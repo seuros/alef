@@ -263,7 +263,7 @@ fn generate_typed_url_all(
     let (e2e, resolved) = build_typed_url_config(language, function, args);
     let groups = groups_with(fixtures);
     codegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("typed URL generation succeeds")
 }
 
@@ -285,7 +285,7 @@ fn generate_all(
     let (e2e, resolved) = build_config(language);
     let groups = groups_with(fixtures);
     codegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds")
 }
 
@@ -675,7 +675,7 @@ fn typescript_emits_isolated_pnpm_workspace_in_registry_mode() {
     e2e.dep_mode = alef::e2e::config::DependencyMode::Registry;
     let groups = groups_with(vec![make_plain_fixture("basic_crawl")]);
     let files = TypeScriptCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     let workspace = files
         .iter()
@@ -694,7 +694,7 @@ fn typescript_omits_pnpm_workspace_in_local_mode() {
     assert_eq!(e2e.dep_mode, alef::e2e::config::DependencyMode::Local);
     let groups = groups_with(vec![make_plain_fixture("basic_crawl")]);
     let files = TypeScriptCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     assert!(
         files.iter().all(|f| !f.path.ends_with("pnpm-workspace.yaml")),

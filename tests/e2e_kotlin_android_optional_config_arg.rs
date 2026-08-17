@@ -112,7 +112,7 @@ fn render_kotlin_android_test(toml: &str, fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = KotlinAndroidE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     let async_test_path = kotlin_android_async_test_path();
     files

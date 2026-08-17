@@ -143,7 +143,7 @@ fn test_go_bool_return_not_treated_as_error() {
 
     let codegen = GoCodegen;
     let generated = codegen
-        .generate(&groups, &e2e_config, &config, &[], &[])
+        .generate(&groups, &e2e_config, &config, &[], &[], &[])
         .expect("code generation should succeed");
 
     let test_file = generated
@@ -174,7 +174,7 @@ fn test_go_uint_return_not_treated_as_error() {
 
     let codegen = GoCodegen;
     let generated = codegen
-        .generate(&groups, &e2e_config, &config, &[], &[])
+        .generate(&groups, &e2e_config, &config, &[], &[], &[])
         .expect("code generation should succeed");
 
     let test_file = generated

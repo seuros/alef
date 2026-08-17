@@ -41,6 +41,7 @@ impl E2eCodegen for RustE2eCodegen {
         config: &ResolvedCrateConfig,
         _type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let mut files = Vec::new();
         let output_base = PathBuf::from(e2e_config.effective_output()).join("rust");
@@ -792,6 +793,7 @@ fn test_method(
         error_type: error_type.map(str::to_string),
         doc: String::new(),
         receiver: Some(crate::core::ir::ReceiverKind::Ref),
+        cfg: None,
         sanitized: false,
         trait_source: None,
         returns_ref: false,

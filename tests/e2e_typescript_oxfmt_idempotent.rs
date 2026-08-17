@@ -94,7 +94,7 @@ fn typescript_emitted_code_is_oxfmt_canonical() {
     let (e2e, resolved) = build_config();
     let groups = vec![simple_fixture_group()];
     let files = TypeScriptCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files

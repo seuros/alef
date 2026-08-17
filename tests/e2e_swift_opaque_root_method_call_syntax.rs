@@ -64,6 +64,7 @@ fn make_type(name: &str, fields: Vec<FieldDef>) -> TypeDef {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         doc: String::new(),
         cfg: None,
@@ -164,7 +165,7 @@ fn render_no_result_type(fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = SwiftE2eCodegen
-        .generate(&groups, &e2e, &resolved, &opaque_result_ir(), &[])
+        .generate(&groups, &e2e, &resolved, &opaque_result_ir(), &[], &[])
         .expect("generation succeeds");
     files
         .iter()

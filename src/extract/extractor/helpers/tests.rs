@@ -1,6 +1,6 @@
 use super::attributes::{
     extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all, extract_serde_with,
-    has_derive, has_derive_path,
+    has_container_serde_default, has_derive, has_derive_path,
 };
 use super::normalize_rustdoc;
 
@@ -420,4 +420,57 @@ fn serde_with_absent_returns_none() {
 fn serde_with_ignores_a_non_serde_attribute() {
     let attrs = parse_attrs("#[alef(skip)]");
     assert!(extract_serde_with(&attrs).is_none());
+}
+
+// --- has_container_serde_default ---
+
+#[test]
+fn container_serde_default_reads_a_bare_container_attribute() {
+    let attrs = parse_attrs("#[serde(default)]");
+    assert!(has_container_serde_default(&attrs));
+}
+
+#[test]
+fn container_serde_default_reads_a_named_default_path() {
+    let attrs = parse_attrs(r#"#[serde(default = "RetryPolicy::conservative")]"#);
+    assert!(has_container_serde_default(&attrs));
+}
+
+#[test]
+fn container_serde_default_reads_it_alongside_other_container_keys() {
+    let attrs = parse_attrs(r#"#[serde(rename_all = "camelCase", default, deny_unknown_fields)]"#);
+    assert!(has_container_serde_default(&attrs));
+}
+
+#[test]
+fn container_serde_default_reads_through_cfg_attr() {
+    let attrs = parse_attrs(r#"#[cfg_attr(feature = "serde", serde(default))]"#);
+    assert!(has_container_serde_default(&attrs));
+}
+
+#[test]
+fn container_serde_default_ignores_a_derived_default() {
+    // `#[derive(serde::Serialize, serde::Deserialize, Default)]` mentions both `serde` and
+    // `Default`, but deriving `Default` says nothing about wire-optionality — every field of
+    // such a struct is still a required key. Confusing the two is the exact regression the
+    // Go backend's `needs_omitempty_pointer` documents. ~keep
+    let attrs = parse_attrs("#[derive(serde::Serialize, serde::Deserialize, Default)]");
+    assert!(!has_container_serde_default(&attrs));
+}
+
+#[test]
+fn container_serde_default_ignores_prose_in_a_doc_comment() {
+    // The trailing newline matters: `parse_attrs` appends `struct _Dummy;`, which a doc
+    // comment would otherwise swallow to end of line. ~keep
+    let attrs = parse_attrs("/// Missing keys fall back through #[serde(default)] on each field.\n");
+    assert!(
+        !has_container_serde_default(&attrs),
+        "a doc comment is prose, not an attribute"
+    );
+}
+
+#[test]
+fn container_serde_default_absent_returns_false() {
+    let attrs = parse_attrs(r#"#[serde(rename_all = "snake_case")]"#);
+    assert!(!has_container_serde_default(&attrs));
 }

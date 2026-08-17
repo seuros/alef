@@ -34,6 +34,7 @@ impl E2eCodegen for KotlinAndroidE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         project::generate(groups, e2e_config, config, type_defs)
     }

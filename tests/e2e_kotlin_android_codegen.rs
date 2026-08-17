@@ -239,7 +239,7 @@ fn render_kotlin_android_chat(toml: &str, fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = KotlinAndroidE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()
@@ -320,7 +320,7 @@ fn render_kotlin_android_streaming(fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = KotlinAndroidE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()
@@ -461,7 +461,7 @@ fn generate_kotlin_android_files(toml: &str, fixture: Fixture) -> Vec<alef::core
         fixtures: vec![fixture],
     }];
     KotlinAndroidE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds")
 }
 

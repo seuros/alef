@@ -68,6 +68,9 @@ pub(super) struct SnippetContext<'a> {
     pub field_resolver: &'a FieldResolver,
     pub config: &'a ResolvedCrateConfig,
     pub type_defs: &'a [crate::core::ir::TypeDef],
+    /// The core IR the visitor arm re-resolves its own call info from. It cannot reuse
+    /// `info`: `render_visitor_snippet` renders a whole file and resolves per-fixture. ~keep
+    pub ir: super::CallIr<'a>,
 }
 
 pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result<String> {
@@ -80,6 +83,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         field_resolver,
         config,
         type_defs,
+        ir,
     } = context;
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -89,7 +93,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         &fixture.input,
     );
     if fixture.visitor.is_some() {
-        return super::visitor::render_visitor_snippet(fixture, header, prefix, e2e_config, config);
+        return super::visitor::render_visitor_snippet(fixture, header, prefix, e2e_config, config, ir);
     }
     if fixture
         .resolved_args(call)

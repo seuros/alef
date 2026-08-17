@@ -44,6 +44,7 @@ impl E2eCodegen for SwiftE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         // Emit under `<output>/swift_e2e/` so the consumer's SwiftPM identity

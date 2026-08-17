@@ -127,7 +127,7 @@ fn contains_on_string_field_does_not_cast_to_list() {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![make_fixture_with_contains_on_string()];
     let files = KotlinE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files
@@ -241,7 +241,7 @@ type = "json_object"
     }];
 
     let files = KotlinE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     let combined = files
         .iter()

@@ -98,7 +98,7 @@ fn render() -> String {
         ],
     }];
     let files = DartE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("dart generation succeeds");
     files
         .iter()

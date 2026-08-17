@@ -8,7 +8,7 @@ use crate::e2e::fixture::Fixture;
 use heck::{ToPascalCase, ToSnakeCase};
 use std::fmt::Write as FmtWrite;
 
-use super::{json_to_c, resolve_call_info};
+use super::{CallIr, json_to_c, resolve_call_info};
 
 // ---------------------------------------------------------------------------
 // Visitor test file generation for C FFI
@@ -32,6 +32,7 @@ pub(super) fn render_visitor_test_file(
     prefix: &str,
     e2e_config: &E2eConfig,
     _config: &ResolvedCrateConfig,
+    ir: CallIr<'_>,
 ) -> String {
     use crate::e2e::fixture::CallbackAction;
 
@@ -72,7 +73,7 @@ pub(super) fn render_visitor_test_file(
             &fixture.tags,
             &fixture.input,
         );
-        let call_info = resolve_call_info(call_config, "c", &[]);
+        let call_info = resolve_call_info(call_config, "c", ir);
         let function_name = call_info.function_name.as_str();
         let options_type_name = call_info.options_type_name.as_str();
         let options_type_snake = options_type_name.to_snake_case();
@@ -217,10 +218,11 @@ pub(super) fn render_visitor_snippet(
     prefix: &str,
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
+    ir: CallIr<'_>,
 ) -> anyhow::Result<String> {
     let mut snippet_fixture = fixture.clone();
     snippet_fixture.assertions.clear();
-    let rendered = render_visitor_test_file(&[&snippet_fixture], header, prefix, e2e_config, config);
+    let rendered = render_visitor_test_file(&[&snippet_fixture], header, prefix, e2e_config, config, ir);
     let function_marker = format!("void test_{}(void) {{", sanitize_ident(&fixture.id));
     let function_start = rendered
         .find(&function_marker)
@@ -567,7 +569,7 @@ fn c_visitor_placeholder_to_arg(method: &str, name: &str) -> String {
 mod visitor_tests {
     use super::super::c_visitor_fixture_has_typed_call;
     use super::super::snippet_regressions::compile_snippet;
-    use super::{render_visitor_snippet, render_visitor_test_file};
+    use super::{CallIr, render_visitor_snippet, render_visitor_test_file};
     use crate::core::config::e2e::{CallConfig, CallOverride, E2eConfig};
     use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
     use crate::e2e::fixture::{Assertion, CallbackAction, Fixture, VisitorSpec};
@@ -650,7 +652,14 @@ mod visitor_tests {
         let fixture = visitor_fixture();
         let fixtures = vec![&fixture];
         let config = crate_config_with_visitor_metadata();
-        let content = render_visitor_test_file(&fixtures, "krz.h", "krz", &e2e_config_with_c_call(), &config);
+        let content = render_visitor_test_file(
+            &fixtures,
+            "krz.h",
+            "krz",
+            &e2e_config_with_c_call(),
+            &config,
+            CallIr::default(),
+        );
 
         assert!(content.contains("KRZKrzVisitorCallbacks _callbacks"));
         assert!(content.contains("const KRZKrzContext* _ctx"));
@@ -686,6 +695,7 @@ mod visitor_tests {
             "krz",
             &e2e_config_with_c_call(),
             &crate_config_with_visitor_metadata(),
+            CallIr::default(),
         )
         .expect("visitor snippet renders");
 
@@ -707,6 +717,7 @@ mod visitor_tests {
             "krz",
             &e2e_config_with_c_call(),
             &crate_config_with_visitor_metadata(),
+            CallIr::default(),
         )
         .expect("visitor snippet renders");
 
@@ -739,7 +750,7 @@ mod visitor_tests {
         let config = E2eConfig::default();
 
         assert!(
-            !c_visitor_fixture_has_typed_call(&fixture, &config),
+            !c_visitor_fixture_has_typed_call(&fixture, &config, CallIr::default()),
             "visitor fixtures need a configured C function and options type"
         );
     }
@@ -795,6 +806,7 @@ mod visitor_tests {
             "krz",
             &e2e_config_with_c_call(),
             &crate_config_with_visitor_metadata(),
+            CallIr::default(),
         )
         .expect("visitor snippet renders");
 
@@ -844,6 +856,7 @@ mod visitor_tests {
             prefix,
             &e2e,
             &crate_config_with_visitor_metadata(),
+            CallIr::default(),
         )
         .expect("visitor snippet renders");
 

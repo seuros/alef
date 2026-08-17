@@ -95,7 +95,7 @@ fn string_array_arg_with_element_type_does_not_wrap_in_constructor() {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![make_fixture_with_string_array()];
     let files = KotlinE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files

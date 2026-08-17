@@ -460,6 +460,16 @@ pub trait E2eCodegen: Send + Sync {
     /// `enums` is the IR enum registry extracted from the source crate.
     /// For WASM, it is used to identify tagged-data enums so they are emitted
     /// as plain JS object literals instead of wrapper factories.
+    ///
+    /// `functions` is the IR free-function registry (`ApiSurface::functions`) —
+    /// free `pub fn`s only; inherent and trait methods live on
+    /// [`TypeDef::methods`] and are reachable through `type_defs`. Backends use
+    /// it to derive a call's result type from the declared return type instead
+    /// of inventing one from the call name; a name invented that way is not a
+    /// real type, and every IR-keyed check downstream of it (the C backend's
+    /// nested-field verification, for one) default-allows rather than fails, so
+    /// a wrong name here silently disables verification instead of breaking
+    /// generation. ~keep
     fn generate(
         &self,
         groups: &[FixtureGroup],
@@ -467,6 +477,7 @@ pub trait E2eCodegen: Send + Sync {
         config: &ResolvedCrateConfig,
         type_defs: &[TypeDef],
         enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>>;
 
     /// Render the target-language source inside a generated documentation snippet.

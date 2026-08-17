@@ -73,7 +73,7 @@ fn smoke_group() -> FixtureGroup {
 fn elixir_e2e_emits_formatter_exs_next_to_mix_exs() {
     let (e2e, resolved) = build_config();
     let files = ElixirCodegen
-        .generate(&[smoke_group()], &e2e, &resolved, &[], &[])
+        .generate(&[smoke_group()], &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     let formatter = files

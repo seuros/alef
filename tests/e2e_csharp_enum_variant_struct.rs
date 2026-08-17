@@ -85,7 +85,7 @@ fn csharp_enum_variant_struct_type_correct() {
     let groups = vec![make_group()];
 
     let generated = CSharpCodegen
-        .generate(&groups, &e2e, &_resolved, &[], &[])
+        .generate(&groups, &e2e, &_resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     assert!(!generated.is_empty(), "Should generate C# test code");

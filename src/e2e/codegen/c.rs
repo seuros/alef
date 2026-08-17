@@ -181,9 +181,11 @@ impl E2eCodegen for CCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
+        let ir = CallIr { functions, type_defs };
 
         let mut files = Vec::new();
 
@@ -237,7 +239,7 @@ impl E2eCodegen for CCodegen {
             .flat_map(|group| group.fixtures.iter())
             .filter(|f| super::should_include_fixture(f, lang, e2e_config))
             .filter(|f| f.visitor.is_some())
-            .filter(|f| c_visitor_fixture_has_typed_call(f, e2e_config))
+            .filter(|f| c_visitor_fixture_has_typed_call(f, e2e_config, ir))
             .collect();
 
         // Resolve FFI crate path for local repo builds.
@@ -327,6 +329,7 @@ impl E2eCodegen for CCodegen {
                 &field_resolver,
                 config,
                 type_defs,
+                ir,
             )?;
             files.push(GeneratedFile {
                 path: output_base.join(filename),
@@ -339,7 +342,7 @@ impl E2eCodegen for CCodegen {
         if !visitor_fixtures.is_empty() {
             files.push(GeneratedFile {
                 path: output_base.join("test_visitor.c"),
-                content: render_visitor_test_file(&visitor_fixtures, &header, &prefix, e2e_config, config),
+                content: render_visitor_test_file(&visitor_fixtures, &header, &prefix, e2e_config, config, ir),
                 generated_header: true,
             });
         }
@@ -382,7 +385,8 @@ fn render_c_snippet(
     type_defs: &[crate::core::ir::TypeDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Result<String> {
-    let mut info = resolve_fixture_call_info(fixture, e2e_config, config, "c", functions);
+    let ir = CallIr { functions, type_defs };
+    let mut info = resolve_fixture_call_info(fixture, e2e_config, config, "c", ir);
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -426,6 +430,7 @@ fn render_c_snippet(
         field_resolver: &resolver,
         config,
         type_defs,
+        ir,
     })
 }
 
@@ -454,7 +459,82 @@ struct ResolvedCallInfo {
     extra_args: Vec<String>,
 }
 
-fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir::FunctionDef]) -> ResolvedCallInfo {
+/// The two core-IR registries a C call resolves its result and argument types from.
+///
+/// They travel together because a call name can only be answered by consulting both:
+/// `functions` is `ApiSurface::functions`, which holds **free `pub fn`s only**, and every
+/// inherent or trait method — a client's `chat`, say — is a [`crate::core::ir::MethodDef`]
+/// hanging off a [`crate::core::ir::TypeDef`] in `type_defs`. Passing one without the other
+/// answers `None` for half the calls in a typical suite, and every `None` here lands on
+/// [`fallback_result_type_name`], which invents a name. ~keep
+#[derive(Clone, Copy, Default)]
+pub(super) struct CallIr<'a> {
+    pub functions: &'a [crate::core::ir::FunctionDef],
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+}
+
+impl<'a> CallIr<'a> {
+    /// True when neither registry was supplied, i.e. this generator has no IR to consult at
+    /// all. Distinct from "the IR was present and the call was not in it", which is a
+    /// per-call authoring problem rather than a structural one.
+    fn is_absent(self) -> bool {
+        self.functions.is_empty() && self.type_defs.is_empty()
+    }
+
+    /// The declared signature for a Rust-side call name: the free function of that name if
+    /// there is one, otherwise the method of that name declared on an IR type.
+    ///
+    /// Free functions win because they are unambiguous — a crate has at most one `pub fn` of
+    /// a given path. Methods are not: several types can declare `new`, and a type carrying
+    /// both an inherent and a trait-sourced `chat` lists both. Rather than pick one, this
+    /// answers only when every same-named method agrees on the signature, so the result is
+    /// the one the IR actually determines. Disagreement yields `None` and the caller's
+    /// fallback runs, which is exactly the behaviour before methods were consulted at all. ~keep
+    fn signature(self, name: &str) -> Option<IrSignature<'a>> {
+        if let Some(function) = self.functions.iter().find(|function| function.name == name) {
+            return Some(IrSignature {
+                params: &function.params,
+                return_type: &function.return_type,
+            });
+        }
+        let mut methods = self
+            .type_defs
+            .iter()
+            .flat_map(|type_def| type_def.methods.iter())
+            .filter(|method| method.name == name);
+        let first = methods.next()?;
+        if !methods.all(|other| same_signature(first, other)) {
+            return None;
+        }
+        Some(IrSignature {
+            params: &first.params,
+            return_type: &first.return_type,
+        })
+    }
+}
+
+/// The parts of a declared signature C codegen reads, shared by the free-function and
+/// method arms of [`CallIr::signature`].
+struct IrSignature<'a> {
+    params: &'a [crate::core::ir::ParamDef],
+    return_type: &'a crate::core::ir::TypeRef,
+}
+
+/// Whether two same-named methods declare the same thing, for the purposes of the three
+/// questions C codegen asks a signature: what it returns, and what its parameters are named
+/// and typed. `ParamDef` has no `PartialEq`, and the fields beyond name and type (defaults,
+/// `is_ref`, newtype wrappers) do not change any answer here.
+fn same_signature(left: &crate::core::ir::MethodDef, right: &crate::core::ir::MethodDef) -> bool {
+    left.return_type == right.return_type
+        && left.params.len() == right.params.len()
+        && left
+            .params
+            .iter()
+            .zip(right.params.iter())
+            .all(|(left, right)| left.name == right.name && left.ty == right.ty)
+}
+
+fn resolve_call_info(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> ResolvedCallInfo {
     let overrides = call.overrides.get(lang);
     let function_name = overrides
         .and_then(|o| o.function.as_ref())
@@ -467,8 +547,8 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     let result_type_name = overrides
         .and_then(|o| o.result_type.as_ref())
         .cloned()
-        .or_else(|| resolve_ir_result_type(call, lang, functions))
-        .unwrap_or_else(|| fallback_result_type_name(call, lang, functions));
+        .or_else(|| resolve_ir_result_type(call, lang, ir))
+        .unwrap_or_else(|| fallback_result_type_name(call, lang, ir));
     let options_type_name = overrides
         .and_then(|o| o.options_type.as_deref())
         .or(call.options_type.as_deref())
@@ -477,7 +557,7 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     let client_factory = overrides.and_then(|o| o.client_factory.as_ref()).cloned();
     let raw_c_result_type = overrides
         .and_then(|o| o.raw_c_result_type.clone())
-        .or_else(|| return_shape::resolve_raw_c_result_type(call, lang, functions));
+        .or_else(|| return_shape::resolve_raw_c_result_type(call, lang, ir));
     let c_free_fn = overrides.and_then(|o| o.c_free_fn.clone());
     let c_engine_factory = overrides.and_then(|o| o.c_engine_factory.clone());
     let result_is_option = overrides
@@ -491,25 +571,22 @@ fn resolve_call_info(call: &CallConfig, lang: &str, functions: &[crate::core::ir
     let result_is_bytes = call.result_is_bytes || overrides.is_some_and(|o| o.result_is_bytes);
     let extra_args = overrides.map(|o| o.extra_args.clone()).unwrap_or_default();
     let mut args = call.args.clone();
-    // `functions` is the Rust core's IR, so this lookup wants the Rust identity and must NOT
+    // `ir` is the Rust core's IR, so this lookup wants the Rust identity and must NOT
     // resolve `overrides.c.function` — that names a prefixed C export (`samplellm_chat`), not
     // the Rust function (`chat`). `core_lookup_name` keeps the base name as the key and only
     // supplies a fallback when the base names nothing at all, which stops the key degrading
     // to `""` and silently deriving arg/result types from the empty string. ~keep
     let core_lookup_name = call.core_lookup_name(lang);
-    if let Some(function) = core_lookup_name
-        .as_deref()
-        .and_then(|name| functions.iter().find(|function| function.name == name))
-    {
+    if let Some(signature) = core_lookup_name.as_deref().and_then(|name| ir.signature(name)) {
         for (index, arg) in args.iter_mut().enumerate() {
             if arg.element_type.is_some() || arg.arg_type != "json_object" {
                 continue;
             }
-            let parameter = function
+            let parameter = signature
                 .params
                 .iter()
                 .find(|parameter| parameter.name == arg.name)
-                .or_else(|| function.params.get(index));
+                .or_else(|| signature.params.get(index));
             arg.element_type = parameter
                 .and_then(|parameter| named_type(&parameter.ty))
                 .map(str::to_string);
@@ -542,7 +619,7 @@ fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
 
 /// Name the type a call's result handle points at, read from the core IR.
 ///
-/// `FunctionDef::return_type` is already the `Ok` type: the extractor splits `Result<T, E>`
+/// The declared return type is already the `Ok` type: the extractor splits `Result<T, E>`
 /// into `return_type = T` plus a separate `error_type`, so a fallible
 /// `fn complete(..) -> Result<CompletionResponse, String>` resolves to `CompletionResponse`.
 ///
@@ -550,10 +627,13 @@ fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
 /// already uses for argument element types — a second, one-level-deep match sitting beside it
 /// answered `None` for `Result<Vec<Model>, E>` and every other nesting, and every `None` here
 /// lands on [`fallback_result_type_name`].
-fn resolve_ir_result_type(call: &CallConfig, lang: &str, functions: &[crate::core::ir::FunctionDef]) -> Option<String> {
+///
+/// The lookup goes through [`CallIr::signature`], so a call naming an inherent or trait method
+/// resolves too; `ApiSurface::functions` alone would answer `None` for every one of them.
+fn resolve_ir_result_type(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> Option<String> {
     let lookup_name = call.core_lookup_name(lang)?;
-    let function = functions.iter().find(|function| function.name == *lookup_name)?;
-    named_type(&function.return_type).map(str::to_string)
+    let signature = ir.signature(&lookup_name)?;
+    named_type(signature.return_type).map(str::to_string)
 }
 
 /// Last-resort result type when neither config nor the IR names one: PascalCase the call's
@@ -565,35 +645,39 @@ fn resolve_ir_result_type(call: &CallConfig, lang: &str, functions: &[crate::cor
 /// parent is not an IR type — so a fabricated type does not fail generation, it *disables* the
 /// nested-field verification for that fixture.
 ///
-/// It nonetheless has to stay, because resolution legitimately cannot answer for two shapes:
+/// It nonetheless has to stay, because resolution legitimately cannot answer for these shapes:
 ///
-/// - `E2eCodegen::generate` carries no `functions` parameter, so `render_test_file` passes an
-///   empty slice and no call on the generated-test-file path can resolve at all. Only the
-///   snippet path (`generate_e2e` → `render_snippet_body_with_functions`) is threaded.
-/// - `ApiSurface::functions` holds free `pub fn`s only; a call naming an inherent or trait
-///   method (a client's `chat`, say) is a `MethodDef` and is never in the slice.
+/// - The call names something the IR does not model at all — a C-only export, a registry
+///   operation with no Rust-side `fn` of that name, a `mock_response` fixture whose "call" is
+///   an HTTP request. Setting `result_type` on the call override is the fix.
+/// - Every same-named method disagrees on its signature, so [`CallIr::signature`] declines to
+///   pick one (see its doc comment).
+/// - No IR was supplied at all: unit tests and the two visitor call sites construct a
+///   [`CallIr`] from empty slices deliberately.
 ///
-/// Both are guess-shaped, so it warns when the IR was available and the call still did not
-/// resolve — the actionable case, fixed by setting `result_type` on the call override — and
-/// stays at debug for the structural gap, which is not per-call actionable and would otherwise
-/// warn once for every fixture in the suite.
-fn fallback_result_type_name(call: &CallConfig, lang: &str, functions: &[crate::core::ir::FunctionDef]) -> String {
+/// Only the last is structural and not per-call actionable, so it stays at debug; the others
+/// warn, because with the IR in hand a call that still does not resolve is an authoring
+/// problem with a config fix. Before `functions` reached [`E2eCodegen::generate`] the debug
+/// arm covered the whole generated-test-file path and the warn arm was unreachable there,
+/// which is precisely why a suite could be generated with field verification off and nothing
+/// said so. ~keep
+fn fallback_result_type_name(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> String {
     let result_type = call.function.to_pascal_case();
-    if functions.is_empty() {
+    if ir.is_absent() {
         tracing::debug!(
             call = %call.function,
             language = %lang,
             %result_type,
-            "no core IR functions available to this generator; result type derived from the call name"
+            "no core IR available to this generator; result type derived from the call name"
         );
     } else {
         tracing::warn!(
             call = %call.function,
             language = %lang,
             %result_type,
-            "call did not resolve to a core IR function with a named return type; result type \
-             derived from the call name, which disables nested-field verification if the name is \
-             not a real type — set `result_type` on the call override"
+            "call did not resolve to a core IR function or method with a named return type; \
+             result type derived from the call name, which disables nested-field verification if \
+             the name is not a real type — set `result_type` on the call override"
         );
     }
     result_type
@@ -609,7 +693,7 @@ fn resolve_fixture_call_info(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     lang: &str,
-    functions: &[crate::core::ir::FunctionDef],
+    ir: CallIr<'_>,
 ) -> ResolvedCallInfo {
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -618,7 +702,7 @@ fn resolve_fixture_call_info(
         &fixture.tags,
         &fixture.input,
     );
-    let mut info = resolve_call_info(call, lang, functions);
+    let mut info = resolve_call_info(call, lang, ir);
 
     // `trait_bridge_derived_c_identity` derives the C ABI symbol the FFI backend
     // actually generates for a trait-bridge registry operation, rather than trusting
@@ -676,7 +760,7 @@ fn resolve_fixture_call_info(
     info
 }
 
-fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig) -> bool {
+fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, ir: CallIr<'_>) -> bool {
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -684,7 +768,7 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig) -
         &fixture.tags,
         &fixture.input,
     );
-    let info = resolve_call_info(call, "c", &[]);
+    let info = resolve_call_info(call, "c", ir);
     let has_function = call
         .overrides
         .get("c")
@@ -731,6 +815,7 @@ fn render_test_file(
     field_resolver: &FieldResolver,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    ir: CallIr<'_>,
 ) -> anyhow::Result<String> {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::Block));
@@ -755,7 +840,11 @@ fn render_test_file(
             );
         }
 
-        let call_info = resolve_fixture_call_info(fixture, e2e_config, config, lang, &[]);
+        // `ir`, not an empty slice: `resolve_call_info` derives `result_type_name` from the
+        // declared return type here, and `result_type_name` is what `parent_is_ir_type` — and
+        // through it `ensure_leaf_field_exists` — reads. An unresolved name is not merely
+        // cosmetic; it turns the nested-field walk's verification off for this fixture. ~keep
+        let call_info = resolve_fixture_call_info(fixture, e2e_config, config, lang, ir);
 
         // Effective enum fields for this fixture: merge global e2e_config.fields_enum
         // (HashSet) with the per-call C override's enum_fields (HashMap keys). This
@@ -1015,7 +1104,7 @@ mod snippet_tests {
             ..ResolvedCrateConfig::default()
         };
 
-        let info = resolve_fixture_call_info(&fixture, &e2e, &config, "c", &[]);
+        let info = resolve_fixture_call_info(&fixture, &e2e, &config, "c", CallIr::default());
 
         assert_eq!(
             info.function_name, "",
@@ -1401,7 +1490,7 @@ mod snippet_tests {
 #[cfg(test)]
 mod result_type_resolution_tests {
     use super::*;
-    use crate::core::ir::{FunctionDef, TypeRef};
+    use crate::core::ir::{FunctionDef, MethodDef, ParamDef, TypeDef, TypeRef};
 
     fn call_named(function: &str) -> CallConfig {
         CallConfig {
@@ -1419,6 +1508,37 @@ mod result_type_resolution_tests {
         }
     }
 
+    fn method_returning(name: &str, return_type: TypeRef) -> MethodDef {
+        MethodDef {
+            name: name.to_string(),
+            return_type,
+            error_type: Some("String".to_string()),
+            ..MethodDef::default()
+        }
+    }
+
+    fn type_with_methods(name: &str, methods: Vec<MethodDef>) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            methods,
+            ..TypeDef::default()
+        }
+    }
+
+    fn ir_functions(functions: &[FunctionDef]) -> CallIr<'_> {
+        CallIr {
+            functions,
+            type_defs: &[],
+        }
+    }
+
+    fn ir_types(type_defs: &[TypeDef]) -> CallIr<'_> {
+        CallIr {
+            functions: &[],
+            type_defs,
+        }
+    }
+
     /// The case that was silently wrong. The extractor splits `Result<T, E>` into
     /// `return_type = T` plus a separate `error_type`, so a fallible
     /// `pub fn complete(..) -> Result<CompletionResponse, String>` must resolve to
@@ -1433,7 +1553,7 @@ mod result_type_resolution_tests {
         )];
 
         assert_eq!(
-            resolve_ir_result_type(&call_named("complete"), "c", &functions),
+            resolve_ir_result_type(&call_named("complete"), "c", ir_functions(&functions)),
             Some("CompletionResponse".to_string())
         );
     }
@@ -1449,7 +1569,7 @@ mod result_type_resolution_tests {
         )];
 
         assert_eq!(
-            resolve_ir_result_type(&call_named("find_model"), "c", &functions),
+            resolve_ir_result_type(&call_named("find_model"), "c", ir_functions(&functions)),
             Some("Model".to_string())
         );
     }
@@ -1466,7 +1586,7 @@ mod result_type_resolution_tests {
         )];
 
         assert_eq!(
-            resolve_ir_result_type(&call_named("list_models"), "c", &functions),
+            resolve_ir_result_type(&call_named("list_models"), "c", ir_functions(&functions)),
             Some("Model".to_string())
         );
     }
@@ -1477,20 +1597,113 @@ mod result_type_resolution_tests {
     fn should_not_invent_a_result_type_for_an_unnamed_return() {
         let functions = vec![function_returning("ping", TypeRef::Unit, None)];
 
-        assert_eq!(resolve_ir_result_type(&call_named("ping"), "c", &functions), None);
+        assert_eq!(
+            resolve_ir_result_type(&call_named("ping"), "c", ir_functions(&functions)),
+            None
+        );
     }
 
-    /// The generated-test-file path passes an empty `functions` slice, and free-function IR
-    /// never contains methods, so resolution cannot answer for either shape. The fallback is
-    /// load-bearing for exactly those cases — this pins that it still produces the documented
-    /// PascalCase name rather than failing generation.
+    /// The fallback stays load-bearing for callers that genuinely have no IR — this module's
+    /// own cases, and the two visitor call sites. This pins that it still produces the
+    /// documented PascalCase name rather than failing generation.
     #[test]
     fn should_fall_back_to_the_pascal_cased_call_name_without_ir_functions() {
-        assert_eq!(resolve_ir_result_type(&call_named("complete"), "c", &[]), None);
         assert_eq!(
-            fallback_result_type_name(&call_named("complete"), "c", &[]),
+            resolve_ir_result_type(&call_named("complete"), "c", CallIr::default()),
+            None
+        );
+        assert_eq!(
+            fallback_result_type_name(&call_named("complete"), "c", CallIr::default()),
             "Complete".to_string(),
             "the fallback must stay, and its output must stay the documented shape"
+        );
+    }
+
+    /// The other half of the gap this module documents: `ApiSurface::functions` holds free
+    /// `pub fn`s only, so a call naming an inherent or trait method — liter-llm's `chat`, the
+    /// motivating case — is absent from it no matter how well `functions` is threaded. The
+    /// method lives on `TypeDef::methods`, which the C generator already had in hand.
+    #[test]
+    fn should_resolve_a_method_call_from_the_type_registry() {
+        let type_defs = vec![type_with_methods(
+            "LlmClient",
+            vec![method_returning("chat", TypeRef::Named("ChatResponse".to_string()))],
+        )];
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("chat"), "c", ir_types(&type_defs)),
+            Some("ChatResponse".to_string())
+        );
+    }
+
+    /// A free function of the same name is the unambiguous answer and must win, so adding
+    /// method lookup cannot change what an already-resolving call resolves to.
+    #[test]
+    fn should_prefer_a_free_function_over_a_same_named_method() {
+        let functions = vec![function_returning(
+            "chat",
+            TypeRef::Named("FreeFunctionResponse".to_string()),
+            Some("String"),
+        )];
+        let type_defs = vec![type_with_methods(
+            "LlmClient",
+            vec![method_returning("chat", TypeRef::Named("ChatResponse".to_string()))],
+        )];
+        let ir = CallIr {
+            functions: &functions,
+            type_defs: &type_defs,
+        };
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("chat"), "c", ir),
+            Some("FreeFunctionResponse".to_string())
+        );
+    }
+
+    /// Two types declaring `chat` with different return types give the IR no single answer.
+    /// Guessing one would be worse than the fallback, because a wrong-but-plausible IR type
+    /// name switches `ensure_leaf_field_exists` ON against the wrong parent and fails
+    /// generation with a diagnostic pointing at the wrong type. Decline instead.
+    #[test]
+    fn should_decline_an_ambiguous_method_name() {
+        let type_defs = vec![
+            type_with_methods(
+                "LlmClient",
+                vec![method_returning("chat", TypeRef::Named("ChatResponse".to_string()))],
+            ),
+            type_with_methods(
+                "MockClient",
+                vec![method_returning("chat", TypeRef::Named("MockResponse".to_string()))],
+            ),
+        ];
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("chat"), "c", ir_types(&type_defs)),
+            None
+        );
+    }
+
+    /// The same method reached through both an inherent impl and a trait impl is listed twice
+    /// with the same signature. That is not ambiguity — declining there would leave the common
+    /// case unresolved for no reason.
+    #[test]
+    fn should_resolve_a_method_duplicated_with_an_identical_signature() {
+        let method = MethodDef {
+            params: vec![ParamDef {
+                name: "request".to_string(),
+                ty: TypeRef::Named("ChatRequest".to_string()),
+                ..ParamDef::default()
+            }],
+            ..method_returning("chat", TypeRef::Named("ChatResponse".to_string()))
+        };
+        let type_defs = vec![
+            type_with_methods("LlmClient", vec![method.clone()]),
+            type_with_methods("OpenAiClient", vec![method]),
+        ];
+
+        assert_eq!(
+            resolve_ir_result_type(&call_named("chat"), "c", ir_types(&type_defs)),
+            Some("ChatResponse".to_string())
         );
     }
 
@@ -1505,11 +1718,11 @@ mod result_type_resolution_tests {
         )];
 
         assert_eq!(
-            resolve_call_info(&call_named("complete"), "c", &functions).result_type_name,
+            resolve_call_info(&call_named("complete"), "c", ir_functions(&functions)).result_type_name,
             "CompletionResponse".to_string()
         );
         assert_eq!(
-            resolve_call_info(&call_named("complete"), "c", &[]).result_type_name,
+            resolve_call_info(&call_named("complete"), "c", CallIr::default()).result_type_name,
             "Complete".to_string()
         );
     }

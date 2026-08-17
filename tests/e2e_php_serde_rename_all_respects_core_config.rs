@@ -24,7 +24,7 @@ fn render_with_type_defs(toml_src: &str, type_defs: Vec<TypeDef>, fixture: Fixtu
         fixtures: vec![fixture],
     }];
     let files = PhpCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
         .expect("PHP codegen succeeds");
     files
         .iter()
@@ -86,6 +86,7 @@ fn php_respects_serde_rename_all_camel_case_when_present() {
         is_return_type: false,
         serde_rename_all: Some("camelCase".to_string()),
         has_serde: true,
+        serde_container_default: false,
         super_traits: Vec::new(),
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -155,6 +156,7 @@ fn php_camel_cases_keys_when_core_type_lacks_rename_all() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: Vec::new(),
         binding_excluded: false,
         binding_exclusion_reason: None,

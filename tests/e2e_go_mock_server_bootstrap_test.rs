@@ -90,7 +90,7 @@ fn test_go_main_test_with_mock_server_fixture() {
     let groups = vec![make_mock_server_fixture()];
 
     let files = GoCodegen
-        .generate(&groups, &e2e_config, &resolved_config, &[], &[])
+        .generate(&groups, &e2e_config, &resolved_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let main_test_file = files
@@ -194,7 +194,7 @@ fn test_go_main_test_fixture_has_http_fixtures_not_mock_server() {
     }];
 
     let files = GoCodegen
-        .generate(&groups, &e2e_config, &resolved_config, &[], &[])
+        .generate(&groups, &e2e_config, &resolved_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let main_test_file = files

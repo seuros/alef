@@ -93,7 +93,7 @@ fn render(fixture: Fixture, category: &str) -> String {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![group(fixture, category)];
     let files = ElixirCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     files.iter().map(|f| f.content.clone()).collect::<Vec<_>>().join("\n")
 }

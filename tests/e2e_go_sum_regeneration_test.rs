@@ -86,7 +86,7 @@ fn test_go_e2e_generation_includes_go_mod() {
 
     let codegen = GoCodegen;
     let files = codegen
-        .generate(&groups, &e2e_config, &crate_config, &[], &[])
+        .generate(&groups, &e2e_config, &crate_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let go_mod_file = files
@@ -121,7 +121,7 @@ fn test_go_e2e_generation_with_local_replace_directive() {
 
     let codegen = GoCodegen;
     let files = codegen
-        .generate(&groups, &e2e_config, &crate_config, &[], &[])
+        .generate(&groups, &e2e_config, &crate_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let go_mod_file = files
@@ -145,7 +145,7 @@ fn test_go_e2e_generation_gitignores_the_cgo_link_shim() {
 
     let codegen = GoCodegen;
     let files = codegen
-        .generate(&groups, &e2e_config, &crate_config, &[], &[])
+        .generate(&groups, &e2e_config, &crate_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let gitignore_file = files

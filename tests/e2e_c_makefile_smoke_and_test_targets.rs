@@ -136,7 +136,7 @@ fn c_makefile_emits_smoke_and_test_targets() {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![build_fixture_with_http()];
     let files = CCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("C generation succeeds");
 
     let makefile = files
@@ -266,7 +266,7 @@ prefix = "htm"
     }];
 
     let files = CCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("C generation succeeds");
 
     let makefile = files

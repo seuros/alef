@@ -93,7 +93,7 @@ fn generate(
     let (e2e, resolved) = build_config(language, arg_type);
     let groups = vec![build_fixture(preserve, input)];
     codegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds")
         .iter()
         .map(|f| f.content.clone())

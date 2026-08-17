@@ -158,14 +158,15 @@ function = "complete"
 module = "gatelib"
 result_var = "result"
 
-# The C path derives the result type from the IR return type and falls back to
-# PascalCasing the function name. That fallback yields `Complete` here, not
-# `CompletionResponse`, so the nested-field walk starts from a type that does not
-# exist. Pinned explicitly rather than renaming the fixture function to match, so the
-# fixture keeps a function whose name differs from its return type -- which is the
-# realistic shape and the one the fallback gets wrong.
-[crates.e2e.call.overrides.c]
-result_type = "CompletionResponse"
+# NOTE: deliberately no `[crates.e2e.call.overrides.c] result_type`. `complete` is a free
+# `pub fn complete(prompt: String) -> Result<CompletionResponse, String>` in the fixture
+# crate, so the C generated-test-file path must derive `CompletionResponse` from the IR
+# return type on its own. Pinning it here would mask the thing this gate is for: the
+# fallback would otherwise PascalCase the call name to `Complete`, which is not a type,
+# and `ensure_leaf_field_exists` default-allows every leaf under a non-IR parent -- so the
+# nested-field walk below would report success while verifying nothing. The fixture keeps a
+# function whose name differs from its return type on purpose; that is the realistic shape
+# and the one a call-name guess gets wrong.
 
 [[crates.e2e.call.args]]
 name = "prompt"

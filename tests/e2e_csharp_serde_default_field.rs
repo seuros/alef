@@ -108,7 +108,7 @@ fn csharp_serde_default_field_not_required() {
     let groups = vec![make_group()];
 
     let generated = CSharpCodegen
-        .generate(&groups, &e2e, &_resolved, &[], &[])
+        .generate(&groups, &e2e, &_resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     // since the Rust field has `#[serde(default)]`. The field should either:

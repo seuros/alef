@@ -114,10 +114,21 @@ fn test_impl_default_without_fn_default() {
     let incomplete = &surface.types[0];
     let value_field = &incomplete.fields[0];
 
+    // Contract reversed deliberately. This used to record `Empty`, which every backend renders as
+    // the target-language zero. But an `impl Default` whose body we cannot read is not a claim that
+    // the default IS the zero -- it is the absence of a reading. Conflating the two is what shipped
+    // `DetDbThresh = 0.0f` beneath a generated doc comment reading "default: 0.3". ~keep
     assert_eq!(
         value_field.typed_default,
+        Some(crate::core::ir::DefaultValue::Unresolved(
+            "impl Default block without a `fn default()` item".to_string()
+        )),
+        "an unreadable impl Default must be Unresolved, not Empty"
+    );
+    assert_ne!(
+        value_field.typed_default,
         Some(crate::core::ir::DefaultValue::Empty),
-        "Fields should have Empty when fn default() is missing"
+        "Empty licenses every backend to substitute its own zero for a default it never read"
     );
 }
 
@@ -222,5 +233,60 @@ fn test_enum_with_manual_default_impl() {
     assert!(
         mode.variants.iter().all(|variant| !variant.is_default),
         "manual enum Default impls should not synthesize a default variant"
+    );
+}
+
+#[test]
+fn container_level_serde_default_is_recorded_on_the_type() {
+    let source = r#"
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(default)]
+        pub struct RetryPolicy {
+            pub limit: u32,
+        }
+
+        impl Default for RetryPolicy {
+            fn default() -> Self {
+                Self { limit: 3 }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let policy = &surface.types[0];
+
+    assert!(
+        policy.serde_container_default,
+        "a container-level #[serde(default)] must set serde_container_default=true"
+    );
+    assert_eq!(
+        policy.fields[0].default, None,
+        "the container attribute must not be mistaken for a per-field #[serde(default)]"
+    );
+    // The non-zero value is what the container default actually yields for a missing key,
+    // and what backends compare against the target language's zero value. ~keep
+    assert_eq!(
+        policy.fields[0].typed_default,
+        Some(crate::core::ir::DefaultValue::IntLiteral(3))
+    );
+}
+
+#[test]
+fn deriving_default_alone_does_not_set_the_container_serde_flag() {
+    let source = r#"
+        /// Every key stays required on the wire even though the type has a Default impl.
+        #[derive(Default, serde::Serialize, serde::Deserialize)]
+        pub struct RetryPolicy {
+            pub limit: u32,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let policy = &surface.types[0];
+
+    assert!(policy.has_default, "derive(Default) still sets has_default");
+    assert!(
+        !policy.serde_container_default,
+        "derive(Default) is not #[serde(default)]: every field is still a required wire key"
     );
 }

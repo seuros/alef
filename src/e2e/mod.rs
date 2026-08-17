@@ -87,6 +87,12 @@ pub fn known_e2e_target_names() -> Vec<String> {
 /// from the extracted [`crate::core::ir::ApiSurface`]. For WASM, it is used
 /// to identify tagged-data enums so they are emitted as plain JS object literals
 /// instead of wrapper factories. Pass an empty slice when not available.
+///
+/// `functions` is the IR free-function registry. Pass `&api.functions`. It reaches
+/// both the generated-test-file path ([`codegen::E2eCodegen::generate`]) and the
+/// documentation-snippet path, so a call's result type resolves from the declared
+/// return type rather than from a PascalCased guess at the call name. Pass an empty
+/// slice when not available; generators fall back to the guess.
 pub fn generate_e2e(
     config: &ResolvedCrateConfig,
     e2e_config: &E2eConfig,
@@ -186,7 +192,7 @@ pub fn generate_e2e(
 
     let mut all_files = Vec::new();
     for generator in &generators {
-        let files = generator.generate(&groups, e2e_config, config, type_defs, enums)?;
+        let files = generator.generate(&groups, e2e_config, config, type_defs, enums, functions)?;
         info!("  [{}] generated {} file(s)", generator.language_name(), files.len());
         all_files.extend(files);
     }

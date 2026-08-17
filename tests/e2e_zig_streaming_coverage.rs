@@ -62,7 +62,7 @@ fn render_stream_category(toml: &str) -> Vec<alef::core::backend::GeneratedFile>
         fixtures: vec![streaming_fixture("crawl_stream_events")],
     }];
     ZigE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds")
 }
 

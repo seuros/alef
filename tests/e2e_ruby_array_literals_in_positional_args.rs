@@ -89,7 +89,7 @@ fn ruby_array_literals_render_elements() {
     let (e2e, resolved) = build_config();
     let groups = vec![string_array_fixture_group()];
     let files = RubyCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
 
     let spec_file = files

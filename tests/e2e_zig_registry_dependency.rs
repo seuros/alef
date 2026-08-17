@@ -97,7 +97,7 @@ fn render_registry_build_zig() -> String {
     // `dep_mode` is `#[serde(skip)]` — set at runtime by the `--registry` flag.
     e2e.dep_mode = DependencyMode::Registry;
     let files = ZigE2eCodegen
-        .generate(&[group()], &e2e, &resolved, &[], &[])
+        .generate(&[group()], &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()
@@ -173,7 +173,7 @@ hash = "demo_crawler-1.2.3-STALE_HASH_REGENERATE"
     let mut e2e = cfg.crates[0].e2e.clone().expect("e2e config");
     e2e.dep_mode = DependencyMode::Registry;
 
-    let result = ZigE2eCodegen.generate(&[group()], &e2e, &resolved, &[], &[]);
+    let result = ZigE2eCodegen.generate(&[group()], &e2e, &resolved, &[], &[], &[]);
 
     assert!(
         result.is_ok(),

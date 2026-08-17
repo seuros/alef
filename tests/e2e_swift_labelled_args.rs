@@ -89,7 +89,7 @@ fn swift_emits_labelled_arguments_on_free_function_calls() {
     }];
 
     let files = SwiftE2eCodegen
-        .generate(&groups, &e2e_config, &crate_config, &[], &[])
+        .generate(&groups, &e2e_config, &crate_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files
@@ -179,7 +179,7 @@ name = "SampleLanguagePack"
     }];
 
     let files = SwiftE2eCodegen
-        .generate(&groups, &e2e, &crate_config, &[], &[])
+        .generate(&groups, &e2e, &crate_config, &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files

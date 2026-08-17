@@ -167,7 +167,7 @@ fn render_build_zig(groups: Vec<FixtureGroup>) -> String {
     let resolved = cfg.clone().resolve().expect("resolves").remove(0);
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
     let files = ZigE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()
@@ -182,7 +182,7 @@ fn render_build_zig_file(groups: Vec<FixtureGroup>) -> String {
     let resolved = cfg.clone().resolve().expect("resolves").remove(0);
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
     let files = ZigE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

@@ -103,7 +103,7 @@ fn wasm_generate_emits_placeholder_for_a_fully_excluded_category() {
     let groups = vec![fully_excluded_group()];
 
     let files = WasmCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[])
         .expect("wasm generation succeeds");
 
     let combined = files.iter().map(|f| f.content.as_str()).collect::<Vec<_>>().join("\n");
