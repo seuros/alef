@@ -1,8 +1,9 @@
 use super::super::errors::{emit_return_marshalling_indented, emit_return_statement, emit_return_statement_indented};
 use super::super::functions::{is_bytes_result_func, is_bytes_result_method};
 use super::super::{
-    bytes_len_arg, emit_named_param_setup, emit_named_param_teardown, emit_named_param_teardown_indented,
-    is_bridge_param, native_call_arg, needs_param_teardown, returns_ptr, zero_sentinel,
+    CAPSULE_PINVOKE_RETURN_TYPE, bytes_len_arg, emit_named_param_setup, emit_named_param_teardown,
+    emit_named_param_teardown_indented, is_bridge_param, native_call_arg, needs_param_teardown, returns_ptr,
+    zero_sentinel, zero_sentinel_for_pinvoke_type,
 };
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::doc_emission;
@@ -75,7 +76,8 @@ pub(super) fn gen_capsule_function_wrapper(
     out.push_str(&c_params.join(", "));
     out.push_str(");\n");
 
-    out.push_str("            if (nativeResult == IntPtr.Zero)\n");
+    let zero = zero_sentinel_for_pinvoke_type(CAPSULE_PINVOKE_RETURN_TYPE);
+    out.push_str(&format!("            if (nativeResult == {zero})\n"));
     out.push_str("            {\n");
     if matches!(func.return_type, TypeRef::Optional(_)) {
         out.push_str("                return null;\n");
@@ -823,6 +825,7 @@ mod tests {
     use super::*;
     use crate::core::config::HostCapsuleTypeConfig;
     use crate::core::ir::{CoreWrapper, FunctionDef, ParamDef, TypeRef, VersionAnnotation};
+    use std::collections::HashMap;
 
     #[test]
     fn capsule_function_wrapper_uses_correct_pinvoke_name() {
@@ -933,6 +936,130 @@ mod tests {
             return_pos < finally_pos && finally_pos < free_pos,
             "FreeBytes must run after the normal-path return, via `finally`, not inline before \
              it:\n{code}"
+        );
+    }
+
+    fn func_returning(name: &str, return_type: TypeRef) -> FunctionDef {
+        FunctionDef {
+            name: name.to_string(),
+            rust_path: format!("test::{name}"),
+            original_rust_path: format!("test::{name}"),
+            params: vec![],
+            return_type,
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: VersionAnnotation::default(),
+        }
+    }
+
+    fn wrap(func: &FunctionDef) -> String {
+        gen_wrapper_function(
+            func,
+            "TestException",
+            "sample_ffi",
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            &[],
+        )
+    }
+
+    fn pinvoke(func: &FunctionDef, capsule_types: &HashMap<String, HostCapsuleTypeConfig>) -> String {
+        super::super::super::functions::gen_pinvoke_for_func(
+            &format!("sample_ffi_{}", func.name),
+            func,
+            &HashSet::new(),
+            &HashSet::new(),
+            capsule_types,
+        )
+    }
+
+    /// Regression for CS0034 (`Operator '==' is ambiguous on operands of type 'ulong' and 'nint'`):
+    /// the null check must be derived from the same fact as the `extern` signature emitted for the
+    /// same function, never from an independently-recomputed condition.
+    ///
+    /// The string half of this test is load-bearing and must not be deleted: the handle half alone
+    /// would also be satisfied by blanket-replacing every `IntPtr.Zero` in the emitters with `0`,
+    /// which would silently corrupt the far more common `char*`-returning wrappers whose P/Invoke
+    /// genuinely returns `IntPtr`. Both directions have to hold at once. ~keep
+    #[test]
+    fn null_check_sentinel_matches_pinvoke_return_type_for_handle_and_string_returns() {
+        let handle_func = func_returning(
+            "find_thing",
+            TypeRef::Optional(Box::new(TypeRef::Named("Thing".into()))),
+        );
+        let handle_decl = pinvoke(&handle_func, &HashMap::new());
+        let handle_body = wrap(&handle_func);
+        assert!(
+            handle_decl.contains("internal static extern ulong FindThing("),
+            "a handle return must be declared `ulong`:\n{handle_decl}"
+        );
+        assert!(
+            handle_body.contains("if (nativeResult == 0)"),
+            "a `ulong`-returning P/Invoke must be null-checked against the scalar `0`:\n{handle_body}"
+        );
+        assert!(
+            !handle_body.contains("IntPtr.Zero"),
+            "comparing a `ulong` against `IntPtr.Zero` is the CS0034 defect:\n{handle_body}"
+        );
+
+        let string_func = func_returning("find_name", TypeRef::Optional(Box::new(TypeRef::String)));
+        let string_decl = pinvoke(&string_func, &HashMap::new());
+        let string_body = wrap(&string_func);
+        assert!(
+            string_decl.contains("internal static extern IntPtr FindName("),
+            "a `char*` return must be declared `IntPtr`:\n{string_decl}"
+        );
+        assert!(
+            string_body.contains("if (nativeResult == IntPtr.Zero)"),
+            "an `IntPtr`-returning P/Invoke must keep its `IntPtr.Zero` check:\n{string_body}"
+        );
+    }
+
+    /// A host-native capsule return is exported by the FFI crate as a raw `*const T`
+    /// (`backends::ffi::gen_bindings::capsule::capsule_c_return_type`), not as an `AlefHandle`, so
+    /// its P/Invoke must say `IntPtr` even though the IR spells the return `TypeRef::Named`. Before
+    /// the fix the declaration said `ulong` while the capsule wrapper compared against
+    /// `IntPtr.Zero` — the exact CS0034 break, and the reason the sentinel is now derived from the
+    /// declaration rather than recomputed from `TypeRef`. ~keep
+    #[test]
+    fn capsule_return_declares_intptr_and_checks_intptr_zero() {
+        let func = func_returning("get_language", TypeRef::Named("Language".into()));
+        let cfg = HostCapsuleTypeConfig {
+            host_type: "TreeSitter.Language".to_string(),
+            construct_expr: "new TreeSitter.Language({ptr})".to_string(),
+            ..Default::default()
+        };
+        let capsule_types: HashMap<String, HostCapsuleTypeConfig> =
+            [("Language".to_string(), cfg.clone())].into_iter().collect();
+
+        let decl = pinvoke(&func, &capsule_types);
+        assert!(
+            decl.contains("internal static extern IntPtr GetLanguage("),
+            "a capsule return crosses as a raw pointer and must be declared `IntPtr`:\n{decl}"
+        );
+        assert!(
+            !pinvoke(&func, &HashMap::new()).contains("extern IntPtr GetLanguage("),
+            "without capsule config the same `Named` return must still be the `ulong` AlefHandle"
+        );
+
+        let body = gen_capsule_function_wrapper(&func, "TestException", "sample_ffi", &cfg);
+        assert!(
+            body.contains("if (nativeResult == IntPtr.Zero)"),
+            "the capsule wrapper must null-check against the sentinel its `IntPtr` declaration \
+             pairs with:\n{body}"
         );
     }
 }

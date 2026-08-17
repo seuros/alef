@@ -1,7 +1,8 @@
 use crate::codegen::naming::csharp_type_name;
+use crate::core::config::HostCapsuleTypeConfig;
 use crate::core::ir::{PrimitiveType, TypeDef, TypeRef};
 use heck::ToLowerCamelCase;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// True when `ty` crosses the C ABI as the scalar `AlefHandle` (`uint64_t`) rather than a
 /// real pointer. Mirrors `FfiParamMapper`/`FfiReturnMapper::named` in
@@ -19,10 +20,43 @@ pub(super) fn is_handle_type(ty: &TypeRef) -> bool {
     }
 }
 
+/// The P/Invoke return type of a host-native capsule function.
+///
+/// A capsule return is *not* an `AlefHandle`: the FFI crate exports it as a raw
+/// `*const T` owned by the host runtime — see
+/// `backends::ffi::gen_bindings::capsule::capsule_c_return_type` — so it crosses as a real
+/// pointer even though the IR spells it `TypeRef::Named`. Every other C-ABI backend agrees
+/// (Dart declares `Pointer<Void>`, Zig a `*const` extern). ~keep
+pub(super) const CAPSULE_PINVOKE_RETURN_TYPE: &str = "IntPtr";
+
+/// True when `ty` is a host-native capsule return whose value crosses as a raw pointer.
+///
+/// Deliberately matches only a bare `Named`, exactly like the capsule-wrapper router in
+/// `methods::class`, which calls this: if the router and the P/Invoke declaration disagreed
+/// about which functions are capsules, the wrapper's zero check and the `extern` signature
+/// would be derived from different facts — the CS0034 `ulong`/`nint` ambiguity this
+/// predicate exists to prevent. ~keep
+pub(super) fn is_capsule_return(ty: &TypeRef, capsule_types: &HashMap<String, HostCapsuleTypeConfig>) -> bool {
+    matches!(ty, TypeRef::Named(name) if capsule_types.contains_key(name))
+}
+
+/// The C# zero-sentinel literal that pairs with an already-emitted P/Invoke return type.
+///
+/// This is the single source of truth for null checks: callers must pass the *same* string
+/// the `[DllImport]` declaration was emitted from, so a check can never be derived from a
+/// different fact than the signature it guards. ~keep
+pub(super) fn zero_sentinel_for_pinvoke_type(pinvoke_ty: &str) -> &'static str {
+    if pinvoke_ty == CAPSULE_PINVOKE_RETURN_TYPE {
+        "IntPtr.Zero"
+    } else {
+        "0"
+    }
+}
+
 /// The C# zero-sentinel literal for a P/Invoke return value: the scalar `0` for a value
 /// carried as `AlefHandle`, or `IntPtr.Zero` for a value carried as a real native pointer.
 pub(super) fn zero_sentinel(ty: &TypeRef) -> &'static str {
-    if is_handle_type(ty) { "0" } else { "IntPtr.Zero" }
+    zero_sentinel_for_pinvoke_type(pinvoke_return_type(ty))
 }
 
 /// Returns the C# type to use in a `[DllImport]` declaration for the given return type.
@@ -60,6 +94,21 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
         | TypeRef::Named(_)
         | TypeRef::Path
         | TypeRef::Json => "IntPtr",
+    }
+}
+
+/// Returns the C# `[DllImport]` return type, accounting for host-native capsule returns.
+///
+/// This is the one function the `extern` signature is emitted from; pair it with
+/// [`zero_sentinel_for_pinvoke_type`] to derive the matching null check.
+pub(super) fn pinvoke_return_type_with_capsules(
+    ty: &TypeRef,
+    capsule_types: &HashMap<String, HostCapsuleTypeConfig>,
+) -> &'static str {
+    if is_capsule_return(ty, capsule_types) {
+        CAPSULE_PINVOKE_RETURN_TYPE
+    } else {
+        pinvoke_return_type(ty)
     }
 }
 

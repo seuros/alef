@@ -1,6 +1,8 @@
 //! C# NativeMethods (P/Invoke) code generation.
 
-use super::{StreamingMethodMeta, is_bridge_param, pinvoke_param_type, pinvoke_return_type};
+use super::{
+    StreamingMethodMeta, is_bridge_param, pinvoke_param_type, pinvoke_return_type, pinvoke_return_type_with_capsules,
+};
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::config::workspace::ClientConstructorConfig;
@@ -141,6 +143,7 @@ pub(super) fn gen_native_methods(
     exclude_functions: &HashSet<String>,
     client_constructors: &HashMap<String, ClientConstructorConfig>,
     adapters: &[crate::core::config::AdapterConfig],
+    capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
 ) -> anyhow::Result<String> {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
@@ -349,6 +352,7 @@ pub(super) fn gen_native_methods(
                 func,
                 bridge_param_names,
                 bridge_type_aliases,
+                capsule_types,
             ));
         }
     }
@@ -620,6 +624,7 @@ pub(super) fn gen_pinvoke_for_func(
     func: &FunctionDef,
     bridge_param_names: &HashSet<String>,
     bridge_type_aliases: &HashSet<String>,
+    capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
 ) -> String {
     use crate::backends::csharp::template_env::render;
 
@@ -632,7 +637,7 @@ pub(super) fn gen_pinvoke_for_func(
     if is_bytes_result {
         out.push_str("int");
     } else {
-        out.push_str(pinvoke_return_type(&func.return_type));
+        out.push_str(pinvoke_return_type_with_capsules(&func.return_type, capsule_types));
     }
 
     out.push(' ');
@@ -957,6 +962,7 @@ registry_getter = "markup_visitor_registry"
             &HashSet::new(),
             &HashMap::new(),
             &[],
+            &HashMap::new(),
         )
         .expect("no trait bridges configured, so generation cannot fail");
 
@@ -1018,6 +1024,7 @@ registry_getter = "markup_visitor_registry"
             &HashSet::new(),
             &HashMap::new(),
             &[],
+            &HashMap::new(),
         )
         .expect("no trait bridges configured, so generation cannot fail");
 
@@ -1082,6 +1089,7 @@ registry_getter = "markup_visitor_registry"
             &HashSet::new(),
             &HashMap::new(),
             &[],
+            &HashMap::new(),
         )
     }
 

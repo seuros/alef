@@ -9,11 +9,11 @@ use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
 use std::collections::{HashMap, HashSet};
 
 /// Check if a function returns a capsule type (Language passthrough).
+///
+/// Delegates to the shared predicate so this router and `pinvoke_return_type_with_capsules`
+/// can never disagree about which functions return a raw host pointer. ~keep
 fn is_capsule_function(func: &FunctionDef, capsule_types: &HashMap<String, HostCapsuleTypeConfig>) -> bool {
-    match &func.return_type {
-        TypeRef::Named(name) => capsule_types.contains_key(name),
-        _ => false,
-    }
+    super::super::is_capsule_return(&func.return_type, capsule_types)
 }
 
 /// Get the capsule config for a function's return type, if it is a capsule.
@@ -231,14 +231,19 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
     }
 
     let has_base_error = !api.errors.is_empty();
-    let (base_exception_class, has_invalid_input_variant, variant_dispatch_lines) = if has_base_error {
+    let (base_exception_class, variant_dispatch_lines) = if has_base_error {
         let base_error = &api.errors[0];
         let base_ex = format!("{}Exception", base_error.name);
-        let has_invalid = base_error.variants.iter().any(|v| v.name == "InvalidInput");
+        // Every variant dispatches by message prefix here, `InvalidInput` included: the FFI
+        // layer's numeric code 1 is the infrastructure `ALEF_FFI_CONVERSION_ERROR`, not a slot
+        // reserved for a user variant that happens to share that name, and
+        // `ApiSurface::validate_error_taxonomy` forbids user `error_code`s below 100 — so no
+        // legitimate user variant can ever earn code 1. A prior version special-cased
+        // `code == 1` straight to `InvalidInputException`, which mislabeled every real
+        // conversion failure as that variant whenever an error enum happened to declare one. ~keep
         let mut variants_with_prefix: Vec<(String, String)> = base_error
             .variants
             .iter()
-            .filter(|v| v.name != "InvalidInput")
             .filter_map(|v| {
                 let template = v.message_template.as_deref()?;
                 let prefix_end = template.find('{').unwrap_or(template.len());
@@ -257,9 +262,9 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
                 format!("        if (message.StartsWith(\"{escaped_prefix}\")) return new {class}(message);")
             })
             .collect();
-        (base_ex, has_invalid, dispatch_lines)
+        (base_ex, dispatch_lines)
     } else {
-        (String::new(), false, Vec::new())
+        (String::new(), Vec::new())
     };
 
     out.push_str(&render(
@@ -268,7 +273,6 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
             "exception_name": exception_name,
             "has_base_error": has_base_error,
             "base_exception_class": base_exception_class,
-            "has_invalid_input_variant": has_invalid_input_variant,
             "variant_dispatch_lines": variant_dispatch_lines,
         })),
     ));

@@ -11,9 +11,10 @@ use files::{
     strip_trailing_whitespace,
 };
 use marshalling::{
-    bytes_len_arg, emit_named_param_setup, emit_named_param_teardown, emit_named_param_teardown_indented,
-    is_bridge_param, native_call_arg, needs_param_teardown, pinvoke_param_type, pinvoke_return_type,
-    returns_bool_via_int, returns_json_object, returns_ptr, returns_string, zero_sentinel,
+    CAPSULE_PINVOKE_RETURN_TYPE, bytes_len_arg, emit_named_param_setup, emit_named_param_teardown,
+    emit_named_param_teardown_indented, is_bridge_param, is_capsule_return, native_call_arg, needs_param_teardown,
+    pinvoke_param_type, pinvoke_return_type, pinvoke_return_type_with_capsules, returns_bool_via_int,
+    returns_json_object, returns_ptr, returns_string, zero_sentinel, zero_sentinel_for_pinvoke_type,
 };
 
 /// Metadata for a streaming adapter, used to drive emission of an
@@ -287,6 +288,12 @@ impl Backend for CsharpBackend {
 
         let exception_class_name = format!("{}Exception", to_csharp_name(&api.crate_name));
 
+        let capsule_types = config
+            .csharp
+            .as_ref()
+            .map(|c| c.capsule_types.clone())
+            .unwrap_or_default();
+
         files.push(GeneratedFile {
             path: base_path.join("NativeMethods.cs"),
             content: strip_trailing_whitespace(&functions::gen_native_methods(
@@ -303,6 +310,7 @@ impl Backend for CsharpBackend {
                 &exclude_functions,
                 &config.client_constructors,
                 &config.adapters,
+                &capsule_types,
             )?),
             generated_header: true,
         });
@@ -346,11 +354,6 @@ impl Backend for CsharpBackend {
             .collect();
 
         let wrapper_class_name = csharp_wrapper_class_name(&api.crate_name, &namespace);
-        let capsule_types = config
-            .csharp
-            .as_ref()
-            .map(|c| c.capsule_types.clone())
-            .unwrap_or_default();
         crate::core::config::languages::require_shared_native_runtime(
             &capsule_types,
             config

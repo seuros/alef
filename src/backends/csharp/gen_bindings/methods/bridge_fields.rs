@@ -1,3 +1,4 @@
+use super::super::zero_sentinel;
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::doc_emission;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
@@ -164,7 +165,10 @@ pub(super) fn gen_bridge_field_wrapper_function(
     out.push_str(");\n");
 
     if func.return_type != TypeRef::Unit {
-        out.push_str("                    if (nativeResult == IntPtr.Zero) throw GetLastError();\n");
+        let zero = zero_sentinel(&func.return_type);
+        out.push_str(&format!(
+            "                    if (nativeResult == {zero}) throw GetLastError();\n"
+        ));
     }
 
     if func.return_type != TypeRef::Unit {
@@ -210,7 +214,10 @@ pub(super) fn gen_bridge_field_wrapper_function(
     out.push_str(");\n");
 
     if func.return_type != TypeRef::Unit {
-        out.push_str("                if (nativeResult == IntPtr.Zero) throw GetLastError();\n");
+        let zero = zero_sentinel(&func.return_type);
+        out.push_str(&format!(
+            "                if (nativeResult == {zero}) throw GetLastError();\n"
+        ));
         out.push_str(&render(
             "bridge_field_json_return.jinja",
             minijinja::context! { indent => "                ", result_pascal },
