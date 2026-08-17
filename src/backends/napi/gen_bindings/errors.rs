@@ -344,12 +344,45 @@ pub(super) fn gen_dts(
                         }
                     }
                     lines.push("};".to_string());
+                } else if is_data_enum && e.variants.iter().any(|v| !v.fields.is_empty()) {
+                    // Internal tagging (`#[serde(tag = "...")]`) with at least one data-bearing
+                    // variant: each variant serializes to its own flat object on the wire —
+                    // `{"type":"basic","username":"...","password":"..."}` — with no other keys
+                    // present, so a discriminated union of per-variant shapes matches the wire
+                    // format exactly and gives callers real narrowing plus required fields. The
+                    // compiled napi struct behind this still stores every variant's fields as one
+                    // flattened `Option<T>` bag (`gen_tagged_enum_as_object`), but a constructed
+                    // instance only ever populates its own variant's fields, so the union type is
+                    // a faithful (if narrower) view of what a caller actually receives — the same
+                    // relationship the adjacent-tagging branch above already relies on. Field
+                    // naming reuses `tagged_enum_field_js_name` so a newtype variant's synthetic
+                    // `_0` field still gets its variant-derived name, not a bare `0`. (~keep)
+                    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
+                    let mut member_lines: Vec<String> = Vec::new();
+                    for variant in &e.variants {
+                        let tag_value = wire_variant_value(
+                            &variant.name,
+                            variant.serde_rename.as_deref(),
+                            e.serde_rename_all.as_deref(),
+                        );
+                        let mut obj_fields: Vec<String> = vec![format!("{tag_field}: '{tag_value}'")];
+                        for field in &variant.fields {
+                            let js_name = enums::tagged_enum_field_js_name(variant, field);
+                            let ts_ty = dts_type(&field.ty, no_prefix);
+                            if matches!(field.ty, TypeRef::Optional(_)) {
+                                obj_fields.push(format!("{js_name}?: {ts_ty}"));
+                            } else {
+                                obj_fields.push(format!("{js_name}: {ts_ty}"));
+                            }
+                        }
+                        member_lines.push(format!("  | {{ {} }}", obj_fields.join("; ")));
+                    }
+                    lines.push(format!("export type {} =", e.name));
+                    lines.extend(member_lines);
                 } else if is_data_enum {
-                    // Internal tagging (`#[serde(tag = "...")]`): the napi glue flattens every
-                    // variant onto ONE `#[napi(object)]` struct (tag + one `Option<T>` field per
-                    // distinct variant field), so the `.d.ts` must be a single object type with
-                    // every payload field optional, not a discriminated union. Field naming and
-                    // dedup mirror `gen_tagged_enum_as_object` exactly via the shared helpers.
+                    // Internal tagging, every variant a unit variant: `{"kind":"A"}` carries no
+                    // payload fields to differentiate, so a single object with a union-valued tag
+                    // says the same thing as a per-variant union without the redundant repetition.
                     // (~keep)
                     let tag_field = e.serde_tag.as_deref().unwrap_or("type");
                     let tag_values: Vec<String> = e
@@ -362,39 +395,11 @@ pub(super) fn gen_dts(
                             )
                         })
                         .collect();
-                    let mut obj_fields: Vec<String> = vec![format!("{tag_field}: {}", tag_values.join(" | "))];
-                    let mut seen_fields: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-                    for variant in &e.variants {
-                        for field in &variant.fields {
-                            if enums::tagged_enum_field_is_tuple(field) && matches!(&field.ty, TypeRef::Named(_)) {
-                                continue;
-                            }
-                            let field_name = enums::tagged_enum_binding_field_name(e, variant, field);
-                            if seen_fields.insert(field_name) {
-                                let js_name = enums::tagged_enum_binding_field_js_name(e, variant, field);
-                                let ts_ty = dts_type(&field.ty, no_prefix);
-                                obj_fields.push(format!("{js_name}?: {ts_ty}"));
-                            }
-                        }
-                    }
-                    for variant in &e.variants {
-                        if variant.fields.len() != 1 {
-                            continue;
-                        }
-                        let field = &variant.fields[0];
-                        if !enums::tagged_enum_field_is_tuple(field) {
-                            continue;
-                        }
-                        if matches!(&field.ty, TypeRef::Named(_)) {
-                            let field_name = enums::tagged_enum_binding_field_name(e, variant, field);
-                            if seen_fields.insert(field_name) {
-                                let js_name = enums::tagged_enum_binding_field_js_name(e, variant, field);
-                                let ts_ty = dts_type(&field.ty, no_prefix);
-                                obj_fields.push(format!("{js_name}?: {ts_ty}"));
-                            }
-                        }
-                    }
-                    lines.push(format!("export type {} = {{ {} }};", e.name, obj_fields.join("; ")));
+                    lines.push(format!(
+                        "export type {} = {{ {tag_field}: {} }};",
+                        e.name,
+                        tag_values.join(" | ")
+                    ));
                 } else if e.serde_untagged && e.variants.iter().any(|v| !v.fields.is_empty()) {
                     // `#[serde(untagged)]`: each variant serializes as its own bare shape, with no
                     // discriminant and no wrapper object — the napi glue already reflects this by
@@ -911,11 +916,14 @@ mod tests {
     }
 
     /// Internally-tagged enums whose variants are newtype wrappers around struct types must
-    /// declare the same flat object the napi glue actually emits (one `#[napi(object)]` struct
-    /// with the discriminant plus one `Option<T>` per variant) — not a discriminated union keyed
-    /// by the tuple field's synthetic `_0` name. Regression test for the `0:` key bug.
+    /// declare a discriminated union keyed by the variant-derived field name (e.g. `system`,
+    /// `user`) — not the tuple field's synthetic `_0` name, and not the napi glue's internal
+    /// flattened `#[napi(object)]` representation. Regression test for the `0:` key bug and for
+    /// the flattening regression introduced alongside its original fix (see
+    /// `internally_tagged_struct_variants_declare_discriminated_union` for the more common
+    /// struct-variant case).
     #[test]
-    fn internally_tagged_newtype_variants_declare_flat_optional_object() {
+    fn internally_tagged_newtype_variants_declare_discriminated_union() {
         let api = ApiSurface {
             enums: vec![EnumDef {
                 name: "InternalNewtype".to_string(),
@@ -957,19 +965,103 @@ mod tests {
             &Default::default(),
         );
 
-        assert!(
-            dts.contains(
-                "export type InternalNewtype = { role: 'system' | 'user'; system?: SystemMessage; user?: UserMessage };"
-            ),
-            "expected a flat optional-field object matching the napi glue struct, got:\n{dts}"
+        assert_eq!(
+            dts.lines()
+                .skip_while(|l| *l != "export type InternalNewtype =")
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![
+                "export type InternalNewtype =",
+                "  | { role: 'system'; system: SystemMessage }",
+                "  | { role: 'user'; user: UserMessage }",
+            ],
+            "expected a discriminated union keyed by the variant-derived field name, got:\n{dts}"
         );
         assert!(
             !dts.contains("0:"),
             "must not emit the tuple field's synthetic `_0` name as a `0:` key:\n{dts}"
         );
         assert!(
-            !dts.contains(" | { role:"),
-            "must not emit a discriminated union of per-variant shapes:\n{dts}"
+            !dts.contains("system?:") && !dts.contains("user?:"),
+            "a field belonging to only one variant must not be optional:\n{dts}"
+        );
+    }
+
+    /// The reported regression: an internally-tagged enum whose variants are struct variants
+    /// (e.g. `AuthConfig::Basic { username, password }`) must declare a real discriminated union
+    /// — one member per variant, each variant's own fields required — not a single flattened
+    /// object with every field made optional. Each variant serializes to its own flat object on
+    /// the wire (`{"type":"basic","username":"...","password":"..."}`), so the union is a
+    /// one-to-one match for what a caller actually receives.
+    #[test]
+    fn internally_tagged_struct_variants_declare_discriminated_union() {
+        let api = ApiSurface {
+            enums: vec![EnumDef {
+                name: "AuthConfig".to_string(),
+                serde_tag: Some("type".to_string()),
+                serde_rename_all: Some("snake_case".to_string()),
+                variants: vec![
+                    EnumVariant {
+                        name: "Basic".to_string(),
+                        fields: vec![
+                            FieldDef {
+                                name: "username".to_string(),
+                                ty: TypeRef::String,
+                                ..Default::default()
+                            },
+                            FieldDef {
+                                name: "password".to_string(),
+                                ty: TypeRef::String,
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    EnumVariant {
+                        name: "Bearer".to_string(),
+                        fields: vec![FieldDef {
+                            name: "token".to_string(),
+                            ty: TypeRef::String,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let dts = gen_dts(
+            &api,
+            "",
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+        );
+
+        assert_eq!(
+            dts.lines()
+                .skip_while(|l| *l != "export type AuthConfig =")
+                .take(3)
+                .collect::<Vec<_>>(),
+            vec![
+                "export type AuthConfig =",
+                "  | { type: 'basic'; username: string; password: string }",
+                "  | { type: 'bearer'; token: string }",
+            ],
+            "expected one discriminated-union member per variant with required fields, got:\n{dts}"
+        );
+        assert!(
+            !dts.contains("username?:") && !dts.contains("password?:") && !dts.contains("token?:"),
+            "a field belonging to only one variant must not be optional:\n{dts}"
+        );
+        assert!(
+            !dts.contains("export type AuthConfig = {"),
+            "must not emit a single flattened object type:\n{dts}"
         );
     }
 
