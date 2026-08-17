@@ -1,6 +1,7 @@
 use super::{
-    WasmBackend, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields, forward_trait_bridge_builder_fields,
-    WasmCallability, function_is_exported, types_needing_self_delegation_reverse_impl, wasm_callability,
+    WasmBackend, WasmCallability, cargo::gen_cargo_toml, fix_dropped_payload_enum_option_fields,
+    forward_trait_bridge_builder_fields, function_is_exported, types_needing_self_delegation_reverse_impl,
+    wasm_callability,
 };
 use crate::core::backend::Backend;
 use crate::core::config::{BridgeBinding, NewAlefConfig, ResolvedCrateConfig, TraitBridgeConfig};

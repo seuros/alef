@@ -349,8 +349,10 @@ mod tests {
         assert!(gated.contains("does not export"), "{gated}");
         assert!(gated.contains("`download`"), "{gated}");
 
-        e2e.calls
-            .insert("download".into(), call_named_only_by_overrides(&[("wasm", "fetchAssets")]));
+        e2e.calls.insert(
+            "download".into(),
+            call_named_only_by_overrides(&[("wasm", "fetchAssets")]),
+        );
         let absent = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &functions)
             .expect_err("a name nothing answers to under either spelling is not callable")
             .to_string();

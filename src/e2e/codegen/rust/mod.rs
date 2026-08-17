@@ -1005,12 +1005,18 @@ client_factory = "create_client"
             .render_snippet_body(&fixture, &e2e, &resolved, &[], &[])
             .expect("Rust snippet renders");
 
-        assert!(!rendered.contains("MOCK_SERVER"), "mock-server env var leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("MOCK_SERVER"),
+            "mock-server env var leaked:\n{rendered}"
+        );
         assert!(
             !rendered.contains("/fixtures/rate_limit_429"),
             "mock-server fixture route leaked:\n{rendered}"
         );
-        assert!(!rendered.contains("\"test-key\""), "literal credential leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("\"test-key\""),
+            "literal credential leaked:\n{rendered}"
+        );
         assert!(
             rendered.contains("std::env::var(\"API_KEY\").expect(\"API_KEY must be set\")"),
             "credential is not read from the environment:\n{rendered}"

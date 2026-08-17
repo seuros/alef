@@ -373,7 +373,11 @@ fn record_type_scalar_defaults_agree_with_the_swift_renderer() {
 
     let code = render_plain_record(&typ);
 
-    let cs_names = ["EnablePdfTextHeuristics", "TextLayerThreshold", "FileSizeThresholdBytes"];
+    let cs_names = [
+        "EnablePdfTextHeuristics",
+        "TextLayerThreshold",
+        "FileSizeThresholdBytes",
+    ];
     for (field, cs_name) in fields.iter().zip(cs_names) {
         let typed_default = field.typed_default.as_ref().expect("fixture field carries a default");
         let swift = swift_typed_default_literal(typed_default).expect("swift renders every fixture default");

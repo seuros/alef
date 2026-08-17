@@ -285,7 +285,10 @@ mod tests {
         )
         .expect("snippet renders");
 
-        assert!(!rendered.contains("MOCK_SERVER"), "mock-server env var leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("MOCK_SERVER"),
+            "mock-server env var leaked:\n{rendered}"
+        );
         assert!(
             !rendered.contains("AlefE2EMockServer"),
             "e2e mock-server harness type leaked:\n{rendered}"
@@ -294,7 +297,10 @@ mod tests {
             !rendered.contains("/fixtures/rate_limit_429"),
             "mock-server fixture route leaked:\n{rendered}"
         );
-        assert!(!rendered.contains("\"test-key\""), "literal credential leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("\"test-key\""),
+            "literal credential leaked:\n{rendered}"
+        );
         assert!(
             rendered.contains("ProcessInfo.processInfo.environment[\"API_KEY\"]"),
             "credential is not read from the environment:\n{rendered}"

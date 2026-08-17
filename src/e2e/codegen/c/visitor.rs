@@ -798,7 +798,11 @@ mod visitor_tests {
         )
         .expect("visitor snippet renders");
 
-        assert_eq!(brace_depth(&content), 0, "visitor snippet braces do not balance:\n{content}");
+        assert_eq!(
+            brace_depth(&content),
+            0,
+            "visitor snippet braces do not balance:\n{content}"
+        );
     }
 
     /// The snippet must spell header *types* with cbindgen's `[export] prefix`, which is

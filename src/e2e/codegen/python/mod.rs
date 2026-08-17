@@ -862,12 +862,18 @@ from_json_module = "my_lib._internal_bindings"
             .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
             .expect("snippet renders");
 
-        assert!(!rendered.contains("MOCK_SERVER"), "mock-server env var leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("MOCK_SERVER"),
+            "mock-server env var leaked:\n{rendered}"
+        );
         assert!(
             !rendered.contains("/fixtures/rate_limit_429"),
             "mock-server fixture route leaked:\n{rendered}"
         );
-        assert!(!rendered.contains("\"test-key\""), "literal credential leaked:\n{rendered}");
+        assert!(
+            !rendered.contains("\"test-key\""),
+            "literal credential leaked:\n{rendered}"
+        );
         assert!(
             rendered.contains("os.environ[\"API_KEY\"]"),
             "credential is not read from the environment:\n{rendered}"

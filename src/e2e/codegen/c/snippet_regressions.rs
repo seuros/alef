@@ -597,8 +597,8 @@ fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
     );
 
     let bytes = mock_backed_fixture("speech_basic");
-    let rendered = render_c_snippet(&bytes, &bytes_client_e2e(), &bytes_client_config(), &[], &[])
-        .expect("bytes snippet renders");
+    let rendered =
+        render_c_snippet(&bytes, &bytes_client_e2e(), &bytes_client_config(), &[], &[]).expect("bytes snippet renders");
 
     assert_no_mock_harness(&rendered, "speech_basic");
     assert!(
