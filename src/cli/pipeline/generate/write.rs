@@ -682,6 +682,23 @@ pub fn finalize_hashes(
 /// twice -- once via explicit tracking, once via the directory scan -- is
 /// harmless; `paths` is a `HashSet`; duplicates collapse before any file is
 /// touched.
+///
+/// The same "regardless of whether this run's generation touched it" breadth
+/// that makes the cache-hit self-heal work has a cost the self-heal framing
+/// doesn't mention: `collect_alef_headered_paths` cannot tell a still-valid
+/// skipped-language file from a file the generator has permanently stopped
+/// emitting (a type folded into a capsule, a manifest whose emit condition
+/// changed). Both carry the marker; both get re-derived from their own
+/// on-disk content and re-stamped here. For the orphan, that is not
+/// "harmless" the way the duplicate-sweep case is -- it is the step that
+/// launders a stale file into one `alef verify` reports as current, with no
+/// trace that it happened. `paths` (this run's explicit, generation-sourced
+/// keep set) is the only signal this function has for which route a given
+/// path took, so every path added purely by the directory scan is logged
+/// below; it is not proof of staleness (a legitimately skipped language lands
+/// here too), but it is the only place in this call chain the two cases are
+/// still distinguishable at all, so it is surfaced rather than silently
+/// re-stamped alongside the paths this run actually generated. ~keep
 pub fn finalize_hashes_sweeping(
     paths: &std::collections::HashSet<std::path::PathBuf>,
     roots: &[std::path::PathBuf],
@@ -692,7 +709,39 @@ pub fn finalize_hashes_sweeping(
     for root in roots {
         swept.extend(super::orphans::collect_alef_headered_paths(root));
     }
+    log_disk_scan_only_restamps(paths, &swept);
     finalize_hashes(&swept, sources_hash, alef_toml_bytes)
+}
+
+/// Name every path in `swept` that reached [`finalize_hashes_sweeping`] only
+/// through the `collect_alef_headered_paths` directory scan, not through
+/// `paths` (this run's explicit, generation-sourced keep set). See that
+/// function's doc for why this is the one place the two routes are still
+/// distinguishable, and why it is not by itself proof any given path is an
+/// orphan. ~keep
+fn log_disk_scan_only_restamps(
+    paths: &std::collections::HashSet<std::path::PathBuf>,
+    swept: &std::collections::HashSet<std::path::PathBuf>,
+) {
+    let mut disk_scan_only: Vec<&std::path::PathBuf> = swept.difference(paths).collect();
+    if disk_scan_only.is_empty() {
+        return;
+    }
+    disk_scan_only.sort();
+    debug!(
+        "{} alef-marked file(s) under this sweep's roots were re-stamped from their own on-disk \
+         content without appearing in this run's explicit generation output -- expected for a \
+         language skipped by the per-language cache, but also how a file the generator has \
+         stopped emitting entirely (a dropped type, a manifest whose emit condition changed) gets \
+         its stale `alef:hash:` line replaced with one that matches, so `alef verify` reports it \
+         current. If a path below is not owned by a currently cache-skipped language, it is \
+         orphaned rather than merely unchanged -- cross-check against sweep_manifest_orphans's \
+         input for this run.",
+        disk_scan_only.len()
+    );
+    for path in disk_scan_only {
+        debug!("  re-stamped via disk scan only: {}", path.display());
+    }
 }
 
 #[cfg(test)]

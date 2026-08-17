@@ -555,4 +555,79 @@ mod tests {
             "write_cache=true must create the language hash cache file"
         );
     }
+
+    /// Reproduces the self-erasing baseline reported against `alef all`'s
+    /// binding-orphan sweep. `write_lang_hash` (called right here, at
+    /// `generate`'s `write_cache` branch above, on every cache-miss
+    /// regeneration) and `cache::read_lang_manifest` (the source of
+    /// `previous_paths` at the `alef all` binding-orphan-sweep call site in
+    /// `src/bin_cli/all_commands.rs`) both resolve to the identical on-disk
+    /// file: `.alef/<crate>/hashes/<lang>.manifest`. That call site always runs
+    /// after `generate()` in the same command invocation, so the "previous run"
+    /// baseline it reads back is not the previous run's output -- it is this
+    /// run's output, written moments earlier by the very call under test here.
+    /// A path this run stopped emitting (e.g. a type folded into a capsule
+    /// type) was never part of that write, so it can never appear in the read,
+    /// and is therefore invisible to `sweep_manifest_orphans` as a candidate --
+    /// not because the sweep's own matching logic is wrong (see
+    /// `orphans.rs`'s `manifest_sweep_*` tests, which prove it is correct given
+    /// a correct baseline), but because the baseline itself was clobbered
+    /// before the sweep ever read it. This is why the sweep measured zero
+    /// orphans in production regardless of whether any genuinely existed. ~keep
+    #[test]
+    fn lang_manifest_baseline_self_erases_before_the_orphan_sweep_ever_reads_it() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(dir.path()).expect("chdir into tempdir");
+
+        let result = (|| -> anyhow::Result<()> {
+            let package_dir = dir.path().join("packages/python");
+            std::fs::create_dir_all(&package_dir)?;
+            let dropped_type_file = package_dir.join("dropped_type.py");
+            let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+            let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+            std::fs::write(&dropped_type_file, &hashed)?;
+
+            // Run N-1: the type still existed, so generation wrote both the file
+            // above (not simulated here -- assumed already on disk from that
+            // run) and recorded it in the language manifest via the exact
+            // `write_lang_hash` call `generate`'s `write_cache` branch makes. ~keep
+            cache::write_lang_hash("sample", "python", "hash-n-minus-1", &[dropped_type_file.clone()])?;
+
+            // Run N: the type folded into a capsule type, so this run's
+            // generated file list no longer includes it. `generate` calls
+            // `write_lang_hash` again, unconditionally, with the smaller list --
+            // before `all_commands.rs` ever reads the manifest as
+            // `previous_paths` for the orphan sweep. ~keep
+            cache::write_lang_hash("sample", "python", "hash-n", &[])?;
+
+            // Mirrors exactly what the `alef all` binding-orphan sweep does:
+            // read the language manifest as the previous-run baseline. ~keep
+            let previous_paths = cache::read_lang_manifest("sample", "python");
+            assert!(
+                !previous_paths.contains(&dropped_type_file),
+                "the write above already erased the dropped path from the baseline before this \
+                 read -- reproducing the self-erasure"
+            );
+
+            let keep = std::collections::HashSet::new();
+            let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir])?;
+
+            assert_eq!(
+                removed, 0,
+                "the sweep finds nothing to remove not because the file isn't an orphan, but \
+                 because its baseline was clobbered before the sweep ever ran"
+            );
+            assert!(
+                dropped_type_file.exists(),
+                "the dropped type's file survives on disk with its now-stale marker, invisible to \
+                 the sweep, ready to be re-stamped by finalize_hashes_sweeping"
+            );
+            Ok(())
+        })();
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        result.expect("reproduction body");
+    }
 }

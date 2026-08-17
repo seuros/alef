@@ -208,8 +208,18 @@ pub fn sweep_manifest_orphans(
             continue;
         }
         std::fs::remove_file(path).with_context(|| format!("failed to remove orphan {}", path.display()))?;
+        debug!("  swept manifest orphan: {}", path.display());
         removed += 1;
         removed += reclaim_lockfile_siblings(path, keep)?;
+    }
+    // This function previously returned its count with no logging at any level, at any call
+    // site (every caller discards the `Ok(usize)` through `?`), which made "did the sweep run
+    // and find nothing" and "did the sweep not run at all" indistinguishable from the log --
+    // the exact ambiguity that made a caller-side wiring defect (a previous-run baseline
+    // clobbered before this function ever saw it) look, from the log alone, like this
+    // function's own fault. ~keep
+    if removed > 0 {
+        info!("Swept {removed} manifest orphan(s)");
     }
     Ok(removed)
 }
