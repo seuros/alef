@@ -692,6 +692,33 @@ fn merge_values(existing: &mut toml_edit::Value, generated: &toml_edit::Value) {
     }
 }
 
+/// Strip a leading `/` from a `poly.toml` array value when doing so cannot
+/// change what the string means to poly, so array-identity comparisons treat
+/// `/packages/**` and `packages/**` as the same entry instead of accumulating
+/// both spellings forever.
+///
+/// poly's own anchoring rule (`build_excludes` in
+/// `poly-core/src/discover.rs`, gitignore-style): a glob is anchored to the
+/// walk root whenever it carries a `/` *anywhere except as a single trailing
+/// character* — a leading `/`, or one in the middle. `packages/**` already
+/// carries a middle `/` (the one before `**`, which is not the pattern's last
+/// character), so it is anchored exactly like `/packages/**` — the leading
+/// `/` is redundant and safe to drop before comparing. `Package.swift` carries
+/// no `/` at all, so it is unanchored (matches at any depth); `/Package.swift`
+/// anchors it to root instead — there the leading `/` changes which files
+/// match, so it is left alone. ~keep
+fn strip_redundant_leading_slash(value: &str) -> &str {
+    let Some(rest) = value.strip_prefix('/') else {
+        return value;
+    };
+    let without_trailing_slash = rest.strip_suffix('/').unwrap_or(rest);
+    if without_trailing_slash.contains('/') {
+        rest
+    } else {
+        value
+    }
+}
+
 /// Semantic equality for a TOML value, ignoring decor (whitespace, comments,
 /// quote style) entirely rather than comparing serialized text.
 ///
@@ -705,7 +732,7 @@ fn merge_values(existing: &mut toml_edit::Value, generated: &toml_edit::Value) {
 fn values_equal(existing: &toml_edit::Value, generated: &toml_edit::Value) -> bool {
     match (existing, generated) {
         (toml_edit::Value::String(existing), toml_edit::Value::String(generated)) => {
-            existing.value() == generated.value()
+            strip_redundant_leading_slash(existing.value()) == strip_redundant_leading_slash(generated.value())
         }
         (toml_edit::Value::Integer(existing), toml_edit::Value::Integer(generated)) => {
             existing.value() == generated.value()
@@ -758,14 +785,16 @@ fn dedupe_array(array: &mut toml_edit::Array) {
 
 /// The decoded, decor-free representation of a value used for the merge
 /// provenance record and the prune comparison -- a plain string decodes to
-/// itself; anything else falls back to trimmed serialized text (arrays and
-/// inline tables are not a shape alef's own `exclude`-style generators ever
-/// emit as array *elements*, so this fallback is not expected to matter in
-/// practice, only to avoid silently dropping an unusual value from the
-/// record).
+/// itself modulo [`strip_redundant_leading_slash`] (so `/packages/**` and
+/// `packages/**` are recorded and pruned as the same value, matching the
+/// identity [`values_equal`] uses for the union pass); anything else falls
+/// back to trimmed serialized text (arrays and inline tables are not a shape
+/// alef's own `exclude`-style generators ever emit as array *elements*, so
+/// this fallback is not expected to matter in practice, only to avoid
+/// silently dropping an unusual value from the record).
 fn canonical_value_repr(value: &toml_edit::Value) -> String {
     match value {
-        toml_edit::Value::String(value) => value.value().clone(),
+        toml_edit::Value::String(value) => strip_redundant_leading_slash(value.value()).to_string(),
         other => other.to_string().trim().to_string(),
     }
 }
@@ -895,4 +924,76 @@ fn detached_item(mut item: toml_edit::Item) -> toml_edit::Item {
 /// is not on PATH.
 fn normalize_poly_config(full_path: &Path, base_dir: &Path) {
     crate::cli::pipeline::poly_format(std::slice::from_ref(&full_path.to_path_buf()), base_dir);
+}
+
+#[cfg(test)]
+mod merge_managed_toml_tests {
+    use super::*;
+
+    fn exclude_values(merged: &str) -> Vec<String> {
+        let doc = merged
+            .parse::<toml_edit::DocumentMut>()
+            .expect("parse merged poly.toml");
+        doc["discovery"]["exclude"]
+            .as_array()
+            .expect("discovery.exclude is an array")
+            .iter()
+            .map(|value| value.as_str().expect("exclude entries are strings").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn merge_does_not_duplicate_a_leading_slash_spelling_variant_of_an_existing_glob() {
+        let existing = "[discovery]\nexclude = [\"/packages/**\"]\n";
+        let generated = "[discovery]\nexclude = [\"packages/**\"]\n";
+        let previous_generated_arrays = std::collections::BTreeMap::new();
+
+        let (merged, _) =
+            merge_managed_toml_core(existing, generated, &previous_generated_arrays).expect("merge succeeds");
+
+        assert_eq!(
+            exclude_values(&merged),
+            vec!["/packages/**".to_string()],
+            "packages/** and /packages/** anchor identically to poly (the / before ** already \
+             anchors it) -- the union pass must not append a second, differently-spelled copy"
+        );
+    }
+
+    #[test]
+    fn merge_prunes_a_stale_glob_even_when_the_consumer_file_spells_it_with_a_leading_slash() {
+        let existing = "[discovery]\nexclude = [\"/packages/**\", \"kept/**\"]\n";
+        let generated = "[discovery]\nexclude = [\"kept/**\"]\n";
+        let mut previous_generated_arrays = std::collections::BTreeMap::new();
+        previous_generated_arrays.insert("discovery.exclude".to_string(), vec!["packages/**".to_string()]);
+
+        let (merged, current_generated_arrays) =
+            merge_managed_toml_core(existing, generated, &previous_generated_arrays).expect("merge succeeds");
+
+        assert_eq!(
+            exclude_values(&merged),
+            vec!["kept/**".to_string()],
+            "alef recorded packages/** as its own prior proposal and no longer generates it; the \
+             consumer's on-disk copy spelled it /packages/** and must still be pruned rather than \
+             surviving forever as unrecognised foreign content"
+        );
+        assert_eq!(
+            current_generated_arrays.get("discovery.exclude"),
+            Some(&vec!["kept/**".to_string()])
+        );
+    }
+
+    #[test]
+    fn strip_redundant_leading_slash_treats_a_dir_glob_leading_slash_as_a_no_op() {
+        assert_eq!(strip_redundant_leading_slash("/packages/**"), "packages/**");
+        assert_eq!(strip_redundant_leading_slash("packages/**"), "packages/**");
+    }
+
+    #[test]
+    fn strip_redundant_leading_slash_keeps_a_leading_slash_that_changes_anchoring() {
+        // `Package.swift` carries no other `/`, so it is unanchored (matches at any
+        // depth); `/Package.swift` anchors it to the walk root instead -- these are
+        // genuinely different globs to poly and must not be collapsed.
+        assert_eq!(strip_redundant_leading_slash("/Package.swift"), "/Package.swift");
+        assert_eq!(strip_redundant_leading_slash("Package.swift"), "Package.swift");
+    }
 }
