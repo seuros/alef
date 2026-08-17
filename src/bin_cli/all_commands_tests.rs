@@ -4,6 +4,7 @@ use super::{
 };
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
+use crate::cli::cache;
 use crate::core::config::NewAlefConfig;
 
 #[test]
@@ -647,5 +648,103 @@ fn all_gates_e2e_stage_hash_and_orphan_sweep_on_a_deferred_generator_failure() {
         handle(e2e_defer_all_command(), &context),
         "a repeat run over the same broken fixture must still fail -- a stage hash written on \
          the previous failed attempt would silently cache the failure away",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `<lang>.manifest` cross-phase accumulation -- drives the real `handle` entry point
+// ---------------------------------------------------------------------------
+//
+// `generation.rs`'s own unit tests (`python_manifest_holds_only_the_binding_crate_when_
+// public_api_is_never_reconciled` and `write_lang_manifest_records_the_full_union_once_
+// every_phase_is_reconciled`) pin the same defect and its remedy one layer down, by
+// calling `generate()` / `generate_public_api()` / `write_lang_manifest()` directly.
+// Neither drives `all_commands.rs::handle`, so neither can catch a regression in the
+// wiring itself -- the per-phase accumulation into `language_output_paths` and the final
+// `cache::write_lang_manifest` call added to `handle`. This is the test that exercises
+// that wiring end to end. ~keep
+
+const LANG_MANIFEST_FIXTURE_SOURCE: &str = "pub fn greet(name: String) -> String {\n    name\n}\n";
+
+const LANG_MANIFEST_FIXTURE_CARGO_TOML: &str =
+    "[package]\nname = \"test-lib\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+
+/// `[crates.python.stubs]` is required for the stubs phase to produce anything at all --
+/// `pyo3::gen_bindings::public_files::generate_type_stubs` returns an empty file list
+/// outright when `config.python.stubs` is `None`. Setting `output` here also pins the
+/// public-API phase's output directory to the same value (it falls back to the same
+/// path when `stubs` is absent, but pinning it removes that as a second variable from
+/// the expected-path assertion below). ~keep
+const LANG_MANIFEST_FIXTURE_ALEF_TOML: &str = r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+version_from = "Cargo.toml"
+
+[crates.python]
+module_name = "test_lib"
+
+[crates.python.stubs]
+output = "packages/python/test_lib"
+"#;
+
+fn write_lang_manifest_fixture_workspace(root: &std::path::Path) {
+    std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
+    std::fs::write(root.join("src/lib.rs"), LANG_MANIFEST_FIXTURE_SOURCE).expect("write fixture source");
+    std::fs::write(root.join("Cargo.toml"), LANG_MANIFEST_FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
+    std::fs::write(root.join("alef.toml"), LANG_MANIFEST_FIXTURE_ALEF_TOML).expect("write fixture alef.toml");
+}
+
+fn lang_manifest_all_command() -> Commands {
+    Commands::All {
+        clean: false,
+        strict: false,
+        skip_frb: false,
+    }
+}
+
+/// Regression for the defect this whole change fixes: `alef all`'s generate step never
+/// called `cache::write_lang_manifest`, so `<lang>.manifest` was left holding only
+/// whatever `pipeline::generate`'s own internal `write_lang_hash` call recorded --
+/// `generate_bindings_checked`'s output alone -- while the stubs and public-API phases'
+/// files were written to disk and hash-stamped but never folded back into the manifest.
+/// On a real consumer tree this measured as `python 1/6`: one manifest entry against six
+/// alef-marked files actually on disk. This fixture reproduces that ratio exactly: one
+/// bindings file, one stub file, and four public-API files -- asserting the exact path
+/// set, not just non-emptiness, since the bug IS a non-empty (one-entry) manifest. ~keep
+#[test]
+fn all_writes_the_full_cross_phase_union_into_the_language_manifest() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().unwrap_or_else(|_| temp.path().to_path_buf());
+    write_lang_manifest_fixture_workspace(&root);
+    let _cwd = E2eDeferCwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    handle(lang_manifest_all_command(), &context).expect("all must succeed against a plain python fixture");
+
+    let mut manifest = cache::read_lang_manifest("test-lib", "python");
+    manifest.sort();
+
+    let mut expected = vec![
+        root.join("packages/python/lib.rs"),
+        root.join("packages/python/test_lib/test_lib.pyi"),
+        root.join("packages/python/test_lib/options.py"),
+        root.join("packages/python/test_lib/api.py"),
+        root.join("packages/python/test_lib/exceptions.py"),
+        root.join("packages/python/test_lib/__init__.py"),
+    ];
+    expected.sort();
+
+    assert_eq!(
+        manifest, expected,
+        "python.manifest must hold the union of every phase's alef-marked output -- bindings, \
+         stubs, and public API -- not just generate_bindings' own single file. Got: {manifest:?}"
     );
 }

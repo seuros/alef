@@ -271,6 +271,27 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 tracing::info!("Generating bindings...");
                 let bindings = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path, true)?;
+                // `<lang>.manifest` (`cache::write_lang_manifest`) must hold the union of every
+                // phase's output, not just this one: `pipeline::generate`'s own `write_lang_hash`
+                // call already stamped it with only `bindings`, and that stays uncorrected for a
+                // language `pipeline::generate` skips as lang-hash-cached (absent from `bindings`
+                // entirely) unless seeded here from last run's own manifest -- mirrors
+                // `alef generate`'s `language_output_paths` seeding in `core_commands.rs`. ~keep
+                let regenerated_languages: std::collections::HashSet<_> =
+                    bindings.iter().map(|(language, _)| *language).collect();
+                let mut language_output_paths: std::collections::HashMap<
+                    crate::core::config::Language,
+                    std::collections::HashSet<PathBuf>,
+                > = std::collections::HashMap::new();
+                for language in languages
+                    .iter()
+                    .filter(|language| !regenerated_languages.contains(language))
+                {
+                    language_output_paths
+                        .entry(*language)
+                        .or_default()
+                        .extend(cache::read_lang_manifest(&resolved_cfg.name, &language.to_string()));
+                }
                 // This run's per-language binding ownership: the exact file list `pipeline::generate`
                 // just produced for every language it regenerated, plus -- unchanged -- last run's
                 // recorded list for any language `pipeline::generate` skipped as cached (it is present
@@ -304,6 +325,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
                         current_gen_paths.insert(base_dir.join(&file.path));
+                        language_output_paths
+                            .entry(*lang)
+                            .or_default()
+                            .insert(base_dir.join(&file.path));
                     }
 
                     let hashes: Vec<(String, String)> = lang_files
@@ -339,9 +364,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
-                        for (_, files) in &svc_files {
+                        for (lang, files) in &svc_files {
                             for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
+                                language_output_paths
+                                    .entry(*lang)
+                                    .or_default()
+                                    .insert(base_dir.join(&file.path));
                             }
                         }
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
@@ -424,9 +453,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     0
                 };
 
-                for (_, files) in &stubs {
+                for (lang, files) in &stubs {
                     for file in files.iter().filter(|file| file.carries_alef_marker()) {
                         current_gen_paths.insert(base_dir.join(&file.path));
+                        language_output_paths
+                            .entry(*lang)
+                            .or_default()
+                            .insert(base_dir.join(&file.path));
                     }
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
@@ -452,9 +485,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let api_match =
                             !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
 
-                        for (_, files) in &public_api_files {
+                        for (lang, files) in &public_api_files {
                             for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
+                                language_output_paths
+                                    .entry(*lang)
+                                    .or_default()
+                                    .insert(base_dir.join(&file.path));
                             }
                         }
 
@@ -787,6 +824,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         &sources_hash,
                         paths,
                     )?;
+                }
+                // Replaces the bindings-only manifest `pipeline::generate`'s own `write_lang_hash`
+                // call left behind, now that every phase (bindings, service API, stubs, public API)
+                // has contributed its `carries_alef_marker()` paths to `language_output_paths` above.
+                // Writing this after the sweep (not before) matches the ownership write-back just
+                // above: both are end-of-loop bookkeeping the sweep must not observe as this run's
+                // "previous" state. ~keep
+                for (language, paths) in &language_output_paths {
+                    let paths: Vec<_> = paths.iter().cloned().collect();
+                    cache::write_lang_manifest(&resolved_cfg.name, &language.to_string(), &paths)?;
                 }
 
                 if !changed_languages.is_empty() {
