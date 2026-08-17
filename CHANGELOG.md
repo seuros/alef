@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`MethodDef` carries its `#[cfg]`**: it was the only IR node without one, and extraction saw the attribute and
+  discarded it. Methods now inherit their impl block's gate (AND-combined) and survive `with_cfg_filtered_deep`, so
+  each backend filters against its own feature set — one surface is extracted once and handed to every backend in
+  parallel, so dropping at IR level is impossible. `cbindgen_feature_defines` moved in lockstep: it is a second,
+  independent feature collector, and a feature missing from `[defines]` makes cbindgen emit the declaration
+  **unguarded**, which is worse than not gating. **Behavioural risk**: a language whose `features_for_language`
+  omits a feature the cdylib was built with now loses those methods — the divergence `warn_on_ffi_feature_drift`
+  announces. Native `#[cfg]` emission for pyo3/napi/magnus/rustler/dart, swift method filtering, and gleam are
+  deliberately deferred: each needs the method and its runtime registration gated together.
+- **`TypeDef::serde_container_default`**: `FieldDef::default` is populated only from per-field attributes, so a
+  struct carrying `#[serde(default)]` at the type level was indistinguishable from one with no defaults at all.
+- **`DefaultValue::Unresolved`**: `Empty` meant two opposite things — "the default is exactly the type-zero" and
+  "the extractor could not read it". `has_default` cannot separate them (it is set for a manual `impl Default`
+  too), so the distinction lives in the value. The extractor now follows `Self::new(<literals>)` delegation to
+  recover real values, and refuses at validation time when it cannot, with `suppress_validation_codes` as the
+  release valve. This is the shape that shipped `DetDbThresh = 0.0f` into generated C# beneath a doc comment
+  reading "default: 0.3". Still conflated: a field initializer that cannot be read *inside* an otherwise-readable
+  struct literal, which remains `Empty`.
+
+### Fixed
+
+- **csharp**: keep every vtable slot the Rust struct declares. C# carried the same unguarded `exclude_types` prune
+  that cost Java a slot, and builds a positional `IntPtr` vtable, so a pruned trait method shifted every later
+  function pointer and the last read ran past the allocation. Latent, but not for the assumed reason —
+  `effective_exclude_types` draws from four sources, and `#[alef(skip)]` or `doc(hidden)` trips it with no
+  `[crates.csharp]` config at all. A second defect ran the other way: `num_vtable_fields` never filtered
+  `ffi_skip_methods`, emitting N slots into a struct declaring N−1.
+- **csharp**: stop assigning `null` into non-nullable properties. 17 sites emitted `= default!` — compiles, the `!`
+  silences the nullable analysis, first read throws. `CrawlConfig.Content` and `.Browser` are that case.
+- **bindings**: stop substituting a zero for a default that was never read. Swift's memberwise init ignored
+  defaults and decoded `Some(30)` as `nil`; Kotlin turned a function-call default on a collection into an empty
+  one; the shared constructor path collapsed enum-variant and empty defaults into one `unwrap_or_default()`, so a
+  `#[default]` variant other than the declared one shipped to wasm, pyo3 and extendr alike. pyo3's `None` was
+  never the bug — three copies of a predicate matched only the bare `#[serde(default)]` spelling.
+- **go**: send real defaults for a container-level `serde(default)` struct. `is_named_enum` shared the blind spot,
+  and there it is worse — a unit enum's Go zero is `""`, never a valid variant.
+- **e2e**: resolve result types from the IR on the generated-test-file path. `E2eCodegen::generate` carried no
+  `functions`, so every IR lookup there was dead code. The invented type name was the visible symptom; the real
+  cost was that a fabricated result type reports as not-an-IR-type, which switched off leaf-field verification on
+  the very path it was written for.
+- **e2e (ruby)**: assert streaming completion instead of dropping it. `stream_complete` and `no_chunks_after_done`
+  matched a `None` accessor the resolver never returns, so both arms were unreachable — and the compensating
+  assertion is suppressed precisely when a fixture asserts that field.
+
 ## [0.61.0] - 2026-08-17
 
 ### Added
