@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.62.0] - 2026-08-17
+## [0.61.0] - 2026-08-17
 
 ### Added
 
@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `iterate` already had. Without it Rust snippets always rendered `println!("{:?}", …)`, so documentation printed
   `Some(Text("Hello!"))` where a reader expects `Hello!`. Defaults to the previous behaviour.
 
+
+- **readme**: expose each language README's generated public functions as structured `functions` template values
+  with `name`, `rust_name`, `is_async`, and `documentation` fields. Names honor language exclusions, feature gates,
+  ABI prefixes, Go type collisions, Ruby re-export names, and the centralized host-language naming policy.
+
 ### Changed
 
 - **`alef verify` now fails on a frozen file rather than warning.** This is a semantics change for consumer CI. The
@@ -60,6 +65,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writes a developer's machine permitted. Reads union the committed record with the legacy gitignored one, which is
   never written again, so upgrading does not turn every unmarkable file into a refusal at once. Entries migrate on
   the first authorised write of that path. Commit the file. Do not hand-add entries: use `alef adopt`.
+
+
+- **formatting**: normalize the persistent FRB Cargo-cache helper with the repository Rust formatter.
+- **test formatting**: normalize recently added FFI handle-registry, enum-conversion, and generated-hash regression
+  fixtures with the repository formatter.
+
+- **zig**: give each streaming adapter its own iterator struct type instead of naming it after the item type alone.
+  Two streaming methods on the same opaque handle that yield the same item type (e.g. `crawl_stream` and
+  `batch_crawl_stream`, both yielding `CrawlEvent`) collapsed into one shared `{ItemType}Stream` struct — whichever
+  adapter emitted its struct first "won" the name, and the other adapter's wrapper method returned that same struct,
+  whose `next()`/`deinit()` hardcode only the first adapter's `_next`/`_free` FFI symbols. That compiled and linked
+  (both symbol sets exist in the C header) but handed the second adapter's stream handle to the first adapter's
+  native functions — a runtime handle type-confusion bug, not a missing feature. Colliding adapters now each get a
+  uniquely named struct derived from the adapter's own name. **Consumer-visible:** where a collision exists the
+  shared `{ItemType}Stream` type is renamed to adapter-specific stream types. Zig code naming the old type explicitly
+  must be updated. Types with a single streaming adapter
+  keep their existing name.
 
 ### Fixed
 
@@ -448,22 +470,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process-global cwd into tempdirs that are then dropped, so an inherited cwd could already be deleted and the
   toolchain died at startup rather than reporting any result.
 
-## [0.61.0] - 2026-08-16
-
-### Added
-
-- **readme**: expose each language README's generated public functions as structured `functions` template values
-  with `name`, `rust_name`, `is_async`, and `documentation` fields. Names honor language exclusions, feature gates,
-  ABI prefixes, Go type collisions, Ruby re-export names, and the centralized host-language naming policy.
-
-### Removed
-
-- **snippet validation**: remove the legacy path-only `alef snippets validate` command, the fail-whole-map session
-  preparation API, and the report-dropping snippet artifact projection. Use configured `alef snippets check`,
-  isolated session preparation, and `generate_snippet_report` so validation retains sessions, coverage, audits, and
-  missing-generation diagnostics.
-
-### Fixed
 
 - **build observability**: emit centralized backend completion events with `duration_ms` and explicit success, failure,
   or skip outcomes for every configured language.
@@ -673,25 +679,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ShellCheck and R's `codetools::checkUsage`/lintr exist but aren't wired up here, so `typecheck` must not be
   claimed until they are.
 
-### Changed
-
-- **formatting**: normalize the persistent FRB Cargo-cache helper with the repository Rust formatter.
-- **test formatting**: normalize recently added FFI handle-registry, enum-conversion, and generated-hash regression
-  fixtures with the repository formatter.
-
-- **zig**: give each streaming adapter its own iterator struct type instead of naming it after the item type alone.
-  Two streaming methods on the same opaque handle that yield the same item type (e.g. `crawl_stream` and
-  `batch_crawl_stream`, both yielding `CrawlEvent`) collapsed into one shared `{ItemType}Stream` struct — whichever
-  adapter emitted its struct first "won" the name, and the other adapter's wrapper method returned that same struct,
-  whose `next()`/`deinit()` hardcode only the first adapter's `_next`/`_free` FFI symbols. That compiled and linked
-  (both symbol sets exist in the C header) but handed the second adapter's stream handle to the first adapter's
-  native functions — a runtime handle type-confusion bug, not a missing feature. Colliding adapters now each get a
-  uniquely named struct derived from the adapter's own name. **Consumer-visible:** where a collision exists the
-  shared `{ItemType}Stream` type is renamed to adapter-specific stream types. Zig code naming the old type explicitly
-  must be updated. Types with a single streaming adapter
-  keep their existing name.
-
-### Fixed
 
 - **C# e2e**: omit the illegal `private` modifier from file-scope generated visitor classes while preserving the
   same class shape when the visitor appears inside a nested test container.
@@ -967,16 +954,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trailing newline permanently unsatisfiable. `equals` now compares both sides exactly, matching every other
   generated language.
 
-### Changed (BREAKING)
-
-- **FFI handles**: ordinary opaque values now cross the C ABI as scalar, generational `AlefHandle` tokens with zero as
-  the invalid sentinel. Regenerate every host binding and C consumer; pointer-shaped calls to constructors,
-  accessors, serializers, streaming methods, and destructors are no longer compatible.
-- **capsules**: Java, C#, JNI, and Kotlin Android capsule mappings must explicitly describe either shared-runtime
-  ownership or borrowed-static ABI compatibility. Owned, refcounted, and WebAssembly-backed pointers remain
-  fail-closed unless the configured host contract can preserve their lifecycle.
-
-### Fixed
 
 - **config/services**: accept registration variant `languages` maps and carry each canonical language's style,
   handler shape, and method prefix through extraction into service generation. Python decorator overrides now use
@@ -1264,6 +1241,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension recipe, including cached coverage manifests, instead of warning and crediting an incomplete corpus.
 - **snippets**: use pyrefly as the sole built-in Python snippet type-checker, matching scaffolded project tooling and
   reporting it explicitly when unavailable.
+
+### Removed
+
+- **snippet validation**: remove the legacy path-only `alef snippets validate` command, the fail-whole-map session
+  preparation API, and the report-dropping snippet artifact projection. Use configured `alef snippets check`,
+  isolated session preparation, and `generate_snippet_report` so validation retains sessions, coverage, audits, and
+  missing-generation diagnostics.
+
+### Changed (BREAKING)
+
+- **FFI handles**: ordinary opaque values now cross the C ABI as scalar, generational `AlefHandle` tokens with zero as
+  the invalid sentinel. Regenerate every host binding and C consumer; pointer-shaped calls to constructors,
+  accessors, serializers, streaming methods, and destructors are no longer compatible.
+- **capsules**: Java, C#, JNI, and Kotlin Android capsule mappings must explicitly describe either shared-runtime
+  ownership or borrowed-static ABI compatibility. Owned, refcounted, and WebAssembly-backed pointers remain
+  fail-closed unless the configured host contract can preserve their lifecycle.
 
 ## [0.60.2] - 2026-08-12
 
