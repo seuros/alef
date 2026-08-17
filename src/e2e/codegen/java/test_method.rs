@@ -7,7 +7,7 @@ use crate::e2e::fixture::Fixture;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 
 use super::args::{JavaArgsContext, build_args_and_setup};
-use super::assertions::render_assertion;
+use super::assertions::{fractional_scalar_fields, render_assertion};
 use super::http::render_http_test_method;
 use super::values::{java_builder_expression, json_to_java};
 use super::visitor::{apply_java_visitor_arg, build_java_visitor, java_visitor_binding};
@@ -360,6 +360,7 @@ pub(super) fn render_test_method(
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call_config.streaming_enabled());
     let streaming_item_type =
         crate::e2e::codegen::recipe::streaming_item_type(call_config, adapters, &adapter_lookup_names);
+    let fractional_fields = fractional_scalar_fields(type_defs);
 
     for assertion in &fixture.assertions {
         render_assertion(
@@ -376,6 +377,7 @@ pub(super) fn render_test_method(
             &effective_enum_fields,
             &assert_enum_types,
             call_config.returns_void,
+            &fractional_fields,
         );
         ensure_assertion_line_ending(&mut assertions_body);
     }

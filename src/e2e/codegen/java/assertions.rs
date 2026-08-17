@@ -20,6 +20,7 @@ pub(super) fn render_assertion(
     enum_fields: &std::collections::HashSet<String>,
     assert_enum_types: &std::collections::HashMap<String, String>,
     returns_void: bool,
+    fractional_fields: &std::collections::HashSet<String>,
 ) {
     // Bare-result is_empty / not_empty on Option<T> returns: the Java facade exposes
     // these as `@Nullable T` (via `.orElse(null)`) rather than `Optional<T>`, so the
@@ -476,9 +477,19 @@ pub(super) fn render_assertion(
                             // Rust `Option<u32>`) and `Optional<Long>` fields.  Using a bare
                             // `.orElse(0L)` would fail for `Optional<Integer>` because the
                             // fallback type would not match the element type.
+                            //
+                            // Fractional fields (`f32`/`f64`, e.g. `Optional<Double>
+                            // qualityScore`) must NOT go through `Number::longValue()` — that
+                            // truncates the boxed value to zero before the comparison ever
+                            // runs, turning a `[0.0, 1.0]` range assertion into a tautology
+                            // (every legal value truncates to `0L`, so both bounds always
+                            // hold). Route these through `Number::doubleValue()` instead so
+                            // the comparison actually observes the fractional value. ~keep
                             "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal" => {
                                 if field_resolver.is_array(resolved) {
                                     format!("{optional_expr}.orElse(java.util.List.of())")
+                                } else if is_fractional_field(fractional_fields, resolved) {
+                                    format!("{optional_expr}.map(Number::doubleValue).orElse(0.0)")
                                 } else {
                                     format!("{optional_expr}.map(Number::longValue).orElse(0L)")
                                 }
@@ -625,6 +636,46 @@ pub(super) fn render_assertion(
         },
     );
     out.push_str(&rendered);
+}
+
+/// Leaf segment of a (possibly dotted / bracketed) resolved field path, e.g.
+/// `"results[0].quality_score"` -> `"quality_score"`.
+fn leaf_field_name(path: &str) -> &str {
+    let last_dot = path.rsplit('.').next().unwrap_or(path);
+    last_dot.split('[').next().unwrap_or(last_dot)
+}
+
+/// True when `resolved`'s leaf field name is known (via [`fractional_scalar_fields`]) to
+/// carry an `f32`/`f64` Rust type — directly or through `Option<T>`.
+fn is_fractional_field(fractional_fields: &std::collections::HashSet<String>, resolved: &str) -> bool {
+    fractional_fields.contains(leaf_field_name(resolved))
+}
+
+/// Field names (bare leaf, e.g. `"quality_score"`) whose Rust type — or `Option<T>` inner
+/// type — is `f32`/`f64` on at least one IR type in `type_defs`.
+///
+/// Consulted before defaulting an `Optional` numeric-range coercion to
+/// `Number::longValue()`: that truncates a fractional value to zero before the comparison
+/// runs, turning e.g. a `[0.0, 1.0]` range assertion on a `Double` `qualityScore` into a
+/// tautology (every legal value truncates to `0L`, so both bounds always hold). ~keep
+pub(super) fn fractional_scalar_fields(type_defs: &[crate::core::ir::TypeDef]) -> std::collections::HashSet<String> {
+    use crate::core::ir::{PrimitiveType, TypeRef};
+    let mut fractional = std::collections::HashSet::new();
+    for type_def in type_defs {
+        for field in &type_def.fields {
+            let ty = match &field.ty {
+                TypeRef::Optional(inner) => inner.as_ref(),
+                other => other,
+            };
+            if matches!(
+                ty,
+                TypeRef::Primitive(PrimitiveType::F32) | TypeRef::Primitive(PrimitiveType::F64)
+            ) {
+                fractional.insert(field.name.clone());
+            }
+        }
+    }
+    fractional
 }
 
 /// Build a Java call expression for a `method_result` assertion on a sample_language Tree.
@@ -845,6 +896,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         out
     }
@@ -932,6 +984,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -970,6 +1023,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -998,6 +1052,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         assert!(
             out.contains("Objects::toString"),
@@ -1035,6 +1090,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         assert!(
             out.contains(".map(v -> v.text()).orElse(\"\")"),
@@ -1076,6 +1132,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         assert_eq!(out, "        assertNotNull(result, \"expected non-null response\");\n");
     }
@@ -1099,6 +1156,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             false,
+            &HashSet::new(),
         );
         assert_eq!(
             out,
@@ -1128,10 +1186,135 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             true,
+            &HashSet::new(),
         );
         assert!(
             out.is_empty(),
             "a returns_void call must not reference an unbound result_var, got: {out}"
+        );
+    }
+
+    fn make_range_assertion(assertion_type: &str, field: &str, value: f64) -> Assertion {
+        Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value: serde_json::Number::from_f64(value).map(serde_json::Value::Number),
+            ..Default::default()
+        }
+    }
+
+    /// Regression test for the `qualityScore` range-assertion defect: an
+    /// `Optional<Double>` field's range comparators must NOT coerce through
+    /// `Number::longValue()` — that truncates every legal fractional value to `0L`
+    /// before the comparison runs, so a `[0.0, 1.0]` range check on a `Double` becomes
+    /// a tautology that can never fail. With the field registered in
+    /// `fractional_fields`, the emitted comparison must use `Number::doubleValue()`
+    /// instead, so it can actually observe (and fail on) an out-of-range value. ~keep
+    #[test]
+    fn fractional_optional_field_range_assertion_uses_double_value_not_long_value() {
+        let mut optional = HashSet::new();
+        optional.insert("quality_score".to_string());
+        let resolver = make_resolver(optional, HashSet::new());
+        let fractional: HashSet<String> = ["quality_score".to_string()].into_iter().collect();
+        let assertion = make_range_assertion("greater_than_or_equal", "quality_score", 0.0);
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &fractional,
+        );
+        assert!(
+            out.contains("Number::doubleValue"),
+            "fractional Optional field must coerce via Number::doubleValue, got: {out}"
+        );
+        assert!(
+            !out.contains("Number::longValue"),
+            "fractional Optional field must NOT truncate via Number::longValue, got: {out}"
+        );
+    }
+
+    /// Negative control: an integer `Optional` field (e.g. `sheetCount`, correctly
+    /// handled at `SmokeTest.java:149`) is absent from `fractional_fields` and must
+    /// keep using `Number::longValue()` — the fractional-type fix must not regress
+    /// the already-correct integer path.
+    #[test]
+    fn integer_optional_field_range_assertion_still_uses_long_value() {
+        let mut optional = HashSet::new();
+        optional.insert("sheet_count".to_string());
+        let resolver = make_resolver(optional, HashSet::new());
+        let assertion = make_range_assertion("greater_than_or_equal", "sheet_count", 1.0);
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClass",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &HashSet::new(),
+        );
+        assert!(
+            out.contains("Number::longValue"),
+            "integer Optional field must keep Number::longValue, got: {out}"
+        );
+        assert!(
+            !out.contains("Number::doubleValue"),
+            "integer Optional field must not use Number::doubleValue, got: {out}"
+        );
+    }
+
+    /// `fractional_scalar_fields` must recognize `f64`/`f32` fields, including
+    /// through `Option<T>`, and must NOT flag integer fields.
+    #[test]
+    fn fractional_scalar_fields_detects_float_types_through_optional() {
+        use crate::core::ir::{FieldDef, PrimitiveType, TypeDef, TypeRef};
+
+        let type_defs = vec![TypeDef {
+            name: "SampleResult".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "quality_score".to_string(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::F64))),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "ratio".to_string(),
+                    ty: TypeRef::Primitive(PrimitiveType::F32),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "sheet_count".to_string(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::U32))),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+
+        let fractional = fractional_scalar_fields(&type_defs);
+        assert!(fractional.contains("quality_score"), "got: {fractional:?}");
+        assert!(fractional.contains("ratio"), "got: {fractional:?}");
+        assert!(
+            !fractional.contains("sheet_count"),
+            "integer field must not be classified as fractional, got: {fractional:?}"
         );
     }
 }
