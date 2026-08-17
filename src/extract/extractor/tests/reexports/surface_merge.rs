@@ -34,6 +34,61 @@ fn test_merge_surface_and_combines_own_cfg_with_module_cfg() {
     assert!(satisfied(&["module", "own"]), "both gates enabled must satisfy");
 }
 
+/// Regression: a sibling crate commonly re-exports an item under the exact feature the item is
+/// itself gated on (`#[cfg(feature = "x")] pub use other::thing;` where `thing` is declared
+/// `#[cfg(feature = "x")]`). AND-combining unconditionally would grow that into `all(x, x)` —
+/// same evaluation result, but a gate string that churns on every regen and reads as a generator
+/// bug in the diff. The item's own gate already implies the reexport's, so it must pass through
+/// unchanged, exactly as `combine_gates` already does for a method inheriting its impl block's
+/// gate. ~keep
+#[test]
+fn test_merge_surface_collapses_reexport_cfg_identical_to_own_cfg() {
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        functions: vec![crate::core::ir::FunctionDef {
+            name: "gated_fn".into(),
+            rust_path: "src::gated_fn".into(),
+            cfg: Some(r#"feature = "x""#.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    merge_surface(&mut dst, src, Some(r#"feature = "x""#.into()));
+
+    assert_eq!(
+        dst.functions[0].cfg.as_deref(),
+        Some(r#"feature = "x""#),
+        "an identical reexport gate must not double-wrap the item's own gate"
+    );
+}
+
+/// Same collapse, one level deeper: the item's own gate is already a conjunction that names the
+/// reexport's feature (`all(x, y)` re-exported under `#[cfg(feature = "x")]`). The reexport gate
+/// adds no information `all(x, y)` doesn't already require, so the combined gate must stay
+/// `all(x, y)` rather than growing to the doubly redundant `all(x, all(x, y))`.
+#[test]
+fn test_merge_surface_collapses_reexport_cfg_already_implied_by_own_conjunction() {
+    let mut dst = ApiSurface::default();
+    let src = ApiSurface {
+        functions: vec![crate::core::ir::FunctionDef {
+            name: "gated_fn".into(),
+            rust_path: "src::gated_fn".into(),
+            cfg: Some(r#"all(feature = "x", feature = "y")"#.into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    merge_surface(&mut dst, src, Some(r#"feature = "x""#.into()));
+
+    assert_eq!(
+        dst.functions[0].cfg.as_deref(),
+        Some(r#"all(feature = "x", feature = "y")"#),
+        "a reexport gate already implied by the item's own conjunction must not be re-wrapped"
+    );
+}
+
 #[test]
 fn test_merge_surface_fills_module_cfg_when_type_has_no_own_cfg() {
     let mut dst = ApiSurface::default();

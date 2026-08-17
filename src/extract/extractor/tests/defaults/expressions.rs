@@ -320,7 +320,7 @@ fn test_zero_arg_function_call_default_extracts_as_function_call() {
 }
 
 #[test]
-fn test_call_with_args_defaults_to_empty() {
+fn test_call_with_args_is_unresolved_not_empty() {
     let source = r#"
         pub struct Complex {
             pub result: u32,
@@ -341,10 +341,14 @@ fn test_call_with_args_defaults_to_empty() {
     let complex = &surface.types[0];
     let result_field = &complex.fields[0];
 
-    assert_eq!(
-        result_field.typed_default,
-        Some(crate::core::ir::DefaultValue::Empty),
-        "Calls with arguments cannot be faithfully represented and should default to Empty"
+    assert!(
+        matches!(
+            result_field.typed_default,
+            Some(crate::core::ir::DefaultValue::Unresolved(_))
+        ),
+        "a call with arguments cannot be folded, so its value is unknown -- `Empty` would assert \
+         the default IS the type-zero; got {:?}",
+        result_field.typed_default
     );
 }
 
@@ -460,12 +464,12 @@ fn non_empty_vec_macro_default_keeps_its_elements() {
     );
 }
 
-/// The all-or-nothing rule: one unrepresentable element makes the whole literal `Empty`.
+/// The all-or-nothing rule: one unrepresentable element makes the whole literal unreadable.
 ///
 /// A partially-lowered list would hand a backend a default that silently differs from the Rust
 /// one, which is strictly worse than the pre-existing loss.
 #[test]
-fn vec_macro_default_with_an_unrepresentable_element_falls_back_to_empty() {
+fn vec_macro_default_with_an_unrepresentable_element_is_unresolved() {
     let source = r#"
         pub struct Pipeline {
             pub stages: Vec<String>,
@@ -481,10 +485,14 @@ fn vec_macro_default_with_an_unrepresentable_element_falls_back_to_empty() {
     let surface = extract_from_source(source);
     let stages_field = &surface.types[0].fields[0];
 
-    assert_eq!(
-        stages_field.typed_default,
-        Some(crate::core::ir::DefaultValue::Empty),
-        "a literal containing a non-representable element must not lower to a partial list"
+    assert!(
+        matches!(
+            stages_field.typed_default,
+            Some(crate::core::ir::DefaultValue::Unresolved(_))
+        ),
+        "a literal containing a non-representable element must not lower to a partial list, and \
+         the whole list is a value alef never read; got {:?}",
+        stages_field.typed_default
     );
 }
 
@@ -514,7 +522,7 @@ fn test_field_with_none_default() {
 }
 
 #[test]
-fn test_unary_negation_on_non_numeric_falls_back_to_empty() {
+fn test_unary_negation_on_non_numeric_is_unresolved() {
     let source = r#"
         pub struct Unusual {
             pub val: i32,
@@ -524,8 +532,8 @@ fn test_unary_negation_on_non_numeric_falls_back_to_empty() {
 
         impl Default for Unusual {
             fn default() -> Self {
-                // This will be parsed as Unary(Neg, Call(...)) — the inner call returns Empty,
-                // so the negation should also return Empty.
+                // Parsed as Unary(Neg, Paren(Call(..))) — the inner call is unreadable, so the
+                // negation is unreadable too.
                 Unusual { val: -(compute()) }
             }
         }
@@ -535,9 +543,93 @@ fn test_unary_negation_on_non_numeric_falls_back_to_empty() {
     let unusual = &surface.types[0];
     let val_field = &unusual.fields[0];
 
+    assert!(
+        matches!(
+            val_field.typed_default,
+            Some(crate::core::ir::DefaultValue::Unresolved(_))
+        ),
+        "negating a non-literal expression yields a value alef never read; got {:?}",
+        val_field.typed_default
+    );
+}
+
+/// The reported defect, end to end through the real extractor so the field's declared type is
+/// the one alef actually derives.
+///
+/// `Self::DEFAULT_MODEL` is a two-segment path exactly like `Status::Pending`, and the extractor
+/// lowered both to `EnumVariant`. On a `String` field `codegen::config_gen::shared` then renders
+/// an `EnumVariant` as its snake-cased name, so the binding shipped `"default_model"` — a value
+/// that appears nowhere in the source crate. The const is readable, so the fix is not to report
+/// the field as unresolved but to resolve it.
+#[test]
+fn associated_const_default_on_a_string_field_is_the_consts_value_not_a_variant_name() {
+    let source = r#"
+        pub struct LlmConfig {
+            pub model: String,
+        }
+
+        impl LlmConfig {
+            pub const DEFAULT_MODEL: &str = "claude-sonnet-4-5";
+        }
+
+        impl Default for LlmConfig {
+            fn default() -> Self {
+                Self { model: Self::DEFAULT_MODEL.to_string() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "LlmConfig").unwrap();
+    let model = &config.fields[0];
+
     assert_eq!(
-        val_field.typed_default,
-        Some(crate::core::ir::DefaultValue::Empty),
-        "Negating a non-literal expression should fall back to Empty"
+        model.typed_default,
+        Some(crate::core::ir::DefaultValue::StringLiteral(
+            "claude-sonnet-4-5".to_string()
+        ))
+    );
+    assert_ne!(
+        model.typed_default,
+        Some(crate::core::ir::DefaultValue::EnumVariant("DEFAULT_MODEL".to_string())),
+        "an associated const is not an enum variant, and a `String` field cannot hold one"
+    );
+    assert_ne!(
+        crate::codegen::config_gen::default_value_for_field(model, "python"),
+        "\"default_model\"",
+        "the snake-cased const name is fabricated; it must not reach a generated binding"
+    );
+}
+
+/// The same shape with the const declared out of module reach. There is no value to recover, so
+/// the field is reported — but it must still not be lowered to a variant name, because that is
+/// what the renderer turns into a plausible-looking fabricated string.
+#[test]
+fn unreachable_associated_const_on_a_string_field_is_unresolved_not_a_variant_name() {
+    let source = r#"
+        pub struct LlmConfig {
+            pub model: String,
+        }
+
+        impl Default for LlmConfig {
+            fn default() -> Self {
+                Self { model: Self::DEFAULT_MODEL.to_string() }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "LlmConfig").unwrap();
+    let model = &config.fields[0];
+
+    assert!(
+        matches!(model.typed_default, Some(crate::core::ir::DefaultValue::Unresolved(_))),
+        "got {:?}",
+        model.typed_default
+    );
+    assert_ne!(
+        crate::codegen::config_gen::default_value_for_field(model, "python"),
+        "\"default_model\"",
+        "the fabricated snake-cased const name must be absent from generated output"
     );
 }

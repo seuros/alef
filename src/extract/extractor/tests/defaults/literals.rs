@@ -320,9 +320,13 @@ fn test_field_with_duration_from_secs_non_literal_fallback() {
     let config = &surface.types[0];
     let timeout_field = &config.fields[0];
 
-    assert_eq!(
-        timeout_field.typed_default,
-        Some(crate::core::ir::DefaultValue::Empty),
-        "Duration::from_secs with non-literal arg should fall back to Empty"
+    assert!(
+        matches!(
+            timeout_field.typed_default,
+            Some(crate::core::ir::DefaultValue::Unresolved(_))
+        ),
+        "Duration::from_secs with a non-literal arg is a value alef never read, so it must be \
+         reported rather than zeroed; got {:?}",
+        timeout_field.typed_default
     );
 }

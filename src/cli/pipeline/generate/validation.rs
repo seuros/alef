@@ -114,24 +114,22 @@ fn unreadable_field_default_diagnostics(api: &ApiSurface, config: &ResolvedCrate
 
     let mut diagnostics = Vec::new();
     for typ in api.types.iter().filter(|typ| !typ.binding_excluded) {
-        let unreadable: Vec<&str> = typ
+        // Each field is named with the *expression* alef could not read, because the two cases
+        // that reach here need different fixes and the payload is what tells them apart: a whole
+        // unreadable `fn default()` body repeats the same text on every field, whereas a single
+        // unreadable initializer inside a readable struct literal names just that one. ~keep
+        let unreadable: Vec<String> = typ
             .fields
             .iter()
             .filter(|field| !field.binding_excluded)
-            .filter(|field| matches!(field.typed_default, Some(DefaultValue::Unresolved(_))))
-            .map(|field| field.name.as_str())
+            .filter_map(|field| match &field.typed_default {
+                Some(DefaultValue::Unresolved(source)) => Some(format!("{} (`{source}`)", field.name)),
+                _ => None,
+            })
             .collect();
         if unreadable.is_empty() {
             continue;
         }
-        let body = typ
-            .fields
-            .iter()
-            .find_map(|field| match &field.typed_default {
-                Some(DefaultValue::Unresolved(body)) => Some(body.as_str()),
-                _ => None,
-            })
-            .unwrap_or("<unknown>");
         diagnostics.push(ValidationDiagnostic {
             severity: ValidationSeverity::Error,
             code: ValidationCode::UnreadableFieldDefault,
@@ -139,14 +137,14 @@ fn unreadable_field_default_diagnostics(api: &ApiSurface, config: &ResolvedCrate
             language: None,
             item_path: Some(typ.rust_path.clone()),
             reason: format!(
-                "`impl Default for {}` could not be read into concrete values, so the defaults for {} \
-                 ({}) are unknown; every binding would emit its own target-language zero underneath a \
-                 doc comment quoting the real Rust default. Body: `{body}`",
+                "`impl Default for {}` could not be read into concrete values for {} {}; every \
+                 binding would emit its own target-language zero underneath a doc comment quoting \
+                 the real Rust default.",
                 typ.name,
                 if unreadable.len() == 1 { "field" } else { "fields" },
                 unreadable.join(", "),
             ),
-            suggested_fix: "spell the defaults as a struct literal in `fn default()`, or delegate to an \
+            suggested_fix: "spell the defaults as literals in the `fn default()` struct literal, or delegate to an \
                             associated function in the same module that returns a struct literal built from \
                             the literal arguments passed (`Self::new(\"en\")`), or accept the type-zero \
                             explicitly with `suppress_validation_codes = [\"unreadable_field_default\"]`"

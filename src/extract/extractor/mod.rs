@@ -502,7 +502,7 @@ fn extract_items(
         })
         .collect();
 
-    let string_consts = defaults::collect_string_consts(items);
+    let literal_consts = defaults::collect_literal_consts(items);
     // Indexed once per module so a `fn default()` that delegates to `Self::new(..)` can be
     // followed to the constructor's own struct literal instead of collapsing to a type-zero. ~keep
     let constructors = defaults::collect_constructors(items);
@@ -521,7 +521,7 @@ fn extract_items(
                 &type_index,
                 &binding_excluded_type_names,
                 result_wrapping_aliases,
-                &string_consts,
+                &literal_consts,
                 &constructors,
             );
         }

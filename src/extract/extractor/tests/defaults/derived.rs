@@ -22,6 +22,19 @@ fn test_struct_with_default_derive() {
         config.has_default,
         "Config with #[derive(Default)] should have has_default=true"
     );
+
+    // The control for the whole `Empty`/`Unresolved` split. A derived `Default` gives every field
+    // its type's zero, so `Empty` is an assertion here and a backend substituting its own zero is
+    // exact. Widening `Unresolved` over this meaning would arm `unreadable_field_default` on
+    // every `#[derive(Default)]` type in every consumer crate. ~keep
+    for field in &config.fields {
+        assert_eq!(
+            field.typed_default,
+            Some(crate::core::ir::DefaultValue::Empty),
+            "`{}` is a derived type-zero and must stay `Empty`, never `Unresolved`",
+            field.name
+        );
+    }
 }
 
 #[test]

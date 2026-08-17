@@ -136,17 +136,22 @@ pub(crate) fn collect_use_names(tree: &syn::UseTree) -> UseFilter {
     }
 }
 
-/// AND-combine a propagated outer cfg (a re-exporting module's, a `pub use`'s, or an `impl`
-/// block's `#[cfg(...)]`)
+/// AND-combine a propagated outer cfg (a re-exporting module's or `pub use`'s `#[cfg(...)]`)
 /// with an item's own cfg, so an item must satisfy both gates rather than losing whichever one
-/// isn't already present. Wraps only — `all({outer}, {inner})` — and never reformats either
-/// operand string, because every cfg evaluator in this codebase (`core/ir/surface.rs` and each
-/// backend's cfg parser) normalises with `.trim().replace(" (", "(")` and matches leaves via a
-/// literal `strip_prefix("feature = \"")`; any other whitespace change to the operands stops
-/// that leaf match from firing. ~keep
+/// isn't already present.
+///
+/// Delegates to [`crate::codegen::cfg::combine_gates`] rather than a bare `format!("all({outer},
+/// {inner})")`: a sibling crate commonly re-exports an item under the exact feature it is itself
+/// gated on (`#[cfg(feature = "x")] pub use other_crate::thing;` where `thing` is declared
+/// `#[cfg(feature = "x")]`), and a naive wrap would grow that into `all(x, x)` — and, when the
+/// item's own gate is already a conjunction containing `x` (e.g. `all(x, y)`), into the doubly
+/// redundant `all(x, all(x, y))` — churning the gate line on every regen for no semantic change,
+/// exactly the failure mode `combine_gates` exists to avoid for method-in-impl-block gates. Two
+/// gates that name genuinely different features still combine to `all(outer, inner)`, unchanged
+/// from before — this only elides the operand that is already implied. ~keep
 pub(crate) fn combine_cfg(item_cfg: Option<String>, outer_cfg: &Option<String>) -> Option<String> {
     match (outer_cfg, item_cfg) {
-        (Some(outer), Some(inner)) => Some(format!("all({outer}, {inner})")),
+        (Some(outer), Some(inner)) => Some(crate::codegen::cfg::combine_gates(outer, &inner)),
         (Some(outer), None) => Some(outer.clone()),
         (None, inner) => inner,
     }

@@ -1,4 +1,4 @@
-use crate::core::ir::{ApiSurface, MethodDef, TypeDef, UnsupportedPublicItem};
+use crate::core::ir::{ApiSurface, DefaultValue, MethodDef, TypeDef, UnsupportedPublicItem};
 use ahash::AHashMap;
 
 use super::super::defaults::{ConstructorIndex, extract_default_values};
@@ -54,7 +54,7 @@ pub(crate) fn extract_impl_block(
     type_index: &AHashMap<String, usize>,
     binding_excluded_type_names: &ahash::AHashSet<String>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
-    string_consts: &AHashMap<String, String>,
+    literal_consts: &AHashMap<String, DefaultValue>,
     constructors: &ConstructorIndex<'_>,
 ) {
     // Honor `#[cfg_attr(alef, alef(skip))]` (or bare `#[alef(skip)]`) on the impl block
@@ -73,7 +73,7 @@ pub(crate) fn extract_impl_block(
             surface,
             type_index,
             result_wrapping_aliases,
-            string_consts,
+            literal_consts,
             impl_cfg.as_deref(),
             constructors,
         );
@@ -243,7 +243,7 @@ fn extract_trait_impl_methods(
     surface: &mut ApiSurface,
     type_index: &AHashMap<String, usize>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
-    string_consts: &AHashMap<String, String>,
+    literal_consts: &AHashMap<String, DefaultValue>,
     impl_cfg: Option<&str>,
     constructors: &ConstructorIndex<'_>,
 ) {
@@ -331,7 +331,7 @@ fn extract_trait_impl_methods(
         // is `DefaultValue::Unresolved`'s job, not this flag's. ~keep
         let self_type = type_def.name.clone();
         type_def.has_default = true;
-        extract_default_values(item, &self_type, &mut type_def.fields, string_consts, constructors);
+        extract_default_values(item, &self_type, &mut type_def.fields, literal_consts, constructors);
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {
