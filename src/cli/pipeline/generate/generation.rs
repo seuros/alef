@@ -635,4 +635,137 @@ mod tests {
 
         result.expect("reproduction body");
     }
+
+    /// A minimal but fully resolved Python crate config, mirroring
+    /// `backends::pyo3::gen_bindings::tests::python_config` so the tests below exercise the
+    /// real, already-proven-working config-resolution path rather than a hand-built
+    /// `ResolvedCrateConfig::default()` whose defaults pyo3 codegen does not otherwise see
+    /// exercised. ~keep
+    fn python_fixture() -> (ApiSurface, ResolvedCrateConfig) {
+        let cfg: crate::core::config::new_config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.python]
+module_name = "test_lib"
+"#,
+        )
+        .expect("parse fixture alef.toml");
+        (
+            ApiSurface::default(),
+            cfg.resolve().expect("resolve fixture config").remove(0),
+        )
+    }
+
+    /// Reproduces alef#158 for `pyo3`/Python: on a real consumer tree, `python.manifest` held
+    /// exactly one path (its native-extension `lib.rs`) against six alef-marked files actually
+    /// on disk. `generate()` above writes `<lang>.manifest` unconditionally via
+    /// `write_lang_hash`, from `generate_bindings_checked`'s own return value alone --
+    /// `bin_cli/all_commands.rs`'s `alef all` generate step runs `generate_public_api`
+    /// afterward (to emit the `.py` package: `options.py`, `api.py`, `exceptions.py`,
+    /// `__init__.py`) but never reconciles that output back into the manifest, unlike
+    /// `bin_cli/core_commands.rs`'s `alef generate`, which accumulates every phase's
+    /// alef-marked paths and calls `cache::write_lang_manifest` once at the end. This test runs
+    /// the exact `alef all` sequence -- `generate()` then `generate_public_api()`, nothing in
+    /// between -- and pins that the manifest is left holding only the binding crate's own
+    /// path. ~keep
+    #[test]
+    fn python_manifest_holds_only_the_binding_crate_when_public_api_is_never_reconciled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(dir.path());
+
+        let (api, config) = python_fixture();
+        let config_path = std::path::Path::new("does-not-exist-alef.toml");
+        let base_dir = std::env::current_dir().unwrap_or_default();
+
+        generate(&api, &config, &[Language::Python], true, config_path, true).expect("generate bindings");
+        let public_api_files =
+            generate_public_api(&api, &config, &[Language::Python], config_path).expect("generate public api");
+
+        let public_api_paths: Vec<std::path::PathBuf> = public_api_files
+            .iter()
+            .flat_map(|(_, files)| files.iter())
+            .map(|file| file.path.clone())
+            .collect();
+        assert_eq!(
+            public_api_paths,
+            vec![
+                std::path::PathBuf::from("packages/python/test_lib/options.py"),
+                std::path::PathBuf::from("packages/python/test_lib/api.py"),
+                std::path::PathBuf::from("packages/python/test_lib/exceptions.py"),
+                std::path::PathBuf::from("packages/python/test_lib/__init__.py"),
+            ],
+            "generate_public_api must still be the one emitting the python package tree"
+        );
+
+        // The binding crate's own source resolves under `packages/python` for this fixture, not
+        // under `crates/<name>-py/src`. The distinction is only about where this config puts the
+        // crate; the property under test is that the manifest holds exactly ONE path -- the
+        // generate_bindings output -- while the four public-api files above are unrecorded. ~keep
+        let manifest = cache::read_lang_manifest("test-lib", "python");
+        assert_eq!(
+            manifest,
+            vec![base_dir.join("packages/python/lib.rs")],
+            "on the unfixed `alef all` sequence, `<lang>.manifest` must hold only \
+             generate_bindings' own path -- the four public-api files above are unrecorded"
+        );
+    }
+
+    /// The remedy already implemented for `alef generate`
+    /// (`bin_cli/core_commands.rs::Commands::Generate`): once a caller unions every phase's
+    /// alef-marked output and writes it back through [`cache::write_lang_manifest`], the
+    /// manifest holds the exact full set. Proves the gap pinned above is a missing call at the
+    /// `alef all` call site, not a defect in `write_lang_manifest`/`read_lang_manifest`
+    /// themselves. ~keep
+    #[test]
+    fn write_lang_manifest_records_the_full_union_once_every_phase_is_reconciled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(dir.path());
+
+        let (api, config) = python_fixture();
+        let config_path = std::path::Path::new("does-not-exist-alef.toml");
+        let base_dir = std::env::current_dir().unwrap_or_default();
+
+        let bindings =
+            generate(&api, &config, &[Language::Python], true, config_path, true).expect("generate bindings");
+        let public_api_files =
+            generate_public_api(&api, &config, &[Language::Python], config_path).expect("generate public api");
+
+        let mut full_set: Vec<std::path::PathBuf> = bindings
+            .iter()
+            .flat_map(|(_, files)| files.iter())
+            .filter(|file| file.carries_alef_marker())
+            .map(|file| base_dir.join(&file.path))
+            .collect();
+        full_set.extend(
+            public_api_files
+                .iter()
+                .flat_map(|(_, files)| files.iter())
+                .filter(|file| file.carries_alef_marker())
+                .map(|file| base_dir.join(&file.path)),
+        );
+
+        cache::write_lang_manifest("test-lib", "python", &full_set).expect("write reconciled manifest");
+
+        let mut manifest = cache::read_lang_manifest("test-lib", "python");
+        manifest.sort();
+        let mut expected = vec![
+            base_dir.join("packages/python/lib.rs"),
+            base_dir.join("packages/python/test_lib/options.py"),
+            base_dir.join("packages/python/test_lib/api.py"),
+            base_dir.join("packages/python/test_lib/exceptions.py"),
+            base_dir.join("packages/python/test_lib/__init__.py"),
+        ];
+        expected.sort();
+        assert_eq!(
+            manifest, expected,
+            "write_lang_manifest, once called with every phase's contribution, already \
+             records the exact full set -- the fix is wiring the call, not this function"
+        );
+    }
 }

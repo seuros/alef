@@ -210,11 +210,25 @@ pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &str) -> bool {
 }
 
 /// Write language hash and output file manifest for the given crate.
+///
+/// `output_paths` is whatever the caller passes -- this does not, by itself, cover every
+/// phase a language's generation may run (service API, type stubs, public API wrappers
+/// are each a separate pipeline call the caller may or may not have made yet). The count
+/// is logged at `debug` because a manifest this call leaves at one or two entries for a
+/// backend whose language-side output tree is much larger is otherwise silent: nothing
+/// else marks the difference between "this backend genuinely emits one file" and "the
+/// caller never folded a later phase's output back in" (alef#158). ~keep
 pub fn write_lang_hash(crate_name: &str, lang: &str, lang_hash: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
     fs::create_dir_all(&dir)?;
     fs::write(dir.join(format!("{lang}.hash")), lang_hash)?;
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
+    tracing::debug!(
+        crate_name,
+        lang,
+        paths = output_paths.len(),
+        "wrote language manifest via write_lang_hash"
+    );
     Ok(())
 }
 
@@ -223,7 +237,14 @@ pub fn write_lang_hash(crate_name: &str, lang: &str, lang_hash: &str, output_pat
 pub fn write_lang_manifest(crate_name: &str, lang: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
     fs::create_dir_all(&dir)?;
-    write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)
+    write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
+    tracing::debug!(
+        crate_name,
+        lang,
+        paths = output_paths.len(),
+        "wrote language manifest via write_lang_manifest"
+    );
+    Ok(())
 }
 
 pub fn read_lang_manifest(crate_name: &str, lang: &str) -> Vec<PathBuf> {
