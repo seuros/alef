@@ -436,7 +436,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.enums,
                             &api.functions,
                         )?;
-                        e2e_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
+                        let e2e_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                        refusals.absorb_refusals(&e2e_report);
+                        e2e_count = e2e_report.changed_count();
                         let managed_files: Vec<_> = files
                             .iter()
                             .filter(|file| file.carries_alef_marker())
@@ -495,8 +497,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.enums,
                             &api.functions,
                         )?;
-                        let test_apps_count = pipeline::write_scaffold_files_with_overwrite(&files, &base_dir, true)?;
-                        e2e_count += test_apps_count;
+                        let test_apps_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
+                        refusals.absorb_refusals(&test_apps_report);
+                        e2e_count += test_apps_report.changed_count();
                         let managed_files: Vec<_> = files
                             .iter()
                             .filter(|file| file.carries_alef_marker())
@@ -528,7 +531,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 tracing::info!("Generating READMEs...");
                 let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
                 let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
-                let readme_count = pipeline::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
+                let readme_report = pipeline::write_scaffold_files_report(&readme_files, &base_dir, true)?;
+                refusals.absorb_refusals(&readme_report);
+                let readme_count = readme_report.changed_count();
                 for file in readme_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
@@ -544,12 +549,36 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // hash `doc_files` before propagating `doc_result`, not after. ~keep
                 let (doc_files, doc_result) =
                     crate::docs::generate_docs_stage(&docs_api, resolved_cfg, &doc_languages, None, &base_dir);
-                let doc_count = pipeline::write_scaffold_files_with_overwrite(&doc_files, &base_dir, clean)?;
+                let doc_report = pipeline::write_scaffold_files_report(&doc_files, &base_dir, clean)?;
+                refusals.absorb_refusals(&doc_report);
+                let doc_count = doc_report.changed_count();
                 for file in doc_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
-                doc_result?;
+                // Snippet/doc validation (`docs::generate_docs_stage`'s later sub-steps) reads its
+                // input from disk, not from `doc_files` in memory. When the ownership guard refuses
+                // a write earlier in this same run -- e.g. a pre-marker-fix snippet with no durable
+                // ownership record -- the file on disk stays exactly as stale as it was before this
+                // run started, and a validation failure against it reads as a defect in freshly
+                // generated content when it is actually a defect in content this run never touched.
+                // Naming the refusal count on the error, right where it surfaces, is what makes that
+                // distinguishable without cross-referencing a warning log emitted stages earlier. ~keep
+                if let Err(error) = doc_result {
+                    if refusals.refused_count() > 0 {
+                        pipeline::report_refused_writes(&refusals);
+                        return Err(error.context(format!(
+                            "{} file write(s) earlier in this run were refused by the ownership guard \
+                             (see the refusal report above). Docs/snippet validation reads content from \
+                             disk, so a refused write leaves stale content in place for it to grade -- if \
+                             this failure looks like a content mismatch rather than a real defect, check \
+                             whether the affected path is among the refused writes and run \
+                             `alef adopt <path>`.",
+                            refusals.refused_count()
+                        )));
+                    }
+                    return Err(error);
+                }
 
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
                 let previous_paths: Vec<_> = languages

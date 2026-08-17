@@ -46,6 +46,51 @@ fn all_never_calls_the_general_per_language_build_stage() {
     );
 }
 
+/// Regression for the incident where `alef all --clean` reported the write stage as
+/// successful while the ownership guard silently refused thousands of writes.
+/// `write_scaffold_files_with_overwrite` returns a bare `usize`, discarding
+/// `WriteReport::refused_paths`; every e2e/test-apps/README/docs write in `alef all`
+/// used it, so `refusals` -- the accumulator `report_refused_writes` reads at the end
+/// of the run -- never saw a single one of those refusals, no matter how many the
+/// guard logged. The standalone `alef docs` / `alef e2e generate` commands never had
+/// this bug: they already write through `write_scaffold_files_report` and fold the
+/// result into their own report. `alef all` must do the same for every write, not
+/// just bindings/service/public-API/stubs. ~keep
+#[test]
+fn all_never_drops_refusals_through_the_count_only_write_wrapper() {
+    let source = include_str!("all_commands.rs");
+    assert!(
+        !source.contains("write_scaffold_files_with_overwrite"),
+        "`alef all` must write through `write_scaffold_files_report` and fold every result into \
+         `refusals` via `absorb_refusals` -- the count-only wrapper silently drops refused writes, \
+         which is what let a run with thousands of refusals report success"
+    );
+}
+
+/// Docs/snippet validation reads its input from disk (`discover_snippets` walks
+/// `docs.snippets.dirs`), not from the `doc_files` this run rendered in memory. When
+/// the write just above refused to update one of those files, a validation failure
+/// against the stale bytes reads as a defect in freshly generated content -- it is
+/// not. The docs-stage error path must name the pending refusal count so that
+/// distinction is visible at the point of failure, not only in a warning several
+/// stages earlier that a reader chasing the validation error has no reason to
+/// connect to it. ~keep
+#[test]
+fn all_correlates_a_docs_stage_failure_with_pending_write_refusals() {
+    let source = include_str!("all_commands.rs");
+    let doc_write = source
+        .find("write_scaffold_files_report(&doc_files")
+        .expect("docs write must go through the refusal-tracking writer");
+    let correlation = source
+        .find("Docs/snippet validation reads content from")
+        .expect("doc-result error path must explain a possible refusal/stale-content correlation");
+    assert!(
+        doc_write < correlation,
+        "the docs write must be folded into `refusals` before its failure path can correlate a \
+         validation error with pending write refusals"
+    );
+}
+
 #[test]
 fn snippet_validation_needs_build_artifacts_is_true_only_for_toolchain_levels() {
     assert!(snippet_validation_needs_build_artifacts(Some("typecheck")));
