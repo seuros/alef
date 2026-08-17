@@ -328,16 +328,17 @@ mod zig_visitor_tests {
     }
 
     // A non-empty assertion list is not sufficient on its own: `render_json_assertion`
-    // can render an assertion as a comment only (e.g. the "chunks_have_heading_context"
-    // synthetic field, which is unconditionally unsupported and always emits a
-    // "skipped: ..." comment). That still leaves `result` unused, so the binding must
-    // still be omitted.
+    // can render an assertion as a comment only (e.g. the "keywords" synthetic field,
+    // which is a fixture alias with no JSON-struct-result counterpart and always emits
+    // a "skipped: ..." comment). That still leaves `result` unused, so the binding must
+    // still be omitted. `chunks_have_heading_context` no longer fits this test: it now
+    // renders a real predicate over `result`, not a comment. ~keep
     #[test]
     fn emit_visitor_test_body_omits_result_binding_when_assertions_render_only_comments() {
         let (symbols, visitor_spec, resolver) = default_test_fixtures();
         let assertions = vec![Assertion {
             assertion_type: "is_true".to_string(),
-            field: Some("chunks_have_heading_context".to_string()),
+            field: Some("keywords".to_string()),
             ..Default::default()
         }];
         let mut content = String::new();
@@ -356,7 +357,7 @@ mod zig_visitor_tests {
         );
 
         assert!(
-            content.contains("skipped: synthetic field 'chunks_have_heading_context'"),
+            content.contains("skipped:"),
             "expected the comment-only assertion to still render, got:\n{content}"
         );
         assert!(

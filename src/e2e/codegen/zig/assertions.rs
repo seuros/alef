@@ -248,6 +248,73 @@ fn emit_zig_chunks_predicate(
     let _ = writeln!(out, "    }}");
 }
 
+/// Emit a boolean predicate over `result_var.chunks[]`'s `metadata.heading_context` field,
+/// read directly off the parsed JSON tree rather than approximated via `content` shape.
+/// `heading_context` sits one hop deeper than the fields `emit_zig_chunks_predicate` checks
+/// (inside `chunk.metadata`), so it needs its own two-level `.object.get(...)` walk instead of
+/// that helper's single accessor string. A chunk missing the `metadata` key, whose `metadata`
+/// is not an object, missing the `heading_context` key, or holding JSON `null` there are all
+/// read as "no heading context" — the same signal every other backend's typed `nil`/`None`
+/// check reads (serde drops `None` fields from the JSON entirely).
+///
+/// When `only_first` is set, the loop inspects exactly the first chunk (`first_chunk_starts_with_heading`)
+/// instead of requiring every chunk to satisfy the predicate (`chunks_have_heading_context`). ~keep
+fn emit_zig_chunks_heading_context_predicate(
+    out: &mut String,
+    result_var: &str,
+    assertion_type: &str,
+    field_name: &str,
+    only_first: bool,
+) {
+    let _ = writeln!(out, "    {{");
+    let _ = writeln!(out, "        const _chunks_opt = {result_var}.object.get(\"chunks\");");
+    let _ = writeln!(out, "        var _all: bool = true;");
+    let _ = writeln!(out, "        if (_chunks_opt) |_chunks_val| {{");
+    let _ = writeln!(out, "            if (_chunks_val == .array) {{");
+    let _ = writeln!(
+        out,
+        "                if (_chunks_val.array.items.len == 0) _all = false;"
+    );
+    let _ = writeln!(out, "                for (_chunks_val.array.items) |c| {{");
+    let _ = writeln!(out, "                    if (c != .object) {{ _all = false; break; }}");
+    let _ = writeln!(out, "                    var _has_heading = false;");
+    let _ = writeln!(out, "                    if (c.object.get(\"metadata\")) |_meta| {{");
+    let _ = writeln!(out, "                        if (_meta == .object) {{");
+    let _ = writeln!(
+        out,
+        "                            if (_meta.object.get(\"heading_context\")) |_hc| {{"
+    );
+    let _ = writeln!(
+        out,
+        "                                if (_hc != .null) {{ _has_heading = true; }}"
+    );
+    let _ = writeln!(out, "                            }}");
+    let _ = writeln!(out, "                        }}");
+    let _ = writeln!(out, "                    }}");
+    let _ = writeln!(out, "                    if (!_has_heading) {{ _all = false; break; }}");
+    if only_first {
+        let _ = writeln!(out, "                    break;");
+    }
+    let _ = writeln!(out, "                }}");
+    let _ = writeln!(out, "            }} else {{ _all = false; }}");
+    let _ = writeln!(out, "        }} else {{ _all = false; }}");
+    match assertion_type {
+        "is_true" => {
+            let _ = writeln!(out, "        try testing.expect(_all);");
+        }
+        "is_false" => {
+            let _ = writeln!(out, "        try testing.expect(!_all);");
+        }
+        _ => {
+            let _ = writeln!(
+                out,
+                "        // skipped: unsupported assertion type on synthetic field '{field_name}'"
+            );
+        }
+    }
+    let _ = writeln!(out, "    }}");
+}
+
 /// Render a single assertion for a JSON-struct result (result_is_json_struct = true).
 ///
 /// The `result_var` variable is `*std.json.Value` (pointer to the parsed root object).
@@ -372,20 +439,29 @@ pub(super) fn render_json_assertion(
                 return;
             }
             "chunks_have_heading_context" => {
-                // `heading_context` is `Option<HeadingContext>` and serde drops
-                // `None` from the JSON, so chunks without a heading produce no
-                // key — making an "all chunks have it" predicate spuriously
-                // fail. Matching the Ruby codegen, skip this synthetic field.
-                let _ = writeln!(
+                // `heading_context` sitting one JSON hop deeper than `content`/`embedding`
+                // (inside `chunk.metadata`) is not the same thing as "not derivable from
+                // JSON value alone" -- a chunk missing the key is exactly the signal every
+                // other backend's typed `nil`/`None` check reads (serde drops `None`
+                // fields), not an unrepresentable one. It is checkable the same way
+                // `emit_zig_chunks_predicate` already checks `content`/`embedding`, just
+                // with an extra `.object.get(...)` hop. ~keep
+                emit_zig_chunks_heading_context_predicate(
                     out,
-                    "    // skipped: synthetic field 'chunks_have_heading_context' not derivable from JSON value alone"
+                    result_var,
+                    assertion.assertion_type.as_str(),
+                    "chunks_have_heading_context",
+                    false,
                 );
                 return;
             }
             "first_chunk_starts_with_heading" => {
-                let _ = writeln!(
+                emit_zig_chunks_heading_context_predicate(
                     out,
-                    "    // skipped: synthetic field 'first_chunk_starts_with_heading' not derivable from JSON value alone"
+                    result_var,
+                    assertion.assertion_type.as_str(),
+                    "first_chunk_starts_with_heading",
+                    true,
                 );
                 return;
             }
@@ -1200,5 +1276,124 @@ mod wildcard_tests {
         assert_eq!(split_wildcard("links[]"), None);
         assert_eq!(split_wildcard("results[0].url"), None);
         assert_eq!(split_wildcard("metadata.title"), None);
+    }
+}
+
+#[cfg(test)]
+mod chunks_heading_context_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    fn render(field: &str, assertion_type: &str) -> String {
+        let assertion = Assertion {
+            assertion_type: assertion_type.into(),
+            field: Some(field.into()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_json_assertion(&mut out, &assertion, "result", &resolver(), false);
+        out
+    }
+
+    /// `heading_context` is reachable via the same `.object.get(...)` mechanism the codegen
+    /// already uses for `content`/`embedding` -- it just sits one hop deeper, inside
+    /// `chunk.metadata`. This is the positive half: the field must be asserted for real, not
+    /// approximated via `content` shape and not left as a comment-only skip.
+    #[test]
+    fn chunks_have_heading_context_reads_the_real_field_not_a_content_proxy() {
+        let rendered = render("chunks_have_heading_context", "is_true");
+
+        assert!(
+            !rendered.contains("skipped"),
+            "must not skip a reachable field, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("\"metadata\"") && rendered.contains("\"heading_context\""),
+            "must read the real metadata.heading_context field, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("\"content\""),
+            "must not fall back to a content-shape proxy, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("try testing.expect(_all);"),
+            "is_true must assert the aggregate flag, got:\n{rendered}"
+        );
+    }
+
+    #[test]
+    fn chunks_have_heading_context_is_false_negates_the_aggregate_flag() {
+        let rendered = render("chunks_have_heading_context", "is_false");
+        assert!(rendered.contains("try testing.expect(!_all);"), "got:\n{rendered}");
+    }
+
+    /// A chunk is only proven to carry heading context by an explicit, non-null
+    /// `metadata.heading_context` key; every other case (missing `metadata`, `metadata` not an
+    /// object, missing `heading_context`, or JSON `null`) must fall through to "no heading" by
+    /// construction, not by an extra check that could itself be wrong. `_has_heading` starts
+    /// `false` and only one line can flip it to `true`, so absence is the structural default.
+    #[test]
+    fn chunks_have_heading_context_defaults_to_false_absent_explicit_proof() {
+        let rendered = render("chunks_have_heading_context", "is_true");
+        assert_eq!(
+            rendered.matches("_has_heading = true").count(),
+            1,
+            "exactly one line may prove heading context present, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("var _has_heading = false;"),
+            "must default to false, got:\n{rendered}"
+        );
+    }
+
+    /// `first_chunk_starts_with_heading` must inspect only element 0 -- not every chunk (that
+    /// is what `chunks_have_heading_context` is for) and not a `content`-prefix proxy.
+    #[test]
+    fn first_chunk_starts_with_heading_only_inspects_the_first_chunk() {
+        let rendered = render("first_chunk_starts_with_heading", "is_true");
+
+        assert!(
+            !rendered.contains("skipped"),
+            "must not skip a reachable field, got:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("\"heading_context\""),
+            "must read the real field, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("startsWith") && !rendered.contains("\"#\""),
+            "must not fall back to a markdown-heading content-prefix proxy, got:\n{rendered}"
+        );
+        // `only_first` adds exactly one unconditional `break;` beyond the two the loop body
+        // already has (the `c != .object` guard and the `!_has_heading` check) -- proving the
+        // loop stops after element 0 instead of scanning (and asserting over) every chunk,
+        // which is what `chunks_have_heading_context` is for.
+        assert_eq!(
+            rendered.matches("break;").count(),
+            3,
+            "expected exactly one extra unconditional break restricting the loop to element 0, got:\n{rendered}"
+        );
+    }
+
+    /// Negative control for the test above: `chunks_have_heading_context` must NOT carry the
+    /// element-0-only `break;` — it is required to check every chunk, not just the first.
+    #[test]
+    fn chunks_have_heading_context_inspects_every_chunk_not_only_the_first() {
+        let rendered = render("chunks_have_heading_context", "is_true");
+        assert_eq!(
+            rendered.matches("break;").count(),
+            2,
+            "must not carry the element-0-only break, got:\n{rendered}"
+        );
     }
 }

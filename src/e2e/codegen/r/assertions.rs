@@ -57,18 +57,21 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_heading_context" => {
-                // prepend_heading_context adds heading text to chunk content, so verify chunks
-                // exist and every chunk has non-empty content.
-                let pred_true = format!(
-                    "!is.null({result_var}$chunks) && length({result_var}$chunks) > 0 && all(sapply({result_var}$chunks, function(c) nchar(c$content) > 0))"
+                // extendr exposes `Chunk.metadata` and its nested `heading_context` the same
+                // way it exposes `content`/`embedding` above (both accessed via plain `$` a few
+                // lines up) -- an `Option<T>::None` maps to R `NULL`, so the field itself is
+                // directly checkable. A predicate over `content` length would be a proxy: it
+                // can pass on a chunk whose heading metadata was never attached, and fail on
+                // one where it was but the content happens to be short. ~keep
+                let pred = format!(
+                    "!is.null({result_var}$chunks) && length({result_var}$chunks) > 0 && all(sapply({result_var}$chunks, function(c) !is.null(c$metadata) && !is.null(c$metadata$heading_context)))"
                 );
-                let pred_false = format!("is.null({result_var}$chunks) || length({result_var}$chunks) == 0");
                 match assertion.assertion_type.as_str() {
                     "is_true" => {
-                        let _ = writeln!(out, "  expect_true({pred_true})");
+                        let _ = writeln!(out, "  expect_true({pred})");
                     }
                     "is_false" => {
-                        let _ = writeln!(out, "  expect_true({pred_false})");
+                        let _ = writeln!(out, "  expect_false({pred})");
                     }
                     other => {
                         panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
@@ -77,20 +80,17 @@ pub(super) fn render_assertion(
                 return;
             }
             "first_chunk_starts_with_heading" => {
-                // First chunk's content should start with a markdown heading marker (`#`)
-                // when prepend_heading_context is enabled.
-                let pred_true = format!(
-                    "!is.null({result_var}$chunks) && length({result_var}$chunks) > 0 && startsWith(trimws({result_var}$chunks[[1]]$content), \"#\")"
-                );
-                let pred_false = format!(
-                    "is.null({result_var}$chunks) || length({result_var}$chunks) == 0 || !startsWith(trimws({result_var}$chunks[[1]]$content), \"#\")"
+                // Same field as `chunks_have_heading_context` above, restricted to the first
+                // chunk -- not a `content`-prefix proxy. ~keep
+                let pred = format!(
+                    "!is.null({result_var}$chunks) && length({result_var}$chunks) > 0 && !is.null({result_var}$chunks[[1]]$metadata) && !is.null({result_var}$chunks[[1]]$metadata$heading_context)"
                 );
                 match assertion.assertion_type.as_str() {
                     "is_true" => {
-                        let _ = writeln!(out, "  expect_true({pred_true})");
+                        let _ = writeln!(out, "  expect_true({pred})");
                     }
                     "is_false" => {
-                        let _ = writeln!(out, "  expect_true({pred_false})");
+                        let _ = writeln!(out, "  expect_false({pred})");
                     }
                     other => {
                         panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
@@ -633,6 +633,73 @@ mod tests {
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
         assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    fn render_chunk_heading_assertion(field: &str, assertion_type: &str) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let enum_fields = HashMap::new();
+        let assertion = Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        };
+        let context = RAssertionContext {
+            field_resolver: &resolver,
+            result_is_simple: false,
+            result_is_bytes: false,
+            assert_enum_fields: &enum_fields,
+        };
+        let mut out = String::new();
+        render_assertion(&mut out, &assertion, "result", &context);
+        out
+    }
+
+    /// `chunks_have_heading_context` must assert the real `metadata$heading_context` field --
+    /// extendr exposes it the same way `chunks_have_content`/`chunks_have_embeddings` (a few
+    /// lines above in the generator) already reach `content`/`embedding` -- not a `content`
+    /// non-emptiness proxy, which passes on a chunk whose heading metadata was never attached
+    /// as long as it has any content at all.
+    #[test]
+    fn chunks_have_heading_context_asserts_the_real_field_not_a_content_proxy() {
+        let out = render_chunk_heading_assertion("chunks_have_heading_context", "is_true");
+        assert!(
+            out.contains("c$metadata$heading_context"),
+            "must read the real field, got: {out}"
+        );
+        assert!(
+            !out.contains("nchar(c$content)"),
+            "must not proxy via content length, got: {out}"
+        );
+    }
+
+    /// Same field as above, restricted to the first chunk -- not a markdown-heading
+    /// content-prefix proxy (`startsWith(trimws(content), "#")`).
+    #[test]
+    fn first_chunk_starts_with_heading_asserts_the_real_field_not_a_content_proxy() {
+        let out = render_chunk_heading_assertion("first_chunk_starts_with_heading", "is_true");
+        assert!(
+            out.contains("chunks[[1]]$metadata$heading_context"),
+            "must read the real field on the first chunk, got: {out}"
+        );
+        assert!(
+            !out.contains("startsWith") && !out.contains("\"#\""),
+            "must not fall back to a content-prefix proxy, got: {out}"
+        );
+    }
+
+    /// Negative control: `is_false` must negate the same real-field predicate, not just flip a
+    /// content-shape heuristic.
+    #[test]
+    fn chunks_have_heading_context_is_false_uses_expect_false_on_the_same_predicate() {
+        let out = render_chunk_heading_assertion("chunks_have_heading_context", "is_false");
+        assert!(out.contains("expect_false("), "got: {out}");
+        assert!(out.contains("c$metadata$heading_context"), "got: {out}");
     }
 
     /// The negative-control half of the same regression: `internal_diagnostics`

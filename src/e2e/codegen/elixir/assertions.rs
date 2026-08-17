@@ -80,9 +80,14 @@ pub(super) fn render_assertion(
                 return;
             }
             "first_chunk_starts_with_heading" => {
+                // Same real field as `chunks_have_heading_context` above (`c.metadata.heading_context`),
+                // restricted to the first chunk -- not a `content`-prefix proxy. A chunk whose
+                // content happens to start with "#" for an unrelated reason (a literal markdown
+                // heading in the source, not `prepend_heading_context`) would pass the old proxy
+                // and hide a genuine `heading_context` regression. ~keep
                 let expr = format!(
                     "case List.first({result_var}.chunks || []) do
-        c when is_map(c) -> String.trim_leading(c.content || \"\") |> String.starts_with?(\"#\")
+        c when is_map(c) -> c.metadata != nil and c.metadata.heading_context != nil
         _ -> false
       end"
                 );
@@ -726,6 +731,40 @@ mod tests {
             false,
         );
         assert!(!out.contains("skipped"), "got: {out}");
+    }
+
+    /// `first_chunk_starts_with_heading` must assert the real `metadata.heading_context`
+    /// field, matching `chunks_have_heading_context` a few lines above it in the generator —
+    /// not a `content`-prefix proxy (`String.starts_with?(c.content, "#")`), which can pass on
+    /// a chunk whose heading metadata was never attached (a literal "#" in unrelated source
+    /// content) and would not catch a regression that dropped `heading_context` entirely.
+    #[test]
+    fn first_chunk_starts_with_heading_asserts_the_real_field_not_a_content_proxy() {
+        let assertion = Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some("first_chunk_starts_with_heading".to_string()),
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &empty_resolver(),
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        assert!(
+            out.contains("c.metadata.heading_context != nil"),
+            "must read the real field, got: {out}"
+        );
+        assert!(
+            !out.contains("starts_with?") && !out.contains("\"#\""),
+            "must not fall back to a content-prefix proxy, got: {out}"
+        );
     }
 
     /// The negative-control half of the same regression: `internal_diagnostics`
