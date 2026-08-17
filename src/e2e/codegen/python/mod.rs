@@ -836,6 +836,104 @@ from_json_module = "my_lib._internal_bindings"
         );
     }
 
+    /// Builds a fictional `my-lib` config where the `from_json` request type lives on a
+    /// *named* call (`create_widget`) while the default `[crates.e2e.call]` carries no
+    /// `json_object` args at all. Mirrors the real liter-llm shape: a default `chat` call
+    /// plus named calls like `create_batch`, each with its own python override. This is the
+    /// scenario `build_thirdparty_imports`'s `needs_options_type` computed wrong before it was
+    /// fixed to resolve the call per fixture — it read the *default* call's args instead of the
+    /// fixture's actual resolved call, so a default call with zero `json_object` args made
+    /// `needs_options_type` false even though the fixture's own call needed the from_json
+    /// dedup. `per_call_native_types_are_excluded_from_public_imports` and
+    /// `build_thirdparty_imports_does_not_duplicate_the_from_json_type_across_modules` in
+    /// `test_file.rs` cover the same fix at the unit level; this drives it end to end through
+    /// `render_snippet_body` with a real named-call config, which is what actually failed. ~keep
+    fn named_call_widget_snippet_config() -> (crate::e2e::config::E2eConfig, crate::core::config::ResolvedCrateConfig) {
+        use crate::core::config::NewAlefConfig;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "list_widgets"
+module = "my_lib"
+async = true
+[crates.e2e.call.overrides.python]
+client_factory = "create_client"
+[crates.e2e.calls.create_widget]
+function = "create_widget"
+module = "my_lib"
+async = true
+[[crates.e2e.calls.create_widget.args]]
+name = "request"
+field = "input"
+type = "json_object"
+owned = true
+[crates.e2e.calls.create_widget.overrides.python]
+options_type = "WidgetRequest"
+options_via = "from_json"
+from_json_module = "my_lib._internal_bindings"
+"#,
+        )
+        .expect("config must parse");
+        let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+        let mut resolved = cfg.resolve().expect("config resolves").remove(0);
+        resolved.output_paths.insert(
+            "python".to_string(),
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        );
+        (e2e, resolved)
+    }
+
+    fn named_call_widget_fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "create_widget_smoke",
+            "description": "Create a widget",
+            "docs": {"topic": "widgets", "stem": "create-widget", "title": "Create a widget"},
+            "call": "create_widget",
+            "input": {"name": "gadget", "count": 3},
+            "mock_response": {"status": 200, "body": {"id": "w1"}},
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture must parse")
+    }
+
+    /// Regression for the exact liter-llm defect: a docs snippet whose `from_json` request
+    /// type is configured on a named call (not the default one) must still import that type
+    /// exactly once, from the native bindings module — not once from the public package root
+    /// and again from the native module. Asserts the precise emitted import lines. ~keep
+    #[test]
+    fn named_call_from_json_type_is_imported_exactly_once() {
+        let (e2e, resolved) = named_call_widget_snippet_config();
+        let fixture = named_call_widget_fixture();
+        let type_defs = vec![crate::core::ir::TypeDef {
+            name: "WidgetRequest".to_string(),
+            has_serde: true,
+            ..Default::default()
+        }];
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &type_defs, &[])
+            .expect("snippet renders");
+
+        let import_lines: Vec<&str> = rendered.lines().filter(|line| line.starts_with("from ")).collect();
+        assert_eq!(
+            import_lines,
+            vec![
+                "from my_lib import create_client",
+                "from my_lib._internal_bindings import WidgetRequest",
+            ],
+            "WidgetRequest must be imported exactly once, from the native bindings module, and \
+             must not also appear on the public import line: {rendered}"
+        );
+    }
+
     /// Pins that a `client_factory` fixture's Python documentation snippet reads its
     /// credential via `os.environ[...]` — the substitution `render_snippet_body` applies over
     /// the harness's hardcoded `api_key="test-key"` literal (mod.rs ~line 183-191) — and never
