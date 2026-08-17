@@ -511,10 +511,11 @@ pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
         .any(|existing| *existing == key)
 }
 
-/// Repo-scoped (rooted at `base_dir`) local record of the array *values*
-/// alef's own generator proposed for a TOML merge target, per dotted
-/// key path, on the most recent successful merge -- e.g.
-/// `{"poly.toml": {"discovery.exclude": ["target/**", "docs/snippets/**"]}}`.
+/// Repo-scoped (rooted at `base_dir`), COMMITTED record of the array
+/// *values* alef's own generator proposed for a TOML merge target, per
+/// dotted key path, on the most recent successful merge -- e.g. alef last
+/// generated `["target/**", "docs/snippets/**"]` for `poly.toml`'s
+/// `discovery.exclude`.
 ///
 /// This is the provenance data [`merge_managed_toml`]'s prune step needs to
 /// answer "did alef itself, in a past run, propose this exact value" without
@@ -534,30 +535,88 @@ pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
 /// not the `base_dir`-joined absolute one, so the record does not depend on
 /// how a given invocation happened to express `base_dir`.
 ///
-/// `.alef/` is gitignored and machine-local: a fresh clone or a wiped cache
-/// has no record for any key path, so [`merge_managed_toml`]'s prune step
-/// finds nothing to compare against and removes nothing -- the same
-/// degrade-safely-to-no-op contract as [`is_scaffold_owned_path`], and for
-/// the same reason: this can only ever prevent *future* drift from
-/// accumulating starting at the first run that establishes a baseline in a
-/// given working copy, never retroactively clean up values that went stale
-/// before that baseline existed. ~keep
-const TOML_MERGE_PROVENANCE_MANIFEST: &str = "toml-merge-provenance.json";
+/// **Committed to git on purpose**, same rationale and same failure mode as
+/// [`OWNERSHIP_MANIFEST`]: this used to live at gitignored
+/// `.alef/toml-merge-provenance.json`, so a fresh clone or a CI checkout
+/// never had a baseline and the prune step could never fire there, no matter
+/// how long a value had been gone from alef's own template. Concretely, this
+/// is why liter-llm's `docs/assets/**` / `docs/snippets/**` `poly.toml`
+/// excludes, for a `docs/` tree that had been deleted, had to be removed BY
+/// HAND in `12b1d0a69` instead of pruning themselves. Sitting at the repo
+/// root, this file travels with every checkout of the commit that describes
+/// it, so pruning behaves identically on a fresh clone and a warm machine.
+///
+/// Unlike [`OWNERSHIP_MANIFEST`] this record carries no legacy-gitignored-read
+/// fallback and no cross-machine migration bridge: [`OWNERSHIP_MANIFEST`]
+/// needs one because losing a positive ownership claim flips the guard to
+/// *refuse* a write it used to allow, which upgrading alef must never do to
+/// every existing consumer repo at once. Losing a stale prune baseline only
+/// means *not pruning* for one run -- never data loss, never a spurious
+/// refusal -- so the first run after upgrading simply establishes a fresh
+/// committed baseline and pruning resumes from there. ~keep
+const TOML_MERGE_PROVENANCE_MANIFEST: &str = ".alef-toml-merge-provenance.toml";
+
+/// Preamble written above the entry list, mirroring [`OWNERSHIP_MANIFEST_HEADER`]:
+/// addressed at a human reading a `git diff` who has no reason to know what this
+/// mystery dotfile is for. ~keep
+const TOML_MERGE_PROVENANCE_HEADER: &str = "\
+# alef toml-merge provenance record -- COMMIT THIS FILE, do not add it to .gitignore.
+#
+# Records, per merge target and key path, the array values alef itself generated on
+# the most recent `alef generate` run -- the baseline the poly.toml merge's prune step
+# diffs against to tell \"alef proposed this and later stopped\" from \"the consumer
+# wrote this by hand.\" Without this file committed, a fresh clone has no baseline, so
+# a value alef stops generating can never be pruned there -- it accumulates forever.
+#
+# Nothing here is inferred by comparing bytes -- an entry is only ever a copy of
+# alef's own past `generated` output for the given key path, captured before merging
+# with consumer content. Do not hand-edit; it is rewritten on every `alef generate`.
+";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TomlMergeProvenanceEntry {
+    relative_path: String,
+    key_path: String,
+    values: Vec<String>,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct TomlMergeProvenanceFile {
+    #[serde(default)]
+    entries: Vec<TomlMergeProvenanceEntry>,
+}
 
 type TomlMergeProvenance = std::collections::BTreeMap<String, std::collections::BTreeMap<String, Vec<String>>>;
 
+fn toml_merge_provenance_path(base_dir: &Path) -> PathBuf {
+    base_dir.join(TOML_MERGE_PROVENANCE_MANIFEST)
+}
+
+/// Read the committed record, treating an unreadable or unparseable file as
+/// empty -- the same safe direction as [`read_committed_owned_paths`]: a
+/// record we could not parse must never be silently treated as "no prior
+/// proposal for anything," which here is the *pruning* direction and is
+/// exactly as safe as it looks (see [`TOML_MERGE_PROVENANCE_MANIFEST`]'s doc).
 fn read_toml_merge_provenance_file(base_dir: &Path) -> TomlMergeProvenance {
-    let manifest_path = base_dir.join(CACHE_DIR).join(TOML_MERGE_PROVENANCE_MANIFEST);
-    fs::read_to_string(manifest_path)
-        .ok()
-        .and_then(|content| serde_json::from_str(&content).ok())
-        .unwrap_or_default()
+    let Ok(content) = fs::read_to_string(toml_merge_provenance_path(base_dir)) else {
+        return TomlMergeProvenance::new();
+    };
+    let Ok(parsed) = toml::from_str::<TomlMergeProvenanceFile>(&content) else {
+        return TomlMergeProvenance::new();
+    };
+    let mut all = TomlMergeProvenance::new();
+    for entry in parsed.entries {
+        all.entry(entry.relative_path)
+            .or_default()
+            .insert(entry.key_path, entry.values);
+    }
+    all
 }
 
 /// Read the previously recorded array values for every key path in
 /// `relative_path` (e.g. `"poly.toml"`). Empty when nothing was ever
-/// recorded for this path in this working copy -- callers must treat that as
-/// "no known prior proposal," never as "alef proposed no arrays."
+/// recorded for this path -- callers must treat that as "no known prior
+/// proposal," never as "alef proposed no arrays."
 pub fn read_toml_merge_provenance(
     base_dir: &Path,
     relative_path: &Path,
@@ -570,18 +629,47 @@ pub fn read_toml_merge_provenance(
 /// Replace the recorded array values for `relative_path` with
 /// `arrays_by_key_path` -- this run's freshly generated content, captured
 /// before merging with consumer content -- for the next run's comparison.
-/// Other merge targets' records are left untouched.
+/// Other merge targets' records are left untouched. Rewrites the committed
+/// [`TOML_MERGE_PROVENANCE_MANIFEST`] in full every call, the same
+/// read-modify-write shape as [`record_scaffold_owned_paths`] (and, like it,
+/// not guarded against concurrent writers from other processes -- not a
+/// supported mode for any cache in this module).
 pub fn write_toml_merge_provenance(
     base_dir: &Path,
     relative_path: &Path,
     arrays_by_key_path: &std::collections::BTreeMap<String, Vec<String>>,
 ) -> anyhow::Result<()> {
-    let dir = base_dir.join(CACHE_DIR);
-    fs::create_dir_all(&dir)?;
+    let manifest_path = toml_merge_provenance_path(base_dir);
+    let is_new_manifest = !manifest_path.exists();
+
     let mut all = read_toml_merge_provenance_file(base_dir);
     all.insert(relative_path.to_string_lossy().into_owned(), arrays_by_key_path.clone());
-    let manifest_path = dir.join(TOML_MERGE_PROVENANCE_MANIFEST);
-    fs::write(&manifest_path, serde_json::to_string_pretty(&all)?)?;
+
+    // Both maps are `BTreeMap`s, so this iterates in `(relative_path, key_path)`
+    // order already -- no separate sort needed to keep the rendered file diffable.
+    let entries: Vec<TomlMergeProvenanceEntry> = all
+        .into_iter()
+        .flat_map(|(relative_path, by_key_path)| {
+            by_key_path
+                .into_iter()
+                .map(move |(key_path, values)| TomlMergeProvenanceEntry {
+                    relative_path: relative_path.clone(),
+                    key_path,
+                    values,
+                })
+        })
+        .collect();
+
+    fs::create_dir_all(base_dir)?;
+    let body = toml::to_string_pretty(&TomlMergeProvenanceFile { entries })?;
+    fs::write(&manifest_path, format!("{TOML_MERGE_PROVENANCE_HEADER}\n{body}"))?;
+    if is_new_manifest {
+        tracing::info!(
+            manifest = %TOML_MERGE_PROVENANCE_MANIFEST,
+            "created the alef toml-merge provenance record: commit it, or a fresh clone can never \
+             prune a value alef stops generating"
+        );
+    }
     Ok(())
 }
 
@@ -1232,5 +1320,120 @@ mod tests {
             found_from_absolute,
             "a record written with a relative base_dir must be found by an absolute-base_dir lookup"
         );
+    }
+
+    /// The record must be a file `git add` picks up, not one alef itself gitignores --
+    /// same #80-shaped concern as [`ownership_record_lives_outside_the_gitignored_cache_and_is_valid_toml`],
+    /// applied to the merge-provenance baseline. ~keep
+    #[test]
+    fn toml_merge_provenance_record_lives_outside_the_gitignored_cache_and_is_valid_toml() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let mut arrays = std::collections::BTreeMap::new();
+        arrays.insert(
+            "discovery.exclude".to_string(),
+            vec!["target/**".to_string(), "docs/assets/**".to_string()],
+        );
+
+        write_toml_merge_provenance(base, Path::new("poly.toml"), &arrays).expect("write provenance");
+
+        let manifest_path = base.join(TOML_MERGE_PROVENANCE_MANIFEST);
+        assert!(manifest_path.exists(), "the record must exist at the repo root");
+        assert!(
+            !manifest_path.starts_with(base.join(CACHE_DIR)),
+            "the record must not live under the gitignored `{CACHE_DIR}` directory"
+        );
+        let content = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let parsed: TomlMergeProvenanceFile = toml::from_str(&content).expect("the record must be valid TOML");
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].relative_path, "poly.toml");
+        assert_eq!(parsed.entries[0].key_path, "discovery.exclude");
+        assert_eq!(
+            parsed.entries[0].values,
+            vec!["target/**".to_string(), "docs/assets/**".to_string()]
+        );
+    }
+
+    /// A fresh clone carries the committed record but no `.alef/` cache at all. Simulated
+    /// by writing into one `base_dir` and reading the manifest back from a second,
+    /// cache-less one -- mirrors [`committed_record_answers_identically_on_a_cache_less_clone`]
+    /// for the merge-provenance baseline.
+    #[test]
+    fn toml_merge_provenance_answers_identically_on_a_cache_less_clone() {
+        let warm = tempfile::tempdir().expect("tempdir warm");
+        let clone = tempfile::tempdir().expect("tempdir clone");
+        let mut arrays = std::collections::BTreeMap::new();
+        arrays.insert("discovery.exclude".to_string(), vec!["docs/assets/**".to_string()]);
+
+        write_toml_merge_provenance(warm.path(), Path::new("poly.toml"), &arrays).expect("write provenance");
+        std::fs::copy(
+            warm.path().join(TOML_MERGE_PROVENANCE_MANIFEST),
+            clone.path().join(TOML_MERGE_PROVENANCE_MANIFEST),
+        )
+        .expect("check out the committed record");
+
+        assert!(
+            !clone.path().join(CACHE_DIR).exists(),
+            "the simulated clone must have no machine-local cache"
+        );
+        assert_eq!(
+            read_toml_merge_provenance(warm.path(), Path::new("poly.toml")),
+            read_toml_merge_provenance(clone.path(), Path::new("poly.toml")),
+            "a fresh clone must agree with the warm machine about alef's prior proposal"
+        );
+    }
+
+    /// An unparseable record must read as "no prior proposal for anything" -- the prune
+    /// step then removes nothing, rather than panicking or, far worse, guessing.
+    #[test]
+    fn unparseable_toml_merge_provenance_record_prunes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        std::fs::write(
+            base.join(TOML_MERGE_PROVENANCE_MANIFEST),
+            "this is not = = valid toml [[[",
+        )
+        .expect("write junk");
+
+        assert_eq!(
+            read_toml_merge_provenance(base, Path::new("poly.toml")),
+            std::collections::BTreeMap::new()
+        );
+    }
+
+    /// The record is itself a `.toml` file at the repo root, so `alef verify`'s walk
+    /// reaches it. Its explanatory header must not read as a provenance marker, for the
+    /// same reason pinned in [`ownership_record_header_does_not_read_as_a_provenance_marker`].
+    #[test]
+    fn toml_merge_provenance_header_does_not_read_as_a_provenance_marker() {
+        assert!(
+            !crate::core::hash::content_has_alef_marker(TOML_MERGE_PROVENANCE_HEADER),
+            "the record's own header must not look like an alef provenance marker, got:\n{TOML_MERGE_PROVENANCE_HEADER}"
+        );
+    }
+
+    /// Writing a second, unrelated merge target's provenance must not clobber a
+    /// previously recorded one -- this is the read-modify-write round trip
+    /// [`write_toml_merge_provenance`]'s doc promises ("other merge targets' records are
+    /// left untouched"), pinned so a future rewrite of the read-modify-write step cannot
+    /// silently drop it.
+    #[test]
+    fn toml_merge_provenance_write_extends_rather_than_replaces_other_targets() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let mut poly_arrays = std::collections::BTreeMap::new();
+        poly_arrays.insert("discovery.exclude".to_string(), vec!["target/**".to_string()]);
+        write_toml_merge_provenance(base, Path::new("poly.toml"), &poly_arrays).expect("write poly.toml provenance");
+
+        let mut other_arrays = std::collections::BTreeMap::new();
+        other_arrays.insert("some.key".to_string(), vec!["value".to_string()]);
+        write_toml_merge_provenance(base, Path::new("other.toml"), &other_arrays).expect("write other.toml provenance");
+
+        assert_eq!(
+            read_toml_merge_provenance(base, Path::new("poly.toml")),
+            poly_arrays,
+            "recording a second merge target's provenance must leave the first's untouched"
+        );
+        assert_eq!(read_toml_merge_provenance(base, Path::new("other.toml")), other_arrays);
     }
 }

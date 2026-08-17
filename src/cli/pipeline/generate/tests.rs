@@ -209,7 +209,7 @@ file_safety = { exclude = ["target/**"] }
     }
 
     /// The `merge_managed_toml` prune step: a value alef itself proposed on a
-    /// prior run (recorded in the local `.alef/toml-merge-provenance.json`,
+    /// prior run (recorded in the committed `.alef-toml-merge-provenance.toml`,
     /// straight from that run's own generated output) and no longer proposes
     /// must be removed once a baseline exists to compare against. The first
     /// run establishes the baseline and cannot prune anything yet (nothing to
@@ -247,6 +247,93 @@ file_safety = { exclude = ["target/**"] }
         assert!(
             after_second.contains("target/**"),
             "a value alef still emits must survive; got:\n{after_second}"
+        );
+    }
+
+    /// The `poly.toml` prune baseline must be determinable from the repository alone,
+    /// identically on a fresh clone and on the machine that generated it -- the same
+    /// #80-shaped reproducibility property already covered for scaffold ownership in
+    /// `ownership_of_an_unmarkable_file_survives_a_cache_less_fresh_clone`.
+    ///
+    /// The baseline used to live at gitignored `.alef/toml-merge-provenance.json`, so a
+    /// fresh clone or CI checkout never had it and the prune step could never fire there,
+    /// no matter how long a value had been gone from alef's own template -- this is
+    /// exactly the liter-llm `docs/assets/**` / `docs/snippets/**` staleness that had to
+    /// be removed by hand in `12b1d0a69` instead of pruning itself.
+    ///
+    /// Deleting the whole `.alef/` cache between the baseline-establishing run and the
+    /// pruning run is the load-bearing step -- it is what a fresh clone *is*. Without it
+    /// the assertion would pass whether or not the baseline is committed, and prove
+    /// nothing. ~keep
+    #[test]
+    fn poly_merge_prunes_a_stale_value_after_a_cache_less_fresh_clone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+
+        let first_generation = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"docs/assets/**\", \"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[first_generation], base, true).expect("first scaffold run");
+
+        let record = base.join(".alef-toml-merge-provenance.toml");
+        assert!(
+            record.exists(),
+            "establishing a merge baseline must leave a committable record"
+        );
+
+        std::fs::remove_dir_all(base.join(".alef")).ok();
+        assert!(!base.join(".alef").exists(), "sanity: the machine-local cache is gone");
+
+        // Simulate alef dropping `docs/assets/**` from its own EXCLUDES, on a checkout
+        // that carries only the committed provenance record.
+        let second_generation = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[second_generation], base, true).expect("second scaffold run");
+        let after_second = std::fs::read_to_string(base.join("poly.toml")).expect("read after second run");
+        assert!(
+            !after_second.contains("docs/assets/**"),
+            "a checkout carrying only the committed record must still prune a value alef stopped \
+             emitting; got:\n{after_second}"
+        );
+        assert!(
+            after_second.contains("target/**"),
+            "a value alef still emits must survive; got:\n{after_second}"
+        );
+    }
+
+    /// Negative control for the prune fix above: a value the CONSUMER hand-added to
+    /// `poly.toml` -- never alef's own generated output -- must survive the same
+    /// cache-less-fresh-clone scenario. A prune baseline that pruned everything on a
+    /// fresh clone would pass the positive test above while destroying user config; this
+    /// is what tells the two apart.
+    #[test]
+    fn poly_merge_never_prunes_a_consumer_value_after_a_cache_less_fresh_clone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let existing = "[discovery]\nexclude = [\"packages/**\"]\n";
+        std::fs::write(base.join("poly.toml"), existing).expect("write existing, consumer-authored config");
+
+        let generated = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[generated.clone()], base, true).expect("first scaffold run");
+
+        std::fs::remove_dir_all(base.join(".alef")).ok();
+        assert!(!base.join(".alef").exists(), "sanity: the machine-local cache is gone");
+
+        write_scaffold_files_with_overwrite(&[generated], base, true).expect("second scaffold run");
+        let merged = std::fs::read_to_string(base.join("poly.toml")).expect("read merged config");
+        assert!(
+            merged.contains("packages/**"),
+            "a value alef never generated must never be pruned, on a fresh clone or otherwise; \
+             got:\n{merged}"
         );
     }
 
@@ -295,7 +382,7 @@ file_safety = { exclude = ["target/**"] }
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path();
         // A value that leaked in before this mechanism ever ran -- no
-        // `.alef/toml-merge-provenance.json` record exists for it.
+        // `.alef-toml-merge-provenance.toml` record exists for it.
         let existing = "[discovery]\nexclude = [\"docs/assets/**\", \"target/**\"]\n";
         std::fs::write(base.join("poly.toml"), existing).expect("write existing, already-stale config");
 

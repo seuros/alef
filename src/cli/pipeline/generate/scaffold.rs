@@ -589,9 +589,10 @@ pub(super) fn merge_managed_toml(
 }
 
 /// Read-only counterpart to [`merge_managed_toml`] for preview/diff callers:
-/// runs the identical prune + union + dedupe merge against the same local
-/// provenance record, but never writes a new snapshot back. Safe to call
-/// from multiple threads concurrently (only reads shared `.alef/` state).
+/// runs the identical prune + union + dedupe merge against the same
+/// committed provenance record, but never writes a new snapshot back. Safe
+/// to call from multiple threads concurrently (only reads shared, committed
+/// `.alef-toml-merge-provenance.toml` state).
 pub(super) fn merge_managed_toml_preview(
     existing: &str,
     generated: &str,
