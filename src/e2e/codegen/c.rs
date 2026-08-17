@@ -875,6 +875,12 @@ use assertions::{
     FieldConfigSources, LeafFieldCheck, build_args_string_c, emit_nested_accessor, ensure_leaf_field_exists,
     render_assertion,
 };
+// Test-only: the tests here and in `snippet_regressions` (which pulls this scope in via
+// `use super::*`) construct sources explicitly to pin which config key a diagnostic names, while
+// non-test code only ever goes through `FieldConfigSources`. Importing it unconditionally would be
+// an unused import, which this repo's clippy config escalates to a build failure. ~keep
+#[cfg(test)]
+use assertions::EffectiveConfigSource;
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
 use project::{render_download_script, render_gitignore, render_makefile};
 use runner::{render_main_c, render_test_runner_header};
