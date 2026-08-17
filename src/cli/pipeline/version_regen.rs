@@ -83,8 +83,17 @@ pub(super) fn regenerate_test_apps_after_sync(
 
     let api = extract(&fresh_config, config_path, false)?;
 
-    let generated = crate::e2e::generate_e2e(&fresh_config, e2e_ref, None, &api.types, &api.enums, &api.functions)?;
+    // `generate_e2e` now returns a per-backend generator failure alongside the files it did
+    // produce instead of folding it into this `Result`. Nothing here caches a stage hash or
+    // sweeps orphans against a previous run (unlike the `alef all` / `alef e2e generate`
+    // callers), so there is no premature-success or stale-cache hazard to gate -- writing
+    // what succeeded and re-raising the failure afterward is sufficient. ~keep
+    let (generated, generator_error) =
+        crate::e2e::generate_e2e(&fresh_config, e2e_ref, None, &api.types, &api.enums, &api.functions)?;
     if generated.is_empty() {
+        if let Some(error) = generator_error {
+            return Err(error);
+        }
         return Ok(0);
     }
 
@@ -104,6 +113,9 @@ pub(super) fn regenerate_test_apps_after_sync(
         managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
     super::generate::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
+    if let Some(error) = generator_error {
+        return Err(error);
+    }
     Ok(count)
 }
 

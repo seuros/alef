@@ -221,6 +221,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let config_toml = std::fs::read_to_string(config_path)?;
                     let base_dir = std::env::current_dir()?;
                     let mut grand_count: usize = 0;
+                    // Deferred the same way `all_commands::handle` defers it, and for the same
+                    // reason: `sweep_manifest_orphans` and `cache::write_stage_hash` right after the
+                    // write below are unsafe to run on a generator failure (stale-cache and
+                    // last-good-output-deletion hazards). Both are gated on this being `None`. ~keep
+                    let mut e2e_stage_error: Option<anyhow::Error> = None;
                     for e2e_crate in &crates_to_process {
                         let Some(this_e2e_config) = e2e_crate.e2e.as_ref() else {
                             continue;
@@ -264,7 +269,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             tracing::info!("Generating e2e test suites...");
                         }
                         let languages = lang.as_deref();
-                        let files = crate::e2e::generate_e2e(
+                        let (files, generator_error) = crate::e2e::generate_e2e(
                             e2e_crate,
                             e2e_ref,
                             languages,
@@ -308,13 +313,23 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         } else {
                             vec![e2e_output_root]
                         };
-                        let previous_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
-                        pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
+                        if let Some(error) = generator_error {
+                            if e2e_stage_error.is_some() {
+                                tracing::error!("[{}] e2e codegen failed: {error:#}", e2e_crate.name);
+                            }
+                            e2e_stage_error.get_or_insert(error);
+                        } else {
+                            let previous_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
 
-                        cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
+                        }
                         grand_count += count;
                     }
                     tracing::info!("Generated {grand_count} e2e files");
+                    if let Some(error) = e2e_stage_error {
+                        return Err(error);
+                    }
                     Ok(None)
                 }
                 E2eAction::SnippetsMigrate {
@@ -445,6 +460,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let config_toml = std::fs::read_to_string(config_path)?;
                     let base_dir = std::env::current_dir()?;
                     let mut grand_count: usize = 0;
+                    // Deferred the same way `all_commands::handle` defers it -- see the `e2e`
+                    // command's `e2e_stage_error` above for the cache-poisoning and
+                    // orphan-deletion hazard this gates against. ~keep
+                    let mut e2e_stage_error: Option<anyhow::Error> = None;
                     for e2e_crate in &crates_to_process {
                         let Some(this_e2e_config) = e2e_crate.e2e.as_ref() else {
                             continue;
@@ -480,7 +499,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         tracing::info!("Generating registry-mode test apps...");
                         let languages = lang.as_deref();
-                        let files = crate::e2e::generate_e2e(
+                        let (files, generator_error) = crate::e2e::generate_e2e(
                             e2e_crate,
                             e2e_ref,
                             languages,
@@ -575,12 +594,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         } else {
                             vec![output_root]
                         };
-                        pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
+                        if let Some(error) = generator_error {
+                            if e2e_stage_error.is_some() {
+                                tracing::error!("[{}] test-apps codegen failed: {error:#}", e2e_crate.name);
+                            }
+                            e2e_stage_error.get_or_insert(error);
+                        } else {
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
 
-                        cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
+                        }
                         grand_count += count;
                     }
                     tracing::info!("Generated {grand_count} test-app files");
+                    if let Some(error) = e2e_stage_error {
+                        return Err(error);
+                    }
                     Ok(None)
                 }
                 TestAppsAction::Run { lang } => {

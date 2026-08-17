@@ -760,7 +760,16 @@ fn drive_pipeline(root: &Path, config_path: &Path, resolved: &ResolvedCrateConfi
     // This is where crawlberg died: the C generator walks the *resolved* field
     // path of `metadata.title`, which the `[crates.e2e.fields]` alias expands
     // across a namespace hop, and needs a declared C type for every intermediate.
-    let e2e_files = stage!(
+    //
+    // `generate_e2e` isolates one backend's codegen failure from its siblings: it no
+    // longer returns `Err` for a generator failure, it returns the files every other
+    // backend still produced alongside the failure in a second slot. This gate still
+    // needs the stage to read as failed -- the assertions below check for exactly that --
+    // so the deferred error is turned into a `StageOutcome::Failed` by hand instead of
+    // the `stage!` macro's `Err` arm doing it, right after the files that did generate
+    // are written (mirroring what the real fix does at every caller: write what
+    // succeeded, then report the failure). ~keep
+    let (e2e_files, e2e_generator_error) = stage!(
         run,
         "e2e-codegen",
         alef::e2e::generate_e2e(resolved, &e2e_config, None, &api.types, &api.enums, &api.functions,)
@@ -771,10 +780,15 @@ fn drive_pipeline(root: &Path, config_path: &Path, resolved: &ResolvedCrateConfi
         "e2e-codegen",
         pipeline::write_scaffold_files_with_overwrite(&e2e_files, root, true)
     );
-    run.ledger.completed("e2e-codegen", e2e_written);
     for file in &e2e_files {
         run.written_paths.push(root.join(&file.path));
     }
+    if let Some(error) = e2e_generator_error {
+        run.ledger.failed("e2e-codegen", format!("{error:#}"));
+        run.ledger.not_reached(DRIVEN_STAGES);
+        return;
+    }
+    run.ledger.completed("e2e-codegen", e2e_written);
 
     // --- readme ------------------------------------------------------------
     let readme_files = stage!(run, "readme", pipeline::readme(&api, resolved, &languages));

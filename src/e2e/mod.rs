@@ -93,6 +93,14 @@ pub fn known_e2e_target_names() -> Vec<String> {
 /// documentation-snippet path, so a call's result type resolves from the declared
 /// return type rather than from a PascalCased guess at the call name. Pass an empty
 /// slice when not available; generators fall back to the guess.
+/// Thin wrapper: reads the active extensions from the process-global registry and
+/// delegates to [`generate_e2e_with_extensions`]. Every production caller keeps calling
+/// this function unchanged -- the split below exists solely so tests can inject a
+/// synthetic extensions list instead of mutating `crate::EXTENSIONS`, which is a
+/// process-global `OnceLock` settable exactly once per test binary and therefore unsafe
+/// to touch from any individual test (see `generate_e2e_with_extensions`'s own tests).
+/// Mirrors `snippets::generate_snippet_report` / `generate_snippet_report_with_extensions`
+/// exactly, for the same reason. ~keep
 pub fn generate_e2e(
     config: &ResolvedCrateConfig,
     e2e_config: &E2eConfig,
@@ -100,7 +108,21 @@ pub fn generate_e2e(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
-) -> Result<Vec<GeneratedFile>> {
+) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
+    crate::with_extensions(|extensions| {
+        generate_e2e_with_extensions(config, e2e_config, languages, type_defs, enums, functions, extensions)
+    })
+}
+
+fn generate_e2e_with_extensions(
+    config: &ResolvedCrateConfig,
+    e2e_config: &E2eConfig,
+    languages: Option<&[String]>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+    extensions: &[Box<dyn crate::Extension>],
+) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
     let fixtures_dir = Path::new(&e2e_config.fixtures);
     let fixtures = load_fixtures(fixtures_dir)
         .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
@@ -193,13 +215,37 @@ pub fn generate_e2e(
     let (mut all_files, generator_failures) =
         run_generators(&generators, &groups, e2e_config, config, type_defs, enums, functions);
 
-    // Let registered extensions contribute e2e files per language. The default
-    // `Extension::emit_e2e` returns empty, so consumers without an e2e extension
-    // see no change. Returned files merge into the same collection the caller
-    // writes and orphan-sweeps.
-    crate::with_extensions(|exts| {
+    // A backend's codegen failure no longer turns this function into an `Err`: it travels
+    // out alongside `all_files` in this slot instead, so the caller can still write every
+    // file that did succeed -- including the failing backend's own siblings -- and stamp
+    // their provenance before it ever has to decide whether to propagate. Returning `Err`
+    // here, as this used to, discarded `all_files` wholesale even though `run_generators`
+    // had already isolated the failure to just the one backend; deferring it is what makes
+    // that isolation reach the caller instead of stopping at this function's boundary. The
+    // extension-emission and snippet-stage blocks below can also populate this slot -- see
+    // the comments there -- and `Option::get_or_insert` keeps whichever failure claims it
+    // first rather than losing any of them. ~keep
+    let mut deferred_error = ensure_no_generator_failures(&generator_failures, generators.len());
+
+    // Let registered extensions (passed in by the caller -- see `generate_e2e`'s doc
+    // comment) contribute e2e files per language. The default `Extension::emit_e2e`
+    // returns empty, so consumers without an e2e extension see no change. Returned files
+    // merge into the same collection the caller writes and orphan-sweeps.
+    //
+    // A failure here defers into `deferred_error` the same way the generator failure
+    // above and the snippet-stage failures below do, instead of aborting via `?`: `emit_e2e` is
+    // documented as emitting one self-contained file set per `(language, extension)`
+    // call with no state carried between calls (it does not even receive `all_files`),
+    // so a failing call contributes zero files for that pair -- never a partial one --
+    // and leaves every earlier pair's already-merged output exactly as coherent as it
+    // already was. There is nothing this call could have half-written that unwinding
+    // `all_files` would protect against. The immediately-invoked closure below (rather
+    // than a bare `?` in the loop) exists only to give that `?` an early-exit boundary
+    // narrower than this whole function, so a failure skips the rest of the extension
+    // loop without skipping the snippet stage or the return below. ~keep
+    let extension_result = (|| {
         for lang in &resolved_languages {
-            for ext in exts {
+            for ext in extensions {
                 let extra = ext.emit_e2e(&groups, e2e_config, config, lang, type_defs, enums)?;
                 if !extra.is_empty() {
                     info!(
@@ -213,10 +259,19 @@ pub fn generate_e2e(
             }
         }
         Ok::<(), anyhow::Error>(())
-    })?;
+    })();
+    if let Err(error) = extension_result {
+        warn!("e2e extension emission failed, deferring failure: {error:#}");
+        deferred_error.get_or_insert(error);
+    }
 
+    // A snippet-stage failure defers into `deferred_error` the same way a generator
+    // failure does above, instead of aborting via `?`: the generators that already ran
+    // successfully -- CODE, not documentation -- must not be discarded because the
+    // snippet stage behind them tripped. `Option::get_or_insert` leaves an earlier
+    // generator failure in place rather than overwriting it with this one. ~keep
     if let Some(snippet_config) = &e2e_config.snippets {
-        let report = snippets::generate_snippet_report(
+        match snippets::generate_snippet_report(
             &fixtures,
             snippet_config.languages_or(&resolved_languages),
             e2e_config,
@@ -225,27 +280,31 @@ pub fn generate_e2e(
             type_defs,
             enums,
             functions,
-        )?;
-        report_snippet_coverage(&report.coverage);
-        prune_orphaned_snippets(Path::new(&snippet_config.output), &report.coverage);
-        ensure_snippet_coverage_complete(&report.coverage)?;
-        let coverage_content =
-            serde_json::to_string_pretty(&report.coverage).context("failed to serialize snippet coverage manifest")?;
-        all_files.push(GeneratedFile {
-            path: Path::new(&snippet_config.output).join(snippets::COVERAGE_MANIFEST),
-            content: format!("{coverage_content}\n"),
-            generated_header: false,
-        });
-        all_files.extend(report.snippets.into_iter().map(|snippet| snippet.file));
+        ) {
+            Ok(report) => {
+                report_snippet_coverage(&report.coverage);
+                prune_orphaned_snippets(Path::new(&snippet_config.output), &report.coverage);
+                if let Err(error) = ensure_snippet_coverage_complete(&report.coverage) {
+                    warn!("snippet coverage incomplete, deferring failure: {error:#}");
+                    deferred_error.get_or_insert(error);
+                }
+                let coverage_content = serde_json::to_string_pretty(&report.coverage)
+                    .context("failed to serialize snippet coverage manifest")?;
+                all_files.push(GeneratedFile {
+                    path: Path::new(&snippet_config.output).join(snippets::COVERAGE_MANIFEST),
+                    content: format!("{coverage_content}\n"),
+                    generated_header: false,
+                });
+                all_files.extend(report.snippets.into_iter().map(|snippet| snippet.file));
+            }
+            Err(error) => {
+                warn!("snippet generation failed, deferring failure: {error:#}");
+                deferred_error.get_or_insert(error);
+            }
+        }
     }
 
-    // Checked last, not with `?` at the loop itself: every backend that could succeed,
-    // and the snippet stage behind them, must still run and land in `all_files` before
-    // a single backend's codegen failure turns this into an `Err`. See
-    // `run_generators` for why the failure itself is not swallowed. ~keep
-    ensure_no_generator_failures(&generator_failures, generators.len())?;
-
-    Ok(all_files)
+    Ok((all_files, deferred_error))
 }
 
 /// Run every per-language e2e generator, isolating one backend's codegen failure from
@@ -297,18 +356,19 @@ fn run_generators(
     (all_files, failures)
 }
 
-/// Turn the failures [`run_generators`] collected into the single `Err`
-/// [`generate_e2e`] returns once every backend that could run already has.
-fn ensure_no_generator_failures(failures: &[String], generator_count: usize) -> Result<()> {
+/// Turn the failures [`run_generators`] collected into the single deferred error
+/// [`generate_e2e`] carries out to its caller once every backend that could run already
+/// has, instead of a `Result` its caller would have to propagate immediately with `?`.
+fn ensure_no_generator_failures(failures: &[String], generator_count: usize) -> Option<anyhow::Error> {
     if failures.is_empty() {
-        return Ok(());
+        return None;
     }
-    bail!(
+    Some(anyhow::anyhow!(
         "e2e codegen failed for {} of {} backend(s) -- other backends and the snippet stage still ran: {}",
         failures.len(),
         generator_count,
         failures.join("; ")
-    );
+    ))
 }
 
 pub fn report_cached_snippet_coverage(path: &Path) -> Result<()> {
@@ -595,9 +655,14 @@ mod tests {
             ..E2eConfig::default()
         };
 
-        generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[])
-            .expect("generate empty E2E suite");
+        let (_files, deferred_error) =
+            generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[])
+                .expect("generate empty E2E suite");
 
+        assert!(
+            deferred_error.is_none(),
+            "an empty fixture set has no backend to fail: {deferred_error:?}"
+        );
         assert!(!directory.path().join("schema.json").exists());
     }
 
@@ -681,9 +746,74 @@ mod tests {
         );
     }
 
+    struct FailingExtension;
+
+    impl crate::Extension for FailingExtension {
+        fn name(&self) -> &str {
+            "failing-e2e-extension"
+        }
+
+        fn emit_e2e(
+            &self,
+            _groups: &[fixture::FixtureGroup],
+            _e2e_config: &E2eConfig,
+            _config: &ResolvedCrateConfig,
+            _language: &str,
+            _type_defs: &[crate::core::ir::TypeDef],
+            _enums: &[crate::core::ir::EnumDef],
+        ) -> Result<Vec<GeneratedFile>> {
+            anyhow::bail!("simulated extension emission failure")
+        }
+    }
+
+    /// Regression for the same defect class as
+    /// `run_generators_isolates_one_backend_failure_from_the_rest`, one layer over: an e2e
+    /// extension's `emit_e2e` failure must not discard the backend generator output
+    /// `run_generators` already merged into `all_files`, and must still surface as a deferred
+    /// failure rather than being swallowed.
+    ///
+    /// Exercised through `generate_e2e_with_extensions` (a synthetic extensions list passed
+    /// directly) instead of the public `generate_e2e` (which reads `crate::EXTENSIONS`, a
+    /// process-global `OnceLock` settable exactly once per process) -- no individual test can
+    /// mutate that global without leaking its registration into every other test sharing this
+    /// binary for the rest of the process's lifetime. `generate_e2e_with_extensions` exists so
+    /// this failure mode is provable without that. ~keep
+    #[test]
+    fn generate_e2e_with_extensions_defers_an_extension_failure_so_backend_output_survives() {
+        let directory = tempfile::tempdir().expect("temporary fixture directory");
+        let e2e_config = E2eConfig {
+            fixtures: directory.path().display().to_string(),
+            output: "e2e".to_string(),
+            languages: vec!["rust".to_string()],
+            ..E2eConfig::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FailingExtension)];
+
+        let (files, deferred_error) =
+            generate_e2e_with_extensions(&config, &e2e_config, None, &[], &[], &[], &extensions)
+                .expect("an extension failure must defer through the `Option` slot, not propagate as a hard `Err`");
+
+        let error = deferred_error.expect("the extension's failure must still be reported, not silently dropped");
+        assert!(
+            format!("{error:#}").contains("simulated extension emission failure"),
+            "the deferred error must carry the extension's own diagnostic verbatim: {error:#}"
+        );
+
+        assert!(
+            files
+                .iter()
+                .any(|file| file.path == std::path::PathBuf::from("e2e/rust/Cargo.toml")),
+            "the `rust` backend's own e2e suite must survive an unrelated extension's failure: {files:?}"
+        );
+    }
+
     #[test]
     fn ensure_no_generator_failures_passes_through_when_nothing_failed() {
-        ensure_no_generator_failures(&[], 3).expect("no failures must not error");
+        assert!(
+            ensure_no_generator_failures(&[], 3).is_none(),
+            "no failures must not produce a deferred error"
+        );
     }
 
     #[test]
@@ -694,7 +824,7 @@ mod tests {
         ];
 
         let message = ensure_no_generator_failures(&failures, 5)
-            .expect_err("collected failures must still fail the run")
+            .expect("collected failures must still produce a deferred error")
             .to_string();
 
         assert!(

@@ -723,20 +723,28 @@ pub(crate) fn collect_managed_surface(
     // propagated rather than downgraded: `alef all` calls the same function unguarded,
     // so a configuration that fails here is one no regeneration could have succeeded
     // under, and silently returning a short surface would put `alef adopt` back to
-    // "no alef-managed output matches" for exactly the paths that need it. ~keep
+    // "no alef-managed output matches" for exactly the paths that need it. `generate_e2e`
+    // now returns its per-backend generator failure alongside the files it did produce
+    // rather than folding it into this `Result`, so it is absorbed and then re-raised here
+    // explicitly instead of via `?` -- the files that did generate are still worth adding
+    // to the surface, but the failure itself must reach the caller exactly as before. ~keep
     if let Some(e2e_config) = &config.e2e {
-        absorb_stage(
-            &mut surface,
+        let (files, generator_error) =
             crate::e2e::generate_e2e(config, e2e_config, None, &api.types, &api.enums, &api.functions)
-                .context("failed to render the e2e stage of alef's managed output")?,
-        );
+                .context("failed to render the e2e stage of alef's managed output")?;
+        absorb_stage(&mut surface, files);
+        if let Some(error) = generator_error {
+            return Err(error.context("failed to render the e2e stage of alef's managed output"));
+        }
         let mut registry_config = e2e_config.clone();
         registry_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-        absorb_stage(
-            &mut surface,
+        let (files, generator_error) =
             crate::e2e::generate_e2e(config, &registry_config, None, &api.types, &api.enums, &api.functions)
-                .context("failed to render the registry-mode test-app stage of alef's managed output")?,
-        );
+                .context("failed to render the registry-mode test-app stage of alef's managed output")?;
+        absorb_stage(&mut surface, files);
+        if let Some(error) = generator_error {
+            return Err(error.context("failed to render the registry-mode test-app stage of alef's managed output"));
+        }
     }
 
     let readme_languages = crate::readme::expand_configured_readme_languages(config, languages);

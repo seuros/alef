@@ -207,6 +207,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // `Result` reports; later ones are only `tracing::error!`-ed so a second crate's distinct
             // docs failure in the same run is never silently dropped. ~keep
             let mut docs_stage_error: Option<anyhow::Error> = None;
+            // A generator failure inside either e2e stage below (`crate::e2e::generate_e2e`) must be
+            // deferred the same way, and for a sharper reason than the docs case: the two lines right
+            // after each write -- `sweep_manifest_orphans` and `cache::write_stage_hash` -- are
+            // actively unsafe to run when a backend's codegen failed. `write_stage_hash` would record
+            // this IR+config+fixture hash as satisfied, so the *next* run reads it back as cached,
+            // never calls `generate_e2e` again, and exits 0 with the failing backend's suite
+            // permanently missing. `sweep_manifest_orphans` compares this run's (incomplete) path set
+            // against the last good run's (complete) one, so the previously-working backend's own
+            // output -- present in the old set, absent from this one -- reads as orphaned and gets
+            // deleted. Both call sites below gate on this being `None` before either line runs; write,
+            // format and `finalize_hashes` still run unconditionally, because unstamped output has no
+            // provenance marker for the ownership guard to recognise next run. ~keep
+            let mut e2e_stage_error: Option<anyhow::Error> = None;
 
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
@@ -473,7 +486,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     } else {
                         tracing::info!("Generating e2e test suites...");
                         let previous_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
-                        let files = crate::e2e::generate_e2e(
+                        let (files, generator_error) = crate::e2e::generate_e2e(
                             resolved_cfg,
                             e2e_config,
                             None,
@@ -500,10 +513,23 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
-                        let e2e_output_root = base_dir.join(&e2e_config.output);
-                        pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root])?;
+                        // A generator failure here must not reach either line below -- see
+                        // `e2e_stage_error`'s doc comment above the loop for the two-part hazard
+                        // (cache poisoning that hides the failure next run, and orphan-sweeping the
+                        // last known-good backend output). Write, format and hash finalisation above
+                        // still ran unconditionally, so this run's partial output still carries a
+                        // provenance marker for the ownership guard. ~keep
+                        if let Some(error) = generator_error {
+                            if e2e_stage_error.is_some() {
+                                tracing::error!("[{}] e2e codegen failed: {error:#}", resolved_cfg.name);
+                            }
+                            e2e_stage_error.get_or_insert(error);
+                        } else {
+                            let e2e_output_root = base_dir.join(&e2e_config.output);
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root])?;
 
-                        cache::write_stage_hash(&resolved_cfg.name, "e2e", &e2e_stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&resolved_cfg.name, "e2e", &e2e_stage_hash, &output_paths)?;
+                        }
 
                         for path in output_paths {
                             current_gen_paths.insert(path);
@@ -534,7 +560,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
                         let registry_e2e_ref = &registry_e2e_config;
 
-                        let files = crate::e2e::generate_e2e(
+                        let (files, generator_error) = crate::e2e::generate_e2e(
                             resolved_cfg,
                             registry_e2e_ref,
                             None,
@@ -561,10 +587,24 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
-                        let test_apps_root = base_dir.join(registry_e2e_ref.effective_output());
-                        pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[test_apps_root])?;
+                        // Same hazard, same gate, as the `e2e` stage above -- see `e2e_stage_error`'s
+                        // doc comment above the loop. ~keep
+                        if let Some(error) = generator_error {
+                            if e2e_stage_error.is_some() {
+                                tracing::error!("[{}] test-apps codegen failed: {error:#}", resolved_cfg.name);
+                            }
+                            e2e_stage_error.get_or_insert(error);
+                        } else {
+                            let test_apps_root = base_dir.join(registry_e2e_ref.effective_output());
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[test_apps_root])?;
 
-                        cache::write_stage_hash(&resolved_cfg.name, "test-apps", &test_apps_stage_hash, &output_paths)?;
+                            cache::write_stage_hash(
+                                &resolved_cfg.name,
+                                "test-apps",
+                                &test_apps_stage_hash,
+                                &output_paths,
+                            )?;
+                        }
 
                         for path in output_paths {
                             current_gen_paths.insert(path);
@@ -731,7 +771,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // finalisation and hook installation -- see `docs_stage_error`'s doc comment for why a
             // docs/snippet validation failure must not reach this point any earlier than this. The
             // run still exits non-zero and the error's context (including the refusal-count wrapping
-            // above) is untouched; only the timing of the `return` moved. ~keep
+            // above) is untouched; only the timing of the `return` moved. `e2e_stage_error` is checked
+            // first: emitted code outranks docs under the same standing priority ruling. ~keep
+            if let Some(error) = e2e_stage_error {
+                return Err(error);
+            }
             if let Some(error) = docs_stage_error {
                 return Err(error);
             }
