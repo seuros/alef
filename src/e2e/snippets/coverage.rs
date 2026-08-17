@@ -73,14 +73,36 @@ pub fn validate(ledger: &SnippetCoverageLedger) -> Result<()> {
     Ok(())
 }
 
+/// Confirm every path the ledger claims it generated actually exists on disk.
+///
+/// This is deliberately independent of whether `generated`/`generated_paths` were computed
+/// correctly upstream (see `function_excluded_for_language` for the case that motivated this
+/// check): a ledger's `missing` field only ever explains a cell the *computation* refused to
+/// classify as generated. It says nothing about a cell the computation claimed to generate but
+/// that never actually reached disk -- that is a different failure mode, caught here instead. ~keep
 pub fn validate_tracked_files(ledger: &SnippetCoverageLedger, output: &Path) -> Result<()> {
+    let mut absent = Vec::new();
     for relative in &ledger.generated_paths {
         let path = super::ledger_paths::resolve_tracked_path(output, relative)?;
         if !path.is_file() {
-            bail!("tracked snippet file is missing: {}", path.display());
+            absent.push(path);
         }
     }
-    Ok(())
+    if absent.is_empty() {
+        return Ok(());
+    }
+    let mut detail = String::new();
+    for path in &absent {
+        detail.push_str("\n  ");
+        detail.push_str(&path.display().to_string());
+    }
+    bail!(
+        "snippet coverage ledger records {} file(s) as generated in `generated_paths`, but they are \
+         absent from disk -- this is not a coverage gap the ledger's own `missing` field explains, \
+         since it is a discrepancy between what the ledger claims it wrote and what is actually \
+         there:{detail}",
+        absent.len()
+    );
 }
 
 pub fn validate_current(disk: SnippetCoverageLedger, computed: SnippetCoverageLedger) -> Result<()> {
@@ -291,7 +313,36 @@ mod tests {
             validate_tracked_files(&ledger, directory.path())
                 .expect_err("missing tracked file must fail")
                 .to_string()
-                .contains("tracked snippet file is missing")
+                .contains("absent from disk")
+        );
+    }
+
+    /// Pins that `validate_tracked_files` reports every absent tracked file, not just the
+    /// first one -- a ledger claiming ten generated paths that do not exist must not read
+    /// exactly like a ledger claiming one. A count-of-one message here would still pass a
+    /// `contains("absent from disk")` check but would fail this exact-count assertion, which
+    /// is the point: it pins the multi-file report the single-path `bail!` this replaced could
+    /// never produce.
+    #[test]
+    fn validate_tracked_files_reports_every_absent_path_and_its_count() {
+        // `validate_tracked_files` only reads `generated_paths`; the rest of the ledger's
+        // bookkeeping (`expected`/`generated`/`missing`) is irrelevant to this check and is
+        // left at whatever `generated_ledger()` provides.
+        let mut ledger = generated_ledger();
+        ledger.generated_paths.push(PathBuf::from("python/second.md"));
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let error = validate_tracked_files(&ledger, directory.path())
+            .expect_err("two claimed-generated files that do not exist must fail")
+            .to_string();
+
+        assert!(
+            error.contains("2 file(s)"),
+            "message must name the exact count of absent files, got: {error}"
+        );
+        assert!(
+            error.contains("python/sample-request.md") && error.contains("python/second.md"),
+            "message must name every absent path, not just the first: {error}"
         );
     }
 

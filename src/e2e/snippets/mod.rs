@@ -238,6 +238,16 @@ fn generate_snippet_report_with_extensions(
         validate_coverage_exceptions(fixture)?;
         validate_docs_paths(fixture, languages)?;
         for (language, generator) in &generators {
+            // A function this language's `exclude_functions` (or the crate-wide
+            // `[crates.exclude].functions` that `language_excludes` folds in) drops can
+            // never be emitted here, so the cell must not enter `expected` at all --
+            // pushing it and then failing to generate it is exactly the ledger/emitter
+            // disagreement this check exists to prevent. See
+            // `function_excluded_for_language`'s doc comment for why this reuses the
+            // docs generator's exclusion accessor instead of re-deriving the rule. ~keep
+            if function_excluded_for_language(fixture, language, generator.language_name(), context) {
+                continue;
+            }
             let key = SnippetCoverageKey {
                 fixture_id: fixture.id.clone(),
                 language: language.to_string(),
@@ -721,6 +731,43 @@ fn capabilities(language: &str, snippets: &SnippetConfig, crate_config: &Resolve
     let mut values = snippets.capabilities.for_language(language);
     values.extend(crate_config.features.iter().map(|feature| format!("feature:{feature}")));
     values
+}
+
+/// Whether the function a fixture's call resolves to for `language` is excluded for that
+/// language, and therefore can never be rendered into a snippet.
+///
+/// Reuses [`crate::docs::language_pages::excludes::language_excludes`] -- the accessor the
+/// docs generator already consults for the same question -- rather than re-deriving the
+/// per-language `exclude_functions` union here. A second copy of that rule is exactly how a
+/// ledger and its emitter drift apart: one path evolves (a language gains an override, a new
+/// per-language config field is added) and the other silently keeps checking the old shape.
+/// [`CallConfig::core_lookup_name`] gives the Rust-spelled identity `exclude_functions`
+/// entries are keyed by, matching every built-in snippet recipe's own resolution (see
+/// `e2e/codegen/go/snippet.rs`, `kotlin/snippet.rs`, `php/snippet.rs`, `ruby/snippet.rs`, and
+/// the WASM-specific `rust_identity_for_wasm_symbol`, which resolves the same identity for the
+/// one target that also accepts the JS spelling of an override). ~keep
+fn function_excluded_for_language(
+    fixture: &Fixture,
+    language: &str,
+    generator_language_name: &str,
+    context: &SnippetRenderContext<'_>,
+) -> bool {
+    let Some(DocumentationLanguage::Binding(lang)) = parse_language(generator_language_name) else {
+        return false;
+    };
+    let docs_fixture = fixture.docs_call_fixture();
+    let call = context.e2e.resolve_call_for_fixture(
+        docs_fixture.call.as_deref(),
+        &docs_fixture.id,
+        &docs_fixture.resolved_category(),
+        &docs_fixture.tags,
+        &docs_fixture.input,
+    );
+    let Some(function_name) = call.core_lookup_name(language) else {
+        return false;
+    };
+    let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(context.crate_config, lang);
+    excluded_functions.contains(function_name.as_ref())
 }
 
 fn snippet_path(
@@ -1782,6 +1829,76 @@ mod tests {
         assert_eq!(report.coverage.generated, report.coverage.expected);
         assert!(report.coverage.missing.is_empty());
         assert!(!report.snippets[0].file.content.contains("pkg.()"));
+    }
+
+    /// The peer's positive control: a fixture's function excluded via `[crates.wasm]
+    /// exclude_functions` must drop out of `expected` for wasm specifically, while the very
+    /// same fixture -- same call, same function identity -- stays expected (and generated)
+    /// for a language that does not exclude it. A version of this check that ignored the
+    /// exclusion entirely would still pass every other assertion in this file (the fixture
+    /// renders fine on both targets absent the exclusion) but would fail the two assertions
+    /// below, which is what makes this the load-bearing test rather than a truthiness check.
+    #[test]
+    fn excluded_function_drops_only_the_excluding_languages_cell_from_expected() {
+        let fixture = documented_fixture();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "excluded_fn".into();
+        let wasm_config = toml::from_str::<crate::core::config::WasmConfig>("exclude_functions = [\"excluded_fn\"]")
+            .expect("wasm config with exclude_functions parses");
+        let crate_config = ResolvedCrateConfig {
+            wasm: Some(wasm_config),
+            ..ResolvedCrateConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["wasm".into(), "go".into()],
+            &snippet_config,
+            &context,
+            &[],
+        )
+        .expect("an excluded function must not abort the run");
+
+        let wasm_key = SnippetCoverageKey {
+            fixture_id: "extension_owned".into(),
+            language: "wasm".into(),
+        };
+        let go_key = SnippetCoverageKey {
+            fixture_id: "extension_owned".into(),
+            language: "go".into(),
+        };
+        assert_eq!(
+            report.coverage.expected,
+            vec![go_key.clone()],
+            "wasm's exclude_functions entry must remove the wasm cell from `expected` while \
+             leaving go's untouched: {:?}",
+            report.coverage.expected
+        );
+        assert!(
+            !report.coverage.expected.contains(&wasm_key),
+            "excluded cell must not be expected for wasm: {:?}",
+            report.coverage.expected
+        );
+        assert_eq!(report.coverage.generated, vec![go_key]);
+        assert!(
+            report.coverage.missing.is_empty(),
+            "an excluded cell is not a coverage gap -- it must never have been expected in the \
+             first place, so it must not appear in `missing` either: {:?}",
+            report.coverage.missing
+        );
+        assert_eq!(report.coverage.generated_paths.len(), 1);
+        assert!(!report.coverage.generated_paths[0].starts_with("wasm"));
     }
 
     #[test]
