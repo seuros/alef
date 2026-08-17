@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-08-17
+
 ### Added
 
 - **`alef adopt <path-or-glob>`**: take ownership of a pre-existing generated file so alef can regenerate it again.
