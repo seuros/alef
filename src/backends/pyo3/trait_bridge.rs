@@ -170,6 +170,7 @@ mod tests {
             is_async,
             error_type: Some("SampleError".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 
@@ -247,6 +248,7 @@ mod tests {
             is_async,
             error_type: Some("SampleError".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 
@@ -318,6 +320,7 @@ mod tests {
             is_async,
             error_type: Some("SampleError".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 
@@ -400,6 +403,7 @@ mod tests {
             is_async,
             error_type: Some("SampleError".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 
@@ -476,6 +480,7 @@ mod tests {
             is_async: false,
             error_type: None,
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 
@@ -545,6 +550,7 @@ mod tests {
             is_async: false,
             error_type: Some("SampleError".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 
@@ -628,6 +634,7 @@ mod tests {
             is_async: true,
             error_type: Some("SampleError".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
 

@@ -46,6 +46,7 @@ fn trait_type() -> TypeDef {
             name: "render_text".to_string(),
             return_type: TypeRef::String,
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             error_type: Some("Error".to_string()),
             ..Default::default()
         }],

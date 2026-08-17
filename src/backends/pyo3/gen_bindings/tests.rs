@@ -193,6 +193,7 @@ fn struct_impl_block_skips_method_colliding_with_a_field_getter() {
                 name: "providers".to_string(),
                 return_type: TypeRef::String,
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..Default::default()
             }],
             ..Default::default()

@@ -1,20 +1,28 @@
 use crate::core::ir::{MethodDef, TypeRef};
 
-use super::super::helpers::{extract_binding_exclusion_reason, extract_doc_comments, extract_version_annotation};
+use super::super::helpers::{
+    extract_binding_exclusion_reason, extract_cfg_condition, extract_doc_comments, extract_version_annotation,
+};
+use super::super::reexports::combine_cfg;
 use super::returns::detect_cow_return;
 use super::{detect_receiver, extract_params, resolve_return_type, unwrap_future_return};
 
 /// Extract a single method from an impl block.
 /// `parent_type_name` is used to resolve `Self` references in return types and params.
 /// `trait_source` is the fully qualified trait path if this method comes from a trait impl.
+/// `impl_cfg` is the enclosing `impl` block's own `#[cfg(...)]` condition. A method is compiled
+/// only when its block's gate *and* its own gate hold, so the two are AND-combined; passing
+/// `None` means the block is ungated. ~keep
 pub(crate) fn extract_method(
     method: &syn::ImplItemFn,
     _crate_name: &str,
     parent_type_name: &str,
     trait_source: Option<String>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
+    impl_cfg: Option<&str>,
 ) -> MethodDef {
     let name = method.sig.ident.to_string();
+    let cfg = combine_cfg(extract_cfg_condition(&method.attrs), &impl_cfg.map(str::to_string));
     let doc = extract_doc_comments(&method.attrs);
     let binding_exclusion_reason = extract_binding_exclusion_reason(&method.attrs);
     let binding_excluded = binding_exclusion_reason.is_some();
@@ -51,6 +59,7 @@ pub(crate) fn extract_method(
         error_type,
         doc,
         receiver,
+        cfg,
         sanitized: false,
         trait_source,
         returns_ref,

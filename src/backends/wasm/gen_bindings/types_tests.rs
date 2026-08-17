@@ -109,6 +109,7 @@ fn gen_struct_methods_skips_method_wrapper_when_field_getter_already_emitted() {
             name: "providers".to_string(),
             return_type: TypeRef::String,
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         }],
         ..Default::default()

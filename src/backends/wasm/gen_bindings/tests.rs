@@ -548,6 +548,7 @@ fn types_needing_self_delegation_reverse_impl_flags_return_only_delegating_type(
             name: "page_count".to_string(),
             return_type: TypeRef::Primitive(PrimitiveType::U32),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         }],
         ..Default::default()
@@ -582,6 +583,7 @@ fn types_needing_self_delegation_reverse_impl_ignores_opaque_mutex_delegated_typ
                 name: "resize".to_string(),
                 return_type: TypeRef::Primitive(PrimitiveType::Bool),
                 receiver: Some(ReceiverKind::RefMut),
+                cfg: None,
                 sanitized: true,
                 ..Default::default()
             },
@@ -589,6 +591,7 @@ fn types_needing_self_delegation_reverse_impl_ignores_opaque_mutex_delegated_typ
                 name: "len".to_string(),
                 return_type: TypeRef::Primitive(PrimitiveType::Usize),
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..Default::default()
             },
         ],
@@ -630,6 +633,7 @@ fn generated_lib_rs_has_reverse_impl_for_return_only_delegating_type() {
             name: "page_count".to_string(),
             return_type: TypeRef::Primitive(PrimitiveType::U32),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         }],
         ..Default::default()
@@ -666,6 +670,7 @@ fn instance_method_with_borrowed_named_input_delegates_to_core() {
         return_type: TypeRef::Primitive(PrimitiveType::Bool),
         error_type: Some("EvaluationError".to_string()),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..Default::default()
     };
     let typ = TypeDef {
@@ -976,6 +981,7 @@ fn async_method_returning_map_bridges_through_serde_not_from() {
         is_async: true,
         return_type: TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..Default::default()
     };
     let typ = TypeDef {
@@ -1016,6 +1022,7 @@ fn async_method_returning_named_still_uses_from() {
         is_async: true,
         return_type: TypeRef::Named("Report".to_string()),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..Default::default()
     };
     let typ = TypeDef {

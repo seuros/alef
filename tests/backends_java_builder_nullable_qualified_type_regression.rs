@@ -94,6 +94,7 @@ fn builder_nullable_qualified_type_emits_correct_annotation_position() {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: true,
+            serde_container_default: false,
             super_traits: vec![],
             doc: "Cache configuration with optional paths.".to_string(),
             cfg: None,

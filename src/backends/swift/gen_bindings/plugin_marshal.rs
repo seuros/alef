@@ -342,6 +342,7 @@ mod tests {
             is_static: false,
             doc: String::new(),
             receiver: None,
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,

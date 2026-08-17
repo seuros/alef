@@ -89,6 +89,7 @@ fn test_generated_code_example() {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: "Configuration for text extraction".to_string(),
             cfg: None,

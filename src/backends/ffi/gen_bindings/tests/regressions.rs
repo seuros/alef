@@ -749,6 +749,7 @@ type = "ChatRequest"
                 returns_cow: false,
                 return_newtype_wrapper: None,
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 trait_source: None,
                 has_default_impl: false,
                 binding_excluded: false,
@@ -764,6 +765,7 @@ type = "ChatRequest"
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: String::new(),
             cfg: None,
@@ -919,6 +921,7 @@ type = "ChatRequest"
                 is_async: true,
                 error_type: Some("MyError".to_string()),
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..MethodDef::default()
             }],
             ..TypeDef::default()
@@ -1051,6 +1054,7 @@ type = "*const std::ffi::c_char"
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: String::new(),
             cfg: None,
@@ -1318,6 +1322,7 @@ fn test_optional_bytes_field_accessor_emits_out_len_and_length_writes() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         doc: String::new(),
         cfg: None,
@@ -1699,6 +1704,7 @@ fn instance_method_void_non_error_return_binds_no_result_variable() {
     session.methods.push(MethodDef {
         name: "reset".into(),
         receiver: Some(ReceiverKind::RefMut),
+        cfg: None,
         return_type: TypeRef::Unit,
         error_type: None,
         ..Default::default()

@@ -63,6 +63,7 @@ fn method_def(name: &str, params: Vec<ParamDef>, return_type: TypeRef) -> Method
         error_type: None,
         doc: String::new(),
         receiver: None,
+        cfg: None,
         sanitized: false,
         trait_source: None,
         returns_ref: false,
@@ -425,6 +426,7 @@ fn api_surface_validation_allows_opaque_receiver_mut_method_returning_opaque_typ
                 is_opaque: true,
                 methods: vec![MethodDef {
                     receiver: Some(ReceiverKind::RefMut),
+                    cfg: None,
                     ..method_def(
                         "parse",
                         vec![],
@@ -462,6 +464,7 @@ fn api_surface_validation_errors_for_non_opaque_receiver_mut_method_returning_op
                 is_opaque: false,
                 methods: vec![MethodDef {
                     receiver: Some(ReceiverKind::RefMut),
+                    cfg: None,
                     ..method_def("build", vec![], TypeRef::Named("Session".to_string()))
                 }],
                 ..TypeDef::default()

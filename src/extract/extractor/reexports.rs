@@ -136,14 +136,15 @@ pub(crate) fn collect_use_names(tree: &syn::UseTree) -> UseFilter {
     }
 }
 
-/// AND-combine a propagated outer cfg (a re-exporting module's or `pub use`'s `#[cfg(...)]`)
+/// AND-combine a propagated outer cfg (a re-exporting module's, a `pub use`'s, or an `impl`
+/// block's `#[cfg(...)]`)
 /// with an item's own cfg, so an item must satisfy both gates rather than losing whichever one
 /// isn't already present. Wraps only — `all({outer}, {inner})` — and never reformats either
 /// operand string, because every cfg evaluator in this codebase (`core/ir/surface.rs` and each
 /// backend's cfg parser) normalises with `.trim().replace(" (", "(")` and matches leaves via a
 /// literal `strip_prefix("feature = \"")`; any other whitespace change to the operands stops
 /// that leaf match from firing. ~keep
-fn combine_cfg(item_cfg: Option<String>, outer_cfg: &Option<String>) -> Option<String> {
+pub(crate) fn combine_cfg(item_cfg: Option<String>, outer_cfg: &Option<String>) -> Option<String> {
     match (outer_cfg, item_cfg) {
         (Some(outer), Some(inner)) => Some(format!("all({outer}, {inner})")),
         (Some(outer), None) => Some(outer.clone()),

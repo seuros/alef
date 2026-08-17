@@ -18,6 +18,7 @@ fn surface_with_named_service_calls() -> ApiSurface {
         params: vec![named_config_param()],
         return_type: TypeRef::Named("App".to_owned()),
         receiver: Some(ReceiverKind::Owned),
+        cfg: None,
         ..MethodDef::default()
     };
     let registration = RegistrationDef {

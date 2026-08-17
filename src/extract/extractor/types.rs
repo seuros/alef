@@ -7,8 +7,8 @@ use crate::extract::type_resolver;
 use super::helpers::{
     build_rust_path, extract_alef_error_code, extract_cfg_condition, extract_doc_comments, extract_enum_variant,
     extract_error_message_template, extract_field, extract_field_binding_exclusion_reason,
-    extract_field_type_rust_path, extract_serde_rename_all, extract_version_annotation, has_cfg_attribute, has_derive,
-    has_field_attr, is_pub, syn_type_is_boxed,
+    extract_field_type_rust_path, extract_serde_rename_all, extract_version_annotation, has_cfg_attribute,
+    has_container_serde_default, has_derive, has_field_attr, is_pub, syn_type_is_boxed,
 };
 
 /// Return true when the enum has `#[serde(untagged)]`.
@@ -117,12 +117,19 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
     let is_copy = has_derive(item.attrs.as_slice(), "Copy");
     let has_default = has_derive(item.attrs.as_slice(), "Default");
     let has_serde = has_derive(item.attrs.as_slice(), "Serialize") && has_derive(item.attrs.as_slice(), "Deserialize");
+    let serde_container_default = has_container_serde_default(&item.attrs);
     let serde_rename_all = extract_serde_rename_all(&item.attrs);
     let doc = extract_doc_comments(&item.attrs);
     let is_opaque = fields.is_empty() && !(has_default && has_serde);
     let rust_path = build_rust_path(crate_name, module_path, &name);
 
-    // #[derive(Default)] — all fields get DefaultValue::Empty (type's own Default)
+    // `#[derive(Default)]` is the one case where `DefaultValue::Empty` is an *assertion* rather
+    // than a fallback: the derived impl gives every field its type's zero, so a backend
+    // substituting its own zero is exact. A manual `impl Default` is read instead by
+    // `extract::extractor::defaults`, which writes `DefaultValue::Unresolved` when it cannot
+    // recover the real values — the distinction this seeding must not be confused with. Note that
+    // `has_default` itself does *not* carry it: `functions::impl_blocks` sets the same flag for a
+    // manual impl. ~keep
     if has_default {
         for field in &mut fields {
             field.typed_default = Some(DefaultValue::Empty);
@@ -148,6 +155,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
         cfg,
         serde_rename_all,
         has_serde,
+        serde_container_default,
         super_traits: vec![],
         binding_excluded,
         binding_exclusion_reason,

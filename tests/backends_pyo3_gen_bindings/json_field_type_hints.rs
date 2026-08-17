@@ -35,6 +35,7 @@ fn make_json_field_api() -> ApiSurface {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: true,
+            serde_container_default: false,
             super_traits: vec![],
             doc: String::new(),
             cfg: None,

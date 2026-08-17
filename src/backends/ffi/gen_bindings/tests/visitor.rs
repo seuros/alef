@@ -355,6 +355,7 @@ result_type = "WalkOutcome"
             ],
             return_type: TypeRef::Named("WalkOutcome".to_string()),
             receiver: Some(ReceiverKind::RefMut),
+            cfg: None,
             doc: "Visit parser tokens.".to_string(),
             is_async: false,
             is_static: false,

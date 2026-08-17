@@ -163,6 +163,7 @@ fn find_bridge_field_detects_field_via_alias() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -221,6 +222,7 @@ fn find_bridge_field_returns_none_for_function_param_bridge() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -277,6 +279,7 @@ fn native_marshalled_struct_params_allowlists_only_known_serde_structs() {
         ],
         return_type: TypeRef::Named("Doc".to_string()),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..MethodDef::default()
     };
     let trait_def = TypeDef {

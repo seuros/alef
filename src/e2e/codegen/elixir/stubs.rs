@@ -253,6 +253,7 @@ mod test_backend_tests {
             error_type: None,
             doc: String::new(),
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,

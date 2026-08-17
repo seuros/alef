@@ -219,7 +219,15 @@ fn recover_from_items(
                     if owner_def.methods.iter().any(|m| m.name == method_name) {
                         continue;
                     }
-                    let recovered = super::functions::extract_method(method, crate_name, &owner, None, aliases);
+                    let impl_cfg = super::helpers::extract_cfg_condition(&item_impl.attrs);
+                    let recovered = super::functions::extract_method(
+                        method,
+                        crate_name,
+                        &owner,
+                        None,
+                        aliases,
+                        impl_cfg.as_deref(),
+                    );
                     owner_def.methods.push(recovered);
                 }
             }

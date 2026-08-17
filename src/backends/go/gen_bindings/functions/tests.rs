@@ -122,6 +122,7 @@ fn make_bytes_result_method(name: &str) -> MethodDef {
         is_async: false,
         error_type: Some("SampleCrateError".to_string()),
         receiver: None,
+        cfg: None,
         sanitized: false,
         trait_source: None,
         returns_ref: false,

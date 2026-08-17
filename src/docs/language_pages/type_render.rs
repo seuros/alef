@@ -71,6 +71,7 @@ fn java_opaque_close_method(ty: &TypeDef, lang: Language) -> Option<MethodDef> {
     Some(MethodDef {
         name: "close".to_string(),
         receiver: Some(ReceiverKind::RefMut),
+        cfg: None,
         return_type: TypeRef::Unit,
         doc: "Releases the native handle backing this instance. Implements `AutoCloseable`; \
               safe to call more than once."
@@ -216,6 +217,7 @@ mod tests {
             methods: vec![MethodDef {
                 name: "validate".to_string(),
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 return_type: TypeRef::Unit,
                 ..Default::default()
             }],
@@ -333,6 +335,7 @@ mod tests {
                     name: "default".to_string(),
                     is_static: true,
                     receiver: None,
+                    cfg: None,
                     params: vec![],
                     return_type: TypeRef::Named(name.to_string()),
                     ..Default::default()
@@ -340,6 +343,7 @@ mod tests {
                 MethodDef {
                     name: "parse".to_string(),
                     receiver: Some(ReceiverKind::Ref),
+                    cfg: None,
                     return_type: TypeRef::Unit,
                     ..Default::default()
                 },
@@ -397,6 +401,7 @@ mod tests {
                 name: "default".to_string(),
                 is_static: true,
                 receiver: None,
+                cfg: None,
                 params: vec![crate::docs::test_helpers::make_param("region", TypeRef::String, false)],
                 return_type: TypeRef::Named("Config".to_string()),
                 ..Default::default()
@@ -429,6 +434,7 @@ mod tests {
             methods: vec![MethodDef {
                 name: "with_chunking".to_string(),
                 receiver: Some(ReceiverKind::Owned),
+                cfg: None,
                 return_type: TypeRef::Named(name.to_string()),
                 ..Default::default()
             }],

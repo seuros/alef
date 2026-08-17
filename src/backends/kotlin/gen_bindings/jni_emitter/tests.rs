@@ -119,12 +119,14 @@ mod tests {
                     MethodDef {
                         name: "chat".to_owned(),
                         receiver: Some(ReceiverKind::Ref),
+                        cfg: None,
                         return_type: TypeRef::String,
                         ..MethodDef::default()
                     },
                     MethodDef {
                         name: "chat_stream".to_owned(),
                         receiver: Some(ReceiverKind::Ref),
+                        cfg: None,
                         return_type: TypeRef::String,
                         sanitized: true,
                         ..MethodDef::default()

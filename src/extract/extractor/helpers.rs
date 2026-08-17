@@ -12,7 +12,7 @@ mod tests;
 pub(crate) use attributes::{
     extract_alef_error_code, extract_binding_exclusion_reason, extract_cfg_condition, extract_error_message_template,
     extract_field_binding_exclusion_reason, extract_serde_rename_all, extract_version_annotation, has_cfg_attribute,
-    has_derive, has_field_attr, is_pub, is_test_gated, is_thiserror_enum,
+    has_container_serde_default, has_derive, has_field_attr, is_pub, is_test_gated, is_thiserror_enum,
 };
 pub(crate) use enum_variants::extract_enum_variant;
 #[cfg(test)]

@@ -1,8 +1,8 @@
 use crate::core::ir::{ApiSurface, MethodDef, TypeDef, UnsupportedPublicItem};
 use ahash::AHashMap;
 
-use super::super::defaults::extract_default_values;
-use super::super::helpers::{build_rust_path, extract_binding_exclusion_reason, is_test_gated};
+use super::super::defaults::{ConstructorIndex, extract_default_values};
+use super::super::helpers::{build_rust_path, extract_binding_exclusion_reason, extract_cfg_condition, is_test_gated};
 use super::extract_method;
 
 fn has_non_lifetime_generics(generics: &syn::Generics) -> bool {
@@ -55,11 +55,16 @@ pub(crate) fn extract_impl_block(
     binding_excluded_type_names: &ahash::AHashSet<String>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
     string_consts: &AHashMap<String, String>,
+    constructors: &ConstructorIndex<'_>,
 ) {
     // Honor `#[cfg_attr(alef, alef(skip))]` (or bare `#[alef(skip)]`) on the impl block
     if extract_binding_exclusion_reason(&item.attrs).is_some() {
         return;
     }
+
+    // The block's own gate applies to every method it contains; `#[cfg(test)]` blocks were
+    // already dropped by the caller, so anything left here is a real binding-surface gate. ~keep
+    let impl_cfg = extract_cfg_condition(&item.attrs);
 
     if item.trait_.is_some() {
         extract_trait_impl_methods(
@@ -69,6 +74,8 @@ pub(crate) fn extract_impl_block(
             type_index,
             result_wrapping_aliases,
             string_consts,
+            impl_cfg.as_deref(),
+            constructors,
         );
         return;
     }
@@ -143,6 +150,7 @@ pub(crate) fn extract_impl_block(
                         &type_name,
                         None,
                         result_wrapping_aliases,
+                        impl_cfg.as_deref(),
                     ));
                 }
             None
@@ -155,6 +163,12 @@ pub(crate) fn extract_impl_block(
 
     if let Some(&idx) = type_index.get(&type_name) {
         for method in methods {
+            // First-wins by name, with no `cfg` merge: when the same method name is provided by
+            // two blocks under disjoint gates (`#[cfg(feature = "x")]` / `#[cfg(not(...))]`), the
+            // first block's gate is the one that survives onto the retained `MethodDef`. Free
+            // functions have `codegen::fn_dedup` for exactly this; methods have no counterpart
+            // yet. Merging the gates (OR of the group, mirroring `with_deduped_functions`) is
+            // deliberately deferred — do it here and in the trait-impl loop below together. ~keep
             if !surface.types[idx].methods.iter().any(|m| m.name == method.name) {
                 surface.types[idx].methods.push(method);
             }
@@ -207,6 +221,7 @@ pub(crate) fn extract_impl_block(
             cfg: None,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             binding_excluded: true,
             binding_exclusion_reason: Some(
@@ -221,6 +236,7 @@ pub(crate) fn extract_impl_block(
 }
 
 /// Extract methods from a trait impl and attach them to an existing type in the surface.
+#[allow(clippy::too_many_arguments)]
 fn extract_trait_impl_methods(
     item: &syn::ItemImpl,
     crate_name: &str,
@@ -228,6 +244,8 @@ fn extract_trait_impl_methods(
     type_index: &AHashMap<String, usize>,
     result_wrapping_aliases: &ahash::AHashSet<String>,
     string_consts: &AHashMap<String, String>,
+    impl_cfg: Option<&str>,
+    constructors: &ConstructorIndex<'_>,
 ) {
     let type_name = match &*item.self_ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -308,8 +326,12 @@ fn extract_trait_impl_methods(
         .as_ref()
         .is_some_and(|(path, _)| path.segments.last().is_some_and(|segment| segment.ident == "Default"));
     if is_default_trait_impl {
+        // NOTE: this also sets `has_default` for a *manual* `impl Default`, so the flag does not
+        // distinguish a derived (type-zero) default from a hand-written one. Telling those apart
+        // is `DefaultValue::Unresolved`'s job, not this flag's. ~keep
+        let self_type = type_def.name.clone();
         type_def.has_default = true;
-        extract_default_values(item, &mut type_def.fields, string_consts);
+        extract_default_values(item, &self_type, &mut type_def.fields, string_consts, constructors);
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {
@@ -349,7 +371,9 @@ fn extract_trait_impl_methods(
                 &type_name,
                 trait_source.clone(),
                 result_wrapping_aliases,
+                impl_cfg,
             );
+            // First-wins by name, no `cfg` merge — see the note in `extract_impl_block`. ~keep
             if !type_def.methods.iter().any(|m| m.name == method_def.name) {
                 type_def.methods.push(method_def);
             }

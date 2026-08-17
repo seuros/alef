@@ -192,6 +192,7 @@ mod tests {
             error_type: None,
             doc: String::new(),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,

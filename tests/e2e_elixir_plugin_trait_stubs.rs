@@ -26,6 +26,7 @@ fn make_method(name: &str, return_type: TypeRef, has_default: bool) -> MethodDef
         error_type: None,
         doc: String::new(),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         sanitized: false,
         trait_source: None,
         returns_ref: false,

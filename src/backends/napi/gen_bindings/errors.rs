@@ -848,6 +848,7 @@ mod tests {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: Vec::new(),
             binding_excluded: false,
             binding_exclusion_reason: None,
@@ -1105,6 +1106,7 @@ mod tests {
                     is_static: false,
                     error_type: None,
                     receiver: Some(ReceiverKind::Owned),
+                    cfg: None,
                     doc: String::new(),
                     sanitized: false,
                     trait_source: None,
@@ -1174,6 +1176,7 @@ mod tests {
                     methods: vec![MethodDef {
                         name: "process".to_string(),
                         receiver: Some(ReceiverKind::Ref),
+                        cfg: None,
                         params: vec![ParamDef {
                             name: "handle".to_string(),
                             ty: TypeRef::Named("Handle".to_string()),
@@ -1224,6 +1227,7 @@ mod tests {
                 methods: vec![MethodDef {
                     name: "fromRaw".to_string(),
                     receiver: None,
+                    cfg: None,
                     is_static: true,
                     sanitized: true,
                     return_type: TypeRef::Named("Config".to_string()),
@@ -1265,12 +1269,14 @@ mod tests {
                     MethodDef {
                         name: "run".to_string(),
                         receiver: Some(ReceiverKind::Ref),
+                        cfg: None,
                         return_type: TypeRef::Unit,
                         ..Default::default()
                     },
                     MethodDef {
                         name: "create".to_string(),
                         receiver: None,
+                        cfg: None,
                         is_static: true,
                         return_type: TypeRef::Named("Worker".to_string()),
                         ..Default::default()

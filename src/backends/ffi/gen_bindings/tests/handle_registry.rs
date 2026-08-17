@@ -119,6 +119,7 @@ fn opaque_type_exports_use_scalar_handles_and_parse() {
     resource.methods.push(crate::core::ir::MethodDef {
         name: "label".into(),
         receiver: Some(crate::core::ir::ReceiverKind::Ref),
+        cfg: None,
         return_type: crate::core::ir::TypeRef::String,
         ..Default::default()
     });
@@ -167,6 +168,7 @@ fn generated_calls_acquire_all_handles_before_use_or_owned_take() {
     resource.methods.push(MethodDef {
         name: "merge".into(),
         receiver: Some(ReceiverKind::Owned),
+        cfg: None,
         params: vec![ParamDef {
             name: "other".into(),
             ty: TypeRef::Named("Resource".into()),
@@ -258,6 +260,7 @@ fn borrowed_types_keep_owned_lifecycle_and_accessor_exports() {
                 name: "into_owned".into(),
                 return_type: TypeRef::Named("BorrowedNode".into()),
                 receiver: Some(crate::core::ir::ReceiverKind::Owned),
+                cfg: None,
                 ..MethodDef::default()
             },
             MethodDef {

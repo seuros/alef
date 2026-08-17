@@ -814,6 +814,7 @@ mod tests {
             name: "validate".to_string(),
             return_type: TypeRef::Primitive(PrimitiveType::Bool),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         let type_def = TypeDef {

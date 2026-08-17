@@ -364,6 +364,7 @@ fn test_generate_docs_with_type_renders_fields_and_doc() {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             binding_excluded: false,
             binding_exclusion_reason: None,

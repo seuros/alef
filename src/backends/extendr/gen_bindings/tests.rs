@@ -69,6 +69,7 @@ fn make_api_surface() -> ApiSurface {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: String::new(),
             cfg: None,

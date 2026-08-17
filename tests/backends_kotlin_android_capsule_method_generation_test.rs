@@ -54,6 +54,7 @@ fn capsule_method_api(return_type: TypeRef) -> ApiSurface {
         name: "get_language".into(),
         return_type,
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..Default::default()
     };
     ApiSurface {
@@ -133,6 +134,7 @@ fn ffi_only_capsule_method_api() -> ApiSurface {
         name: "find_language".into(),
         return_type: TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..Default::default()
     });
     api

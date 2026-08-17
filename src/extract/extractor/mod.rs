@@ -313,6 +313,7 @@ fn extract_items(
                     cfg: None,
                     serde_rename_all: None,
                     has_serde: false,
+                    serde_container_default: false,
                     super_traits: vec![],
                     binding_excluded,
                     binding_exclusion_reason,
@@ -390,6 +391,7 @@ fn extract_items(
                                 error_type,
                                 doc: method_doc,
                                 receiver,
+                                cfg: None,
                                 sanitized: false,
                                 trait_source: None,
                                 returns_ref,
@@ -441,6 +443,7 @@ fn extract_items(
                     cfg: None,
                     serde_rename_all: None,
                     has_serde: false,
+                    serde_container_default: false,
                     super_traits,
                     binding_excluded: trait_binding_excluded,
                     binding_exclusion_reason: trait_binding_exclusion_reason,
@@ -500,6 +503,9 @@ fn extract_items(
         .collect();
 
     let string_consts = defaults::collect_string_consts(items);
+    // Indexed once per module so a `fn default()` that delegates to `Self::new(..)` can be
+    // followed to the constructor's own struct literal instead of collapsing to a type-zero. ~keep
+    let constructors = defaults::collect_constructors(items);
 
     for item in items {
         if let syn::Item::Impl(item_impl) = item {
@@ -516,6 +522,7 @@ fn extract_items(
                 &binding_excluded_type_names,
                 result_wrapping_aliases,
                 &string_consts,
+                &constructors,
             );
         }
     }

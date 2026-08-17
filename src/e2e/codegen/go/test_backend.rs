@@ -532,6 +532,7 @@ mod trait_bridge_tests {
             error_type: Some("Error".to_string()),
             doc: String::new(),
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,
@@ -632,6 +633,7 @@ mod trait_bridge_tests {
                 error_type: None,
                 doc: String::new(),
                 receiver: Some(crate::core::ir::ReceiverKind::Ref),
+                cfg: None,
                 sanitized: false,
                 // trait_source matches the super_trait configured on the bridge.
                 trait_source: Some("Plugin".to_string()),

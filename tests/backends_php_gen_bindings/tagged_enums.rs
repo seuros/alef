@@ -242,6 +242,7 @@ fn test_tagged_data_enum_generates_flat_class_not_string_constants() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         doc: String::new(),
         cfg: None,

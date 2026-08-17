@@ -24,6 +24,7 @@ fn doxygen_sample_api() -> ApiSurface {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: "An opaque handle that wraps the underlying resource.".to_string(),
             cfg: None,
@@ -257,6 +258,7 @@ fn test_error_type_with_methods_gets_opaque_typedef_in_cbindgen_toml() {
             error_type: None,
             doc: "HTTP status code for the error.".to_string(),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,
@@ -324,6 +326,7 @@ fn test_error_accessor_symbol_matches_c_consumer_method_symbol() {
                 return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
                 doc: "HTTP status code for the error.".to_string(),
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..MethodDef::default()
             },
             MethodDef {
@@ -331,6 +334,7 @@ fn test_error_accessor_symbol_matches_c_consumer_method_symbol() {
                 return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
                 doc: "Whether a retry may succeed.".to_string(),
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..MethodDef::default()
             },
             MethodDef {
@@ -338,6 +342,7 @@ fn test_error_accessor_symbol_matches_c_consumer_method_symbol() {
                 return_type: TypeRef::String,
                 doc: "Machine-readable error category.".to_string(),
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..MethodDef::default()
             },
         ],
@@ -386,6 +391,7 @@ fn test_error_accessor_symbol_unchanged_for_non_acronym_error_name() {
             return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::U16),
             doc: "HTTP status code for the error.".to_string(),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         }],
         binding_excluded: false,

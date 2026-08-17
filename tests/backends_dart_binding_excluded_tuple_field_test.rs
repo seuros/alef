@@ -90,6 +90,7 @@ fn make_api_with_binding_excluded_error() -> ApiSurface {
                 error_type: None,
                 doc: "Get the error message.".to_string(),
                 receiver: None,
+                cfg: None,
                 sanitized: false,
                 trait_source: None,
                 returns_ref: false,

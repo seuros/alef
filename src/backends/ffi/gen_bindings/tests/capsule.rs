@@ -31,6 +31,7 @@ fn capsule_api() -> ApiSurface {
             is_return_type: true,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: "A tree-sitter grammar.".to_string(),
             cfg: None,

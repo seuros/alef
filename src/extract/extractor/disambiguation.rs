@@ -237,6 +237,7 @@ mod tests {
             cfg: None,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             binding_excluded,
             binding_exclusion_reason: None,

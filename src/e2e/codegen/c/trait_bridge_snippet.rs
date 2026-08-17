@@ -317,6 +317,7 @@ mod tests {
             }],
             return_type: TypeRef::Primitive(PrimitiveType::Bool),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         };
         let types = [TypeDef {

@@ -607,6 +607,7 @@ mod forwarding_tests {
                 crate::core::ir::MethodDef {
                     name: "supports_language".to_string(),
                     receiver: Some(crate::core::ir::ReceiverKind::Ref),
+                    cfg: None,
                     return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
                     ..Default::default()
                 },
@@ -614,6 +615,7 @@ mod forwarding_tests {
                     name: "supports_table_detection".to_string(),
                     has_default_impl: true,
                     receiver: Some(crate::core::ir::ReceiverKind::Ref),
+                    cfg: None,
                     return_type: crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
                     ..Default::default()
                 },

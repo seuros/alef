@@ -523,6 +523,7 @@ namespace = "dev.sample_crate"
             return_type: TypeRef::Named("Preset".into()),
             error_type: Some("LoadError".into()),
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         let content = emit_lib_rs(&api_with_client_methods(vec![method]), &btree_fixture_config());
@@ -565,6 +566,7 @@ namespace = "dev.sample_crate"
             return_type: TypeRef::Named("Preset".into()),
             error_type: Some("LoadError".into()),
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         let content = emit_lib_rs(&api_with_client_methods(vec![method]), &btree_fixture_config());
@@ -620,6 +622,7 @@ exclude_types = ["Loader"]
             return_type: TypeRef::String,
             error_type: Some("LoadError".into()),
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         let client = |name: &str, m: crate::core::ir::MethodDef| crate::core::ir::TypeDef {
@@ -836,6 +839,7 @@ c_return_type = "TSLanguage"
             name: "status".into(),
             return_type: TypeRef::String,
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         let content = emit_lib_rs(&api_with_client_methods(vec![method]), &btree_fixture_config());
@@ -917,6 +921,7 @@ register_fn = "register_backend"
             params: vec![],
             return_type: TypeRef::Unit,
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         let trait_def = crate::core::ir::TypeDef {

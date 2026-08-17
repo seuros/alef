@@ -362,6 +362,7 @@ mod tests {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: String::new(),
             cfg: None,
@@ -506,6 +507,7 @@ mod dispatcher_tests {
                     return_type: TypeRef::Named("ExtractedDocument".into()),
                     is_async: true,
                     receiver: Some(ReceiverKind::Ref),
+                    cfg: None,
                     error_type: Some("Error".into()),
                     ..Default::default()
                 },
@@ -519,6 +521,7 @@ mod dispatcher_tests {
                     }],
                     return_type: TypeRef::Primitive(PrimitiveType::Bool),
                     receiver: Some(ReceiverKind::Ref),
+                    cfg: None,
                     ..Default::default()
                 },
                 MethodDef {
@@ -526,6 +529,7 @@ mod dispatcher_tests {
                     params: vec![],
                     return_type: TypeRef::Primitive(PrimitiveType::Bool),
                     receiver: Some(ReceiverKind::Ref),
+                    cfg: None,
                     has_default_impl: true,
                     ..Default::default()
                 },

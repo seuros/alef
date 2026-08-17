@@ -53,6 +53,7 @@ fn node_context_api() -> ApiSurface {
                 name: "to_json".to_string(),
                 return_type: TypeRef::String,
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..MethodDef::default()
             }],
             has_serde: true,

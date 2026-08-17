@@ -37,6 +37,7 @@ fn handler_contract() -> HandlerContractDef {
         dispatch: MethodDef {
             name: "handle".into(),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             params: vec![ParamDef {
                 name: "request".into(),
                 ty: TypeRef::Named("RequestData".into()),
@@ -146,6 +147,7 @@ pub fn opaque_source() -> String {
             methods: vec![MethodDef {
                 name: "consume".into(),
                 receiver: Some(ReceiverKind::Owned),
+                cfg: None,
                 ..Default::default()
             }],
             ..Default::default()

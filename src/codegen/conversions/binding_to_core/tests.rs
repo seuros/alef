@@ -23,6 +23,7 @@ fn type_with_field(field: FieldDef) -> TypeDef {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -608,6 +609,7 @@ fn lifetime_type_with_enum_field(field: FieldDef) -> TypeDef {
         return_type: TypeRef::Named(typ.name.clone()),
         is_static: true,
         receiver: None,
+        cfg: None,
         ..MethodDef::default()
     });
     typ

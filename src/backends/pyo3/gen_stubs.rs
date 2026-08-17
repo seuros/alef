@@ -500,6 +500,7 @@ module_name = "test_lib"
                     name: "providers".to_string(),
                     return_type: TypeRef::String,
                     receiver: Some(ReceiverKind::Ref),
+                    cfg: None,
                     ..Default::default()
                 }],
                 ..Default::default()

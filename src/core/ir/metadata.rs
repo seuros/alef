@@ -39,8 +39,28 @@ pub enum DefaultValue {
     /// every element is itself representable — anything else falls back to `Empty`, so a
     /// backend never emits a default that silently differs from the Rust one. ~keep
     ListLiteral(Vec<DefaultValue>),
-    /// Empty collection or Default::default()
+    /// Empty collection or `Default::default()` — the type's own zero, and known to be exactly
+    /// what the Rust default is. Contrast [`DefaultValue::Unresolved`]. ~keep
     Empty,
+    /// The extractor found the type's `Default` implementation but could not read a value out
+    /// of it: the body is neither a struct literal nor a delegation alef can constant-fold
+    /// (`Self::builder().build()`, a `match`, a computed constructor).
+    ///
+    /// Distinct from [`DefaultValue::Empty`], and the distinction is the entire point of the
+    /// variant. `Empty` asserts *"the default is exactly this type's zero"* — true for
+    /// `#[derive(Default)]`, for `Vec::new()`, for `Default::default()` — so a backend
+    /// substituting its target language's zero is exact. `Unresolved` asserts the opposite:
+    /// alef does **not** know the value, and a zero would be a guess.
+    ///
+    /// Before this variant existed both wrote `Empty`, so one enum value carried "exact" and
+    /// "guess" at once and nothing could tell them apart. Every per-field-literal backend
+    /// (C#, Java, Kotlin, Swift, Python, Go) then shipped its type-zero directly underneath a
+    /// generated doc comment quoting the real Rust default — the value the extractor had
+    /// already read out of the same doc prose.
+    ///
+    /// The payload is the source text of the `fn default()` body that could not be read, so a
+    /// diagnostic can name it. ~keep
+    Unresolved(String),
     /// None / null
     None,
 }

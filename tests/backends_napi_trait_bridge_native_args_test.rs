@@ -61,6 +61,7 @@ fn greeter_trait() -> TypeDef {
             ],
             return_type: TypeRef::Named("Doc".to_string()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             error_type: Some("Error".to_string()),
             is_async: true,
             ..Default::default()

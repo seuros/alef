@@ -32,6 +32,7 @@ fn config_method(
         is_async,
         error_type: error_type.map(str::to_string),
         receiver: Some(receiver),
+        cfg: None,
         ..Default::default()
     }
 }
@@ -207,6 +208,7 @@ fn json_method(name: &str, is_async: bool, sanitized: bool) -> MethodDef {
         return_type: TypeRef::Unit,
         is_async,
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         sanitized,
         ..Default::default()
     }

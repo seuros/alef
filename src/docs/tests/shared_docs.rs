@@ -224,6 +224,7 @@ fn test_generate_configuration_doc_renders_referenced_enums_only() {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             binding_excluded: false,
             binding_exclusion_reason: None,

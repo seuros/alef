@@ -49,6 +49,17 @@ pub struct TypeDef {
     /// without serde derives cannot be (de)serialized.
     #[serde(default)]
     pub has_serde: bool,
+    /// True when the container itself carries `#[serde(default)]` / `#[serde(default = "path")]`.
+    ///
+    /// A container-level serde default makes **every** field of the struct absent-tolerant on
+    /// the wire: a missing key is filled from the container's `Default` (or the named function),
+    /// so no field is required in the payload. This is a strictly different fact from
+    /// [`TypeDef::has_default`], which only says the type *has* a `Default` impl — a struct can
+    /// implement `Default` while every field stays required at the serde level. Backends that
+    /// decide per-field wire-optionality (e.g. Go's `omitempty` pointer fields) must consult
+    /// this flag and never substitute `has_default` for it. ~keep
+    #[serde(default)]
+    pub serde_container_default: bool,
     /// Super-traits of this trait (e.g., `["Plugin"]` for `WorkerBackend: Plugin`).
     /// Only populated when `is_trait` is true. Used by trait bridge codegen
     /// to determine which super-trait impls to generate.
@@ -182,6 +193,17 @@ pub struct MethodDef {
     pub error_type: Option<String>,
     pub doc: String,
     pub receiver: Option<ReceiverKind>,
+    /// `#[cfg(...)]` condition string on this method, AND-combined with its `impl` block's
+    /// own `#[cfg(...)]` (`all(<impl>, <method>)`).
+    ///
+    /// One `ApiSurface` is extracted once and handed to every backend, each with its own
+    /// `features_for_language`, so the gate cannot be resolved at extraction time — it must
+    /// travel in the IR. Backends that generate Rust source re-emit it verbatim
+    /// ([`MethodDef::rust_cfg_attribute`]); backends that emit a single host-language surface
+    /// drop the method when their feature set does not satisfy it
+    /// ([`crate::core::ir::ApiSurface::with_cfg_filtered_deep`]).
+    #[serde(default)]
+    pub cfg: Option<String>,
     /// True if any param or return type was sanitized during unknown type resolution.
     /// Methods with sanitized signatures cannot be auto-delegated.
     #[serde(default)]
@@ -236,6 +258,49 @@ impl MethodDef {
         self.is_static
             && self.returns_ref
             && matches!(&self.return_type, TypeRef::Named(name) if name == owner_type_name)
+    }
+
+    /// True when this method's `#[cfg(...)]` gate is satisfied by `enabled_features`.
+    ///
+    /// The sibling of [`Self::returns_ref_to_owner`]: a per-method predicate every backend
+    /// consults, so the gate is evaluated in one place rather than re-derived at each
+    /// emission site. Backends that generate Rust source should prefer
+    /// [`Self::rust_cfg_attribute`] — `rustc` resolves the gate for them, and unlike this
+    /// predicate it also honours non-feature leaves such as `target_arch`.
+    #[must_use]
+    pub fn cfg_satisfied(&self, enabled_features: &std::collections::HashSet<&str>) -> bool {
+        super::surface::cfg_feature_satisfied(self.cfg.as_deref(), enabled_features)
+    }
+
+    /// The `#[cfg(...)]` condition for an emitted item that also sits behind `owner_cfg`
+    /// (its owning type's or `impl` block's gate): the AND of the two.
+    ///
+    /// Identical gates collapse to one operand rather than `all(X, X)` — the common case, since
+    /// a gated type is normally implemented in an `impl` block carrying the same gate, and a
+    /// method inherits its block's gate at extraction time.
+    #[must_use]
+    pub fn cfg_within(&self, owner_cfg: Option<&str>) -> Option<String> {
+        match (owner_cfg, self.cfg.as_deref()) {
+            (Some(owner), Some(own)) if owner.trim() == own.trim() => Some(owner.to_string()),
+            (Some(owner), Some(own)) => Some(format!("all({owner}, {own})")),
+            (Some(owner), None) => Some(owner.to_string()),
+            (None, own) => own.map(str::to_string),
+        }
+    }
+
+    /// The `#[cfg(...)]` attribute line to emit above this method in generated Rust source,
+    /// including the trailing newline; empty when the method is ungated.
+    ///
+    /// Backends that emit Rust (FFI, pyo3, napi, magnus, rustler, Dart's bridge crate) must
+    /// re-emit the gate rather than filter on it: their generated crate is compiled with the
+    /// core crate's features, so `rustc` decides. Backends that emit a single host-language
+    /// surface cannot express the gate and must filter instead.
+    #[must_use]
+    pub fn rust_cfg_attribute(&self) -> String {
+        self.cfg
+            .as_deref()
+            .map(|cfg| format!("#[cfg({cfg})]\n"))
+            .unwrap_or_default()
     }
 }
 
@@ -628,6 +693,7 @@ mod tests {
             is_return_type: _,           // output DTO style (e.g. Python TypedDict)
             serde_rename_all: _,         // Go/Java/C# JSON tag casing
             has_serde: _,                // gates FFI from_json/to_json generation
+            serde_container_default: _,  // per-field wire-optionality (Go omitempty pointers) ~keep
             super_traits: _,             // trait bridge super-trait impl selection ~keep
             binding_excluded: _,         // excludes the type from generated surfaces
             binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
@@ -677,6 +743,7 @@ mod tests {
             error_type: _,               // fallible-call error-mapping codegen
             doc: _,                      // doc-comment emission
             receiver: _,                 // `&self` / `&mut self` / owned call-site codegen
+            cfg: _,                      // `rust_cfg_attribute` re-emits it; `cfg_satisfied` drops it ~keep
             sanitized: _,                // methods with sanitized signatures can't auto-delegate
             trait_source: _,             // trait bridge impl selection ~keep
             returns_ref: _,              // inserts `.clone()` before type conversion ~keep
@@ -808,5 +875,65 @@ mod tests {
             is_tuple: _,         // selects the tuple-variant wildcard pattern `(..)`
             doc: _,              // doc-comment emission
         } = value;
+    }
+
+    fn gated(cfg: Option<&str>) -> MethodDef {
+        MethodDef {
+            name: "stream".to_string(),
+            cfg: cfg.map(str::to_string),
+            ..MethodDef::default()
+        }
+    }
+
+    #[test]
+    fn rust_cfg_attribute_is_empty_when_ungated() {
+        assert_eq!(gated(None).rust_cfg_attribute(), "");
+    }
+
+    #[test]
+    fn rust_cfg_attribute_wraps_the_condition_with_a_trailing_newline() {
+        assert_eq!(
+            gated(Some("feature = \"streaming\"")).rust_cfg_attribute(),
+            "#[cfg(feature = \"streaming\")]\n"
+        );
+    }
+
+    #[test]
+    fn cfg_within_and_combines_owner_and_method_gates() {
+        assert_eq!(
+            gated(Some("feature = \"streaming\"")).cfg_within(Some("feature = \"client\"")),
+            Some("all(feature = \"client\", feature = \"streaming\")".to_string())
+        );
+    }
+
+    #[test]
+    fn cfg_within_collapses_an_owner_gate_the_method_already_inherited() {
+        // A method in `#[cfg(feature = "x")] impl T` inherits that gate verbatim; if `T` carries
+        // the same gate, emitting `all(X, X)` would be redundant churn in every generated file.
+        assert_eq!(
+            gated(Some("feature = \"client\"")).cfg_within(Some("feature = \"client\"")),
+            Some("feature = \"client\"".to_string())
+        );
+    }
+
+    #[test]
+    fn cfg_within_falls_back_to_whichever_gate_is_present() {
+        assert_eq!(
+            gated(None).cfg_within(Some("feature = \"client\"")),
+            Some("feature = \"client\"".to_string())
+        );
+        assert_eq!(
+            gated(Some("feature = \"streaming\"")).cfg_within(None),
+            Some("feature = \"streaming\"".to_string())
+        );
+        assert_eq!(gated(None).cfg_within(None), None);
+    }
+
+    #[test]
+    fn cfg_satisfied_matches_the_shared_feature_evaluator() {
+        let enabled: std::collections::HashSet<&str> = ["streaming"].into_iter().collect();
+        assert!(gated(Some("feature = \"streaming\"")).cfg_satisfied(&enabled));
+        assert!(!gated(Some("feature = \"tokenizer\"")).cfg_satisfied(&enabled));
+        assert!(gated(None).cfg_satisfied(&enabled));
     }
 }

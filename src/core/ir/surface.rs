@@ -268,8 +268,8 @@ impl ApiSurface {
     }
 
     /// Like [`with_cfg_filtered`](Self::with_cfg_filtered), but also drops
-    /// cfg-gated *members* — struct fields, enum variants, and enum-variant
-    /// fields — whose gate is not satisfied by `enabled_features`.
+    /// cfg-gated *members* — struct fields, methods, enum variants, and
+    /// enum-variant fields — whose gate is not satisfied by `enabled_features`.
     ///
     /// The docs generator renders the full public surface of a type (its fields
     /// and variants), so a shallow top-level filter is not enough: a
@@ -285,6 +285,7 @@ impl ApiSurface {
         for typ in &mut filtered.types {
             typ.fields
                 .retain(|field| cfg_feature_satisfied(field.cfg.as_deref(), enabled_features));
+            typ.methods.retain(|method| method.cfg_satisfied(enabled_features));
         }
 
         for enum_def in &mut filtered.enums {
@@ -296,6 +297,15 @@ impl ApiSurface {
                     .fields
                     .retain(|field| cfg_feature_satisfied(field.cfg.as_deref(), enabled_features));
             }
+            enum_def.methods.retain(|method| method.cfg_satisfied(enabled_features));
+        }
+
+        // Error introspection methods (`status_code`, `is_transient`, …) reach the same
+        // single-surface emitters as type methods, so an unsatisfied gate must drop them here
+        // too — otherwise the host facade calls an FFI export the linked library never
+        // compiled. ~keep
+        for error in &mut filtered.errors {
+            error.methods.retain(|method| method.cfg_satisfied(enabled_features));
         }
 
         filtered
@@ -493,6 +503,57 @@ mod tests {
         assert_eq!(field_names, vec!["use_cache"]);
         let variant_names: Vec<&str> = filtered.enums[0].variants.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(variant_names, vec!["Markdown"]);
+    }
+
+    #[test]
+    fn with_cfg_filtered_deep_drops_gated_methods_on_types_enums_and_errors() {
+        use crate::core::ir::{ErrorDef, MethodDef};
+
+        fn method(name: &str, cfg: Option<&str>) -> MethodDef {
+            MethodDef {
+                name: name.to_string(),
+                cfg: cfg.map(str::to_string),
+                ..MethodDef::default()
+            }
+        }
+
+        let mut client = ty("Client", None);
+        client.methods = vec![method("ping", None), method("stream", Some("feature = \"streaming\""))];
+
+        let mut format = en("Format", None);
+        format.methods = vec![method("all", None), method("from_mime", Some("feature = \"mime\""))];
+
+        let error = ErrorDef {
+            name: "ClientError".to_string(),
+            rust_path: "mylib::ClientError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![],
+            doc: String::new(),
+            methods: vec![
+                method("status_code", None),
+                method("retry_after", Some("feature = \"retry\"")),
+            ],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let mut surface = ApiSurface::default();
+        surface.types.push(client);
+        surface.enums.push(format);
+        surface.errors.push(error);
+
+        let filtered = surface.with_cfg_filtered_deep(&features(&["mime"]));
+
+        let type_methods: Vec<&str> = filtered.types[0].methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(type_methods, vec!["ping"], "unsatisfied type method must be dropped");
+        let enum_methods: Vec<&str> = filtered.enums[0].methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(
+            enum_methods,
+            vec!["all", "from_mime"],
+            "a satisfied gate keeps the method"
+        );
+        let error_methods: Vec<&str> = filtered.errors[0].methods.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(error_methods, vec!["status_code"], "error methods are filtered too");
     }
 
     #[test]

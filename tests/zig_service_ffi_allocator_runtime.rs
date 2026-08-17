@@ -79,6 +79,7 @@ fn handler_contract() -> HandlerContractDef {
             }],
             return_type: TypeRef::Named("Response".to_owned()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..MethodDef::default()
         },
         optional_methods: vec![],

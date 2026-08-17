@@ -64,6 +64,7 @@ fn make_api_surface() -> ApiSurface {
             is_return_type: false,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: String::new(),
             cfg: None,
@@ -284,6 +285,7 @@ fn gen_struct_methods_skips_method_wrapper_when_field_accessor_already_emitted()
             name: "providers".to_string(),
             return_type: TypeRef::String,
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         }],
         ..Default::default()

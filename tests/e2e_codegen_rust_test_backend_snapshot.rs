@@ -45,6 +45,7 @@ fn make_method(
         error_type: error_type.map(str::to_string),
         doc: String::new(),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         sanitized: false,
         trait_source: None,
         returns_ref: false,

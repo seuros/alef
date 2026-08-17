@@ -652,6 +652,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
         is_return_type: true,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         binding_excluded: false,
         binding_exclusion_reason: None,

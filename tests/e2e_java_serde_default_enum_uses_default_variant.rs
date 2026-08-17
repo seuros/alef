@@ -114,6 +114,7 @@ fn java_builder_uses_correct_default_variant_for_serde_default_enum_field() {
         cfg: None,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         binding_excluded: false,
         binding_exclusion_reason: None,

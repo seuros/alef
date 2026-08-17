@@ -42,6 +42,7 @@ fn make_typedef(name: &str, fields: Vec<FieldDef>) -> TypeDef {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         doc: String::new(),
         cfg: None,
@@ -493,6 +494,7 @@ fn async_method_without_error(name: &str, receiver: ReceiverKind) -> MethodDef {
         is_async: true,
         error_type: None,
         receiver: Some(receiver),
+        cfg: None,
         ..Default::default()
     }
 }

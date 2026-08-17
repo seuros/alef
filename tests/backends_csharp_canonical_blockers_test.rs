@@ -75,6 +75,7 @@ fn opaque_fixture() -> ApiSurface {
             methods: vec![MethodDef {
                 name: "consume".into(),
                 receiver: Some(ReceiverKind::Owned),
+                cfg: None,
                 ..Default::default()
             }],
             ..Default::default()
@@ -129,6 +130,7 @@ fn handler_contract() -> HandlerContractDef {
             }],
             return_type: TypeRef::Named("Response".into()),
             receiver: Some(ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         },
         wire_request_type: Some("RequestData".into()),

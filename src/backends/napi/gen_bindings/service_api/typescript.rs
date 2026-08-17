@@ -693,6 +693,7 @@ mod classify_service_imports_tests {
             error_type: None,
             doc: String::new(),
             receiver: None,
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,

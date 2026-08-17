@@ -462,6 +462,26 @@ pub(crate) fn has_serde_default(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Check if a *container* (struct/enum) carries `#[serde(default)]` or
+/// `#[serde(default = "path")]`, including through `#[cfg_attr(..., serde(default))]`.
+///
+/// Reuses [`has_serde_default`]'s needle logic per attribute, but skips `doc` attributes:
+/// a container doc comment is far more likely than a field one to quote `#[serde(default)]`
+/// in prose, and prose is not an attribute.
+///
+/// The *meaning* differs from the field-level reader. A container default fills every missing
+/// key from the container's `Default` (or the named function), making all fields
+/// absent-tolerant on the wire; a field-level default fills that one key from the field
+/// type's `Default`. The two disagree exactly where it matters: a container whose `Default`
+/// sets `timeout: 30` yields `30` for a missing key, whereas the same field marked
+/// `#[serde(default)]` would yield `u32::default()` — `0`. ~keep
+pub(crate) fn has_container_serde_default(attrs: &[syn::Attribute]) -> bool {
+    attrs
+        .iter()
+        .filter(|attr| !attr.path().is_ident("doc"))
+        .any(|attr| has_serde_default(std::slice::from_ref(attr)))
+}
+
 /// Check if a `#[derive(...)]` attribute contains a specific multi-segment derive path.
 /// e.g. `has_derive_path(attrs, &["thiserror", "Error"])` matches `#[derive(thiserror::Error)]`.
 /// Also checks `#[cfg_attr(..., derive(...))]` for conditional derives.

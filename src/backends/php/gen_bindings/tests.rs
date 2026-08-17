@@ -135,6 +135,7 @@ fn php_self_ref_builder_shares_arc_instead_of_cloning_returned_ref() {
         error_type: Some("AppError".to_string()),
         doc: "Register a route, returning the app for chaining.".to_string(),
         receiver: Some(ReceiverKind::RefMut),
+        cfg: None,
         returns_ref: true,
         ..MethodDef::default()
     };

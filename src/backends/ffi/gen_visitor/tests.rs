@@ -20,6 +20,7 @@ fn method(name: &str, params: Vec<ParamDef>, return_type: TypeRef) -> MethodDef 
         return_type,
         doc: "Callback method.".to_string(),
         receiver: Some(ReceiverKind::RefMut),
+        cfg: None,
         ..MethodDef::default()
     }
 }

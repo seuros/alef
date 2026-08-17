@@ -137,6 +137,7 @@ fn napi_opaque_type_with_default_and_static_new_emits_constructor() {
         methods: vec![MethodDef {
             name: "new".to_string(),
             receiver: None,
+            cfg: None,
             params: vec![],
             return_type: TypeRef::Named("App".to_string()),
             is_async: false,
@@ -193,6 +194,7 @@ fn napi_self_ref_builder_shares_arc_instead_of_cloning_returned_ref() {
         error_type: Some("AppError".to_string()),
         doc: "Register a route, returning the app for chaining.".to_string(),
         receiver: Some(ReceiverKind::RefMut),
+        cfg: None,
         returns_ref: true,
         ..MethodDef::default()
     };

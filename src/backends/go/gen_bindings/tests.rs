@@ -333,6 +333,7 @@ fn test_gen_go_opaque_constructor_emits_new_function() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         doc: String::new(),
         cfg: None,
@@ -423,6 +424,7 @@ fn capsule_api() -> crate::core::ir::ApiSurface {
             is_return_type: true,
             serde_rename_all: None,
             has_serde: false,
+            serde_container_default: false,
             super_traits: vec![],
             doc: "A grammar.".to_string(),
             cfg: None,
@@ -533,6 +535,7 @@ fn free_function_colliding_with_type_name_is_renamed_get_prefixed() {
             is_return_type: true,
             serde_rename_all: None,
             has_serde: true,
+            serde_container_default: false,
             super_traits: vec![],
             doc: "Model metadata.".to_string(),
             cfg: None,
@@ -662,6 +665,7 @@ fn generate_bindings_skips_method_wrapper_when_struct_field_has_same_name() {
                 name: "providers".to_string(),
                 return_type: TypeRef::String,
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..Default::default()
             }],
             ..Default::default()

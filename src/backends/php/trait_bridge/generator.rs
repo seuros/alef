@@ -463,6 +463,7 @@ mod tests {
             name: "supports_table_detection".to_string(),
             has_default_impl: true,
             receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
             ..Default::default()
         };
         assert!(generator.gen_method_presence_check(&method, &spec).is_none());

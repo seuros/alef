@@ -45,6 +45,7 @@ fn async_method(name: &str, return_type: TypeRef) -> MethodDef {
         params: vec![make_param("texts", TypeRef::Vec(Box::new(TypeRef::String)), false)],
         return_type,
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         error_type: Some("Error".to_string()),
         is_async: true,
         ..Default::default()
