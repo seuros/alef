@@ -481,12 +481,11 @@ pub fn default_value_for_field_in_type(field: &FieldDef, language: &str, typ: &T
         if let Some(expr) = crate::codegen::shared::core_default_field_access(field, typ) {
             return expr;
         }
-        let crate_name = typ.rust_path.split("::").next().unwrap_or(typ.rust_path.as_str());
         return format!(
             "compile_error!(r#\"cannot render tuple/struct-variant default `{variant}` for \
-             `{crate_name}::{type_name}.{field_name}` without a `Default` impl on the owning type to read it back \
+             `{type_path}.{field_name}` without a `Default` impl on the owning type to read it back \
              from\"#)",
-            type_name = typ.name,
+            type_path = owning_type_path(typ),
             field_name = field.name,
         );
     }
@@ -503,16 +502,30 @@ pub fn default_value_for_field_in_type(field: &FieldDef, language: &str, typ: &T
         if let Some(expr) = crate::codegen::shared::core_default_field_access(field, typ) {
             return expr;
         }
-        let crate_name = typ.rust_path.split("::").next().unwrap_or(typ.rust_path.as_str());
         return format!(
             "compile_error!(r#\"cannot render an unresolved `impl Default` for \
-             `{crate_name}::{type_name}.{field_name}` without a `Default` impl on the owning type to read it back \
+             `{type_path}.{field_name}` without a `Default` impl on the owning type to read it back \
              from\"#)",
-            type_name = typ.name,
+            type_path = owning_type_path(typ),
             field_name = field.name,
         );
     }
     default_value_for_field(field, language)
+}
+
+/// How a `compile_error!` diagnostic names the type that owns an unrenderable field.
+///
+/// Uses `rust_path` whole rather than splicing its first segment onto `typ.name`. The splice
+/// produced a path that need not exist: it dropped every intermediate module, rendering
+/// `demo::inner::Settings` as `demo::Settings`, and it silently disagreed with itself whenever
+/// `rust_path` and `name` named different types. A diagnostic that misnames the type it is
+/// pointing at sends the reader to the wrong definition, which is worse than no diagnostic. ~keep
+fn owning_type_path(typ: &TypeDef) -> &str {
+    if typ.rust_path.is_empty() {
+        &typ.name
+    } else {
+        &typ.rust_path
+    }
 }
 
 /// Recover a `#[serde(default = "path")]` field's true value by deserializing a minimal

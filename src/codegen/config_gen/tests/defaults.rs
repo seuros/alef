@@ -1057,7 +1057,10 @@ fn unresolved_default_without_a_default_impl_to_read_back_from_fails_loudly() {
 
     let message = default_value_for_field_in_type(&field, "rust", &typ);
 
-    assert!(message.starts_with("compile_error!"), "must fail rather than guess: {message}");
+    assert!(
+        message.starts_with("compile_error!"),
+        "must fail rather than guess: {message}"
+    );
     for needle in ["demo::Settings", "Settings", "mode"] {
         assert!(
             message.contains(needle),
