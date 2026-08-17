@@ -187,6 +187,37 @@ fn does_not_merge_identical_cfg_overloads() {
     );
 }
 
+/// Two REAL (non-underscore-param) entries sharing a name under disjoint cfg gates but with
+/// genuinely different arity are not a sanctioned real+stub pair — there is no basis for
+/// picking one arity as canonical for cfg branches it does not describe. Before the fix,
+/// `pick_canonical_entry` would silently keep the first entry's 2-param signature and claim
+/// (via the merged `any(...)` cfg) that it also covers the branch whose real signature takes
+/// only 1 param, discarding that arity information entirely. This must now be refused so both
+/// variants reach the emitter and a duplicate-symbol declaration surfaces the disagreement
+/// loudly instead of emitting a signature that is wrong under one of the two cfg branches.
+#[test]
+fn does_not_merge_when_real_variants_disagree_on_signature() {
+    let input = vec![
+        make_fn(
+            "compute",
+            "my_crate::compute",
+            Some(r#"feature = "fast""#),
+            &["x", "precision"],
+        ),
+        make_fn("compute", "my_crate::compute", Some(r#"not(feature = "fast")"#), &["x"]),
+    ];
+
+    let out = dedup_same_name_functions(&input);
+
+    assert_eq!(
+        out.len(),
+        2,
+        "disagreeing real signatures must not be collapsed into one entry: {out:?}"
+    );
+    assert_eq!(out[0].params.len(), 2);
+    assert_eq!(out[1].params.len(), 1);
+}
+
 #[test]
 fn merges_multiple_function_groups_without_index_drift() {
     let input = vec![

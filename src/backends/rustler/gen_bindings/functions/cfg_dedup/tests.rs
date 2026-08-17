@@ -235,6 +235,46 @@ fn merges_gated_cfgs_by_disjunct_not_by_raw_text() {
     );
 }
 
+/// End-to-end proof that the Rustler pipeline — `dedup_same_name_functions` then
+/// `regate_ungated_same_name_functions`, exactly as `native.rs`'s `generate_bindings` chains
+/// them — protects against a disagreeing-signature group the same way the FFI and single-surface
+/// backends do.
+///
+/// This file's own pass never merges or discards an entry: it only rewrites the `cfg` of
+/// already-ungated members, and a purely-gated group (no ungated member) is left completely
+/// untouched regardless of the gated arms' signatures — see
+/// `leaves_purely_gated_disjoint_arms_untouched` above. So `regate_ungated_same_name_functions`
+/// has no `pick_canonical_entry`-equivalent step and cannot itself silently drop a real
+/// signature; a `real_variant_signatures_agree`-style guard added here would never have anything
+/// to reject. The merge/collapse step Rustler shares with every other emitting backend is
+/// `codegen::fn_dedup::dedup_same_name_functions`, called first in `native.rs` (before this
+/// file's pass ever runs) — its own `real_variant_signatures_agree` guard is what protects this
+/// pipeline. This test pins that end-to-end behaviour so the guarantee is proven against the
+/// actual call chain, not assumed. ~keep
+#[test]
+fn full_pipeline_preserves_disagreeing_real_signatures() {
+    let input = vec![
+        make_fn(
+            "compute",
+            "krate::compute",
+            Some(r#"feature = "fast""#),
+            &["x", "precision"],
+        ),
+        make_fn("compute", "krate::compute", Some(r#"not(feature = "fast")"#), &["x"]),
+    ];
+
+    let deduped = crate::codegen::fn_dedup::dedup_same_name_functions(&input);
+    let out = regate_ungated_same_name_functions(&deduped);
+
+    assert_eq!(
+        out.len(),
+        2,
+        "disagreeing real signatures must reach the Rustler NIF emitter as two distinct entries: {out:?}"
+    );
+    assert_eq!(out[0].params.len(), 2);
+    assert_eq!(out[1].params.len(), 1);
+}
+
 /// The pass is a pure transformation — it must not mutate the input slice.
 #[test]
 fn does_not_mutate_input() {

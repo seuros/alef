@@ -94,7 +94,68 @@ fn should_merge_cfg_group(indices: &[usize], functions: &[FunctionDef]) -> bool 
         return false;
     }
     let first_cfg = &functions[indices[0]].cfg;
-    indices.iter().any(|&idx| &functions[idx].cfg != first_cfg)
+    if !indices.iter().any(|&idx| &functions[idx].cfg != first_cfg) {
+        return false;
+    }
+    if real_variant_signatures_agree(indices, functions) {
+        return true;
+    }
+    warn_on_signature_disagreement(indices, functions);
+    false
+}
+
+/// True when every "real" (non-stub) entry in a same-name, differing-cfg group agrees on
+/// parameter arity, parameter types, and return type.
+///
+/// The stub-fallback convention (all params `_`-prefixed) marks an entry's own signature as a
+/// placeholder, so only a REAL entry's signature is trusted as canonical — see
+/// `pick_canonical_entry`. But when a group has two or more real entries, which the sanctioned
+/// real+stub pattern never produces, there is no basis for picking one signature as the one
+/// that applies under every cfg branch. Refusing to merge in that case leaves every entry in
+/// the output; downstream emission then declares the same symbol under multiple cfg branches
+/// with disagreeing signatures, which fails loudly (duplicate-definition compile/link error)
+/// instead of silently emitting a signature that is wrong under some cfg combination. ~keep
+fn real_variant_signatures_agree(indices: &[usize], functions: &[FunctionDef]) -> bool {
+    let mut real_signatures = indices.iter().filter_map(|&idx| {
+        let func = &functions[idx];
+        let all_underscore = !func.params.is_empty() && func.params.iter().all(|p| p.name.starts_with('_'));
+        (!all_underscore).then_some(func)
+    });
+
+    let Some(first) = real_signatures.next() else {
+        return true;
+    };
+    real_signatures.all(|func| signatures_match(first, func))
+}
+
+fn signatures_match(a: &FunctionDef, b: &FunctionDef) -> bool {
+    a.return_type == b.return_type
+        && a.params.len() == b.params.len()
+        && a.params.iter().zip(&b.params).all(|(p, q)| p.ty == q.ty)
+}
+
+fn warn_on_signature_disagreement(indices: &[usize], functions: &[FunctionDef]) {
+    let name = &functions[indices[0]].name;
+    let variants: Vec<String> = indices
+        .iter()
+        .map(|&idx| {
+            let func = &functions[idx];
+            format!(
+                "{rust_path} cfg={cfg:?} params={params:?} returns={returns:?}",
+                rust_path = func.rust_path,
+                cfg = func.cfg,
+                params = func.params.iter().map(|p| &p.ty).collect::<Vec<_>>(),
+                returns = func.return_type,
+            )
+        })
+        .collect();
+    tracing::warn!(
+        function = %name,
+        variants = ?variants,
+        "same-name functions under disjoint cfg gates disagree on signature; skipping cfg dedup \
+         for this group so every variant reaches the emitter unmerged rather than silently \
+         picking one signature as canonical for cfg branches it does not describe"
+    );
 }
 
 /// Compute the OR-merge of a set of cfg strings.
