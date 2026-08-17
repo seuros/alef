@@ -283,10 +283,21 @@ fn generate_e2e_with_extensions(
         ) {
             Ok(report) => {
                 report_snippet_coverage(&report.coverage);
-                prune_orphaned_snippets(Path::new(&snippet_config.output), &report.coverage);
-                if let Err(error) = ensure_snippet_coverage_complete(&report.coverage) {
-                    warn!("snippet coverage incomplete, deferring failure: {error:#}");
-                    deferred_error.get_or_insert(error);
+                // The prune must not run unless the coverage that licenses it is complete.
+                // `orphaned_paths` stakes its whole safety argument on this gate having passed
+                // first: a snippet that merely FAILED TO RENDER is absent from `generated_paths`
+                // while its language is still in `expected`, which is indistinguishable from a
+                // genuine orphan -- so pruning first unlinks previously published documentation
+                // because of a transient generator failure. The gate only DEFERS its error, so
+                // ordering alone is not enough; the prune has to be skipped explicitly. ~keep
+                match ensure_snippet_coverage_complete(&report.coverage) {
+                    Ok(()) => prune_orphaned_snippets(Path::new(&snippet_config.output), &report.coverage),
+                    Err(error) => {
+                        warn!(
+                            "snippet coverage incomplete, deferring failure and skipping the orphan prune: {error:#}"
+                        );
+                        deferred_error.get_or_insert(error);
+                    }
                 }
                 let coverage_content = serde_json::to_string_pretty(&report.coverage)
                     .context("failed to serialize snippet coverage manifest")?;
