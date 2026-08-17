@@ -6,37 +6,74 @@
 //!
 //! # Hash semantics
 //!
-//! The embedded `alef:hash:<hex>` value is a **generation-inputs fingerprint**
-//! produced by [`compute_inputs_hash`]:
+//! The embedded `alef:hash:<hex>` value is **not** [`compute_inputs_hash`]'s
+//! output. It is [`compute_file_hash`]'s output, which folds that inputs
+//! fingerprint together with the file's own emitted content — every call site
+//! that injects a hash line passes it `compute_file_hash`'s result, never
+//! `compute_inputs_hash`'s directly:
 //!
 //! ```text
-//! blake3(
+//! inputs_hash = blake3(
 //!   "alef:inputs\0"
 //!   || CODEGEN_FORMAT_VERSION || "\0"
 //!   || sources_hash || "\0"
 //!   || canonical_toml          ← parse + key-sort + re-serialize alef.toml
+//! )
+//!
+//! alef:hash:<hex> = blake3(
+//!   "sources\0" || inputs_hash || "\0content\0" || file_content_without_hash_line
 //! )
 //! ```
 //!
 //! Where `sources_hash` is [`compute_sources_hash`] over the sorted Rust source
 //! files alef parses to build the IR, and `canonical_toml` is the normalized
 //! form of `alef.toml` (comments stripped, keys sorted, whitespace and line
-//! endings normalized). The hash answers **"was this file generated from the
-//! current alef inputs?"** — post-generation formatter drift (rustfmt, ruff,
-//! rumdl-fmt, oxfmt, etc.) is irrelevant because the hash is not derived from
-//! the emitted file content. Routine alef crate releases do not change the hash
-//! because the alef crate version (`ALEF_REV`) is not an input.
+//! endings normalized). Because the file's own bytes are folded in, the
+//! embedded hash answers a strictly stronger question than "were these inputs
+//! used" — it answers **"was this exact file content produced by these
+//! inputs?"** A hand-edit to an emitted file (a reverted dependency bump, a
+//! manually patched line) changes `file_content_without_hash_line` without
+//! touching `inputs_hash`, so it changes the embedded value and `alef verify`
+//! reports it stale, exactly like an inputs change would.
 //!
-//! `alef verify` re-derives the same inputs hash from the current `alef.toml`
-//! and Rust sources, embeds nothing from the on-disk file, and compares to the
-//! embedded line — pure read+compare, no regeneration, no writes.
+//! Post-generation formatter drift (rustfmt, ruff, rumdl-fmt, oxfmt, etc.) is
+//! *not* a false positive, but not because content is excluded — it is
+//! included. The reason is ordering: `generate::write::finalize_hashes`
+//! stamps the hash *after* every formatter has already run
+//! (`write_files_report` writes the header with no hash line; formatters run;
+//! `finalize_hashes` then hashes the final, formatted bytes). So the embedded
+//! hash reflects the post-format content from the start, and a later run of
+//! the same formatter over already-formatted content is a no-op, not drift.
+//! Routine alef crate releases do not change the hash because the alef crate
+//! version (`ALEF_REV`) is not an input to `inputs_hash`.
+//!
+//! `alef verify` (`bin_cli::helpers::verify_walk` / `verify_walk_multi`)
+//! re-derives `inputs_hash` from the current `alef.toml` and Rust sources,
+//! reads each on-disk file, strips its `alef:hash:` line, recomputes
+//! [`compute_file_hash`] over `inputs_hash` plus the *actual on-disk bytes*,
+//! and compares that to the embedded line. It is read-only — no
+//! regeneration, no writes — but it is not a bare line comparison: the
+//! on-disk content is rehashed on every run, which is exactly what lets it
+//! catch content drift without regenerating.
+//!
+//! What this mechanism cannot see is scoped precisely by two other things, not
+//! by the hash formula: a file whose extension isn't in
+//! `bin_cli::helpers::VERIFY_SCAN_EXTENSIONS`/`VERIFY_SCAN_FILENAMES` is
+//! never opened at all, and a file whose format cannot carry a comment marker
+//! (`.json`, `.jar`, lockfiles) is tracked only by path presence in
+//! `cli::cache::OWNERSHIP_MANIFEST`, which has no content hash to compare —
+//! for those, `alef verify` can confirm alef once wrote the path but not that
+//! its current bytes still match. Both gaps are enumerated, not this hash
+//! design; see the doc comments at the definitions above.
 //!
 //! # Migration from v0.10.1 — v0.20.x
 //!
-//! Pre-v0.21.0 alef embedded `blake3(sources_hash || file_content_without_hash_line)`.
-//! Any file regenerated with v0.21.0+ will carry a new hash value; `alef verify`
-//! from v0.21.0+ rejects old-format hashes. Run `alef generate` once after
-//! upgrading to stamp all files with the new inputs hash.
+//! Pre-v0.21.0 alef embedded `blake3(sources_hash || file_content_without_hash_line)` —
+//! already content-inclusive, just without the `inputs_hash` domain
+//! separation and canonicalized-`alef.toml` mixing described above. Any file
+//! regenerated with v0.21.0+ will carry a new hash value; `alef verify` from
+//! v0.21.0+ rejects old-format hashes. Run `alef generate` once after
+//! upgrading to stamp all files with the new format.
 
 const HASH_PREFIX: &str = "alef:hash:";
 const DEFAULT_REGENERATE_COMMAND: &str = "alef generate";

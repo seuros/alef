@@ -835,7 +835,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
         } => {
             let (_workspace, resolved) = load_config(config_path)?;
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
-            tracing::info!("Verifying alef-generated files (inputs-hash mode)");
+            // Not "inputs-hash mode": the embedded per-file hash folds in the file's own
+            // content (see `core::hash`'s module doc), so this also catches hand-edited
+            // or reverted generated output, not only stale generation inputs. ~keep
+            tracing::info!("Verifying alef-generated files (per-file inputs+content hash)");
             let base_dir = std::env::current_dir()?;
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
