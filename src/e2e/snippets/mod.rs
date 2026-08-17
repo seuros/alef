@@ -12,6 +12,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod coverage;
 pub(crate) mod ledger_paths;
 pub mod migration;
+pub mod ownership;
 mod recipe_policy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +254,12 @@ fn generate_snippet_report_with_extensions(
     extensions: &[Box<dyn crate::Extension>],
 ) -> Result<SnippetGenerationReport> {
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
+    // Pin the *previous* run's ownership record before this run computes, let alone writes,
+    // anything. `e2e::run` hands the freshly computed ledger to the same write batch as the
+    // snippets, and `.alef-snippet-coverage.json` sorts ahead of every sibling snippet directory
+    // in that batch's `BTreeMap`, so reading it any later would read this run's intentions and
+    // silently degrade `ownership::is_ledger_owned_snippet_path` to bare path identity. ~keep
+    ownership::snapshot_pre_run_ledger(Path::new(&snippets.output));
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
     let mut guard_rejections = Vec::<SnippetGuardRejection>::new();
@@ -1601,6 +1608,90 @@ mod tests {
         assert!(unmarked_refused);
         assert_eq!(
             unmarked_content, unmarked_existing,
+            "a refused file must be left byte-identical"
+        );
+    }
+
+    /// The companion to the test above, and the only end-to-end proof that the ledger disjunct in
+    /// `write_scaffold_files_report` actually unfreezes anything: the same unmarked, pre-existing
+    /// snippet the guard refuses above is written when the previous run's coverage ledger records
+    /// it. The negative half lives in the test above -- its temp dirs carry no ledger, so it
+    /// already pins that an unrecorded unmarked snippet stays refused. Both halves matter: a
+    /// disjunct that claimed every unmarked `.md` would pass this test alone. ~keep
+    #[test]
+    fn write_guard_accepts_an_unmarked_snippet_the_previous_run_recorded_in_the_ledger() {
+        let relative = PathBuf::from("docs/snippets/python/api/example.md");
+        let sibling = PathBuf::from("docs/snippets/python/api/hand-written.md");
+        let updated = rendered_snippet().replace("example()", "updated_example()");
+        let existing = rendered_snippet_without_header();
+
+        let directory = tempfile::tempdir().expect("temporary output directory");
+        let root = directory.path().join("docs/snippets");
+        for path in [&relative, &sibling] {
+            let full = directory.path().join(path);
+            std::fs::create_dir_all(full.parent().expect("snippet parent")).expect("snippet directory");
+            std::fs::write(&full, &existing).expect("pre-existing snippet");
+        }
+
+        let key = SnippetCoverageKey {
+            fixture_id: "example".into(),
+            language: "python".into(),
+        };
+        let ledger = SnippetCoverageLedger {
+            format_version: COVERAGE_MANIFEST_VERSION,
+            generated_paths: vec![PathBuf::from("python/api/example.md")],
+            generated_metadata: vec![GeneratedSnippetMetadata {
+                key: key.clone(),
+                path: PathBuf::from("python/api/example.md"),
+                language: "python".into(),
+                target: "python".into(),
+                session: "python".into(),
+                requires: Vec::new(),
+                side_effect: SideEffectClass::Safe,
+            }],
+            expected: vec![key.clone()],
+            generated: vec![key],
+            missing: Vec::new(),
+            documented_exceptions: Vec::new(),
+        };
+        std::fs::write(
+            root.join(COVERAGE_MANIFEST),
+            serde_json::to_string(&ledger).expect("serialize ledger"),
+        )
+        .expect("write ledger");
+        super::ownership::snapshot_pre_run_ledger(&root);
+
+        let report = crate::cli::pipeline::write_scaffold_files_report(
+            &[
+                crate::core::backend::GeneratedFile {
+                    path: relative.clone(),
+                    content: updated.clone(),
+                    generated_header: false,
+                },
+                crate::core::backend::GeneratedFile {
+                    path: sibling.clone(),
+                    content: updated.clone(),
+                    generated_header: false,
+                },
+            ],
+            directory.path(),
+            true,
+        )
+        .expect("scaffold write report");
+
+        let recorded = directory.path().join(&relative);
+        let unrecorded = directory.path().join(&sibling);
+        assert!(
+            report.changed_paths.contains(&recorded),
+            "a snippet the previous run recorded must be regenerable"
+        );
+        assert!(
+            report.refused_paths.contains(&unrecorded),
+            "a hand-written sibling under the same root has no record and must stay refused"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&unrecorded).expect("sibling still readable"),
+            existing,
             "a refused file must be left byte-identical"
         );
     }

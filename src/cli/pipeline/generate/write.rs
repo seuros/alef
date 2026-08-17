@@ -556,8 +556,15 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                     // ownership record is the fallback only for extensions that truly
                     // cannot carry a marker in any form.
                     let has_marker = hash::content_has_alef_marker(&existing);
-                    let owned =
-                        has_marker || (!is_markable && crate::cli::cache::is_scaffold_owned_path(base_dir, full_path));
+                    // Kept deliberately identical to `scaffold.rs`'s guard: these are two copies of
+                    // one predicate on two write rails, and they have already drifted once -- the
+                    // derived-output disjunct landed on the scaffold rail only, so the next
+                    // unmarkable generated artifact emitted through this rail would have been
+                    // refused forever for want of a record only a blocked write could create. ~keep
+                    let owned = has_marker
+                        || (!is_markable
+                            && (crate::cli::cache::is_scaffold_owned_path(base_dir, full_path)
+                                || crate::cli::cache::is_alef_derived_output(full_path)));
                     if !owned {
                         warn!(
                             "refusing to write {}: pre-existing file carries no alef marker and \
