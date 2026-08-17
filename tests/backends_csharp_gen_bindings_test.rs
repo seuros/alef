@@ -700,11 +700,14 @@ fn test_bool_param_call_site_matches_pinvoke_bool_decl() {
         "Call site must not emit `(enable ? 1 : 0)` (would not type-check against the bool P/Invoke param); got:\n{}",
         wrapper.content
     );
+    // The receiver arg is a leased handle (`handleLease.Handle`, not the bare `Handle`
+    // property) since every borrowed instance call now takes `using var handleLease =
+    // BorrowHandle()`; `enable` still follows it directly and unconverted. ~keep
     assert!(
         wrapper
             .content
-            .contains("EnablePlayground(\n            Handle,\n            enable\n")
-            || wrapper.content.contains("EnablePlayground(Handle, enable"),
+            .contains("EnablePlayground(\n            handleLease.Handle,\n            enable\n")
+            || wrapper.content.contains("EnablePlayground(handleLease.Handle, enable"),
         "Call site must pass `enable` directly to the P/Invoke; got:\n{}",
         wrapper.content
     );

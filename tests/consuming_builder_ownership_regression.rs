@@ -226,8 +226,12 @@ fn csharp_invalidates_the_consumed_safe_handle_before_observing_result() {
     let native_call = method
         .find("NativeMethods.RouteBuilderWithCors")
         .expect("native call must be emitted");
+    // `TakeHandle()` (before the native call) claims the receiver exclusively and marks the
+    // owner's `_safeHandle` unavailable; `handleTransfer.Commit()` (after the native call) is
+    // what finalizes the transferred handle via `SetHandleAsInvalid()`, replacing the old
+    // direct `_safeHandle.Invalidate()` call at this position. ~keep
     let invalidate = method
-        .find("_safeHandle.Invalidate()")
+        .find("handleTransfer.Commit()")
         .expect("consumed handle must be invalidated");
     let error_check = method
         .find("LastError")
