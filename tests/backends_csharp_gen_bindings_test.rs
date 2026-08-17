@@ -1653,10 +1653,9 @@ fn wrapper_functions_cleanup_owned_handles_only_in_finally() {
         lib.content
     );
     assert!(
-        lib.content.contains(
-            "if (configHandle != global::System.IntPtr.Zero) NativeMethods.ExtractionConfigFree(configHandle);"
-        ),
-        "optional named cleanup must preserve the IntPtr.Zero guard:\n{}",
+        lib.content
+            .contains("if (configHandle != 0) NativeMethods.ExtractionConfigFree(configHandle);"),
+        "optional named cleanup must preserve the zero-sentinel guard for the scalar AlefHandle:\n{}",
         lib.content
     );
 }
@@ -2749,13 +2748,13 @@ fn test_opaque_handle_wrapper_has_internal_handle() {
         .expect("Document.cs should be generated");
 
     assert!(
-        doc_file.content.contains("internal IntPtr Handle =>"),
-        "Opaque handle wrapper should use 'internal IntPtr Handle'; got:\n{}",
+        doc_file.content.contains("internal ulong Handle =>"),
+        "Opaque handle wrapper should use 'internal ulong Handle' (scalar AlefHandle, not IntPtr); got:\n{}",
         doc_file.content
     );
     assert!(
-        !doc_file.content.contains("public IntPtr Handle"),
-        "Opaque handle wrapper must NOT expose 'public IntPtr Handle'; got:\n{}",
+        !doc_file.content.contains("public ulong Handle"),
+        "Opaque handle wrapper must NOT expose 'public ulong Handle'; got:\n{}",
         doc_file.content
     );
 }
@@ -2942,8 +2941,8 @@ type = "ChatRequest"
     assert!(
         native_file
             .content
-            .contains("IntPtr StreamClientChatStreamStart(IntPtr client, IntPtr req)"),
-        "streaming adapter C# symbol must use configured owner_type, got:\n{}",
+            .contains("ulong StreamClientChatStreamStart(ulong client, ulong req)"),
+        "streaming adapter C# symbol must use configured owner_type and scalar AlefHandle params, got:\n{}",
         native_file.content
     );
     assert!(
@@ -3326,8 +3325,8 @@ type = "*const std::ffi::c_char"
         "string param should use explicit UTF-8 marshalling in P/Invoke: {native_content}"
     );
     assert!(
-        native_content.contains("IntPtr DefaultClientNew("),
-        "P/Invoke should return IntPtr: {native_content}"
+        native_content.contains("ulong DefaultClientNew("),
+        "P/Invoke should return ulong (scalar AlefHandle, not IntPtr): {native_content}"
     );
 }
 

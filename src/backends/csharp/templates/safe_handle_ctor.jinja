@@ -1,2 +1,4 @@
-    internal {{ class_name }}SafeHandle(IntPtr handle) : base(IntPtr.Zero, true)
+    internal {{ class_name }}SafeHandle(ulong handle) : base(IntPtr.Zero, true)
     {
+        SetHandle({{ class_name }}SafeHandle.Pack(handle));
+    }

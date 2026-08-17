@@ -1,4 +1,4 @@
-{{ indent }}if (nativeResult == IntPtr.Zero)
+{{ indent }}if (nativeResult == {{ zero }})
 {{ indent }}{
 {{ indent }}    var ec = NativeMethods.LastErrorCode();
 {{ indent }}    var ctxPtr = NativeMethods.LastErrorContext();

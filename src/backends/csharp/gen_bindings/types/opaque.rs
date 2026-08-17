@@ -1,7 +1,7 @@
 use super::super::errors::{emit_return_marshalling_indented, emit_return_statement, emit_return_statement_indented};
 use super::super::{
     StreamingMethodMeta, emit_named_param_setup, emit_named_param_teardown, emit_named_param_teardown_indented,
-    returns_ptr,
+    returns_ptr, zero_sentinel,
 };
 use super::constructors::{gen_opaque_factory_method, gen_opaque_static_constructor, is_static_constructor};
 use crate::backends::csharp::type_map::csharp_type;
@@ -390,15 +390,16 @@ pub(super) fn gen_opaque_method(
         }
 
         if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
+            let zero = zero_sentinel(&method.return_type);
             if matches!(method.return_type, TypeRef::Optional(_)) {
                 out.push_str(&render(
                     "null_result_return.jinja",
-                    minijinja::context! { indent => "            " },
+                    minijinja::context! { indent => "            ", zero },
                 ));
             } else {
                 out.push_str(&render(
                     "null_result_throw.jinja",
-                    minijinja::context! { indent => "            ", exception_name, cs_native_name },
+                    minijinja::context! { indent => "            ", exception_name, cs_native_name, zero },
                 ));
             }
         } else if method.error_type.is_some() {
@@ -479,15 +480,16 @@ pub(super) fn gen_opaque_method(
         }
 
         if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
+            let zero = zero_sentinel(&method.return_type);
             if matches!(method.return_type, TypeRef::Optional(_)) {
                 out.push_str(&render(
                     "null_result_return.jinja",
-                    minijinja::context! { indent => "        " },
+                    minijinja::context! { indent => "        ", zero },
                 ));
             } else {
                 out.push_str(&render(
                     "null_result_throw.jinja",
-                    minijinja::context! { indent => "        ", exception_name, cs_native_name },
+                    minijinja::context! { indent => "        ", exception_name, cs_native_name, zero },
                 ));
             }
         } else if method.error_type.is_some() {

@@ -3,11 +3,35 @@ use crate::core::ir::{PrimitiveType, TypeDef, TypeRef};
 use heck::ToLowerCamelCase;
 use std::collections::HashSet;
 
+/// True when `ty` crosses the C ABI as the scalar `AlefHandle` (`uint64_t`) rather than a
+/// real pointer. Mirrors `FfiParamMapper`/`FfiReturnMapper::named` in
+/// `backends::ffi::type_map`, which map *every* `TypeRef::Named` — opaque handle or
+/// JSON-backed data struct alike — to `AlefHandle`, including through `Optional`. Enum-typed
+/// `Named` params/returns are unaffected: the FFI backend's `c_param_type_with_paths_and_enums`
+/// still emits `i32` for those, and this backend has never special-cased enum-ness at this
+/// layer either, so the pre-existing (non-)handling of enum positions is left exactly as it
+/// was. ~keep
+pub(super) fn is_handle_type(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Named(_) => true,
+        TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Named(_)),
+        _ => false,
+    }
+}
+
+/// The C# zero-sentinel literal for a P/Invoke return value: the scalar `0` for a value
+/// carried as `AlefHandle`, or `IntPtr.Zero` for a value carried as a real native pointer.
+pub(super) fn zero_sentinel(ty: &TypeRef) -> &'static str {
+    if is_handle_type(ty) { "0" } else { "IntPtr.Zero" }
+}
+
 /// Returns the C# type to use in a `[DllImport]` declaration for the given return type.
 ///
 /// Key differences from the high-level `csharp_type`:
 /// - Bool is marshalled as `int` (C FFI convention) — the wrapper compares != 0.
-/// - String / Named / Vec / Map / Path / Json / Bytes all come back as `IntPtr`.
+/// - Named types (and `Optional<Named>`) come back as `ulong`, matching the `AlefHandle`
+///   (`uint64_t`) scalar the FFI crate registers them behind — see `is_handle_type`.
+/// - String / Vec / Map / Path / Json / Bytes all come back as `IntPtr` (real pointers).
 /// - Numeric primitives use their natural C# types (`nuint`, `int`, etc.).
 pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
     match ty {
@@ -26,6 +50,7 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
         TypeRef::Primitive(PrimitiveType::Usize) => "ulong",
         TypeRef::Primitive(PrimitiveType::Isize) => "long",
         TypeRef::Duration => "ulong",
+        _ if is_handle_type(ty) => "ulong",
         TypeRef::String
         | TypeRef::Char
         | TypeRef::Bytes
@@ -40,13 +65,14 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
 
 /// Returns the C# type to use for a parameter in a `[DllImport]` declaration.
 ///
-/// Managed reference types (Named structs, Vec, Map, Bytes, Optional of Named, etc.)
-/// cannot be directly marshalled by P/Invoke.  They must be passed as `IntPtr` (opaque
-/// handle or JSON-string pointer).  Primitive types and plain strings use their natural
-/// types.
+/// Managed reference types (Vec, Map, Bytes) and strings/paths/json cannot be directly
+/// marshalled by P/Invoke and cross as `IntPtr`/`string` (real pointers). Named types (and
+/// `Optional<Named>`) cross as `ulong` — see `is_handle_type`. Primitive types use their
+/// natural C# numeric types.
 pub(super) fn pinvoke_param_type(ty: &TypeRef) -> &'static str {
     match ty {
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "string",
+        _ if is_handle_type(ty) => "ulong",
         TypeRef::Named(_) | TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Bytes | TypeRef::Optional(_) => "IntPtr",
         TypeRef::Unit => "void",
         TypeRef::Primitive(PrimitiveType::Bool) => "int",

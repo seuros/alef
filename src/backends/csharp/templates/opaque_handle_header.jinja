@@ -21,14 +21,26 @@ using System.Runtime.CompilerServices;
 
 namespace {{ namespace }};
 
+// The native handle is the scalar `AlefHandle` (`uint64_t`) registry index, not a pointer.
+// `SafeHandle`'s only storage slot is a pointer-width `IntPtr`, so the `ulong` is packed into
+// that slot as a raw bit pattern (never dereferenced) to keep `SafeHandle`'s guaranteed
+// finalization and `DangerousAddRef`/`DangerousRelease` ref-counting, which the borrow/lease/
+// transfer machinery below builds on. This is lossless on every currently supported .NET
+// target (IntPtr is 8 bytes on all 64-bit platforms .NET 5+ ships on); on a true 32-bit
+// process a handle value above `uint.MaxValue` would truncate, but that requires over four
+// billion concurrently live handles of this type, and 32-bit .NET targets are legacy-only. ~keep
 internal sealed class {{ class_name }}SafeHandle : SafeHandle
 {
-    internal {{ class_name }}SafeHandle(IntPtr handle) : base(IntPtr.Zero, true)
+    internal {{ class_name }}SafeHandle(ulong handle) : base(IntPtr.Zero, true)
     {
-        SetHandle(handle);
+        SetHandle(Pack(handle));
     }
 
     public override bool IsInvalid => handle == IntPtr.Zero;
+
+    internal static IntPtr Pack(ulong value) => unchecked((IntPtr)(long)value);
+
+    internal static ulong Unpack(IntPtr value) => unchecked((ulong)(long)value);
 
 {% if has_consuming_methods %}
     internal void Invalidate()
@@ -40,7 +52,7 @@ internal sealed class {{ class_name }}SafeHandle : SafeHandle
 {% endif %}
     protected override bool ReleaseHandle()
     {
-        NativeMethods.{{ free_method }}(handle);
+        NativeMethods.{{ free_method }}(Unpack(handle));
         return true;
     }
 }
@@ -77,13 +89,13 @@ public sealed class {{ class_name }} : IDisposable
     {
         private {{ class_name }}? _owner;
 
-        internal HandleLease({{ class_name }} owner, IntPtr handle)
+        internal HandleLease({{ class_name }} owner, ulong handle)
         {
             _owner = owner;
             Handle = handle;
         }
 
-        internal IntPtr Handle { get; }
+        internal ulong Handle { get; }
 
         public void Dispose()
         {
@@ -97,14 +109,15 @@ public sealed class {{ class_name }} : IDisposable
         private {{ class_name }}? _owner;
         private {{ class_name }}SafeHandle? _transferredHandle;
 
-        internal HandleTransfer({{ class_name }} owner, IntPtr handle)
+        internal HandleTransfer({{ class_name }} owner, ulong handle)
         {
             _owner = owner;
             _transferredHandle = new {{ class_name }}SafeHandle(handle);
         }
 
-        internal IntPtr Handle => _transferredHandle?.DangerousGetHandle()
-            ?? throw new InvalidOperationException("Handle transfer is no longer active");
+        internal ulong Handle => _transferredHandle is { } transferredHandle
+            ? {{ class_name }}SafeHandle.Unpack(transferredHandle.DangerousGetHandle())
+            : throw new InvalidOperationException("Handle transfer is no longer active");
 
         internal void Commit()
         {
@@ -127,25 +140,25 @@ public sealed class {{ class_name }} : IDisposable
                 transferredHandle.Dispose();
                 return;
             }
-            var handle = transferredHandle.DangerousGetHandle();
+            var handle = {{ class_name }}SafeHandle.Unpack(transferredHandle.DangerousGetHandle());
             transferredHandle.SetHandleAsInvalid();
             owner.RollbackTransfer(handle);
         }
     }
 
-    internal {{ class_name }}(IntPtr handle)
+    internal {{ class_name }}(ulong handle)
     {
         _safeHandle = new {{ class_name }}SafeHandle(handle);
     }
 
-    internal IntPtr Handle => GetHandle();
+    internal ulong Handle => GetHandle();
 
-    private IntPtr GetHandle()
+    private ulong GetHandle()
     {
         lock (_handleLock)
         {
             ThrowIfHandleUnavailable();
-            return _safeHandle.DangerousGetHandle();
+            return {{ class_name }}SafeHandle.Unpack(_safeHandle.DangerousGetHandle());
         }
     }
 
@@ -154,7 +167,7 @@ public sealed class {{ class_name }} : IDisposable
         lock (_handleLock)
         {
             ThrowIfHandleUnavailable();
-            var lease = new HandleLease(this, _safeHandle.DangerousGetHandle());
+            var lease = new HandleLease(this, {{ class_name }}SafeHandle.Unpack(_safeHandle.DangerousGetHandle()));
             var addRefSucceeded = false;
             _safeHandle.DangerousAddRef(ref addRefSucceeded);
             if (!addRefSucceeded) throw new ObjectDisposedException(nameof({{ class_name }}));
@@ -179,7 +192,7 @@ public sealed class {{ class_name }} : IDisposable
         {
             ThrowIfHandleUnavailable();
             WaitForBorrowedCalls();
-            var transfer = new HandleTransfer(this, _safeHandle.DangerousGetHandle());
+            var transfer = new HandleTransfer(this, {{ class_name }}SafeHandle.Unpack(_safeHandle.DangerousGetHandle()));
             _handleUnavailable = true;
             _safeHandle.SetHandleAsInvalid();
             _transferPending = true;
@@ -187,7 +200,7 @@ public sealed class {{ class_name }} : IDisposable
         }
     }
 
-    private void RollbackTransfer(IntPtr handle)
+    private void RollbackTransfer(ulong handle)
     {
         lock (_handleLock)
         {

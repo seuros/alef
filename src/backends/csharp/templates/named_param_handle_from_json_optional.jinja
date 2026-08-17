@@ -1,13 +1,13 @@
-{{ indent }}IntPtr {{ handle_var }};
+{{ indent }}ulong {{ handle_var }};
 {{ indent }}if ({{ param_name }} == null)
 {{ indent }}{
-{{ indent }}    {{ handle_var }} = IntPtr.Zero;
+{{ indent }}    {{ handle_var }} = 0;
 {{ indent }}}
 {{ indent }}else
 {{ indent }}{
 {{ indent }}    var {{ json_var }} = JsonSerializer.Serialize({{ param_name }}, JsonSerializationOptions);
 {{ indent }}    {{ handle_var }} = NativeMethods.{{ from_json_method }}({{ json_var }});
-{{ indent }}    if ({{ handle_var }} == IntPtr.Zero)
+{{ indent }}    if ({{ handle_var }} == 0)
 {{ indent }}    {
 {{ indent }}        var ec = NativeMethods.LastErrorCode();
 {{ indent }}        var ctxPtr = NativeMethods.LastErrorContext();

@@ -158,7 +158,7 @@ internal static class Program {
     [DllImport("neutral_ffi", EntryPoint = "neutral_test_free_count")]
     private static extern int FreeCount();
     private static int Main() {
-        var original = new RouteBuilder(new IntPtr(41));
+        var original = new RouteBuilder(41UL);
         var replacement = original.WithCors();
         try
         {
@@ -176,8 +176,11 @@ internal static class Program {
 }"#;
     let native = r#"#include <stdint.h>
 static int32_t free_count = 0;
-void *neutral_route_builder_with_cors(void *handle) { return (void *)((uintptr_t)handle + 1); }
-void neutral_route_builder_free(void *handle) { if (handle) free_count += 1; }
+/* uint64_t, not void *: handles cross this ABI as scalar `AlefHandle` (alef:handle-abi:1),
+   and the generated P/Invoke declares `ulong`. Declaring the stub as a pointer only happens
+   to work because both occupy one register on 64-bit; it would misdeclare the contract. ~keep */
+uint64_t neutral_route_builder_with_cors(uint64_t handle) { return handle + 1; }
+void neutral_route_builder_free(uint64_t handle) { if (handle) free_count += 1; }
 int32_t neutral_last_error_code(void) { return 0; }
 const char *neutral_last_error_context(void) { return ""; }
 void neutral_free_string(char *ptr) { (void)ptr; }

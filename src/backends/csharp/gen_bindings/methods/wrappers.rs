@@ -2,7 +2,7 @@ use super::super::errors::{emit_return_marshalling_indented, emit_return_stateme
 use super::super::functions::{is_bytes_result_func, is_bytes_result_method};
 use super::super::{
     bytes_len_arg, emit_named_param_setup, emit_named_param_teardown, emit_named_param_teardown_indented,
-    is_bridge_param, native_call_arg, needs_param_teardown, returns_ptr,
+    is_bridge_param, native_call_arg, needs_param_teardown, returns_ptr, zero_sentinel,
 };
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::doc_emission;
@@ -340,7 +340,7 @@ pub(super) fn gen_wrapper_function(
             if matches!(func.return_type, TypeRef::Optional(_)) {
                 out.push_str(&render(
                     "null_result_return.jinja",
-                    minijinja::context! { indent => body_indent },
+                    minijinja::context! { indent => body_indent, zero => zero_sentinel(&func.return_type) },
                 ));
             } else {
                 out.push_str(&render(
@@ -441,7 +441,7 @@ pub(super) fn gen_wrapper_function(
             if matches!(func.return_type, TypeRef::Optional(_)) {
                 out.push_str(&render(
                     "null_result_return.jinja",
-                    minijinja::context! { indent => body_indent },
+                    minijinja::context! { indent => body_indent, zero => zero_sentinel(&func.return_type) },
                 ));
             } else {
                 out.push_str(&render(
@@ -562,7 +562,8 @@ pub(super) fn gen_wrapper_method(
 
     let has_receiver = !method.is_static && method.receiver.is_some();
     if has_receiver {
-        out.push_str("IntPtr handle");
+        // The receiver crosses the C ABI as `AlefHandle` (`uint64_t`), not a pointer. ~keep
+        out.push_str("ulong handle");
         if !visible_params.is_empty() {
             out.push_str(", ");
         }
@@ -715,14 +716,15 @@ pub(super) fn gen_wrapper_method(
         }
 
         if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
+            let zero = zero_sentinel(&method.return_type);
             if matches!(method.return_type, TypeRef::Optional(_)) {
-                out.push_str(
-                    "            if (nativeResult == IntPtr.Zero)\n            {\n                return null;\n            }\n",
-                );
+                out.push_str(&format!(
+                    "            if (nativeResult == {zero})\n            {{\n                return null;\n            }}\n",
+                ));
             } else {
-                out.push_str(
-                    "            if (nativeResult == IntPtr.Zero)\n            {\n                throw GetLastError();\n            }\n",
-                );
+                out.push_str(&format!(
+                    "            if (nativeResult == {zero})\n            {{\n                throw GetLastError();\n            }}\n",
+                ));
             }
         } else if method.error_type.is_some() {
             out.push_str(
@@ -783,14 +785,15 @@ pub(super) fn gen_wrapper_method(
         }
 
         if method.return_type != TypeRef::Unit && returns_ptr(&method.return_type) {
+            let zero = zero_sentinel(&method.return_type);
             if matches!(method.return_type, TypeRef::Optional(_)) {
-                out.push_str(
-                    "        if (nativeResult == IntPtr.Zero)\n        {\n            return null;\n        }\n",
-                );
+                out.push_str(&format!(
+                    "        if (nativeResult == {zero})\n        {{\n            return null;\n        }}\n",
+                ));
             } else {
-                out.push_str(
-                    "        if (nativeResult == IntPtr.Zero)\n        {\n            throw GetLastError();\n        }\n",
-                );
+                out.push_str(&format!(
+                    "        if (nativeResult == {zero})\n        {{\n            throw GetLastError();\n        }}\n",
+                ));
             }
         } else if method.error_type.is_some() {
             out.push_str(

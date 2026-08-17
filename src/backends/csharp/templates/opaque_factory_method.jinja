@@ -2,7 +2,7 @@
     public static {{ class_name }} Create({{ param_list }})
     {
         var handle = NativeMethods.{{ native_method }}({{ call_args }});
-        if (handle == IntPtr.Zero)
+        if (handle == 0)
         {
             var ec = NativeMethods.LastErrorCode();
             var ctxPtr = NativeMethods.LastErrorContext();
