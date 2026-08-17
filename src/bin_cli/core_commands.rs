@@ -935,12 +935,29 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
             }
 
+            // The `verify` half of the escalation `cache::untracked_required_records`
+            // documents: write commands warn and keep going, verification must refuse. The
+            // query is already silent outside a git work tree and for a record that does not
+            // exist yet, so this never fires where "untracked" is unanswerable, nor on the
+            // run that legitimately creates the record. ~keep
+            let untracked_records = cache::untracked_required_records(&base_dir);
+            if !untracked_records.is_empty() {
+                crate::bin_cli::output::line(
+                    "Required alef records are not tracked by git (alef writes these and depends on them \
+                     being committed):",
+                );
+                for record in &untracked_records {
+                    crate::bin_cli::output::line(format_args!("  {record} -- fix with: git add {record}"));
+                }
+            }
+
             if stale.is_empty()
                 && !has_missing_files
                 && !has_frozen_files
                 && !has_abi_disagreement
                 && !has_version_issues
                 && snippet_coverage_issues.is_empty()
+                && untracked_records.is_empty()
             {
                 crate::bin_cli::output::line("All bindings and versions are up to date.");
             } else {
@@ -989,6 +1006,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 snippet_coverage_issues.len(),
                 report_only,
             )?;
+            ensure_required_records_tracked(&untracked_records, report_only)?;
             Ok(None)
         }
         Commands::Diff { exit_code } => {
@@ -1025,5 +1043,127 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             Ok(None)
         }
         other => Ok(Some(other)),
+    }
+}
+
+/// Fail `alef verify` when a record alef requires to be committed exists on disk but git
+/// does not track it.
+///
+/// Kept separate from [`super::verify_outcome::ensure_success`] because the remedy is
+/// different in kind: nothing is stale, nothing regenerates it, a human has to `git add`
+/// the file -- so folding it into "generated bindings, versions, or snippet coverage are
+/// out of date" would name the wrong fix. The message therefore lists every offending
+/// record and the exact command, because the notice this replaces was ignored precisely
+/// for being unspecific and unactionable.
+///
+/// `report_only` short-circuits after the caller has already printed the records, matching
+/// how every other verify failure downgrades to a report. ~keep
+fn ensure_required_records_tracked(untracked: &[&'static str], report_only: bool) -> Result<()> {
+    if report_only || untracked.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "required alef records exist but git does not track them: {names}. Fix with `git add {names_spaced}` \
+         and commit them -- until then this verification passes only on the machine holding the uncommitted \
+         files, and a fresh clone or CI has neither the scaffold protection nor a correct orphan picture",
+        names = untracked.join(", "),
+        names_spaced = untracked.join(" "),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ensure_required_records_tracked;
+    use crate::cli::cache;
+    use std::path::Path;
+
+    /// `cache::OWNERSHIP_MANIFEST` is private to that module, so the name is spelled out
+    /// here; it is also the literal an operator has to type into `git add`, which is what
+    /// the assertions below are really about. ~keep
+    const OWNERSHIP_MANIFEST: &str = ".alef-ownership.toml";
+
+    fn init_git_work_tree(base_dir: &Path) -> Option<()> {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(base_dir)
+            .args(["init", "--quiet"])
+            .status()
+            .ok()?;
+        status.success().then_some(())
+    }
+
+    fn git_add(base_dir: &Path, relative: &str) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(base_dir)
+            .args(["add", "--", relative])
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add {relative} failed");
+    }
+
+    /// The load-bearing assertion is the *status* flipping from failure to success across a
+    /// single `git add`, driven end to end by real files and a real git index. Asserting
+    /// only on the message text would keep passing even if the run never failed at all --
+    /// which is exactly the "check that examines nothing" defect this whole fix exists to
+    /// correct, since the notice it replaces printed a true sentence and changed no
+    /// outcome. ~keep
+    #[test]
+    fn verify_fails_on_an_untracked_required_record_and_passes_once_it_is_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        if init_git_work_tree(base).is_none() {
+            return;
+        }
+        cache::record_scaffold_owned_path(base, &base.join("packages/node/package.json")).expect("record");
+
+        let error = ensure_required_records_tracked(&cache::untracked_required_records(base), false)
+            .expect_err("an untracked required record must fail verification, not merely print");
+        let message = error.to_string();
+        assert!(
+            message.contains(OWNERSHIP_MANIFEST),
+            "the failure must name the offending record, got: {message}"
+        );
+        assert!(
+            message.contains(&format!("git add {OWNERSHIP_MANIFEST}")),
+            "the failure must carry the exact remedy command, got: {message}"
+        );
+
+        git_add(base, OWNERSHIP_MANIFEST);
+
+        ensure_required_records_tracked(&cache::untracked_required_records(base), false)
+            .expect("staging the record must make verification pass");
+    }
+
+    /// Outside a git work tree tracked-ness is unanswerable, so verification must not
+    /// invent a failure there -- an export tarball or a git-less container would fail
+    /// forever with nothing the operator could do. ~keep
+    #[test]
+    fn verify_passes_outside_a_git_work_tree() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        cache::record_scaffold_owned_path(base, &base.join("packages/node/package.json")).expect("record");
+        assert!(base.join(OWNERSHIP_MANIFEST).is_file(), "sanity: the record exists");
+
+        ensure_required_records_tracked(&cache::untracked_required_records(base), false)
+            .expect("no repository to ask means no fault to report");
+    }
+
+    #[test]
+    fn report_only_downgrades_an_untracked_record_to_a_report() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        if init_git_work_tree(base).is_none() {
+            return;
+        }
+        cache::record_scaffold_owned_path(base, &base.join("packages/node/package.json")).expect("record");
+        let untracked = cache::untracked_required_records(base);
+        assert_eq!(
+            untracked,
+            vec![OWNERSHIP_MANIFEST],
+            "sanity: without this the report-only assertion below would examine nothing"
+        );
+
+        ensure_required_records_tracked(&untracked, true).expect("--report-only keeps a successful exit status");
     }
 }

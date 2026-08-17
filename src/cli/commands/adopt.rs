@@ -92,9 +92,9 @@ pub struct ManagedOutput {
     /// Sniffing would misclassify every `generated_header: true` path whose format
     /// cannot hold a marker (`.json`, `.jar`, `DESCRIPTION`) as a seed, when those are
     /// squarely on the regeneration rail and prove ownership through the committed
-    /// record instead. The one deliberate carve-out from the marker check is the
-    /// snippet-coverage ledger, which the marker check alone cannot distinguish from a
-    /// human-grown seed — see [`is_create_once_seed`]. ~keep
+    /// record instead. The one deliberate carve-out from the marker check is
+    /// [`crate::cli::cache::is_alef_derived_output`] — artifacts the marker check alone
+    /// cannot distinguish from a human-grown seed — see [`is_create_once_seed`]. ~keep
     pub create_once: bool,
 }
 
@@ -215,18 +215,23 @@ impl AdoptReport {
 /// subject to [`AdoptOptions::clobber_create_once_seeds`].
 ///
 /// [`crate::core::backend::GeneratedFile::carries_alef_marker`] answers this correctly
-/// for every ordinary generated path, but the snippet-coverage ledger
-/// (`e2e::snippets::COVERAGE_MANIFEST`) is strict JSON — it can never carry the marker —
-/// and is emitted with `generated_header: false` regardless, so the marker check alone
-/// misreads it as a human-grown seed. It is the opposite: pure derived output (a
-/// `generated_paths` array) that nothing but alef ever writes or reads.
-/// `is_snippet_coverage_manifest_path` is the same narrow, name-based ownership proof
-/// `write_scaffold_files_report`'s write-time guard already trusts for this exact file
-/// (see its doc for why a name match is sufficient there and not elsewhere); reusing it
-/// here instead of re-deriving a second exclusion keeps the two ownership checks from
-/// drifting apart. ~keep
+/// for every ordinary generated path, and it is the whole answer for a real seed: alef
+/// could have marked a `.zig` test stub and deliberately did not, so the missing marker
+/// *is* the protection.
+///
+/// It is the wrong answer for an artifact whose format cannot hold a marker at all.
+/// Such a file presents the identical signature — no marker, `generated_header: false`,
+/// no ownership record until alef's first authorised write establishes one — while
+/// meaning the exact opposite: there is no human-grown content to protect, and being
+/// replaced wholesale is the intended behaviour. The snippet-coverage ledger was the
+/// first such artifact and was answered here by its own file name, which meant this call
+/// site and `write_scaffold_files_report`'s guard each carried a copy of the exception —
+/// two places to keep in step, and nothing that generalises to the next unmarkable
+/// artifact. [`crate::cli::cache::is_alef_derived_output`] is the one named property both
+/// sides ask instead, and its doc carries the admission criteria a candidate has to
+/// satisfy before it is added. ~keep
 fn is_create_once_seed(file: &crate::core::backend::GeneratedFile) -> bool {
-    !file.carries_alef_marker() && !crate::e2e::snippets::is_snippet_coverage_manifest_path(&file.path)
+    !file.carries_alef_marker() && !crate::cli::cache::is_alef_derived_output(&file.path)
 }
 
 /// Apply the writer's own normalization and header logic to a generated-file set,

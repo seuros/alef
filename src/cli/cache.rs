@@ -509,7 +509,13 @@ pub fn record_scaffold_owned_paths(base_dir: &Path, paths: &[&Path]) -> anyhow::
             "created the alef ownership record: commit it, or a fresh clone cannot regenerate \
              the unmarkable files listed in it"
         );
+        // The record did not exist yet when the standing check last ran for this
+        // `base_dir`, so it correctly reported nothing. Re-arm it so the run that creates
+        // the file is also a run that says it is untracked -- the one moment the operator
+        // is unambiguously in a position to stage it. ~keep
+        rearm_untracked_record_notice(base_dir);
     }
+    note_untracked_required_records(base_dir);
     Ok(())
 }
 
@@ -525,11 +531,192 @@ pub fn record_scaffold_owned_paths(base_dir: &Path, paths: &[&Path]) -> anyhow::
 /// the path the answer is `false` and the write-time guard refuses rather than
 /// risk clobbering foreign content. ~keep
 pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
+    note_untracked_required_records(base_dir);
     let key = scaffold_owned_path_key(base_dir, path);
     read_committed_owned_paths(base_dir)
         .iter()
         .chain(read_legacy_owned_paths(base_dir).iter())
         .any(|existing| *existing == key)
+}
+
+/// The namespace alef reserves for its own bookkeeping artifacts, and the first of the
+/// two conditions [`is_alef_derived_output`] requires.
+///
+/// Already load-bearing elsewhere on exactly this meaning: `snippets::discovery` skips
+/// every `.alef-`-prefixed entry when it walks a snippet directory, because a file in
+/// this namespace is alef's own state and never documentation a consumer wrote. Naming
+/// it here makes that convention checkable rather than a per-site string literal. ~keep
+const ALEF_RESERVED_NAME_PREFIX: &str = ".alef-";
+
+/// File names that are **pure derived output**: every byte is recomputed from this run's
+/// inputs, nothing but alef writes them, and nothing but alef reads them.
+///
+/// A name earns a place here only by satisfying **all four** of these, verified against
+/// the emitter, not assumed from the extension:
+///
+/// 1. The format structurally cannot carry an `alef:hash:` marker (strict JSON has no
+///    comment syntax), so `write::marker_comment_style` is `None` for it and a missing
+///    marker is not evidence of foreign authorship.
+/// 2. The name sits in alef's reserved [`ALEF_RESERVED_NAME_PREFIX`] namespace, so no
+///    other tool defines a file by that name and a consumer has no reason to author one.
+/// 3. Alef is the only *reader* as well as the only writer. This is the condition that
+///    separates this list from `orphans::UNMARKABLE_ALEF_MANIFESTS`
+///    (`composer.json`, `package.json`): those are also unmarkable and also
+///    alef-generated, but a human edits them and a package manager reads them, so
+///    trusting their name alone would be a licence to clobber hand-written content.
+/// 4. The content has no state a human could have added. Regenerating it wholesale is
+///    not a loss of work, it is the *point* — the opposite of a create-once seed, whose
+///    whole premise is that the copy on disk has grown past the placeholder alef emitted.
+///
+/// The snippet-coverage ledger (`e2e::snippets::COVERAGE_MANIFEST`) is the founding
+/// member: a `generated_paths`/`generated_metadata` index of what the snippet stage
+/// emitted, consumed only by alef's own coverage checks. ~keep
+const ALEF_DERIVED_OUTPUT_NAMES: &[&str] = &[crate::e2e::snippets::COVERAGE_MANIFEST];
+
+/// The single named property "this is pure derived output alef must be free to replace".
+///
+/// Exists because a generated artifact that cannot carry a marker has, until it is
+/// answered, exactly the same signature as a hand-grown create-once seed: no marker, no
+/// ownership record, `generated_header: false`. Every mechanism that reads that signature
+/// — the write-time ownership guard, the write-time create-once skip, and
+/// `commands::adopt`'s create-once classifier — must therefore consult *this* property
+/// rather than each carving out its own exception, which is how the ledger came to be
+/// unblocked at the guard and still refused by adopt (see `adopt::is_create_once_seed`).
+///
+/// **What this deliberately does not do.** It is not an ownership record and it never
+/// widens one: [`is_scaffold_owned_path`] still answers only from what alef actually
+/// wrote or a human actually adopted, so nothing here can claim a path by coincidence.
+/// It is also not consulted by any *delete* gate — `orphans::path_is_reclaimable` keeps
+/// its own, narrower allowlist on purpose, because "alef may overwrite this with freshly
+/// computed content" and "alef may remove this file" are different licences and the
+/// second one is how a consumer's public API nearly went missing.
+///
+/// The [`ALEF_RESERVED_NAME_PREFIX`] conjunct is a structural backstop rather than a
+/// redundant test: it makes a mistaken future entry in [`ALEF_DERIVED_OUTPUT_NAMES`]
+/// inert instead of dangerous. Adding `composer.json` there would grant nothing, because
+/// no name a consumer's toolchain defines can live in alef's reserved namespace. ~keep
+pub fn is_alef_derived_output(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with(ALEF_RESERVED_NAME_PREFIX) && ALEF_DERIVED_OUTPUT_NAMES.contains(&name))
+}
+
+/// Every alef-authored record whose entire purpose depends on it being committed.
+///
+/// Both are provenance alef cannot re-derive from anything else: [`OWNERSHIP_MANIFEST`]
+/// is the only proof of authorship for a format that cannot carry a marker, and
+/// [`TOML_MERGE_PROVENANCE_MANIFEST`] is the only proof of which array values alef itself
+/// once proposed. Left out of the commit, each degrades in the *safe* direction — the
+/// guard refuses, the prune declines — which is precisely why the failure is silent: the
+/// run is green on the machine that holds the untracked file and refuses everything on a
+/// fresh clone or in CI, with no signal connecting the two. ~keep
+const REQUIRED_COMMITTED_RECORDS: &[&str] = &[OWNERSHIP_MANIFEST, TOML_MERGE_PROVENANCE_MANIFEST];
+
+/// Which of [`REQUIRED_COMMITTED_RECORDS`] exist on disk under `base_dir` but are not
+/// tracked by git.
+///
+/// A record that does not exist is not reported: alef has nothing to depend on yet, so
+/// there is no hidden dependency to warn about. `None` from [`git_tracks`] — no git, not
+/// a work tree, git failed — is likewise not reported: this must never cry wolf in an
+/// export tarball or a container without git, where "untracked" is meaningless rather
+/// than wrong.
+///
+/// Exposed as a pure query, separate from the logging in
+/// [`note_untracked_required_records`], so a command can escalate it. The recommended
+/// split: `alef all` warns (the operator can still `git add` and the run's output is
+/// genuinely correct on their disk), while `alef verify` should fail — a verification
+/// that passes only because of an uncommitted local file certifies a state no other
+/// checkout has, which is the same defect class as a check that examines nothing. ~keep
+pub fn untracked_required_records(base_dir: &Path) -> Vec<&'static str> {
+    REQUIRED_COMMITTED_RECORDS
+        .iter()
+        .filter(|record| base_dir.join(record).is_file() && git_tracks(base_dir, record) == Some(false))
+        .copied()
+        .collect()
+}
+
+/// Whether git tracks `relative` under `base_dir`; `None` when git cannot answer at all.
+///
+/// `--error-unmatch` is what makes the exit status meaningful: without it `git ls-files`
+/// exits 0 and prints nothing for an untracked path, which is indistinguishable from
+/// success. A non-zero exit therefore means "git ran and does not track this", and only a
+/// failure to spawn (or a repository git refuses to read) yields `None`. `git status`
+/// would answer the same question far more expensively and would also fold in staged and
+/// dirty state, which is not what is being asked here. ~keep
+fn git_tracks(base_dir: &Path, relative: &str) -> Option<bool> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(base_dir)
+        .args(["ls-files", "--error-unmatch", "--", relative])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        return Some(true);
+    }
+    // Distinguish "git ran and said no" from "there is no repository here to ask". Git
+    // reports the latter on stderr and exits non-zero for both, so the exit code alone
+    // would turn every non-repo invocation into a false alarm. ~keep
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("not a git repository") || stderr.contains("this operation must be run in a work tree") {
+        return None;
+    }
+    Some(false)
+}
+
+/// Base directories already reported on, so the `git` probe and the warning happen once
+/// per repository per process rather than once per path consulted.
+///
+/// A set rather than a `OnceLock`: the check is keyed on `base_dir`, and a single
+/// process legitimately visits several (a multi-crate workspace command, and every test
+/// in this module, each with its own tempdir). A `OnceLock` would answer for whichever
+/// directory happened to arrive first and stay silent for the rest. ~keep
+static REPORTED_RECORD_TRACKING: std::sync::Mutex<Option<std::collections::BTreeSet<PathBuf>>> =
+    std::sync::Mutex::new(None);
+
+/// Warn, at most once per `base_dir` per process, about every required record that exists
+/// but is untracked.
+///
+/// Called from the two places alef actually *depends* on such a record —
+/// [`is_scaffold_owned_path`] and [`record_scaffold_owned_paths`] — rather than only from
+/// the branch that creates it. That is the whole correction: the previous notice was a
+/// one-shot `INFO` on the single historical run that first wrote the file, so a repository
+/// that missed it once never heard about it again, and every subsequent green run was
+/// green because of a file no other checkout has. A standing condition has to be re-stated
+/// by every run that relies on it.
+///
+/// `WARN`, not `ERROR`: per this repo's level contract the run is degraded but correct on
+/// this disk, and the output it produced is real. Escalation to a hard failure belongs to
+/// `alef verify`, via [`untracked_required_records`]. ~keep
+fn note_untracked_required_records(base_dir: &Path) {
+    {
+        let mut reported = REPORTED_RECORD_TRACKING
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let seen = reported.get_or_insert_with(std::collections::BTreeSet::new);
+        if !seen.insert(base_dir.to_path_buf()) {
+            return;
+        }
+    }
+    for record in untracked_required_records(base_dir) {
+        tracing::warn!(
+            manifest = %record,
+            "alef depends on `{record}` but git does not track it: this run's writes succeeded only \
+             because of a file no other checkout has. Run `git add {record}` and commit it, or a \
+             fresh clone and CI will refuse to regenerate everything it vouches for"
+        );
+    }
+}
+
+/// Drop `base_dir` from the once-per-repo memo so the next
+/// [`note_untracked_required_records`] re-probes it. Only for the moment a required
+/// record comes into existence *after* the check already ran for this directory. ~keep
+fn rearm_untracked_record_notice(base_dir: &Path) {
+    let mut reported = REPORTED_RECORD_TRACKING
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(seen) = reported.as_mut() {
+        seen.remove(base_dir);
+    }
 }
 
 /// Repo-scoped (rooted at `base_dir`), COMMITTED record of the array
@@ -1232,6 +1419,162 @@ mod tests {
             foreign_exists,
             "a path alef never recorded owning must survive the sweep"
         );
+    }
+
+    /// The positive half: the snippet-coverage ledger is recognised as pure derived
+    /// output by the property itself, with no ownership record and no marker anywhere —
+    /// which is the state every consumer tree's ledger is actually in.
+    #[test]
+    fn is_alef_derived_output_recognises_the_snippet_coverage_ledger() {
+        assert!(is_alef_derived_output(Path::new(
+            "docs-site/src/snippets-generated/.alef-snippet-coverage.json"
+        )));
+        assert!(is_alef_derived_output(Path::new(
+            crate::e2e::snippets::COVERAGE_MANIFEST
+        )));
+    }
+
+    /// THE load-bearing half. A fix that simply answered `true` for every unmarkable
+    /// `generated_header: false` path would satisfy the ledger assertion above on its own
+    /// while handing alef a licence to overwrite `composer.json`, `package.json`, a zig
+    /// test suite and every other create-once seed — the `e2e/go/helpers_test.go`
+    /// incident, re-opened. Each name below is a real generated, unmarkable or
+    /// create-once path that a human legitimately grows past alef's placeholder, and none
+    /// of them may ever be classified as derived output. ~keep
+    #[test]
+    fn is_alef_derived_output_refuses_every_hand_growable_generated_path() {
+        for hand_growable in [
+            "packages/php/composer.json",
+            "packages/node/package.json",
+            "packages/java/pom.xml",
+            "packages/zig/build.zig",
+            "packages/zig/test/sample_core_test.zig",
+            "packages/dart/test/sample_core_test.dart",
+            "e2e/go/helpers_test.go",
+        ] {
+            assert!(
+                !is_alef_derived_output(Path::new(hand_growable)),
+                "{hand_growable} is content a human grows: it must never be classified as derived output"
+            );
+        }
+    }
+
+    /// The reserved-namespace conjunct is a backstop, not decoration: it is what makes a
+    /// mistaken future entry in `ALEF_DERIVED_OUTPUT_NAMES` inert rather than a licence to
+    /// clobber. Pinned by construction so the guard cannot be dropped as redundant. ~keep
+    #[test]
+    fn is_alef_derived_output_requires_the_reserved_namespace_not_only_list_membership() {
+        for name in ALEF_DERIVED_OUTPUT_NAMES {
+            assert!(
+                name.starts_with(ALEF_RESERVED_NAME_PREFIX),
+                "{name} is registered as derived output but sits outside alef's reserved namespace, \
+                 so the backstop silently disables it"
+            );
+        }
+        assert!(
+            !is_alef_derived_output(Path::new("docs/snippets/.alef-snippet-coverage.json.bak")),
+            "a name that merely contains the ledger's name must not match"
+        );
+        assert!(
+            !is_alef_derived_output(Path::new("docs/snippets/.alef-unregistered-state.json")),
+            "the reserved prefix alone is not enough: membership in the registry is still required"
+        );
+    }
+
+    /// Initialise a git work tree in `base_dir`, or `None` when git is unavailable.
+    ///
+    /// No identity is configured because nothing here commits: `git ls-files
+    /// --error-unmatch` answers from the index, so `git add` alone is enough to make a
+    /// path tracked for the purpose under test. ~keep
+    fn init_git_work_tree(base_dir: &Path) -> Option<()> {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(base_dir)
+            .args(["init", "--quiet"])
+            .status()
+            .ok()?;
+        status.success().then_some(())
+    }
+
+    fn git_add(base_dir: &Path, relative: &str) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(base_dir)
+            .args(["add", "--", relative])
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add {relative} failed");
+    }
+
+    /// THE new regression: alef writes `.alef-ownership.toml`, depends on it for every
+    /// unmarkable file it is allowed to rewrite, tells the reader inside the file to commit
+    /// it -- and never once notices that nobody did. A run is then green only because of a
+    /// file no other checkout has, and a fresh clone or CI refuses everything the record
+    /// vouches for. The condition has to be observable from outside alef, which is what this
+    /// query is for. ~keep
+    #[test]
+    fn untracked_required_records_reports_a_record_git_does_not_track() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        if init_git_work_tree(base).is_none() {
+            return;
+        }
+        record_scaffold_owned_path(base, &base.join("packages/node/package.json")).expect("record");
+
+        assert_eq!(
+            untracked_required_records(base),
+            vec![OWNERSHIP_MANIFEST],
+            "a record alef just created and now depends on must be reported as untracked"
+        );
+    }
+
+    /// The other half: once the operator stages it, the condition is gone and must stop
+    /// being reported. A check that fires unconditionally is a check nobody reads, which is
+    /// how the original one-shot notice failed in the first place. ~keep
+    #[test]
+    fn untracked_required_records_is_silent_once_the_record_is_staged() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        if init_git_work_tree(base).is_none() {
+            return;
+        }
+        record_scaffold_owned_path(base, &base.join("packages/node/package.json")).expect("record");
+        git_add(base, OWNERSHIP_MANIFEST);
+
+        assert!(
+            untracked_required_records(base).is_empty(),
+            "a staged record is tracked; reporting it anyway trains the operator to ignore the warning"
+        );
+    }
+
+    /// Never cry wolf. Outside a git work tree "untracked" is not a defect, it is a
+    /// question with no answer -- an export tarball, a vendored copy, a container with no
+    /// git. Reporting there would fire on every such run forever with nothing the operator
+    /// could do about it. ~keep
+    #[test]
+    fn untracked_required_records_is_silent_outside_a_git_work_tree() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        record_scaffold_owned_path(base, &base.join("packages/node/package.json")).expect("record");
+        assert!(base.join(OWNERSHIP_MANIFEST).is_file(), "sanity: the record exists");
+
+        assert!(
+            untracked_required_records(base).is_empty(),
+            "with no repository to ask, tracked-ness is unanswerable and must not be reported as a fault"
+        );
+    }
+
+    /// A record alef has never had reason to write is not a hidden dependency, so an empty
+    /// repository must stay quiet. ~keep
+    #[test]
+    fn untracked_required_records_ignores_a_record_that_does_not_exist_yet() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        if init_git_work_tree(base).is_none() {
+            return;
+        }
+
+        assert!(untracked_required_records(base).is_empty());
     }
 
     #[test]

@@ -728,6 +728,67 @@ fn the_snippet_coverage_ledger_is_not_a_create_once_seed() {
     );
 }
 
+/// THE load-bearing negative control, and the one the zig test below cannot stand in for.
+///
+/// A fix that unblocked the ledger by answering "anything unmarkable is derived output"
+/// would pass `the_snippet_coverage_ledger_is_not_a_create_once_seed` on its own, and
+/// pass the zig case too — `.zig` is a markable extension, so it is protected by the
+/// marker rail whatever the derived-output property says, which makes it no evidence at
+/// all about this axis. `composer.json` is the file that actually distinguishes the two
+/// fixes: strict JSON, structurally unmarkable, emitted `generated_header: false`, and
+/// squarely a file a human edits. It must stay create-once. ~keep
+#[test]
+fn an_unmarkable_hand_editable_seed_stays_a_create_once_seed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outputs = managed(
+        "packages/php/composer.json",
+        "{\n  \"name\": \"vendor/generated\"\n}\n",
+        false,
+        dir.path(),
+    );
+
+    assert!(
+        outputs[0].create_once,
+        "an unmarkable file outside alef's derived-output registry is still a seed: widening the \
+         property to every unmarkable path is a licence to clobber hand-written manifests"
+    );
+}
+
+/// The same protection at the command level rather than the classifier level: a plain
+/// `alef adopt --write` on an unmarkable hand-editable seed must still refuse, name the
+/// path, and point at `--clobber-create-once-seeds` — the behaviour that stops a repo-wide
+/// glob from arming a later `alef version` bump to replace real content with a placeholder.
+/// Asserting only the classifier would not catch a `run` that stopped honouring it. ~keep
+#[test]
+fn adopt_still_refuses_an_unmarkable_hand_editable_seed_under_a_plain_write() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let hand_written = "{\n  \"name\": \"vendor/hand-written\",\n  \"require\": {\"ext-json\": \"*\"}\n}\n";
+    let target = seed(base, "packages/php/composer.json", hand_written);
+    let outputs = managed(
+        "packages/php/composer.json",
+        "{\n  \"name\": \"vendor/generated\"\n}\n",
+        false,
+        base,
+    );
+
+    let error = run(&options(base, "packages/php/composer.json", true), &outputs).expect_err("must refuse");
+
+    assert!(
+        error.to_string().contains("--clobber-create-once-seeds"),
+        "the refusal must point at the deliberate opt-in, got: {error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("read after"),
+        hand_written,
+        "a refused seed's bytes must be untouched"
+    );
+    assert!(
+        !crate::cli::cache::is_scaffold_owned_path(base, &target),
+        "and no ownership claim may be recorded for it either"
+    );
+}
+
 /// NEGATIVE CONTROL: the ledger exclusion must be scoped to its own name, not widen the
 /// create-once guard in general. An ordinary `generated_header: false` seed (the zig
 /// test placeholder from `mixed_rail_fixture`) must still classify as create-once. ~keep
