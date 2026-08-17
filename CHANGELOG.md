@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading "default: 0.3". Still conflated: a field initializer that cannot be read *inside* an otherwise-readable
   struct literal, which remains `Empty`.
 
+### Changed
+
+- **`exclude_functions` is now actually enforced** — and for some consumers this removes symbols at upgrade with no
+  other warning. The key has been honoured inconsistently: a downstream repo declared four exclusions in July and
+  three subsequent regenerations on 0.60.x emitted the functions anyway. This release closes that gap across Go
+  (`func` declarations), Java/Panama (methods, both `MethodHandle` downcalls, and the symbol-lookup and
+  not-found-message entries) and Ruby (`.rbs` signatures). If your `exclude_functions` was silently a no-op, the
+  named functions disappear from the generated surface on the next regeneration. That is the configured behaviour,
+  but it arrives as a breaking change to the emitted API. **Why it hid for a month**: where a C ABI exposes only
+  the async variant of a function, the async pair is the *only* observable test of the exclusion, so entries naming
+  a non-existent sync symbol are unfalsifiable.
+- **Generated binding crates now always carry a `[lints.clippy]` deny block** (`dbg_macro`, `print_stderr`,
+  `print_stdout`), instead of emitting one only when a consumer declared `[crates.cargo_lints.clippy]`. Binding
+  manifests are `generated_header: true` and therefore rewritten in full on every run, so an opt-in block that a
+  consumer had hand-added into the `DO NOT EDIT` manifest was deleted on each regeneration — silently removing the
+  logging enforcement the block existed to apply. A consumer-configured value for any of these keys still wins, so
+  a crate with a real reason to relax one can. No alef template emits `println!`/`eprintln!`/`dbg!` outside
+  `build.rs`, whose `cargo:` directives are natively exempt.
+
 ### Fixed
 
 - **csharp**: keep every vtable slot the Rust struct declares. C# carried the same unguarded `exclude_types` prune
