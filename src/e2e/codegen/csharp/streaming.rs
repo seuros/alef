@@ -354,8 +354,12 @@ pub(super) fn render_streaming_test_method(
         if is_chat_stream {
             emit_chat_stream_assertion(&mut body, assertion);
         } else {
-            // For non-chat streams, emit skipped assertions for fields not in result_fields
-            emit_non_chat_stream_assertion(&mut body, assertion, &call_config.result_fields);
+            // Must be the EFFECTIVE set, not the per-call one. A per-call list REPLACES the global
+            // rather than merging, so a crate configuring only `[crates.e2e].result_fields` leaves
+            // `call_config.result_fields` empty -- and an empty set gates every field out, silently
+            // degrading every assertion here to a skip comment while the suite still reports green.
+            // This was the only assertion-gating site in e2e codegen reading the raw per-call set. ~keep
+            emit_non_chat_stream_assertion(&mut body, assertion, e2e_config.effective_result_fields(call_config));
         }
     }
     if !had_explicit_complete {
