@@ -54,6 +54,18 @@ pub fn generate_docs(
     let ffi_prefix = &config.ffi_prefix().to_pascal_case();
 
     for &lang in languages {
+        // `Language::C` is an e2e consumer target, not a generated binding, and
+        // `Language::Jni` is an internal Rust shim crate paired with `kotlin_android`
+        // (see the `Language` variant docs in core/config/extras.rs) -- neither owns a
+        // public API reference page of its own. `readme::generate_readme` already skips
+        // both for the same reason. Both slug to `"c"` in `naming::lang_slug`, so
+        // rendering a page for them here raced `Language::Ffi` -- the actual generated C
+        // binding -- for `api-c.md`, and for `Jni` specifically the content was never
+        // even the right ABI to begin with (see the long comment on
+        // `examples::sample_param_value`'s Jni arm). ~keep
+        if matches!(lang, Language::C | Language::Jni) {
+            continue;
+        }
         files.push(language_pages::generate_lang_doc(
             api, config, lang, output_dir, ffi_prefix,
         )?);

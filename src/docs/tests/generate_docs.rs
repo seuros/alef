@@ -138,6 +138,81 @@ fn test_generate_docs_produces_one_file_per_language_plus_three_shared() {
     assert!(paths.iter().any(|p| p.contains("errors")));
 }
 
+/// `Language::Ffi` and `Language::Jni` both slug to `"c"` (`naming::lang_slug`), and their
+/// content genuinely diverges -- `Jni` is an internal shim crate paired with `kotlin_android`,
+/// not a real C ABI (see the long comment on `examples::sample_param_value`'s Jni arm), so its
+/// render arms skip the FFI-specific "int32_t status code" return phrasing and the "C
+/// representation" handle note. Before `generate_docs` learned to skip `Language::Jni` (mirroring
+/// `readme::generate_readme`'s existing `Language::C | Language::Jni` skip),
+/// `languages = ["ffi", "jni", "kotlin_android"]` -- a legal combination liter-llm's alef.toml
+/// configures for real -- produced two `GeneratedFile`s at `api-c.md` with different content,
+/// which `write_scaffold_files_report` correctly refused to write rather than pick a winner.
+/// Only `Ffi` may own that path. ~keep
+#[test]
+fn test_generate_docs_jni_does_not_duplicate_the_c_reference_page() {
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["ffi", "jni", "kotlin_android"]
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#,
+    );
+    let mut api = make_minimal_api("1.0.0");
+    api.functions = vec![make_function(
+        "connect",
+        vec![],
+        TypeRef::Unit,
+        false,
+        Some("ConnectError"),
+    )];
+    api.types = vec![empty_type("Config")];
+
+    let files = generate_docs(
+        &api,
+        &config,
+        &[Language::Ffi, Language::Jni, Language::KotlinAndroid],
+        "out",
+    )
+    .unwrap();
+
+    let c_pages: Vec<_> = files
+        .iter()
+        .filter(|f| f.path.to_str().unwrap().contains("api-c"))
+        .collect();
+    assert_eq!(
+        c_pages.len(),
+        1,
+        "exactly one generator must claim api-c.md, got paths: {:?}",
+        c_pages.iter().map(|f| f.path.clone()).collect::<Vec<_>>()
+    );
+    assert!(
+        c_pages[0]
+            .content
+            .contains("`int32_t` status code -- `0` on success, `-1` on error"),
+        "api-c.md must render the Ffi/C ABI, not the Jni one:\n{}",
+        c_pages[0].content
+    );
+    assert!(
+        c_pages[0].content.contains("**C representation:**"),
+        "api-c.md must carry the FFI handle note:\n{}",
+        c_pages[0].content
+    );
+
+    assert!(
+        files
+            .iter()
+            .any(|f| f.path.to_str().unwrap().contains("api-kotlin-android")),
+        "kotlin_android must still get its own reference page"
+    );
+    assert!(
+        !files.iter().any(|f| f.path.to_str().unwrap().contains("api-jni")),
+        "jni must not render an independent reference page"
+    );
+}
+
 #[test]
 fn test_generate_docs_all_output_files_end_with_newline() {
     let api = make_minimal_api("0.1.0");
