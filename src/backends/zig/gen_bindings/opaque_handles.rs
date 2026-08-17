@@ -278,4 +278,55 @@ mod tests {
         // fails, the fix above is over-wrapping and the negative assertion is vacuous.
         assert!(output.contains("if (handle == 0) return;"), "{output}");
     }
+
+    /// Regression test for the reported defect: a method with no declared Rust error type,
+    /// returning a bare opaque handle (`Tree.root_node() -> Node`, `TreeCursor.node() -> Node`,
+    /// `Node.walk() -> TreeCursor`, `Tree.walk() -> TreeCursor`), must declare `OutOfMemory`
+    /// alongside `HandleClosed` -- the body unconditionally emits
+    /// `if (_result == 0) return error.OutOfMemory;` for this shape (see
+    /// `opaque_handles::returns::method_unwrap_return_expr`'s bare-`Named` arm) regardless of
+    /// whether a Rust error type was declared. This must fail against the pre-fix emitter, which
+    /// declared only `error{HandleClosed}!NodeHandle` -- a set the body's own
+    /// `error.OutOfMemory` cannot type-check against. ~keep
+    #[test]
+    fn infallible_handle_return_declares_out_of_memory_alongside_handle_closed() {
+        let ty = TypeDef {
+            name: "TreeHandle".to_owned(),
+            rust_path: "sample::TreeHandle".to_owned(),
+            is_opaque: true,
+            methods: vec![MethodDef {
+                name: "root_node".to_owned(),
+                is_static: false,
+                return_type: TypeRef::Named("NodeHandle".to_owned()),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        };
+        let mut output = String::new();
+
+        emit_opaque_handle(
+            &ty,
+            "sample",
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &mut output,
+        );
+
+        assert!(
+            output.contains("error{OutOfMemory,HandleClosed}!NodeHandle"),
+            "a handle-returning method with no declared Rust error must still declare \
+             OutOfMemory alongside HandleClosed, matching its body's unconditional \
+             `error.OutOfMemory`. Got:\n{output}"
+        );
+        assert!(
+            output.contains("if (_result == 0) return error.OutOfMemory;"),
+            "Got:\n{output}"
+        );
+        assert!(
+            !output.contains("error{HandleClosed}!NodeHandle"),
+            "must not regress to the pre-fix HandleClosed-only declared set. Got:\n{output}"
+        );
+    }
 }

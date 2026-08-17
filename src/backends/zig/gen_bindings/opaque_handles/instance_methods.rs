@@ -1,5 +1,7 @@
 use crate::backends::zig::gen_bindings::errors::resolve_zig_error_type;
-use crate::backends::zig::gen_bindings::functions::{return_uses_bytes_out_params, zig_return_type};
+use crate::backends::zig::gen_bindings::functions::{
+    assert_error_set_covers_body, return_conversion_needs_out_of_memory, return_uses_bytes_out_params, zig_return_type,
+};
 use crate::backends::zig::gen_bindings::helpers::emit_cleaned_zig_doc;
 use crate::core::ir::{MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 use heck::AsSnakeCase;
@@ -53,6 +55,7 @@ pub(super) fn emit_opaque_method(
         .as_ref()
         .map(|e| resolve_zig_error_type(e, declared_errors));
     let return_ty = method_return_type(method, effective_params, struct_names, zig_error_type.as_ref());
+    let emit_start = out.len();
 
     out.push_str(&render(
         "opaque_method_signature.jinja",
@@ -100,6 +103,7 @@ pub(super) fn emit_opaque_method(
     );
 
     out.push_str("    }\n");
+    assert_error_set_covers_body(&method.name, &return_ty, &out[emit_start..], declared_errors);
 }
 
 /// Emit a `free()` method that releases the underlying FFI handle by calling
@@ -149,6 +153,12 @@ fn method_params_signature(
     param_parts.join(", ")
 }
 
+/// The declared error union for a method wrapper. `body_needs_try` must classify a return
+/// shape as fallible whenever `method_unwrap_return_expr` (`opaque_handles/returns.rs`) emits
+/// a `try`/`error.OutOfMemory` for it -- see `return_conversion_needs_out_of_memory`, the
+/// shared predicate both this function and the free-function equivalent
+/// (`functions::wrapper_return_type`) consult, so the two can't independently decide a shape
+/// is infallible while the body it emits performs exactly that check. ~keep
 fn method_return_type(
     method: &MethodDef,
     params: &[ParamDef],
@@ -156,18 +166,8 @@ fn method_return_type(
     zig_error_type: Option<&String>,
 ) -> String {
     let body_needs_try = params.iter().any(method_param_needs_alloc)
-        || matches!(
-            &method.return_type,
-            TypeRef::String
-                | TypeRef::Char
-                | TypeRef::Path
-                | TypeRef::Json
-                | TypeRef::Bytes
-                | TypeRef::Vec(_)
-                | TypeRef::Map(_, _)
-        )
-        || return_uses_bytes_out_params(&method.return_type)
-        || matches!(&method.return_type, TypeRef::Named(name) if struct_names.contains(name));
+        || return_conversion_needs_out_of_memory(&method.return_type, struct_names)
+        || return_uses_bytes_out_params(&method.return_type);
     let body_needs_invalid_json = params.iter().any(|p| method_param_needs_from_json(p, struct_names));
 
     let ret_ty_inner = zig_return_type(&method.return_type, struct_names);
@@ -374,6 +374,69 @@ mod tests {
             return_ty.contains("OutOfMemory"),
             "Char return must need OutOfMemory in the error set. Got: {return_ty}"
         );
+        assert_eq!(return_ty, "error{OutOfMemory,HandleClosed}![]u8");
+    }
+
+    /// Regression test for the exact defect reported against `Tree.root_node` /
+    /// `TreeCursor.node` / `Tree.walk` / `TreeCursor.walk`: an infallible method (no declared
+    /// Rust error, no allocating params) returning a bare opaque handle (a `Named` type that
+    /// is not a `has_serde` struct) must still declare `OutOfMemory`, because
+    /// `method_unwrap_return_expr`'s bare-`Named` arm (`opaque_handles/returns.rs`)
+    /// unconditionally emits `if (_result == 0) return error.OutOfMemory;` for this shape.
+    /// Before the `return_conversion_needs_out_of_memory` fix, this fell through to the
+    /// `error{HandleClosed}!Node` fallback branch — a declared set the body's own
+    /// `error.OutOfMemory` cannot satisfy, which is exactly the reported Zig compile error
+    /// (`error.OutOfMemory' not a member of destination error set`). This test must fail
+    /// against the pre-fix emitter. ~keep
+    #[test]
+    fn method_return_type_includes_out_of_memory_for_bare_opaque_handle_return() {
+        let method = MethodDef {
+            name: "root_node".to_string(),
+            return_type: TypeRef::Named("Node".to_string()),
+            ..MethodDef::default()
+        };
+
+        let return_ty = method_return_type(&method, &[], &HashSet::new(), None);
+
+        assert_eq!(
+            return_ty, "error{OutOfMemory,HandleClosed}!Node",
+            "a bare opaque-handle return must declare OutOfMemory alongside HandleClosed. Got: {return_ty}"
+        );
+    }
+
+    /// Positive control: a `has_serde` struct return (JSON round-trip via `struct_names`) was
+    /// already correct before the fix and must stay unaffected by folding its case into
+    /// `return_conversion_needs_out_of_memory`.
+    #[test]
+    fn method_return_type_unchanged_for_serde_struct_return() {
+        let method = MethodDef {
+            name: "to_config".to_string(),
+            return_type: TypeRef::Named("DocumentHandle".to_string()),
+            ..MethodDef::default()
+        };
+
+        let return_ty = method_return_type(&method, &[], &HashSet::from(["DocumentHandle".to_string()]), None);
+
+        // `[]u8`, not `DocumentHandle`: membership in `struct_names` IS the JSON-round-trip shape,
+        // so the method hands back serialized bytes rather than the named type. Asserting the type
+        // name here would pin the opposite of what `struct_names` selects. ~keep
+        assert_eq!(return_ty, "error{OutOfMemory,HandleClosed}![]u8");
+    }
+
+    /// Positive control: the already-correct slice-returning shape (`String`) must keep
+    /// producing exactly the same declared set after the fix, proving the shared predicate
+    /// did not regress the case it replaced. Mirrors
+    /// `method_return_type_includes_out_of_memory_for_infallible_char_return` above.
+    #[test]
+    fn method_return_type_unchanged_for_string_return() {
+        let method = MethodDef {
+            name: "status".to_string(),
+            return_type: TypeRef::String,
+            ..MethodDef::default()
+        };
+
+        let return_ty = method_return_type(&method, &[], &HashSet::new(), None);
+
         assert_eq!(return_ty, "error{OutOfMemory,HandleClosed}![]u8");
     }
 }

@@ -151,6 +151,7 @@ pub(crate) fn emit_function(
         .map(|e| resolve_zig_error_type(e, declared_errors));
 
     let return_ty = wrapper_return_type(f, declared_errors, struct_names, opaque_creator_map);
+    let emit_start = out.len();
 
     out.push_str(&crate::backends::zig::template_env::render(
         "function_signature.jinja",
@@ -350,6 +351,7 @@ pub(crate) fn emit_function(
     }
 
     out.push_str("}\n");
+    assert_error_set_covers_body(&f.name, &return_ty, &out[emit_start..], declared_errors);
 }
 
 /// Emit a Zig wrapper for a function returning a host-native capsule (Language) type.
@@ -489,18 +491,8 @@ pub(crate) fn wrapper_return_type(
         .map(|e| resolve_zig_error_type(e, declared_errors));
 
     let body_needs_try = f.params.iter().any(needs_alloc_param)
-        || matches!(
-            &f.return_type,
-            TypeRef::String
-                | TypeRef::Char
-                | TypeRef::Path
-                | TypeRef::Json
-                | TypeRef::Bytes
-                | TypeRef::Vec(_)
-                | TypeRef::Map(_, _)
-        )
-        || return_uses_bytes_out_params(&f.return_type)
-        || matches!(&f.return_type, TypeRef::Named(name) if struct_names.contains(name));
+        || return_conversion_needs_out_of_memory(&f.return_type, struct_names)
+        || return_uses_bytes_out_params(&f.return_type);
     let body_needs_invalid_json = f
         .params
         .iter()
@@ -733,6 +725,98 @@ pub(crate) fn return_uses_len_companion(ty: &TypeRef) -> bool {
             TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _)
         ),
         _ => false,
+    }
+}
+
+/// Returns true if converting a raw C return value of type `ty` into the Zig wrapper's
+/// return type requires the body to fall back to `error.OutOfMemory` -- either a
+/// caller-owned allocation (`try std.heap.c_allocator.dupe`, which Zig infers as
+/// `error{OutOfMemory}` regardless of what the declared signature says) or a zero/null
+/// opaque-handle check that the body maps onto `error.OutOfMemory` by hand.
+///
+/// This is the single place `wrapper_return_type` (this module) and `method_return_type`
+/// (`opaque_handles/instance_methods.rs`) query to decide whether the declared return type
+/// must carry `OutOfMemory` -- both signature computations call it instead of each
+/// re-deriving its own list of "shapes that need `try`", which is what let a handle-return
+/// method (`Node`, `TreeCursor`, ...) declare `error{HandleClosed}!Node` while its body,
+/// emitted by `unwrap_return_expr`/`method_unwrap_return_expr`, unconditionally returns
+/// `error.OutOfMemory` for exactly that shape.
+///
+/// A direct (non-`Optional`) `Named` return always needs it: both the JSON round-trip taken
+/// by a `has_serde` struct and the null-handle check taken by a bare opaque handle perform a
+/// fallible operation the body cannot avoid. An `Optional<Named>` bare-handle return is the
+/// one exception -- it degrades a zero handle straight to Zig `null` with no `try` and no
+/// error literal, so it must stay excluded or every method returning `?Node`-shaped values
+/// would gain an error union its body never uses. ~keep
+pub(crate) fn return_conversion_needs_out_of_memory(
+    ty: &TypeRef,
+    struct_names: &std::collections::HashSet<String>,
+) -> bool {
+    match ty {
+        TypeRef::String
+        | TypeRef::Char
+        | TypeRef::Path
+        | TypeRef::Json
+        | TypeRef::Bytes
+        | TypeRef::Vec(_)
+        | TypeRef::Map(_, _)
+        | TypeRef::Named(_) => true,
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Vec(_) | TypeRef::Map(_, _) => {
+                true
+            }
+            TypeRef::Named(name) => struct_names.contains(name),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Collect every distinct `error.<Variant>` literal a generated function body returns.
+fn body_error_literals(body: &str) -> std::collections::HashSet<String> {
+    const NEEDLE: &str = "error.";
+    let mut found = std::collections::HashSet::new();
+    let mut search_from = 0usize;
+    while let Some(offset) = body[search_from..].find(NEEDLE) {
+        let start = search_from + offset + NEEDLE.len();
+        let end = body[start..]
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map_or(body.len(), |rel| start + rel);
+        found.insert(body[start..end].to_string());
+        search_from = end.max(start + 1);
+    }
+    found
+}
+
+/// Verify the mechanical invariant this module exists to enforce: every `error.<Variant>` the
+/// emitted body can return must be admitted by the function's declared error set. A violation
+/// means the emitted Zig cannot compile -- provably broken output, not a style question -- so
+/// this panics rather than warning, mirroring `template_env::render`'s panic on a template that
+/// fails to exist or render (an emitter-internal invariant, as opposed to a user-fixable config
+/// gap like a missing capsule `host_type`, which instead gets an inline `// ALEF ERROR:`
+/// comment because the user, not the emitter, can act on it).
+///
+/// `declared_errors` lets a custom Rust-declared error type satisfy `OutOfMemory`/
+/// `UnknownFfiError` by name: `errors::emit_error_set` guarantees every declared set carries
+/// both even when `return_ty`'s text is just the bare type name and doesn't spell them out. ~keep
+pub(crate) fn assert_error_set_covers_body(context: &str, return_ty: &str, body: &str, declared_errors: &[String]) {
+    // `anyerror` is Zig's universal error set: it admits every error by construction, so a
+    // containment check against the declared text is meaningless there and would panic on output
+    // that compiles fine. Checked before anything else because this invariant hard-fails -- an
+    // over-strict check on legitimate output is worse than the divergence it hunts. ~keep
+    if return_ty.contains("anyerror") {
+        return;
+    }
+    let custom_error_declared = declared_errors.iter().any(|name| return_ty.contains(name.as_str()));
+    for token in body_error_literals(body) {
+        let admitted = return_ty.contains(&token)
+            || (custom_error_declared && matches!(token.as_str(), "OutOfMemory" | "UnknownFfiError"));
+        assert!(
+            admitted,
+            "zig codegen invariant violated for `{context}`: body returns `error.{token}` but \
+             declared return type `{return_ty}` does not admit it -- the declared error set and \
+             the emitted body's `return error.X` sites have diverged."
+        );
     }
 }
 
@@ -1289,6 +1373,126 @@ mod tests {
         assert!(
             out.contains("    const _owned = try std.heap.c_allocator.dupe(u8, _out_ptr[0.._out_len]);\n"),
             "bare Bytes must keep its owned copy. Got:\n{out}"
+        );
+    }
+
+    /// Regression test: a bare opaque-handle return (`Named` not in `struct_names`, e.g. a
+    /// tree-sitter `Node`) makes `unwrap_return_expr` unconditionally emit
+    /// `if (_result == 0) return error.OutOfMemory;` -- so the declared set must carry
+    /// `OutOfMemory` even with no declared Rust error type and no allocating params. This must
+    /// fail against the pre-fix emitter, whose `body_needs_try` matched only slice-like and
+    /// JSON-struct returns and fell through to a bare, error-less return type here. ~keep
+    #[test]
+    fn return_conversion_needs_out_of_memory_includes_bare_opaque_handle_return() {
+        assert!(return_conversion_needs_out_of_memory(
+            &TypeRef::Named("NodeHandle".to_string()),
+            &std::collections::HashSet::new()
+        ));
+    }
+
+    /// Positive control: `Optional<Named>` for a bare handle degrades straight to Zig `null`
+    /// (see `unwrap_return_expr`'s `Optional` arm) with no `try` and no `error.OutOfMemory`, so
+    /// it must NOT be classified as needing `OutOfMemory`. Without this, the assertion above
+    /// would pass for a fix that marked every `Named` shape (optional or not) as fallible.
+    #[test]
+    fn return_conversion_needs_out_of_memory_excludes_optional_bare_handle_return() {
+        assert!(!return_conversion_needs_out_of_memory(
+            &TypeRef::Optional(Box::new(TypeRef::Named("NodeHandle".to_string()))),
+            &std::collections::HashSet::new()
+        ));
+    }
+
+    fn handle_return_fn() -> FunctionDef {
+        FunctionDef {
+            name: "root_node".to_string(),
+            rust_path: "sample::root_node".to_string(),
+            original_rust_path: String::new(),
+            params: vec![],
+            return_type: TypeRef::Named("NodeHandle".to_string()),
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// End-to-end regression: the free-function wrapper for a bare opaque-handle return with no
+    /// declared Rust error must declare `OutOfMemory`, matching the unconditional
+    /// `error.OutOfMemory` its body emits on a zero handle. This exercises the same shape as the
+    /// method-side `root_node`/`node`/`walk` bug report through `emit_function` instead of
+    /// `emit_opaque_method`, since `wrapper_return_type` had the identical missing arm. ~keep
+    #[test]
+    fn emit_function_bare_handle_return_declares_out_of_memory_and_body_agrees() {
+        let f = handle_return_fn();
+        let mut out = String::new();
+        emit_function(
+            &f,
+            "sample",
+            &[],
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &mut out,
+        );
+
+        assert!(
+            out.contains("error{OutOfMemory}!NodeHandle"),
+            "a bare handle return with no declared Rust error must declare OutOfMemory. Got:\n{out}"
+        );
+        assert!(
+            out.contains("if (_result == 0) return error.OutOfMemory;"),
+            "Got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn assert_error_set_covers_body_panics_on_declared_set_missing_a_body_error() {
+        let result = std::panic::catch_unwind(|| {
+            assert_error_set_covers_body(
+                "root_node",
+                "error{HandleClosed}!NodeHandle",
+                "if (_result == 0) return error.OutOfMemory;",
+                &[],
+            );
+        });
+
+        assert!(
+            result.is_err(),
+            "a declared set missing OutOfMemory must panic when the body returns it"
+        );
+    }
+
+    #[test]
+    fn assert_error_set_covers_body_accepts_a_declared_set_that_covers_the_body() {
+        assert_error_set_covers_body(
+            "root_node",
+            "error{OutOfMemory,HandleClosed}!NodeHandle",
+            "if (_result == 0) return error.OutOfMemory;",
+            &[],
+        );
+    }
+
+    /// A custom Rust-declared error type's declared-set text is just the bare type name (e.g.
+    /// `MyError!T`), never a literal `error{OutOfMemory,...}` spelling -- `errors::emit_error_set`
+    /// still guarantees `MyError` carries `OutOfMemory`/`UnknownFfiError` as members, so the
+    /// invariant check must accept the body's literal via `declared_errors`, not by searching
+    /// `return_ty`'s text for the token. ~keep
+    #[test]
+    fn assert_error_set_covers_body_accepts_out_of_memory_via_a_declared_custom_error_type() {
+        assert_error_set_covers_body(
+            "parse",
+            "MyError!NodeHandle",
+            "if (_result == 0) return error.OutOfMemory;",
+            &["MyError".to_string()],
         );
     }
 }
