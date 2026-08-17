@@ -276,4 +276,23 @@ mod tests {
              warnings from render calls that happened on the same OS thread."
         );
     }
+
+    /// Regression for a two-line field doc ending in a trailing, space-separated `~keep` with no
+    /// punctuation after it — the shape a downstream consumer reported as "stripped across four
+    /// bindings". Pinned here so the marker-removal contract holds independently of any single
+    /// backend's comment-emission formatting.
+    #[test]
+    fn normalize_rustdoc_strips_trailing_marker_on_multiline_field_doc() {
+        let normalized = normalize_rustdoc(
+            "Zero-indexed column of the span's start, counted in **bytes** from the\n\
+             start of the line — not characters, not UTF-16 code units. ~keep",
+        );
+
+        assert_eq!(
+            normalized,
+            "Zero-indexed column of the span's start, counted in **bytes** from the\n\
+             start of the line — not characters, not UTF-16 code units."
+        );
+        assert!(!normalized.contains("~keep"));
+    }
 }
