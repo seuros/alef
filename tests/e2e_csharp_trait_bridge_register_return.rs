@@ -25,6 +25,7 @@ fn make_trait_def(name: &str) -> TypeDef {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         doc: String::new(),
         cfg: None,
@@ -65,7 +66,7 @@ fn test_renderer_bridge_register_returns_intptr() {
     let bridges = vec![("Renderer".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["Renderer"].into_iter().collect();
 
-    let (_filename, content) = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types).content;
 
     assert!(content.contains("public static IntPtr Register(IRenderer impl)"));
     assert!(!content.contains("public static void Register(IRenderer impl)"));
@@ -80,7 +81,7 @@ fn test_validator_bridge_register_returns_intptr() {
     let bridges = vec![("Validator".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["Validator"].into_iter().collect();
 
-    let (_filename, content) = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types).content;
 
     assert!(content.contains("public static IntPtr Register(IValidator impl)"));
     assert!(!content.contains("public static void Register(IValidator impl)"));
@@ -95,7 +96,7 @@ fn test_ocr_backend_bridge_register_returns_intptr() {
     let bridges = vec![("OcrBackend".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["OcrBackend"].into_iter().collect();
 
-    let (_filename, content) = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types).content;
 
     assert!(content.contains("public static IntPtr Register(IOcrBackend impl)"));
     assert!(!content.contains("public static void Register(IOcrBackend impl)"));
@@ -110,7 +111,7 @@ fn test_register_without_super_trait_also_returns_intptr() {
     let bridges = vec![("PostProcessor".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["PostProcessor"].into_iter().collect();
 
-    let (_filename, content) = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_trait_bridges_file("SampleCrate", "sample_crate", &bridges, &visible_types).content;
 
     assert!(content.contains("public static IntPtr Register(IPostProcessor impl, string name)"));
     assert!(!content.contains("public static void Register(IPostProcessor impl, string name)"));

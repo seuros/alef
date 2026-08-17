@@ -109,8 +109,16 @@ fn api_without_excluded_types(api: &ApiSurface, exclude_types: &HashSet<String>)
     for typ in &mut filtered.types {
         typ.fields
             .retain(|field| !references_excluded_type(&field.ty, exclude_types));
-        typ.methods
-            .retain(|method| !signature_references_excluded_type(&method.params, &method.return_type, exclude_types));
+        // Trait methods are exempt: each one owns a positional slot in the C vtable the
+        // FFI crate declares from the unfiltered surface, and `csharp_type_visible` already
+        // degrades an excluded type in a bridge signature to a JSON `string`. Dropping the
+        // method here would leave the bridge class allocating and writing N-1 function
+        // pointers into a struct Rust reads as N slots wide. ~keep
+        if !typ.is_trait {
+            typ.methods.retain(|method| {
+                !signature_references_excluded_type(&method.params, &method.return_type, exclude_types)
+            });
+        }
     }
     filtered
         .enums
@@ -127,6 +135,55 @@ fn api_without_excluded_types(api: &ApiSurface, exclude_types: &HashSet<String>)
         .retain(|func| !signature_references_excluded_type(&func.params, &func.return_type, exclude_types));
     filtered.errors.retain(|error| !exclude_types.contains(&error.name));
     filtered
+}
+
+/// Fail generation when the C# bridge's vtable does not slot-for-slot match the Rust
+/// vtable struct the FFI crate declares for the same trait.
+///
+/// The two sides are derived independently: `emitted_slot_names` comes from the
+/// `Marshal.WriteIntPtr` calls the bridge class actually writes (built from the
+/// C#-filtered surface), while the expected list comes from `source_api` — the same
+/// unfiltered surface the FFI backend reads. Any C#-side filtering that drops, adds, or
+/// reorders a trait method therefore shows up here.
+///
+/// This is checked at generation time rather than emitted as a runtime guard because both
+/// sides are knowable now and a consumer cannot skip it. Nothing on the Rust side can catch
+/// it later: the bridge class writes into a `Marshal.AllocHGlobal` block sized from the same
+/// (wrong) count, so an omitted slot is not null — it holds the next field's valid pointer
+/// shifted one word left, and the final read runs past the allocation.
+fn assert_vtable_matches_rust_struct(
+    source_api: &ApiSurface,
+    trait_def: &crate::core::ir::TypeDef,
+    has_super_trait: bool,
+    ffi_skip_methods: &[String],
+    emitted_slot_names: &[String],
+) -> anyhow::Result<()> {
+    let source_trait_def = source_api
+        .types
+        .iter()
+        .find(|typ| typ.name == trait_def.name && typ.is_trait)
+        .unwrap_or(trait_def);
+    let expected = crate::codegen::generators::trait_bridge::vtable_slot_names(
+        source_trait_def,
+        has_super_trait,
+        ffi_skip_methods,
+    );
+    if emitted_slot_names == expected.as_slice() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "C# trait bridge for `{}` emits a vtable that does not match the Rust vtable struct.\n\
+         Rust slots ({}): {}\n\
+         C# slots ({}): {}\n\
+         Every slot is written at a fixed byte offset, so a missing, extra, or reordered slot \
+         makes registration dispatch through the wrong function pointer and read past the \
+         allocation.",
+        trait_def.name,
+        expected.len(),
+        expected.join(", "),
+        emitted_slot_names.len(),
+        emitted_slot_names.join(", "),
+    )
 }
 
 impl Backend for CsharpBackend {
@@ -151,6 +208,9 @@ impl Backend for CsharpBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // The surface as the FFI backend sees it, kept alongside the C#-filtered one so the
+        // trait-bridge block can prove C#'s vtable matches the Rust vtable struct. ~keep
+        let source_api = api;
         let exclude_types = effective_exclude_types(api, config);
         let filtered_api;
         let api = if exclude_types.is_empty() {
@@ -377,12 +437,30 @@ impl Backend for CsharpBackend {
                     .map(|t| t.name.as_str())
                     .chain(api.enums.iter().map(|e| e.name.as_str()))
                     .collect();
-                let (filename, content) = crate::backends::csharp::trait_bridge::gen_trait_bridges_file(
+                let crate::backends::csharp::trait_bridge::TraitBridgesFile {
+                    filename,
+                    content,
+                    vtable_slot_names,
+                } = crate::backends::csharp::trait_bridge::gen_trait_bridges_file(
                     &namespace,
                     &prefix,
                     &bridges,
                     &visible_type_names,
                 );
+
+                for (trait_name, bridge_cfg, trait_def) in &bridges {
+                    let Some((_, emitted)) = vtable_slot_names.iter().find(|(name, _)| name == trait_name) else {
+                        continue;
+                    };
+                    assert_vtable_matches_rust_struct(
+                        source_api,
+                        trait_def,
+                        bridge_cfg.super_trait.is_some(),
+                        &bridge_cfg.ffi_skip_methods,
+                        emitted,
+                    )?;
+                }
+
                 files.push(GeneratedFile {
                     path: base_path.join(filename),
                     content: strip_trailing_whitespace(&content),
@@ -597,4 +675,192 @@ impl Backend for CsharpBackend {
 pub(super) fn is_tuple_field(field: &FieldDef) -> bool {
     (field.name.starts_with('_') && field.name[1..].chars().all(|c| c.is_ascii_digit()))
         || field.name.chars().next().is_none_or(|c| c.is_ascii_digit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::TraitBridgeConfig;
+    use crate::core::ir::{MethodDef, PrimitiveType, TypeDef};
+
+    fn make_method(name: &str, return_type: TypeRef) -> MethodDef {
+        MethodDef {
+            name: name.to_string(),
+            return_type,
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
+            ..MethodDef::default()
+        }
+    }
+
+    fn ocr_shaped_trait() -> TypeDef {
+        TypeDef {
+            name: "OcrBackend".to_string(),
+            rust_path: "sample_core::OcrBackend".to_string(),
+            is_trait: true,
+            methods: vec![
+                make_method("supports_language", TypeRef::Primitive(PrimitiveType::Bool)),
+                make_method("backend_type", TypeRef::Named("OcrBackendType".to_string())),
+                make_method("supported_languages", TypeRef::Vec(Box::new(TypeRef::String))),
+            ],
+            ..TypeDef::default()
+        }
+    }
+
+    fn ocr_bridge_config() -> ResolvedCrateConfig {
+        ResolvedCrateConfig {
+            trait_bridges: vec![TraitBridgeConfig {
+                trait_name: "OcrBackend".to_string(),
+                super_trait: Some("Plugin".to_string()),
+                ..TraitBridgeConfig::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        }
+    }
+
+    /// Ordered slot-comment identities the bridge class writes, e.g. `["name_fn", "backend_type_fn"]`.
+    fn emitted_slot_comments(content: &str) -> Vec<String> {
+        content
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("// Slot "))
+            .filter_map(|rest| rest.split_once(": "))
+            .map(|(_, name)| name.to_string())
+            .collect()
+    }
+
+    /// Regression: `[crates.csharp].exclude_types` (and every other source feeding
+    /// `effective_exclude_types`, here `binding_excluded`) must not delete a trait method from
+    /// the bridge. The method keeps a slot in the Rust vtable struct, so deleting it here
+    /// leaves C# allocating and writing N-1 function pointers into an N-slot struct.
+    #[test]
+    fn excluded_return_type_does_not_remove_a_vtable_slot() {
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            types: vec![
+                ocr_shaped_trait(),
+                TypeDef {
+                    name: "OcrBackendType".to_string(),
+                    binding_excluded: true,
+                    ..TypeDef::default()
+                },
+            ],
+            ..ApiSurface::default()
+        };
+
+        let files = CsharpBackend
+            .generate_bindings(&api, &ocr_bridge_config())
+            .expect("C# bindings");
+        let bridges = files
+            .iter()
+            .find(|file| file.path.ends_with("TraitBridges.cs"))
+            .expect("TraitBridges.cs");
+
+        assert_eq!(
+            emitted_slot_comments(&bridges.content),
+            vec![
+                "name_fn",
+                "version_fn",
+                "initialize_fn",
+                "shutdown_fn",
+                "supports_language_fn",
+                "backend_type_fn",
+                "supported_languages_fn",
+                "free_string",
+                "free_user_data",
+            ],
+            "every Rust vtable field must get a slot, at its own index"
+        );
+        assert!(
+            bridges.content.contains("Marshal.AllocHGlobal(IntPtr.Size * 9)"),
+            "the block must stay as wide as the Rust vtable struct;\nactual:\n{}",
+            bridges.content
+        );
+        assert!(
+            bridges.content.contains("string BackendType { get; }"),
+            "an excluded return type degrades to a JSON string rather than removing the method;\nactual:\n{}",
+            bridges.content
+        );
+    }
+
+    #[test]
+    fn vtable_slot_check_accepts_a_faithful_bridge() {
+        let trait_def = ocr_shaped_trait();
+        let api = ApiSurface {
+            types: vec![trait_def.clone()],
+            ..ApiSurface::default()
+        };
+        let emitted = crate::codegen::generators::trait_bridge::vtable_slot_names(&trait_def, true, &[]);
+
+        assert_vtable_matches_rust_struct(&api, &trait_def, true, &[], &emitted)
+            .expect("matching slot lists must pass");
+    }
+
+    #[test]
+    fn vtable_slot_check_rejects_a_dropped_slot() {
+        let source_trait = ocr_shaped_trait();
+        let api = ApiSurface {
+            types: vec![source_trait.clone()],
+            ..ApiSurface::default()
+        };
+        let mut pruned_trait = source_trait.clone();
+        pruned_trait.methods.retain(|method| method.name != "backend_type");
+        let emitted = crate::codegen::generators::trait_bridge::vtable_slot_names(&pruned_trait, true, &[]);
+
+        let error = assert_vtable_matches_rust_struct(&api, &pruned_trait, true, &[], &emitted)
+            .expect_err("a bridge missing a slot must fail generation");
+        let message = error.to_string();
+        assert!(
+            message.contains("Rust slots (9)") && message.contains("C# slots (8)"),
+            "the failure must report both slot counts;\nactual:\n{message}"
+        );
+        assert!(
+            message.contains("backend_type"),
+            "the failure must name the slot that disagrees;\nactual:\n{message}"
+        );
+    }
+
+    #[test]
+    fn vtable_slot_check_rejects_a_reordered_slot() {
+        let trait_def = ocr_shaped_trait();
+        let api = ApiSurface {
+            types: vec![trait_def.clone()],
+            ..ApiSurface::default()
+        };
+        let mut reordered = crate::codegen::generators::trait_bridge::vtable_slot_names(&trait_def, true, &[]);
+        reordered.swap(5, 6);
+
+        let error = assert_vtable_matches_rust_struct(&api, &trait_def, true, &[], &reordered)
+            .expect_err("a bridge with the right slot count in the wrong order must fail generation");
+        let message = error.to_string();
+        assert!(
+            message.contains("Rust slots (9)") && message.contains("C# slots (9)"),
+            "a reordering keeps the count, so the counts alone must not be what fails;\nactual:\n{message}"
+        );
+        assert!(
+            message.contains("backend_type, supported_languages")
+                && message.contains("supported_languages, backend_type"),
+            "the failure must show both orders so the swapped pair is identifiable;\nactual:\n{message}"
+        );
+    }
+
+    /// A skipped method is absent from the Rust vtable struct, so an emitter that still writes
+    /// a slot for it must fail generation rather than shift every later function pointer.
+    #[test]
+    fn vtable_slot_check_rejects_a_slot_for_a_skipped_method() {
+        let trait_def = ocr_shaped_trait();
+        let api = ApiSurface {
+            types: vec![trait_def.clone()],
+            ..ApiSurface::default()
+        };
+        let skip = vec!["backend_type".to_string()];
+        let over_counted = crate::codegen::generators::trait_bridge::vtable_slot_names(&trait_def, true, &[]);
+
+        let error = assert_vtable_matches_rust_struct(&api, &trait_def, true, &skip, &over_counted)
+            .expect_err("an extra slot must fail generation");
+        let message = error.to_string();
+        assert!(
+            message.contains("Rust slots (8)") && message.contains("C# slots (9)"),
+            "the failure must report both slot counts;\nactual:\n{message}"
+        );
+    }
 }

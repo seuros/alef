@@ -105,20 +105,30 @@ pub fn gen_native_methods_trait_bridges(
     render("native_methods_trait_bridges.jinja", ctx)
 }
 
+/// The generated `TraitBridges.cs`, plus the vtable layout each bridge class committed to.
+pub struct TraitBridgesFile {
+    pub filename: String,
+    pub content: String,
+    /// `(trait name, slot names)` for every generic trait bridge emitted, in the order the
+    /// bridge class writes them. Named after the corresponding Rust vtable struct field so a
+    /// caller can diff against [`crate::codegen::generators::trait_bridge::vtable_slot_names`].
+    /// Visitor-style bridges are absent — they use an unrelated slot layout whose slot 0 is
+    /// `user_data` rather than a function pointer.
+    pub vtable_slot_names: Vec<(String, Vec<String>)>,
+}
+
 /// Generate the complete TraitBridges.cs file for all configured trait bridges.
 ///
 /// For each bridge in the config:
 /// - Generates a managed `interface I{TraitName}` with Plugin lifecycle methods (when super_trait set)
 /// - Generates a `{TraitName}Bridge` class with delegate rooting, GCHandle management, and vtable construction
 /// - Generates static registration helpers for `Register{TraitName}` / `Unregister{TraitName}`
-///
-/// Returns a tuple of (filename, content) ready for GeneratedFile emission.
 pub fn gen_trait_bridges_file(
     namespace: &str,
     prefix: &str,
     bridges: &[(String, &TraitBridgeConfig, &TypeDef)],
     visible_type_names: &HashSet<&str>,
-) -> (String, String) {
+) -> TraitBridgesFile {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
@@ -128,6 +138,8 @@ pub fn gen_trait_bridges_file(
             "namespace": namespace,
         })),
     );
+
+    let mut vtable_slot_names = Vec::new();
 
     for (trait_name, bridge_cfg, trait_def) in bridges {
         if bridge_cfg.exclude_languages.iter().any(|lang| lang == "csharp") {
@@ -145,7 +157,9 @@ pub fn gen_trait_bridges_file(
             continue;
         }
 
-        gen_single_trait_bridge(&mut out, trait_name, bridge_cfg, trait_def, prefix, visible_type_names);
+        let slot_names =
+            gen_single_trait_bridge(&mut out, trait_name, bridge_cfg, trait_def, prefix, visible_type_names);
+        vtable_slot_names.push((trait_name.clone(), slot_names));
         out.push('\n');
     }
 
@@ -154,7 +168,11 @@ pub fn gen_trait_bridges_file(
         Value::from_serialize(serde_json::json!({})),
     ));
 
-    ("TraitBridges.cs".to_string(), out)
+    TraitBridgesFile {
+        filename: "TraitBridges.cs".to_string(),
+        content: out,
+        vtable_slot_names,
+    }
 }
 
 /// Generate the BridgeAdapters.cs file with sealed adapter classes for each trait.
@@ -192,8 +210,12 @@ pub fn gen_bridge_adapters_file(
         let trait_snake = trait_name.to_snake_case();
         let has_super_trait = bridge_cfg.super_trait.is_some();
 
-        let methods: Vec<_> = trait_def
-            .methods
+        // Same method set as the interface the adapter implements: the adapter forwards to
+        // `_impl`, so a method the interface does not declare would not compile. ~keep
+        let own_methods =
+            crate::codegen::generators::trait_bridge::own_vtable_methods(trait_def, &bridge_cfg.ffi_skip_methods);
+
+        let methods: Vec<_> = own_methods
             .iter()
             .map(|method| {
                 let return_type = if method.is_async {
@@ -257,6 +279,10 @@ pub fn gen_bridge_adapters_file(
     Some(("BridgeAdapters.cs".to_string(), content))
 }
 
+/// Emit one generic trait bridge (interface, bridge class, registry) into `out`.
+///
+/// Returns the identity of each vtable slot in write order, so the caller can prove the
+/// emitted layout matches the Rust vtable struct.
 fn gen_single_trait_bridge(
     out: &mut String,
     trait_name: &str,
@@ -264,21 +290,23 @@ fn gen_single_trait_bridge(
     trait_def: &TypeDef,
     _prefix: &str,
     visible_type_names: &HashSet<&str>,
-) {
+) -> Vec<String> {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
     let trait_pascal = csharp_type_name(trait_name);
     let _trait_snake = trait_name.to_snake_case();
     let has_super_trait = bridge_cfg.super_trait.is_some();
-    let has_bytes_param = trait_def
-        .methods
+    // Every emitter below walks this same list, so the interface, the delegate declarations,
+    // the callbacks, and the vtable writes cannot disagree about which methods exist. ~keep
+    let own_methods =
+        crate::codegen::generators::trait_bridge::own_vtable_methods(trait_def, &bridge_cfg.ffi_skip_methods);
+    let has_bytes_param = own_methods
         .iter()
         .flat_map(|m| m.params.iter())
         .any(|p| matches!(&p.ty, TypeRef::Bytes));
 
-    let methods: Vec<_> = trait_def
-        .methods
+    let methods: Vec<_> = own_methods
         .iter()
         .map(|method| {
             let return_type = if method.is_async {
@@ -321,13 +349,9 @@ fn gen_single_trait_bridge(
     ));
     out.push('\n');
 
-    let num_methods = trait_def.methods.len();
-    let num_super_slots = if has_super_trait { 4usize } else { 0usize };
-    let num_vtable_fields = num_super_slots + num_methods + 2;
     let is_options_field = bridge_cfg.bind_via == BridgeBinding::OptionsField;
 
-    let template_methods: Vec<_> = trait_def
-        .methods
+    let template_methods: Vec<_> = own_methods
         .iter()
         .map(|method| {
             let mut parts: Vec<String> = Vec::new();
@@ -375,10 +399,12 @@ fn gen_single_trait_bridge(
         .collect();
 
     let mut vtable_slots = String::with_capacity(1024);
+    let mut slot_names: Vec<String> = Vec::new();
     let mut offset = 0usize;
     let ptr_size = std::mem::size_of::<*const ()>();
 
     if has_super_trait {
+        slot_names.push("name_fn".to_string());
         vtable_slots.push_str(&render(
             "vtable_slot_comment.jinja",
             minijinja::context! { slot_idx => offset, slot_name => "name_fn" },
@@ -395,6 +421,7 @@ fn gen_single_trait_bridge(
         vtable_slots.push('\n');
         offset += 1;
 
+        slot_names.push("version_fn".to_string());
         vtable_slots.push_str(&render(
             "vtable_slot_comment.jinja",
             minijinja::context! { slot_idx => offset, slot_name => "version_fn" },
@@ -411,6 +438,7 @@ fn gen_single_trait_bridge(
         vtable_slots.push('\n');
         offset += 1;
 
+        slot_names.push("initialize_fn".to_string());
         vtable_slots.push_str(&render(
             "vtable_slot_comment.jinja",
             minijinja::context! { slot_idx => offset, slot_name => "initialize_fn" },
@@ -427,6 +455,7 @@ fn gen_single_trait_bridge(
         vtable_slots.push('\n');
         offset += 1;
 
+        slot_names.push("shutdown_fn".to_string());
         vtable_slots.push_str(&render(
             "vtable_slot_comment.jinja",
             minijinja::context! { slot_idx => offset, slot_name => "shutdown_fn" },
@@ -444,10 +473,11 @@ fn gen_single_trait_bridge(
         offset += 1;
     }
 
-    for method in &trait_def.methods {
+    for method in &own_methods {
         let method_pascal = to_csharp_name(&method.name);
         let method_camel = method.name.to_lower_camel_case();
         let slot_name = format!("{}_fn", method.name);
+        slot_names.push(method.name.clone());
         vtable_slots.push_str(&render(
             "vtable_slot_comment.jinja",
             minijinja::context! { slot_idx => offset, slot_name },
@@ -468,6 +498,7 @@ fn gen_single_trait_bridge(
         offset += 1;
     }
 
+    slot_names.push("free_string".to_string());
     vtable_slots.push_str(&render(
         "vtable_slot_comment.jinja",
         minijinja::context! { slot_idx => offset, slot_name => "free_string" },
@@ -484,6 +515,7 @@ fn gen_single_trait_bridge(
     vtable_slots.push('\n');
     offset += 1;
 
+    slot_names.push("free_user_data".to_string());
     vtable_slots.push_str(&render(
         "vtable_slot_comment.jinja",
         minijinja::context! { slot_idx => offset, slot_name => "free_user_data" },
@@ -546,7 +578,7 @@ fn gen_single_trait_bridge(
         callbacks.push('\n');
     }
 
-    for method in &trait_def.methods {
+    for method in &own_methods {
         let method_pascal = to_csharp_name(&method.name);
 
         let is_primitive_return = matches!(&method.return_type, TypeRef::Primitive(_) | TypeRef::Unit);
@@ -792,6 +824,11 @@ fn gen_single_trait_bridge(
     ));
     callbacks.push('\n');
 
+    // Size the allocation from the slots actually written rather than recomputing the
+    // arithmetic: the emitter writes slot `i` at `i * IntPtr.Size`, so a block narrower than
+    // the slot list would put the final `WriteIntPtr` past the allocation. ~keep
+    let num_vtable_fields = slot_names.len();
+
     out.push_str(&render(
         "trait_bridge_class.jinja",
         Value::from_serialize(serde_json::json!({
@@ -820,6 +857,8 @@ fn gen_single_trait_bridge(
             "clear_fn": clear_fn,
         })),
     ));
+
+    slot_names
 }
 
 fn _to_json_string(_obj: &dyn std::any::Any) -> String {
