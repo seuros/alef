@@ -540,9 +540,9 @@ pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
 /// `.alef/toml-merge-provenance.json`, so a fresh clone or a CI checkout
 /// never had a baseline and the prune step could never fire there, no matter
 /// how long a value had been gone from alef's own template. Concretely, this
-/// is why liter-llm's `docs/assets/**` / `docs/snippets/**` `poly.toml`
+/// is why a consumer's `docs/assets/**` / `docs/snippets/**` `poly.toml`
 /// excludes, for a `docs/` tree that had been deleted, had to be removed BY
-/// HAND in `12b1d0a69` instead of pruning themselves. Sitting at the repo
+/// HAND downstream instead of pruning themselves. Sitting at the repo
 /// root, this file travels with every checkout of the commit that describes
 /// it, so pruning behaves identically on a fresh clone and a warm machine.
 ///
