@@ -158,6 +158,14 @@ impl super::E2eCodegen for PythonE2eCodegen {
             .any(|assertion| assertion.assertion_type == "error");
         call_fixture.assertions.clear();
         call_fixture.mock_response = None;
+        // With `mock_response` cleared, `test_function`'s `client_factory` path falls through
+        // to its "declared env var" branch whenever `fixture.env.api_key_var` is set — which
+        // guards the read with `pytest.skip(...)` for the executable e2e suite's real-API-vs-mock
+        // dispatch. A docs snippet is not a pytest test function, so that guard renders as an
+        // undefined name. Clearing `env` here (the credential var name below still reads it from
+        // the *original* `fixture`) drops straight to the same bare `api_key="test-key"` shape the
+        // substitution just below already targets. ~keep
+        call_fixture.env = None;
         let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python");
         let call = e2e_config.resolve_call_for_fixture(
             call_fixture.call.as_deref(),
@@ -191,6 +199,26 @@ impl super::E2eCodegen for PythonE2eCodegen {
                 )
             })
             .collect::<Vec<_>>();
+        // A `configuration/custom-base-url`-style topic documents `docs.client.base_url` so the
+        // reader sees the setting the topic is about, mirroring the Java/Rust/Elixir generators'
+        // `docs_client` handling. The client-construction line always ends in exactly this
+        // single-argument shape immediately after the substitution above, so targeting it here
+        // (rather than threading `docs_client` through `render_test_file`/`test_function`, which
+        // also serves the executable e2e suite) keeps this docs-only concern out of the shared
+        // test-rendering path entirely. ~keep
+        let body = match fixture.docs_client().and_then(|client| client.base_url.as_deref()) {
+            Some(base_url) => {
+                let bare_call = format!("api_key=os.environ[\"{api_key_var}\"])");
+                let with_base_url = format!(
+                    "api_key=os.environ[\"{api_key_var}\"], base_url=\"{}\")",
+                    crate::e2e::escape::escape_python(base_url)
+                );
+                body.into_iter()
+                    .map(|line| line.replace(&bare_call, &with_base_url))
+                    .collect::<Vec<_>>()
+            }
+            None => body,
+        };
         let error_type = config.error_type_name();
         let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
         if body.iter().any(|line| line.contains("os.environ")) && !imports.iter().any(|line| line == "import os") {
@@ -981,6 +1009,88 @@ from_json_module = "my_lib._internal_bindings"
         assert!(
             rendered.contains("client = create_client(api_key=os.environ[\"API_KEY\"])"),
             "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
+    /// A `client_factory` fixture that declares `env.api_key_var` — the common shape for a
+    /// real fixture, since `rate_limit_429` above deliberately omits it — must still read the
+    /// credential as a single direct `os.environ[...]` expression. `render_test_file`'s
+    /// `client_factory` path guards that read with `pytest.skip(...)` for the executable e2e
+    /// suite's real-API-vs-mock dispatch, which is invalid, undefined-name Python outside a
+    /// pytest test function; a docs snippet must never carry it.
+    #[test]
+    fn client_factory_snippet_with_declared_env_var_never_leaks_pytest_skip() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "chat_basic",
+            "description": "Basic chat",
+            "input": null,
+            "env": {"api_key_var": "OPENAI_API_KEY"}
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "python".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("snippet renders");
+
+        assert!(
+            !rendered.contains("pytest"),
+            "docs snippet must not reference pytest:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("client = create_client(api_key=os.environ[\"OPENAI_API_KEY\"])"),
+            "client must be constructed directly from the environment:\n{rendered}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its Python
+    /// snippet, mirroring the Java/Rust/Elixir generators' `docs_client` handling
+    /// (`java/snippet.rs::a_snippet_renders_the_base_url_the_fixture_documents`). Paired with
+    /// `client_factory_snippet_never_points_the_reader_at_the_mock_server` above (whose fixture
+    /// declares no `docs.client` and must keep rendering the bare, no-`base_url` call) as the
+    /// negative control: an indiscriminate "always add base_url" change would fail that test.
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url",
+            "description": "Custom base URL",
+            "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "python".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[])
+            .expect("snippet renders");
+
+        assert!(
+            rendered.contains(
+                "client = create_client(api_key=os.environ[\"API_KEY\"], base_url=\"https://llm.internal.example.com/v1\")"
+            ),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{rendered}"
         );
     }
 
