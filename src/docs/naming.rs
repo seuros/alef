@@ -156,11 +156,57 @@ pub(crate) fn func_name(name: &str, lang: Language, ffi_prefix: &str) -> String 
     // (`reserved_words(Java)` in formatting.rs, which does list all three) would report a
     // violation for it -- correctly, since the emitted Java really is broken. Fixing
     // that belongs in `safe_java_method_name`; this table must follow it, not lead it.
+    // ~keep Dart's `new` is an ordinary reserved-word collision, not a declaration-shape
+    // mismatch the way Swift's `init` is (see `is_swift_static_constructor` in signatures.rs):
+    // the docs pipeline already renders a static factory method for a static `new` returning
+    // `Self` (`static Future<T> {name}(...)`), which is a legal Dart declaration for any legal
+    // name -- only the identifier `new` itself is reserved. Mirrors the Java `new` -> `create`
+    // arm above for the same reason: a curated or default opaque constructor used to reach the
+    // identifier gate as the raw reserved word `new`, and the docs pipeline shipped
+    // `static Future<DownloadManager> new(String version)` -- three such sites in one real
+    // consumer's `api-dart.md`, none of which compile. Given its own named arm ahead of the
+    // general sweep below so it keeps the more idiomatic `create` instead of falling through
+    // to the mechanical `new_`.
+    //
+    // ~keep The class this whole function exists to close is not "constructors named `new`" --
+    // it is "any emitted `pub fn` whose name is a keyword in the target language". A second,
+    // independently measured consumer tree hit `global` (Python), `get` (Dart, Kotlin), and
+    // `new` (Dart) on four *ordinary* methods with no constructor shape at all
+    // (`pub fn global() -> &'static Registry`, `pub fn get(&self, id: &str) -> Option<&Preset>`
+    // repeated across five registries). None of those collide in every language --
+    // `identifier_violation`'s own per-language tables are the single source of truth for
+    // which word collides where (Kotlin's `get` is a conservative soft-keyword inclusion,
+    // documented on `reserved_words`; a narrower per-backend list would let it through and
+    // silently disagree with the gate that judges the output). So: any language whose grammar
+    // reserves the word in every position (`!reserved_words_bind_in_member_position`, i.e.
+    // everyone except Node/Wasm/Php) gets the trailing-underscore escape already used
+    // throughout `core::keywords` for exactly this purpose (`python_ident`, `kotlin_ident`,
+    // `swift_ident`, `dart_ident`, ...) -- checked against `identifier_violation` itself, not
+    // a second hand-copied list, so the escape and the gate can never disagree about what
+    // needs escaping. Node/Wasm/Php are excluded because `func_name` has no position
+    // parameter: those two languages only relax the reserved-word rule in *member* position
+    // (formatting.rs's `reserved_words_bind_in_member_position`), and a free-function
+    // *declaration* using the same name is still illegal there -- escaping it here would hide
+    // that real declaration-position violation instead of reporting it. Java is excluded
+    // because its own arms above already cover it with a more idiomatic mapping; running both
+    // would be redundant, not wrong, but the explicit arms document *why* those two words are
+    // special-cased instead of falling through to the mechanical escape.
     match (lang, base.as_str()) {
         (Language::Java, "default") => "defaultInstance".to_string(),
         (Language::Java, "new") => "create".to_string(),
         (Language::Java, other) if crate::core::keywords::JAVA_KEYWORDS.contains(&other) => format!("{other}_"),
         (Language::Csharp, "Default") => "CreateDefault".to_string(),
+        (Language::Dart, "new") => "create".to_string(),
+        (lang, other)
+            if !matches!(lang, Language::Java | Language::Node | Language::Wasm | Language::Php)
+                && crate::docs::formatting::identifier_violation(
+                    other,
+                    lang,
+                    crate::docs::formatting::IdentifierPosition::Declaration,
+                ) == Some("reserved word") =>
+        {
+            format!("{other}_")
+        }
         _ => base,
     }
 }

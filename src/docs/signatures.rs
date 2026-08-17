@@ -1,9 +1,9 @@
 use crate::core::config::Language;
 use crate::core::ir::{FunctionDef, MethodDef, TypeRef};
 use crate::docs::formatting::{IdentifierPosition, report_identifier_violation};
-use crate::docs::naming::{field_name, method_name, to_camel_case, type_name};
+use crate::docs::naming::{field_name, func_name, method_name, to_camel_case, type_name};
 use crate::docs::type_mapping::{FFI_HANDLE_TYPE_NAME, doc_type};
-use heck::{ToPascalCase, ToSnakeCase};
+use heck::ToSnakeCase;
 
 pub(crate) fn render_function_signature(func: &FunctionDef, lang: Language, ffi_prefix: &str) -> String {
     match lang {
@@ -29,7 +29,12 @@ pub(crate) fn render_function_signature(func: &FunctionDef, lang: Language, ffi_
 }
 
 pub(crate) fn render_python_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = func.name.to_snake_case();
+    // ~keep Routed through `func_name`, not a bare `.to_snake_case()`, so a free function
+    // whose name collides with a Python keyword (`global`, `class`, ...) is escaped before the
+    // gate ever judges it -- the same discipline `method_name` already applies to opaque-type
+    // methods. A real consumer's `pub fn global() -> &'static Registry` is what this closes: a
+    // free function, not a constructor, so no per-shape renderer branch could have caught it.
+    let name = func_name(&func.name, Language::Python, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Python,
@@ -54,7 +59,14 @@ pub(crate) fn render_python_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
 }
 
 pub(crate) fn render_typescript_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = to_camel_case(&func.name);
+    // ~keep Routed through `func_name` (Declaration position, checked below) rather than a
+    // bare `to_camel_case` -- `func_name` never renames anything for Node/Wasm (the member-
+    // position relaxation those two languages get depends on the raw word surviving), so this
+    // is a no-op today, but a free function *is* judged in Declaration position, where the
+    // reserved word is still illegal in every language including these two. Keeping this call
+    // site on the same helper as every other renderer, rather than a hand-rolled exception, is
+    // what stops that from silently drifting later.
+    let name = func_name(&func.name, Language::Node, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Node,
@@ -102,7 +114,7 @@ fn go_return_type(return_type: &TypeRef, ret: String) -> String {
 }
 
 pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = func.name.to_pascal_case();
+    let name = func_name(&func.name, Language::Go, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Go,
@@ -133,7 +145,11 @@ pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
 }
 
 pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = to_camel_case(&func.name);
+    // ~keep Routed through `func_name` rather than a bare `to_camel_case`: a free function
+    // named `new` or `default` used to reach the gate unrenamed (only `method_name`'s opaque
+    // methods went through `func_name`'s Java table), so this closes the same gap on the
+    // free-function path.
+    let name = func_name(&func.name, Language::Java, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Java,
@@ -161,7 +177,7 @@ pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 }
 
 pub(crate) fn render_ruby_fn_sig(func: &FunctionDef) -> String {
-    let name = func.name.to_snake_case();
+    let name = func_name(&func.name, Language::Ruby, "");
     report_identifier_violation(
         &name,
         Language::Ruby,
@@ -210,7 +226,7 @@ pub(crate) fn render_c_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
 }
 
 pub(crate) fn render_php_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = to_camel_case(&func.name);
+    let name = func_name(&func.name, Language::Php, ffi_prefix);
     report_identifier_violation(&name, Language::Php, IdentifierPosition::Member, "a function signature");
     let params: Vec<String> = func
         .params
@@ -230,7 +246,7 @@ pub(crate) fn render_php_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String 
 }
 
 pub(crate) fn render_elixir_fn_sig(func: &FunctionDef) -> String {
-    let name = func.name.to_snake_case();
+    let name = func_name(&func.name, Language::Elixir, "");
     report_identifier_violation(
         &name,
         Language::Elixir,
@@ -248,7 +264,7 @@ pub(crate) fn render_elixir_fn_sig(func: &FunctionDef) -> String {
 }
 
 pub(crate) fn render_r_fn_sig(func: &FunctionDef) -> String {
-    let name = func.name.to_snake_case();
+    let name = func_name(&func.name, Language::R, "");
     let params: Vec<String> = func
         .params
         .iter()
@@ -261,7 +277,7 @@ pub(crate) fn render_r_fn_sig(func: &FunctionDef) -> String {
 }
 
 pub(crate) fn render_csharp_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = func.name.to_pascal_case();
+    let name = func_name(&func.name, Language::Csharp, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Csharp,
@@ -339,7 +355,7 @@ pub(crate) fn render_rust_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 }
 
 pub(crate) fn render_kotlin_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = to_camel_case(&func.name);
+    let name = func_name(&func.name, Language::Kotlin, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Kotlin,
@@ -374,7 +390,11 @@ pub(crate) fn render_kotlin_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
 }
 
 pub(crate) fn render_swift_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = to_camel_case(&func.name);
+    // ~keep A free function has no owning type, so there is no `is_swift_static_constructor`
+    // shape to divert here -- only the generic keyword escape in `func_name` applies. A free
+    // Swift function literally named `init` (declaration-keyword collision) or any other
+    // reserved word now renders escaped instead of reaching the gate raw.
+    let name = func_name(&func.name, Language::Swift, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Swift,
@@ -405,7 +425,7 @@ pub(crate) fn render_swift_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Strin
 }
 
 pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = to_camel_case(&func.name);
+    let name = func_name(&func.name, Language::Dart, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Dart,
@@ -457,7 +477,7 @@ pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
 }
 
 pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
-    let name = func.name.to_snake_case();
+    let name = func_name(&func.name, Language::Zig, ffi_prefix);
     report_identifier_violation(
         &name,
         Language::Zig,
@@ -517,6 +537,35 @@ pub(crate) fn is_csharp_static_constructor(method: &MethodDef, owner_type: &str)
     // the backend's copy tests `n == typ.name` against the same two IR values this receives
     // (`type_render.rs` passes `&ty.name` straight through), so normalising here would make
     // docs promote a fully qualified return the backend leaves as an ordinary method.
+    match &method.return_type {
+        TypeRef::Named(n) => n == owner_type,
+        _ => false,
+    }
+}
+
+/// Whether a Rust static `new` returning `Self` must be promoted to a real Swift initializer
+/// instead of an ordinary member.
+///
+/// ~keep Swift's `init` is a declaration keyword, not a reserved identifier: `public static
+/// func init(...)` is a syntax error regardless of what the name is escaped or renamed to,
+/// because the defect is the *declaration shape* (`static func`), not the identifier. The only
+/// legal Swift spelling of a constructor is `init(...)` -- no `static`, no `func`, no name for
+/// the identifier gate to judge -- so this, like `is_csharp_static_constructor`, diverts the
+/// shape at render time rather than trying to make some string legal in member position.
+/// Same clause matrix as the C# mirror (name, staticness, return type), but deliberately
+/// without the C# guard's `params.is_empty()` exclusion: C# excludes a zero-arg `new` because
+/// the backend's configured `client_constructor` already emits one, and promoting it here
+/// would document a duplicate. Swift has no equivalent zero-arg diversion in this docs layer,
+/// and two of the four real consumer constructors this was measured against --
+/// `LanguageRegistry::new()` and `Parser::new()` -- are zero-arg; excluding them would leave
+/// the fatal case half-fixed.
+pub(crate) fn is_swift_static_constructor(method: &MethodDef, owner_type: &str) -> bool {
+    if method.name != "new" {
+        return false;
+    }
+    if !method.is_static {
+        return false;
+    }
     match &method.return_type {
         TypeRef::Named(n) => n == owner_type,
         _ => false,
@@ -916,15 +965,24 @@ pub(crate) fn render_method_signature_with_override(
                 })
                 .collect();
             let throws = if method.error_type.is_some() { " throws" } else { "" };
-            let ret_part = if ret == "Void" {
-                String::new()
+            // ~keep A static `new` returning `Self` is a Swift initializer, not a member named
+            // `init` -- `public static func init(...)` is a syntax error no identifier fix can
+            // repair, since Swift constructors have no `static`, no `func`, and no name at all.
+            // This must be checked before the identifier gate would otherwise see `init` as a
+            // member-position name; see `is_swift_static_constructor`'s doc comment.
+            if is_swift_static_constructor(method, type_name_str) {
+                format!("public init({}){throws}", params.join(", "))
             } else {
-                format!(" -> {ret}")
-            };
-            if method.is_static {
-                format!("public static func {name}({}){throws}{ret_part}", params.join(", "))
-            } else {
-                format!("public func {name}({}){throws}{ret_part}", params.join(", "))
+                let ret_part = if ret == "Void" {
+                    String::new()
+                } else {
+                    format!(" -> {ret}")
+                };
+                if method.is_static {
+                    format!("public static func {name}({}){throws}{ret_part}", params.join(", "))
+                } else {
+                    format!("public func {name}({}){throws}{ret_part}", params.join(", "))
+                }
             }
         }
         Language::Dart => {
