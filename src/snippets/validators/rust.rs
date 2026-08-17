@@ -1,11 +1,11 @@
 use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use std::io::Write;
 use std::path::Path;
-use tempfile::TempDir;
 
 pub struct RustValidator;
 
@@ -17,8 +17,8 @@ impl RustValidator {
         session: Option<&ValidationSession>,
     ) -> Result<Vec<(SnippetStatus, Option<String>)>> {
         let dir = match session {
-            Some(session) => session.temp_dir()?,
-            None => TempDir::new()?,
+            Some(session) => session.scratch_dir()?,
+            None => ScratchDir::isolated()?,
         };
         let bin_dir = dir.path().join("src/bin");
         std::fs::create_dir_all(&bin_dir)?;
@@ -123,8 +123,8 @@ impl RustValidator {
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
         let dir = match session {
-            Some(session) => session.temp_dir()?,
-            None => TempDir::new()?,
+            Some(session) => session.scratch_dir()?,
+            None => ScratchDir::isolated()?,
         };
         let source_dir = dir.path().join("src");
         std::fs::create_dir_all(&source_dir)?;
@@ -492,6 +492,7 @@ mod tests {
         .expect("package manifest");
         std::fs::write(project.path().join("src/lib.rs"), "pub const VALUE: usize = 1;\n").expect("package source");
         let session = ValidationSession {
+            language: Language::Rust,
             working_directory: project.path().to_path_buf(),
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
@@ -538,6 +539,7 @@ mod tests {
         )
         .expect("package manifest");
         let session = ValidationSession {
+            language: Language::Rust,
             working_directory: project.path().to_path_buf(),
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),
@@ -554,6 +556,7 @@ mod tests {
     #[test]
     fn session_manifest_adds_explicit_dependencies() {
         let mut session = ValidationSession {
+            language: Language::Rust,
             working_directory: std::path::PathBuf::from("fixture"),
             manifest: None,
             fingerprint: "neutral-project".into(),
@@ -581,6 +584,7 @@ mod tests {
     #[test]
     fn rejects_invalid_dependency_names() {
         let mut session = ValidationSession {
+            language: Language::Rust,
             working_directory: std::path::PathBuf::from("fixture"),
             manifest: None,
             fingerprint: "neutral-project".into(),
@@ -681,6 +685,7 @@ mod tests {
         let mut declared = snippet("fn main() {}");
         declared.metadata.requires = vec!["crate:serde_json".into()];
         let mut session = ValidationSession {
+            language: Language::Rust,
             working_directory: std::path::PathBuf::from("fixture"),
             manifest: None,
             fingerprint: "neutral-project".into(),

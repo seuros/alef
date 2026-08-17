@@ -1,9 +1,9 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
 use std::io::Write;
-use tempfile::TempDir;
 
 pub struct TypeScriptValidator;
 
@@ -20,7 +20,7 @@ impl TypeScriptValidator {
         {
             return Ok((SnippetStatus::Pass, None));
         }
-        let temporary_directory = session.is_none().then(TempDir::new).transpose()?;
+        let temporary_directory = session.is_none().then(ScratchDir::isolated).transpose()?;
         let directory = match (session, temporary_directory.as_ref()) {
             (Some(value), _) => value.workspace_directory()?,
             (None, Some(value)) => value.path().to_path_buf(),
@@ -273,6 +273,7 @@ mod tests {
         )
         .unwrap();
         let session = ValidationSession {
+            language: Language::TypeScript,
             working_directory: project.path().to_path_buf(),
             manifest: Some(manifest),
             fingerprint: "neutral-project".into(),

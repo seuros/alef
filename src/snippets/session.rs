@@ -18,6 +18,10 @@ pub struct SessionSpec {
 
 #[derive(Debug, Clone)]
 pub struct ValidationSession {
+    /// Carried from the [`SessionSpec`] so the scratch destination can be one decision rather than
+    /// per-runner behaviour: [`crate::snippets::scratch::scratch_root`] needs the language, and a
+    /// validator holds only a `ValidationSession`. ~keep
+    pub language: Language,
     pub working_directory: PathBuf,
     pub manifest: Option<PathBuf>,
     pub fingerprint: String,
@@ -82,13 +86,22 @@ impl ValidationSession {
         Ok(directory)
     }
 
-    pub fn temp_dir(&self) -> Result<tempfile::TempDir> {
-        let scratch_root = self.working_directory.join(".alef/snippets/tmp");
-        std::fs::create_dir_all(&scratch_root)?;
-        tempfile::Builder::new()
-            .prefix(".alef-snippet-")
-            .tempdir_in(scratch_root)
-            .map_err(Into::into)
+    /// Where this session's per-snippet scratch is allocated. Delegates to
+    /// [`crate::snippets::scratch::scratch_root`] so a runner and the preparation-time sweep can
+    /// never disagree about the destination. ~keep
+    #[must_use]
+    pub fn scratch_root(&self) -> PathBuf {
+        crate::snippets::scratch::scratch_root(self.language, &self.working_directory, self.manifest.as_deref())
+    }
+
+    /// Allocates a self-removing scratch directory for this session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the scratch root cannot be created or a unique directory cannot be
+    /// allocated inside it.
+    pub fn scratch_dir(&self) -> Result<crate::snippets::scratch::ScratchDir> {
+        crate::snippets::scratch::ScratchDir::for_session(self)
     }
 
     pub fn apply(&self, command: &mut std::process::Command) {
@@ -172,6 +185,7 @@ fn resolve_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
     let language = spec.language;
     ensure_directory(&spec.working_directory, language)?;
     cleanup_legacy_scratch_directories(&spec.working_directory, timeout_secs)?;
+    purge_abandoned_scratch(spec, timeout_secs);
     if let Some(manifest) = &spec.manifest
         && !manifest.is_file()
     {
@@ -181,6 +195,7 @@ fn resolve_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
         )));
     }
     Ok(ValidationSession {
+        language,
         working_directory: spec.working_directory.clone(),
         manifest: spec.manifest.clone(),
         fingerprint: session_fingerprint(spec)?,
@@ -334,6 +349,36 @@ fn purge_stale_workspace_scratch_files(directory: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Sweeps the scratch root [`crate::snippets::scratch::scratch_root`] chose for this spec, removing
+/// entries abandoned by a run that was killed before its guards could drop.
+///
+/// This exists because moving scratch under `.alef/snippets/tmp` pointed
+/// [`cleanup_legacy_scratch_directories`] — which only ever reads the top level of
+/// `working_directory` — at a set that no longer contains any scratch at all. Without this the
+/// only remaining cleanup was in-process `Drop`, which a `SIGINT` skips entirely, so leftovers
+/// accumulated in the cache root indefinitely.
+///
+/// Logged and tolerated rather than propagated, for the same reason as
+/// [`purge_stale_session_scratch`]: losing a sweep costs cleanliness, while failing preparation
+/// over it would black out exactly the language the sweep exists to keep clean. ~keep
+fn purge_abandoned_scratch(spec: &SessionSpec, timeout_secs: u64) {
+    let root = crate::snippets::scratch::scratch_root(spec.language, &spec.working_directory, spec.manifest.as_deref());
+    if let Err(error) = crate::snippets::scratch::purge_stale_scratch_root(&root, timeout_secs) {
+        tracing::warn!(
+            scratch_root = %root.display(),
+            language = %spec.language,
+            error = %error,
+            "could not purge abandoned snippet scratch"
+        );
+    }
+}
+
+/// Sweeps `.alef-snippet-*` directories left *directly* in `working_directory` by alef versions
+/// that predate the single scratch destination. Nothing writes there any more, so this covers only
+/// pre-fix leftovers; abandoned scratch from the current layout is [`purge_abandoned_scratch`]'s
+/// job. Deliberately keyed on the `.alef-snippet-` prefix and on directories only: this root is
+/// the consumer's own source directory, not alef's, so anything less specific would be a delete
+/// gate pointed at tracked files. ~keep
 fn cleanup_legacy_scratch_directories(working_directory: &Path, timeout_secs: u64) -> Result<()> {
     let stale_after = std::time::Duration::from_secs(timeout_secs.saturating_add(60));
     let entries = std::fs::read_dir(working_directory).map_err(|error| {
@@ -793,6 +838,7 @@ mod tests {
     fn reuses_a_stable_workspace_for_a_prepared_session() {
         let directory = tempfile::tempdir().expect("temp directory");
         let session = ValidationSession {
+            language: Language::Python,
             working_directory: directory.path().to_path_buf(),
             manifest: None,
             fingerprint: "neutral-fixture".into(),
@@ -827,6 +873,7 @@ mod tests {
             directory.path().to_string_lossy().replace(['/', '\\', ':'], "_")
         );
         let session = ValidationSession {
+            language: Language::Python,
             working_directory: directory.path().to_path_buf(),
             manifest: None,
             fingerprint,
@@ -861,6 +908,7 @@ mod tests {
     fn provides_absolute_isolated_toolchain_directories() {
         let directory = tempfile::tempdir().expect("temp directory");
         let session = ValidationSession {
+            language: Language::Python,
             working_directory: directory.path().to_path_buf(),
             manifest: None,
             fingerprint: "neutral-fixture".into(),
@@ -870,7 +918,7 @@ mod tests {
             rust_dependencies: BTreeMap::new(),
         };
 
-        let scratch = session.temp_dir().expect("isolated scratch directory");
+        let scratch = session.scratch_dir().expect("isolated scratch directory");
         assert!(scratch.path().starts_with(directory.path().join(".alef/snippets/tmp")));
         let mut command = std::process::Command::new("true");
         session.apply_environment(&mut command);

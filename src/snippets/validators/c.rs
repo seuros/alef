@@ -1,4 +1,5 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
@@ -49,9 +50,12 @@ impl SnippetValidator for CValidator {
                 command.args(["-fsyntax-only", "-Wall", "-Werror", &source_path]);
             }
             ValidationLevel::Compile | ValidationLevel::Run => {
-                let out = NamedTempFile::new()?;
-                let out_path = out.path().to_string_lossy().to_string();
-                drop(out);
+                // The compiled binary lives inside a guarded scratch directory rather than being
+                // removed by hand at each `return`: the two `run_command` calls below both exit
+                // through `?`, and neither of the old `remove_file` calls was reachable from
+                // there, so a spawn failure or a timeout leaked an executable every time. ~keep
+                let scratch = ScratchDir::isolated()?;
+                let out_path = scratch.path().join("snippet-output").to_string_lossy().to_string();
                 command.args(["-o", &out_path, &source_path]);
                 let (success, output) = run_command(&mut command, timeout_secs)?;
                 if !success {
@@ -60,14 +64,12 @@ impl SnippetValidator for CValidator {
                 if matches!(level, ValidationLevel::Run) {
                     let mut run = std::process::Command::new(&out_path);
                     let (ran_ok, run_output) = run_command(&mut run, timeout_secs)?;
-                    let _ = std::fs::remove_file(&out_path);
                     return Ok(if ran_ok {
                         (SnippetStatus::Pass, None)
                     } else {
                         (SnippetStatus::Fail, Some(run_output))
                     });
                 }
-                let _ = std::fs::remove_file(&out_path);
                 return Ok((SnippetStatus::Pass, None));
             }
         }
@@ -97,12 +99,11 @@ impl SnippetValidator for CValidator {
         let Some(cc) = compiler() else {
             return Ok((SnippetStatus::Unavailable, Some("no C compiler on PATH".into())));
         };
-        let mut source = tempfile::Builder::new()
-            .suffix(".c")
-            .tempfile_in(&session.working_directory)?;
+        let scratch_dir = session.scratch_dir()?;
+        let mut source = tempfile::Builder::new().suffix(".c").tempfile_in(scratch_dir.path())?;
         source.write_all(snippet.code.as_bytes())?;
         source.flush()?;
-        let output = session.working_directory.join(".alef-snippet-output");
+        let output = scratch_dir.path().join(".alef-snippet-output");
         let mut command = std::process::Command::new(cc);
         let include_directory = session
             .manifest
@@ -203,6 +204,86 @@ mod tests {
         let s = snippet("int main(void) { @@@ }\n");
         let (status, _) = v.validate(&s, ValidationLevel::Syntax, 30).unwrap();
         assert_eq!(status, SnippetStatus::Fail);
+    }
+
+    fn scratch_shape_session(project: &std::path::Path, fingerprint: &str) -> ValidationSession {
+        ValidationSession {
+            language: Language::C,
+            working_directory: project.to_path_buf(),
+            manifest: None,
+            fingerprint: fingerprint.into(),
+            env: std::collections::BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn scratch_top_level_entries(project: &std::path::Path) -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(project)
+            .expect("read project directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != ".alef")
+            .collect()
+    }
+
+    /// Regression: `validate_in_session` used to write its source file via a bare `tempfile_in`
+    /// directly against `session.working_directory`, and its compiled output to a literal
+    /// `session.working_directory.join(".alef-snippet-output")` — both loose in a tracked
+    /// package source directory. Both must nest under the session's own `.alef/snippets/tmp`
+    /// cache root instead. ~keep
+    #[test]
+    fn session_scratch_resolves_under_the_cache_root_not_the_working_directory() {
+        if compiler().is_none() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        let session = scratch_shape_session(project.path(), "scratch-shape-fixture");
+        let s = snippet("int main(void) { return 0; }\n");
+
+        let (status, output) = CValidator
+            .validate_in_session(&s, ValidationLevel::Compile, 30, Some(&session))
+            .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+
+        let leftovers = scratch_top_level_entries(project.path());
+        assert!(
+            leftovers.is_empty(),
+            "no scratch entry may be left directly in the project directory: {leftovers:?}"
+        );
+    }
+
+    /// Pins cleanup on the failure path specifically: a snippet that fails to compile must not
+    /// leave its scratch source or output behind under the working directory any more than a
+    /// passing one does.
+    #[test]
+    fn session_scratch_is_removed_after_a_run_that_fails() {
+        if compiler().is_none() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        let session = scratch_shape_session(project.path(), "scratch-cleanup-fixture");
+        let s = snippet("int main(void) { @@@ }\n");
+
+        let (status, _) = CValidator
+            .validate_in_session(&s, ValidationLevel::Compile, 30, Some(&session))
+            .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Fail);
+
+        let leftovers = scratch_top_level_entries(project.path());
+        assert!(
+            leftovers.is_empty(),
+            "no scratch entry may be left directly in the project directory after a failing run: {leftovers:?}"
+        );
+        let scratch_root = project.path().join(".alef/snippets/tmp");
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining, 0,
+            "scratch left behind under the cache root after a failing snippet validation"
+        );
     }
 
     #[test]

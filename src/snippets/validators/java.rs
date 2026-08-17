@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct JavaValidator;
 
@@ -13,7 +13,7 @@ impl JavaValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let temporary_directory = session.is_none().then(TempDir::new).transpose()?;
+        let temporary_directory = session.is_none().then(ScratchDir::isolated).transpose()?;
         let directory = match (session, temporary_directory.as_ref()) {
             (Some(value), _) => value.external_workspace_directory()?,
             (None, Some(value)) => value.path().to_path_buf(),
@@ -232,6 +232,7 @@ mod tests {
             .expect("javac runs");
         assert!(compiled.success());
         let session = ValidationSession {
+            language: Language::Java,
             working_directory: root.path().to_path_buf(),
             manifest: Some(classes),
             fingerprint: test_fingerprint(root.path()),
@@ -270,6 +271,7 @@ mod tests {
         }
         let root = tempfile::tempdir().expect("temporary root");
         let session = ValidationSession {
+            language: Language::Java,
             working_directory: root.path().to_path_buf(),
             manifest: None,
             fingerprint: test_fingerprint(root.path()),

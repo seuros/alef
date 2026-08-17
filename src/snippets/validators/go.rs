@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct GoValidator;
 
@@ -14,10 +14,8 @@ impl GoValidator {
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
         let dir = match session {
-            Some(session) => tempfile::Builder::new()
-                .prefix(".alef-snippet-")
-                .tempdir_in(Self::project_directory(session))?,
-            None => TempDir::new()?,
+            Some(session) => ScratchDir::for_session(session)?,
+            None => ScratchDir::isolated()?,
         };
         let file = dir.path().join("snippet.go");
         std::fs::write(&file, Self::wrap_if_fragment(&snippet.code))?;
@@ -278,6 +276,7 @@ mod tests {
         let snippet =
             snippet("package main\nimport \"example.test/local/localpkg\"\nfunc main() { _ = localpkg.Value }");
         let session = ValidationSession {
+            language: Language::Go,
             working_directory: working,
             manifest: Some(project.join("go.mod")),
             fingerprint: "fixture".into(),
@@ -298,6 +297,93 @@ mod tests {
         )
         .expect("validation runs");
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    fn scratch_shape_session(project: &std::path::Path, fingerprint: &str) -> ValidationSession {
+        ValidationSession {
+            language: Language::Go,
+            working_directory: project.to_path_buf(),
+            manifest: None,
+            fingerprint: fingerprint.into(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        }
+    }
+
+    fn scratch_top_level_entries(project: &std::path::Path) -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(project)
+            .expect("read project directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != ".alef")
+            .collect()
+    }
+
+    /// Regression: `validate_with_context` used to create its session-scoped scratch directory
+    /// directly inside `project_directory(session)` (a tracked package source directory) via a
+    /// bare `tempdir_in`, leaving a `.alef-snippet-*/` directory loose in `packages/go/` after
+    /// every run. It must nest under that project's own `.alef/snippets/tmp` cache root instead. ~keep
+    #[test]
+    fn session_scratch_resolves_under_the_cache_root_not_the_project_directory() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        let session = scratch_shape_session(project.path(), "scratch-shape-fixture");
+        let snippet = snippet("package main\n\nfunc main() {}\n");
+
+        let (status, output) = GoValidator::validate_with_context(
+            &snippet,
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            Some(&session),
+        )
+        .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+
+        let leftovers = scratch_top_level_entries(project.path());
+        assert!(
+            leftovers.is_empty(),
+            "no scratch entry may be left directly in the project directory: {leftovers:?}"
+        );
+    }
+
+    /// Pins cleanup on the failure path specifically: a snippet that fails `go build` must not
+    /// leave its scratch directory behind under the project directory any more than a passing
+    /// one does.
+    #[test]
+    fn session_scratch_is_removed_after_a_run_that_fails() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        let session = scratch_shape_session(project.path(), "scratch-cleanup-fixture");
+        let snippet = snippet("package main\n\nfunc main() { this does not compile }\n");
+
+        let (status, _) = GoValidator::validate_with_context(
+            &snippet,
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            Some(&session),
+        )
+        .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Fail);
+
+        let leftovers = scratch_top_level_entries(project.path());
+        assert!(
+            leftovers.is_empty(),
+            "no scratch entry may be left directly in the project directory after a failing run: {leftovers:?}"
+        );
+        let scratch_root = project.path().join(".alef/snippets/tmp");
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining, 0,
+            "scratch left behind under the cache root after a failing snippet validation"
+        );
     }
 
     fn snippet(code: &str) -> Snippet {

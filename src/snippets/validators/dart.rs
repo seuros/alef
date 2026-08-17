@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct DartValidator;
 
@@ -14,10 +14,8 @@ impl DartValidator {
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
         let dir = match session {
-            Some(value) => tempfile::Builder::new()
-                .prefix(".alef-snippet-")
-                .tempdir_in(Self::project_directory(value))?,
-            None => TempDir::new()?,
+            Some(value) => ScratchDir::for_session(value)?,
+            None => ScratchDir::isolated()?,
         };
         let file = dir.path().join("snippet.dart");
         std::fs::write(&file, snippet.code.trim())?;
@@ -128,6 +126,7 @@ mod tests {
         assert!(prepared.success());
         let snippet = snippet("import 'package:local_fixture/local_fixture.dart';\nvoid main() { print(value); }");
         let session = ValidationSession {
+            language: Language::Dart,
             working_directory: working,
             manifest: Some(project.join("pubspec.yaml")),
             fingerprint: "fixture".into(),
@@ -141,6 +140,84 @@ mod tests {
             DartValidator::validate_with_context(&snippet, ValidationLevel::TypeCheck, 30, Some(&session))
                 .expect("validation runs");
         assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+    }
+
+    fn scratch_shape_session(project: &std::path::Path, fingerprint: &str) -> ValidationSession {
+        ValidationSession {
+            language: Language::Dart,
+            working_directory: project.to_path_buf(),
+            manifest: None,
+            fingerprint: fingerprint.into(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        }
+    }
+
+    fn scratch_top_level_entries(project: &std::path::Path) -> Vec<std::ffi::OsString> {
+        std::fs::read_dir(project)
+            .expect("read project directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != ".alef")
+            .collect()
+    }
+
+    /// Regression: `validate_with_context` used to create its session-scoped scratch directory
+    /// directly inside `project_directory(session)` (a tracked package source directory) via a
+    /// bare `tempdir_in`, leaving a `.alef-snippet-*/` directory loose in `packages/dart/` after
+    /// every run. It must nest under that project's own `.alef/snippets/tmp` cache root instead. ~keep
+    #[test]
+    fn session_scratch_resolves_under_the_cache_root_not_the_project_directory() {
+        if which::which("dart").is_err() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        let session = scratch_shape_session(project.path(), "scratch-shape-fixture");
+        let snippet = snippet("void main() { print('ok'); }\n");
+
+        let (status, output) =
+            DartValidator::validate_with_context(&snippet, ValidationLevel::Syntax, 30, Some(&session))
+                .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Pass, "{output:?}");
+
+        let leftovers = scratch_top_level_entries(project.path());
+        assert!(
+            leftovers.is_empty(),
+            "no scratch entry may be left directly in the project directory: {leftovers:?}"
+        );
+    }
+
+    /// Pins cleanup on the failure path specifically: a snippet that fails `dart analyze` must
+    /// not leave its scratch directory behind under the project directory any more than a
+    /// passing one does.
+    #[test]
+    fn session_scratch_is_removed_after_a_run_that_fails() {
+        if which::which("dart").is_err() {
+            return;
+        }
+        let project = tempfile::tempdir().expect("project directory");
+        let session = scratch_shape_session(project.path(), "scratch-cleanup-fixture");
+        let snippet = snippet("this does not parse as dart {{{\n");
+
+        let (status, _) = DartValidator::validate_with_context(&snippet, ValidationLevel::Syntax, 30, Some(&session))
+            .expect("validation runs");
+        assert_eq!(status, SnippetStatus::Fail);
+
+        let leftovers = scratch_top_level_entries(project.path());
+        assert!(
+            leftovers.is_empty(),
+            "no scratch entry may be left directly in the project directory after a failing run: {leftovers:?}"
+        );
+        let scratch_root = project.path().join(".alef/snippets/tmp");
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining, 0,
+            "scratch left behind under the cache root after a failing snippet validation"
+        );
     }
 
     fn snippet(code: &str) -> Snippet {

@@ -20,6 +20,7 @@ pub mod yaml_validator;
 pub mod zig;
 
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use std::collections::HashMap;
@@ -162,6 +163,19 @@ impl ValidatorRegistry {
     pub fn get(&self, language: Language) -> Option<&dyn SnippetValidator> {
         self.validators.get(&language).map(Box::as_ref)
     }
+
+    /// Every language this registry can validate, sorted.
+    ///
+    /// Exists so contracts that must hold for *all* languages — the scratch destination above all,
+    /// since the defect it guards against was runners disagreeing with each other — can be
+    /// asserted over the registered set rather than over a hand-written list that silently stops
+    /// covering the next language someone registers. ~keep
+    #[must_use]
+    pub fn languages(&self) -> Vec<Language> {
+        let mut languages: Vec<Language> = self.validators.keys().copied().collect();
+        languages.sort_unstable();
+        languages
+    }
 }
 
 impl Default for ValidatorRegistry {
@@ -179,10 +193,9 @@ pub fn run_script(
     program: &str,
     syntax_arguments: &[&str],
 ) -> Result<(SnippetStatus, Option<String>)> {
-    let mut source = match session {
-        Some(value) => tempfile::Builder::new()
-            .suffix(suffix)
-            .tempfile_in(&value.working_directory)?,
+    let scratch_dir = session.map(ScratchDir::for_session).transpose()?;
+    let mut source = match &scratch_dir {
+        Some(dir) => tempfile::Builder::new().suffix(suffix).tempfile_in(dir.path())?,
         None => tempfile::Builder::new().suffix(suffix).tempfile()?,
     };
     source.write_all(snippet.code.as_bytes())?;
@@ -399,5 +412,137 @@ mod tests {
 
         assert!(matches!(error, crate::snippets::error::Error::Timeout { .. }));
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    fn script_session(working_directory: std::path::PathBuf) -> crate::snippets::session::ValidationSession {
+        crate::snippets::session::ValidationSession {
+            language: crate::snippets::types::Language::Bash,
+            working_directory,
+            manifest: None,
+            fingerprint: "run-script-scratch-fixture".into(),
+            env: std::collections::BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn script_snippet(code: &str) -> crate::snippets::types::Snippet {
+        crate::snippets::types::Snippet {
+            id: None,
+            path: "example.md".into(),
+            language: crate::snippets::types::Language::Bash,
+            title: None,
+            code: code.to_string(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: crate::snippets::types::SnippetMetadata::default(),
+            source_origin: crate::snippets::types::SourceOrigin {
+                path: "example.md".into(),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+
+    /// Regression: `run_script` (shared by bash/php/r/ruby) used to write its scratch file
+    /// directly into `session.working_directory` via a bare `tempfile_in`, producing an
+    /// untracked `.tmp<random><suffix>` file with no `.gitignore` coverage — the exact shape of
+    /// the git-visible litter this fix closes. It must resolve under the session's own cache
+    /// tree instead, leaving nothing behind at the top level of `working_directory` at all. ~keep
+    #[test]
+    fn run_script_resolves_scratch_under_the_cache_root_not_directly_in_working_directory() {
+        let working = tempfile::tempdir().expect("working directory");
+        let session = script_session(working.path().to_path_buf());
+        let snippet = script_snippet("true\n");
+
+        let (status, _) = super::run_script(
+            &snippet,
+            super::ValidationLevel::Syntax,
+            5,
+            Some(&session),
+            ".sh",
+            "true",
+            &[],
+        )
+        .expect("run_script runs");
+
+        assert_eq!(status, super::SnippetStatus::Pass);
+        let top_level_entries: Vec<_> = std::fs::read_dir(working.path())
+            .expect("read working directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != ".alef")
+            .collect();
+        assert!(
+            top_level_entries.is_empty(),
+            "run_script must not leave any scratch entry directly in working_directory: {top_level_entries:?}"
+        );
+    }
+
+    /// Pins cleanup on the failure path specifically: a snippet that fails validation must not
+    /// leave its scratch directory behind any more than a passing one does.
+    #[test]
+    fn run_script_removes_scratch_after_a_run_that_fails() {
+        let working = tempfile::tempdir().expect("working directory");
+        let session = script_session(working.path().to_path_buf());
+        let snippet = script_snippet("false\n");
+
+        let (status, _) = super::run_script(
+            &snippet,
+            super::ValidationLevel::Syntax,
+            5,
+            Some(&session),
+            ".sh",
+            "false",
+            &[],
+        )
+        .expect("run_script runs");
+
+        assert_eq!(status, super::SnippetStatus::Fail);
+        let scratch_root = working.path().join(".alef/snippets/tmp");
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining, 0,
+            "scratch left behind under the cache root after a failing snippet validation"
+        );
+    }
+
+    /// The load-bearing exit path, and the one explicit cleanup calls always missed: `run_script`
+    /// returns `Err` from `?` — here because the toolchain is not installed at all, elsewhere
+    /// because the child timed out — long before any cleanup statement at the bottom of the
+    /// function could run. Only a `Drop` guard covers this, so if scratch ever survives here the
+    /// mechanism has silently regressed to explicit cleanup. ~keep
+    #[test]
+    fn run_script_removes_scratch_when_the_run_returns_an_error() {
+        let working = tempfile::tempdir().expect("working directory");
+        let session = script_session(working.path().to_path_buf());
+        let snippet = script_snippet("true\n");
+
+        let error = super::run_script(
+            &snippet,
+            super::ValidationLevel::Syntax,
+            5,
+            Some(&session),
+            ".sh",
+            "alef-nonexistent-toolchain-for-scratch-test",
+            &[],
+        )
+        .expect_err("a missing toolchain must surface as an error, not a status");
+
+        assert!(matches!(error, crate::snippets::error::Error::Other(_)));
+        let scratch_root = session.scratch_root();
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining,
+            0,
+            "scratch left behind under {} after run_script returned an error",
+            scratch_root.display()
+        );
     }
 }

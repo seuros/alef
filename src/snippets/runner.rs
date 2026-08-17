@@ -1130,6 +1130,7 @@ mod tests {
             (
                 "typescript".into(),
                 crate::snippets::session::ValidationSession {
+                    language: crate::snippets::types::Language::TypeScript,
                     working_directory: "bindings/node".into(),
                     manifest: None,
                     fingerprint: "node".into(),
@@ -1142,6 +1143,7 @@ mod tests {
             (
                 "wasm".into(),
                 crate::snippets::session::ValidationSession {
+                    language: crate::snippets::types::Language::TypeScript,
                     working_directory: "bindings/wasm".into(),
                     manifest: None,
                     fingerprint: "wasm".into(),

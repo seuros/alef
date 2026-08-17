@@ -14,10 +14,9 @@ impl RValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let mut source = match session {
-            Some(value) => tempfile::Builder::new()
-                .suffix(".R")
-                .tempfile_in(&value.working_directory)?,
+        let scratch_dir = session.map(ValidationSession::scratch_dir).transpose()?;
+        let mut source = match &scratch_dir {
+            Some(dir) => tempfile::Builder::new().suffix(".R").tempfile_in(dir.path())?,
             None => NamedTempFile::with_suffix(".R")?,
         };
         source.write_all(snippet.code.as_bytes())?;
@@ -223,5 +222,73 @@ mod tests {
         assert_eq!(result.effective_level, ValidationLevel::Syntax);
         assert_eq!(summary.downgraded, 0);
         assert_eq!(summary.capability_capped, 1);
+    }
+
+    /// Regression: `validate_with_context` used to write its session-scoped scratch file
+    /// directly into `session.working_directory` via a bare `tempfile_in`, leaving an untracked
+    /// `.tmp<random>.R` file loose in a tracked package source directory — with no `.gitignore`
+    /// coverage at all. It must nest under the session's own `.alef/snippets/tmp` cache root
+    /// instead, and stay gone whether the snippet passes or fails. ~keep
+    #[test]
+    fn session_scratch_resolves_under_the_cache_root_and_is_removed_on_pass_and_fail() {
+        if !RValidator.is_available() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temp directory");
+        let session = ValidationSession {
+            language: Language::R,
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "scratch-shape-fixture".into(),
+            env: std::collections::BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+        };
+        let passing = Snippet {
+            id: None,
+            path: "passing.R".into(),
+            language: Language::R,
+            title: None,
+            code: "value <- 1\n".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "passing.R".into(),
+                line: 1,
+                block_index: 0,
+            },
+        };
+        let mut failing = passing.clone();
+        failing.code = "value <- (\n".into();
+
+        let (pass_status, pass_message) =
+            RValidator::validate_with_context(&passing, ValidationLevel::Syntax, 10, Some(&session))
+                .expect("passing snippet validates");
+        assert_eq!(pass_status, SnippetStatus::Pass, "{pass_message:?}");
+        let (fail_status, _) = RValidator::validate_with_context(&failing, ValidationLevel::Syntax, 10, Some(&session))
+            .expect("failing snippet validates");
+        assert_eq!(fail_status, SnippetStatus::Fail);
+
+        let top_level_entries: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("read working directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != ".alef")
+            .collect();
+        assert!(
+            top_level_entries.is_empty(),
+            "no scratch entry may be left directly in working_directory: {top_level_entries:?}"
+        );
+        let scratch_root = directory.path().join(".alef/snippets/tmp");
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining, 0,
+            "scratch left behind under the cache root after a passing and a failing snippet validation"
+        );
     }
 }

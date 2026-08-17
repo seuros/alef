@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct SwiftValidator;
 
@@ -21,7 +21,7 @@ impl SnippetValidator for SwiftValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = TempDir::new()?;
+        let dir = ScratchDir::isolated()?;
         let file = dir.path().join("snippet.swift");
         std::fs::write(&file, snippet.code.trim())?;
 
@@ -65,7 +65,7 @@ impl SnippetValidator for SwiftValidator {
         let Some(session) = session else {
             return self.validate(snippet, level, timeout_secs);
         };
-        let dir = session.temp_dir()?;
+        let dir = session.scratch_dir()?;
         let file = dir.path().join("snippet.swift");
         std::fs::write(&file, snippet.code.trim())?;
         let module_directories = swift_module_directories(session)?;

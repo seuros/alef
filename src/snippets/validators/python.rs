@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct PythonValidator;
 const PYREFLY_UNAVAILABLE: &str = "pyrefly is not available for Python type-checking";
@@ -18,10 +18,8 @@ impl PythonValidator {
             return Ok((SnippetStatus::Unavailable, Some(PYREFLY_UNAVAILABLE.to_string())));
         }
         let dir = match session {
-            Some(session) => tempfile::Builder::new()
-                .prefix(".alef-snippet-")
-                .tempdir_in(&session.working_directory)?,
-            None => TempDir::new()?,
+            Some(session) => session.scratch_dir()?,
+            None => ScratchDir::isolated()?,
         };
         let code = Self::patch_code(&snippet.code);
         let snippet_path = dir.path().join("snippet.py");
@@ -347,6 +345,7 @@ mod tests {
             },
         };
         let session = ValidationSession {
+            language: Language::Python,
             working_directory: directory.path().to_path_buf(),
             manifest: None,
             fingerprint: "test-binding".into(),
@@ -361,5 +360,74 @@ mod tests {
             .expect("session validation runs");
 
         assert_eq!(status, SnippetStatus::Pass, "{message:?}");
+    }
+
+    /// Regression: `validate_with_context` used to create its session-scoped scratch directory
+    /// directly inside `session.working_directory` via a bare `tempdir_in`, leaving a
+    /// `.alef-snippet-*/` directory loose in a tracked package source directory after every run.
+    /// It must nest under the session's own `.alef/snippets/tmp` cache root instead — and stay
+    /// gone whether the snippet passes or fails. ~keep
+    #[test]
+    fn session_scratch_resolves_under_the_cache_root_and_is_removed_on_pass_and_fail() {
+        if !PythonValidator.is_available() {
+            return;
+        }
+        let directory = tempfile::tempdir().expect("temp directory");
+        let session = ValidationSession {
+            language: Language::Python,
+            working_directory: directory.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "scratch-shape-fixture".into(),
+            env: std::collections::BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+        };
+        let passing = Snippet {
+            id: None,
+            path: "passing.py".into(),
+            language: Language::Python,
+            title: None,
+            code: "value = 1\n".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "passing.py".into(),
+                line: 1,
+                block_index: 0,
+            },
+        };
+        let mut failing = passing.clone();
+        failing.code = "def broken(:\n".into();
+
+        let (pass_status, pass_message) = PythonValidator
+            .validate_in_session(&passing, ValidationLevel::Syntax, 10, Some(&session))
+            .expect("passing snippet validates");
+        assert_eq!(pass_status, SnippetStatus::Pass, "{pass_message:?}");
+        let (fail_status, _) = PythonValidator
+            .validate_in_session(&failing, ValidationLevel::Syntax, 10, Some(&session))
+            .expect("failing snippet validates");
+        assert_eq!(fail_status, SnippetStatus::Fail);
+
+        let top_level_entries: Vec<_> = std::fs::read_dir(directory.path())
+            .expect("read working directory")
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name())
+            .filter(|name| name != ".alef")
+            .collect();
+        assert!(
+            top_level_entries.is_empty(),
+            "no scratch entry may be left directly in working_directory: {top_level_entries:?}"
+        );
+        let scratch_root = directory.path().join(".alef/snippets/tmp");
+        let remaining = std::fs::read_dir(&scratch_root)
+            .map(|entries| entries.filter_map(|entry| entry.ok()).count())
+            .unwrap_or(0);
+        assert_eq!(
+            remaining, 0,
+            "scratch left behind under the cache root after a passing and a failing snippet validation"
+        );
     }
 }

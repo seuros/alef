@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct KotlinValidator;
 
@@ -14,8 +14,8 @@ impl KotlinValidator {
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
         let dir = match session {
-            Some(value) => value.temp_dir()?,
-            None => TempDir::new()?,
+            Some(value) => value.scratch_dir()?,
+            None => ScratchDir::isolated()?,
         };
         let file = dir.path().join("snippet.kt");
         std::fs::write(&file, snippet.code.trim())?;
@@ -158,6 +158,7 @@ mod tests {
         };
         assert!(compiled.success());
         let session = ValidationSession {
+            language: Language::Kotlin,
             working_directory: root.path().to_path_buf(),
             manifest: Some(library),
             fingerprint: "fixture".into(),

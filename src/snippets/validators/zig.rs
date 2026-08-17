@@ -1,8 +1,8 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
-use tempfile::TempDir;
 
 pub struct ZigValidator;
 
@@ -21,7 +21,7 @@ impl SnippetValidator for ZigValidator {
         level: ValidationLevel,
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
-        let dir = TempDir::new()?;
+        let dir = ScratchDir::isolated()?;
         let file = dir.path().join("snippet.zig");
         std::fs::write(&file, snippet.code.trim())?;
 
@@ -58,7 +58,7 @@ impl SnippetValidator for ZigValidator {
         let Some(session) = session else {
             return self.validate(snippet, level, timeout_secs);
         };
-        let dir = session.temp_dir()?;
+        let dir = session.scratch_dir()?;
         let file = dir.path().join("snippet.zig");
         std::fs::write(&file, snippet.code.trim())?;
         let mut command = std::process::Command::new("zig");
@@ -689,6 +689,7 @@ mod tests {
         .unwrap();
 
         let session = ValidationSession {
+            language: Language::Zig,
             working_directory: root.to_path_buf(),
             manifest: Some(root.join("build.zig")),
             fingerprint: "neutral-project".into(),
