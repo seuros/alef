@@ -629,7 +629,7 @@ fn render_snippet_markdown(
             fence => language.code_fence(),
             id => snippet_id,
             language => language.canonical_name(),
-            level => "typecheck",
+            level => level_stamp(docs.side_effects),
             requires => requires,
             side_effect => side_effect_name(docs.side_effects),
             target => target,
@@ -658,6 +658,27 @@ fn snippet_requirements(fixture: &Fixture, target: &str, body: &str) -> Vec<Stri
         requirements.push(TOKIO_REQUIREMENT.to_string());
     }
     requirements
+}
+
+/// The front-matter `level` a generated snippet declares. `effective_validation_level`
+/// (`src/snippets/runner.rs`) folds this with the requested level by `min`, so any concrete
+/// value here can only ever lower validation, never raise it.
+///
+/// `94d09809d` ("fix(e2e): typecheck fixture snippets") made this stamp unconditional, replacing
+/// a `syntax` ceiling with `typecheck` specifically because fixtures with side effects the e2e
+/// harness cannot safely execute unattended (network calls, process/install/server side effects)
+/// were being validated no deeper than syntax. That protection is still needed for exactly those
+/// fixtures. It was never needed for `Safe` ones, and stamping them anyway silently capped every
+/// generated snippet at `typecheck` regardless of what the workspace and the snippet's own
+/// capabilities could actually support. A `Safe` snippet renders `level: null` — parsed back as
+/// `SnippetMetadata::level == None` — so it has nothing to fold against `requested` and validates
+/// at whatever level the workspace and validator achieve on their own. ~keep
+fn level_stamp(side_effects: SideEffectClass) -> &'static str {
+    if side_effects == SideEffectClass::Safe {
+        "null"
+    } else {
+        "typecheck"
+    }
 }
 
 fn side_effect_name(side_effect: SideEffectClass) -> &'static str {
@@ -1149,7 +1170,7 @@ mod tests {
             assert_eq!(
                 rendered,
                 format!(
-                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: typecheck\nrequires: []\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
+                    "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: null\nrequires: []\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
                     language.display_name()
                 )
             );
@@ -1220,9 +1241,103 @@ mod tests {
         assert_eq!(
             render(&required, SideEffectClass::Safe, "node"),
             format!(
-                "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nlevel: typecheck\nrequires: [\"feature:json\",\"service:api\"]\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
+                "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nlevel: null\nrequires: [\"feature:json\",\"service:api\"]\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
             )
         );
+    }
+
+    /// `render_snippet_markdown` stamps `level: null` for `Safe` side effects instead of the
+    /// unconditional `typecheck` `94d09809d` introduced, so `SnippetMetadata::level` resolves to
+    /// `None` and `effective_validation_level` (`src/snippets/runner.rs`) has nothing of the
+    /// front matter's own to fold the requested level down against.
+    #[test]
+    fn safe_side_effects_snippet_is_not_level_capped() {
+        let docs = FixtureDocs {
+            topic: "api".into(),
+            stem: None,
+            paths: BTreeMap::new(),
+            title: None,
+            description: None,
+            input: None,
+            shows: Vec::new(),
+            error: None,
+            presentation: None,
+            client: None,
+            side_effects: SideEffectClass::Safe,
+            coverage_exceptions: BTreeMap::new(),
+        };
+        let rendered = render_snippet_markdown(
+            "example()",
+            &documented_fixture(),
+            &docs,
+            "node",
+            DocumentationLanguage::Binding(Language::Node),
+        );
+
+        assert!(
+            rendered.contains("\nlevel: null\n"),
+            "safe snippet must not declare a level cap, got: {rendered}"
+        );
+
+        let front_matter = rendered
+            .split("---\n")
+            .nth(1)
+            .expect("rendered snippet has front matter");
+        let metadata: crate::snippets::types::SnippetMetadata =
+            serde_yaml::from_str(front_matter).expect("front matter is valid YAML");
+        assert_eq!(metadata.level, None, "safe snippet must resolve to no declared level");
+    }
+
+    /// The `typecheck` cap `94d09809d` introduced for side-effecting fixtures survives: it is
+    /// exactly the fixtures this test conditions on that the e2e harness cannot safely execute
+    /// unattended, so they must still resolve to a declared `TypeCheck` ceiling.
+    #[test]
+    fn unsafe_side_effects_snippet_keeps_the_typecheck_cap() {
+        for side_effects in [
+            SideEffectClass::Network,
+            SideEffectClass::Process,
+            SideEffectClass::Install,
+            SideEffectClass::Server,
+        ] {
+            let docs = FixtureDocs {
+                topic: "api".into(),
+                stem: None,
+                paths: BTreeMap::new(),
+                title: None,
+                description: None,
+                input: None,
+                shows: Vec::new(),
+                error: None,
+                presentation: None,
+                client: None,
+                side_effects,
+                coverage_exceptions: BTreeMap::new(),
+            };
+            let rendered = render_snippet_markdown(
+                "example()",
+                &documented_fixture(),
+                &docs,
+                "node",
+                DocumentationLanguage::Binding(Language::Node),
+            );
+
+            assert!(
+                rendered.contains("\nlevel: typecheck\n"),
+                "unsafe snippet ({side_effects:?}) must keep the typecheck cap, got: {rendered}"
+            );
+
+            let front_matter = rendered
+                .split("---\n")
+                .nth(1)
+                .expect("rendered snippet has front matter");
+            let metadata: crate::snippets::types::SnippetMetadata =
+                serde_yaml::from_str(front_matter).expect("front matter is valid YAML");
+            assert_eq!(
+                metadata.level,
+                Some(crate::snippets::types::ValidationLevel::TypeCheck),
+                "unsafe snippet ({side_effects:?}) must resolve to the typecheck cap"
+            );
+        }
     }
 
     /// A snippet exactly as `generate_snippet_report` emits it, for the ownership tests below.
@@ -1293,7 +1408,7 @@ mod tests {
             .expect("rendered snippet carries the marker");
         assert_eq!(marker_index, 9, "marker must stay on the last line of the scan window");
 
-        let widened = rendered.replacen("\nlevel: typecheck\n", "\nlevel: typecheck\nextra: value\n", 1);
+        let widened = rendered.replacen("\nlevel: null\n", "\nlevel: null\nextra: value\n", 1);
         assert!(
             !crate::core::hash::content_has_alef_marker(&widened),
             "one extra front-matter line must push the marker out of the scan window -- \
