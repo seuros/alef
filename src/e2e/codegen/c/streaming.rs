@@ -254,7 +254,20 @@ pub(super) fn render_streaming_test_function(
     let _ = writeln!(out, "    stream_content[0] = '\\0';");
     let _ = writeln!(out, "    size_t stream_content_len = 0;");
     let _ = writeln!(out, "    int stream_complete = 0;");
-    let _ = writeln!(out, "    int no_chunks_after_done = 1;");
+    // `no_chunks_after_done` is a structural invariant, not tracked state: the `while` loop
+    // below calls `stream_next` only until it returns 0/done and `break`s immediately, so no
+    // code path can call `stream_next` again afterward -- there is no way for this loop to
+    // observe a chunk arriving after done. Every other backend encodes the same fact the same
+    // way: `StreamingFieldResolver::accessor`'s `no_chunks_after_done` arm
+    // (`streaming_assertions/accessors.rs`) returns the literal `"true"` for every language
+    // without post-DONE chunk plumbing, exactly matching this `1` that is never reassigned.
+    // This is documented at `streaming_assertions/model.rs`'s field-name table. If a future
+    // adapter design exposes post-DONE chunks as an observable event, THAT is where tracking
+    // would need to start — not here, where "done" and "no more chunks" are the same event. ~keep
+    let _ = writeln!(
+        out,
+        "    int no_chunks_after_done = 1; /* true by construction: the loop below cannot call stream_next again once it observes done */"
+    );
     let _ = writeln!(out);
 
     let _ = writeln!(out, "    while (1) {{");
