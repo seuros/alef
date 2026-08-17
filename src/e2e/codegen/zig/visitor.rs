@@ -221,7 +221,16 @@ pub(super) fn emit_visitor_test_body(
             render_json_assertion(&mut assertions_body, assertion, "result", field_resolver, false);
         }
     }
-    if contains_word(&assertions_body, "result") {
+    // ~keep: Scanning the whole rendered body is not enough on its own — a comment-only
+    // line can legitimately mention "result" in prose (e.g. FieldSkip's "not available on
+    // the JSON-struct result"), which `contains_word` cannot tell apart from a real Zig
+    // identifier reference. Drop comment-only lines before scanning so prose in a skip
+    // comment can never be mistaken for live code reading `result`.
+    let references_result = assertions_body
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .any(|line| contains_word(line, "result"));
+    if references_result {
         let _ = writeln!(out, "    const result = &_parsed.value;");
     }
     out.push_str(&assertions_body);
