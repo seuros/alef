@@ -633,18 +633,19 @@ mod feature_cfg_tests {
             file.content
         );
         assert!(
-            file.content.contains("[lints.clippy]\nprint_stdout = \"deny\""),
-            "configured clippy lints must be spliced in; got:\n{}",
+            file.content
+                .contains("[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""),
+            "configured clippy lints must merge with the builtin deny defaults; got:\n{}",
             file.content
         );
         toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
     }
 
     /// Absence of a configured `cargo_lints` table must reproduce the pre-existing
-    /// builtin `[lints.rust]` block exactly -- byte-identical to a crate that never
-    /// set the field.
+    /// builtin `[lints.rust]` block exactly, followed by the builtin `[lints.clippy]`
+    /// deny block that alef now emits unconditionally for every generated binding crate.
     #[test]
-    fn cargo_toml_omits_extra_lints_when_cargo_lints_unset() {
+    fn cargo_toml_emits_builtin_clippy_denies_when_cargo_lints_unset() {
         use crate::core::config::ResolvedCrateConfig;
         use crate::core::ir::ApiSurface;
 
@@ -656,7 +657,9 @@ mod feature_cfg_tests {
 
         assert!(
             file.content.ends_with(
-                "[lints.rust]\n# flutter_rust_bridge uses #[cfg(frb_expand)] internally during macro expansion.\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }\n"
+                "[lints.rust]\n# flutter_rust_bridge uses #[cfg(frb_expand)] internally during macro expansion.\n\
+                 unexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }\n\n\
+                 [lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\"\n"
             ),
             "got:\n{}",
             file.content

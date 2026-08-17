@@ -251,8 +251,9 @@ namespace = "dev.sample_crate.demo"
     }
 
     /// `[crates.cargo_lints]` must round-trip into the emitted JNI `Cargo.toml` as a
-    /// `[lints.rust]` / `[lints.clippy]` block. The JNI template builds its
-    /// `[package]` header from a hand-written literal rather than
+    /// `[lints.rust]` / `[lints.clippy]` block, with a configured `clippy` entry for a
+    /// non-builtin key surviving alongside the builtin deny defaults. The JNI template
+    /// builds its `[package]` header from a hand-written literal rather than
     /// `cargo_package_header`, so this exercises the splice against a differently
     /// shaped template than the other binding crates.
     #[test]
@@ -274,7 +275,7 @@ namespace = "dev.sample_crate.demo"
 unused_must_use = "deny"
 
 [crates.cargo_lints.clippy]
-print_stdout = "deny"
+unwrap_used = "warn"
 "#,
         );
 
@@ -287,15 +288,19 @@ print_stdout = "deny"
             "expected [lints.rust] block, got:\n{cargo_toml}"
         );
         assert!(
-            cargo_toml.contains("[lints.clippy]\nprint_stdout = \"deny\""),
-            "expected [lints.clippy] block, got:\n{cargo_toml}"
+            cargo_toml.contains(
+                "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\n\
+                 print_stdout = \"deny\"\nunwrap_used = \"warn\""
+            ),
+            "expected the configured clippy entry to merge with the builtin deny defaults, got:\n{cargo_toml}"
         );
         toml::from_str::<toml::Value>(cargo_toml).expect("generated Cargo.toml with cargo_lints must be valid TOML");
     }
 
-    /// Absence of `[crates.cargo_lints]` must not emit any `[lints]` table.
+    /// Absence of `[crates.cargo_lints]` must still emit the built-in `[lints.clippy]` deny
+    /// block; no `[lints.rust]` table is emitted since nothing configures it.
     #[test]
-    fn scaffold_jni_cargo_toml_omits_lints_block_when_cargo_lints_unset() {
+    fn scaffold_jni_cargo_toml_emits_builtin_clippy_denies_when_cargo_lints_unset() {
         let config = resolved_one(
             r#"
 [workspace]
@@ -316,8 +321,13 @@ namespace = "dev.sample_crate.demo"
         let cargo_toml = &files[0].content;
 
         assert!(
-            !cargo_toml.contains("[lints"),
-            "no [lints] table should be emitted when cargo_lints is unset, got:\n{cargo_toml}"
+            !cargo_toml.contains("[lints.rust]"),
+            "no [lints.rust] table should be emitted when cargo_lints.rust is unset, got:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml
+                .contains("[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""),
+            "the builtin [lints.clippy] deny block must survive even when cargo_lints is unset, got:\n{cargo_toml}"
         );
     }
 

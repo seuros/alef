@@ -462,17 +462,17 @@ mod tests {
             "non-colliding configured rust lints must be spliced in; got:\n{content}"
         );
         assert!(
-            content.contains("[lints.clippy]\nprint_stdout = \"deny\""),
-            "configured clippy lints must be spliced in; got:\n{content}"
+            content.contains("[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""),
+            "configured clippy lints must merge with the builtin deny defaults; got:\n{content}"
         );
         toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
     }
 
     /// Absence of a configured `cargo_lints` table must reproduce the pre-existing
-    /// builtin `[lints.rust]` block exactly -- a single table with only the
-    /// `unexpected_cfgs` entry, no `[lints.clippy]` table appended.
+    /// builtin `[lints.rust]` block exactly, followed by the builtin `[lints.clippy]`
+    /// deny block that alef now emits unconditionally for every generated binding crate.
     #[test]
-    fn cargo_toml_omits_extra_lints_when_cargo_lints_unset() {
+    fn cargo_toml_emits_builtin_clippy_denies_when_cargo_lints_unset() {
         let content = emit_cargo_toml(
             "sample-lib",
             "sample_lib",
@@ -496,8 +496,10 @@ mod tests {
         );
 
         assert!(
-            content
-                .ends_with("[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }\n"),
+            content.ends_with(
+                "[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(frb_expand)'] }\n\n\
+                 [lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\"\n"
+            ),
             "got:\n{content}"
         );
     }

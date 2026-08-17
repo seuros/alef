@@ -679,18 +679,20 @@ print_stdout = "deny"
         cargo_toml.content
     );
     assert!(
-        cargo_toml.content.contains("[lints.clippy]\nprint_stdout = \"deny\""),
-        "configured clippy lints must be spliced in; content:\n{}",
+        cargo_toml
+            .content
+            .contains("[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""),
+        "configured clippy lints must merge with the builtin deny defaults; content:\n{}",
         cargo_toml.content
     );
     toml::from_str::<toml::Value>(&cargo_toml.content).expect("generated Cargo.toml must be valid TOML");
 }
 
-/// Absence of `[crates.cargo_lints]` must leave the pre-existing builtin
-/// `[lints.rust]` block exactly as it was: a single table containing only the
-/// `unexpected_cfgs` entry, with no `[lints.clippy]` table appended.
+/// Absence of `[crates.cargo_lints]` must leave the pre-existing builtin `[lints.rust]`
+/// block (only the `unexpected_cfgs` entry) exactly as it was, and must still emit the
+/// builtin `[lints.clippy]` deny block right after it.
 #[test]
-fn test_scaffold_elixir_cargo_lints_unset_leaves_builtin_block_unchanged() {
+fn test_scaffold_elixir_cargo_lints_unset_emits_builtin_clippy_denies() {
     let config = test_config();
     let api = test_api();
     let all_files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
@@ -712,8 +714,8 @@ fn test_scaffold_elixir_cargo_lints_unset_leaves_builtin_block_unchanged() {
         cargo_toml.content
     );
     assert!(
-        !lints_block.contains("[lints.clippy]"),
-        "no [lints.clippy] table should appear when cargo_lints is unset; content:\n{}",
+        lints_block.contains("[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""),
+        "the builtin [lints.clippy] deny block must be emitted even when cargo_lints is unset; content:\n{}",
         cargo_toml.content
     );
     toml::from_str::<toml::Value>(&cargo_toml.content).expect("generated Cargo.toml must be valid TOML");

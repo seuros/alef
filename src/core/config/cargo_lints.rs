@@ -12,14 +12,36 @@
 //! generate` silently overwrote it back out, going unnoticed because Cargo just
 //! stops enforcing the denies rather than erroring.
 //!
-//! [`CargoLintsConfig`] gives that table a declarative home. It is a pure
-//! passthrough — alef does not validate or interpret lint names, mirroring
-//! [`super::manifest_extras::ManifestExtras`] for the language-native-manifest
-//! equivalent.
+//! [`CargoLintsConfig`] gives that table a declarative home. Beyond the passthrough,
+//! [`BUILTIN_CLIPPY_DEFAULTS`] makes the three-lint `[lints.clippy]` deny block itself a
+//! built-in: every generated binding crate gets it whether or not `[crates.cargo_lints]` is
+//! configured at all, since making it opt-in reproduced the exact bug this module was built
+//! to fix -- a consumer who never wrote the config key (or who, as this module's own
+//! changelog entry above records, hand-added the block directly instead) still silently lost
+//! enforcement on the next `alef generate`. A configured entry for one of the three keys still
+//! wins verbatim over the built-in, so a crate with a real reason to relax one can. Everything
+//! else about the table remains a pure passthrough — alef does not validate or interpret lint
+//! names, mirroring [`super::manifest_extras::ManifestExtras`] for the
+//! language-native-manifest equivalent. ~keep
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Built-in `[lints.clippy]` entries every alef-generated binding crate carries
+/// unconditionally, merged underneath any consumer-configured `clippy` entries so a
+/// same-named consumer entry still wins. These three mirror the xberg-io family's
+/// "tracing is the only logging surface" convention, which requires each generated crate to
+/// opt into the denies itself since `[lints]\nworkspace = true` is not available to it (see
+/// the module doc). Sorted by key: [`CargoLintsConfig::render`] and
+/// [`CargoLintsConfig::clippy_block`] both render a `BTreeMap`, so this list's own order is
+/// cosmetic, but keeping it sorted here avoids the constant reading as if insertion order
+/// mattered. ~keep
+const BUILTIN_CLIPPY_DEFAULTS: &[(&str, &str)] = &[
+    ("dbg_macro", "deny"),
+    ("print_stderr", "deny"),
+    ("print_stdout", "deny"),
+];
 
 /// Raw `[lints.rust]` / `[lints.clippy]` tables for a generated binding-crate
 /// `Cargo.toml`. Each entry's value may be a bare string (`print_stdout = "deny"`)
@@ -39,18 +61,32 @@ pub struct CargoLintsConfig {
 }
 
 impl CargoLintsConfig {
-    /// True when neither table has any entries.
+    /// True when neither table has any *configured* entries. This reflects only what the
+    /// consumer wrote in `[crates.cargo_lints]` — it does not account for
+    /// [`BUILTIN_CLIPPY_DEFAULTS`], which [`Self::render`] and [`Self::clippy_block`] always
+    /// merge in regardless of this value.
     pub fn is_empty(&self) -> bool {
         self.rust.is_empty() && self.clippy.is_empty()
     }
 
+    /// The `clippy` table merged with [`BUILTIN_CLIPPY_DEFAULTS`] — a configured entry wins
+    /// over the built-in default for the same key.
+    fn effective_clippy(&self) -> BTreeMap<String, toml::Value> {
+        let mut merged: BTreeMap<String, toml::Value> = BUILTIN_CLIPPY_DEFAULTS
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), toml::Value::String((*value).to_string())))
+            .collect();
+        merged.extend(self.clippy.iter().map(|(key, value)| (key.clone(), value.clone())));
+        merged
+    }
+
     /// Render `[lints.rust]` / `[lints.clippy]` tables for splicing into a generated
-    /// Cargo.toml. Returns an empty string when both tables are empty, so callers can
-    /// splice the result in unconditionally without ever emitting an empty `[lints]`
-    /// block. The returned text carries no leading or trailing newline — callers own
-    /// the blank-line glue that fits their own template.
+    /// Cargo.toml. `[lints.rust]` is omitted when no `rust` entries are configured;
+    /// `[lints.clippy]` always renders, since [`Self::effective_clippy`] is never empty.
+    /// The returned text carries no leading or trailing newline — callers own the
+    /// blank-line glue that fits their own template.
     pub fn render(&self) -> String {
-        render_lint_tables(&self.rust, &self.clippy)
+        render_lint_tables(&self.rust, &self.effective_clippy())
     }
 
     /// `"key = value"` lines for every `[lints.rust]` entry except `exclude`, sorted
@@ -74,14 +110,11 @@ impl CargoLintsConfig {
     }
 
     /// The `[lints.clippy]` table alone, rendered the same way [`Self::render`]
-    /// would, or an empty string when `clippy` has no entries. Pairs with
-    /// [`Self::extra_rust_lines`] for backends that hand-assemble `[lints.rust]`.
+    /// would. Never empty — [`BUILTIN_CLIPPY_DEFAULTS`] guarantees at least those three
+    /// entries even when `clippy` is unconfigured. Pairs with [`Self::extra_rust_lines`]
+    /// for backends that hand-assemble `[lints.rust]`.
     pub fn clippy_block(&self) -> String {
-        if self.clippy.is_empty() {
-            String::new()
-        } else {
-            render_table("[lints.clippy]", &self.clippy)
-        }
+        render_table("[lints.clippy]", &self.effective_clippy())
     }
 }
 
@@ -106,10 +139,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_are_empty() {
+    fn defaults_have_no_configured_entries() {
         let cfg = CargoLintsConfig::default();
         assert!(cfg.is_empty());
-        assert_eq!(cfg.render(), "");
+    }
+
+    /// Regression: an unconfigured `CargoLintsConfig` must still render the built-in
+    /// `[lints.clippy]` deny block — `is_empty()` describing "nothing configured" must not be
+    /// read as "nothing rendered", which was exactly the coverage-loss bug (four binding
+    /// crates' hand-added `[lints.clippy]` block silently dropped by a full regen) this
+    /// built-in closes.
+    #[test]
+    fn render_emits_the_builtin_clippy_block_when_nothing_is_configured() {
+        let cfg = CargoLintsConfig::default();
+        assert_eq!(
+            cfg.render(),
+            "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""
+        );
     }
 
     #[test]
@@ -144,18 +190,56 @@ mod tests {
         let rendered = cfg.render();
         assert_eq!(
             rendered,
-            "[lints.rust]\nunused_must_use = \"deny\"\n\n[lints.clippy]\ndbg_macro = \"deny\"\nprint_stdout = \"deny\""
+            "[lints.rust]\nunused_must_use = \"deny\"\n\n[lints.clippy]\ndbg_macro = \"deny\"\n\
+             print_stderr = \"deny\"\nprint_stdout = \"deny\""
         );
     }
 
     #[test]
-    fn render_omits_absent_table() {
+    fn render_omits_absent_rust_table_and_merges_builtin_clippy_defaults() {
         let toml_src = r#"
             [clippy]
             print_stdout = "deny"
         "#;
         let cfg: CargoLintsConfig = toml::from_str(toml_src).expect("deserializes");
-        assert_eq!(cfg.render(), "[lints.clippy]\nprint_stdout = \"deny\"");
+        assert_eq!(
+            cfg.render(),
+            "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""
+        );
+    }
+
+    /// Regression: a configured `clippy` entry for a non-baseline key (something
+    /// [`BUILTIN_CLIPPY_DEFAULTS`] never mentions) must survive the merge alongside the
+    /// three built-in entries — the built-in must be additive, never a replacement for
+    /// whatever the consumer configured.
+    #[test]
+    fn render_keeps_a_non_builtin_configured_clippy_key_alongside_the_builtin_defaults() {
+        let toml_src = r#"
+            [clippy]
+            unwrap_used = "warn"
+        "#;
+        let cfg: CargoLintsConfig = toml::from_str(toml_src).expect("deserializes");
+        assert_eq!(
+            cfg.render(),
+            "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\"\n\
+             unwrap_used = \"warn\""
+        );
+    }
+
+    /// Regression: a consumer's own value for a built-in key must win over the built-in
+    /// default -- the built-in guarantees the key is *present*, not that its value is
+    /// fixed, so a crate with a real reason to relax one of the three denies still can.
+    #[test]
+    fn render_lets_a_configured_value_override_the_builtin_default_for_the_same_key() {
+        let toml_src = r#"
+            [clippy]
+            print_stdout = "warn"
+        "#;
+        let cfg: CargoLintsConfig = toml::from_str(toml_src).expect("deserializes");
+        assert_eq!(
+            cfg.render(),
+            "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"warn\""
+        );
     }
 
     #[test]
@@ -204,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn clippy_block_renders_the_clippy_table_alone() {
+    fn clippy_block_renders_the_clippy_table_alone_merged_with_builtin_defaults() {
         let toml_src = r#"
             [rust]
             unused_must_use = "deny"
@@ -213,12 +297,18 @@ mod tests {
             print_stdout = "deny"
         "#;
         let cfg: CargoLintsConfig = toml::from_str(toml_src).expect("deserializes");
-        assert_eq!(cfg.clippy_block(), "[lints.clippy]\nprint_stdout = \"deny\"");
+        assert_eq!(
+            cfg.clippy_block(),
+            "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""
+        );
     }
 
     #[test]
-    fn clippy_block_is_empty_when_clippy_table_unset() {
+    fn clippy_block_renders_the_builtin_defaults_when_clippy_table_unset() {
         let cfg = CargoLintsConfig::default();
-        assert_eq!(cfg.clippy_block(), "");
+        assert_eq!(
+            cfg.clippy_block(),
+            "[lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""
+        );
     }
 }
