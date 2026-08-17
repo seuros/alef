@@ -634,7 +634,7 @@ fn typed_default_to_python(
             // goes through `default_factory` — the same mechanism the empty case already uses. ~keep
             format!("field(default_factory=lambda: [{}])", rendered.join(", "))
         }
-        DefaultValue::Empty => {
+        DefaultValue::Empty | DefaultValue::Unresolved(_) => {
             if let TypeRef::Named(name) = ty
                 && data_enum_names.contains(name.as_str())
             {

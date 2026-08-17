@@ -150,12 +150,19 @@ pub(super) fn emit_first_class_struct(
             let camel = swift_case_ident(&field.name.to_lower_camel_case());
             let already_optional = matches!(&field.ty, TypeRef::Optional(_));
             let swift_ty = mapper.map_type(&field.ty);
-            if field.optional && !already_optional {
-                format!("{camel}: {swift_ty}? = nil")
-            } else if already_optional {
-                format!("{camel}: {swift_ty} = nil")
-            } else {
-                format!("{camel}: {swift_ty}")
+            // The Rust default, when it has a Swift literal, beats the `nil`/required rendering
+            // below. `Option<T>` carrying `Some(x)` reaches the IR as the bare literal (the
+            // extractor unwraps `Some`), so without this an `Option<u32>` defaulting to
+            // `Some(30)` initialised to `nil` — a value the source crate never produces.
+            // `swift_typed_default_literal` is value-only: `Empty`, `EnumVariant` and the
+            // function-call defaults return `None` and keep the previous rendering rather than
+            // being answered with a zero. ~keep
+            let literal = field.typed_default.as_ref().and_then(swift_typed_default_literal);
+            let optional_suffix = if field.optional && !already_optional { "?" } else { "" };
+            match literal {
+                Some(value) => format!("{camel}: {swift_ty}{optional_suffix} = {value}"),
+                None if field.optional || already_optional => format!("{camel}: {swift_ty}{optional_suffix} = nil"),
+                None => format!("{camel}: {swift_ty}"),
             }
         })
         .collect();
@@ -370,7 +377,12 @@ pub(super) fn emit_first_class_struct(
 
 /// Renders a typed `DefaultValue` into a Swift literal expression suitable for use as
 /// a `??` fallback. Returns `None` for variants that have no direct Swift literal
-/// (`Empty`, `None`, `EnumVariant`), so callers fall back to a type-based default.
+/// (`Empty`, `None`, `EnumVariant`, `FunctionCall`, `PublicFunctionCall`).
+///
+/// A `None` is *not* an invitation to substitute a type-based zero: only `Empty`/`None` mean
+/// "the type's own default". The other three mean "there is a default whose value is not in the
+/// IR", and the callers in this module keep the field required rather than answering them with a
+/// zero — see [`emit_decoder_init`]. ~keep
 ///
 /// `FloatLiteral` values that are NaN or infinite are also rejected so generated code
 /// stays parseable — callers handle those by falling back to a type-based default.
@@ -391,18 +403,10 @@ pub(crate) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
         DefaultValue::BoolLiteral(true) => Some("true".to_string()),
         DefaultValue::BoolLiteral(false) => Some("false".to_string()),
         DefaultValue::IntLiteral(n) => Some(n.to_string()),
-        DefaultValue::FloatLiteral(f) => {
-            if f.is_nan() || f.is_infinite() {
-                None
-            } else {
-                let s = if f.fract() == 0.0 {
-                    format!("{f:.1}")
-                } else {
-                    f.to_string()
-                };
-                Some(s)
-            }
-        }
+        // `{f}` on a whole-valued f64 prints `1`, which is an *integer* literal in Swift, and the
+        // non-finite values print as `NaN`/`inf`, which name nothing. Both rules live in
+        // `float_literal_digits` so the oracle and the Java/Kotlin/C# emitters cannot drift. ~keep
+        DefaultValue::FloatLiteral(f) => crate::codegen::shared::float_literal_digits(*f),
         DefaultValue::StringLiteral(s) => {
             let mut escaped = String::with_capacity(s.len() + 2);
             escaped.push('"');
@@ -421,6 +425,7 @@ pub(crate) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
         }
         DefaultValue::EnumVariant(_) => None,
         DefaultValue::Empty
+        | DefaultValue::Unresolved(_)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,
@@ -434,7 +439,7 @@ pub(crate) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
 /// Returns `None` for `Named(_)`, `Bytes`, `Path`, `Duration`, `Json`, `Char`, `Unit` —
 /// the caller then emits a plain `decode(T.self, ...)` which relies on the nested
 /// type's own decoder.
-pub(super) fn swift_type_based_default(ty: &TypeRef) -> Option<String> {
+pub(crate) fn swift_type_based_default(ty: &TypeRef) -> Option<String> {
     match ty {
         TypeRef::Primitive(prim) => match prim {
             PrimitiveType::Bool => Some("false".to_string()),
@@ -459,10 +464,11 @@ pub(super) fn swift_type_based_default(ty: &TypeRef) -> Option<String> {
 }
 
 /// Emits a custom `public init(from decoder: any Decoder) throws` body that uses
-/// `decodeIfPresent + ?? <fallback>` for every non-Optional field with a known
-/// default, `decodeIfPresent ?? nil` for Optional fields, and plain
+/// `decodeIfPresent + ?? <fallback>` for every field whose Rust default has a Swift literal
+/// (Optional fields included — `Some(x)` reaches the IR as the literal for `x`),
+/// `decodeIfPresent ?? nil` for Optional fields with no such literal, and plain
 /// `decode(T.self, ...)` for non-Optional fields with no safe Swift fallback
-/// (e.g. nested `Named` structs).
+/// (e.g. nested `Named` structs, and the defaults whose value alef cannot see).
 pub(super) fn emit_decoder_init(mapper: &SwiftMapper, visible_fields: &[&FieldDef], out: &mut String) {
     out.push_str("    public init(from decoder: any Decoder) throws {\n");
     out.push_str("        let container = try decoder.container(keyedBy: CodingKeys.self)\n");
@@ -472,23 +478,51 @@ pub(super) fn emit_decoder_init(mapper: &SwiftMapper, visible_fields: &[&FieldDe
         let is_optional = field.optional || already_optional;
         let swift_ty = mapper.map_type(&field.ty);
 
+        let literal = field.typed_default.as_ref().and_then(swift_typed_default_literal);
+
         if is_optional {
             let inner_ty = swift_ty.strip_suffix('?').unwrap_or(&swift_ty);
-            out.push_str(&crate::backends::swift::template_env::render(
-                "swift_decode_optional_assignment.swift.jinja",
-                minijinja::context! {
-                    field => camel,
-                    ty => inner_ty,
-                },
-            ));
+            // `Option<T>` defaulting to `Some(x)` reaches the IR as the bare literal for `x`, so
+            // decoding an absent key as `nil` would substitute a value the source crate never
+            // produces. Only a genuinely absent literal keeps the `?? nil` rendering. ~keep
+            match &literal {
+                Some(fb) => out.push_str(&crate::backends::swift::template_env::render(
+                    "swift_decode_default_assignment.swift.jinja",
+                    minijinja::context! {
+                        field => camel,
+                        ty => inner_ty,
+                        fallback => fb,
+                    },
+                )),
+                None => out.push_str(&crate::backends::swift::template_env::render(
+                    "swift_decode_optional_assignment.swift.jinja",
+                    minijinja::context! {
+                        field => camel,
+                        ty => inner_ty,
+                    },
+                )),
+            }
             continue;
         }
 
-        let fallback = field
-            .typed_default
-            .as_ref()
-            .and_then(swift_typed_default_literal)
-            .or_else(|| swift_type_based_default(&field.ty));
+        let fallback = literal.or_else(|| {
+            // The type-based zero is only a legitimate stand-in when the Rust default *is* the
+            // type's own default. `FunctionCall`/`PublicFunctionCall` (a `#[serde(default =
+            // "path")]` whose body alef never sees) and `EnumVariant` (whose enum path the
+            // extractor discards) both mean "there is a default and it is not this zero";
+            // answering them with `0`/`""`/`false` is a silent disagreement with the source
+            // crate. Emitting the plain required `decode` instead makes an absent key throw a
+            // `DecodingError` the caller can see. ~keep
+            if matches!(
+                field.typed_default,
+                Some(
+                    DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) | DefaultValue::EnumVariant(_)
+                )
+            ) {
+                return None;
+            }
+            swift_type_based_default(&field.ty)
+        });
 
         match fallback {
             Some(fb) => {
@@ -951,6 +985,7 @@ mod tests {
                 name: "providers".to_string(),
                 return_type: TypeRef::String,
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 ..Default::default()
             }],
             ..Default::default()
@@ -999,6 +1034,7 @@ mod tests {
                 name: "providers".to_string(),
                 return_type: TypeRef::String,
                 receiver: Some(ReceiverKind::Ref),
+                cfg: None,
                 params: vec![crate::core::ir::ParamDef {
                     name: "limit".to_string(),
                     ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
@@ -1026,6 +1062,137 @@ mod tests {
         assert!(
             out.contains("public func providers(limit: UInt32)"),
             "a method with parameters must not be dropped:\n{out}"
+        );
+    }
+
+    /// A field whose Rust default is a `#[serde(default = "path")]` function. Its value is not in
+    /// the IR, so the decoder must not invent one: `?? 0` on a `UInt32` is a silent disagreement
+    /// with the source crate (`default_archive_depth()` returns 1 in the crate this was found in),
+    /// while a plain `decode` makes an absent key a visible `DecodingError`.
+    #[test]
+    fn a_function_call_default_never_becomes_a_swift_zero() {
+        let field = FieldDef {
+            name: "max_archive_depth".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            typed_default: Some(DefaultValue::FunctionCall("default_archive_depth".to_string())),
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        emit_decoder_init(&SwiftMapper, &[&field], &mut out);
+
+        assert!(
+            out.contains("try container.decode(UInt32.self, forKey: .maxArchiveDepth)"),
+            "an unreadable default must leave the key required:\n{out}"
+        );
+        assert!(
+            !out.contains("?? 0"),
+            "the UInt32 zero is not the Rust default and must never stand in for it:\n{out}"
+        );
+    }
+
+    /// The apparatus check for the test above. `Empty` *is* `Default::default()`, so the type zero
+    /// is exact there and must still be emitted — without this, the assertion above would pass
+    /// just as well against an emitter that had stopped producing `??` fallbacks at all.
+    #[test]
+    fn an_empty_default_still_becomes_the_swift_zero() {
+        let field = FieldDef {
+            name: "max_archive_depth".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            typed_default: Some(DefaultValue::Empty),
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        emit_decoder_init(&SwiftMapper, &[&field], &mut out);
+
+        assert!(
+            out.contains("?? 0"),
+            "`Empty` is the type's own default and keeps the zero fallback:\n{out}"
+        );
+    }
+
+    /// `Option<T>` carrying `Some(x)` reaches the IR as the bare literal for `x` — the extractor
+    /// unwraps `Some` (`extract::extractor::defaults`). Decoding an absent key as `nil` therefore
+    /// substitutes a value the source crate never produces. 30000 is deliberately not the Swift
+    /// zero for the type and not `nil`, so a drop cannot look like a render.
+    #[test]
+    fn an_optional_field_defaulting_to_some_keeps_the_value() {
+        let field = FieldDef {
+            name: "timeout_ms".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            optional: true,
+            typed_default: Some(DefaultValue::IntLiteral(30_000)),
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        emit_decoder_init(&SwiftMapper, &[&field], &mut out);
+
+        assert!(
+            out.contains("?? 30000"),
+            "`Some(30_000)` must survive into the decoder:\n{out}"
+        );
+        assert!(
+            !out.contains("?? nil"),
+            "`nil` is not what `Some(30_000)` means:\n{out}"
+        );
+    }
+
+    /// The memberwise `init` used to spell no default at all: every defaulted field was a required
+    /// argument, and every optional one was `= nil` regardless of what Rust said. Both fixture
+    /// values differ from the Swift zero for their type, so a dropped default cannot pass as a
+    /// rendered one.
+    #[test]
+    fn the_memberwise_init_carries_the_rust_default() {
+        let ty = TypeDef {
+            name: "RetryPolicy".to_string(),
+            rust_path: "demo::RetryPolicy".to_string(),
+            has_serde: true,
+            has_default: true,
+            fields: vec![
+                FieldDef {
+                    name: "attempts".to_string(),
+                    ty: TypeRef::Primitive(PrimitiveType::U32),
+                    typed_default: Some(DefaultValue::IntLiteral(7)),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "timeout_ms".to_string(),
+                    ty: TypeRef::Primitive(PrimitiveType::U32),
+                    optional: true,
+                    typed_default: Some(DefaultValue::IntLiteral(30_000)),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut out = String::new();
+        emit_first_class_struct(
+            &ty,
+            &SwiftMapper,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            "DemoError",
+            &std::collections::HashSet::new(),
+            &mut out,
+        );
+
+        assert!(
+            out.contains("attempts: UInt32 = 7"),
+            "a defaulted field must not stay a required init argument:\n{out}"
+        );
+        assert!(
+            out.contains("timeoutMs: UInt32? = 30000"),
+            "an optional field defaulting to `Some(30_000)` must not initialise to nil:\n{out}"
+        );
+        assert!(
+            !out.contains("timeoutMs: UInt32? = nil"),
+            "`nil` is not what `Some(30_000)` means:\n{out}"
         );
     }
 }

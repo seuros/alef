@@ -476,6 +476,7 @@ fn rust_scalar_default(item: &DefaultValue) -> Option<String> {
         DefaultValue::EnumVariant(v) => Some(v.clone()),
         DefaultValue::ListLiteral(_)
         | DefaultValue::Empty
+        | DefaultValue::Unresolved(_)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,
@@ -503,6 +504,52 @@ pub fn maps_to_js_value(mapped_ty: &str) -> bool {
         .is_some_and(|segment| segment == "JsValue")
 }
 
+/// The value the *source crate's own* `Default` gives `field`, as a Rust expression, or `None`
+/// when the owning type cannot be named or has no `Default` to read.
+///
+/// This is the delegation route for defaults alef can see the shape of but not the value of.
+/// [`DefaultValue::EnumVariant`] is the case that needs it: the extractor keeps only the variant
+/// name (`SomeEnum::Variant` lowers to `EnumVariant("Variant")` — see
+/// `extract::extractor::defaults`), so there is no path to spell in generated Rust, and the
+/// binding cannot reconstruct one from `field.ty` because a `Named` type's binding-side spelling
+/// is a wrapper, not the core enum. Reading the value back off `<CoreType as Default>::default()`
+/// asks the source crate instead of guessing, which is the same principle the NAPI and extendr
+/// backends apply by seeding their builders from `CoreType::default()`.
+///
+/// Direct field access is sound because alef only extracts `pub` fields
+/// (`extract::extractor::types` filters on `is_pub`), and it is the same access the serde-stub
+/// recovery in `codegen::config_gen::default_value_for_field_in_type` already emits. Unlike that
+/// recovery this needs no `Deserialize` impl and cannot panic at runtime — but it is only valid
+/// where the owning type really implements `Default`, hence the `has_default` guard. ~keep
+fn core_default_field_access(field: &FieldDef, typ: &TypeDef) -> Option<String> {
+    if !typ.has_default || typ.rust_path.is_empty() {
+        return None;
+    }
+    let core_path = typ.rust_path.replace('-', "_");
+    Some(format!(
+        "<{core_path} as ::core::default::Default>::default().{}",
+        field.name
+    ))
+}
+
+/// Wrap a recovered *core-type* expression so it becomes the binding-side type `mapped_ty`.
+///
+/// A `Named` field usually maps to a per-type binding wrapper reachable by `.into()`, but the
+/// wasm backend degrades some of them to an opaque `JsValue` (see `backends::wasm::type_map`).
+/// `JsValue` has no `From<CoreType>` impl, so `.into()` there is an E0277; serde is the only
+/// bridge, matching what the generated `From<CoreType> for WasmType` bodies already emit for the
+/// same fields. Every non-`Named` field already evaluates to its own representation. ~keep
+fn convert_core_default_expr(field: &FieldDef, mapped_ty: &str, expr: String) -> String {
+    if !matches!(field.ty, TypeRef::Named(_)) {
+        return expr;
+    }
+    if maps_to_js_value(mapped_ty) {
+        format!("serde_wasm_bindgen::to_value(&{expr}).unwrap_or(wasm_bindgen::JsValue::NULL)")
+    } else {
+        format!("{expr}.into()")
+    }
+}
+
 pub fn format_default_value(field: &FieldDef, typ: &TypeDef, mapped_ty: &str) -> String {
     let default = field
         .typed_default
@@ -520,7 +567,14 @@ pub fn format_default_value(field: &FieldDef, typ: &TypeDef, mapped_ty: &str) ->
                 format!("{s}.0")
             }
         }
-        DefaultValue::EnumVariant(v) => v.clone(),
+        // The bare variant name is not a Rust path and never compiles on its own; it is kept only
+        // as the last-resort spelling for callers that already refuse to use this arm (see
+        // `config_constructor_parts_inner`, which falls back to `unwrap_or_default()` when the
+        // owning type carries no `Default` to read the real variant off). ~keep
+        DefaultValue::EnumVariant(v) => match core_default_field_access(field, typ) {
+            Some(access) => convert_core_default_expr(field, mapped_ty, access),
+            None => v.clone(),
+        },
         DefaultValue::ListLiteral(items) => {
             let rendered: Option<Vec<String>> = items.iter().map(rust_scalar_default).collect();
             // A non-scalar element falls back to `Default::default()` rather than a partial
@@ -530,23 +584,21 @@ pub fn format_default_value(field: &FieldDef, typ: &TypeDef, mapped_ty: &str) ->
                 None => "Default::default()".to_string(),
             }
         }
-        DefaultValue::Empty => "Default::default()".to_string(),
+        // `Unresolved` renders exactly like `Empty` here on purpose. This is a *renderer*, and a
+        // renderer has no way to fail; refusing to guess is the validation pass's job
+        // (`ValidationCode::UnreadableFieldDefault`), which runs before any backend reaches this
+        // code. Reaching here with `Unresolved` therefore means the crate explicitly suppressed
+        // that diagnostic and accepted the type-zero. ~keep
+        DefaultValue::Empty | DefaultValue::Unresolved(_) => "Default::default()".to_string(),
         DefaultValue::None => "None".to_string(),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => {
             let recovered = crate::codegen::config_gen::default_value_for_field_in_type(field, "rust", typ);
-            if !matches!(field.ty, TypeRef::Named(_)) || recovered.starts_with("compile_error!") {
+            // A `compile_error!` recovery failure is left unconverted: it never compiles
+            // regardless, and appending `.into()` would only obscure the diagnostic. ~keep
+            if recovered.starts_with("compile_error!") {
                 return recovered;
             }
-            // A `Named` field usually maps to a per-type binding wrapper reachable by `.into()`,
-            // but the wasm backend degrades some of them to an opaque `JsValue` (see
-            // `backends::wasm::type_map`). `JsValue` has no `From<CoreType>` impl, so `.into()`
-            // there is an E0277; serde is the only bridge, matching what the generated
-            // `From<CoreType> for WasmType` bodies already emit for the same fields. ~keep
-            if maps_to_js_value(mapped_ty) {
-                format!("serde_wasm_bindgen::to_value(&{recovered}).unwrap_or(wasm_bindgen::JsValue::NULL)")
-            } else {
-                format!("{recovered}.into()")
-            }
+            convert_core_default_expr(field, mapped_ty, recovered)
         }
     }
 }
@@ -693,7 +745,20 @@ fn config_constructor_parts_inner(
                 format!("{}: {}", binding_name, f.name)
             } else if let Some(ref typed_default) = f.typed_default {
                 match typed_default {
-                    DefaultValue::EnumVariant(_) | DefaultValue::Empty => {
+                    // `Empty` *is* `Default::default()`, so the binding type's own default is the
+                    // right answer by construction.
+                    DefaultValue::Empty => {
+                        format!("{}: {}.unwrap_or_default()", binding_name, f.name)
+                    }
+                    // `EnumVariant` is not. `unwrap_or_default()` here calls the *field type's*
+                    // `Default`, which is a different value from the variant this field defaults
+                    // to whenever the two disagree — `#[derive(Default)] enum Mode { #[default]
+                    // Slow, Fast }` with `mode: Mode::Fast` shipped `Slow` to every wasm, pyo3 and
+                    // extendr caller. The variant name alone cannot be spelled as a path (the
+                    // extractor drops the enum), so the value is read back off the owning type's
+                    // own `Default` instead. Types with no `Default` to read keep the old
+                    // rendering: it is the only expression available, not a claim of correctness. ~keep
+                    DefaultValue::EnumVariant(_) if core_default_field_access(f, typ).is_none() => {
                         format!("{}: {}.unwrap_or_default()", binding_name, f.name)
                     }
                     _ => {

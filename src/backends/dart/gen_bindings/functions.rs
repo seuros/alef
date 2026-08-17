@@ -222,7 +222,12 @@ fn render_default_value(
         DefaultValue::BoolLiteral(value) => Some(value.to_string()),
         DefaultValue::StringLiteral(value) => Some(format!("'{}'", escape_dart_string(value))),
         DefaultValue::IntLiteral(value) => Some(value.to_string()),
-        DefaultValue::FloatLiteral(value) => Some(value.to_string()),
+        // `{f}` on a non-finite `f64` prints `NaN`/`inf`, neither of which names anything in Dart
+        // (`double.nan`, `double.infinity`), so the emitted default would not parse. Returning
+        // `None` propagates all the way up and routes the whole type through the serde round-trip
+        // below, which is the faithful answer rather than a substituted zero. The whole-valued
+        // rule comes along with the shared helper. ~keep
+        DefaultValue::FloatLiteral(value) => crate::codegen::shared::float_literal_digits(*value),
         DefaultValue::EnumVariant(variant) => render_enum_variant_default(ty, variant, enums),
         DefaultValue::ListLiteral(items) => {
             let element_ty = match ty {
@@ -240,7 +245,7 @@ fn render_default_value(
                 None => zero_value_for_type(ty, type_defs, enums),
             }
         }
-        DefaultValue::Empty => zero_value_for_type(ty, type_defs, enums),
+        DefaultValue::Empty | DefaultValue::Unresolved(_) => zero_value_for_type(ty, type_defs, enums),
         DefaultValue::None => Some("null".to_string()),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,
     }

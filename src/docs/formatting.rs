@@ -166,7 +166,11 @@ pub(crate) fn format_typed_default(
                 }
             }
         }
-        DefaultValue::Empty => {
+        // `Unresolved` documents the type-zero, same as `Empty`. That is the prose half of the
+        // very drift this variant exists to expose — generated docs claiming `0ms` for a default
+        // alef could not read — and it is left here only because the validation pass refuses the
+        // surface before docs are written unless the crate suppressed the diagnostic. ~keep
+        DefaultValue::Empty | DefaultValue::Unresolved(_) => {
             let inner_for_dur = match field_ty {
                 TypeRef::Optional(inner) => Some(inner.as_ref()),
                 other => Some(other),

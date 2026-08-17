@@ -948,3 +948,70 @@ fn whole_valued_and_non_finite_float_defaults_stay_valid_kotlin() {
         );
     }
 }
+
+/// The function-call half of the same control. A `#[serde(default = "path")]` whose body alef
+/// never sees used to fall through to the type-driven fallbacks, so a `Vec` field answered with
+/// `emptyList()` and a `Map` field with `emptyMap()` — a *claim* about the Rust value, and a wrong
+/// one for every default function that returns a populated collection. Kotlin cannot call the Rust
+/// function from a data-class parameter default, so the only honest rendering is none at all,
+/// which is what the non-finite `FloatLiteral` case above already does.
+#[test]
+fn a_function_call_default_never_becomes_an_empty_kotlin_collection() {
+    use crate::core::ir::DefaultValue;
+    use std::collections::{HashMap, HashSet};
+
+    let enum_defaults = HashMap::new();
+    let constructible = HashSet::new();
+
+    for default in [
+        DefaultValue::FunctionCall("default_stop_words".to_string()),
+        DefaultValue::PublicFunctionCall("Settings::default_stop_words".to_string()),
+    ] {
+        for ty in [
+            TypeRef::Vec(Box::new(TypeRef::String)),
+            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+        ] {
+            let rendered =
+                super::types::kotlin_field_default(&ty, false, Some(&default), &enum_defaults, &constructible);
+            assert_eq!(
+                rendered, "",
+                "a `{default:?}` on `{ty:?}` has no Kotlin literal and must leave the parameter required, \
+                 not claim the empty collection"
+            );
+        }
+    }
+}
+
+/// The apparatus check for the test above. A field with *no* typed default at all still needs the
+/// empty-collection fallback — that is the feature-gated-field case `kotlin_field_default` was
+/// written for, and the Jackson Kotlin module fails deserialization without it. Without this, the
+/// assertion above would pass equally against an emitter that had stopped defaulting collections
+/// entirely.
+#[test]
+fn a_field_with_no_default_still_gets_the_empty_kotlin_collection() {
+    use std::collections::{HashMap, HashSet};
+
+    let enum_defaults = HashMap::new();
+    let constructible = HashSet::new();
+
+    assert_eq!(
+        super::types::kotlin_field_default(
+            &TypeRef::Vec(Box::new(TypeRef::String)),
+            false,
+            None,
+            &enum_defaults,
+            &constructible,
+        ),
+        " = emptyList()"
+    );
+    assert_eq!(
+        super::types::kotlin_field_default(
+            &TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+            false,
+            None,
+            &enum_defaults,
+            &constructible,
+        ),
+        " = emptyMap()"
+    );
+}

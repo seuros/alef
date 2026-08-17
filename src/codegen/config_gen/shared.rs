@@ -179,7 +179,10 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                     },
                 }
             }
-            DefaultValue::Empty => match &field.ty {
+            // Grouped with `Empty` deliberately: see the note in `codegen::shared`'s
+            // `format_default_value`. A renderer cannot fail, so `Unresolved` only reaches here
+            // when the refusal was suppressed. ~keep
+            DefaultValue::Empty | DefaultValue::Unresolved(_) => match &field.ty {
                 TypeRef::Vec(_) => match language {
                     "python" | "ruby" | "csharp" => "[]".to_string(),
                     "go" => "nil".to_string(),
@@ -556,6 +559,7 @@ fn config_scalar_default(item: &DefaultValue, language: &str) -> Option<String> 
         DefaultValue::ListLiteral(_)
         | DefaultValue::EnumVariant(_)
         | DefaultValue::Empty
+        | DefaultValue::Unresolved(_)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,

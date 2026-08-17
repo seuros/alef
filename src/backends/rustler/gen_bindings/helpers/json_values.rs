@@ -263,7 +263,7 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_field_default(
                     None => elixir_zero_value(ty, enum_defaults),
                 }
             }
-            DefaultValue::Empty => elixir_zero_value(ty, enum_defaults),
+            DefaultValue::Empty | DefaultValue::Unresolved(_) => elixir_zero_value(ty, enum_defaults),
             DefaultValue::None => "nil".to_string(),
             DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => "nil".to_string(),
         };
@@ -287,6 +287,7 @@ fn elixir_scalar_default(item: &crate::core::ir::DefaultValue) -> Option<String>
         DefaultValue::EnumVariant(v) => Some(format!(":{}", v.to_snake_case())),
         DefaultValue::ListLiteral(_)
         | DefaultValue::Empty
+        | DefaultValue::Unresolved(_)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,

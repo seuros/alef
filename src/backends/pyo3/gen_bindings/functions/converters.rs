@@ -6,6 +6,30 @@ use heck::ToSnakeCase;
 
 type OptionsFieldBridges<'a> = AHashMap<&'a str, (&'a str, &'a str, Option<&'a str>)>;
 
+/// True when the options dataclass may hand this field a `None` that the *native* constructor is
+/// expected to replace with the Rust default, so the Python converter must pass it through
+/// untouched instead of eagerly coercing it.
+///
+/// Two serde spellings reach that state and only one used to be recognised here. Bare
+/// `#[serde(default)]` is stored as the `"/* serde(default) */"` marker in `FieldDef::default`,
+/// while `#[serde(default = "path")]` is stored as `serde(default = "path")` there and as
+/// `DefaultValue::FunctionCall`/`PublicFunctionCall` in `typed_default`
+/// (`extract::extractor::helpers::fields`). `typed_default_to_python` renders both function-call
+/// variants as the Python literal `None`, so an equality test against the marker alone left
+/// exactly those fields unguarded: `_coerce_enum(_rust.Mode, None)` raises `ValueError`, and the
+/// `Vec<enum>` form raises `TypeError: 'NoneType' object is not iterable` — both before the value
+/// ever reaches the `#[pyo3(signature = (field=None, ...))]` constructor that would have applied
+/// the real default. `codegen::config_gen::default_value_for_field` already discriminates the two
+/// spellings the same way. ~keep
+fn defers_to_rust_default(field: &crate::core::ir::FieldDef) -> bool {
+    use crate::core::ir::DefaultValue;
+    field.default.as_deref() == Some("/* serde(default) */")
+        || matches!(
+            field.typed_default,
+            Some(DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_))
+        )
+}
+
 /// Check if a cfg condition is present in the pyo3 build (i.e., the field should be
 /// included in the pyo3-compiled binding). This mirrors the logic in gen_stubs/classes.rs
 /// to ensure the converter includes the same fields as the .pyi stub.
@@ -406,8 +430,7 @@ pub(super) fn emit_converters(
                         } else {
                             // For non-optional data enums with #[serde(default)], the user-facing
                             // #[pyo3(signature = ...)] default apply.
-                            let has_serde_default = field.default.as_deref() == Some("/* serde(default) */");
-                            if has_serde_default {
+                            if defers_to_rust_default(field) {
                                 out.push_str(&crate::backends::pyo3::template_env::render(
                                     "data_enum_dict_coerce_optional_default.jinja",
                                     minijinja::context! {
@@ -431,9 +454,8 @@ pub(super) fn emit_converters(
                         let accessor = field_access(&field.name);
 
                         // If this enum field is optional (may be None) or has #[serde(default)]
-                        let has_serde_default = field.default.as_deref() == Some("/* serde(default) */");
                         let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
-                        let needs_none_guard = is_optional || has_serde_default;
+                        let needs_none_guard = is_optional || defers_to_rust_default(field);
 
                         if needs_none_guard {
                             out.push_str(&crate::backends::pyo3::template_env::render(
@@ -550,12 +572,10 @@ pub(super) fn emit_converters(
             let pyo3_param_name = field.serde_rename.as_deref().unwrap_or(&field.name);
 
             // If this field has a #[serde(default)] and is non-optional in the binding,
-            // The marker string "/* serde(default) */" indicates the field has #[serde(default)].
-            let has_serde_default = field.default.as_deref() == Some("/* serde(default) */");
             let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
             let is_named_type = matches!(field.ty, TypeRef::Named(_));
 
-            if has_serde_default && !is_optional && is_named_type {
+            if defers_to_rust_default(field) && !is_optional && is_named_type {
                 // For Named fields with #[serde(default)] that are non-optional in the binding,
                 let raw_field_accessor = field_access(&field.name);
                 out.push_str(&crate::backends::pyo3::template_env::render(

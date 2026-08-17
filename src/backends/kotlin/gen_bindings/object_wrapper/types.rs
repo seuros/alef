@@ -104,6 +104,20 @@ pub(super) fn kotlin_field_default(
         if let Some(literal) = render_kotlin_default(ty, default, enum_defaults, default_constructible_types) {
             return format!(" = {literal}");
         }
+        // A `#[serde(default = "path")]` field states that a default exists and that alef cannot
+        // see its value. Falling through to the type-driven fallbacks below would answer that
+        // with `null`/`emptyList()`/`emptyMap()`, which is a *claim* about the Rust value — and
+        // a wrong one whenever the function returns a populated collection or a `Some(..)`.
+        // Kotlin has no way to reach the Rust function from a data-class parameter default, so
+        // the only honest rendering is no default at all: the parameter stays required, which
+        // costs ergonomics and never disagrees with the source crate. Same rule the non-finite
+        // `FloatLiteral` case follows in `render_kotlin_default`. ~keep
+        if matches!(
+            default,
+            crate::core::ir::DefaultValue::FunctionCall(_) | crate::core::ir::DefaultValue::PublicFunctionCall(_)
+        ) {
+            return String::new();
+        }
     }
     if optional {
         return " = null".to_string();
@@ -237,7 +251,7 @@ fn render_kotlin_default(
             }
             _ => None,
         },
-        DefaultValue::Empty => match ty {
+        DefaultValue::Empty | DefaultValue::Unresolved(_) => match ty {
             TypeRef::Vec(_) => Some("emptyList()".to_string()),
             TypeRef::Map(_, _) => Some("emptyMap()".to_string()),
             TypeRef::Optional(_) => Some("null".to_string()),
