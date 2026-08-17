@@ -1015,3 +1015,127 @@ fn a_field_with_no_default_still_gets_the_empty_kotlin_collection() {
         " = emptyMap()"
     );
 }
+
+/// The regression this control exists for: `Unresolved` is a manual `impl Default` body alef read
+/// but could not constant-fold (`Self::builder().build()`, a `match`, a computed constructor) —
+/// distinct from `Empty`, which *is* the type's own zero. A prior fix folded `Unresolved` into the
+/// same `render_kotlin_default` match arm as `Empty`, so every one of these shapes silently got the
+/// target-language zero instead of staying required — the same "plausible wrong value" defect the
+/// `FunctionCall` control above exists to prevent, just reached through a different `DefaultValue`
+/// variant. Every shape here must render exactly the empty string: no default at all.
+#[test]
+fn an_unresolved_default_never_becomes_a_kotlin_zero() {
+    use crate::core::ir::{DefaultValue, PrimitiveType};
+    use std::collections::{HashMap, HashSet};
+
+    let enum_defaults: HashMap<String, String> = [("Mode".to_string(), "Fast".to_string())].into();
+    let default_constructible: HashSet<String> = ["Settings".to_string()].into();
+    let unresolved = DefaultValue::Unresolved("Self::builder().build()".to_string());
+
+    let cases: Vec<(&str, TypeRef, bool)> = vec![
+        ("bool", TypeRef::Primitive(PrimitiveType::Bool), false),
+        ("i64", TypeRef::Primitive(PrimitiveType::I64), false),
+        ("f64", TypeRef::Primitive(PrimitiveType::F64), false),
+        ("string", TypeRef::String, false),
+        ("vec", TypeRef::Vec(Box::new(TypeRef::String)), false),
+        (
+            "map",
+            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+            false,
+        ),
+        (
+            "optional scalar, not marked optional",
+            TypeRef::Optional(Box::new(TypeRef::String)),
+            false,
+        ),
+        ("optional field flag", TypeRef::Primitive(PrimitiveType::I64), true),
+        // A `Named` type with a declared `#[default]` enum variant: `render_kotlin_default`'s
+        // `Empty` arm would answer `Mode.FAST`, guessing the *declared* variant rather than the
+        // one this specific field's unreadable `impl Default` actually picks. ~keep
+        (
+            "named enum with a declared default",
+            TypeRef::Named("Mode".to_string()),
+            false,
+        ),
+        // A `Named` struct type in `default_constructible_types`: the `Empty` arm would answer
+        // `Settings()`, which is that type's *own* zero-arg constructor, not necessarily what this
+        // field's unreadable default produces. ~keep
+        (
+            "named default-constructible struct",
+            TypeRef::Named("Settings".to_string()),
+            false,
+        ),
+        // A `Named` type with no declared default and not default-constructible: this is the one
+        // shape that already returned "no default" before the fix, via the catch-all `_ => None`
+        // inside the `Empty` arm. ~keep
+        (
+            "named type with no default at all",
+            TypeRef::Named("Opaque".to_string()),
+            false,
+        ),
+    ];
+
+    for (label, ty, optional) in cases {
+        let rendered = super::types::kotlin_field_default(
+            &ty,
+            optional,
+            Some(&unresolved),
+            &enum_defaults,
+            &default_constructible,
+        );
+        assert_eq!(
+            rendered, "",
+            "an `Unresolved` default on `{label}` must leave the parameter required, not guess a zero: got `{rendered}`"
+        );
+    }
+}
+
+/// The disambiguation control at the Kotlin rendering layer, mirroring
+/// `default_agreement_tests::empty_and_unresolved_are_distinct_values` but proving the two diverge
+/// where it actually matters: the emitted parameter text. `Empty` is exactly `Default::default()`,
+/// so the type-zero is the correct rendering and must be unaffected by the `Unresolved` fix above —
+/// without this, a regression that reverted the split by re-merging the two match arms would pass
+/// every other test in this file while reintroducing the exact defect just fixed.
+#[test]
+fn empty_and_unresolved_render_differently_for_the_same_shapes() {
+    use crate::core::ir::{DefaultValue, PrimitiveType};
+    use std::collections::{HashMap, HashSet};
+
+    let enum_defaults = HashMap::new();
+    let constructible = HashSet::new();
+
+    let shapes = [
+        ("bool", TypeRef::Primitive(PrimitiveType::Bool)),
+        ("vec", TypeRef::Vec(Box::new(TypeRef::String))),
+        (
+            "map",
+            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+        ),
+        ("string", TypeRef::String),
+    ];
+
+    for (label, ty) in shapes {
+        let empty =
+            super::types::kotlin_field_default(&ty, false, Some(&DefaultValue::Empty), &enum_defaults, &constructible);
+        let unresolved = super::types::kotlin_field_default(
+            &ty,
+            false,
+            Some(&DefaultValue::Unresolved("computed()".to_string())),
+            &enum_defaults,
+            &constructible,
+        );
+        assert_ne!(
+            empty, unresolved,
+            "`Empty` and `Unresolved` must render differently for `{label}`: `Empty` is a known zero, \
+             `Unresolved` is not — got `{empty}` for both"
+        );
+        assert!(
+            !empty.is_empty(),
+            "`Empty` on `{label}` is the type's own zero and must still render one: got `{empty}`"
+        );
+        assert_eq!(
+            unresolved, "",
+            "`Unresolved` on `{label}` must leave the parameter required: got `{unresolved}`"
+        );
+    }
+}

@@ -104,17 +104,20 @@ pub(super) fn kotlin_field_default(
         if let Some(literal) = render_kotlin_default(ty, default, enum_defaults, default_constructible_types) {
             return format!(" = {literal}");
         }
-        // A `#[serde(default = "path")]` field states that a default exists and that alef cannot
-        // see its value. Falling through to the type-driven fallbacks below would answer that
-        // with `null`/`emptyList()`/`emptyMap()`, which is a *claim* about the Rust value — and
-        // a wrong one whenever the function returns a populated collection or a `Some(..)`.
-        // Kotlin has no way to reach the Rust function from a data-class parameter default, so
-        // the only honest rendering is no default at all: the parameter stays required, which
-        // costs ergonomics and never disagrees with the source crate. Same rule the non-finite
-        // `FloatLiteral` case follows in `render_kotlin_default`. ~keep
+        // A `#[serde(default = "path")]` field (`FunctionCall`/`PublicFunctionCall`) or a manual
+        // `impl Default` body alef could not constant-fold (`Unresolved`) both state that a
+        // default exists and that alef cannot see its value. Falling through to the type-driven
+        // fallbacks below would answer that with `null`/`emptyList()`/`emptyMap()`, which is a
+        // *claim* about the Rust value — and a wrong one whenever the real value is a populated
+        // collection or a `Some(..)`. Kotlin has no way to reach the Rust value from a data-class
+        // parameter default, so the only honest rendering is no default at all: the parameter
+        // stays required, which costs ergonomics and never disagrees with the source crate. Same
+        // rule the non-finite `FloatLiteral` case follows in `render_kotlin_default`. ~keep
         if matches!(
             default,
-            crate::core::ir::DefaultValue::FunctionCall(_) | crate::core::ir::DefaultValue::PublicFunctionCall(_)
+            crate::core::ir::DefaultValue::FunctionCall(_)
+                | crate::core::ir::DefaultValue::PublicFunctionCall(_)
+                | crate::core::ir::DefaultValue::Unresolved(_)
         ) {
             return String::new();
         }
@@ -251,7 +254,7 @@ fn render_kotlin_default(
             }
             _ => None,
         },
-        DefaultValue::Empty | DefaultValue::Unresolved(_) => match ty {
+        DefaultValue::Empty => match ty {
             TypeRef::Vec(_) => Some("emptyList()".to_string()),
             TypeRef::Map(_, _) => Some("emptyMap()".to_string()),
             TypeRef::Optional(_) => Some("null".to_string()),
@@ -289,6 +292,11 @@ fn render_kotlin_default(
             _ => None,
         },
         DefaultValue::None => Some("null".to_string()),
+        // Alef read the `Default` impl but could not constant-fold its body: the value is
+        // genuinely unknown, not the type's zero. Rendering nothing here — rather than reusing
+        // the `Empty` arm above — is what lets `kotlin_field_default` tell the two apart and
+        // leave the parameter required instead of guessing `emptyList()`/`0`/`Name()`. ~keep
+        DefaultValue::Unresolved(_) => None,
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,
     }
 }
