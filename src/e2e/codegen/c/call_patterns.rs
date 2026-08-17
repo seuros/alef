@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
 use super::{
-    LeafFieldCheck, ResultFieldsSource, c_optional_sentinel, emit_nested_accessor, ensure_leaf_field_exists,
+    FieldConfigSources, LeafFieldCheck, c_optional_sentinel, emit_nested_accessor, ensure_leaf_field_exists,
     infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, render_assertion, try_emit_enum_accessor,
 };
 
@@ -36,7 +36,7 @@ pub(super) fn render_engine_factory_test_function(
     expects_error: bool,
     raw_c_result_type: Option<&str>,
     type_defs: &[crate::core::ir::TypeDef],
-    result_fields_source: &ResultFieldsSource,
+    config_sources: &FieldConfigSources,
 ) -> anyhow::Result<()> {
     // cbindgen's `[export] prefix` (shouty-snake), not a bare uppercase — see
     // `c_consumer::export_type_prefix`. ~keep
@@ -254,7 +254,7 @@ pub(super) fn render_engine_factory_test_function(
                     result_type_name,
                     f,
                     type_defs,
-                    result_fields_source,
+                    config_sources,
                 )?;
                 if let Some(returned_type) = leaf_result {
                     // Could be a primitive type (primitive_locals) or opaque handle type
@@ -313,7 +313,8 @@ pub(super) fn render_engine_factory_test_function(
                         declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
                         result_type_name,
                         type_defs,
-                        result_fields_source,
+                        result_fields_source: &config_sources.result_fields,
+                        fields_source: &config_sources.fields,
                     })?;
                     let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                 }

@@ -643,7 +643,10 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
         &streaming_client_config(),
         &[],
         false,
-        &ResultFieldsSource::Global,
+        &FieldConfigSources {
+            result_fields: EffectiveConfigSource::Global,
+            fields: EffectiveConfigSource::Global,
+        },
     )
     .expect("streaming test function renders");
 
@@ -684,7 +687,10 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
         &bytes_client_config(),
         &[],
         false,
-        &ResultFieldsSource::Global,
+        &FieldConfigSources {
+            result_fields: EffectiveConfigSource::Global,
+            fields: EffectiveConfigSource::Global,
+        },
     )
     .expect("bytes test function renders");
 

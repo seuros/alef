@@ -38,7 +38,7 @@ pub(super) fn emit_nested_accessor(
     result_type_name: &str,
     raw_field: &str,
     type_defs: &[crate::core::ir::TypeDef],
-    result_fields_source: &ResultFieldsSource,
+    config_sources: &FieldConfigSources,
 ) -> anyhow::Result<Option<String>> {
     let segments: Vec<&str> = resolved.split('.').collect();
     // cbindgen's `[export] prefix` is shouty-snake, not uppercase; re-deriving it here as
@@ -260,7 +260,8 @@ pub(super) fn emit_nested_accessor(
                 declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
                 result_type_name,
                 type_defs,
-                result_fields_source,
+                result_fields_source: &config_sources.result_fields,
+                fields_source: &config_sources.fields,
             })?;
             let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({current_handle});");
         } else {
@@ -294,6 +295,7 @@ pub(super) fn emit_nested_accessor(
                             current_snake_type: &current_snake_type,
                             result_type_name,
                             type_defs,
+                            fields_source: &config_sources.fields,
                         })
                     );
                 }
@@ -539,6 +541,9 @@ struct MissingIntermediateType<'a> {
     /// The type the walk started from.
     result_type_name: &'a str,
     type_defs: &'a [crate::core::ir::TypeDef],
+    /// Which `fields` (alias table) governs the call this hop belongs to — threaded
+    /// through so the diagnostic can name the one config key an edit will actually reach.
+    fields_source: &'a EffectiveConfigSource,
 }
 
 /// Explain a missing `fields_c_types` key in terms of the chain that produced it.
@@ -563,6 +568,7 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
         current_snake_type,
         result_type_name,
         type_defs,
+        fields_source,
     } = context;
 
     let mut message = format!(
@@ -592,11 +598,20 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
             };
             let real_path = &chain.path;
             let real_symbol = format!("{prefix}_{}_{seg_snake}", chain.owner_type.to_snake_case());
+            // Same shadowing rule as the leaf diagnostic's alias-fix branch, `fields`
+            // instead of `result_fields`: a non-empty per-call `fields` override
+            // replaces the global alias table outright (`E2eConfig::effective_fields`),
+            // so the alias must be spelled under whichever one actually governs this
+            // call. ~keep
+            let fields_key = match fields_source {
+                EffectiveConfigSource::Global => "`[crates.e2e.fields]`".to_string(),
+                EffectiveConfigSource::PerCall(label) => format!("`{label}.fields`"),
+            };
             let _ = write!(
                 message,
                 " Field `{seg_snake}` does exist below `{result_type_name}`, at \"{real_path}\" -- it is declared on \
                  `{owner}`, so the accessor that really exists is `{real_symbol}()`. Fix: add \
-                 \"{alias_key}\" = \"{real_path}\" under `[crates.e2e.fields]` so the fixture path resolves to the \
+                 \"{alias_key}\" = \"{real_path}\" under {fields_key} so the fixture path resolves to the \
                  real chain. Only add \"{lookup_key}\" to `[crates.e2e.fields_c_types]` if `{accessor_fn}()` really \
                  is in the generated header.",
                 owner = chain.owner_type,
@@ -614,7 +629,7 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
             let _ = write!(
                 message,
                 "{}",
-                ambiguous_field_name_suffix(seg_snake, result_type_name, chains)
+                ambiguous_field_name_suffix(seg_snake, result_type_name, chains, fields_source)
             );
         }
     }
@@ -633,60 +648,105 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
 /// values `function`/`class`), and the message confidently suggested aliasing to it. Naming
 /// every candidate chain, and refusing to recommend any single one of them, is the fix: the
 /// operator -- who knows which chain the fixture actually means -- has to pick. ~keep
-fn ambiguous_field_name_suffix(seg_snake: &str, result_type_name: &str, chains: &[ResolvedFieldChain]) -> String {
+fn ambiguous_field_name_suffix(
+    seg_snake: &str,
+    result_type_name: &str,
+    chains: &[ResolvedFieldChain],
+    fields_source: &EffectiveConfigSource,
+) -> String {
     let candidates: Vec<String> = chains
         .iter()
         .map(|chain| format!("\"{}\" (declared on `{}`)", chain.path, chain.owner_type))
         .collect();
+    // Same shadowing rule as every other alias-fix branch in this file: a non-empty
+    // per-call `fields` override replaces the global alias table outright
+    // (`E2eConfig::effective_fields`), so the manual alias this suggests has to be
+    // spelled under whichever one actually governs this call. ~keep
+    let fields_key = match fields_source {
+        EffectiveConfigSource::Global => "`[crates.e2e.fields]`".to_string(),
+        EffectiveConfigSource::PerCall(label) => format!("`{label}.fields`"),
+    };
     format!(
         " Field `{seg_snake}` is declared on {count} unrelated types reachable from `{result_type_name}`, with \
          different chains: {candidates} -- alef cannot tell which one the fixture means, and guessing risks \
          binding the assertion to a field with a different value domain than intended. Fix: add \
-         \"<fixture path>\" = \"<the correct chain from the list above>\" under `[crates.e2e.fields]` yourself, \
+         \"<fixture path>\" = \"<the correct chain from the list above>\" under {fields_key} yourself, \
          after checking which candidate actually matches this fixture's data.",
         count = chains.len(),
         candidates = candidates.join(", "),
     )
 }
 
-/// Where the `result_fields` set actually governing a call came from: the per-call
-/// override, or the global `[crates.e2e].result_fields` default that only applies when
-/// the call declares no override of its own.
+/// Where a per-call-overridable e2e config collection (`result_fields`, `fields`, ...)
+/// actually came from for a given call: the per-call override, or the global
+/// `[crates.e2e]` default that only applies when the call declares no override of its
+/// own.
 ///
 /// Exists so a diagnostic can name the ONE config key an edit will actually reach.
-/// `E2eConfig::effective_result_fields` REPLACES the global set outright when a call's
-/// own `result_fields` is non-empty — it never merges the two — so a message that always
-/// names the global key is actively wrong for every call with an override. That exact
-/// wrongness shipped once already: it told a consumer with a per-call override to edit
-/// the global key, they did, nothing changed, and they filed it as a codegen blocker. ~keep
-pub(super) enum ResultFieldsSource {
-    /// The global `[crates.e2e].result_fields` set is what's in effect for this call.
+/// Every `E2eConfig::effective_*` method (`effective_result_fields`, `effective_fields`,
+/// ...) REPLACES the global collection outright when a call's own collection is
+/// non-empty — it never merges the two — so a message that always names the global key
+/// is actively wrong for every call with an override. That exact wrongness shipped once
+/// already for `result_fields`: it told a consumer with a per-call override to edit the
+/// global key, they did, nothing changed, and they filed it as a codegen blocker. The
+/// same shape lived on, unfixed, in every diagnostic that names `[crates.e2e.fields]` —
+/// this type is shared by both so the two checks cannot drift onto different resolution
+/// logic the way the two hand-rolled versions of it did before this. ~keep
+pub(super) enum EffectiveConfigSource {
+    /// The global `[crates.e2e]` collection is what's in effect for this call.
     Global,
     /// A per-call override is what's in effect, named by its TOML table path (e.g.
     /// `"[crates.e2e.calls.crawl]"`, or the unnamed default `"[crates.e2e.call]"`).
     PerCall(String),
 }
 
-/// Determine which `result_fields` set governs `call`, by the same rule
-/// [`E2eConfig::effective_result_fields`] applies: a non-empty per-call `result_fields`
-/// wins outright, it never merges with the global default.
+/// Determine which instance of a per-call-overridable collection governs `call`: pass
+/// `call_has_override` as `!call.result_fields.is_empty()`, `!call.fields.is_empty()`,
+/// etc. — whichever collection the caller is resolving — since that emptiness check is
+/// the only part of [`E2eConfig::effective_result_fields`]/[`E2eConfig::effective_fields`]
+/// (and siblings) that differs per collection; the "which key names it" logic that
+/// follows is identical for all of them.
 ///
 /// `call` is matched against `e2e_config.calls`/`e2e_config.call` by pointer identity
 /// rather than by name, because a caller that reached `call` through
 /// `resolve_call_for_fixture`'s `select_when` auto-routing does not get the matched key
 /// back — the resolved `&CallConfig` reference is the only thing both the explicit-name
 /// path and the auto-routed path have in common. ~keep
-pub(super) fn describe_result_fields_source(e2e_config: &E2eConfig, call: &CallConfig) -> ResultFieldsSource {
-    if call.result_fields.is_empty() {
-        return ResultFieldsSource::Global;
+pub(super) fn describe_effective_config_source(
+    e2e_config: &E2eConfig,
+    call: &CallConfig,
+    call_has_override: bool,
+) -> EffectiveConfigSource {
+    if !call_has_override {
+        return EffectiveConfigSource::Global;
     }
     match e2e_config
         .calls
         .iter()
         .find(|(_, candidate)| std::ptr::eq(*candidate, call))
     {
-        Some((name, _)) => ResultFieldsSource::PerCall(format!("[crates.e2e.calls.{name}]")),
-        None => ResultFieldsSource::PerCall("[crates.e2e.call]".to_string()),
+        Some((name, _)) => EffectiveConfigSource::PerCall(format!("[crates.e2e.calls.{name}]")),
+        None => EffectiveConfigSource::PerCall("[crates.e2e.call]".to_string()),
+    }
+}
+
+/// The `result_fields` and `fields` sources actually in effect for one call, resolved
+/// once per fixture and threaded through every nested-field diagnostic for it. Bundled
+/// rather than passed as two loose parameters so a diagnostic that needs both (the leaf
+/// diagnostic proposes a `result_fields` fix on one path and a `fields` alias fix on
+/// another) cannot accidentally receive one resolved against a different call than the
+/// other. ~keep
+pub(super) struct FieldConfigSources {
+    pub result_fields: EffectiveConfigSource,
+    pub fields: EffectiveConfigSource,
+}
+
+impl FieldConfigSources {
+    pub(super) fn resolve(e2e_config: &E2eConfig, call: &CallConfig) -> Self {
+        Self {
+            result_fields: describe_effective_config_source(e2e_config, call, !call.result_fields.is_empty()),
+            fields: describe_effective_config_source(e2e_config, call, !call.fields.is_empty()),
+        }
     }
 }
 
@@ -717,7 +777,10 @@ pub(super) struct LeafFieldCheck<'a> {
     pub type_defs: &'a [crate::core::ir::TypeDef],
     /// Which `result_fields` set governs the call this leaf belongs to — threaded through
     /// so the diagnostic can name the one config key an edit will actually reach.
-    pub result_fields_source: &'a ResultFieldsSource,
+    pub result_fields_source: &'a EffectiveConfigSource,
+    /// Which `fields` (alias table) governs the call this leaf belongs to — same reason
+    /// as `result_fields_source`, for the diagnostic's alias-fix branches.
+    pub fields_source: &'a EffectiveConfigSource,
 }
 
 /// Reject a leaf field the IR positively says the parent type does not have.
@@ -758,6 +821,7 @@ pub(super) fn ensure_leaf_field_exists(check: LeafFieldCheck<'_>) -> anyhow::Res
             result_type_name: check.result_type_name,
             type_defs: check.type_defs,
             result_fields_source: check.result_fields_source,
+            fields_source: check.fields_source,
         })
     )
 }
@@ -774,7 +838,8 @@ struct UnknownLeafField<'a> {
     parent_type: &'a str,
     result_type_name: &'a str,
     type_defs: &'a [crate::core::ir::TypeDef],
-    result_fields_source: &'a ResultFieldsSource,
+    result_fields_source: &'a EffectiveConfigSource,
+    fields_source: &'a EffectiveConfigSource,
 }
 
 /// Explain a leaf segment that names no field of the type the walk arrived at.
@@ -797,6 +862,7 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
         result_type_name,
         type_defs,
         result_fields_source,
+        fields_source,
     } = context;
 
     let mut message = format!(
@@ -833,7 +899,7 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
             let _ = write!(
                 message,
                 "{}",
-                ambiguous_field_name_suffix(seg_snake, result_type_name, chains)
+                ambiguous_field_name_suffix(seg_snake, result_type_name, chains, fields_source)
             );
             return message;
         }
@@ -862,8 +928,8 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
             // consumer followed exactly that instruction, edited the global key, and it
             // changed nothing because their call had its own `result_fields`. ~keep
             let result_fields_key = match result_fields_source {
-                ResultFieldsSource::Global => "`[crates.e2e].result_fields`".to_string(),
-                ResultFieldsSource::PerCall(label) => format!("`{label}.result_fields`"),
+                EffectiveConfigSource::Global => "`[crates.e2e].result_fields`".to_string(),
+                EffectiveConfigSource::PerCall(label) => format!("`{label}.result_fields`"),
             };
             let _ = write!(
                 message,
@@ -873,9 +939,17 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
             );
         }
         None => {
+            // Same shadowing rule, `[crates.e2e.fields]` instead of `.result_fields`: a
+            // non-empty per-call `fields` override replaces the global alias table
+            // outright (`E2eConfig::effective_fields`), so the alias must be spelled
+            // under whichever one actually governs this call. ~keep
+            let fields_key = match fields_source {
+                EffectiveConfigSource::Global => "`[crates.e2e.fields]`".to_string(),
+                EffectiveConfigSource::PerCall(label) => format!("`{label}.fields`"),
+            };
             let _ = write!(
                 message,
-                " Fix: add \"{raw_field}\" = \"{real_path}\" under `[crates.e2e.fields]` so the fixture path \
+                " Fix: add \"{raw_field}\" = \"{real_path}\" under {fields_key} so the fixture path \
                  resolves to the real chain."
             );
         }
@@ -1582,6 +1656,17 @@ mod tests {
     use super::*;
     use crate::core::ir::{FieldDef, TypeDef, TypeRef};
 
+    /// The neutral `FieldConfigSources` most tests want: neither `result_fields` nor
+    /// `fields` has a per-call override in effect, so every diagnostic falls back to
+    /// naming the global keys — the shape every test that isn't specifically exercising
+    /// the per-call branch expects.
+    fn global_sources() -> FieldConfigSources {
+        FieldConfigSources {
+            result_fields: EffectiveConfigSource::Global,
+            fields: EffectiveConfigSource::Global,
+        }
+    }
+
     /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
     /// (present, non-`binding_excluded`, on some IR type) but missing from the
     /// hand-maintained `result_fields` config must still render a real assertion,
@@ -1781,7 +1866,7 @@ mod tests {
             "ExtractionResult",
             "summary.processed",
             &types,
-            &ResultFieldsSource::Global,
+            &global_sources(),
         )
         .expect("every hop resolves");
 
@@ -1828,6 +1913,10 @@ mod tests {
     }
 
     fn walk_crawlberg_article_tags() -> anyhow::Error {
+        walk_crawlberg_article_tags_with_sources(&global_sources())
+    }
+
+    fn walk_crawlberg_article_tags_with_sources(config_sources: &FieldConfigSources) -> anyhow::Error {
         let mut output = String::new();
         let mut handles = Vec::new();
         emit_nested_accessor(
@@ -1842,7 +1931,7 @@ mod tests {
             "ScrapeResult",
             "article.tags.length",
             &crawlberg_article_types(),
-            &ResultFieldsSource::Global,
+            config_sources,
         )
         .expect_err("`tags` is not a field of ScrapeResult")
     }
@@ -1904,6 +1993,28 @@ mod tests {
         );
     }
 
+    /// The `fields` sibling of the `result_fields` fix: a non-empty per-call `fields`
+    /// override REPLACES the global alias table outright (`E2eConfig::effective_fields`),
+    /// so when a per-call override is what's in effect, the alias-fix must name that
+    /// call's own key -- never the global one, which an edit would not reach.
+    #[test]
+    fn missing_intermediate_type_names_the_per_call_fields_when_that_is_what_shadows() {
+        let sources = FieldConfigSources {
+            result_fields: EffectiveConfigSource::Global,
+            fields: EffectiveConfigSource::PerCall("[crates.e2e.calls.scrape]".to_string()),
+        };
+        let message = walk_crawlberg_article_tags_with_sources(&sources).to_string();
+
+        assert!(
+            message.contains("\"article.tags\" = \"metadata.article.tags\" under `[crates.e2e.calls.scrape].fields`"),
+            "must name the per-call key that actually governs this call: {message}"
+        );
+        assert!(
+            !message.contains("under `[crates.e2e.fields]`"),
+            "must not point at the global key when a per-call override shadows it: {message}"
+        );
+    }
+
     /// The other half of the diagnostic: when the field genuinely does not exist anywhere
     /// under the result type, there is no alias to suggest and the message must say so
     /// rather than inventing a chain.
@@ -1923,7 +2034,7 @@ mod tests {
             "ScrapeResult",
             "nowhere.length",
             &crawlberg_article_types(),
-            &ResultFieldsSource::Global,
+            &global_sources(),
         )
         .expect_err("`nowhere` is not a field of anything");
 
@@ -2033,6 +2144,15 @@ mod tests {
         raw_field: &str,
         fields_c_types: &HashMap<String, String>,
     ) -> anyhow::Result<(String, Option<String>)> {
+        walk_completion_response_with_sources(resolved, raw_field, fields_c_types, &global_sources())
+    }
+
+    fn walk_completion_response_with_sources(
+        resolved: &str,
+        raw_field: &str,
+        fields_c_types: &HashMap<String, String>,
+        config_sources: &FieldConfigSources,
+    ) -> anyhow::Result<(String, Option<String>)> {
         let mut output = String::new();
         let mut handles = Vec::new();
         let leaf = emit_nested_accessor(
@@ -2047,7 +2167,7 @@ mod tests {
             "CompletionResponse",
             raw_field,
             &completion_response_types(),
-            &ResultFieldsSource::Global,
+            config_sources,
         )?;
         Ok((output, leaf))
     }
@@ -2097,6 +2217,37 @@ mod tests {
         assert!(
             message.contains("gatelib_document_title()"),
             "must name the accessor that really exists: {message}"
+        );
+    }
+
+    /// The `fields` sibling of the per-call `result_fields` test above: a per-call `fields`
+    /// override REPLACES the global alias table outright, so the leaf diagnostic's alias-fix
+    /// branch must name that call's own key too -- not just the intermediate-hop diagnostic's
+    /// identical branch tested above.
+    #[test]
+    fn unknown_leaf_field_diagnostic_names_the_per_call_fields_when_that_is_what_shadows() {
+        let sources = FieldConfigSources {
+            result_fields: EffectiveConfigSource::Global,
+            fields: EffectiveConfigSource::PerCall("[crates.e2e.calls.complete]".to_string()),
+        };
+        let message = walk_completion_response_with_sources(
+            "metadata.title",
+            "metadata.title",
+            &completion_response_c_types(),
+            &sources,
+        )
+        .expect_err("`title` is not a field of `Metadata`")
+        .to_string();
+
+        assert!(
+            message.contains(
+                "\"metadata.title\" = \"metadata.document.title\" under `[crates.e2e.calls.complete].fields`"
+            ),
+            "must name the per-call key that actually governs this call: {message}"
+        );
+        assert!(
+            !message.contains("`[crates.e2e.fields]`"),
+            "must not point at the global key when a per-call override shadows it: {message}"
         );
     }
 
@@ -2158,7 +2309,7 @@ mod tests {
             "UnmodelledResult",
             "metadata.title",
             &completion_response_types(),
-            &ResultFieldsSource::Global,
+            &global_sources(),
         )
         .expect("an unmodelled parent type must not be treated as proof the leaf is absent");
 
@@ -2206,7 +2357,7 @@ mod tests {
 
     fn check_ts_pack_stripped_leaf(
         declared_in_fields_c_types: bool,
-        result_fields_source: &ResultFieldsSource,
+        result_fields_source: &EffectiveConfigSource,
     ) -> anyhow::Result<()> {
         let types = ts_pack_types();
         ensure_leaf_field_exists(LeafFieldCheck {
@@ -2221,12 +2372,16 @@ mod tests {
             result_type_name: "ProcessResult",
             type_defs: &types,
             result_fields_source,
+            // Irrelevant to what this helper's callers assert on -- all of them exercise
+            // the namespace-stripped-identity branch, which only reads
+            // `result_fields_source`. Global is the neutral default. ~keep
+            fields_source: &EffectiveConfigSource::Global,
         })
     }
 
     #[test]
     fn namespace_stripped_leaf_that_is_not_a_result_type_field_is_rejected() {
-        let message = check_ts_pack_stripped_leaf(false, &ResultFieldsSource::Global)
+        let message = check_ts_pack_stripped_leaf(false, &EffectiveConfigSource::Global)
             .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
             .to_string();
 
@@ -2251,7 +2406,7 @@ mod tests {
     /// global key really is the one an edit reaches.
     #[test]
     fn stripped_leaf_diagnostic_names_result_fields_not_an_identity_alias() {
-        let message = check_ts_pack_stripped_leaf(false, &ResultFieldsSource::Global)
+        let message = check_ts_pack_stripped_leaf(false, &EffectiveConfigSource::Global)
             .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
             .to_string();
 
@@ -2272,7 +2427,7 @@ mod tests {
     /// because their call's per-call list is what actually governed the walk.
     #[test]
     fn stripped_leaf_diagnostic_names_the_per_call_result_fields_when_that_is_what_shadows() {
-        let source = ResultFieldsSource::PerCall("[crates.e2e.calls.crawl]".to_string());
+        let source = EffectiveConfigSource::PerCall("[crates.e2e.calls.crawl]".to_string());
         let message = check_ts_pack_stripped_leaf(false, &source)
             .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
             .to_string();
@@ -2292,25 +2447,25 @@ mod tests {
     /// with no entry in `e2e_config.calls` to match by pointer. The message must still
     /// name it, not fall back to claiming it's the global key.
     #[test]
-    fn describe_result_fields_source_names_the_unnamed_default_call() {
+    fn describe_effective_config_source_names_the_unnamed_default_call() {
         let e2e_config = E2eConfig::default();
         let call = CallConfig {
             result_fields: HashSet::from(["pages".to_string()]),
             ..CallConfig::default()
         };
 
-        let source = describe_result_fields_source(&e2e_config, &call);
+        let source = describe_effective_config_source(&e2e_config, &call, !call.result_fields.is_empty());
 
         match source {
-            ResultFieldsSource::PerCall(label) => assert_eq!(label, "[crates.e2e.call]"),
-            ResultFieldsSource::Global => panic!("a non-empty call.result_fields must never resolve to Global"),
+            EffectiveConfigSource::PerCall(label) => assert_eq!(label, "[crates.e2e.call]"),
+            EffectiveConfigSource::Global => panic!("call_has_override == true must never resolve to Global"),
         }
     }
 
     /// The common case: a named call in `[crates.e2e.calls]` with its own override must be
     /// identified by that name, so the operator can find the exact TOML table to edit.
     #[test]
-    fn describe_result_fields_source_names_a_call_matched_by_pointer_identity() {
+    fn describe_effective_config_source_names_a_call_matched_by_pointer_identity() {
         let mut e2e_config = E2eConfig::default();
         let crawl_call = CallConfig {
             result_fields: HashSet::from(["pages".to_string()]),
@@ -2318,30 +2473,55 @@ mod tests {
         };
         e2e_config.calls.insert("crawl".to_string(), crawl_call);
 
-        let source = describe_result_fields_source(&e2e_config, &e2e_config.calls["crawl"]);
+        let source = describe_effective_config_source(&e2e_config, &e2e_config.calls["crawl"], true);
 
         match source {
-            ResultFieldsSource::PerCall(label) => assert_eq!(label, "[crates.e2e.calls.crawl]"),
-            ResultFieldsSource::Global => panic!("a non-empty call.result_fields must never resolve to Global"),
+            EffectiveConfigSource::PerCall(label) => assert_eq!(label, "[crates.e2e.calls.crawl]"),
+            EffectiveConfigSource::Global => panic!("call_has_override == true must never resolve to Global"),
         }
     }
 
-    /// A call with no `result_fields` override always defers to the global default,
-    /// regardless of whether it is named or the unnamed default call.
+    /// `call_has_override == false` always resolves to the global default, regardless of
+    /// whether `call` is named or the unnamed default call -- the caller-computed
+    /// emptiness check is authoritative, the function never re-derives it.
     #[test]
-    fn describe_result_fields_source_is_global_when_the_call_declares_no_override() {
+    fn describe_effective_config_source_is_global_when_the_caller_says_there_is_no_override() {
         let e2e_config = E2eConfig::default();
-        let call = CallConfig::default();
+        let call = CallConfig {
+            result_fields: HashSet::from(["pages".to_string()]),
+            ..CallConfig::default()
+        };
 
         assert!(matches!(
-            describe_result_fields_source(&e2e_config, &call),
-            ResultFieldsSource::Global
+            describe_effective_config_source(&e2e_config, &call, false),
+            EffectiveConfigSource::Global
         ));
+    }
+
+    /// `FieldConfigSources::resolve` is the one place production code should call this
+    /// from: it derives `call_has_override` itself, once per collection, so the two
+    /// checks (`result_fields`, `fields`) cannot drift onto different emptiness logic.
+    #[test]
+    fn field_config_sources_resolve_derives_each_collection_independently() {
+        let mut e2e_config = E2eConfig::default();
+        let call = CallConfig {
+            result_fields: HashSet::from(["pages".to_string()]),
+            // `fields` left empty: only `result_fields` has a per-call override.
+            ..CallConfig::default()
+        };
+        e2e_config.calls.insert("crawl".to_string(), call);
+
+        let sources = FieldConfigSources::resolve(&e2e_config, &e2e_config.calls["crawl"]);
+
+        assert!(
+            matches!(sources.result_fields, EffectiveConfigSource::PerCall(ref label) if label == "[crates.e2e.calls.crawl]")
+        );
+        assert!(matches!(sources.fields, EffectiveConfigSource::Global));
     }
 
     #[test]
     fn explicitly_declared_flat_leaf_type_overrides_the_ir_check() {
-        check_ts_pack_stripped_leaf(true, &ResultFieldsSource::Global)
+        check_ts_pack_stripped_leaf(true, &EffectiveConfigSource::Global)
             .expect("an explicit fields_c_types declaration is authoritative");
     }
 
@@ -2410,7 +2590,7 @@ mod tests {
             "ProcessResult",
             "data.kind",
             &types,
-            &ResultFieldsSource::Global,
+            &global_sources(),
         )
         .expect("the Option<DataNode> hop and the enum leaf both resolve");
 
@@ -2490,7 +2670,8 @@ mod tests {
             declared_in_fields_c_types: false,
             result_type_name: "ProcessResult",
             type_defs: &types,
-            result_fields_source: &ResultFieldsSource::Global,
+            result_fields_source: &EffectiveConfigSource::Global,
+            fields_source: &EffectiveConfigSource::Global,
         })
         .expect_err("`kind` is not a field of `ProcessResult` itself")
         .to_string();

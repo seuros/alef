@@ -872,7 +872,7 @@ mod trait_bridge_snippet;
 mod visitor;
 
 use assertions::{
-    LeafFieldCheck, ResultFieldsSource, build_args_string_c, describe_result_fields_source, emit_nested_accessor,
+    EffectiveConfigSource, FieldConfigSources, LeafFieldCheck, build_args_string_c, emit_nested_accessor,
     ensure_leaf_field_exists, render_assertion,
 };
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
@@ -973,11 +973,12 @@ fn render_test_file(
         let _ = field_resolver; // top-level resolver retained for compat; per-call wins
         let field_resolver = &per_call_field_resolver;
 
-        // Which `result_fields` set governs THIS fixture's call, by the identical
-        // shadowing rule `effective_result_fields` just applied above — a nested-field
-        // diagnostic must name the same key that actually shaped `field_resolver`, or it
-        // sends an operator's edit to a config key their call ignores. ~keep
-        let result_fields_source = describe_result_fields_source(e2e_config, fixture_call);
+        // Which `result_fields`/`fields` collections govern THIS fixture's call, by the
+        // identical shadowing rule `effective_result_fields`/`effective_fields` just
+        // applied above — a nested-field diagnostic must name the same key that actually
+        // shaped `field_resolver`, or it sends an operator's edit to a config key their
+        // call ignores. ~keep
+        let config_sources = FieldConfigSources::resolve(e2e_config, fixture_call);
 
         // `out` accumulates every fixture's rendered function in this file, so the
         // strict-availability scan below must only look at the text THIS fixture's
@@ -1007,7 +1008,7 @@ fn render_test_file(
             config,
             type_defs,
             false,
-            &result_fields_source,
+            &config_sources,
         )?;
         crate::e2e::codegen::fail_on_unavailable_field_markers(&out[fixture_start..], "c", &fixture.id);
         if i + 1 < fixtures.len() {
@@ -1484,7 +1485,10 @@ mod snippet_tests {
                 &config,
                 &[],
                 false,
-                &ResultFieldsSource::Global,
+                &FieldConfigSources {
+                    result_fields: EffectiveConfigSource::Global,
+                    fields: EffectiveConfigSource::Global,
+                },
             )
             .expect("test fixture renders");
 
@@ -1551,7 +1555,10 @@ mod snippet_tests {
                 &config,
                 &[],
                 false,
-                &ResultFieldsSource::Global,
+                &FieldConfigSources {
+                    result_fields: EffectiveConfigSource::Global,
+                    fields: EffectiveConfigSource::Global,
+                },
             )
             .expect("test fixture renders");
 
