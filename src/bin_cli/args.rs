@@ -270,14 +270,24 @@ pub(crate) enum Commands {
         /// Stamp the marker. Without this, adopt only prints the diff.
         #[arg(long)]
         write: bool,
-        // Subtractive only: it narrows what `--write` adopts, never widens it. There is
-        // deliberately no `--all`/`--yes` counterpart, since the only thing such a flag
-        // could buy is skipping the drifted diffs -- and a drifted file may be a
+        // Subtractive only: it narrows what `--write` adopts, never widens it. Nothing
+        // additive exists on this axis -- no `--all`/`--yes` -- since the only thing such
+        // a flag could buy is skipping the drifted diffs, and a drifted file may be a
         // deliberate hand-edit, which is the content the guard exists to protect. ~keep
         /// Adopt only files already byte-identical to generated output, leaving every
         /// drifted match untouched. For large migrations.
         #[arg(long)]
         converged_only: bool,
+        // Named for the damage rather than the mechanism. Both "clobber" and "seeds" are
+        // in the flag so the one-line form a user pastes out of a runbook still says what
+        // it does; an `--include-*` or `--force` spelling reads as routine scope-widening,
+        // and this widens scope onto precisely the paths where adoption destroys work on a
+        // later, unrelated command. ~keep
+        /// DANGEROUS: also adopt create-once seeds (real test suites, build.zig, ...).
+        /// alef emits these only when absent, so adopting one consents to alef replacing
+        /// its contents with a placeholder seed on the next generate.
+        #[arg(long)]
+        clobber_create_once_seeds: bool,
     },
     /// Migrate legacy alef.toml schema to new [workspace] / [[crates]] layout.
     Migrate {

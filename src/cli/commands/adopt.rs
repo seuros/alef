@@ -24,6 +24,21 @@
 //! - **Adoption stamps the marker onto the bytes already on disk.** It never writes
 //!   generated content. Convergence happens on the next ordinary `alef generate`,
 //!   through the guard, where `git diff` shows it.
+//! - **Create-once seeds are excluded from `--write` unless
+//!   `--clobber-create-once-seeds` is passed**, and every excluded path is printed.
+//!   Adoption means opposite things for the two rails, and only one of them is safe. On
+//!   the marker rail alef rewrites the path every run, so unfreezing it is the point of
+//!   this command. A seed is the reverse: alef emits it *once*, as a placeholder, and
+//!   never revisits it, so whatever is on disk is by construction the grown-up version of
+//!   that placeholder — a real 12-test suite where the seed is a three-line stub. For
+//!   those paths the missing marker is not a bug to be fixed, it *is* the protection, and
+//!   it is the only protection, because `write_scaffold_files_report`'s create-once skip
+//!   is bypassed under `overwrite: true` — which a routine `alef version` bump passes
+//!   (`version_regen::regenerate_scaffold_after_sync`). A repo-wide
+//!   `alef adopt --write 'packages/**'` therefore arms the next version bump to replace
+//!   real test suites with stubs, and the damage lands on a later, unrelated command
+//!   where no diff review can catch it. Hence a separate, deliberately ugly flag rather
+//!   than a wider `--write`. ~keep
 //!
 //! What a diff is *for* splits the two states apart, and only one of them scales.
 //! A [`AdoptionState::Drifted`] file's diff shows content adoption puts at risk, so it is
@@ -69,6 +84,15 @@ pub enum AdoptionState {
 pub struct ManagedOutput {
     pub relative: PathBuf,
     pub content: String,
+    /// True when alef emits this path **only if it is absent** — a create-once seed.
+    ///
+    /// Taken from [`crate::core::backend::GeneratedFile::carries_alef_marker`] (the flag
+    /// or a self-marker in the content), never from sniffing the processed `content`
+    /// above. Sniffing would misclassify every `generated_header: true` path whose format
+    /// cannot hold a marker (`.json`, `.jar`, `DESCRIPTION`) as a seed, when those are
+    /// squarely on the regeneration rail and prove ownership through the committed
+    /// record instead. ~keep
+    pub create_once: bool,
 }
 
 /// A pre-existing file matched by the adopt target, classified against generated output.
@@ -86,6 +110,8 @@ pub struct AdoptCandidate {
     /// next generate is a byte no-op", which cannot be decided without the stamped
     /// bytes in hand. ~keep
     pub stamped: Option<String>,
+    /// Mirrors [`ManagedOutput::create_once`] — alef emits this path only when absent.
+    pub create_once: bool,
 }
 
 pub struct AdoptOptions {
@@ -99,11 +125,33 @@ pub struct AdoptOptions {
     /// untouched and reported.
     ///
     /// The bulk-migration switch, and deliberately *subtractive*: it can only ever
-    /// adopt a strict subset of what a plain `--write` would. There is no additive
-    /// counterpart — no `--all`, no `--yes` — because the thing such a flag would buy
-    /// is skipping the drifted diffs, and a drifted file may be a deliberate hand-edit,
-    /// which is the exact content the guard exists to protect. ~keep
+    /// adopt a strict subset of what a plain `--write` would. Nothing additive exists on
+    /// *this* axis — no `--all`, no `--yes` — because the thing such a flag would buy is
+    /// skipping the drifted diffs, and a drifted file may be a deliberate hand-edit,
+    /// which is the exact content the guard exists to protect.
+    ///
+    /// [`Self::clobber_create_once_seeds`] is additive but on an orthogonal axis: it
+    /// widens which *paths* are eligible and never suppresses a diff. ~keep
     pub converged_only: bool,
+    /// Include create-once seeds ([`ManagedOutput::create_once`]) in the adoption.
+    ///
+    /// Off by default because adoption means the opposite thing for a seed than it does
+    /// for a regenerated file, in the one direction that destroys work. For a file on the
+    /// marker rail, adoption unfreezes a path alef rewrites every run — the whole point
+    /// of the command. For a seed, alef's generated content is a *placeholder* it emits
+    /// once and never revisits, so the on-disk file is by construction the grown-up
+    /// version: a real test suite where the seed is three lines of stub. Adoption stamps
+    /// the marker, and the marker is the only thing standing between that suite and the
+    /// stub, because `write_scaffold_files_report`'s create-once skip (`can_skip`) is
+    /// bypassed under `overwrite: true` — which `version_regen::regenerate_scaffold_after_sync`
+    /// passes on a routine `alef version` bump. So a repo-wide `alef adopt --write` over a
+    /// glob that happens to sweep in `packages/zig/test/*_test.zig` arms the next version
+    /// bump to replace a hand-grown suite with a placeholder.
+    ///
+    /// That destruction is unrecoverable by review: the consent is recorded now and the
+    /// overwrite happens on a later, unrelated command, far from the mistake. Hence a
+    /// separate opt-in rather than a wider `--write`. ~keep
+    pub clobber_create_once_seeds: bool,
 }
 
 /// The rendered diff for one candidate.
@@ -134,6 +182,14 @@ pub struct AdoptReport {
     pub converged: Vec<PathBuf>,
     /// Drifted matches left untouched because [`AdoptOptions::converged_only`] was set.
     pub skipped_drifted: Vec<PathBuf>,
+    /// Create-once seeds excluded because [`AdoptOptions::clobber_create_once_seeds`] was
+    /// not set, in path order.
+    ///
+    /// A `Vec` of paths rather than a count, and reported even in preview: these are the
+    /// matches where adoption is destructive, so the operator has to be able to read the
+    /// list and recognise a file as their own before deciding. A count tells them only
+    /// that something was excluded, which is exactly the fact that does not help. ~keep
+    pub skipped_create_once: Vec<PathBuf>,
     /// Paths adopted through the committed `.alef-ownership.toml` record because their
     /// format cannot carry a marker at all. Reported separately from [`Self::adopted`]
     /// because adopting these leaves the file itself byte-identical: the consent lives
@@ -174,6 +230,7 @@ pub fn managed_outputs(files: &[crate::core::backend::GeneratedFile], base_dir: 
             ManagedOutput {
                 relative: file.path.clone(),
                 content,
+                create_once: !file.carries_alef_marker(),
             }
         })
         .collect()
@@ -261,7 +318,13 @@ fn stamp_for(full_path: &Path, existing: &str, generated: &str) -> Option<String
 /// the frozen e2e snippets as drifted, because the only difference between them and
 /// generated output is the marker block adoption is about to add. That would have
 /// demanded 12,000 individual diff reads for 12,000 files with nothing to read. ~keep
-pub fn classify(full_path: &Path, relative: &Path, generated: &str, existing: &str) -> AdoptCandidate {
+pub fn classify(
+    full_path: &Path,
+    relative: &Path,
+    generated: &str,
+    existing: &str,
+    create_once: bool,
+) -> AdoptCandidate {
     let stamped = stamp_for(full_path, existing, generated);
     let state = if crate::core::hash::content_has_alef_marker(existing) {
         AdoptionState::AlreadyOwned
@@ -279,6 +342,7 @@ pub fn classify(full_path: &Path, relative: &Path, generated: &str, existing: &s
         generated: generated.to_owned(),
         state,
         stamped,
+        create_once,
     }
 }
 
@@ -335,7 +399,13 @@ fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Resu
         }
         let existing = std::fs::read_to_string(&full_path)
             .with_context(|| format!("failed to read existing {}", full_path.display()))?;
-        candidates.push(classify(&full_path, &output.relative, &output.content, &existing));
+        candidates.push(classify(
+            &full_path,
+            &output.relative,
+            &output.content,
+            &existing,
+            output.create_once,
+        ));
     }
 
     if candidates.is_empty() {
@@ -392,7 +462,27 @@ pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptRep
         ..AdoptReport::default()
     };
 
-    for candidate in &candidates {
+    // Partitioned before anything is classified for the report, so an excluded seed
+    // contributes no diff, no converged tally and no adopted entry -- it is not a thing
+    // this run is deciding about, it is a thing this run refuses to decide about.
+    //
+    // `AlreadyOwned` seeds are deliberately not excluded: the file already carries a
+    // marker, so there is no consent left to give and no content this command could put
+    // at risk. Listing them as blocked would be a false alarm on the exact list whose
+    // whole value is that every line on it is genuinely dangerous. ~keep
+    let (adoptable, blocked): (Vec<&AdoptCandidate>, Vec<&AdoptCandidate>) = candidates.iter().partition(|candidate| {
+        options.clobber_create_once_seeds || !candidate.create_once || candidate.state == AdoptionState::AlreadyOwned
+    });
+    for candidate in &blocked {
+        report.skipped_create_once.push(candidate.relative.clone());
+        tracing::warn!(
+            path = %candidate.relative.display(),
+            "create-once seed: alef emits this path only when absent, so adopting it consents to alef \
+             replacing its contents with a placeholder seed on the next generate"
+        );
+    }
+
+    for candidate in &adoptable {
         match candidate.state {
             AdoptionState::AlreadyOwned => report.already_owned.push(candidate.relative.clone()),
             AdoptionState::Converged => report.converged.push(candidate.relative.clone()),
@@ -415,8 +505,25 @@ pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptRep
         return Ok(report);
     }
 
+    // Non-zero only when the exclusion emptied the run, so a mixed glob still does its
+    // legitimate work instead of forcing the operator to re-type a narrower target (and
+    // learn, from the failure, that the way to make adopt succeed is to pass the
+    // dangerous flag). A `--write` that adopted nothing at all is a different matter: it
+    // exits 0 today only because "nothing matched" is already a `bail!`, and staying
+    // silent here would let a seeds-only glob look like a successful adoption. ~keep
+    let has_work = adoptable.iter().any(|c| c.state != AdoptionState::AlreadyOwned);
+    if !has_work && !report.skipped_create_once.is_empty() {
+        bail!(
+            "`{}` matches only create-once seeds, which alef emits solely when absent -- \
+             adopting one consents to alef replacing its contents with a placeholder seed on the \
+             next generate, so nothing was written. Pass --clobber-create-once-seeds to adopt them \
+             anyway.",
+            options.target
+        );
+    }
+
     let mut to_record: Vec<PathBuf> = Vec::new();
-    for candidate in candidates.iter().filter(|c| c.state != AdoptionState::AlreadyOwned) {
+    for candidate in adoptable.iter().filter(|c| c.state != AdoptionState::AlreadyOwned) {
         if options.converged_only && candidate.state == AdoptionState::Drifted {
             report.skipped_drifted.push(candidate.relative.clone());
             continue;

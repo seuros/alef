@@ -84,6 +84,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             target,
             write,
             converged_only,
+            clobber_create_once_seeds,
         } => {
             let base_dir = std::env::current_dir()?;
             let (_workspace, resolved) = load_config(config_path)?;
@@ -107,8 +108,33 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 base_dir,
                 write,
                 converged_only,
+                clobber_create_once_seeds,
             };
             let report = commands::adopt::run(&options, &managed)?;
+
+            if !report.skipped_create_once.is_empty() {
+                // Every path, never a count, and on stdout with the drifted diffs rather
+                // than through `tracing`: this list is the command's result for these
+                // paths, and `-q` must not be able to hide the one output that says work
+                // is about to be destroyed. The consequence is spelled out because
+                // "skipped" alone reads as "nothing happened", when the fact the operator
+                // needs is what adopting them *would* have cost. ~keep
+                crate::bin_cli::output::blank();
+                crate::bin_cli::output::line(
+                    "NOT ADOPTED -- create-once seeds. alef emits each of these only when the file is \
+                     absent, so it is a placeholder that the copy on disk has almost certainly grown \
+                     past. Adopting one consents to alef REPLACING its contents with that placeholder \
+                     on the next generate:",
+                );
+                for path in &report.skipped_create_once {
+                    crate::bin_cli::output::line(format_args!("  {}", path.display()));
+                }
+                crate::bin_cli::output::line(
+                    "Read each one and confirm it holds nothing you wrote, then re-run with \
+                     --clobber-create-once-seeds to adopt them anyway.",
+                );
+                crate::bin_cli::output::blank();
+            }
 
             for diff in &report.diffs {
                 crate::bin_cli::output::fragment(&diff.body);
