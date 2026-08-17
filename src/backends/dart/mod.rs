@@ -26,3 +26,4 @@ pub use frb_rewrite::{
     make_struct_fields_with_defaults_optional, rewrite_frb_sealed_variants, strip_trailing_whitespace,
 };
 pub use gen_bindings::DartBackend;
+pub(crate) use gen_bindings::config_param_is_named_optional;

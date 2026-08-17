@@ -9,21 +9,36 @@ use crate::core::config::Language;
 
 use super::render_type::{format_param, render_type};
 
-/// Returns `true` if the parameter is a config type that should be made optional in Dart.
+/// Single source of truth for the Dart call shape of a `config` parameter.
 ///
-/// Parameters named `config` whose named type has a Rust `Default` implementation and for
-/// which alef can produce a default expression are made optional (named) in the Dart
-/// wrapper. FRB-generated DTOs use `required` named parameters for every field, so a bare
-/// `Type()` constructor only compiles when alef can emit a value for every field — see
-/// [`config_default_expression`] for the two ways that value is obtained.
+/// `true` means the wrapper declares it as a named-optional parameter (`{Type? config}`)
+/// and every caller must pass it with a `config:` label; `false` means it stays a required
+/// positional parameter and every caller must pass it positionally.
+///
+/// Two emitters need this one fact and must never derive it independently: [`emit_function`]
+/// below writes the declaration, and `e2e::codegen::dart::test_case` writes the call sites
+/// that appear in generated doc snippets and e2e tests. Each half is well-formed on its own,
+/// so nothing but the composed output can show a disagreement — hence this shared function
+/// rather than two matching rules. ~keep
+///
+/// Only a parameter literally named `config` is eligible, and only when alef can emit a Dart
+/// expression for its default: FRB-generated DTOs use `required` named parameters for every
+/// field, so a bare `Type()` constructor compiles only when alef can produce a value for
+/// every field — see [`config_default_expression`] for the two ways that value is obtained.
+pub(crate) fn config_param_is_named_optional(
+    param_name: &str,
+    type_name: &str,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+) -> bool {
+    param_name == "config" && config_default_expression(type_name, type_defs, enums).is_some()
+}
+
 fn is_optional_config_param(p: &crate::core::ir::ParamDef, type_defs: &[TypeDef], enums: &[EnumDef]) -> bool {
     let TypeRef::Named(name) = &p.ty else {
         return false;
     };
-    if p.name != "config" {
-        return false;
-    }
-    config_default_expression(name, type_defs, enums).is_some()
+    config_param_is_named_optional(&p.name, name, type_defs, enums)
 }
 
 /// Dart expression producing the default value for an optional `config` parameter.
@@ -390,6 +405,167 @@ mod tests {
         assert_eq!(
             zero_value_for_type(&TypeRef::Bytes, &[], &[]),
             Some("Uint8List(0)".to_string())
+        );
+    }
+}
+
+/// The `config` parameter's call shape is one fact written by two emitters: the Dart wrapper
+/// declaration here, and the call site in `e2e::codegen::dart::test_case` that lands in every
+/// generated doc snippet and e2e test. Each half is well-formed in isolation, so only the
+/// composed output can reveal a disagreement — which is why these tests run both emitters over
+/// one input and compare, instead of pinning each side to its own expected string. ~keep
+#[cfg(test)]
+mod call_shape_agreement_tests {
+    use super::*;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::core::ir::ParamDef;
+    use crate::e2e::codegen::E2eCodegen;
+    use crate::e2e::codegen::dart::DartE2eCodegen;
+    use crate::e2e::config::{ArgMapping, E2eConfig};
+    use crate::e2e::fixture::Fixture;
+
+    fn config_type(name: &str, has_default: bool) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            has_default,
+            has_serde: true,
+            ..Default::default()
+        }
+    }
+
+    fn embed_function(config_type_name: &str) -> FunctionDef {
+        FunctionDef {
+            name: "embed".to_string(),
+            params: vec![ParamDef {
+                name: "config".to_string(),
+                ty: TypeRef::Named(config_type_name.to_string()),
+                ..Default::default()
+            }],
+            return_type: TypeRef::String,
+            ..Default::default()
+        }
+    }
+
+    /// `true` when the emitted wrapper declares `{Type? config}`, `false` when it declares a
+    /// required positional `Type config`.
+    fn binding_declares_named_config(config_type_name: &str, type_defs: &[TypeDef]) -> bool {
+        let mut out = String::new();
+        let mut imports = BTreeSet::new();
+        emit_function(
+            &embed_function(config_type_name),
+            type_defs,
+            &[],
+            &mut out,
+            &mut imports,
+        );
+        let named = out.contains(&format!("{{{config_type_name}? config}}"));
+        let positional = out.contains(&format!("({config_type_name} config)"));
+        assert!(
+            named != positional,
+            "binding must declare exactly one of the two shapes:\n{out}"
+        );
+        named
+    }
+
+    /// `true` when the generated snippet passes the config with a `config:` label, `false` when
+    /// it passes it positionally.
+    fn snippet_passes_named_config(config_type_name: &str, type_defs: &[TypeDef]) -> bool {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "embed_text",
+            "description": "Embed text",
+            "input": {"config": {"model": "small"}}
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "embed".into();
+        e2e_config.call.result_var = "result".into();
+        e2e_config.call.options_type = Some(config_type_name.to_string());
+        e2e_config.call.args.push(ArgMapping {
+            name: "config".into(),
+            field: "input.config".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        });
+
+        let body = DartE2eCodegen
+            .render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), type_defs, &[])
+            .expect("snippet");
+
+        let named = body.contains("embed(config: _config)");
+        let positional = body.contains("embed(_config)");
+        assert!(
+            named != positional,
+            "snippet must pass the config in exactly one of the two shapes:\n{body}"
+        );
+        named
+    }
+
+    /// A `config` type alef can default (`has_default` + `has_serde`) gets the named-optional
+    /// declaration, so the snippet must use the `config:` label. The type name deliberately
+    /// contains `Embedding`, the substring `test_case.rs` used to route to a positional call.
+    #[test]
+    fn snippet_call_site_agrees_with_binding_for_a_defaultable_config() {
+        let type_defs = [config_type("EmbeddingConfig", true)];
+
+        let binding_named = binding_declares_named_config("EmbeddingConfig", &type_defs);
+        let snippet_named = snippet_passes_named_config("EmbeddingConfig", &type_defs);
+
+        assert!(
+            binding_named,
+            "a defaultable `config` is declared `{{EmbeddingConfig? config}}`, which Dart can only \
+             be passed by label"
+        );
+        assert_eq!(
+            binding_named, snippet_named,
+            "the snippet call site and the binding signature disagree about the `config` \
+             parameter shape; both must derive it from `config_param_is_named_optional`"
+        );
+    }
+
+    /// The mirror case: without a `Default` impl alef cannot synthesize a default expression, so
+    /// the wrapper keeps `config` required and positional and a labelled call site would not
+    /// compile.
+    #[test]
+    fn snippet_call_site_agrees_with_binding_for_a_config_without_a_default() {
+        let type_defs = [config_type("ExtractionConfig", false)];
+
+        let binding_named = binding_declares_named_config("ExtractionConfig", &type_defs);
+        let snippet_named = snippet_passes_named_config("ExtractionConfig", &type_defs);
+
+        assert!(
+            !binding_named,
+            "with no `Default` impl there is no default expression to emit, so `config` stays \
+             required and positional"
+        );
+        assert_eq!(
+            binding_named, snippet_named,
+            "the snippet call site and the binding signature disagree about the `config` \
+             parameter shape; both must derive it from `config_param_is_named_optional`"
+        );
+    }
+
+    #[test]
+    fn shared_predicate_answers_only_for_a_parameter_named_config() {
+        let type_defs = [config_type("EmbeddingConfig", true)];
+
+        assert!(config_param_is_named_optional(
+            "config",
+            "EmbeddingConfig",
+            &type_defs,
+            &[]
+        ));
+        assert!(
+            !config_param_is_named_optional("settings", "EmbeddingConfig", &type_defs, &[]),
+            "only a parameter literally named `config` is eligible"
+        );
+        assert!(
+            !config_param_is_named_optional("config", "UnknownConfig", &type_defs, &[]),
+            "a type alef cannot default has no default expression to make the parameter optional"
         );
     }
 }

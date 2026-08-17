@@ -671,16 +671,20 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         let var_name = format!("_{}", arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
-                        // Facade methods (e.g. `embedTextsAsync`, `rerankAsync`, `classifyText`)
-                        // declare config as a required positional parameter; extraction
-                        // facades declare it as a named optional. Emit positional when the
-                        // resolved options type indicates a required positional config.
-                        let is_config_positional = opts_type.contains("Embedding")
-                            || opts_type.contains("Reranker")
-                            || opts_type.contains("Classification")
-                            || opts_type.contains("Translation")
-                            || opts_type.contains("Keyword")
-                            || opts_type.contains("Redaction");
+                        // The declaration this call has to match is emitted by
+                        // `backends::dart::gen_bindings::functions::emit_function`, which makes only
+                        // a parameter named `config` named-optional, and only when it can synthesize
+                        // a default expression for it. Both sides read that one predicate rather than
+                        // re-deriving the shape, because each half is well-formed alone and only the
+                        // composed output can show a disagreement. Args not named `config` keep their
+                        // existing named-label behaviour here. ~keep
+                        let is_config_positional = arg_def.name == "config"
+                            && !crate::backends::dart::config_param_is_named_optional(
+                                &arg_def.name,
+                                opts_type,
+                                type_defs,
+                                enums,
+                            );
                         if is_config_positional {
                             args.push(var_name);
                         } else {
@@ -689,17 +693,12 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         }
                     }
                 } else if arg_def.name == "config" {
-                    // Helper to check if a config type should be emitted as positional in Dart.
-                    // Config parameters are positional-required in facades like rerankAsync,
-                    // embedTextsAsync, classifyText, etc. They are named-optional in extraction facades
-                    // like extractBytes which declare { ExtractionConfig? config }.
+                    // Whether the wrapper declares this config positionally is decided once, by
+                    // `backends::dart::gen_bindings::functions::emit_function`'s own predicate — the
+                    // arm is already guarded on `arg_def.name == "config"`, so the parameter name is
+                    // exact here. ~keep
                     let is_config_positional = |opts_type: &str| -> bool {
-                        opts_type.contains("Embedding")
-                            || opts_type.contains("Reranker")
-                            || opts_type.contains("Classification")
-                            || opts_type.contains("Translation")
-                            || opts_type.contains("Keyword")
-                            || opts_type.contains("Redaction")
+                        !crate::backends::dart::config_param_is_named_optional("config", opts_type, type_defs, enums)
                     };
 
                     if let serde_json::Value::Object(map) = &arg_value {

@@ -19,6 +19,7 @@ use crate::backends::dart::gen_ffi;
 use crate::backends::dart::gen_rust_crate;
 
 use dart_traits::emit_dart_traits;
+pub(crate) use functions::config_param_is_named_optional;
 use functions::emit_function;
 use service_api as gen_service_api;
 use trait_bridge::emit_trait_bridge_methods;

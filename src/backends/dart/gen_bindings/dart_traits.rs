@@ -3,7 +3,29 @@ use heck::ToLowerCamelCase;
 use std::collections::BTreeSet;
 
 use super::render_type::render_type;
+use crate::backends::dart::ident::dart_safe_ident;
 use crate::backends::dart::template_env;
+
+/// Dart name for a trait method or one of its parameters, renamed when the camel-cased Rust
+/// name collides with the language.
+///
+/// Dart has no identifier-escape syntax — no `r#`, no backticks — so a collision can only be
+/// resolved by renaming, which is why [`dart_safe_ident`] appends `_`. Two distinct Dart
+/// categories reach this emitter, and both are hard parse errors in member-declaration
+/// position:
+///
+/// - `new` is a **reserved word**, illegal in every identifier position. `fn new()` is the
+///   canonical Rust constructor, so it arrives here routinely.
+/// - `get` and `set` are **built-in identifiers** — legal as parameters and locals, but not as
+///   member names: the parser reads `Future<T> get(..)` as a getter header and fails at the
+///   `(`. `fn get(&self, ..)` is an equally routine Rust trait method.
+///
+/// Every other emitted Dart identifier (fields, enum variants, wrapper functions, wrapper
+/// parameters) already routes through [`dart_safe_ident`]; trait methods and their parameters
+/// were the only positions that did not. ~keep
+fn dart_trait_ident(rust_name: &str) -> String {
+    dart_safe_ident(&rust_name.to_lower_camel_case())
+}
 
 /// Emit the content of `packages/dart/lib/src/traits.dart` — one `abstract class`
 /// per configured trait bridge name found in the API surface.
@@ -55,7 +77,7 @@ fn emit_trait_abstract_class(
         },
     ));
     for method in &own_methods {
-        let method_camel = method.name.to_lower_camel_case();
+        let method_camel = dart_trait_ident(&method.name);
         out.push_str("///   @override\n");
         out.push_str(&template_env::render(
             "abstract_class_method_doc_line.jinja",
@@ -77,7 +99,7 @@ fn emit_trait_abstract_class(
         },
     ));
     for method in &own_methods {
-        let method_camel = method.name.to_lower_camel_case();
+        let method_camel = dart_trait_ident(&method.name);
         out.push_str(&template_env::render(
             "trait_method_doc_field.jinja",
             minijinja::context! {
@@ -130,7 +152,7 @@ fn emit_abstract_method(
         ));
     }
 
-    let method_camel = method.name.to_lower_camel_case();
+    let method_camel = dart_trait_ident(&method.name);
     let inner_ret =
         substitute_excluded_named_types(&dart_return_type_str(&method.return_type, imports), excluded_type_paths);
 
@@ -147,7 +169,7 @@ fn emit_abstract_method(
             let rendered = render_type(&p.ty, imports);
             let mapped = substitute_excluded_named_types(&rendered, excluded_type_paths);
             let ty = if p.optional { format!("{mapped}?") } else { mapped };
-            format!("{ty} {}", p.name.to_lower_camel_case())
+            format!("{ty} {}", dart_trait_ident(&p.name))
         })
         .collect();
 
@@ -205,4 +227,134 @@ fn replace_token(input: &str, needle: &str, replacement: &str) -> String {
 
     out.push_str(rest);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{ParamDef, PrimitiveType, ReceiverKind};
+    use std::collections::HashMap;
+
+    fn trait_with_method(method: MethodDef) -> TypeDef {
+        TypeDef {
+            name: "SampleBackend".to_string(),
+            is_trait: true,
+            methods: vec![method],
+            ..Default::default()
+        }
+    }
+
+    fn method(name: &str, params: Vec<ParamDef>) -> MethodDef {
+        MethodDef {
+            name: name.to_string(),
+            params,
+            return_type: TypeRef::Primitive(PrimitiveType::Bool),
+            is_async: true,
+            receiver: Some(ReceiverKind::Ref),
+            ..Default::default()
+        }
+    }
+
+    fn param(name: &str) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }
+    }
+
+    fn emit(trait_def: &TypeDef) -> String {
+        let mut out = String::new();
+        let mut imports = BTreeSet::new();
+        emit_trait_abstract_class(trait_def, &HashMap::new(), &mut out, &mut imports);
+        out
+    }
+
+    /// `new` is a Dart *reserved word*: illegal in every identifier position. `fn new()` is
+    /// the canonical Rust constructor, so it reaches the trait emitter routinely.
+    #[test]
+    fn trait_method_named_new_is_renamed_in_the_declaration() {
+        let body = emit(&trait_with_method(method("new", vec![])));
+
+        assert!(
+            body.contains("Future<bool> new_();"),
+            "reserved word `new` must be renamed in the abstract method declaration:\n{body}"
+        );
+        assert!(
+            !body.contains("Future<bool> new("),
+            "`new` must never be emitted as a bare Dart identifier:\n{body}"
+        );
+    }
+
+    /// `get` is a Dart *built-in identifier*, not a reserved word — legal as a parameter or
+    /// local, but not as a member name: `Future<bool> get(..)` parses as a getter header and
+    /// fails at the `(`.
+    #[test]
+    fn trait_method_named_get_is_renamed_in_the_declaration() {
+        let body = emit(&trait_with_method(method("get", vec![param("key")])));
+
+        assert!(
+            body.contains("Future<bool> get_(String key);"),
+            "built-in identifier `get` must be renamed in member position:\n{body}"
+        );
+        assert!(
+            !body.contains("Future<bool> get("),
+            "`get` must never open a Dart method declaration:\n{body}"
+        );
+    }
+
+    /// The same rename must reach `set`, the setter-syntax twin of `get`.
+    #[test]
+    fn trait_method_named_set_is_renamed_in_the_declaration() {
+        let body = emit(&trait_with_method(method("set", vec![param("key")])));
+
+        assert!(
+            body.contains("Future<bool> set_(String key);"),
+            "built-in identifier `set` must be renamed in member position:\n{body}"
+        );
+    }
+
+    /// A reserved word in *parameter* position is equally illegal, and `new` is a legal Rust
+    /// parameter name.
+    #[test]
+    fn trait_method_parameter_named_new_is_renamed() {
+        let body = emit(&trait_with_method(method("apply", vec![param("new")])));
+
+        assert!(
+            body.contains("Future<bool> apply(String new_);"),
+            "reserved word `new` must be renamed in parameter position:\n{body}"
+        );
+    }
+
+    /// The `///` usage block above the class is what a reader copies into their `@override`
+    /// implementation and into the `create<Trait>DartImpl(..)` call, so it must name the
+    /// method exactly as the declaration does — a rename applied to only one of the three
+    /// emission sites would hand the reader a name that does not exist.
+    #[test]
+    fn renamed_method_name_is_consistent_across_doc_block_and_declaration() {
+        let body = emit(&trait_with_method(method("get", vec![])));
+
+        assert!(
+            body.contains("///   Future<bool> get_(...) async { ... }"),
+            "@override doc line must show the renamed method:\n{body}"
+        );
+        assert!(
+            body.contains("///   get_: (...) => myInstance.get_(...),"),
+            "create<Trait>DartImpl doc line must show the renamed method:\n{body}"
+        );
+        assert!(
+            body.contains("Future<bool> get_();"),
+            "declaration must show the renamed method:\n{body}"
+        );
+    }
+
+    #[test]
+    fn ordinary_method_and_parameter_names_are_left_alone() {
+        let body = emit(&trait_with_method(method("process_image", vec![param("mime_type")])));
+
+        assert!(
+            body.contains("Future<bool> processImage(String mimeType);"),
+            "non-colliding names must pass through unchanged:\n{body}"
+        );
+    }
 }
