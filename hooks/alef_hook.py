@@ -225,7 +225,7 @@ def _system_binary_matches(version: str) -> Path | None:
         return None
     try:
         result = subprocess.run(
-            [candidate, "--version"],
+            [candidate, "-V"],
             check=False,
             capture_output=True,
             text=True,
@@ -235,7 +235,13 @@ def _system_binary_matches(version: str) -> Path | None:
         return None
     if result.returncode != 0:
         return None
-    last_token = (result.stdout.strip().split() or [""])[-1].lstrip("v")
+    # `-V` is the single bare `alef <semver>` line; `--version` is the long form and carries build
+    # provenance after it, so its LAST token is the tree state, not the version. Reading the first
+    # line's last token keeps this correct for either, and a mismatch here fails silently into a
+    # download of the pinned release -- a hook that stops checking the local binary looks exactly
+    # like a hook that checked it and was satisfied. ~keep
+    first_line = (result.stdout.strip().splitlines() or [""])[0]
+    last_token = (first_line.split() or [""])[-1].lstrip("v")
     if last_token != version:
         return None
     return Path(candidate)

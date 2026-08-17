@@ -5,9 +5,13 @@ use clap::{Parser, Subcommand};
 use crate::cli::commands;
 
 #[derive(Parser)]
+// `version` keeps `-V` a single bare `alef <semver>` line; `long_version` gives `--version` the
+// build provenance stamped by `build.rs` — commit, build time, and whether the tree was dirty.
+// The semver stays alone on the first line of both. ~keep
 #[command(
     name = "alef",
     version,
+    long_version = crate::bin_cli::build_info::long_version(),
     about = "Opinionated polyglot binding generator",
     long_about = None,
 )]
@@ -211,11 +215,17 @@ pub(crate) enum Commands {
     },
     /// Run all: generate + stubs + scaffold + readme + docs + sync + e2e.
     All {
-        /// Ignore cache.
+        /// Ignore cache, and overwrite pre-existing unmarked scaffold and docs files.
         ///
         /// Bypasses cached results; it deletes nothing. Snippet validation session scratch under
         /// `<cwd>/.alef/snippets/sessions/` is not cache and is not this flag's business — stale
         /// sessions there are swept on every run, with or without `--clean`.
+        ///
+        /// It is ALSO threaded into `write_scaffold_files_report`'s `overwrite` for the scaffold
+        /// and docs stages, which disables the create-only branch that otherwise leaves an
+        /// already-existing unmarked file alone. Under `--clean` the ownership guard is the only
+        /// remaining protection on a hand-written scaffold file, so read this flag as widening
+        /// the write path, not merely as skipping a cache.
         #[arg(long)]
         clean: bool,
         /// Fail the run when a configured formatter's executable is not installed.
