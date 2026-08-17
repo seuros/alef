@@ -399,26 +399,10 @@ impl Backend for JavaBackend {
             generated_header: true,
         });
 
-        for (class_name, code, doc) in [
-            (
-                "ConversionErrorException",
-                crate::core::ir::ApiSurface::FFI_ERROR_CODE_CONVERSION as i32,
-                "Exception thrown when an FFI value conversion fails.",
-            ),
-            (
-                "CoreErrorException",
-                crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN as i32,
-                "Exception thrown when the Rust core reports an unknown error.",
-            ),
-            (
-                "PanicException",
-                crate::core::ir::ApiSurface::FFI_ERROR_CODE_PANIC as i32,
-                "Exception thrown when a Rust panic is contained at the FFI boundary.",
-            ),
-        ] {
+        for (class_name, code, doc) in marshal::INFRASTRUCTURE_ERROR_CLASSES {
             files.push(GeneratedFile {
                 path: base_path.join(format!("{}.java", class_name)),
-                content: gen_infrastructure_exception_class(&package, &main_class, class_name, code, doc),
+                content: gen_infrastructure_exception_class(&package, &main_class, class_name, code as i32, doc),
                 generated_header: true,
             });
         }
@@ -564,10 +548,10 @@ impl Backend for JavaBackend {
             });
         }
 
-        let infrastructure_exception_names: AHashSet<&str> =
-            ["ConversionErrorException", "CoreErrorException", "PanicException"]
-                .into_iter()
-                .collect();
+        let infrastructure_exception_names: AHashSet<&str> = marshal::INFRASTRUCTURE_ERROR_CLASSES
+            .iter()
+            .map(|(class_name, _code, _doc)| *class_name)
+            .collect();
         let mut emitted_exception_names: AHashSet<String> = AHashSet::new();
         for error in &api.errors {
             for (class_name, content) in crate::codegen::error_gen::gen_java_error_types(error, &package) {

@@ -6,9 +6,6 @@
                 ? "Native call failed with error code " + errCode
                 : ctxPtr.reinterpret(Long.MAX_VALUE).getString(0);
             switch (errCode) {
-                case {{ conversion_error_code }} -> throw new ConversionErrorException(msg);
-                case {{ core_error_code }} -> throw new CoreErrorException(msg);
-                case {{ panic_error_code }} -> throw new PanicException(msg);
 {% for error_code in error_codes %}
                 case {{ error_code.0 }} -> throw new {{ error_code.1 }}(msg);
 {% endfor %}

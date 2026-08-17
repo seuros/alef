@@ -390,28 +390,49 @@ impl HelperNeeds {
     }
 }
 
+/// Single source of truth for Java's fixed FFI infrastructure exception classes.
+///
+/// Every entry here becomes BOTH a generated `<name>.java` class (`JavaBackend::generate_bindings`
+/// in `gen_bindings/mod.rs`, which also derives its `infrastructure_exception_names` skip-set from
+/// this array) AND a `case <code> -> throw new <name>(msg);` arm in `checkLastError()`'s switch
+/// (`emit_error_helper` below). Driving both from one array makes it structurally impossible to
+/// add, rename, or drop an infrastructure exception in only one of the two places — the failure
+/// mode that once left `InvalidInputException.java` on disk with no reachable dispatch arm after
+/// the class was renamed to `ConversionErrorException` without updating both sites in lockstep. ~keep
+pub(crate) const INFRASTRUCTURE_ERROR_CLASSES: [(&str, u32, &str); 3] = [
+    (
+        "ConversionErrorException",
+        crate::core::ir::ApiSurface::FFI_ERROR_CODE_CONVERSION,
+        "Exception thrown when an FFI value conversion fails.",
+    ),
+    (
+        "CoreErrorException",
+        crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN,
+        "Exception thrown when the Rust core reports an unknown error.",
+    ),
+    (
+        "PanicException",
+        crate::core::ir::ApiSurface::FFI_ERROR_CODE_PANIC,
+        "Exception thrown when a Rust panic is contained at the FFI boundary.",
+    ),
+];
+
 fn emit_error_helper(out: &mut String, prefix: &str, class_name: &str, api: &crate::core::ir::ApiSurface) {
-    let taxonomy = api.error_taxonomy();
-    let error_codes: Vec<_> = taxonomy
+    let mut error_codes: Vec<(u32, String)> = INFRASTRUCTURE_ERROR_CLASSES
         .iter()
-        .map(|entry| {
-            let error = api
-                .errors
-                .iter()
-                .find(|error| error.rust_path == entry.error_type)
-                .unwrap();
-            (entry.code, format!("{}Exception", entry.variant), error.name.clone())
-        })
+        .map(|(name, code, _doc)| (*code, (*name).to_string()))
         .collect();
+    error_codes.extend(
+        api.error_taxonomy()
+            .iter()
+            .map(|entry| (entry.code, format!("{}Exception", entry.variant))),
+    );
     out.push_str(&crate::backends::java::template_env::render(
         "helper_check_last_error.jinja",
         minijinja::context! {
             prefix_upper => prefix.to_uppercase(),
             class_name => class_name,
             error_codes => error_codes,
-            conversion_error_code => crate::core::ir::ApiSurface::FFI_ERROR_CODE_CONVERSION,
-            core_error_code => crate::core::ir::ApiSurface::FFI_ERROR_CODE_UNKNOWN,
-            panic_error_code => crate::core::ir::ApiSurface::FFI_ERROR_CODE_PANIC,
         },
     ));
 }
@@ -511,5 +532,98 @@ mod typed_error_tests {
             .expect("null context guard");
         let reinterpret = output.find("ctxPtr.reinterpret").expect("context read");
         assert!(null_guard < reinterpret);
+    }
+
+    /// Regression for a collision where a Java infrastructure exception was renamed in the
+    /// switch-generating list but not in the file-generating list (or vice versa), leaving two
+    /// classes claiming the same numeric code. `INFRASTRUCTURE_ERROR_CLASSES` is the single
+    /// array both lists now read from, so this pins its codes and class names as pairwise unique. ~keep
+    #[test]
+    fn infrastructure_error_classes_have_unique_codes_and_names() {
+        let mut codes: Vec<u32> = INFRASTRUCTURE_ERROR_CLASSES.iter().map(|(_, code, _)| *code).collect();
+        let mut names: Vec<&str> = INFRASTRUCTURE_ERROR_CLASSES.iter().map(|(name, _, _)| *name).collect();
+
+        let code_count = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(
+            codes.len(),
+            code_count,
+            "infrastructure error codes must be pairwise unique"
+        );
+
+        let name_count = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            name_count,
+            names.len(),
+            "infrastructure exception class names must be pairwise unique"
+        );
+    }
+
+    /// Regression for the same class of bug from the switch-dispatch side: every infrastructure
+    /// exception class, plus every explicitly taxonomy-numbered user error variant, must get
+    /// exactly one `case <code> -> throw new <name>(msg);` arm — no class emitted with a code
+    /// that never appears in the switch (unreachable), and no two classes sharing a code (a
+    /// duplicate-`case` compile error in the generated Java). ~keep
+    #[test]
+    fn every_declared_exception_has_a_unique_reachable_dispatch_arm() {
+        let error = crate::core::ir::ErrorDef {
+            name: "RequestError".to_string(),
+            rust_path: "sample::RequestError".to_string(),
+            variants: vec![
+                crate::core::ir::ErrorVariant {
+                    error_code: Some(100),
+                    name: "InvalidInput".to_string(),
+                    is_unit: true,
+                    ..Default::default()
+                },
+                crate::core::ir::ErrorVariant {
+                    error_code: Some(101),
+                    name: "Timeout".to_string(),
+                    is_unit: true,
+                    ..Default::default()
+                },
+            ],
+            original_rust_path: String::new(),
+            doc: String::new(),
+            methods: Vec::new(),
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        };
+        let api = crate::core::ir::ApiSurface {
+            errors: vec![error],
+            ..Default::default()
+        };
+        let mut output = "checkLastError()".to_string();
+        gen_helper_methods(&mut output, "sample", "Sample", &api);
+
+        let expected: Vec<(u32, String)> = INFRASTRUCTURE_ERROR_CLASSES
+            .iter()
+            .map(|(name, code, _)| (*code, (*name).to_string()))
+            .chain(
+                api.error_taxonomy()
+                    .iter()
+                    .map(|entry| (entry.code, format!("{}Exception", entry.variant))),
+            )
+            .collect();
+        assert_eq!(expected.len(), 5, "expected 3 infrastructure + 2 taxonomy exceptions");
+
+        for (code, class_name) in &expected {
+            let arm = format!("case {code} -> throw new {class_name}(msg);");
+            assert!(
+                output.contains(&arm),
+                "missing reachable dispatch arm for {class_name} (code {code}): {arm}"
+            );
+        }
+
+        let case_count = output.matches("case ").count();
+        assert_eq!(
+            case_count,
+            expected.len(),
+            "generated switch must have exactly one case per declared exception, no extras and no drops"
+        );
     }
 }
