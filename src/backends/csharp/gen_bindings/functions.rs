@@ -56,6 +56,76 @@ fn ffi_ty_to_pinvoke_param(rust_ty: &str, param_name: &str) -> String {
     format!("{cs_type} {cs_name}")
 }
 
+/// Reduces a P/Invoke parameter list to its ABI-relevant shape by dropping each parameter's
+/// trailing identifier — a P/Invoke call binds arguments positionally by type, so the local
+/// variable name carries no marshalling meaning. Used by `emit_streaming_pinvoke` to tell a
+/// genuine signature divergence apart from mere renaming. ~keep
+fn pinvoke_param_shape(params: &str) -> Vec<String> {
+    params
+        .split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            p.rsplit_once(char::is_whitespace)
+                .map_or_else(|| p.to_string(), |(ty, _)| ty.trim().to_string())
+        })
+        .collect()
+}
+
+/// Emits one streaming P/Invoke declaration (`_start`/`_next`/`_free`), deduplicating by C entry
+/// point across the two independent emitters in `gen_native_methods` that both cover streaming
+/// symbols: the literal `typ.methods` walk and the `[[crates.adapters]]` walk. A method that is
+/// both a real IR method AND configured as a `pattern = "streaming"` adapter with a matching
+/// `owner_type` is walked by both — see `tests::e2e_csharp_opaque_streaming_wrapper` for that
+/// sanctioned overlap. Rather than letting whichever emitter runs first silently win, this
+/// tracks the ABI shape already emitted per entry point and hard-fails on a genuine divergence
+/// (different return type or parameter types). A divergence limited to a parameter's local name
+/// (e.g. `client` vs `engine`) is not an ABI difference, so that case is left to coalesce
+/// silently — see `streaming_pinvoke_dedup_rejects_real_signature_divergence` and
+/// `streaming_pinvoke_dedup_allows_cosmetic_name_divergence`. ~keep
+#[allow(clippy::too_many_arguments)]
+fn emit_streaming_pinvoke(
+    out: &mut String,
+    emitted: &mut HashSet<String>,
+    signatures: &mut HashMap<String, (Vec<String>, String)>,
+    entry_point: String,
+    cs_name: &str,
+    return_type: &str,
+    params: &str,
+) -> anyhow::Result<()> {
+    use crate::backends::csharp::template_env::render;
+
+    let mut shape = pinvoke_param_shape(params);
+    shape.insert(0, return_type.to_string());
+    let declared_as = format!("{return_type} {cs_name}({params})");
+
+    if let Some((existing_shape, existing_declared_as)) = signatures.get(&entry_point) {
+        anyhow::ensure!(
+            existing_shape == &shape,
+            "csharp NativeMethods: the streaming P/Invoke symbol `{entry_point}` is emitted \
+             twice with disagreeing signatures — one emitter declared `{existing_declared_as}`, \
+             another declared `{declared_as}`. A method that exists both as a real IR method and \
+             as a `[[crates.adapters]] pattern = \"streaming\"` entry must agree on its shape \
+             with the adapter config; fix whichever side is stale.",
+        );
+    } else {
+        signatures.insert(entry_point.clone(), (shape, declared_as));
+    }
+
+    if emitted.insert(entry_point.clone()) {
+        out.push_str(&render(
+            "dll_import_attr.jinja",
+            minijinja::context! { entry_point => &entry_point },
+        ));
+        out.push_str(&render(
+            "streaming_pinvoke_declaration.jinja",
+            minijinja::context! { return_type, cs_name, params },
+        ));
+        out.push('\n');
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn gen_native_methods(
     api: &ApiSurface,
@@ -85,6 +155,7 @@ pub(super) fn gen_native_methods(
     out.push('\n');
 
     let mut emitted: HashSet<String> = HashSet::new();
+    let mut streaming_signatures: HashMap<String, (Vec<String>, String)> = HashMap::new();
 
     let enum_names: HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
 
@@ -310,57 +381,39 @@ pub(super) fn gen_native_methods(
 
             let start_entry = format!("{}_{}_{}_start", prefix, type_snake, method.name.to_lowercase());
             let start_cs = format!("{cs_type}{cs_method}Start");
-            if emitted.insert(start_entry.clone()) {
-                out.push_str(&render(
-                    "dll_import_attr.jinja",
-                    minijinja::context! { entry_point => &start_entry },
-                ));
-                out.push_str(&render(
-                    "streaming_pinvoke_declaration.jinja",
-                    minijinja::context! {
-                        return_type => "ulong",
-                        cs_name => &start_cs,
-                        params => "ulong client, ulong req",
-                    },
-                ));
-                out.push('\n');
-            }
+            emit_streaming_pinvoke(
+                &mut out,
+                &mut emitted,
+                &mut streaming_signatures,
+                start_entry,
+                &start_cs,
+                "ulong",
+                "ulong client, ulong req",
+            )?;
 
             let next_entry = format!("{}_{}_{}_next", prefix, type_snake, method.name.to_lowercase());
             let next_cs = format!("{cs_type}{cs_method}Next");
-            if emitted.insert(next_entry.clone()) {
-                out.push_str(&render(
-                    "dll_import_attr.jinja",
-                    minijinja::context! { entry_point => &next_entry },
-                ));
-                out.push_str(&render(
-                    "streaming_pinvoke_declaration.jinja",
-                    minijinja::context! {
-                        return_type => "ulong",
-                        cs_name => &next_cs,
-                        params => "ulong handle",
-                    },
-                ));
-                out.push('\n');
-            }
+            emit_streaming_pinvoke(
+                &mut out,
+                &mut emitted,
+                &mut streaming_signatures,
+                next_entry,
+                &next_cs,
+                "ulong",
+                "ulong handle",
+            )?;
 
             let free_entry = format!("{}_{}_{}_free", prefix, type_snake, method.name.to_lowercase());
             let free_cs = format!("{cs_type}{cs_method}Free");
-            if emitted.insert(free_entry.clone()) {
-                out.push_str(&render(
-                    "dll_import_attr.jinja",
-                    minijinja::context! { entry_point => &free_entry },
-                ));
-                out.push_str(&render(
-                    "streaming_pinvoke_declaration.jinja",
-                    minijinja::context! {
-                        return_type => "void",
-                        cs_name => &free_cs,
-                        params => "ulong handle",
-                    },
-                ));
-                out.push('\n');
-            }
+            emit_streaming_pinvoke(
+                &mut out,
+                &mut emitted,
+                &mut streaming_signatures,
+                free_entry,
+                &free_cs,
+                "void",
+                "ulong handle",
+            )?;
         }
     }
 
@@ -376,57 +429,39 @@ pub(super) fn gen_native_methods(
 
             let start_entry = format!("{}_{}_{}_start", prefix, owner_snake, adapter_snake);
             let start_cs = format!("{owner_cs}{adapter_cs}Start");
-            if emitted.insert(start_entry.clone()) {
-                out.push_str(&render(
-                    "dll_import_attr.jinja",
-                    minijinja::context! { entry_point => &start_entry },
-                ));
-                out.push_str(&render(
-                    "streaming_pinvoke_declaration.jinja",
-                    minijinja::context! {
-                        return_type => "ulong",
-                        cs_name => &start_cs,
-                        params => "ulong engine, ulong req",
-                    },
-                ));
-                out.push('\n');
-            }
+            emit_streaming_pinvoke(
+                &mut out,
+                &mut emitted,
+                &mut streaming_signatures,
+                start_entry,
+                &start_cs,
+                "ulong",
+                "ulong engine, ulong req",
+            )?;
 
             let next_entry = format!("{}_{}_{}_next", prefix, owner_snake, adapter_snake);
             let next_cs = format!("{owner_cs}{adapter_cs}Next");
-            if emitted.insert(next_entry.clone()) {
-                out.push_str(&render(
-                    "dll_import_attr.jinja",
-                    minijinja::context! { entry_point => &next_entry },
-                ));
-                out.push_str(&render(
-                    "streaming_pinvoke_declaration.jinja",
-                    minijinja::context! {
-                        return_type => "ulong",
-                        cs_name => &next_cs,
-                        params => "ulong handle",
-                    },
-                ));
-                out.push('\n');
-            }
+            emit_streaming_pinvoke(
+                &mut out,
+                &mut emitted,
+                &mut streaming_signatures,
+                next_entry,
+                &next_cs,
+                "ulong",
+                "ulong handle",
+            )?;
 
             let free_entry = format!("{}_{}_{}_free", prefix, owner_snake, adapter_snake);
             let free_cs = format!("{owner_cs}{adapter_cs}Free");
-            if emitted.insert(free_entry.clone()) {
-                out.push_str(&render(
-                    "dll_import_attr.jinja",
-                    minijinja::context! { entry_point => &free_entry },
-                ));
-                out.push_str(&render(
-                    "streaming_pinvoke_declaration.jinja",
-                    minijinja::context! {
-                        return_type => "void",
-                        cs_name => &free_cs,
-                        params => "ulong handle",
-                    },
-                ));
-                out.push('\n');
-            }
+            emit_streaming_pinvoke(
+                &mut out,
+                &mut emitted,
+                &mut streaming_signatures,
+                free_entry,
+                &free_cs,
+                "void",
+                "ulong handle",
+            )?;
         }
     }
 
@@ -726,9 +761,100 @@ pub(super) fn gen_pinvoke_for_method(c_name: &str, cs_name: &str, method: &Metho
 
 #[cfg(test)]
 mod tests {
-    use super::{emits_registered_trait_bridge, ffi_handle_type_names};
+    use super::{emit_streaming_pinvoke, emits_registered_trait_bridge, ffi_handle_type_names};
     use crate::core::config::NewAlefConfig;
     use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef};
+
+    /// Reproduces the collision `gen_native_methods` hits when a streaming method is walked by
+    /// both the `typ.methods` emitter and the `[[crates.adapters]]` emitter (see
+    /// `tests::e2e_csharp_opaque_streaming_wrapper::test_opaque_streaming_static_wrapper` for the
+    /// full end-to-end scenario). The two emitters here disagree on the `_start` signature's
+    /// second parameter type (`ulong req` vs `IntPtr req`) — a genuine ABI divergence, not just a
+    /// renamed identifier — so the second call must hard-fail instead of the first emitter's
+    /// declaration silently winning.
+    #[test]
+    fn streaming_pinvoke_dedup_rejects_real_signature_divergence() {
+        use std::collections::{HashMap, HashSet};
+
+        let mut out = String::new();
+        let mut emitted = HashSet::new();
+        let mut signatures = HashMap::new();
+
+        emit_streaming_pinvoke(
+            &mut out,
+            &mut emitted,
+            &mut signatures,
+            "sample_stream_engine_stream_items_start".to_string(),
+            "StreamEngineStreamItemsStart",
+            "ulong",
+            "ulong client, ulong req",
+        )
+        .expect("first emission establishes the signature");
+
+        let error = emit_streaming_pinvoke(
+            &mut out,
+            &mut emitted,
+            &mut signatures,
+            "sample_stream_engine_stream_items_start".to_string(),
+            "StreamEngineStreamItemsStart",
+            "ulong",
+            "ulong engine, IntPtr req",
+        )
+        .expect_err("a real parameter-type divergence on the same C symbol must not be silently dropped");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("sample_stream_engine_stream_items_start"),
+            "error must name the colliding entry point: {message}"
+        );
+        assert!(
+            message.contains("ulong client, ulong req") && message.contains("ulong engine, IntPtr req"),
+            "error must name both disagreeing signatures: {message}"
+        );
+    }
+
+    /// The sanctioned overlap (same scenario as the divergence test above, but with the two
+    /// emitters' hardcoded shapes as they exist in `gen_native_methods` today): both declare
+    /// `ulong`-typed parameters and only the local parameter identifier differs (`client` vs
+    /// `engine`). That is not an ABI difference — P/Invoke binds positionally by type — so the
+    /// second call must coalesce silently rather than erroring, and only one declaration must
+    /// reach the output.
+    #[test]
+    fn streaming_pinvoke_dedup_allows_cosmetic_name_divergence() {
+        use std::collections::{HashMap, HashSet};
+
+        let mut out = String::new();
+        let mut emitted = HashSet::new();
+        let mut signatures = HashMap::new();
+
+        emit_streaming_pinvoke(
+            &mut out,
+            &mut emitted,
+            &mut signatures,
+            "sample_stream_engine_stream_items_start".to_string(),
+            "StreamEngineStreamItemsStart",
+            "ulong",
+            "ulong client, ulong req",
+        )
+        .expect("first emission succeeds");
+
+        emit_streaming_pinvoke(
+            &mut out,
+            &mut emitted,
+            &mut signatures,
+            "sample_stream_engine_stream_items_start".to_string(),
+            "StreamEngineStreamItemsStart",
+            "ulong",
+            "ulong engine, ulong req",
+        )
+        .expect("a parameter-name-only divergence carries no ABI meaning and must not error");
+
+        assert_eq!(
+            out.matches("StreamEngineStreamItemsStart").count(),
+            1,
+            "only one declaration for the shared entry point may reach the output:\n{out}"
+        );
+    }
 
     #[test]
     fn ffi_handle_types_exclude_traits_and_enums() {
