@@ -198,12 +198,19 @@ fn emit_handle_only_destructors(
         })
         .map(|type_def| type_def.name.as_str())
         .collect();
-    let returns = handle_only_return_names(api, inputs, &client_types);
+    let returns = handle_only_type_names(
+        api,
+        &inputs.visible_functions,
+        &inputs.exclude_functions,
+        &inputs.opaque_type_names,
+        &inputs.capsule_types,
+        &client_types,
+    );
     if returns.is_empty() {
         return;
     }
     body.push_str("\n    // Destructor external funs for handle-only opaque types.\n");
-    for type_name in returns {
+    for type_name in &returns {
         let free_name = format!("nativeFree{}", to_pascal_case(type_name));
         if destructor_names.insert(free_name.clone()) {
             push_jni_external_fun(body, &free_name, "handle: Long", None, None);
@@ -211,22 +218,38 @@ fn emit_handle_only_destructors(
     }
 }
 
-fn handle_only_return_names<'a>(
-    api: &'a ApiSurface,
-    inputs: &'a JniBridgeInputs<'a>,
+/// Opaque type names that exist on the Kotlin side purely as JNI handle wrappers -- no
+/// client class, no capsule host type -- because some visible top-level function or
+/// instance method returns them. A capsule type (`[crates.kotlin_android.capsule_types]`)
+/// is deliberately excluded: its host runtime owns and frees the pointer, so it never gets
+/// a `nativeFree<Type>` destructor.
+///
+/// Shared by [`emit_handle_only_destructors`] (declares each `nativeFree<Type>` external
+/// fun the Bridge object owns) and the kotlin_android handle-wrapper emitter
+/// (`kotlin_android::gen_bindings::module_facade::handle_wrappers`, which emits the `.kt`
+/// wrapper class whose `close()` calls it), so the declaration and its only call site can
+/// never name a different set of types. Returns owned names rather than borrowing from `api`
+/// so both call sites can build it from their own differently-lifetimed inputs without the
+/// two having to share a single lifetime parameter. ~keep
+pub fn handle_only_type_names(
+    api: &ApiSurface,
+    visible_functions: &[&crate::core::ir::FunctionDef],
+    exclude_functions: &std::collections::HashSet<String>,
+    opaque_type_names: &std::collections::HashSet<&str>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
     client_types: &std::collections::HashSet<&str>,
-) -> std::collections::BTreeSet<&'a str> {
-    let function_returns = inputs
-        .visible_functions
+) -> std::collections::BTreeSet<String> {
+    let function_returns = visible_functions
         .iter()
         .filter_map(|function| named_return_type(&function.return_type));
     function_returns
-        .chain(visible_method_return_names(api, &inputs.exclude_functions))
+        .chain(visible_method_return_names(api, exclude_functions))
         .filter(|type_name| {
-            inputs.opaque_type_names.contains(*type_name)
+            opaque_type_names.contains(*type_name)
                 && !client_types.contains(*type_name)
-                && !inputs.capsule_types.contains_key(*type_name)
+                && !capsule_types.contains_key(*type_name)
         })
+        .map(str::to_string)
         .collect()
 }
 

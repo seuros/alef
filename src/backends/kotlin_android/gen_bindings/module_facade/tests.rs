@@ -128,6 +128,53 @@ fn opaque_handle_header_clears_ownership_before_idempotent_free() {
 }
 
 #[test]
+fn capsule_type_gets_no_handle_wrapper_class_or_free_call() {
+    let language_type = crate::core::ir::TypeDef {
+        name: "Language".to_string(),
+        rust_path: "sample_capsule::Language".to_string(),
+        is_opaque: true,
+        is_return_type: true,
+        ..Default::default()
+    };
+    let api = crate::core::ir::ApiSurface {
+        types: vec![language_type],
+        functions: vec![make_get_language_fn()],
+        ..Default::default()
+    };
+    let capsule_config = HostCapsuleTypeConfig {
+        host_type: "dev.runtime.Language".to_string(),
+        package: String::new(),
+        package_version: String::new(),
+        construct_expr: "dev.runtime.Language({ptr})".to_string(),
+        ..Default::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig {
+        kotlin_android: Some(crate::core::config::KotlinAndroidConfig {
+            capsule_types: std::collections::HashMap::from([("Language".to_string(), capsule_config)]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let visible_functions: Vec<&crate::core::ir::FunctionDef> = api.functions.iter().collect();
+    let mut files = Vec::new();
+
+    super::handle_wrappers::emit_handle_wrappers(
+        &api,
+        &config,
+        std::path::Path::new("src/main/kotlin"),
+        "dev.sample",
+        &mut files,
+        "SampleBridge",
+        &visible_functions,
+    );
+
+    assert!(
+        files.is_empty(),
+        "a capsule-typed return must not get a handle-wrapper .kt file: {files:?}"
+    );
+}
+
+#[test]
 fn android_trait_bridge_lifecycle_functions_are_managed_by_bridge_object() {
     let config = crate::core::config::ResolvedCrateConfig {
         trait_bridges: vec![crate::core::config::TraitBridgeConfig {

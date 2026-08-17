@@ -5,7 +5,7 @@ use crate::backends::kotlin::{emit_kdoc_pub, to_lower_camel, to_pascal_case};
 use crate::backends::kotlin_android::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{AdapterConfig, AdapterPattern, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, FunctionDef, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, FunctionDef, TypeDef};
 
 use super::super::assemble_kt_content;
 
@@ -24,11 +24,38 @@ pub(super) fn emit_handle_wrappers(
         .filter(|type_def| has_instance_methods(type_def))
         .map(|type_def| type_def.name.as_str())
         .collect();
-    let reachable_types = reachable_handle_types(visible_functions);
+    let opaque_type_names: HashSet<&str> = api
+        .types
+        .iter()
+        .filter(|type_def| type_def.is_opaque && !type_def.is_trait)
+        .map(|type_def| type_def.name.as_str())
+        .collect();
+    let exclude_functions: HashSet<String> = config
+        .kotlin_android
+        .as_ref()
+        .map(|android| android.exclude_functions.iter().cloned().collect())
+        .unwrap_or_default();
+    let capsule_types = config
+        .kotlin_android
+        .as_ref()
+        .map(|android| android.capsule_types.clone())
+        .unwrap_or_default();
+    // Same predicate the Bridge object uses to decide which `nativeFree<Type>` externals it
+    // declares -- a capsule type's host runtime owns the pointer, so it is excluded from
+    // both the destructor declaration and this wrapper-class-with-close() emission. See
+    // `crate::backends::kotlin::handle_only_type_names` for why the two must never disagree.
+    let handle_type_names = crate::backends::kotlin::handle_only_type_names(
+        api,
+        visible_functions,
+        &exclude_functions,
+        &opaque_type_names,
+        &capsule_types,
+        &client_types,
+    );
     let handle_types: BTreeMap<&str, &TypeDef> = api
         .types
         .iter()
-        .filter(|type_def| is_handle_type(type_def, &client_types, &reachable_types))
+        .filter(|type_def| handle_type_names.contains(type_def.name.as_str()))
         .map(|type_def| (type_def.name.as_str(), type_def))
         .collect();
     for (class_name, type_def) in handle_types {
@@ -51,38 +78,6 @@ fn has_instance_methods(type_def: &TypeDef) -> bool {
             .methods
             .iter()
             .any(|method| !method.sanitized && !method.is_static)
-}
-
-/// Opaque types a caller can actually obtain a handle to: those some visible
-/// top-level function returns.
-///
-/// Mirrors the reachability predicate the sibling JNI shim generator
-/// (`backends::jni::gen_shims::top_level::top_level_opaque_returns`) and the Kotlin
-/// Bridge destructor emitter (`bridge_object::handle_only_opaque_returns`) already
-/// apply, so the three stay in agreement about which types exist on the Kotlin side.
-fn reachable_handle_types<'a>(visible_functions: &[&'a FunctionDef]) -> HashSet<&'a str> {
-    visible_functions
-        .iter()
-        .filter_map(|function| match &function.return_type {
-            TypeRef::Named(name) => Some(name.as_str()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// A handle-only opaque type earns a wrapper class -- and therefore a `close()`
-/// calling `nativeFree<TypeName>` -- only when it is reachable. A type that is
-/// `is_opaque` but that no visible function returns (as seen in a consumer tree: a
-/// counter type, public in Rust, with no alef-exposed constructor path) cannot be
-/// constructed from Kotlin at all, so its wrapper referenced a `nativeFree<TypeName>`
-/// the Bridge object never declares and the native shim never implements -- an
-/// `Unresolved reference` at compile time pointing at a class nothing could have
-/// instantiated.
-fn is_handle_type(type_def: &TypeDef, client_types: &HashSet<&str>, reachable_types: &HashSet<&str>) -> bool {
-    type_def.is_opaque
-        && !type_def.is_trait
-        && !client_types.contains(type_def.name.as_str())
-        && reachable_types.contains(type_def.name.as_str())
 }
 
 fn emit_handle_wrapper(

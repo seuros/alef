@@ -23,6 +23,8 @@ pub use gen_bindings::{
     emit_type_pub_with_enum_defaults_and_sealed_classes, kotlin_type_str_pub, to_lower_camel, to_pascal_case,
 };
 
-pub use gen_bindings::jni_emitter::{emit_jni_bridge_object, emit_jni_client_class, emit_streaming_jni_external_funs};
+pub use gen_bindings::jni_emitter::{
+    emit_jni_bridge_object, emit_jni_client_class, emit_streaming_jni_external_funs, handle_only_type_names,
+};
 
 pub use gen_bindings::literal_normalizer;
