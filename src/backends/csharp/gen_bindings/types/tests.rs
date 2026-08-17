@@ -763,3 +763,124 @@ fn opaque_method_async_bytes_result_frees_inside_finally_not_inline() {
         "async FreeBytes must be the sole statement in a guaranteed `finally` block:\n{code}"
     );
 }
+
+/// A raw `Handle` read on an opaque instance method races `Dispose`/consuming methods on
+/// another thread, since nothing pins the native handle for the duration of the call. The
+/// receiver must instead be borrowed via `BorrowHandle()`, holding a `HandleLease` (which
+/// ref-counts through `SafeHandle.DangerousAddRef`) across the native call. ~keep
+#[test]
+fn opaque_borrowed_instance_method_reads_receiver_through_borrow_handle_not_raw_handle() {
+    use crate::core::ir::{MethodDef, ReceiverKind};
+
+    let method = MethodDef {
+        name: "describe".to_string(),
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        receiver: Some(ReceiverKind::Ref),
+        cfg: None,
+        ..Default::default()
+    };
+
+    let code = super::opaque::gen_opaque_method(
+        &method,
+        &[],
+        "Widget",
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("        using var handleLease = BorrowHandle();\n"),
+        "a borrowed instance method must pin the receiver via BorrowHandle() before the native call:\n{code}"
+    );
+    assert!(
+        code.contains("            handleLease.Handle\n"),
+        "the native call must pass the leased handle, not the raw Handle property:\n{code}"
+    );
+    assert!(
+        !code.contains("            Handle\n") && !code.contains("            Handle,\n"),
+        "the raw, unguarded Handle property must not appear as the native call's receiver arg:\n{code}"
+    );
+}
+
+/// The consuming (owned-receiver) path must route through `TakeHandle()`/`HandleTransfer`,
+/// which waits out any in-flight borrows and is mutually exclusive with them via `_handleLock`,
+/// instead of calling `_safeHandle.Invalidate()` directly outside any lock. ~keep
+#[test]
+fn opaque_consuming_instance_method_commits_handle_transfer_not_raw_invalidate() {
+    use crate::core::ir::{MethodDef, ReceiverKind};
+
+    let method = MethodDef {
+        name: "close".to_string(),
+        return_type: TypeRef::Unit,
+        receiver: Some(ReceiverKind::Owned),
+        cfg: None,
+        ..Default::default()
+    };
+
+    let code = super::opaque::gen_opaque_method(
+        &method,
+        &[],
+        "Widget",
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("        using var handleTransfer = TakeHandle();\n"),
+        "a consuming instance method must take the receiver via TakeHandle() before the native call:\n{code}"
+    );
+    assert!(
+        code.contains("            handleTransfer.Handle\n"),
+        "the native call must pass the transferred handle, not the raw Handle property:\n{code}"
+    );
+    assert!(
+        code.contains("        handleTransfer.Commit();\n"),
+        "a successful consuming call must commit the transfer through the guarded machinery:\n{code}"
+    );
+    assert!(
+        !code.contains("_safeHandle.Invalidate()"),
+        "consuming methods must not invalidate the SafeHandle directly, bypassing _handleLock:\n{code}"
+    );
+}
+
+/// Negative control: a static method (or constructor) has no receiver, so it must not be given
+/// a borrow/transfer guard — there is no `Handle` to protect. Without this assertion, a fix that
+/// guards indiscriminately (even call sites with nothing to guard) would still pass the two
+/// tests above. ~keep
+#[test]
+fn opaque_static_method_has_no_receiver_guard() {
+    use crate::core::ir::MethodDef;
+
+    let method = MethodDef {
+        name: "parse".to_string(),
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        receiver: None,
+        is_static: true,
+        cfg: None,
+        ..Default::default()
+    };
+
+    let code = super::opaque::gen_opaque_method(
+        &method,
+        &[],
+        "Widget",
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        !code.contains("BorrowHandle()"),
+        "a static method has no receiver and must not be given a borrow guard:\n{code}"
+    );
+    assert!(
+        !code.contains("TakeHandle()"),
+        "a static method has no receiver and must not be given a transfer guard:\n{code}"
+    );
+    assert!(
+        !code.contains("handleLease") && !code.contains("handleTransfer"),
+        "a static method body must not reference receiver-guard locals at all:\n{code}"
+    );
+}

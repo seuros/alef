@@ -22,7 +22,11 @@
             var msg = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "{{ request_from_json }} failed";
             throw new {{ exception_name }}(ec, msg);
         }
-        var streamHandle = NativeMethods.{{ start_native }}(Handle, {{ request_param }}Handle);
+        IntPtr streamHandle;
+        using (var handleLease = BorrowHandle())
+        {
+            streamHandle = NativeMethods.{{ start_native }}(handleLease.Handle, {{ request_param }}Handle);
+        }
         if (streamHandle == IntPtr.Zero)
         {
             NativeMethods.{{ request_free }}({{ request_param }}Handle);

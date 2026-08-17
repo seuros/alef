@@ -233,6 +233,20 @@ pub(super) fn gen_opaque_method(
     let is_static = method.is_static || method.receiver.is_none();
     let consumes_receiver = method.receiver == Some(ReceiverKind::Owned);
     let static_kw = if is_static { "static " } else { "" };
+    // A raw `Handle` read races `Dispose`/consuming methods on another thread: the value can be
+    // read as valid and then freed before the native call runs. `BorrowHandle`/`TakeHandle`
+    // pin the handle (ref-count or exclusive take) for the lifetime of the native call instead. ~keep
+    let receiver_guard_var = if consumes_receiver {
+        "handleTransfer"
+    } else {
+        "handleLease"
+    };
+    let receiver_guard_call = if consumes_receiver {
+        "TakeHandle()"
+    } else {
+        "BorrowHandle()"
+    };
+    let receiver_arg = format!("{receiver_guard_var}.Handle");
     out.push_str(
         render(
             "opaque_method_header.jinja",
@@ -289,7 +303,7 @@ pub(super) fn gen_opaque_method(
         if !is_static {
             args_block.push_str(&render(
                 "native_arg_line.jinja",
-                minijinja::context! { indent => arg_indent, arg => "Handle" },
+                minijinja::context! { indent => arg_indent, arg => &receiver_arg },
             ));
         }
         for param in visible_params.iter() {
@@ -306,6 +320,12 @@ pub(super) fn gen_opaque_method(
                 ));
             }
         }
+        let receiver_guard = if is_static {
+            String::new()
+        } else {
+            let guard_indent = if method.is_async { "            " } else { "        " };
+            format!("{guard_indent}using var {receiver_guard_var} = {receiver_guard_call};\n")
+        };
         out.push_str(&render(
             "opaque_bytes_result_call.jinja",
             minijinja::context! {
@@ -314,6 +334,7 @@ pub(super) fn gen_opaque_method(
                 args_block => &args_block,
                 exception_name,
                 consumes_receiver,
+                receiver_guard,
             },
         ));
         out.push_str("    }\n\n");
@@ -327,6 +348,12 @@ pub(super) fn gen_opaque_method(
             out.push_str("        return await Task.Run(() =>\n        {\n");
         }
 
+        if !is_static {
+            out.push_str(&format!(
+                "            using var {receiver_guard_var} = {receiver_guard_call};\n"
+            ));
+        }
+
         if method.return_type != TypeRef::Unit {
             out.push_str("            var nativeResult = ");
         } else {
@@ -338,7 +365,7 @@ pub(super) fn gen_opaque_method(
             minijinja::context! { method_name => &cs_native_name },
         ));
         if !is_static {
-            out.push_str("                Handle");
+            out.push_str(&format!("                {receiver_arg}"));
             for param in &visible_params {
                 let param_name = param.name.to_lower_camel_case();
                 let arg = super::super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);
@@ -421,6 +448,12 @@ pub(super) fn gen_opaque_method(
         emit_return_statement_indented(&mut out, &method.return_type, "            ");
         out.push_str("        });\n");
     } else {
+        if !is_static {
+            out.push_str(&format!(
+                "        using var {receiver_guard_var} = {receiver_guard_call};\n"
+            ));
+        }
+
         if method.return_type != TypeRef::Unit {
             out.push_str("        var nativeResult = ");
         } else {
@@ -432,7 +465,7 @@ pub(super) fn gen_opaque_method(
             minijinja::context! { method_name => &cs_native_name },
         ));
         if !is_static {
-            out.push_str("            Handle");
+            out.push_str(&format!("            {receiver_arg}"));
             for param in &visible_params {
                 let param_name = param.name.to_lower_camel_case();
                 let arg = super::super::native_call_arg(&param.ty, &param_name, param.optional, true_opaque_types);

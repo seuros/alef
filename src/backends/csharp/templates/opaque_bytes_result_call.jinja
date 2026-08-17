@@ -1,13 +1,13 @@
 {% if is_async %}
         return await Task.Run(() =>
         {
-            var rc = NativeMethods.{{ native_method_name }}(
+{{ receiver_guard }}            var rc = NativeMethods.{{ native_method_name }}(
 {{ args_block }}                out var outPtr,
                 out var outLen,
                 out var outCap
             );
 {% if consumes_receiver %}
-            _safeHandle.Invalidate();
+            handleTransfer.Commit();
 {% endif %}
             try
             {
@@ -28,13 +28,13 @@
             }
         });
 {% else %}
-        var rc = NativeMethods.{{ native_method_name }}(
+{{ receiver_guard }}        var rc = NativeMethods.{{ native_method_name }}(
 {{ args_block }}            out var outPtr,
             out var outLen,
             out var outCap
         );
 {% if consumes_receiver %}
-        _safeHandle.Invalidate();
+        handleTransfer.Commit();
 {% endif %}
         try
         {
