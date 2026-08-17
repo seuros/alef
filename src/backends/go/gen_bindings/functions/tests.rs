@@ -546,3 +546,53 @@ fn optional_string_return_keeps_the_direct_pointer_shape() {
         "Optional<String> must not be typed as []byte in:\n{out}"
     );
 }
+
+/// Regression test: a real-world consumer (an async free function returning `Vec<Named>`
+/// over a `Named` config-struct parameter, e.g. `embed_sparse_async(texts, config)`) reported
+/// its Go wrapper missing. `is_async` is never read by `gen_function_wrapper` — every FFI call
+/// it emits is a blocking C call regardless of the Rust function's async-ness — so nothing here
+/// should special-case async, but nothing previously exercised the async + Vec-return +
+/// struct-param combination together, so a future accidental async gate would go unnoticed. ~keep
+#[test]
+fn async_free_function_returning_vec_of_named_over_config_struct_emits_wrapper() {
+    let func = FunctionDef {
+        name: "embed_sparse_async".to_string(),
+        params: vec![
+            make_param("texts", TypeRef::Vec(Box::new(TypeRef::String))),
+            make_param("config", TypeRef::Named("SparseEmbeddingConfig".to_string())),
+        ],
+        return_type: TypeRef::Vec(Box::new(TypeRef::Named("SparseEmbedding".to_string()))),
+        is_async: true,
+        error_type: Some("SampleCrateError".to_string()),
+        ..Default::default()
+    };
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_strings = HashSet::new();
+
+    let out = gen_function_wrapper(
+        &func,
+        "sample",
+        &opaque,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(
+        out.contains(
+            "func EmbedSparseAsync(texts []string, config SparseEmbeddingConfig) ([]SparseEmbedding, error) {"
+        ),
+        "expected the exact async Vec<Named>-over-config-struct signature, got:\n{out}"
+    );
+    assert!(
+        out.contains("C.sample_embed_sparse_async("),
+        "must call the FFI symbol for the underlying blocking C call, got:\n{out}"
+    );
+    assert!(
+        out.contains("json.Unmarshal") && out.contains("[]SparseEmbedding"),
+        "Vec<Named> return must unmarshal into a Go slice, got:\n{out}"
+    );
+}
