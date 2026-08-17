@@ -168,7 +168,7 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
                     method.name.clone()
                 };
                 let param_count = method.params.len();
-                lines.push(crate::backends::magnus::template_env::render(
+                let registration = crate::backends::magnus::template_env::render(
                     "module_class_method_register.rs.jinja",
                     minijinja::context! {
                         ruby_name => &method_name,
@@ -176,7 +176,17 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
                         function_name => &method_name,
                         arity => param_count,
                     },
-                ));
+                );
+                // The registration must carry the same gate the wrapper `fn` got in
+                // `classes::gen_opaque_instance_method`/`gen_instance_method`: `method!` resolves
+                // `{type}::{method}` as a path, so registering a method the gate compiled out is a
+                // hard E0599, not a missing Ruby method. `#[cfg]` on a statement inside `ruby_init`
+                // is the one place the gate can go — the body is a flat statement list, not a set
+                // of items. ~keep
+                lines.push(match method.cfg.as_deref() {
+                    Some(gate) if !gate.is_empty() => format!("    #[cfg({gate})]\n{registration}"),
+                    _ => registration,
+                });
             }
         }
 

@@ -4683,3 +4683,87 @@ fn test_magnus_async_struct_param_marshalled_as_native_ruby_value() {
         "non-struct async params must keep the JSON-string representation:\n{code}"
     );
 }
+
+/// Magnus is the two-sided case: a gated method needs `#[cfg]` on the wrapper `fn` **and** on the
+/// `class.define_method(...)` statement in `ruby_init`. `method!(Type::name, n)` resolves
+/// `Type::name` as a path, so gating only the `fn` turns a feature-off build into an E0599 rather
+/// than a Ruby method that is merely absent — which is exactly the "registration disagrees with
+/// emission" failure this gate exists to prevent.
+///
+/// The count assertion carries the ungated control: exactly two occurrences of the gate means the
+/// gated method got both of its sites and the ungated method got neither. ~keep
+#[test]
+fn magnus_gates_the_wrapper_fn_and_its_define_method_registration_together() {
+    let backend = MagnusBackend;
+
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "StreamClient".to_string(),
+            rust_path: "test_lib::StreamClient".to_string(),
+            is_opaque: true,
+            methods: vec![
+                MethodDef {
+                    name: "ungated_ping".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    cfg: None,
+                    ..MethodDef::default()
+                },
+                MethodDef {
+                    name: "gated_stream".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    cfg: Some("feature = \"streaming\"".to_string()),
+                    ..MethodDef::default()
+                },
+            ],
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = backend
+        .generate_bindings(&api, &make_config())
+        .expect("generation should succeed");
+    let content = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content;
+
+    const GATE: &str = "#[cfg(feature = \"streaming\")]";
+
+    assert_eq!(
+        content.matches(GATE).count(),
+        2,
+        "expected exactly two gates -- the wrapper fn and its registration -- and none on the \
+         ungated control, got:\n{content}"
+    );
+
+    assert!(
+        content.contains(&format!("{GATE}\n    fn gated_stream")),
+        "the wrapper fn must carry the gate:\n{content}"
+    );
+
+    let registration = content
+        .find("class.define_method(\"gated_stream\"")
+        .expect("the gated method must still be registered under its gate");
+    let gate_before = content[..registration]
+        .rfind(GATE)
+        .expect("the registration statement must be preceded by the gate");
+    assert!(
+        content[gate_before + GATE.len()..registration].trim().is_empty(),
+        "only whitespace may sit between the gate and the define_method it guards:\n{content}"
+    );
+
+    assert!(
+        content.contains("fn ungated_ping"),
+        "the ungated control must still be emitted:\n{content}"
+    );
+    assert!(
+        content.contains("class.define_method(\"ungated_ping\""),
+        "the ungated control must still be registered:\n{content}"
+    );
+}

@@ -517,3 +517,92 @@ fn test_free_function_len_companion_name_is_derived_from_the_primary_symbol() {
          parallel computation of it, got:\n{companion}"
     );
 }
+
+/// A streaming method's FFI export must carry the same gate as a plain method's, and the feature
+/// naming that gate must reach cbindgen's `[defines]` — the two halves have to agree or the
+/// header declares a symbol the cdylib never exported.
+///
+/// `gen_streaming_method_wrapper` emitted no `#[cfg]` at all, not even the owning type's, so a
+/// gated streaming adapter produced an unguarded `pub unsafe extern "C" fn` whose body calls a
+/// core method that feature set never compiled.
+#[test]
+fn streaming_method_wrapper_carries_the_combined_owner_and_method_gate() {
+    let typ = TypeDef {
+        name: "Client".to_string(),
+        rust_path: "my_lib::Client".to_string(),
+        is_opaque: true,
+        cfg: Some(r#"feature = "client""#.to_string()),
+        methods: vec![MethodDef {
+            name: "stream".to_string(),
+            cfg: Some(r#"all(feature = "client", feature = "streaming")"#.to_string()),
+            ..MethodDef::default()
+        }],
+        ..TypeDef::default()
+    };
+
+    let wrapper =
+        super::super::functions::gen_streaming_method_wrapper(&typ, &typ.methods[0], "ml", "my_lib", "    Ok(0)");
+
+    assert!(
+        wrapper.contains(r#"#[cfg(all(feature = "client", feature = "streaming"))]"#),
+        "the streaming export must be gated on owner AND method cfg, got:\n{wrapper}"
+    );
+    let cfg_position = wrapper.find("#[cfg(").expect("gate must be present");
+    let no_mangle_position = wrapper
+        .find("#[unsafe(no_mangle)]")
+        .expect("export attribute must be present");
+    assert!(
+        cfg_position < no_mangle_position,
+        "the gate must precede the export attribute so it applies to the item, got:\n{wrapper}"
+    );
+
+    // The registration side: cbindgen only guards a declaration for a feature it was told about,
+    // so both features must land in `[defines]`. Missing ones make the header declare the symbol
+    // unconditionally. ~keep
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![typ],
+        ..ApiSurface::default()
+    };
+    let cbindgen_toml = super::super::helpers::gen_cbindgen_toml(
+        "ml",
+        &api,
+        &std::collections::HashMap::new(),
+        &std::collections::BTreeSet::new(),
+    );
+    assert!(
+        cbindgen_toml.contains("feature = client"),
+        "cbindgen [defines] must carry the owner feature, got:\n{cbindgen_toml}"
+    );
+    assert!(
+        cbindgen_toml.contains("feature = streaming"),
+        "cbindgen [defines] must carry the method feature, got:\n{cbindgen_toml}"
+    );
+}
+
+/// The ungated control: an ungated streaming method on an ungated type must emit no `#[cfg]` at
+/// all, so this change is a strict addition rather than a rewrite of existing output.
+#[test]
+fn streaming_method_wrapper_emits_no_gate_when_neither_side_is_gated() {
+    let typ = TypeDef {
+        name: "Client".to_string(),
+        rust_path: "my_lib::Client".to_string(),
+        is_opaque: true,
+        cfg: None,
+        methods: vec![MethodDef {
+            name: "stream".to_string(),
+            cfg: None,
+            ..MethodDef::default()
+        }],
+        ..TypeDef::default()
+    };
+
+    let wrapper =
+        super::super::functions::gen_streaming_method_wrapper(&typ, &typ.methods[0], "ml", "my_lib", "    Ok(0)");
+
+    assert!(
+        !wrapper.contains("#[cfg("),
+        "an ungated streaming method must emit no gate, got:\n{wrapper}"
+    );
+}

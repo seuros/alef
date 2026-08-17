@@ -137,6 +137,13 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
     );
     let effective_features = feature_gate::effective_swift_codegen_features(api, config, &core_crate_dir);
     let configured_features: HashSet<&str> = effective_features.iter().map(String::as_str).collect();
+    // The feature set is derived from the *unfiltered* surface above (`collect_cfg_features` reads
+    // every gate the surface mentions), so the method filter has to come after it — filtering
+    // first would shrink the very set it is filtered against. The Swift facade applies this same
+    // helper to the same set, which is what keeps extern declarations and Swift call sites in
+    // agreement. ~keep
+    let method_filtered_api = feature_gate::with_cfg_filtered_methods(api, &configured_features);
+    let api = &method_filtered_api;
     let lib_rs = emit_lib_rs(
         api,
         config,

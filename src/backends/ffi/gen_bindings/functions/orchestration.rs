@@ -57,6 +57,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_streaming_method_wrapper(
             qualified => qualified,
             callback_type => callback_type,
             body_indented => body_indented,
+            // The streaming wrapper is an FFI export like any other and needs the same gate
+            // `gen_method_wrapper` carries: the owning type's cfg AND the method's own (which
+            // already includes its `impl` block's). Emitting it unguarded exports a symbol whose
+            // body calls a core method the active feature set never compiled. ~keep
+            source_cfg => method.cfg_within(typ.cfg.as_deref()).unwrap_or_default(),
         },
     )
 }

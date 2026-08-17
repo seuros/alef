@@ -94,6 +94,11 @@ impl Backend for SwiftBackend {
 
         // Drop any type/enum/function whose `#[cfg(feature = "...")]` gate is not satisfied
         let cfg_filtered_api = original_api.with_cfg_filtered(&configured_features);
+        // ...then the same for gated *methods* on whatever survived. The Rust bridge crate drops
+        // them through this identical helper on an identically-derived feature set, so the Swift
+        // facade can never call an extern the bridge crate did not declare. ~keep
+        let cfg_filtered_api =
+            gen_rust_crate::feature_gate::with_cfg_filtered_methods(&cfg_filtered_api, &configured_features);
         let deduped_api = cfg_filtered_api.with_deduped_functions();
         let api = &deduped_api;
 

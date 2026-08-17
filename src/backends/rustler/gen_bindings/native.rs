@@ -366,8 +366,16 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
             })
         {
             let core_path = crate::codegen::conversions::core_type_path(typ, &core_import);
-            if method.is_async {
-                builder.add_item(&gen_nif_async_method(
+            // The same gate the function loop above applies via `prepend_cfg`. A rustler method is
+            // flattened to a standalone `#[rustler::nif] pub fn`, so it takes an item-level
+            // `#[cfg]` directly, and the scaffolded Elixir crate declares every referenced cfg
+            // feature as a default-on passthrough (`scaffold::languages::elixir`) so `rustc` can
+            // resolve it. There is no registration list to keep in step: `rustler::init!` is
+            // rendered with the module name alone (`rustler_init*.rs.jinja` never reads the
+            // `nifs` context it is handed), and rustler discovers NIFs from the attribute — so a
+            // method the gate compiles out is simply never registered. ~keep
+            let item = if method.is_async {
+                gen_nif_async_method(
                     &typ.name,
                     &core_path,
                     method,
@@ -378,9 +386,9 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     &core_import,
                     &adapter_bodies,
                     &types_by_name,
-                ));
+                )
             } else {
-                builder.add_item(&gen_nif_method(
+                gen_nif_method(
                     &typ.name,
                     &core_path,
                     method,
@@ -391,8 +399,9 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                     &core_import,
                     &adapter_bodies,
                     &types_by_name,
-                ));
-            }
+                )
+            };
+            builder.add_item(&prepend_cfg(method.cfg.as_deref(), item));
         }
     }
 

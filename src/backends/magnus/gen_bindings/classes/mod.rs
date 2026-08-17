@@ -295,8 +295,14 @@ fn gen_opaque_instance_method(
     } else {
         ""
     };
+    // A gated method keeps its gate: the scaffolded Ruby extension crate declares every referenced
+    // cfg feature as a default-on passthrough (`scaffold::languages::ruby`), so `rustc` resolves
+    // it, exactly as `prepend_cfg` already arranges for top-level functions. The matching
+    // `define_method` statement in `functions::module_init` carries the identical gate — emitting
+    // one without the other leaves `method!(Type::name, n)` naming a fn that was compiled out. ~keep
+    let method_cfg = method.rust_cfg_attribute();
     format!(
-        "{trait_allow}fn {}(&self, {params}) -> {return_annotation} {{\n        \
+        "{method_cfg}{trait_allow}fn {}(&self, {params}) -> {return_annotation} {{\n        \
          {body}\n    }}",
         method.name
     )
@@ -377,8 +383,11 @@ fn gen_opaque_async_instance_method(
             ASYNC_RETURN_IS_FALLIBLE,
         )
     };
+    // See `gen_opaque_instance_method`. The registration side names `{method}_async`, and
+    // `module_init` gates that statement on this same `method.cfg`. ~keep
+    let method_cfg = method.rust_cfg_attribute();
     format!(
-        "fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
+        "{method_cfg}fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
          {body}\n    \
          }}",
         method.name
@@ -599,8 +608,10 @@ fn gen_instance_method(
     } else {
         ""
     };
+    // See `gen_opaque_instance_method` for why the gate is re-emitted rather than filtered. ~keep
+    let method_cfg = method.rust_cfg_attribute();
     format!(
-        "{trait_allow}{allow_attr}fn {}({self_recv}, {params}) -> {return_annotation} {{\n        \
+        "{method_cfg}{trait_allow}{allow_attr}fn {}({self_recv}, {params}) -> {return_annotation} {{\n        \
          {body}\n    }}",
         method.name
     )
@@ -653,8 +664,11 @@ fn gen_async_instance_method(
             ASYNC_RETURN_IS_FALLIBLE,
         )
     };
+    // See `gen_opaque_instance_method`. The registration side names `{method}_async`, and
+    // `module_init` gates that statement on this same `method.cfg`. ~keep
+    let method_cfg = method.rust_cfg_attribute();
     format!(
-        "fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
+        "{method_cfg}fn {}_async(&self, {params}) -> {return_annotation} {{\n        \
          {body}\n    \
          }}",
         method.name

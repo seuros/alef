@@ -2145,3 +2145,91 @@ fn test_register_nif_stub_has_implemented_methods_parameter() {
         native.content
     );
 }
+
+/// A rustler method is flattened into a standalone `#[rustler::nif] pub fn`, so it re-emits its
+/// gate rather than being filtered — the same treatment the free-function loop already gives
+/// `FunctionDef::cfg` via `prepend_cfg`, and sound because the scaffolded Elixir crate declares
+/// every referenced cfg feature as a default-on passthrough.
+///
+/// The registration half of the contract is the second assertion. Rustler discovers NIFs from the
+/// attribute: `rustler::init!` is rendered with the module name alone and never enumerates NIF
+/// names, so there is no list that could keep naming a method the gate compiled out. Asserting the
+/// absence of such a list is what makes the one-sided gate provably safe rather than merely
+/// untested. ~keep
+#[test]
+fn rustler_gates_a_cfg_gated_nif_method_and_keeps_no_nif_name_list_to_disagree_with() {
+    let backend = RustlerBackend;
+
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "StreamClient".to_string(),
+            rust_path: "my_lib::StreamClient".to_string(),
+            is_opaque: true,
+            methods: vec![
+                MethodDef {
+                    name: "ungated_ping".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    cfg: None,
+                    ..MethodDef::default()
+                },
+                MethodDef {
+                    name: "gated_stream".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    cfg: Some("feature = \"streaming\"".to_string()),
+                    ..MethodDef::default()
+                },
+            ],
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = backend.generate_bindings(&api, &make_config("my_lib")).unwrap();
+    let content = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().replace('\\', "/").ends_with("lib.rs"))
+        .expect("lib.rs should be generated")
+        .content
+        .clone();
+
+    const GATE: &str = "#[cfg(feature = \"streaming\")]";
+
+    assert_eq!(
+        content.matches(GATE).count(),
+        1,
+        "only the gated method should carry the gate, and the ungated control none, got:\n{content}"
+    );
+
+    let gate_at = content.find(GATE).expect("the gated method must carry its gate");
+    let method_at = content
+        .find("gated_stream")
+        .expect("the gated method must still be emitted");
+    assert!(
+        gate_at < method_at && content[gate_at..method_at].contains("rustler::nif"),
+        "the gate must sit above the #[rustler::nif] attribute of the gated method:\n{content}"
+    );
+
+    assert!(
+        content.contains("ungated_ping"),
+        "the ungated control must still be emitted:\n{content}"
+    );
+
+    // The registration side: `rustler::init!` names the module only. If this ever grows an explicit
+    // NIF array, a gated method would have to be dropped from it in lockstep. ~keep
+    let init_at = content.find("rustler::init!").expect("rustler::init! must be emitted");
+    let init_stmt_end = content[init_at..]
+        .find(';')
+        .map(|offset| init_at + offset)
+        .expect("rustler::init! must terminate");
+    assert!(
+        !content[init_at..init_stmt_end].contains("gated_stream")
+            && !content[init_at..init_stmt_end].contains("ungated_ping"),
+        "rustler::init! must not enumerate NIF names -- if it does, gating a method also has to \
+         remove it from that list:\n{}",
+        &content[init_at..init_stmt_end]
+    );
+}

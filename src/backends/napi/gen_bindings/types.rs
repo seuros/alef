@@ -559,6 +559,13 @@ pub(super) fn gen_opaque_instance_method(
     if generators::is_trait_method_name(&method.name) {
         attrs.push_str("#[allow(clippy::should_implement_trait)]\n");
     }
+    // A gated method keeps its gate rather than being filtered: `#[napi]` expands to a real Rust
+    // item, the scaffolded `-node` crate declares every referenced cfg feature as a default-on
+    // passthrough (`scaffold::languages::node`), and `rustc` resolves the gate — the same contract
+    // top-level functions already get from `support::prepend_cfg`. `method.cfg` already carries its
+    // `impl` block's gate AND-combined; `typ.cfg` is deliberately not folded in, because nothing in
+    // this backend gates the struct or its impl block on it. ~keep
+    attrs.push_str(&method.rust_cfg_attribute());
     format!(
         "{attrs}#[napi{js_name_attr}]\npub {async_kw}fn {}(&self, {params}) -> {return_annotation} {{\n    \
          {body}\n}}",
@@ -671,6 +678,8 @@ pub(super) fn gen_static_method(
     if generators::is_trait_method_name(&method.name) {
         attrs.push_str("#[allow(clippy::should_implement_trait)]\n");
     }
+    // See `gen_opaque_instance_method` for why the gate is re-emitted rather than filtered. ~keep
+    attrs.push_str(&method.rust_cfg_attribute());
     format!(
         "{attrs}#[napi{js_name_attr}]\npub {async_kw}fn {}({params}) -> {return_annotation} {{\n    \
          {body}\n}}",
@@ -841,6 +850,9 @@ pub(super) fn gen_dto_method_fns(
         if method.error_type.is_some() || !is_static {
             attrs.push_str("#[allow(clippy::missing_errors_doc)]\n");
         }
+        // DTO methods become standalone `#[napi]` free functions, so the gate lands on the same
+        // kind of item `support::prepend_cfg` already gates for top-level functions. ~keep
+        attrs.push_str(&method.rust_cfg_attribute());
         let returns_result = method.error_type.is_some() || !is_static;
         let final_return_ann = if returns_result && !return_annotation.starts_with("napi::Result") {
             format!("napi::Result<{return_annotation}>")

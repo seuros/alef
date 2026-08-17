@@ -1,6 +1,9 @@
 {%- if doc_comment %}
 {{ doc_comment }}
 {% endif -%}
+{% if source_cfg -%}
+#[cfg({{ source_cfg }})]
+{% endif -%}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn {{ fn_name }}(
     client: AlefHandle,

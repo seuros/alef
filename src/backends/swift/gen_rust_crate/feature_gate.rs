@@ -73,6 +73,44 @@ pub(super) fn cfg_satisfied(cfg: Option<&str>, configured_features: &HashSet<&st
     crate::core::ir::cfg_feature_satisfied(cfg, configured_features)
 }
 
+/// Return a copy of `api` whose types', enums' and errors' methods are restricted to those whose
+/// `#[cfg(...)]` gate `configured_features` satisfies.
+///
+/// The sibling of the `visible_types`/`visible_enums`/`visible_functions` filters, one level
+/// deeper. Swift cannot express the gate on either side it emits: an `extern "Rust"` declaration
+/// inside `#[swift_bridge::bridge]` is a macro input, not a free-standing item that can carry
+/// `#[cfg]` per entry (which is why a gated *type* wraps its whole extern block instead), and the
+/// Swift facade has no conditional compilation at all. So a gated method has to be dropped, not
+/// gated — and dropped from the bridge-crate side and the Swift side by the *same* predicate, or
+/// Swift calls a symbol the extern block never declared.
+///
+/// Applied once at each side's facade rather than threaded into the six method loops
+/// (`emit_extern_block_for_type_methods`, `emit_extern_block_for_first_class_dto_methods`,
+/// `emit_type_method_shims`, `emit_first_class_dto_method_wrappers`, `emit_client_class`,
+/// `emit_error`): the two sides derive `configured_features` independently, so sharing one
+/// filtering function is what makes their agreement structural instead of a property six
+/// signatures have to keep re-establishing.
+///
+/// Deliberately narrower than [`crate::core::ir::ApiSurface::with_cfg_filtered_deep`], which also
+/// drops gated fields and enum variants: swift already filters fields inline at each site that
+/// consumes them (`wrappers::getters`, `extern_block::constructor_fields`), and re-filtering them
+/// here would move that decision without being asked to. ~keep
+pub(crate) fn with_cfg_filtered_methods(api: &ApiSurface, configured_features: &HashSet<&str>) -> ApiSurface {
+    let mut filtered = api.clone();
+    for typ in &mut filtered.types {
+        typ.methods.retain(|method| method.cfg_satisfied(configured_features));
+    }
+    for enum_def in &mut filtered.enums {
+        enum_def
+            .methods
+            .retain(|method| method.cfg_satisfied(configured_features));
+    }
+    for error in &mut filtered.errors {
+        error.methods.retain(|method| method.cfg_satisfied(configured_features));
+    }
+    filtered
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

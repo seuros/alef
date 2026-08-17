@@ -170,7 +170,13 @@ fn jni_signature_references_excluded(
     references_excluded(&function.return_type) || function.params.iter().any(|param| references_excluded(&param.ty))
 }
 
-fn jni_capsule_types(
+/// The capsule types the JNI shim actually emits `tree_sitter::ffi`-style raw-pointer
+/// casts for: the intersection of `[crates.ffi.capsule_types]` (which carries the Rust
+/// `into_raw_type`/`package` info) and `[crates.kotlin_android.capsule_types]` (which
+/// gates whether the paired Kotlin binding wants a capsule at all). `scaffold_jni` calls
+/// this same function to decide which capsule crates to add to the JNI manifest, so the
+/// emitted casts and the declared dependencies can never drift apart. ~keep
+pub(crate) fn jni_capsule_types(
     config: &ResolvedCrateConfig,
 ) -> std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig> {
     let Some(android) = config.kotlin_android.as_ref() else {

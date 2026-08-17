@@ -3305,3 +3305,111 @@ fn every_public_type_is_reachable_from_xberg_module() {
         );
     }
 }
+
+/// A `#[cfg]`-gated method must disappear from **both** sides swift emits, and an ungated one must
+/// survive on both. The two sides derive their feature set independently — `gen_rust_crate::emit`
+/// and `SwiftBackend::generate_bindings` each call `effective_swift_codegen_features` — so this
+/// asserts the agreement, not just the drop: the Rust bridge declares the `extern "Rust"` symbol
+/// and the Swift facade calls it, and a one-sided filter links against a symbol that is not there.
+///
+/// `excluded_default_features` is what makes the gate fail: `effective_swift_codegen_features`
+/// widens the configured set with every feature the surface mentions, so a gated method is
+/// *enabled* by default and only an explicit exclusion turns it off.
+///
+/// `client_constructor_body` is required here even though this test isn't about client
+/// construction: an opaque type with methods only gets its methods rendered into the Swift
+/// facade via `emit_client_class`, which is gated on `client_constructor_types` — without it,
+/// the type surfaces only as a bare `RustBridge` typealias and no method identifier (gated or
+/// not) ever reaches the `.swift` output for this assertion to inspect. ~keep
+#[test]
+fn swift_drops_a_cfg_gated_method_from_the_rust_bridge_and_the_swift_facade_together() {
+    use alef::core::ir::{MethodDef, ReceiverKind};
+
+    let mut client = make_type("StreamClient", vec![]);
+    client.is_opaque = true;
+    client.methods = vec![
+        MethodDef {
+            name: "ungated_ping".to_string(),
+            receiver: Some(ReceiverKind::Ref),
+            return_type: TypeRef::Primitive(PrimitiveType::U32),
+            cfg: None,
+            ..MethodDef::default()
+        },
+        MethodDef {
+            name: "gated_stream".to_string(),
+            receiver: Some(ReceiverKind::Ref),
+            return_type: TypeRef::Primitive(PrimitiveType::U32),
+            cfg: Some("feature = \"streaming\"".to_string()),
+            ..MethodDef::default()
+        },
+    ];
+
+    let api = ApiSurface {
+        crate_name: "demo".into(),
+        version: "0.1.0".into(),
+        types: vec![client],
+        functions: vec![],
+        enums: vec![],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let toml = r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "demo-crate"
+sources = ["src/lib.rs"]
+
+[crates.swift]
+excluded_default_features = ["streaming"]
+client_constructor_body.StreamClient = "Self { inner: ::demo::StreamClient::new() }"
+"#;
+    let parsed: NewAlefConfig = toml::from_str(toml).expect("test config must parse");
+    let config = parsed.resolve().expect("test config must resolve").remove(0);
+
+    let files = SwiftBackend.generate_bindings(&api, &config).unwrap();
+    let rust_bridge = files
+        .iter()
+        .find(|file| {
+            file.path
+                .to_string_lossy()
+                .replace('\\', "/")
+                .ends_with("packages/swift/rust/src/lib.rs")
+        })
+        .expect("generated Rust bridge file must exist");
+    let swift_all: String = files
+        .iter()
+        .filter(|file| file.path.to_string_lossy().ends_with(".swift"))
+        .map(|file| file.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rust_bridge.content.contains("ungated_ping"),
+        "the ungated control must still reach the Rust bridge:\n{}",
+        rust_bridge.content
+    );
+    assert!(
+        !rust_bridge.content.contains("gated_stream"),
+        "an excluded-feature method must not be declared or shimmed in the Rust bridge:\n{}",
+        rust_bridge.content
+    );
+
+    // Swift renames on the way out, so compare case-insensitively rather than guessing the
+    // exact casing the mapper picks. ~keep
+    let swift_lower = swift_all.to_lowercase();
+    assert!(
+        swift_lower.contains("ungatedping") || swift_lower.contains("ungated_ping"),
+        "the ungated control must still reach the Swift facade:\n{swift_all}"
+    );
+    assert!(
+        !swift_lower.contains("gatedstream") && !swift_lower.contains("gated_stream"),
+        "the Swift facade must not call an extern the Rust bridge dropped:\n{swift_all}"
+    );
+}

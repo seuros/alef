@@ -3665,3 +3665,80 @@ fn tagged_data_enum_field_keeps_its_nominal_ts_type() {
         "a tagged data enum has no string literals to widen to; got:\n{content}"
     );
 }
+
+/// napi re-emits a gated method's `#[cfg]` rather than filtering it: `#[napi]` expands to a real
+/// Rust item and the scaffolded node crate declares every referenced cfg feature as a default-on
+/// passthrough, so `rustc` resolves the gate.
+///
+/// The registration side is what makes this safe to do one-sidedly: napi has no separate registry
+/// for methods — `#[napi]` self-registers at macro expansion — so the gate has to sit *above* the
+/// `#[napi]` attribute on the same item. If it drifted below (or onto a different item), the method
+/// would be compiled out while still being registered. That adjacency is the assertion. ~keep
+#[test]
+fn napi_emits_a_cfg_gated_method_with_its_gate_above_the_napi_attribute() {
+    let backend = NapiBackend;
+
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "StreamClient".to_string(),
+            rust_path: "test_lib::StreamClient".to_string(),
+            is_opaque: true,
+            methods: vec![
+                MethodDef {
+                    name: "ungated_ping".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    cfg: None,
+                    ..MethodDef::default()
+                },
+                MethodDef {
+                    name: "gated_stream".to_string(),
+                    receiver: Some(ReceiverKind::Ref),
+                    return_type: TypeRef::Primitive(PrimitiveType::U32),
+                    cfg: Some("feature = \"streaming\"".to_string()),
+                    ..MethodDef::default()
+                },
+            ],
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let files = backend
+        .generate_bindings(&api, &make_config())
+        .expect("generation should succeed");
+    let content = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content
+        .clone();
+
+    const GATE: &str = "#[cfg(feature = \"streaming\")]";
+
+    assert_eq!(
+        content.matches(GATE).count(),
+        1,
+        "exactly the gated method should carry the gate, and the ungated control none, got:\n{content}"
+    );
+
+    let gate_at = content.find(GATE).expect("the gated method must carry its gate");
+    let method_at = content
+        .find("fn gated_stream")
+        .expect("the gated method must still be emitted");
+    let napi_attr_at = content[gate_at..method_at]
+        .find("#[napi")
+        .map(|offset| gate_at + offset)
+        .expect("the gate must be followed by the #[napi] attribute of the same method");
+    assert!(
+        gate_at < napi_attr_at && napi_attr_at < method_at,
+        "order must be #[cfg] -> #[napi] -> fn so the gate governs the self-registering item:\n{content}"
+    );
+
+    assert!(
+        content.contains("fn ungated_ping"),
+        "the ungated control must still be emitted:\n{content}"
+    );
+}
