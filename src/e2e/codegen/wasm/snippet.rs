@@ -61,8 +61,8 @@ pub(super) fn render(
         .and_then(|package| package.name)
         .unwrap_or_else(|| config.wasm_package_name());
     let wasm_type_prefix = config.wasm_type_prefix();
-    Ok(super::super::typescript::test_file::render_snippet_body(
-        super::super::typescript::test_file::SnippetContext {
+    let body =
+        super::super::typescript::test_file::render_snippet_body(super::super::typescript::test_file::SnippetContext {
             lang: "wasm",
             fixture,
             module: &module,
@@ -72,8 +72,29 @@ pub(super) fn render(
             enums,
             wasm_type_prefix: &wasm_type_prefix,
             config,
-        },
-    ))
+        });
+    // A `configuration/custom-base-url`-style topic documents `docs.client.base_url` so the
+    // reader sees the setting the topic is about, mirroring the Java/Rust/Elixir/Python
+    // generators' `docs_client` handling. `render_snippet_body` above is shared with
+    // `typescript/mod.rs`'s own docs path and always emits the single-argument
+    // `factory("your-api-key")` shape with no base-URL slot, so widening its signature would
+    // reach TypeScript's docs snippets too. Substituting the exact rendered call here instead
+    // (Python's model) keeps the change scoped to WASM's docs path alone. ~keep
+    let body = match (
+        effective_factory,
+        fixture.docs_client().and_then(|client| client.base_url.as_deref()),
+    ) {
+        (Some(factory), Some(base_url)) => {
+            let bare_call = format!("{factory}(\"your-api-key\")");
+            let with_base_url = format!(
+                "{factory}(\"your-api-key\", \"{}\")",
+                crate::e2e::escape::escape_js(base_url)
+            );
+            body.replace(&bare_call, &with_base_url)
+        }
+        _ => body,
+    };
+    Ok(body)
 }
 
 #[cfg(test)]
@@ -175,6 +196,75 @@ mod tests {
         assert!(
             body.contains("createClient(\"your-api-key\")"),
             "client is not constructed the way a reader would:\n{body}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its WASM
+    /// snippet, mirroring the Java/Rust/Elixir/Python generators' `docs_client` handling
+    /// (`python/mod.rs::client_factory_snippet_renders_the_base_url_the_fixture_documents`).
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url",
+            "description": "Custom base URL",
+            "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "wasm".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("createClient".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]).expect("snippet renders");
+
+        assert!(
+            rendered.contains("createClient(\"your-api-key\", \"https://llm.internal.example.com/v1\")"),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{rendered}"
+        );
+    }
+
+    /// Negative control for `client_factory_snippet_renders_the_base_url_the_fixture_documents`:
+    /// a fixture with no `docs.client` at all must keep rendering the bare, no-base-URL call.
+    /// An indiscriminate "always add base_url" change would fail this test.
+    #[test]
+    fn client_factory_snippet_without_docs_client_keeps_the_bare_call() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "wasm".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("createClient".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]).expect("snippet renders");
+
+        assert!(
+            rendered.contains("createClient(\"your-api-key\")"),
+            "no docs.client must keep the bare client construction call:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("your-api-key\", \""),
+            "no docs.client must not invent a base URL argument:\n{rendered}"
         );
     }
 

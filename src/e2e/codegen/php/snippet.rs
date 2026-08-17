@@ -160,7 +160,7 @@ pub(super) fn render_snippet_body(
     );
     let presentation = crate::e2e::codegen::presentation::resolve_with(fixture, e2e_config, lang, &field_resolver);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
-    Ok(crate::e2e::template_env::render(
+    let body = crate::e2e::template_env::render(
         "php/snippet_body.jinja",
         minijinja::context! {
             namespace => namespace, class_name => class_name, setup_lines => setup_lines,
@@ -168,7 +168,28 @@ pub(super) fn render_snippet_body(
             returns_void => call.returns_void, is_streaming => is_streaming, imported_types => imported_types,
             expects_error => expects_error, presentation => presentation, api_key_var => api_key_var,
         },
-    ))
+    );
+    // A `configuration/custom-base-url`-style topic documents `docs.client.base_url` so the
+    // reader sees the setting the topic is about, mirroring the Java/Rust/Elixir/Python
+    // generators' `docs_client` handling. `snippet_body.jinja` always renders the client
+    // construction as `::{factory}($apiKey);` immediately after the credential read above, so
+    // targeting that exact substring here (rather than threading `docs_client` through the
+    // shared executable-suite construction in `test_method.rs`) keeps this docs-only concern
+    // out of the path the executable e2e suite also uses. ~keep
+    let body = match client_factory.zip(crate::e2e::codegen::client_factory::docs_base_url(
+        fixture.docs_client(),
+    )) {
+        Some((factory, base_url)) => {
+            let bare_call = format!("::{factory}($apiKey);");
+            let with_base_url = format!(
+                "::{factory}($apiKey, \"{}\");",
+                crate::e2e::escape::escape_php(base_url)
+            );
+            body.replace(&bare_call, &with_base_url)
+        }
+        None => body,
+    };
+    Ok(body)
 }
 
 fn render_http_snippet(fixture: &Fixture) -> Result<String> {
@@ -269,6 +290,48 @@ mod tests {
         assert!(
             body.contains("::createClient($apiKey);"),
             "client is not constructed from the environment-read credential:\n{body}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its PHP
+    /// snippet, mirroring the Java/Rust/Elixir/Python generators' `docs_client` handling
+    /// (`java/snippet.rs::a_snippet_renders_the_base_url_the_fixture_documents`,
+    /// `python/mod.rs::client_factory_snippet_renders_the_base_url_the_fixture_documents`).
+    /// Paired with `client_factory_snippet_never_points_the_reader_at_the_mock_server` above
+    /// (whose fixture declares no `docs.client` and must keep rendering the bare,
+    /// no-`base_url` call) as the negative control: an indiscriminate "always add base_url"
+    /// change would fail that test. ~keep
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url", "description": "Custom base URL", "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "php".into(),
+            CallOverride {
+                client_factory: Some("createClient".into()),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
+
+        assert!(
+            body.contains("::createClient($apiKey, \"https://llm.internal.example.com/v1\");"),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{body}"
         );
     }
 

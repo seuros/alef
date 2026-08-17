@@ -249,12 +249,28 @@ pub(super) fn render_snippet_body(
                 .and_then(|value| value.client_factory.as_deref())
         });
     let (call_prefix, client_setup) = if let Some(factory) = client_factory {
+        // The second positional parameter of a generated Go client factory (e.g.
+        // `CreateClient(apiKey string, baseURL *string, ...)`) is `baseURL *string` — the
+        // same slot every other language's `client_factory` shape reserves for the
+        // documented base URL. A Go string literal has no address, so a documented URL
+        // needs the `ptr[T any]` helper `build_args_and_setup` already emits for
+        // pointer-typed literals elsewhere in this snippet. ~keep
+        let base_url_arg = match crate::e2e::codegen::client_factory::docs_base_url(fixture.docs_client()) {
+            Some(url) => {
+                if !package_decls.iter().any(|decl| decl.starts_with("func ptr[")) {
+                    package_decls.push("func ptr[T any](value T) *T { return &value }".to_string());
+                }
+                format!("ptr(\"{}\")", crate::e2e::escape::escape_go(url))
+            }
+            None => "nil".to_string(),
+        };
+        let call_line = format!(
+            "\tclient, clientErr := {import_alias}.{}(\"your-api-key\", {base_url_arg}, nil, nil, nil)",
+            to_go_name(factory),
+        );
         (
             "client".to_string(),
-            format!(
-                "\tclient, clientErr := {import_alias}.{}(\"your-api-key\", nil, nil, nil, nil)\n\tif clientErr != nil {{\n\t\tpanic(clientErr)\n\t}}",
-                to_go_name(factory),
-            ),
+            format!("{call_line}\n\tif clientErr != nil {{\n\t\tpanic(clientErr)\n\t}}"),
         )
     } else {
         (import_alias.to_string(), String::new())
@@ -1018,6 +1034,51 @@ mod tests {
         assert!(
             body.contains("client.Chat("),
             "the call must go through the constructed client:\n{body}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its Go
+    /// snippet, mirroring the Java/Rust/Elixir/Python generators' `docs_client` handling.
+    /// Paired with `client_factory_snippet_never_points_the_reader_at_the_mock_server`
+    /// above (whose fixture declares no `docs.client` and must keep rendering the bare,
+    /// `nil`-in-that-slot call) as the negative control: an indiscriminate "always add
+    /// base_url" change would fail that test. ~keep
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url",
+            "description": "Custom base URL",
+            "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[])
+            .expect("snippet renders");
+
+        assert!(
+            body.contains(
+                "client, clientErr := pkg.CreateClient(\"your-api-key\", ptr(\"https://llm.internal.example.com/v1\"), nil, nil, nil)"
+            ),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{body}"
+        );
+        assert!(
+            body.contains("func ptr[T any](value T) *T { return &value }"),
+            "the base-url pointer needs the shared ptr[T any] helper declared:\n{body}"
         );
     }
 }

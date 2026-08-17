@@ -106,6 +106,7 @@ pub(super) fn render_snippet_body(
                 .and_then(|value| value.client_factory.as_deref())
         })
         .map(ToUpperCamelCase::to_upper_camel_case);
+    let client_args = render_client_factory_args(fixture, e2e_config, &call);
     let namespace = overrides
         .and_then(|value| value.module.clone())
         .or_else(|| config.csharp.as_ref().and_then(|value| value.namespace.clone()))
@@ -145,6 +146,7 @@ pub(super) fn render_snippet_body(
             setup_lines => setup_lines,
             client_factory => client_factory,
             class_name => class_name,
+            client_args => client_args,
             function_name => function_name,
             args => args,
             result_var => call.result_var,
@@ -160,6 +162,41 @@ pub(super) fn render_snippet_body(
             presentation => presentation,
         },
     ))
+}
+
+/// Argument list appended to a `client_factory` call when the project configures no
+/// `[e2e.call.overrides.csharp] client_factory_trailing_args`.
+///
+/// These were hardcoded into `csharp/snippet_body.jinja` before the override was wired
+/// up and remain the default, so a project that has not adopted the key keeps the
+/// argument list it renders today.
+const CSHARP_CLIENT_FACTORY_FALLBACK_ARGS: [&str; 3] = ["null", "null", "null"];
+
+/// The full argument list for a snippet's `client_factory` call: the credential, the
+/// base URL, and whatever trails them.
+///
+/// The credential is always the `apiKey` local the template declares just above the
+/// call — a snippet must read it from the environment rather than inline a literal.
+fn render_client_factory_args(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    call: &crate::e2e::config::CallConfig,
+) -> String {
+    let docs_client = fixture.docs_client();
+    let base_url = match crate::e2e::codegen::client_factory::docs_base_url(docs_client) {
+        Some(url) => format!("\"{}\"", crate::e2e::escape::escape_csharp(url)),
+        None => "null".to_string(),
+    };
+    let trailing = crate::e2e::codegen::client_factory::trailing_args(
+        docs_client,
+        e2e_config,
+        call,
+        "csharp",
+        &CSHARP_CLIENT_FACTORY_FALLBACK_ARGS,
+    );
+    let mut args = vec!["apiKey".to_string(), base_url];
+    args.extend(trailing);
+    args.join(", ")
 }
 
 fn replace_or_append_options(args: &str, options_type: &str) -> String {
@@ -384,6 +421,62 @@ mod tests {
         assert!(
             body.contains("Environment.GetEnvironmentVariable(\"API_KEY\")"),
             "credential is not read from the environment:\n{body}"
+        );
+    }
+
+    fn client_snippet(docs: Option<serde_json::Value>) -> String {
+        let mut fixture = Fixture {
+            id: "custom_base_url".into(),
+            description: "Custom base URL".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        fixture.docs = docs.map(|value| serde_json::from_value(value).expect("fixture docs"));
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "csharp".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders")
+    }
+
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let body = client_snippet(Some(serde_json::json!({
+            "topic": "configuration",
+            "client": {"base_url": "https://llm.internal.example.com/v1"}
+        })));
+
+        assert!(
+            body.contains("CreateClient(apiKey, \"https://llm.internal.example.com/v1\", null, null, null)"),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{body}"
+        );
+    }
+
+    #[test]
+    fn client_factory_snippet_without_a_docs_client_keeps_the_bare_call() {
+        let body = client_snippet(None);
+
+        assert!(
+            body.contains("CreateClient(apiKey, null, null, null, null)"),
+            "a fixture with no docs client must render the unconfigured argument list:\n{body}"
         );
     }
 

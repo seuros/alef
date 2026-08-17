@@ -79,6 +79,18 @@ pub(super) fn render(
     );
     let body_line_count = method.lines().count().saturating_sub(3);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+    // A `configuration/custom-base-url`-style topic documents `docs.client.base_url` so the
+    // reader sees the setting the topic is about, mirroring the Java/Rust/Elixir/Python
+    // generators' `docs_client` handling. The client constructor's `baseUrl:` slot always
+    // reduces to the bare token `_baseUrl` by this point in the pipeline (its declaration
+    // line was already filtered out below), so substituting a literal here — rather than
+    // threading `docs_client` through `test_method::render_test_method`, which the
+    // executable e2e suite also calls — keeps this docs-only concern out of the shared
+    // client-construction path entirely. ~keep
+    let base_url_expr = match crate::e2e::codegen::client_factory::docs_base_url(fixture.docs_client()) {
+        Some(base_url) => format!("\"{}\"", values::escape_swift(base_url)),
+        None => "nil".to_string(),
+    };
     let mut body = method
         .lines()
         .skip(2)
@@ -102,7 +114,8 @@ pub(super) fn render(
                     "guard let _apiKey = ProcessInfo.processInfo.environment[\"{api_key_var}\"] else {{ fatalError(\"{api_key_var} must be set\") }}"
                 );
             }
-            line.replace("_apiKey ?? \"test-key\"", "_apiKey").replace("_baseUrl", "nil")
+            line.replace("_apiKey ?? \"test-key\"", "_apiKey")
+                .replace("_baseUrl", &base_url_expr)
         })
         .filter(|line| !line.contains("XCTFail(\"expected to throw\")"))
         .map(|line| line.replace("// success", "print(\"\\(type(of: error)): \\(error)\")"))
@@ -308,6 +321,43 @@ mod tests {
         assert!(
             rendered.contains("let _client = try SampleClient(apiKey: _apiKey, baseUrl: nil)"),
             "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its Swift
+    /// snippet, mirroring the Java/Rust/Elixir/Python generators' `docs_client` handling
+    /// (`python/mod.rs::client_factory_snippet_renders_the_base_url_the_fixture_documents`).
+    /// Paired with `client_factory_snippet_never_points_the_reader_at_the_mock_server` above
+    /// (whose fixture declares no `docs.client` and must keep rendering `baseUrl: nil`) as the
+    /// negative control: an indiscriminate "always add base_url" change would fail that test. ~keep
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url",
+            "description": "Custom base URL",
+            "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture must parse");
+
+        let rendered = render(
+            &fixture,
+            &client_factory_e2e(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains(
+                "let _client = try SampleClient(apiKey: _apiKey, baseUrl: \"https://llm.internal.example.com/v1\")"
+            ),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{rendered}"
         );
     }
 

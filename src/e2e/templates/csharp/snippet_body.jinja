@@ -15,7 +15,7 @@ using {{ namespace }};
 {% endfor %}
 {% if client_factory %}var apiKey = Environment.GetEnvironmentVariable("{{ api_key_var }}") ??
   throw new InvalidOperationException("{{ api_key_var }} must be set");
-  var client = {{ class_name }}.{{ client_factory }}(apiKey, null, null, null, null);
+  var client = {{ class_name }}.{{ client_factory }}({{ client_args }});
   {% if returns_void %}{% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
   {% else %}var {{ result_var }} = {% if is_async %}await {% endif %}client.{{ function_name }}({{ args }});
   {% endif %}

@@ -138,6 +138,8 @@ pub(crate) fn render_snippet_body(
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
     let api_key_var = FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+    let base_url = crate::e2e::codegen::client_factory::docs_base_url(fixture.docs_client())
+        .map(crate::e2e::escape::escape_kotlin);
 
     // The template renders the call as `{{ class_name }}.{{ function_name }}(...)`
     // (or, with `client_factory`, constructs a client via
@@ -172,6 +174,7 @@ pub(crate) fn render_snippet_body(
             expects_error => expects_error,
             api_key_var => api_key_var,
             presentation => presentation,
+            base_url => base_url,
         },
     ))
 }
@@ -409,6 +412,97 @@ mod tests {
         assert!(
             body.contains("createClient(apiKey = apiKey)"),
             "an unconfigured project must construct the client without a mock base URL:\n{body}"
+        );
+    }
+
+    /// Companion of `client_factory_snippet_never_points_the_reader_at_the_mock_server`:
+    /// a fixture whose `docs.client.base_url` names an endpoint must show that endpoint
+    /// as a named `baseUrl` argument on the client-construction call.
+    #[test]
+    fn a_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url",
+            "description": "Custom base URL",
+            "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture");
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            false,
+        )
+        .expect("snippet renders");
+
+        assert!(
+            body.contains("createClient(apiKey = apiKey, baseUrl = \"https://llm.internal.example.com/v1\")"),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{body}"
+        );
+    }
+
+    /// Negative control for the base-URL wiring above: a fixture with no `docs.client`
+    /// must keep rendering the bare call, unchanged by the new optional argument.
+    #[test]
+    fn a_fixture_without_a_docs_client_keeps_the_bare_client_construction_call() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            false,
+        )
+        .expect("snippet renders");
+
+        assert!(
+            body.contains("createClient(apiKey = apiKey)"),
+            "an unconfigured project must construct the client without a base URL:\n{body}"
+        );
+        assert!(
+            !body.contains("baseUrl"),
+            "no docs client must mean no baseUrl argument:\n{body}"
         );
     }
 

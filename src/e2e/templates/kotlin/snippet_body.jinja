@@ -10,7 +10,7 @@ fun main() {% if is_async %}= kotlinx.coroutines.runBlocking {% endif %}{
 {% for line in setup_lines %}    {{ line }}
 {% endfor %}
 {% if client_factory %}    val apiKey = requireNotNull(System.getenv("{{ api_key_var }}")) { "{{ api_key_var }} must be set" }
-    val client = {{ class_name }}.{{ client_factory }}(apiKey = apiKey)
+    val client = {{ class_name }}.{{ client_factory }}(apiKey = apiKey{% if base_url %}, baseUrl = "{{ base_url }}"{% endif %})
 {% if returns_void %}    client.{{ function_name }}({{ args }})
 {% else %}    val {{ result_var }} = client.{{ function_name }}({{ args }})
 {% endif %}    client.close()

@@ -349,9 +349,17 @@ fn render_test_fn(
                 out,
                 "    const _api_key = std.c.getenv(\"{api_key_var}\") orelse return error.MissingApiKey;"
             );
+            // The factory's second positional slot is base_url (matches the mock-server
+            // arm below, which passes `_mock_url` there). A docs fixture that names
+            // `docs.client.base_url` fills the slot; otherwise it stays `null` so the
+            // binding falls back to its own default endpoint. ~keep
+            let base_url_arg = match crate::e2e::codegen::client_factory::docs_base_url(fixture.docs_client()) {
+                Some(url) => format!("\"{}\"", escape_zig(url)),
+                None => "null".to_string(),
+            };
             let _ = writeln!(
                 out,
-                "    var _client = try {module_name}.{factory}(std.mem.span(_api_key), null, null, null, null);"
+                "    var _client = try {module_name}.{factory}(std.mem.span(_api_key), {base_url_arg}, null, null, null);"
             );
         } else {
             let fixture_id = &fixture.id;
@@ -739,6 +747,77 @@ mod snippet_tests {
         assert!(
             rendered.contains("sample.create_client(std.mem.span(_api_key), null, null, null, null)"),
             "client is not constructed the way a reader would:\n{rendered}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its Zig
+    /// snippet, mirroring the Java/Rust/Elixir/Python generators' `docs_client` handling
+    /// (`python/mod.rs::client_factory_snippet_renders_the_base_url_the_fixture_documents`).
+    /// Paired with `client_factory_snippet_without_docs_client_keeps_the_base_url_slot_null`
+    /// below as the negative control: an indiscriminate "always add base_url" change would
+    /// fail that test. ~keep
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url",
+            "description": "Custom base URL",
+            "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture must parse");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(
+            rendered.contains(
+                "sample.create_client(std.mem.span(_api_key), \"https://llm.internal.example.com/v1\", null, null, null)"
+            ),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{rendered}"
+        );
+    }
+
+    /// Negative control for the test above: a fixture that declares no `docs.client` must
+    /// keep the base-url slot as a bare `null`, exactly what the generator rendered before
+    /// this fixture's docs got wired up. ~keep
+    #[test]
+    fn client_factory_snippet_without_docs_client_keeps_the_base_url_slot_null() {
+        let fixture = Fixture {
+            id: "no_docs_client".into(),
+            description: "No docs client".into(),
+            input: serde_json::json!({}),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.overrides.insert(
+            "zig".into(),
+            crate::e2e::config::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+
+        let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
+            .expect("snippet renders");
+
+        assert!(
+            rendered.contains("sample.create_client(std.mem.span(_api_key), null, null, null, null)"),
+            "a fixture with no docs.client must keep the bare base-url slot:\n{rendered}"
         );
     }
 

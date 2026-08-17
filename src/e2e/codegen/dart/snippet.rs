@@ -289,6 +289,47 @@ mod tests {
             body.contains("await Bridge.createClient(apiKey)"),
             "client is not constructed the way a reader would:\n{body}"
         );
+        assert!(
+            !body.contains("baseUrl:"),
+            "no docs.client is declared, so no baseUrl argument should be emitted:\n{body}"
+        );
+    }
+
+    /// A fixture whose docs declare a custom `client.base_url` — the mechanism a
+    /// `configuration/custom-base-url` topic uses — must show that base URL in its Dart
+    /// snippet, mirroring the Java/Elixir/Rust/Python generators' `docs_client` handling
+    /// (`java/snippet.rs::a_snippet_renders_the_base_url_the_fixture_documents`). Paired with
+    /// `client_factory_snippet_never_points_the_reader_at_the_mock_server` above (whose fixture
+    /// declares no `docs.client` and must keep rendering the bare, no-`baseUrl` call) as the
+    /// negative control: an indiscriminate "always add baseUrl" change would fail that test.
+    #[test]
+    fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "custom_base_url", "description": "Custom base URL", "input": null,
+            "docs": {
+                "topic": "configuration",
+                "client": {"base_url": "https://llm.internal.example.com/v1"}
+            }
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "chat".into();
+        e2e_config.call.result_var = "result".into();
+        e2e_config.call.overrides.insert(
+            "dart".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        assert!(
+            body.contains("await Bridge.createClient(apiKey, baseUrl: 'https://llm.internal.example.com/v1')"),
+            "the snippet for a custom-base-url topic must show the custom base URL:\n{body}"
+        );
     }
 
     #[test]

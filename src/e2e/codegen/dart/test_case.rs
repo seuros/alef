@@ -937,8 +937,16 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             // is stripped entirely — matching the PHP/Ruby/Go/TypeScript emitters, which
             // all omit baseUrl from their snippet client construction.
             let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+            // ~keep `docs.client.base_url` is the mechanism a configuration/custom-base-url
+            // topic uses to show its client constructed against the endpoint the prose is
+            // about, mirroring the Java/Elixir/Rust/Python `docs_client` handling. `baseUrl:`
+            // is already this call's named slot for the full e2e suite's mock URL (see the
+            // else branch below), so it is an unambiguous, pre-existing slot here too.
+            let base_url_arg = crate::e2e::codegen::client_factory::docs_base_url(fixture.docs_client())
+                .map(|base_url| format!(", baseUrl: '{}'", escape_dart(base_url)))
+                .unwrap_or_default();
             let create_line = format!(
-                "final apiKey = Platform.environment['{api_key_var}'];\n  if (apiKey == null || apiKey.isEmpty) {{ throw StateError('{api_key_var} must be set'); }}\n  final _client = await {receiver_class}.{factory}(apiKey);"
+                "final apiKey = Platform.environment['{api_key_var}'];\n  if (apiKey == null || apiKey.isEmpty) {{ throw StateError('{api_key_var} must be set'); }}\n  final _client = await {receiver_class}.{factory}(apiKey{base_url_arg});"
             );
             ("_client".to_string(), Some(create_line))
         } else {
