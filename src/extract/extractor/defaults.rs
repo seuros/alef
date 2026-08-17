@@ -1296,8 +1296,8 @@ mod tests {
     /// Note: the *inner field* must be `pub` for a real `pub struct Weight(u32)` to reach this
     /// path through the full extractor — `extract_struct` (`extract::extractor::types`) only
     /// extracts a single-unnamed-field tuple struct's field when `is_pub` holds for that field's
-    /// own visibility, not just the struct's. liter-llm's actual `Weight(u32)` has a *private*
-    /// inner field, so it is extracted as a fully opaque type with zero `FieldDef`s — the warning
+    /// own visibility, not just the struct's. A consumer newtype whose inner field is *private*
+    /// is extracted as a fully opaque type with zero `FieldDef`s — the warning
     /// still fires (this fn's `Unresolved` fallback logs unconditionally), but it is inert there:
     /// `unreadable_field_default_diagnostics` iterates `typ.fields`, which is empty, so no
     /// diagnostic and no wrong-`0` ever reaches a backend for that specific type today. This test
