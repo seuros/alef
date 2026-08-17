@@ -232,32 +232,23 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                         None => "[]".to_string(),
                     }
                 }
-                Some(DefaultValue::Empty) | None => match &field.ty {
+                Some(DefaultValue::Empty | DefaultValue::Unresolved(_)) | None => match &field.ty {
                     TypeRef::Vec(_) if field.sanitized => "null".to_string(),
-                    TypeRef::Vec(_) => "[]".to_string(),
-                    TypeRef::Map(k, v) => {
-                        format!("new Dictionary<{}, {}>()", csharp_type(k), csharp_type_for_dto_field(v))
-                    }
-                    TypeRef::String | TypeRef::Char | TypeRef::Path => "\"\"".to_string(),
-                    TypeRef::Json => "null".to_string(),
-                    TypeRef::Bytes => "[]".to_string(),
-                    TypeRef::Primitive(p) => match p {
-                        PrimitiveType::Bool => "false".to_string(),
-                        PrimitiveType::F32 => "0.0f".to_string(),
-                        PrimitiveType::F64 => "0.0".to_string(),
-                        _ => "0".to_string(),
-                    },
                     TypeRef::Named(name) => {
                         let pascal = csharp_type_name(name);
-                        if complex_enums.contains(&pascal) {
-                            "null".to_string()
-                        } else if enum_names.contains(&pascal) {
+                        // An opaque type is emitted as a handle class, not a record, so it has
+                        // no parameterless constructor to call. ~keep
+                        if complex_enums.contains(&pascal)
+                            || enum_names.contains(&pascal)
+                            || true_opaque_types.contains(name)
+                        {
                             "null".to_string()
                         } else {
-                            "default!".to_string()
+                            nested_record_initializer(&pascal, types, enum_names, complex_enums, excluded_types)
+                                .unwrap_or_else(|| "null".to_string())
                         }
                     }
-                    _ => "default!".to_string(),
+                    other => csharp_type_zero_initializer(other).unwrap_or_else(|| "null".to_string()),
                 },
             };
 
@@ -296,15 +287,13 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                     minijinja::context! { field_type, cs_name },
                 ));
             } else {
-                let default_val = match &field.ty {
-                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "\"\"",
-                    TypeRef::Vec(_) => "[]",
-                    TypeRef::Bytes => "[]",
-                    TypeRef::Primitive(PrimitiveType::Bool) => "false",
-                    TypeRef::Primitive(PrimitiveType::F32) => "0.0f",
-                    TypeRef::Primitive(PrimitiveType::F64) => "0.0",
-                    TypeRef::Primitive(_) => "0",
-                    _ => "default!",
+                // `is_complex` degrades the property to the `JsonElement` struct, whose
+                // `default!` is a real value rather than a null. Every other arm resolves
+                // through the same table the defaulted branch uses. ~keep
+                let default_val = if is_complex {
+                    "default!".to_string()
+                } else {
+                    csharp_type_zero_initializer(&field.ty).unwrap_or_else(|| "default!".to_string())
                 };
                 out.push_str(&render(
                     "property_with_default.jinja",
@@ -667,6 +656,145 @@ pub(super) fn emit_record_methods(
     }
 }
 
+/// The C# expression for a `TypeRef`'s own zero, or `None` when that zero is not a value.
+///
+/// One table, two callers: the `Empty`/absent arm of the defaulted branch and the fallback of the
+/// no-default branch. They used to spell this inline and independently, and they had drifted —
+/// only the first knew about [`TypeRef::Map`], so a `HashMap` field with no `#[serde(default)]`
+/// fell through to `default!` and put a **null into a non-nullable `Dictionary<K, V>` property**.
+/// That is the object-initializer trap in its purest form: `new T { }` compiles, the C# nullable
+/// analysis is silenced by the `!`, and the first read of the property throws.
+///
+/// `None` means "this type has no non-null zero in C#" — `Named` (constructing it is the caller's
+/// decision, see [`nested_record_initializer`]), `Optional`/`Json` (whose zero *is* `null`, which
+/// the caller must pair with a nullable property type), and `Duration` (handled before this point).
+/// Returning `None` rather than inventing `default!` is the whole point: `default!` on a reference
+/// type is a null wearing a non-nullable declaration. ~keep
+pub(crate) fn csharp_type_zero_initializer(ty: &TypeRef) -> Option<String> {
+    Some(match ty {
+        TypeRef::Primitive(PrimitiveType::Bool) => "false".to_string(),
+        TypeRef::Primitive(PrimitiveType::F32) => "0.0f".to_string(),
+        TypeRef::Primitive(PrimitiveType::F64) => "0.0".to_string(),
+        TypeRef::Primitive(_) => "0".to_string(),
+        TypeRef::String | TypeRef::Char | TypeRef::Path => "\"\"".to_string(),
+        TypeRef::Vec(_) | TypeRef::Bytes => "[]".to_string(),
+        TypeRef::Map(key, value) => format!(
+            "new Dictionary<{}, {}>()",
+            csharp_type(key),
+            csharp_type_for_dto_field(value)
+        ),
+        _ => return None,
+    })
+}
+
+/// The initializer for a non-optional field whose type is another emitted record, or `None` when
+/// the emitter cannot safely construct one.
+///
+/// A nested record's own body already spells every Rust default as a property initializer, so
+/// `new ContentConfig()` *is* Rust's `ContentConfig::default()` — the same guarantee the scalar
+/// literals give, applied one level down. Emitting it is what makes `new CrawlConfig { MaxDepth =
+/// 3 }` produce a whole value rather than one with a null `Content`.
+///
+/// Two things make it unsafe, and both yield `None` so the caller falls back to `null` and widens
+/// the property to `T?` — a null the compiler can see beats a null hidden behind `default!`:
+///
+/// - The nested type declares a `required` member. `new T()` is then `CS9035`, a hard compile
+///   error in the *consumer's* build, which is strictly worse than a nullable property.
+/// - Constructing it would recurse forever. Rust cannot express a non-`Box` cycle, but `Box<T>`
+///   can, and a cycle here is a `StackOverflowException` in generated code rather than a
+///   generator error. Cheap to guard, so guard it.
+fn nested_record_initializer(
+    pascal: &str,
+    types: &[TypeDef],
+    enum_names: &HashSet<String>,
+    complex_enums: &HashSet<String>,
+    excluded_types: &HashSet<String>,
+) -> Option<String> {
+    let mut path = Vec::new();
+    record_is_default_constructible(pascal, types, enum_names, complex_enums, excluded_types, &mut path)
+        .then(|| format!("new {pascal}()"))
+}
+
+/// Depth limit for the cycle walk. A record graph deeper than this is pathological, and bailing to
+/// a nullable property is the conservative answer either way. ~keep
+const MAX_NESTED_RECORD_DEPTH: usize = 16;
+
+fn record_is_default_constructible(
+    pascal: &str,
+    types: &[TypeDef],
+    enum_names: &HashSet<String>,
+    complex_enums: &HashSet<String>,
+    excluded_types: &HashSet<String>,
+    path: &mut Vec<String>,
+) -> bool {
+    if path.iter().any(|seen| seen == pascal) || path.len() >= MAX_NESTED_RECORD_DEPTH {
+        return false;
+    }
+    let Some(typ) = types
+        .iter()
+        .find(|candidate| csharp_type_name(&candidate.name) == pascal)
+    else {
+        return false;
+    };
+    if typ.is_opaque || typ.is_trait || typ.binding_excluded || enum_names.contains(pascal) {
+        return false;
+    }
+    // The file loop emits no `.cs` at all for a type whose only visible fields are tuple
+    // positions, so `new T()` would name a class that does not exist. ~keep
+    let has_visible_fields = binding_fields(&typ.fields).next().is_some();
+    if has_visible_fields && !binding_fields(&typ.fields).any(|field| !is_tuple_field(field)) {
+        return false;
+    }
+
+    path.push(pascal.to_string());
+    let constructible = binding_fields(&typ.fields)
+        .filter(|field| !is_tuple_field(field))
+        .all(|field| {
+            let is_complex = matches!(&field.ty, TypeRef::Named(n) if {
+                let nested = csharp_type_name(n);
+                complex_enums.contains(&nested) || excluded_types.contains(&nested)
+            });
+            if field_becomes_required_property(field, is_complex) {
+                return false;
+            }
+            match &field.ty {
+                // Only a field that would itself construct a nested record can extend the cycle;
+                // an optional one renders `X? = null` and terminates the walk. ~keep
+                TypeRef::Named(n) if !field.optional && !is_complex && !enum_names.contains(&csharp_type_name(n)) => {
+                    record_is_default_constructible(
+                        &csharp_type_name(n),
+                        types,
+                        enum_names,
+                        complex_enums,
+                        excluded_types,
+                        path,
+                    )
+                }
+                _ => true,
+            }
+        });
+    path.pop();
+    constructible
+}
+
+/// Mirrors the `should_emit_required` decision in [`gen_record_type`]'s field loop: a field lands
+/// on `public required T X { get; init; }` only when it is neither optional nor defaulted and its
+/// type has no meaningful zero. Over-reporting here is safe (the caller falls back to a nullable
+/// property); under-reporting would emit `new T()` against a type that cannot be constructed. ~keep
+fn field_becomes_required_property(field: &crate::core::ir::FieldDef, is_complex: bool) -> bool {
+    if field.optional || (field.serde_flatten && matches!(&field.ty, TypeRef::Json)) {
+        return false;
+    }
+    if field.default.is_some() || carries_renderable_default(field, is_complex) {
+        return false;
+    }
+    match &field.ty {
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json | TypeRef::Duration => true,
+        TypeRef::Named(_) => !is_complex,
+        _ => false,
+    }
+}
+
 /// True when the field's own IR carries a default this emitter can turn into an initializer.
 ///
 /// `field.typed_default` is the signal every other backend reads (java `types/records.rs`,
@@ -716,6 +844,7 @@ fn csharp_scalar_default(item: &DefaultValue) -> Option<String> {
         DefaultValue::EnumVariant(v) => Some(format!("\"{}\"", to_csharp_name(v))),
         DefaultValue::ListLiteral(_)
         | DefaultValue::Empty
+        | DefaultValue::Unresolved(_)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,

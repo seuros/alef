@@ -1,4 +1,6 @@
 use super::gen_record_type;
+use super::records::csharp_type_zero_initializer;
+use crate::backends::swift::gen_bindings::dto::swift_type_based_default;
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
 use crate::core::ir::{DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
 use std::collections::HashSet;
@@ -29,10 +31,14 @@ fn field(name: &str, ty: TypeRef) -> FieldDef {
 }
 
 fn record_type(fields: Vec<FieldDef>) -> TypeDef {
+    named_record_type("RenderOptions", fields)
+}
+
+fn named_record_type(name: &str, fields: Vec<FieldDef>) -> TypeDef {
     TypeDef {
-        name: "RenderOptions".to_string(),
-        rust_path: "demo::RenderOptions".to_string(),
-        original_rust_path: "demo::RenderOptions".to_string(),
+        name: name.to_string(),
+        rust_path: format!("demo::{name}"),
+        original_rust_path: format!("demo::{name}"),
         fields,
         methods: vec![],
         is_opaque: false,
@@ -46,6 +52,7 @@ fn record_type(fields: Vec<FieldDef>) -> TypeDef {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         binding_excluded: false,
         binding_exclusion_reason: None,
@@ -110,6 +117,7 @@ fn record_type_skips_method_whose_name_collides_with_a_property() {
         name: "providers".to_string(),
         return_type: TypeRef::Named("RenderOptions".to_string()),
         receiver: Some(ReceiverKind::Ref),
+        cfg: None,
         ..Default::default()
     }];
 
@@ -389,6 +397,280 @@ fn record_type_scalar_defaults_agree_with_the_swift_renderer() {
             field.name
         );
     }
+}
+
+/// Render `typ` with `types` visible to the emitter, so a nested-record initializer can resolve.
+fn render_record_with_types(typ: &TypeDef, types: &[TypeDef]) -> String {
+    gen_record_type(
+        typ,
+        types,
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+}
+
+/// The declared type of `cs_name`, so a test can tell `T X = null` (nullable, the compiler sees
+/// it) from `T X = default!` (a null wearing a non-nullable declaration).
+fn csharp_property_type(code: &str, cs_name: &str) -> String {
+    let marker = format!(" {cs_name} {{ get; init; }}");
+    code.lines()
+        .find_map(|line| line.split_once(&marker))
+        .map(|(lhs, _)| {
+            lhs.trim()
+                .trim_start_matches("public ")
+                .trim_start_matches("required ")
+                .to_string()
+        })
+        .unwrap_or_else(|| panic!("no property `{cs_name}` in:\n{code}"))
+}
+
+/// Every `TypeRef` whose zero is a real value rather than a null. Swift's
+/// [`swift_type_based_default`] is the reference *coverage* set: it is the only other backend
+/// with the same shape of fallback table, and it has always spelled all of these.
+fn type_refs_with_a_non_null_zero() -> Vec<(&'static str, TypeRef)> {
+    vec![
+        ("bool", TypeRef::Primitive(PrimitiveType::Bool)),
+        ("u64", TypeRef::Primitive(PrimitiveType::U64)),
+        ("f32", TypeRef::Primitive(PrimitiveType::F32)),
+        ("f64", TypeRef::Primitive(PrimitiveType::F64)),
+        ("String", TypeRef::String),
+        ("Vec<String>", TypeRef::Vec(Box::new(TypeRef::String))),
+        (
+            "HashMap<String, String>",
+            TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+        ),
+    ]
+}
+
+/// The control that would have caught the `Map` hole. The literal-agreement control next door
+/// compares *values* for `DefaultValue::*Literal`; nothing compared the type-zero *fallback*,
+/// which is the arm that runs whenever a field's default is `Empty` or absent — and that is
+/// where the null-in-a-non-nullable-property class lives.
+///
+/// Values cannot be compared across the two languages here (`[:]` against
+/// `new Dictionary<string, string>()` is a spelling difference, not a disagreement), so the
+/// comparison is *coverage*: a `TypeRef` Swift can spell a zero for is a `TypeRef` C# must also
+/// spell a zero for. C# had no `Map` arm in one of its two tables, so that field fell through to
+/// `default!` — a null in a property declared non-nullable.
+#[test]
+fn csharp_spells_a_zero_for_every_type_swift_does() {
+    for (label, ty) in type_refs_with_a_non_null_zero() {
+        assert!(
+            swift_type_based_default(&ty).is_some(),
+            "apparatus: the Swift reference must cover `{label}`, or this test compares nothing"
+        );
+        let csharp = csharp_type_zero_initializer(&ty);
+        assert!(
+            csharp.is_some(),
+            "C# has no zero for `{label}`, so that field falls back to a null in a \
+             non-nullable property"
+        );
+        assert_ne!(
+            csharp.as_deref(),
+            Some("default!"),
+            "`default!` on `{label}` is a null wearing a non-nullable declaration"
+        );
+    }
+}
+
+/// The negative half. A `Named` field's zero is *not* a value the fallback table may invent —
+/// constructing one is a decision that needs the whole type graph — so both backends must
+/// decline, leaving the caller to resolve it.
+#[test]
+fn neither_backend_invents_a_zero_for_a_nested_record() {
+    let nested = TypeRef::Named("ContentConfig".to_string());
+    assert!(swift_type_based_default(&nested).is_none());
+    assert!(csharp_type_zero_initializer(&nested).is_none());
+}
+
+/// A `HashMap` field with no default at all. The no-default fallback had no [`TypeRef::Map`] arm
+/// and fell through to `default!`, which is `null` assigned into a non-nullable
+/// `Dictionary<K, V>` property: `new T { }` compiles, and the first read throws. The defaulted
+/// branch had spelled the empty dictionary correctly all along — the two tables had drifted.
+#[test]
+fn record_type_map_field_without_default_is_an_empty_dictionary_not_null() {
+    let typ = record_type(vec![field(
+        "metadata",
+        TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+    )]);
+
+    let code = render_plain_record(&typ);
+
+    assert_eq!(
+        csharp_initializer(&code, "Metadata"),
+        "new Dictionary<string, string>()"
+    );
+    assert_eq!(csharp_property_type(&code, "Metadata"), "Dictionary<string, string>");
+    assert!(
+        !code.contains("default!"),
+        "a non-nullable Dictionary property must not be initialized to null:\n{code}"
+    );
+}
+
+/// The same map field, this time carrying `#[serde(default)]`, must land on the identical
+/// initializer. The two branches resolving one `TypeRef` differently is the defect itself, so
+/// pinning them together is what keeps the tables from drifting apart again.
+#[test]
+fn record_type_map_field_initializer_is_the_same_with_and_without_a_serde_default() {
+    let map_ty = || TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String));
+
+    let bare = record_type(vec![field("metadata", map_ty())]);
+    let mut defaulted_field = field("metadata", map_ty());
+    defaulted_field.default = Some("/* serde(default) */".to_string());
+    let defaulted = record_type(vec![defaulted_field]);
+
+    assert_eq!(
+        csharp_initializer(&render_plain_record(&bare), "Metadata"),
+        csharp_initializer(&render_plain_record(&defaulted), "Metadata"),
+        "the defaulted and no-default branches must resolve a Map to one expression"
+    );
+}
+
+/// A nested record built with values a C# zero cannot produce: `true` where the zero is `false`,
+/// and `9001` where the zero is `0`. A dropped nested default therefore shows up as a *value*
+/// difference, not merely a spelling one.
+fn nested_content_config() -> TypeDef {
+    let mut verbose = field("verbose", TypeRef::Primitive(PrimitiveType::Bool));
+    verbose.typed_default = Some(DefaultValue::BoolLiteral(true));
+    let mut budget = field("budget", TypeRef::Primitive(PrimitiveType::U64));
+    budget.typed_default = Some(DefaultValue::IntLiteral(9001));
+    let mut nested = named_record_type("ContentConfig", vec![verbose, budget]);
+    nested.has_default = true;
+    nested
+}
+
+/// A non-optional field whose type is another emitted record, carrying `#[serde(default)]`.
+/// It used to render `= default!` — a null in a property declared non-nullable `ContentConfig`,
+/// so `new CrawlConfig { MaxDepth = 3 }` handed the caller a half-built value whose first
+/// `.Content` read threw. The nested record's own body already spells every Rust default, so
+/// `new ContentConfig()` is exactly `ContentConfig::default()`.
+#[test]
+fn record_type_nested_record_field_is_constructed_not_null() {
+    let nested = nested_content_config();
+    let mut content = field("content", TypeRef::Named("ContentConfig".to_string()));
+    content.default = Some("/* serde(default) */".to_string());
+    let typ = record_type(vec![content]);
+
+    let code = render_record_with_types(&typ, std::slice::from_ref(&nested));
+
+    assert_eq!(csharp_initializer(&code, "Content"), "new ContentConfig()");
+    assert_eq!(csharp_property_type(&code, "Content"), "ContentConfig");
+    assert!(
+        !code.contains("default!"),
+        "a nested record property must not be initialized to null:\n{code}"
+    );
+
+    let nested_code = render_record_with_types(&nested, std::slice::from_ref(&nested));
+    assert_eq!(csharp_initializer(&nested_code, "Verbose"), "true");
+    assert_eq!(csharp_initializer(&nested_code, "Budget"), "9001");
+}
+
+/// `new T()` is `CS9035` when `T` declares a `required` member, and a compile error in the
+/// consumer's build is strictly worse than a nullable property. The fallback must be `null` on a
+/// `T?` — a null the C# nullable analysis can actually see — never `default!`.
+#[test]
+fn record_type_nested_record_with_a_required_member_falls_back_to_a_nullable_property() {
+    let nested = named_record_type("ContentConfig", vec![field("name", TypeRef::String)]);
+    let mut content = field("content", TypeRef::Named("ContentConfig".to_string()));
+    content.default = Some("/* serde(default) */".to_string());
+    let typ = record_type(vec![content]);
+
+    let nested_code = render_record_with_types(&nested, std::slice::from_ref(&nested));
+    assert!(
+        nested_code.contains("public required string Name { get; init; }"),
+        "the fixture must actually declare a required member:\n{nested_code}"
+    );
+
+    let code = render_record_with_types(&typ, std::slice::from_ref(&nested));
+
+    assert_eq!(csharp_initializer(&code, "Content"), "null");
+    assert_eq!(csharp_property_type(&code, "Content"), "ContentConfig?");
+    assert!(
+        !code.contains("default!"),
+        "the unconstructible fallback must be a visible null, not a hidden one:\n{code}"
+    );
+}
+
+/// A record graph that reaches itself. Rust cannot express a non-`Box` cycle, but `Box<T>` can,
+/// and `new A()` chained through one is a `StackOverflowException` in the consumer's process
+/// rather than a generator error. Both ends of the cycle must degrade to a nullable property.
+#[test]
+fn record_type_cyclic_nested_records_do_not_emit_infinite_construction() {
+    let mut back = field("owner", TypeRef::Named("RenderOptions".to_string()));
+    back.default = Some("/* serde(default) */".to_string());
+    let nested = named_record_type("ContentConfig", vec![back]);
+
+    let mut content = field("content", TypeRef::Named("ContentConfig".to_string()));
+    content.default = Some("/* serde(default) */".to_string());
+    let typ = record_type(vec![content]);
+
+    let types = vec![typ.clone(), nested];
+    let code = render_record_with_types(&typ, &types);
+
+    assert_eq!(csharp_initializer(&code, "Content"), "null");
+    assert_eq!(csharp_property_type(&code, "Content"), "ContentConfig?");
+}
+
+/// The emitter cannot resolve a nested record it was never shown. Falling back to `null` on a
+/// nullable property keeps the failure visible instead of minting a `new ContentConfig()` that
+/// does not compile.
+#[test]
+fn record_type_unknown_nested_record_falls_back_to_a_nullable_property() {
+    let mut content = field("content", TypeRef::Named("ContentConfig".to_string()));
+    content.default = Some("/* serde(default) */".to_string());
+    let typ = record_type(vec![content]);
+
+    let code = render_plain_record(&typ);
+
+    assert_eq!(csharp_initializer(&code, "Content"), "null");
+    assert_eq!(csharp_property_type(&code, "Content"), "ContentConfig?");
+}
+
+/// The apparatus check for the assertions above. `!code.contains("default!")` is only evidence
+/// that a null was avoided if `default!` is a string this emitter can still produce — otherwise
+/// every one of those assertions passes while examining nothing. A `Named` field degraded to
+/// `JsonElement` is the surviving legitimate use: `default(JsonElement)` is a struct value, not
+/// a null.
+#[test]
+fn record_type_still_emits_default_bang_for_the_one_case_where_it_is_a_value() {
+    let typ = record_type(vec![field("payload", TypeRef::Named("OpaqueBlob".to_string()))]);
+    let complex = HashSet::from(["OpaqueBlob".to_string()]);
+
+    let code = gen_record_type(
+        &typ,
+        &[],
+        "Demo",
+        "demo",
+        &HashSet::new(),
+        &complex,
+        &HashSet::new(),
+        "snake_case",
+        &HashSet::new(),
+        &[],
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains("default!"),
+        "`default!` must remain reachable, or the negative assertions above prove nothing:\n{code}"
+    );
+    assert!(
+        csharp_property_type(&code, "Payload").starts_with("JsonElement"),
+        "the surviving `default!` must be on a struct-typed property:\n{code}"
+    );
 }
 
 #[test]
