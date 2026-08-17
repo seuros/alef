@@ -117,11 +117,40 @@ pub(super) fn render_assertion(
                 }
                 return;
             }
-            "chunks_have_heading_context" | "first_chunk_starts_with_heading" => {
-                out.push_str(&format!(
-                    "    # skipped: {}\n",
-                    FieldSkip::SyntheticNotAvailableOnRubyChunkBinding.message(f)
-                ));
+            "chunks_have_heading_context" => {
+                let pred = format!(
+                    "({result_var}.chunks || []).all? {{ |c| c.metadata && !c.metadata.heading_context.nil? }}"
+                );
+                match assertion.assertion_type.as_str() {
+                    "is_true" => {
+                        out.push_str(&format!("    expect({pred}).to be(true)\n"));
+                    }
+                    "is_false" => {
+                        out.push_str(&format!("    expect({pred}).to be(false)\n"));
+                    }
+                    _ => {
+                        out.push_str(&format!(
+                            "    # skipped: unsupported assertion type on synthetic field '{f}'\n"
+                        ));
+                    }
+                }
+                return;
+            }
+            "first_chunk_starts_with_heading" => {
+                let pred = format!("!({result_var}.chunks || []).first&.metadata&.heading_context.nil?");
+                match assertion.assertion_type.as_str() {
+                    "is_true" => {
+                        out.push_str(&format!("    expect({pred}).to be(true)\n"));
+                    }
+                    "is_false" => {
+                        out.push_str(&format!("    expect({pred}).to be(false)\n"));
+                    }
+                    _ => {
+                        out.push_str(&format!(
+                            "    # skipped: unsupported assertion type on synthetic field '{f}'\n"
+                        ));
+                    }
+                }
                 return;
             }
             "chunks_have_embeddings" => {

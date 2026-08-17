@@ -57,6 +57,93 @@ mod not_empty_tests {
 }
 
 #[cfg(test)]
+mod chunk_heading_context_tests {
+    use super::super::assertions::render_assertion;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render(field: &str, assertion_type: &str, value: Option<serde_json::Value>) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            false,
+            &E2eConfig::default(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
+        out
+    }
+
+    /// Magnus generates a real typed accessor for every non-excluded struct field
+    /// (`gen_field_accessor` in the magnus backend), the same mechanism that already lets this
+    /// file assert `c.content` and `c.embedding` on a Ruby `Chunk`. `heading_context` is such a
+    /// field, so it is reachable exactly like it is for Elixir, C#, Java and TypeScript — the old
+    /// unconditional "not available on Ruby Chunk binding" skip was never checking anything.
+    #[test]
+    fn chunks_have_heading_context_is_asserted_not_skipped() {
+        let out = render("chunks_have_heading_context", "is_true", None);
+        assert!(!out.contains("skipped"), "got: {out}");
+        assert_eq!(
+            out.trim(),
+            "expect((result.chunks || []).all? { |c| c.metadata && !c.metadata.heading_context.nil? }).to be(true)"
+        );
+    }
+
+    #[test]
+    fn chunks_have_heading_context_is_false_is_asserted_not_skipped() {
+        let out = render("chunks_have_heading_context", "is_false", None);
+        assert!(!out.contains("skipped"), "got: {out}");
+        assert_eq!(
+            out.trim(),
+            "expect((result.chunks || []).all? { |c| c.metadata && !c.metadata.heading_context.nil? }).to be(false)"
+        );
+    }
+
+    #[test]
+    fn first_chunk_starts_with_heading_is_asserted_not_skipped() {
+        let out = render("first_chunk_starts_with_heading", "is_true", None);
+        assert!(!out.contains("skipped"), "got: {out}");
+        assert_eq!(
+            out.trim(),
+            "expect(!(result.chunks || []).first&.metadata&.heading_context.nil?).to be(true)"
+        );
+    }
+
+    /// Negative control for the fix above: a field that genuinely cannot be reached the same
+    /// way in Ruby still skips. Magnus's `IntoValue` for a data enum serializes it via
+    /// `serde_json::to_value` into a plain Hash (`enum_magnus.rs.jinja`), so a variant accessor
+    /// like `.excel` has no Ruby method to call — this skip has a real, checkable cause, unlike
+    /// the heading-context one that used to fire unconditionally.
+    #[test]
+    fn enum_variant_accessor_still_skips_because_ruby_serializes_it_to_a_hash() {
+        let out = render("metadata.format.excel", "equals", Some(serde_json::json!("Excel")));
+        assert!(out.contains("# skipped:"), "got: {out}");
+        assert!(
+            out.contains("enum variant accessor 'metadata.format.excel' not available on Ruby (serialized to Hash)"),
+            "got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod trait_bridge_tests {
     use super::super::project::render_spec_helper;
     use super::super::stubs::emit_test_backend;

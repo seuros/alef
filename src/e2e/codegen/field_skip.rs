@@ -89,7 +89,6 @@ field_skip_variants! {
         "enum variant accessor ",
         " not available on Ruby (serialized to Hash)",
     ),
-    SyntheticNotAvailableOnRubyChunkBinding => ("synthetic field ", " not available on Ruby Chunk binding"),
     /// ~keep Reworded from `metadata.format enum field serialization differs in Ruby`, which named
     /// no quoted field and so was structurally uncountable — the strict gate could never have seen
     /// it whatever patterns it matched. The reason is unchanged; only the field is now named.
