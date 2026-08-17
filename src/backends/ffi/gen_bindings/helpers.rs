@@ -567,12 +567,13 @@ pub(super) fn gen_build_rs(
     prefix: &str,
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
 ) -> String {
+    // Must match `gen_cbindgen_toml`'s `prefix_upper` above. The capsule fixup rewrites capsule
+    // pointee type names as they literally appear in the generated header text, and the feature
+    // stamp has to spell both the include guard (`{prefix_upper}_H`) and the guard macros
+    // (`{prefix_upper}_FEATURE_X`) exactly as cbindgen wrote them -- a different derivation here
+    // would silently stop matching for a prefix with an internal capital. ~keep
+    let prefix_upper = c_consumer::export_type_prefix(prefix);
     let capsule_header_fixup = {
-        // Must match `gen_cbindgen_toml`'s `prefix_upper` above -- this rewrites capsule
-        // pointee type names as they literally appear in the generated header text, so a
-        // different derivation here would silently stop matching for a prefix with an
-        // internal capital. ~keep
-        let prefix_upper = c_consumer::export_type_prefix(prefix);
         let mut pairs: Vec<(String, String)> = capsule_types
             .values()
             .map(|c| (format!("{prefix_upper}{}", c.c_return_type), c.c_return_type.clone()))
@@ -636,6 +637,7 @@ pub(super) fn gen_build_rs(
         minijinja::context! {
             header_name => header_name,
             lib_name => lib_name,
+            prefix_upper => &prefix_upper,
             go_copy_step => go_copy_step,
             capsule_header_fixup => capsule_header_fixup,
         },
@@ -977,4 +979,65 @@ pub unsafe extern "C" fn {fn_free}(handle: AlefHandle) {{
         owner_snake = owner_snake,
         item_type = item_type,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The feature stamp `gen_build_rs` writes into the header must test the *same* macro names
+    /// `gen_cbindgen_toml` puts in cbindgen's `[defines]`, and must anchor on the *same* include
+    /// guard cbindgen opens the file with. Both are derived here from the two emitters rather
+    /// than pinned, because a stamp spelled any other way defines macros no `#if` in the header
+    /// ever tests -- it fails silently, and only in a consumer's compiler.
+    ///
+    /// `SampleCore` is the discriminating prefix: shouty-snake (`SAMPLE_CORE`) and bare uppercase
+    /// (`SAMPLECORE`) diverge on it, so a re-derivation that drifts is visible here and invisible
+    /// for an already-underscored prefix like `ts_pack`. ~keep
+    #[test]
+    fn build_rs_feature_stamp_matches_the_cbindgen_defines_and_include_guard() {
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "sample_core".to_string(),
+            version: "0.1.0".to_string(),
+            functions: vec![crate::core::ir::FunctionDef {
+                name: "download".to_string(),
+                rust_path: "sample_core::download".to_string(),
+                cfg: Some(r#"feature = "download""#.to_string()),
+                ..crate::core::ir::FunctionDef::default()
+            }],
+            ..crate::core::ir::ApiSurface::default()
+        };
+        let capsule_types = std::collections::HashMap::new();
+        let cbindgen = gen_cbindgen_toml("SampleCore", &api, &capsule_types, &std::collections::BTreeSet::new());
+        let build = gen_build_rs("sample.h", "libsample_ffi", None, "SampleCore", &capsule_types);
+
+        let guard_macro = cbindgen
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(r#""feature = download" = ""#))
+            .map(|rest| rest.trim_end_matches('"'))
+            .expect("control: cbindgen.toml must map the gated feature to a guard macro");
+        assert_eq!(guard_macro, "SAMPLE_CORE_FEATURE_DOWNLOAD");
+        let include_guard = cbindgen
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(r#"include_guard = ""#))
+            .map(|rest| rest.trim_end_matches('"'))
+            .expect("control: cbindgen.toml must declare the header's include guard");
+        assert_eq!(include_guard, "SAMPLE_CORE_H");
+
+        let macro_stem = guard_macro
+            .strip_suffix("DOWNLOAD")
+            .expect("guard macro ends with the feature name");
+        assert!(
+            build.contains(macro_stem),
+            "build.rs must probe and define `{macro_stem}*`, the macros cbindgen guards with:\n{build}"
+        );
+        assert!(
+            build.contains(&format!(r##""#define {include_guard}\n""##)),
+            "build.rs must anchor the stamp on cbindgen's own include guard `{include_guard}`:\n{build}"
+        );
+        assert!(
+            !build.contains("SAMPLECORE"),
+            "build.rs must not fall back to a bare-uppercase prefix for the feature stamp:\n{build}"
+        );
+    }
 }

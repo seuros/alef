@@ -896,3 +896,136 @@ fn every_emitted_go_file_carries_a_hash_line_after_finalize() {
         assert_pipeline_stamps(file);
     }
 }
+
+/// The whole-package invariant behind the cgo feature-macro defect: every FFI symbol the
+/// generated Go sources call must still be *declared* after cgo runs the C preprocessor over the
+/// header. cbindgen wraps each `#[cfg(feature = "x")]` export in `#if defined(PREFIX_FEATURE_X)`,
+/// so a call site whose guard macro is not in the package's `#cgo CFLAGS` compiles to
+/// `could not determine what C.<symbol> refers to`.
+///
+/// Both sides are derived, not pinned: the called set is read out of the emitted Go, the defined
+/// set out of the emitted `#cgo` directives, and the required macro per symbol out of the IR gate
+/// plus `c_consumer`'s symbol spelling — the same helper the FFI backend names its exports with.
+/// A new gated export, a renamed macro, or a dropped `-D` all fail here.
+///
+/// Scope it cannot check: it models cgo's package-wide merge of `#cgo` directives (only
+/// `binding.go` carries the `-D` line, as `service_file_preamble.jinja` already assumes for
+/// `-I`), it only walks free functions, and it cannot see a feature the *library* was built
+/// without — that is `warn_on_ffi_feature_drift`'s and the link step's job. ~keep
+#[test]
+fn every_gated_symbol_the_go_package_calls_has_its_guard_macro_defined() {
+    use crate::codegen::c_consumer;
+    use crate::core::ir::{ApiSurface, FunctionDef};
+    use std::collections::BTreeSet;
+
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi", "go"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+features = ["download", "document-render"]
+[crates.ffi]
+prefix = "test"
+extra_features = ["wasm-http"]
+[crates.go]
+module = "github.com/test/test-lib"
+"#,
+    );
+    let gates: Vec<(&str, Option<&str>)> = vec![
+        ("ping", None),
+        ("download", Some(r#"feature = "download""#)),
+        (
+            "render_document",
+            Some(r#"all(feature = "document-render", feature = "download")"#),
+        ),
+        ("fetch_wasm", Some(r#"feature = "wasm-http""#)),
+    ];
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        functions: gates
+            .iter()
+            .map(|(name, cfg)| FunctionDef {
+                name: (*name).to_string(),
+                rust_path: format!("test_lib::{name}"),
+                cfg: cfg.map(str::to_string),
+                ..FunctionDef::default()
+            })
+            .collect(),
+        ..ApiSurface::default()
+    };
+
+    let files = GoBackend.generate_bindings(&api, &config).unwrap();
+    let go_sources: Vec<&str> = files
+        .iter()
+        .filter(|file| {
+            let path = file.path.to_string_lossy().into_owned();
+            // `cmd/setup` is a separate `package main`; cgo does not merge its directives into
+            // the binding package, so it must not count towards either set. ~keep
+            path.ends_with(".go") && !path.contains("/cmd/")
+        })
+        .map(|file| file.content.as_str())
+        .collect();
+    assert!(!go_sources.is_empty(), "control: the Go backend must emit .go sources");
+
+    let called: HashSet<String> = go_sources
+        .iter()
+        .flat_map(|source| {
+            source.split("C.test_").skip(1).map(|tail| {
+                let end = tail
+                    .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                    .unwrap_or(tail.len());
+                format!("test_{}", &tail[..end])
+            })
+        })
+        .collect();
+
+    let defined: HashSet<String> = go_sources
+        .iter()
+        .flat_map(|source| source.lines())
+        .filter(|line| line.contains("#cgo") && line.contains("CFLAGS:"))
+        .flat_map(str::split_whitespace)
+        .filter_map(|token| token.strip_prefix("-D"))
+        .map(|token| token.split('=').next().unwrap_or(token).to_string())
+        .collect();
+
+    let gated_symbol = c_consumer::free_function_symbol("test", "download");
+    assert!(
+        called.contains(&gated_symbol),
+        "control: the Go package must call the gated export, otherwise this test is vacuous; called: {called:?}"
+    );
+    assert!(
+        called.contains(&c_consumer::free_function_symbol("test", "ping")),
+        "control: the Go package must also call the ungated export; called: {called:?}"
+    );
+    let declare_only = c_consumer::free_function_symbol("test", "fetch_wasm");
+    assert!(
+        !called.contains(&declare_only),
+        "`extra_features` stay off, so the glue for {declare_only} must not be emitted at all"
+    );
+    assert!(
+        !defined.contains("TEST_FEATURE_WASM_HTTP"),
+        "a genuinely-disabled feature must stay genuinely invisible; defined: {defined:?}"
+    );
+
+    for func in &api.functions {
+        let Some(cfg) = func.cfg.as_deref() else { continue };
+        let symbol = c_consumer::free_function_symbol("test", &func.name);
+        if !called.contains(&symbol) {
+            continue;
+        }
+        let mut features = BTreeSet::new();
+        crate::codegen::cfg::collect_cfg_feature_names(cfg, &mut features);
+        for feature in features {
+            let macro_name = crate::backends::go::cgo_features::guard_macro_name("test", &feature);
+            assert!(
+                defined.contains(&macro_name),
+                "the Go package calls {symbol}, whose header declaration cbindgen guards with \
+                 {macro_name}, but no #cgo CFLAGS defines it — cgo deletes the declaration. \
+                 defined: {defined:?}"
+            );
+        }
+    }
+}

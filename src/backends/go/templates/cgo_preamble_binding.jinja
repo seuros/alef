@@ -2,6 +2,9 @@
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/include
+{% if feature_cflags %}
+#cgo CFLAGS: {{ feature_cflags }}
+{% endif %}
 #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/.lib/macos-arm64 -Wl,-rpath,${SRCDIR}/.lib/macos-arm64 -l{{ ffi_lib_name }}
 #cgo darwin,amd64 LDFLAGS: -L${SRCDIR}/.lib/macos-x86_64 -Wl,-rpath,${SRCDIR}/.lib/macos-x86_64 -l{{ ffi_lib_name }}
 #cgo linux,amd64 LDFLAGS: -L${SRCDIR}/.lib/linux-x86_64 -Wl,-rpath,${SRCDIR}/.lib/linux-x86_64 -l{{ ffi_lib_name }}

@@ -203,6 +203,7 @@ pub(super) fn gen_go_file(
     exclude_types: &HashSet<String>,
     value_only_types: &HashSet<String>,
     visitor_bridge_cfg: Option<&TraitBridgeConfig>,
+    feature_cflags: &str,
 ) -> String {
     let mut header = String::with_capacity(2048);
 
@@ -226,6 +227,7 @@ pub(super) fn gen_go_file(
             ffi_crate_dir => ffi_crate_dir,
             ffi_lib_name => ffi_lib_name,
             ffi_header => ffi_header,
+            feature_cflags => feature_cflags,
         },
     ));
     header.push('\n');

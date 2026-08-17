@@ -1,5 +1,6 @@
 //! Go (cgo) binding generator backend for alef.
 
+pub(crate) mod cgo_features;
 mod gen_bindings;
 pub mod gen_visitor;
 pub(crate) mod template_env;

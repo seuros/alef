@@ -75,6 +75,12 @@ impl Backend for GoBackend {
         }
         let deduped_api = api.with_deduped_functions();
         crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Go);
+        // Derived from the *unfiltered* surface: the FFI crate defaults every cfg-discovered
+        // feature ON, so a gate whose items this Go build filters out is still compiled into the
+        // cdylib and still guarded in the header. Emitted once, in `binding.go`'s preamble — cgo
+        // merges `#cgo` directives across every file of a package, which is what already lets
+        // `service_file_preamble.jinja` include the header with no `-I` of its own. ~keep
+        let feature_cflags = crate::backends::go::cgo_features::cgo_feature_cflags(api, config);
         let enabled_features: HashSet<&str> = config
             .features_for_language(Language::Go)
             .iter()
@@ -203,6 +209,7 @@ impl Backend for GoBackend {
             &exclude_types,
             &value_only_types,
             visitor_bridge_cfg,
+            &feature_cflags,
         )));
 
         let _adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::Go)?;
