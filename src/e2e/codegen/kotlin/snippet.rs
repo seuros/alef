@@ -81,10 +81,32 @@ pub(crate) fn render_snippet_body(
     } else {
         None
     };
+    // The adapter-declared request parameter (`[[crates.adapters.params]]`), if any.
+    // Mirrors `test_method.rs::streaming_request`: for an owner_type streaming
+    // adapter the facade signature takes exactly this declared param, built from
+    // the whole fixture input, not from any per-arg ArgMapping the fixture's
+    // `call.args` might otherwise declare (those describe the flat-call shape a
+    // non-owner_type adapter would use). ~keep
+    let streaming_request = adapter.and_then(|a| {
+        matches!(a.pattern, crate::core::config::extras::AdapterPattern::Streaming)
+            .then(|| a.params.first())
+            .flatten()
+    });
+    // When the request is built from the adapter param below, drop every non-handle
+    // ArgMapping before building setup/args — otherwise `build_args_and_setup` would
+    // bind and pass those fields a second time, and (per the fallback path) the
+    // resulting call would reference the un-rebuilt request as a raw string/JSON
+    // fragment instead of the required typed request object. ~keep
+    let call_args: std::borrow::Cow<'_, [crate::e2e::config::ArgMapping]> =
+        if streaming_owner_handle.is_some() && streaming_request.is_some() {
+            std::borrow::Cow::Owned(recipe.args.iter().filter(|a| a.arg_type == "handle").cloned().collect())
+        } else {
+            std::borrow::Cow::Borrowed(recipe.args)
+        };
 
     let (setup_lines, mut args) = build_args_and_setup(
         &fixture.input,
-        recipe.args,
+        &call_args,
         KotlinArgsContext {
             fixture,
             class_name: &class_name,
@@ -100,6 +122,45 @@ pub(crate) fn render_snippet_body(
         .into_iter()
         .map(|line| rebind_mapper_references(&line))
         .collect::<Vec<_>>();
+    // Build and bind the declared request object from the fixture input (minus the
+    // handle's own fields) — the call target is the owner handle instance, and its
+    // method takes this single typed parameter. Without this, `args` from
+    // `build_args_and_setup` above is empty (the handle is the receiver, not a
+    // positional argument), so the rendered call would be missing its required
+    // argument entirely. Mirrors `test_method.rs`'s identical construction for the
+    // generated JUnit test. ~keep
+    if streaming_owner_handle.is_some()
+        && let Some(request) = streaming_request
+    {
+        let request_name = request.name.to_lower_camel_case();
+        let request_type = request.ty.rsplit("::").next().unwrap_or(&request.ty);
+        let mut request_input = fixture.input.clone();
+        if let Some(object) = request_input.as_object_mut() {
+            for handle in recipe.args.iter().filter(|arg| arg.arg_type == "handle") {
+                let field = handle.field.strip_prefix("input.").unwrap_or(&handle.field);
+                object.remove(field);
+            }
+        }
+        let normalized = crate::e2e::codegen::transform_json_keys_for_language(&request_input, "snake_case");
+        let request_json = serde_json::to_string(&normalized).unwrap_or_default();
+        let escaped_json = crate::e2e::escape::escape_kotlin(&request_json);
+        if crate::e2e::codegen::value_contains_mock_url_placeholder(&normalized) {
+            let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
+            setup_lines.push(format!(
+                "val {request_name}Json = \"{escaped_json}\".replace(\"{}\", System.getProperty(\"mockServer.{}\", System.getenv(\"{env_key}\") ?: \"\"))",
+                crate::e2e::escape::escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER),
+                fixture.id,
+            ));
+            setup_lines.push(format!(
+                "val {request_name} = mapper.readValue({request_name}Json, {request_type}::class.java)"
+            ));
+        } else {
+            setup_lines.push(format!(
+                "val {request_name} = mapper.readValue(\"{escaped_json}\", {request_type}::class.java)"
+            ));
+        }
+        args = request_name;
+    }
     if let Some(visitor) = &fixture.visitor
         && let Some(visitor_args) =
             super::visitor::attach_visitor(&mut setup_lines, &args, visitor, config, type_defs, enums)
@@ -816,5 +877,155 @@ mod tests {
         assert!(body.contains(r#"\"request-id\":\"one\""#), "{body}");
         assert!(body.contains(r#"\"pageCount\":2"#), "{body}");
         assert!(body.contains("val mapper = jacksonObjectMapper()"), "{body}");
+    }
+
+    /// Synthetic streaming `owner_type` adapter whose facade signature takes exactly
+    /// the declared `request` param, matching the shape declared by
+    /// `[[crates.adapters]]` in `alef.toml`. Mirrors
+    /// `test_method::tests::streaming_owner_adapter`.
+    fn streaming_owner_adapter(function_name: &str, owner_type: &str) -> crate::core::config::extras::AdapterConfig {
+        crate::core::config::extras::AdapterConfig {
+            name: function_name.to_string(),
+            pattern: crate::core::config::extras::AdapterPattern::Streaming,
+            core_path: format!("test_core::{function_name}"),
+            params: vec![crate::core::config::extras::AdapterParam {
+                name: "request".to_string(),
+                ty: "sample::StreamRequest".to_string(),
+                optional: false,
+            }],
+            returns: None,
+            error_type: None,
+            owner_type: Some(owner_type.to_string()),
+            item_type: Some("Item".to_string()),
+            gil_release: false,
+            trait_name: None,
+            trait_method: None,
+            detect_async: false,
+            request_type: None,
+            skip_languages: Vec::new(),
+        }
+    }
+
+    fn streaming_owner_call() -> CallConfig {
+        CallConfig {
+            function: "stream_items".into(),
+            result_var: "result".into(),
+            args: vec![
+                crate::e2e::config::ArgMapping {
+                    name: "handle".into(),
+                    field: "input.handle".into(),
+                    arg_type: "handle".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                },
+                crate::e2e::config::ArgMapping {
+                    name: "url".into(),
+                    field: "input.url".into(),
+                    arg_type: "string".into(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                },
+            ],
+            ..CallConfig::default()
+        }
+    }
+
+    fn streaming_owner_fixture() -> Fixture {
+        Fixture {
+            id: "stream_basic".into(),
+            description: "Stream items".into(),
+            input: serde_json::json!({ "handle": {}, "url": "https://example.com" }),
+            ..Fixture::default()
+        }
+    }
+
+    /// Regression for #149: an owner_type streaming adapter's declared request
+    /// param (`[[crates.adapters.params]]`) must be built from the fixture input
+    /// and bound to a local `val request = ...` before the call references it —
+    /// mirroring `test_method.rs`'s identical construction for the generated
+    /// JUnit test. Before this fix `render_snippet_body` never resolved the
+    /// adapter's `streaming_request` at all: the handle-typed arg was still
+    /// treated as the call receiver (so it never reached `args`), but nothing
+    /// rebuilt or bound the request in its place, leaving the call either
+    /// missing its required argument or passing an un-rebuilt raw value instead
+    /// of the declared `request` identifier this test pins.
+    #[test]
+    fn kotlin_snippet_binds_the_declared_request_before_the_call() {
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            adapters: vec![streaming_owner_adapter("stream_items", "Engine")],
+            ..ResolvedCrateConfig::default()
+        };
+        let body = render_snippet_body(
+            &streaming_owner_fixture(),
+            &E2eConfig {
+                call: streaming_owner_call(),
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            &[],
+            false,
+        )
+        .expect("snippet renders");
+
+        assert_eq!(
+            line_containing(&body, "val request ="),
+            r#"val request = mapper.readValue("{\"url\":\"https://example.com\"}", StreamRequest::class.java)"#
+        );
+        assert_eq!(
+            line_containing(&body, "val result ="),
+            "val result = handle.streamItems(request)"
+        );
+        assert!(
+            !body.contains("\\\"handle\\\""),
+            "owner handle config must not leak into the request JSON:\n{body}"
+        );
+        assert!(
+            !body.contains("streamItems(\"https://example.com\")"),
+            "the raw url must not be passed positionally in place of the declared request:\n{body}"
+        );
+    }
+
+    #[test]
+    fn kotlin_android_snippet_binds_the_declared_request_before_the_call() {
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            adapters: vec![streaming_owner_adapter("stream_items", "Engine")],
+            ..ResolvedCrateConfig::default()
+        };
+        let body = render_snippet_body(
+            &streaming_owner_fixture(),
+            &E2eConfig {
+                call: streaming_owner_call(),
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            &[],
+            true,
+        )
+        .expect("snippet renders");
+
+        assert_eq!(
+            line_containing(&body, "val request ="),
+            r#"val request = mapper.readValue("{\"url\":\"https://example.com\"}", StreamRequest::class.java)"#
+        );
+        assert_eq!(
+            line_containing(&body, "val result ="),
+            "val result = handle.streamItems(request)"
+        );
+        assert!(
+            !body.contains("\\\"handle\\\""),
+            "owner handle config must not leak into the request JSON:\n{body}"
+        );
     }
 }
