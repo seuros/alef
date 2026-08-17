@@ -872,8 +872,8 @@ mod trait_bridge_snippet;
 mod visitor;
 
 use assertions::{
-    EffectiveConfigSource, FieldConfigSources, LeafFieldCheck, build_args_string_c, emit_nested_accessor,
-    ensure_leaf_field_exists, render_assertion,
+    FieldConfigSources, LeafFieldCheck, build_args_string_c, emit_nested_accessor, ensure_leaf_field_exists,
+    render_assertion,
 };
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
 use project::{render_download_script, render_gitignore, render_makefile};
