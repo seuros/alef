@@ -159,13 +159,14 @@ pub(super) fn render_snippet_body(
         ),
     );
     let presentation = crate::e2e::codegen::presentation::resolve_with(fixture, e2e_config, lang, &field_resolver);
+    let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
     Ok(crate::e2e::template_env::render(
         "php/snippet_body.jinja",
         minijinja::context! {
             namespace => namespace, class_name => class_name, setup_lines => setup_lines,
             client_factory => client_factory, call_expr => call_expr, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming, imported_types => imported_types,
-            expects_error => expects_error, presentation => presentation,
+            expects_error => expects_error, presentation => presentation, api_key_var => api_key_var,
         },
     ))
 }
@@ -221,11 +222,11 @@ mod tests {
     /// inlined `'test-key'` credential (the mock-mode branches the generated
     /// PHPUnit test takes live in `test_method.rs` around lines 299-314).
     ///
-    /// PHP diverges from java/csharp/kotlin/zig on the credential: those read it from
-    /// the environment, while `php/snippet_body.jinja` inlines the reader-substitutable
-    /// placeholder `'your-api-key'`. That is a convention difference, not a harness
-    /// leak, so this pins the placeholder rather than asserting an environment read the
-    /// generator does not perform.
+    /// PHP now follows java/csharp/kotlin/zig/elixir and reads the credential from the
+    /// environment via `FixtureEnv::api_key_var_or_default`. An inlined placeholder is not
+    /// a harness leak, but it is worse documentation — it shows a reader the one thing the
+    /// snippet should never teach — and it is not configurable per project, whereas
+    /// `env.api_key_var` is.
     #[test]
     fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
         let fixture = Fixture {
@@ -258,8 +259,16 @@ mod tests {
         );
         assert!(!body.contains("'test-key'"), "literal credential leaked:\n{body}");
         assert!(
-            body.contains("::createClient('your-api-key');"),
-            "client is not constructed with a reader-substitutable credential:\n{body}"
+            !body.contains("'your-api-key'"),
+            "credential is inlined rather than read from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("$apiKey = getenv('API_KEY');"),
+            "snippet does not read the credential from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("::createClient($apiKey);"),
+            "client is not constructed from the environment-read credential:\n{body}"
         );
     }
 

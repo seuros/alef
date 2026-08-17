@@ -11,7 +11,11 @@ use {{ namespace }}\{{ class_name }};
 {{ line }}
 {% endfor %}
 {% if client_factory %}
-$client = {{ class_name }}::{{ client_factory }}('your-api-key');
+$apiKey = getenv('{{ api_key_var }}');
+if ($apiKey === false || $apiKey === '') {
+    throw new RuntimeException('{{ api_key_var }} must be set');
+}
+$client = {{ class_name }}::{{ client_factory }}($apiKey);
 {% endif %}
 {% if expects_error %}
 try {

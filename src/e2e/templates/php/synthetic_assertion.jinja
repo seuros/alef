@@ -14,51 +14,51 @@
 {%- if assertion_kind == "chunks_content" %}
 {%- if assertion_type == "is_true" %}
         $this->assertTrue({{ pred }});
-{%- elif assertion_type == "is_false" %}
+{% elif assertion_type == "is_false" %}
         $this->assertFalse({{ pred }});
-{%- else %}
+{% else %}
         // skipped: unsupported assertion type on synthetic field '{{ field_name }}'
-{%- endif %}
-{%- elif assertion_kind == "chunks_embeddings" %}
+{% endif %}
+{% elif assertion_kind == "chunks_embeddings" %}
 {%- if assertion_type == "is_true" %}
         $this->assertTrue({{ pred }});
-{%- elif assertion_type == "is_false" %}
+{% elif assertion_type == "is_false" %}
         $this->assertFalse({{ pred }});
-{%- else %}
+{% else %}
         // skipped: unsupported assertion type on synthetic field '{{ field_name }}'
-{%- endif %}
-{%- elif assertion_kind == "embeddings" %}
+{% endif %}
+{% elif assertion_kind == "embeddings" %}
 {%- if assertion_type == "count_equals" %}
         $this->assertCount({{ php_val }}, ${{ result_var }});
-{%- elif assertion_type == "count_min" %}
+{% elif assertion_type == "count_min" %}
         $this->assertGreaterThanOrEqual({{ php_val }}, count(${{ result_var }}));
-{%- elif assertion_type == "not_empty" %}
+{% elif assertion_type == "not_empty" %}
         $this->assertNotEmpty(${{ result_var }});
-{%- elif assertion_type == "is_empty" %}
+{% elif assertion_type == "is_empty" %}
         $this->assertEmpty(${{ result_var }});
-{%- else %}
+{% else %}
         // skipped: unsupported assertion type on synthetic field 'embeddings'
-{%- endif %}
-{%- elif assertion_kind == "embedding_dimensions" %}
+{% endif %}
+{% elif assertion_kind == "embedding_dimensions" %}
 {%- if assertion_type == "equals" %}
         $this->assertEquals({{ php_val }}, {{ expr }});
-{%- elif assertion_type == "greater_than" %}
+{% elif assertion_type == "greater_than" %}
         $this->assertGreaterThan({{ php_val }}, {{ expr }});
-{%- else %}
+{% else %}
         // skipped: unsupported assertion type on synthetic field 'embedding_dimensions'
-{%- endif %}
-{%- elif assertion_kind == "embeddings_valid" or assertion_kind == "embeddings_finite" or assertion_kind == "embeddings_non_zero" or assertion_kind == "embeddings_normalized" %}
+{% endif %}
+{% elif assertion_kind == "embeddings_valid" or assertion_kind == "embeddings_finite" or assertion_kind == "embeddings_non_zero" or assertion_kind == "embeddings_normalized" %}
 {%- if assertion_type == "is_true" %}
         $this->assertTrue({{ pred }});
-{%- elif assertion_type == "is_false" %}
+{% elif assertion_type == "is_false" %}
         $this->assertFalse({{ pred }});
-{%- else %}
+{% else %}
         // skipped: unsupported assertion type on synthetic field '{{ field_name }}'
-{%- endif %}
-{%- elif assertion_kind == "keywords" %}
+{% endif %}
+{% elif assertion_kind == "keywords" %}
         // skipped: field '{{ field_name }}' not available on PHP result type
-{%- elif assertion_kind == "skipped" %}
+{% elif assertion_kind == "skipped" %}
         // skipped: field '{{ field_name }}' not available on result type
-{%- elif assertion_kind == "result_is_simple" %}
+{% elif assertion_kind == "result_is_simple" %}
         // skipped: result_is_simple, field '{{ field_name }}' not on simple result type
-{%- endif %}
+{% endif %}

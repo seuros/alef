@@ -89,10 +89,49 @@ pub struct SnippetCoverageLedger {
     pub documented_exceptions: Vec<DocumentedSnippetException>,
 }
 
+/// A snippet body the mock-harness guard refused, kept out of the coverage ledger. ~keep
+///
+/// This deliberately does not live on [`SnippetCoverageLedger`]: the ledger is the
+/// serialized manifest, and a guard rejection is never a durable state a run may come to
+/// rest in — it aborts generation. Carrying it on the in-memory report instead keeps the
+/// on-disk manifest format unchanged while still giving the caller per-language,
+/// per-marker attribution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnippetGuardRejection {
+    pub key: SnippetCoverageKey,
+    pub marker: String,
+}
+
+/// The guard's typed failure, so a caller can tell "this body leaked harness scaffolding" ~keep
+/// apart from every other reason a recipe can fail to render. Without the type the two are
+/// indistinguishable strings, and a `coverage_exceptions` entry authored for an unrelated
+/// capability gap silently absorbs a leak.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MockHarnessLeak {
+    pub marker: String,
+    pub fixture_id: String,
+    pub language: String,
+}
+
+impl std::fmt::Display for MockHarnessLeak {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "`{}` snippet for fixture `{}` leaks e2e mock-server scaffolding (`{}`); \
+             a documentation snippet must construct its client the way a reader would",
+            self.language, self.fixture_id, self.marker
+        )
+    }
+}
+
+impl std::error::Error for MockHarnessLeak {}
+
 #[derive(Debug, Clone, Default)]
 pub struct SnippetGenerationReport {
     pub snippets: Vec<GeneratedSnippet>,
     pub coverage: SnippetCoverageLedger,
+    /// Always empty on a successful run: a non-empty value aborts generation. ~keep
+    pub guard_rejections: Vec<SnippetGuardRejection>,
 }
 
 struct SnippetRenderContext<'a> {
@@ -189,6 +228,7 @@ fn generate_snippet_report_with_extensions(
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
+    let mut guard_rejections = Vec::<SnippetGuardRejection>::new();
     let mut coverage = SnippetCoverageLedger {
         format_version: COVERAGE_MANIFEST_VERSION,
         ..SnippetCoverageLedger::default()
@@ -240,6 +280,21 @@ fn generate_snippet_report_with_extensions(
             let body = match render_snippet_body(extensions, generator.as_ref(), fixture, language, context) {
                 Ok(body) => body,
                 Err(error) => {
+                    // A guard rejection is a generator defect, not a documented limitation, so ~keep
+                    // it is recorded separately and is deliberately *not* eligible for the
+                    // coverage-exception branch below. Routing it there is what turned a
+                    // rejected snippet into a silent deletion.
+                    if let Some(leak) = error.downcast_ref::<MockHarnessLeak>() {
+                        guard_rejections.push(SnippetGuardRejection {
+                            key: key.clone(),
+                            marker: leak.marker.clone(),
+                        });
+                        coverage.missing.push(MissingSnippet {
+                            key,
+                            reason: format!("{error:#}"),
+                        });
+                        continue;
+                    }
                     if let Some(exception) = docs.coverage_exceptions.get(*language) {
                         coverage.documented_exceptions.push(DocumentedSnippetException {
                             key,
@@ -290,11 +345,17 @@ fn generate_snippet_report_with_extensions(
             coverage.generated.push(key);
         }
     }
+    // Abort before the caller reports coverage, prunes orphans, or writes anything: a run ~keep
+    // that deleted the stale files and *then* failed would still have destroyed published
+    // documentation.
+    guard_rejections.sort_by(|left, right| left.key.cmp(&right.key));
+    ensure_no_guard_rejections(&guard_rejections)?;
     coverage = coverage::normalize(coverage);
     coverage::validate(&coverage)?;
     Ok(SnippetGenerationReport {
         snippets: generated.into_values().collect(),
         coverage,
+        guard_rejections,
     })
 }
 
@@ -430,8 +491,9 @@ const MOCK_HARNESS_MARKERS: &[&str] = &[
 /// at the mock server documents the test harness rather than the library. Every language
 /// — built-in or extension-supplied — funnels through [`render_snippet_body`], so placing
 /// the check here means a new backend inherits the guarantee instead of having to
-/// re-derive it. The caller turns this `Err` into a recorded coverage gap naming the
-/// fixture and language, so the offending snippet is surfaced rather than published.
+/// re-derive it. The `Err` carries a typed [`MockHarnessLeak`] so the caller can route it
+/// to a hard, attributed failure rather than to a coverage gap that a `coverage_exceptions`
+/// entry would silently absorb.
 fn reject_mock_harness_scaffolding(body: &str, fixture: &Fixture, language: &str) -> Result<()> {
     let fixture_route = format!("/fixtures/{}", fixture.id);
     let marker = MOCK_HARNESS_MARKERS
@@ -440,13 +502,54 @@ fn reject_mock_harness_scaffolding(body: &str, fixture: &Fixture, language: &str
         .chain(std::iter::once(fixture_route.as_str()))
         .find(|marker| body.contains(marker));
     if let Some(marker) = marker {
-        bail!(
-            "`{language}` snippet for fixture `{}` leaks e2e mock-server scaffolding (`{marker}`); \
-             a documentation snippet must construct its client the way a reader would",
-            fixture.id
-        );
+        return Err(anyhow::Error::new(MockHarnessLeak {
+            marker: marker.to_string(),
+            fixture_id: fixture.id.clone(),
+            language: language.to_string(),
+        }));
     }
     Ok(())
+}
+
+/// Turn every guard rejection this run produced into one aborting, attributed error. ~keep
+///
+/// A rejection must never come to rest as a coverage gap: `missing` cells can be retired by
+/// writing a `docs.coverage_exceptions` entry, and an exception authored for an unrelated
+/// capability gap would then also retire a leak — deleting the snippet from the docs tree
+/// with no signal at all. Failing here, before the caller prunes orphans or writes any
+/// file, is what makes the denylist's failure mode loud instead of a silent deletion.
+fn ensure_no_guard_rejections(rejections: &[SnippetGuardRejection]) -> Result<()> {
+    if rejections.is_empty() {
+        return Ok(());
+    }
+    let mut by_language: BTreeMap<&str, BTreeMap<&str, Vec<&str>>> = BTreeMap::new();
+    for rejection in rejections {
+        by_language
+            .entry(rejection.key.language.as_str())
+            .or_default()
+            .entry(rejection.marker.as_str())
+            .or_default()
+            .push(rejection.key.fixture_id.as_str());
+    }
+    let mut detail = String::new();
+    for (language, markers) in &by_language {
+        let language_total: usize = markers.values().map(Vec::len).sum();
+        detail.push_str(&format!("\n  {language} ({language_total}):"));
+        for (marker, fixtures) in markers {
+            detail.push_str(&format!(
+                "\n    `{marker}` ({}): {}",
+                fixtures.len(),
+                fixtures.join(", ")
+            ));
+        }
+    }
+    bail!(
+        "{} documentation snippet(s) were rejected by the mock-harness guard; each would otherwise \
+         disappear from the docs tree with no report. Fix the generator so the snippet constructs \
+         its client the way a reader would — a `docs.coverage_exceptions` entry cannot retire a \
+         guard rejection.{detail}",
+        rejections.len()
+    )
 }
 
 fn snippet_generators(languages: &[String]) -> Result<Vec<(&str, Box<dyn E2eCodegen>)>> {
@@ -784,6 +887,118 @@ mod tests {
         };
         let body = "var apiKey = System.getenv(\"API_KEY\");\nvar client = Sample.createClient(apiKey, null);";
         assert!(reject_mock_harness_scaffolding(body, &fixture, "java").is_ok());
+    }
+
+    fn snippet_report_for(fixture: Fixture, languages: &[&str], body: &'static str) -> Result<SnippetGenerationReport> {
+        let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension { body })];
+        let e2e = E2eConfig::default();
+        let crate_config = ResolvedCrateConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+        let languages: Vec<String> = languages.iter().map(|language| (*language).to_string()).collect();
+        generate_snippet_report_with_extensions(&[fixture], &languages, &snippet_config, &context, &extensions)
+    }
+
+    /// The decisive test for the guard's *failure mode*, not for the guard's predicate. ~keep
+    ///
+    /// Asserting that the rejected snippet is absent from the report would pass whether the
+    /// run reported the rejection or dropped it on the floor — that vacuity is precisely how
+    /// the silent deletion stayed hidden. So assert the report exists, and that it carries
+    /// per-language and per-marker attribution.
+    #[test]
+    fn a_guard_rejected_snippet_is_a_reported_failure_not_a_silent_absence() {
+        let leaking_body = "var url = System.getenv(\"MOCK_SERVER_URL\") + \"/fixtures/extension_owned\";";
+
+        let error = snippet_report_for(documented_fixture(), &["java", "rust"], leaking_body)
+            .expect_err("a guard-rejected snippet must abort generation");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("rejected by the mock-harness guard"),
+            "the failure must name the guard: {message}"
+        );
+        assert!(
+            message.contains("2 documentation snippet(s)"),
+            "the failure must count every rejection: {message}"
+        );
+        assert!(
+            message.contains("\n  java (1):"),
+            "the failure must attribute per language: {message}"
+        );
+        assert!(
+            message.contains("\n  rust (1):"),
+            "the failure must attribute per language: {message}"
+        );
+        assert!(
+            message.contains("`MOCK_SERVER_URL` (1): extension_owned"),
+            "the failure must attribute per reason and fixture: {message}"
+        );
+    }
+
+    /// A `docs.coverage_exceptions` entry says "this language cannot express this recipe". ~keep
+    /// It must not also retire "this generator emitted harness scaffolding": one is a
+    /// documented limitation, the other a defect. Conflating them is what let an exception
+    /// authored for an unrelated capability gap delete a snippet with no signal.
+    #[test]
+    fn a_documented_coverage_exception_cannot_retire_a_guard_rejection() {
+        let mut fixture = documented_fixture();
+        fixture
+            .docs
+            .as_mut()
+            .expect("documented fixture has docs")
+            .coverage_exceptions
+            .insert(
+                "rust".into(),
+                crate::e2e::fixture::SnippetCoverageException {
+                    reason: "the sample backend cannot express this recipe".into(),
+                    documentation: "docs/limitations.md".into(),
+                },
+            );
+        let leaking_body = "let url = std::env::var(\"MOCK_SERVER_URL\").unwrap();";
+
+        let error = snippet_report_for(fixture, &["rust"], leaking_body)
+            .expect_err("a coverage exception must not absorb a guard rejection");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("rejected by the mock-harness guard"),
+            "the exception silently absorbed the rejection: {message}"
+        );
+        assert!(
+            message.contains("cannot retire a guard rejection"),
+            "the failure must explain why the exception did not apply: {message}"
+        );
+    }
+
+    /// Positive control: the guard is armed on the same path, so a clean body must still ~keep
+    /// render. Without this, making the guard reject everything would pass the test above.
+    #[test]
+    fn a_clean_snippet_still_renders_while_the_guard_is_armed() {
+        let clean_body =
+            "let api_key = std::env::var(\"API_KEY\").unwrap();\nlet client = sample::create_client(api_key)?;";
+
+        let report =
+            snippet_report_for(documented_fixture(), &["rust"], clean_body).expect("a clean snippet must still render");
+
+        assert!(report.guard_rejections.is_empty());
+        assert!(report.coverage.missing.is_empty());
+        assert_eq!(report.coverage.generated, report.coverage.expected);
+        assert_eq!(report.snippets.len(), 1);
+        assert!(
+            report.snippets[0]
+                .file
+                .content
+                .contains("sample::create_client(api_key)?")
+        );
     }
 
     #[test]

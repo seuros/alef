@@ -81,13 +81,14 @@ pub(super) fn render_snippet_body(
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
     let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
+    let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
     Ok(crate::e2e::template_env::render(
         "ruby/snippet_body.jinja",
         minijinja::context! {
             require_path => require_path, receiver => receiver, setup_lines => setup_lines, client_factory => client_factory,
             call_receiver => call_receiver, function => function, args => args, result_var => call.result_var,
             returns_void => call.returns_void, is_streaming => is_streaming,
-            expects_error => expects_error, presentation => presentation,
+            expects_error => expects_error, presentation => presentation, api_key_var => api_key_var,
         },
     ))
 }
@@ -181,6 +182,55 @@ mod tests {
             ..ResolvedCrateConfig::default()
         };
         render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders")
+    }
+
+    /// Ruby was the one client-constructing backend with no credential-pinning test at all,
+    /// so nothing prevented its snippet from either leaking harness scaffolding or inlining
+    /// a literal. It now follows java/csharp/kotlin/php and reads `env.api_key_var`.
+    #[test]
+    fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.module = "sample".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "ruby".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
+
+        assert!(!body.contains("MOCK_SERVER"), "mock-server env var leaked:\n{body}");
+        assert!(
+            !body.contains("/fixtures/rate_limit_429"),
+            "mock-server fixture route leaked:\n{body}"
+        );
+        assert!(!body.contains("'test-key'"), "literal credential leaked:\n{body}");
+        assert!(!body.contains("\"test-key\""), "literal credential leaked:\n{body}");
+        assert!(
+            !body.contains("your-api-key"),
+            "credential is inlined rather than read from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("api_key = ENV.fetch(\"API_KEY\")"),
+            "snippet does not read the credential from the environment:\n{body}"
+        );
+        assert!(
+            body.contains("client = Sample.create_client(api_key)"),
+            "client is not constructed from the environment-read credential:\n{body}"
+        );
     }
 
     #[test]

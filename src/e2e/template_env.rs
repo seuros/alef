@@ -835,3 +835,136 @@ mod template_registration_tests {
         }
     }
 }
+
+/// A synthetic assertion is appended to the output with a bare `push_str`, so the template
+/// — not the caller — owns its line terminator. `trim_blocks` already eats the newline that
+/// follows a block tag, so a branch that also closes with `{%- endif %}` renders a bare
+/// fragment with no newline at either end, and whatever the next emitter writes lands on the
+/// same physical line. That is harmless between two statements and destructive after a
+/// comment, which swallows the statement that follows it. Observed in a downstream consumer's
+/// generated PHP smoke suite, where two skip comments shared one physical line.
+#[cfg(test)]
+mod synthetic_assertion_line_discipline {
+    use super::render;
+
+    const KIND_KEYED_TEMPLATES: [&str; 3] = [
+        "php/synthetic_assertion.jinja",
+        "java/synthetic_assertion.jinja",
+        "r/synthetic_assertion.jinja",
+    ];
+
+    fn skip_comment(template: &str) -> String {
+        if template == "typescript/synthetic_assertion.jinja" {
+            return render(
+                template,
+                minijinja::context! {
+                    assertion_type => "unsupported_by_this_backend",
+                    field_name => "metadata.format.excel.sheet_count",
+                },
+            );
+        }
+        render(
+            template,
+            minijinja::context! {
+                assertion_kind => "skipped",
+                assertion_type => "unsupported_by_this_backend",
+                field_name => "metadata.format.excel.sheet_count",
+            },
+        )
+    }
+
+    fn every_template() -> Vec<&'static str> {
+        let mut templates = KIND_KEYED_TEMPLATES.to_vec();
+        templates.push("typescript/synthetic_assertion.jinja");
+        templates
+    }
+
+    #[test]
+    fn a_skip_comment_terminates_its_own_line() {
+        for template in every_template() {
+            let rendered = skip_comment(template);
+            assert!(
+                rendered.contains("skipped:"),
+                "{template} rendered no skip comment: {rendered:?}"
+            );
+            assert!(
+                rendered.ends_with('\n'),
+                "{template} left its comment unterminated: {rendered:?}"
+            );
+            assert_eq!(
+                rendered.matches('\n').count(),
+                1,
+                "{template} did not render exactly one line: {rendered:?}"
+            );
+        }
+    }
+
+    /// The defect is *concatenation*, so the assertion has to be made on two appended
+    /// renders. Checking a single render in isolation is the vacuous version of this test:
+    /// it passes whether or not the fragment can collide with its successor.
+    #[test]
+    fn two_appended_skip_comments_do_not_share_a_physical_line() {
+        for template in every_template() {
+            let mut out = String::new();
+            out.push_str(&skip_comment(template));
+            out.push_str(&skip_comment(template));
+            assert_eq!(
+                out.lines().count(),
+                2,
+                "{template} merged two appended assertions onto one line: {out:?}"
+            );
+        }
+    }
+
+    /// Positive control: the branches that emit real code must still emit it, unchanged
+    /// apart from now owning their terminator.
+    #[test]
+    fn a_rendered_assertion_still_emits_its_statement_on_one_line() {
+        let php = render(
+            "php/synthetic_assertion.jinja",
+            minijinja::context! {
+                assertion_kind => "chunks_content",
+                assertion_type => "is_true",
+                pred => "$carry",
+                field_name => "chunks_have_content",
+            },
+        );
+        assert_eq!(php, "        $this->assertTrue($carry);\n");
+
+        let java = render(
+            "java/synthetic_assertion.jinja",
+            minijinja::context! {
+                assertion_kind => "chunks_content",
+                assertion_type => "is_true",
+                pred => "carry",
+                field_name => "chunks_have_content",
+            },
+        );
+        assert_eq!(java, "        assertTrue(carry, \"expected true\");\n");
+    }
+
+    /// A statement followed by a comment is the destructive ordering: without a terminator
+    /// the comment starts on the statement's line, and every later emitter is commented out.
+    #[test]
+    fn a_comment_appended_after_a_statement_starts_its_own_line() {
+        let mut out = String::new();
+        out.push_str(&render(
+            "php/synthetic_assertion.jinja",
+            minijinja::context! {
+                assertion_kind => "chunks_content",
+                assertion_type => "is_true",
+                pred => "$carry",
+                field_name => "chunks_have_content",
+            },
+        ));
+        out.push_str(&skip_comment("php/synthetic_assertion.jinja"));
+
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 2, "statement and comment shared a line: {out:?}");
+        assert!(!lines[0].contains("//"), "the statement was commented out: {out:?}");
+        assert!(
+            lines[1].trim_start().starts_with("//"),
+            "unexpected second line: {out:?}"
+        );
+    }
+}

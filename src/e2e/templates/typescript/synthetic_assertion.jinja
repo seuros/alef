@@ -12,21 +12,21 @@
 {%- if assertion_type == "is_true" or assertion_type == "is_false" %}
 {%- if assertion_type == "is_true" %}
     expect({{ pred }}).toBe(true);
-{%- else %}
+{% else %}
     expect({{ pred }}).toBe(false);
-{%- endif %}
-{%- elif assertion_type == "count_equals" %}
+{% endif %}
+{% elif assertion_type == "count_equals" %}
     expect({{ result_var }}.length).toBe({{ js_val }});
-{%- elif assertion_type == "count_min" %}
+{% elif assertion_type == "count_min" %}
     expect({{ result_var }}.length).toBeGreaterThanOrEqual({{ js_val }});
-{%- elif assertion_type == "not_empty" %}
+{% elif assertion_type == "not_empty" %}
     expect({{ result_var }}.length).toBeGreaterThan(0);
-{%- elif assertion_type == "is_empty" %}
+{% elif assertion_type == "is_empty" %}
     expect({{ result_var }}.length).toBe(0);
-{%- elif assertion_type == "equals" %}
+{% elif assertion_type == "equals" %}
     expect({{ expr }}).toBe({{ js_val }});
-{%- elif assertion_type == "greater_than" %}
+{% elif assertion_type == "greater_than" %}
     expect({{ expr }}).toBeGreaterThan({{ js_val }});
-{%- else %}
+{% else %}
     // skipped: unsupported assertion type on synthetic field '{{ field_name }}'
-{%- endif %}
+{% endif %}

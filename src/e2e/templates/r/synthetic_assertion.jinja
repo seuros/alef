@@ -13,35 +13,35 @@
 {%- if assertion_kind == "bool_pred" %}
 {%- if assertion_type == "is_true" %}
 expect_true({{ pred }})
-{%- elif assertion_type == "is_false" %}
+{% elif assertion_type == "is_false" %}
 expect_false({{ pred }})
-{%- else %}
+{% else %}
 # skipped: unsupported assertion type on synthetic field '{{ field_name }}'
-{%- endif %}
-{%- elif assertion_kind == "embeddings" %}
+{% endif %}
+{% elif assertion_kind == "embeddings" %}
 {%- if assertion_type == "count_equals" %}
 expect_equal(length({{ result_var }}), {{ r_val }})
-{%- elif assertion_type == "count_min" %}
+{% elif assertion_type == "count_min" %}
 expect_gte(length({{ result_var }}), {{ r_val }})
-{%- elif assertion_type == "not_empty" %}
+{% elif assertion_type == "not_empty" %}
 expect_gt(length({{ result_var }}), 0)
-{%- elif assertion_type == "is_empty" %}
+{% elif assertion_type == "is_empty" %}
 expect_equal(length({{ result_var }}), 0)
-{%- else %}
+{% else %}
 # skipped: unsupported assertion type on synthetic field 'embeddings'
-{%- endif %}
-{%- elif assertion_kind == "embedding_dimensions" %}
+{% endif %}
+{% elif assertion_kind == "embedding_dimensions" %}
 {%- if assertion_type == "equals" %}
 expect_equal({{ expr }}, {{ r_val }})
-{%- elif assertion_type == "greater_than" %}
+{% elif assertion_type == "greater_than" %}
 expect_gt({{ expr }}, {{ r_val }})
-{%- else %}
+{% else %}
 # skipped: unsupported assertion type on synthetic field 'embedding_dimensions'
-{%- endif %}
-{%- elif assertion_kind == "keywords" %}
+{% endif %}
+{% elif assertion_kind == "keywords" %}
 # skipped: field '{{ field_name }}' not available on R result type
-{%- elif assertion_kind == "skipped" %}
+{% elif assertion_kind == "skipped" %}
 # skipped: field '{{ field_name }}' not available on result type
-{%- elif assertion_kind == "result_is_simple" %}
+{% elif assertion_kind == "result_is_simple" %}
 # skipped: result_is_simple for field '{{ field_name }}' not available on result type
-{%- endif %}
+{% endif %}
