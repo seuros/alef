@@ -4,7 +4,7 @@ use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::scaffold::naming::python_pip_name;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance,
+    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance_for_crate,
     scaffold::render_extra_deps, scaffold::scaffold_meta, scaffold::to_pep440,
 };
 use std::path::PathBuf;
@@ -89,7 +89,8 @@ pub(crate) fn scaffold_python_cargo(
     let version = &api.version;
     let module_name = config.python_module_name();
     let core_crate_dir = config.core_crate_dir();
-    let ws = detect_workspace_inheritance(config.workspace_root.as_deref());
+    let crate_dir = format!("crates/{core_crate_dir}-py");
+    let ws = detect_workspace_inheritance_for_crate(config.workspace_root.as_deref(), &crate_dir);
     let pkg_header = cargo_package_header(&format!("{core_crate_dir}-py"), version, "2024", &meta, &ws);
 
     let extra_deps = render_extra_deps(config, Language::Python);

@@ -96,3 +96,4 @@ mod language_swift_kotlin_gleam_zig;
 mod licenses;
 mod poly;
 mod python_node;
+mod workspace_inheritance;

@@ -3,7 +3,7 @@ use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance,
+    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance_for_crate,
     scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
 use std::collections::HashSet;
@@ -17,7 +17,8 @@ pub(crate) fn scaffold_ruby_cargo(
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
     let pkg_dir = config.package_dir(Language::Ruby);
-    let ws = detect_workspace_inheritance(config.workspace_root.as_deref());
+    let native_crate_dir = format!("{pkg_dir}/ext/{}_rb/native", core_crate_dir.replace('-', "_"));
+    let ws = detect_workspace_inheritance_for_crate(config.workspace_root.as_deref(), &native_crate_dir);
     let pkg_header = cargo_package_header(&format!("{core_crate_dir}-rb"), version, "2024", &meta, &ws);
 
     let extra_deps = render_extra_deps(config, Language::Ruby);

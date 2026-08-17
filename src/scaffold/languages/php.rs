@@ -4,7 +4,7 @@ use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::detect_workspace_inheritance, scaffold::render_extra_deps,
+    scaffold::cargo_package_header, scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps,
     scaffold::scaffold_meta,
 };
 use anyhow::Context as _;
@@ -144,7 +144,8 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
     let meta = scaffold_meta(config);
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
-    let ws = detect_workspace_inheritance(config.workspace_root.as_deref());
+    let crate_dir = format!("crates/{core_crate_dir}-php");
+    let ws = detect_workspace_inheritance_for_crate(config.workspace_root.as_deref(), &crate_dir);
     let pkg_header = cargo_package_header(&format!("{core_crate_dir}-php"), version, "2024", &meta, &ws);
 
     let extra_deps = render_extra_deps(config, Language::Php);

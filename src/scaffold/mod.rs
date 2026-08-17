@@ -21,7 +21,7 @@ pub(crate) use languages::{
 };
 
 /// Fields available via `[workspace.package]` inheritance detected from the root `Cargo.toml`.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct WorkspacePackageInheritance {
     /// `version` is declared in `[workspace.package]`.
     pub version: bool,
@@ -63,6 +63,85 @@ pub(crate) fn detect_workspace_inheritance(workspace_root: Option<&std::path::Pa
         categories: pkg.map(|p| p.get("categories").is_some()).unwrap_or(false),
         license: pkg.map(|p| p.get("license").is_some()).unwrap_or(false),
     }
+}
+
+/// The `[workspace.package]` inheritance fields declared by the `Cargo.toml` at `dir`,
+/// or `None` when the file is missing/unparseable, has no `[workspace]` table at all, or
+/// has a `[workspace]` table with no `[workspace.package]` (an empty self-hosted
+/// workspace root — a generated crate may declare a bare `[workspace]` to isolate itself
+/// from an outer workspace's resolver without ever declaring its own inheritable fields;
+/// that root still cannot satisfy `<field>.workspace = true`). ~keep
+fn read_workspace_package_fields(dir: &std::path::Path) -> Option<WorkspacePackageInheritance> {
+    let contents = std::fs::read_to_string(dir.join("Cargo.toml")).ok()?;
+    let doc = toml::from_str::<toml::Value>(&contents).ok()?;
+    let pkg = doc.get("workspace")?.get("package")?;
+    Some(WorkspacePackageInheritance {
+        version: pkg.get("version").is_some(),
+        readme: pkg.get("readme").is_some(),
+        keywords: pkg.get("keywords").is_some(),
+        categories: pkg.get("categories").is_some(),
+        license: pkg.get("license").is_some(),
+    })
+}
+
+/// True when `crate_relative_dir` (forward-slash, relative to the workspace root) is
+/// named in `root_doc`'s `[workspace] exclude` list — an exact match or a match against
+/// an ancestor directory entry. This is not a full implementation of Cargo's
+/// gitignore-style workspace-exclude glob syntax; it is sufficient for the literal
+/// directory paths alef's own `exclude` generators, and every observed consumer
+/// `Cargo.toml`, actually write to this list (no wildcards). ~keep
+fn crate_dir_is_excluded(root_doc: &toml::Value, crate_relative_dir: &str) -> bool {
+    let Some(excludes) = root_doc
+        .get("workspace")
+        .and_then(|w| w.get("exclude"))
+        .and_then(|e| e.as_array())
+    else {
+        return false;
+    };
+    let normalized = crate_relative_dir.trim_matches('/');
+    excludes.iter().filter_map(|entry| entry.as_str()).any(|pattern| {
+        let pattern = pattern.trim_matches('/');
+        normalized == pattern || normalized.starts_with(&format!("{pattern}/"))
+    })
+}
+
+/// Detect which `[workspace.package]` fields a *specific* generated crate can actually
+/// reach, unlike [`detect_workspace_inheritance`] (kept for callers that only ever emit
+/// into a crate directory that is unconditionally a member of the root workspace).
+///
+/// A crate can inherit a field only if it can reach a `[workspace.package]` that defines
+/// it:
+/// - `crate_relative_dir` is a member of the workspace rooted at `workspace_root` — i.e.
+///   not named in that root's `[workspace] exclude` — and that root declares the field
+///   under `[workspace.package]`; or
+/// - the crate's own pre-existing manifest at `<workspace_root>/<crate_relative_dir>/Cargo.toml`
+///   self-hosts a `[workspace.package]` that defines the field (it declares its own
+///   `[workspace]` table, making it its own workspace root).
+///
+/// Neither holding means every field is reported absent, so [`cargo_package_header`]
+/// falls back to literals — the alternative, blindly trusting the root's
+/// `[workspace.package]` regardless of exclusion, emits `<field>.workspace = true` into a
+/// manifest that can never resolve it, which fails `cargo metadata` outright for any
+/// crate excluded from the root workspace (Elixir NIF / Ruby native-extension crates are
+/// excluded so their own toolchain, not the root workspace's resolver, builds them). ~keep
+pub(crate) fn detect_workspace_inheritance_for_crate(
+    workspace_root: Option<&std::path::Path>,
+    crate_relative_dir: &str,
+) -> WorkspacePackageInheritance {
+    let Some(root) = workspace_root else {
+        return WorkspacePackageInheritance::default();
+    };
+    let root_reaches = std::fs::read_to_string(root.join("Cargo.toml"))
+        .ok()
+        .and_then(|contents| toml::from_str::<toml::Value>(&contents).ok())
+        .filter(|doc| doc.get("workspace").is_some())
+        .is_some_and(|doc| !crate_dir_is_excluded(&doc, crate_relative_dir));
+    if root_reaches {
+        if let Some(inheritance) = read_workspace_package_fields(root) {
+            return inheritance;
+        }
+    }
+    read_workspace_package_fields(&root.join(crate_relative_dir)).unwrap_or_default()
 }
 
 /// Build the `[package]` header fields for a binding crate Cargo.toml.
@@ -378,6 +457,55 @@ pub(crate) fn render_workspace_dep_or(config: &ResolvedCrateConfig, name: &str, 
     }
 }
 
+/// Rationale comment stamped immediately above every generated `[lints.clippy]` block
+/// this module or its `scaffold::languages::*` callers emit, explaining why the crate
+/// does not simply carry `[lints]\nworkspace = true` instead.
+///
+/// Baked into the generator rather than left for a consumer to hand-add, because these
+/// binding-crate manifests (`crates/*-ffi`, `*-jni`, `*-node`, `*-php`, `*-py`,
+/// `packages/r/**`, the Elixir NIF, the Ruby native extension) are `generated_header:
+/// true` and rewritten in full whenever their content differs from what is on disk —
+/// there is no comment-preserving merge for them the way [`merge_managed_toml`] exists
+/// for `poly.toml`. A `~keep` marker only protects a comment from poly's own uncomment
+/// pass; it does nothing against this full-file regeneration. The only comment that
+/// reliably survives here is one alef itself emits on every run, which is what this
+/// constant is for. `unsafe_code = "deny"` at `[workspace.lints.rust]` is the concrete
+/// reason `[lints]\nworkspace = true` cannot be used: these crates cross a C-ABI / PyO3 /
+/// napi / ext-php-rs / NIF boundary that requires `unsafe`, and that table is
+/// all-or-nothing. ~keep
+const CLIPPY_WORKSPACE_LINTS_RATIONALE: &str = "\
+# This crate deliberately does not use `[lints]` / `workspace = true`: its C-ABI / \n\
+# PyO3 / napi / ext-php-rs / NIF boundary requires `unsafe` code, and the workspace's \n\
+# `[workspace.lints.rust]` sets `unsafe_code = \"deny\"` -- an all-or-nothing table that \n\
+# would turn every such boundary into a compile error. The `[lints.clippy]` block below \n\
+# instead carries the subset of the workspace's deny-by-default lint policy this crate \n\
+# can actually satisfy.";
+
+/// Insert [`CLIPPY_WORKSPACE_LINTS_RATIONALE`] immediately above the first
+/// `[lints.clippy]` header in `rendered` (which may also carry a preceding
+/// `[lints.rust]` table). A no-op if `rendered` carries no `[lints.clippy]` header at
+/// all, which [`CargoLintsConfig::render`]/[`CargoLintsConfig::clippy_block`] never
+/// actually produce (the builtin deny defaults guarantee one), but this function does
+/// not assume that invariant on its caller's behalf.
+fn with_clippy_rationale(rendered: &str) -> String {
+    match rendered.find("[lints.clippy]") {
+        Some(index) => {
+            let (before, from_header) = rendered.split_at(index);
+            format!("{before}{CLIPPY_WORKSPACE_LINTS_RATIONALE}\n{from_header}")
+        }
+        None => rendered.to_string(),
+    }
+}
+
+/// Like [`CargoLintsConfig::clippy_block`] but with [`CLIPPY_WORKSPACE_LINTS_RATIONALE`]
+/// spliced in immediately above the `[lints.clippy]` header, for callers (e.g. the
+/// Elixir NIF template) that build their own `[lints.rust]` table by hand and only pull
+/// the clippy table from [`CargoLintsConfig`] directly rather than going through
+/// [`cargo_lints_section`].
+pub(crate) fn cargo_lints_clippy_block_with_rationale(config: &ResolvedCrateConfig) -> String {
+    with_clippy_rationale(&config.cargo_lints.clippy_block())
+}
+
 ///
 /// Checks for per-language feature overrides first, then falls back to `[crate] features`.
 /// Returns an empty string if no features are configured, otherwise returns
@@ -391,7 +519,7 @@ pub(crate) fn render_workspace_dep_or(config: &ResolvedCrateConfig, name: &str, 
 /// blank-line-delimited `[lints.rust]` / `[lints.clippy]` block between them
 /// otherwise.
 pub(crate) fn cargo_lints_section(config: &ResolvedCrateConfig) -> String {
-    let rendered = config.cargo_lints.render();
+    let rendered = with_clippy_rationale(&config.cargo_lints.render());
     if rendered.is_empty() {
         String::new()
     } else {

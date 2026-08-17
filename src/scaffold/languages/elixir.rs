@@ -4,7 +4,7 @@ use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::{
     scaffold::capitalize_first, scaffold::cargo_package_header, scaffold::core_dep_features,
-    scaffold::detect_workspace_inheritance, scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
 use heck::{ToPascalCase, ToSnakeCase};
 use std::path::PathBuf;
@@ -20,7 +20,7 @@ pub(crate) fn scaffold_elixir_cargo(
     let core_crate_dir = config.core_crate_dir();
     let pkg_dir = config.package_dir(Language::Elixir);
     let native_crate_dir = format!("{pkg_dir}/native/{nif_name}");
-    let ws = detect_workspace_inheritance(config.workspace_root.as_deref());
+    let ws = detect_workspace_inheritance_for_crate(config.workspace_root.as_deref(), &native_crate_dir);
     let pkg_header = cargo_package_header(&nif_name, version, "2024", &meta, &ws);
 
     let extra_deps = render_extra_deps(config, Language::Elixir);
@@ -192,7 +192,7 @@ pub(crate) fn scaffold_elixir_cargo(
             "unexpected_cfgs = {{ level = \"warn\", check-cfg = ['cfg(feature, values({csv}))'] }}"
         )];
         rust_lines.extend(config.cargo_lints.extra_rust_lines(&["unexpected_cfgs"]));
-        let clippy_block = config.cargo_lints.clippy_block();
+        let clippy_block = crate::scaffold::cargo_lints_clippy_block_with_rationale(config);
         let clippy_section = if clippy_block.is_empty() {
             String::new()
         } else {
