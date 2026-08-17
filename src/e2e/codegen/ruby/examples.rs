@@ -265,8 +265,12 @@ pub(super) fn emit_chat_stream_assertion(
         ("tool_calls", Some(expr)) => (expr, Kind::Json),
         ("tool_calls[0].function.name", Some(expr)) => (expr, Kind::Str),
         ("usage.total_tokens", Some(expr)) => (expr, Kind::IntTokens),
-        ("stream_complete", None) => ("stream_complete".to_string(), Kind::Bool),
-        ("no_chunks_after_done", None) => ("stream_complete".to_string(), Kind::Bool),
+        // Match on the field alone: the resolver answers `Some` for both of these for every
+        // language, so a `None` pattern here is unreachable and silently dropped the assertion
+        // into the `Unsupported` arm. Ruby deliberately ignores the resolver's chunk expression
+        // and asserts the `stream_complete` local the spec body already maintains. ~keep
+        ("stream_complete", _) => ("stream_complete".to_string(), Kind::Bool),
+        ("no_chunks_after_done", _) => ("stream_complete".to_string(), Kind::Bool),
         _ => ("".to_string(), Kind::Unsupported),
     };
 
