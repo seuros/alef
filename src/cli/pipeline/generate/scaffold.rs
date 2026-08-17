@@ -317,8 +317,18 @@ pub fn write_scaffold_files_report(
                 // and the founding incident (`e2e/go/helpers_test.go`) is exactly that
                 // coincidence. Adoption is `alef adopt`'s job, with a diff and a human.
                 // See `super::write::stamp_for_adoption`. ~keep
-                let owned =
-                    has_marker || (!is_markable && crate::cli::cache::is_scaffold_owned_path(base_dir, &full_path));
+                //
+                // The snippet-coverage ledger is the one narrow exception: it is strict
+                // JSON (never markable) and its dotfile name has no meaning to anything but
+                // alef's own bookkeeping, so a pre-existing, unrecorded copy is trusted by
+                // name alone instead of being permanently refused for want of a record that
+                // could only ever have been created by a write this same guard forever
+                // blocks. See `e2e::snippets::is_snippet_coverage_manifest_path`'s doc for
+                // why this is not widened into a general filename allowlist. ~keep
+                let owned = has_marker
+                    || (!is_markable
+                        && (crate::cli::cache::is_scaffold_owned_path(base_dir, &full_path)
+                            || crate::e2e::snippets::is_snippet_coverage_manifest_path(&full_path)));
                 if !owned {
                     warn!(
                         "refusing to write {}: pre-existing file carries no alef marker and \

@@ -33,6 +33,33 @@ pub struct GeneratedSnippet {
 pub const COVERAGE_MANIFEST: &str = ".alef-snippet-coverage.json";
 pub const COVERAGE_MANIFEST_VERSION: u32 = 2;
 
+/// True when `path`'s file name is alef's own snippet-coverage ledger.
+///
+/// The ledger is strict JSON, so it can never carry an `alef:hash:` provenance marker, and
+/// `write_scaffold_files_report`'s write-time ownership guard falls back to the committed
+/// `.alef-ownership.toml` record for exactly that reason. That record is populated by the
+/// guard itself the first time it *creates* a path, but a ledger written before this
+/// mechanism existed — or one whose only prior writes happened to leave content
+/// byte-identical to disk, which records nothing by design (byte-equality is never proof of
+/// authorship) — reaches this guard already `exists()` and unrecorded, and is refused
+/// forever: refusing means the write never happens, so the record that would unblock the
+/// *next* write is never established either.
+///
+/// This is deliberately not folded into a general "unmarkable extension" filename
+/// allowlist the way `orphans.rs`'s `UNMARKABLE_ALEF_MANIFESTS` covers
+/// `composer.json`/`package.json` for orphan reclaim: those names a human plausibly authors
+/// independently of alef, so trusting the name alone there would risk silently overwriting
+/// hand-written content. This ledger's dotfile name has no meaning or use to anything but
+/// alef's own coverage bookkeeping — nothing else ever reads or writes it — so a name match
+/// here is sufficient proof of exclusive alef authorship without weakening the guard's
+/// protection for any other path. Consulted from
+/// `cli::pipeline::generate::scaffold::write_scaffold_files_report`'s ownership check; once
+/// it lets the write through once, the guard's own write-time registration records the path
+/// durably and this predicate is never needed again for that tree. ~keep
+pub fn is_snippet_coverage_manifest_path(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(COVERAGE_MANIFEST)
+}
+
 /// Requirement namespace for a Cargo crate a generated Rust snippet body names directly. ~keep
 /// The Rust snippet validator resolves these into `[dependencies]` of the check project.
 pub const CRATE_REQUIREMENT_PREFIX: &str = "crate:";
@@ -868,6 +895,22 @@ fn parse_language(value: &str) -> Option<DocumentationLanguage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn is_snippet_coverage_manifest_path_matches_only_the_exact_ledger_name() {
+        assert!(is_snippet_coverage_manifest_path(Path::new(
+            "docs/snippets/.alef-snippet-coverage.json"
+        )));
+        assert!(is_snippet_coverage_manifest_path(Path::new(COVERAGE_MANIFEST)));
+        assert!(
+            !is_snippet_coverage_manifest_path(Path::new("docs/snippets/.alef-snippet-coverage.json.bak")),
+            "a name that merely contains the ledger name must not match"
+        );
+        assert!(
+            !is_snippet_coverage_manifest_path(Path::new("packages/php/composer.json")),
+            "an unrelated unmarkable manifest must not match"
+        );
+    }
 
     /// The provenance block `docs::render::with_html_header` prepends to every snippet,
     /// spelled out literally so the whole-document assertions below stay whole-document.

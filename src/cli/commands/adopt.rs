@@ -86,12 +86,15 @@ pub struct ManagedOutput {
     pub content: String,
     /// True when alef emits this path **only if it is absent** — a create-once seed.
     ///
-    /// Taken from [`crate::core::backend::GeneratedFile::carries_alef_marker`] (the flag
-    /// or a self-marker in the content), never from sniffing the processed `content`
-    /// above. Sniffing would misclassify every `generated_header: true` path whose format
+    /// Computed by [`is_create_once_seed`] from
+    /// [`crate::core::backend::GeneratedFile::carries_alef_marker`] (the flag or a
+    /// self-marker in the content), never from sniffing the processed `content` above.
+    /// Sniffing would misclassify every `generated_header: true` path whose format
     /// cannot hold a marker (`.json`, `.jar`, `DESCRIPTION`) as a seed, when those are
     /// squarely on the regeneration rail and prove ownership through the committed
-    /// record instead. ~keep
+    /// record instead. The one deliberate carve-out from the marker check is the
+    /// snippet-coverage ledger, which the marker check alone cannot distinguish from a
+    /// human-grown seed — see [`is_create_once_seed`]. ~keep
     pub create_once: bool,
 }
 
@@ -208,6 +211,24 @@ impl AdoptReport {
     }
 }
 
+/// Whether alef emits `file` only when its path is absent on disk — a create-once seed
+/// subject to [`AdoptOptions::clobber_create_once_seeds`].
+///
+/// [`crate::core::backend::GeneratedFile::carries_alef_marker`] answers this correctly
+/// for every ordinary generated path, but the snippet-coverage ledger
+/// (`e2e::snippets::COVERAGE_MANIFEST`) is strict JSON — it can never carry the marker —
+/// and is emitted with `generated_header: false` regardless, so the marker check alone
+/// misreads it as a human-grown seed. It is the opposite: pure derived output (a
+/// `generated_paths` array) that nothing but alef ever writes or reads.
+/// `is_snippet_coverage_manifest_path` is the same narrow, name-based ownership proof
+/// `write_scaffold_files_report`'s write-time guard already trusts for this exact file
+/// (see its doc for why a name match is sufficient there and not elsewhere); reusing it
+/// here instead of re-deriving a second exclusion keeps the two ownership checks from
+/// drifting apart. ~keep
+fn is_create_once_seed(file: &crate::core::backend::GeneratedFile) -> bool {
+    !file.carries_alef_marker() && !crate::e2e::snippets::is_snippet_coverage_manifest_path(&file.path)
+}
+
 /// Apply the writer's own normalization and header logic to a generated-file set,
 /// yielding the exact bytes `write_files_report` / `write_scaffold_files_report` would
 /// place on disk.
@@ -230,7 +251,7 @@ pub fn managed_outputs(files: &[crate::core::backend::GeneratedFile], base_dir: 
             ManagedOutput {
                 relative: file.path.clone(),
                 content,
-                create_once: !file.carries_alef_marker(),
+                create_once: is_create_once_seed(file),
             }
         })
         .collect()

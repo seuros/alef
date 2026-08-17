@@ -1833,6 +1833,86 @@ mod scaffold_ownership_guard_tests {
             report.refused_paths
         );
     }
+
+    /// The snippet-coverage ledger's exact failing sequence (alef bug report): a
+    /// pre-existing, unrecorded copy of `.alef-snippet-coverage.json` — the shape every
+    /// consumer tree is actually in, since the ledger predates write-time registration or
+    /// its only prior writes happened to leave content unchanged, which records nothing by
+    /// design (see `converged_unmarked_file_does_not_acquire_an_ownership_record` for that
+    /// half) — must still accept a write with different content, not be refused forever like
+    /// an ordinary unmarkable manifest at an unrecorded path would be.
+    #[test]
+    fn snippet_coverage_ledger_write_succeeds_without_a_prior_ownership_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("docs/snippets/.alef-snippet-coverage.json");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let stale = "{\n  \"expected\": [],\n  \"generated\": []\n}\n";
+        std::fs::write(&target, stale).expect("seed stale, unrecorded ledger");
+        assert!(
+            !crate::cli::cache::is_scaffold_owned_path(base, &target),
+            "sanity: no ownership record exists for this path yet"
+        );
+
+        let fresh = "{\n  \"expected\": [\"a\"],\n  \"generated\": [\"a\"]\n}\n";
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: fresh.to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            fresh,
+            "the ledger must be rewritten with this run's freshly computed content"
+        );
+        assert_eq!(report.refused_count(), 0, "the ledger write must not be refused");
+        assert_eq!(report.changed_count(), 1);
+        assert!(
+            crate::cli::cache::is_scaffold_owned_path(base, &target),
+            "the write must durably register ownership so a future run needs no bootstrap help"
+        );
+    }
+
+    /// Counterpart to the ledger test above, pinning the guard's general behaviour is
+    /// unchanged: a genuinely hand-written file at a path alef has no record of ever
+    /// owning is still refused, even when its extension is unmarkable exactly like the
+    /// ledger's. The distinguishing signal is the ledger's own reserved name — see
+    /// `e2e::snippets::is_snippet_coverage_manifest_path` — never "any unmarkable JSON at an
+    /// unrecorded path", which would reopen the `composer.json`/`package.json` incident this
+    /// guard exists to prevent.
+    #[test]
+    fn unrelated_unmarkable_json_at_unrecorded_path_is_still_refused() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/php/composer.json");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        let hand_written = "{\n  \"name\": \"hand-written/never-alefs\"\n}\n";
+        std::fs::write(&target, hand_written).expect("seed hand-written manifest");
+
+        let generated = GeneratedFile {
+            path: target_relative,
+            content: "{\n  \"name\": \"alef-generated\"\n}\n".to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[generated], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            hand_written,
+            "a hand-written file at a path alef does not own must survive untouched"
+        );
+        assert_eq!(
+            report.refused_count(),
+            1,
+            "the write must be refused, not silently adopted"
+        );
+    }
 }
 
 #[cfg(test)]

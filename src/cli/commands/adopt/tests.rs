@@ -701,3 +701,84 @@ fn target_matching_only_absent_output_is_refused_with_generate_guidance() {
     );
     assert!(!base.join("crates/sample-ffi/Cargo.toml").exists());
 }
+
+/// THE regression this lane exists to fix: the snippet-coverage ledger
+/// (`e2e::snippets::COVERAGE_MANIFEST`) is strict JSON emitted with
+/// `generated_header: false`, so before this fix `carries_alef_marker()` alone
+/// classified it as a create-once seed and `alef adopt` refused it -- the exact loop
+/// this module's header documents as the blocker. It must not be create-once. ~keep
+#[test]
+fn the_snippet_coverage_ledger_is_not_a_create_once_seed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let relative = Path::new("docs/snippets").join(crate::e2e::snippets::COVERAGE_MANIFEST);
+    let outputs = managed_outputs(
+        &[GeneratedFile {
+            path: relative,
+            content: "{\n  \"format_version\": 2,\n  \"generated_paths\": []\n}\n".to_owned(),
+            generated_header: false,
+        }],
+        base,
+    );
+
+    assert_eq!(outputs.len(), 1);
+    assert!(
+        !outputs[0].create_once,
+        "the coverage ledger is pure derived output alef owns outright, not a human-grown seed"
+    );
+}
+
+/// NEGATIVE CONTROL: the ledger exclusion must be scoped to its own name, not widen the
+/// create-once guard in general. An ordinary `generated_header: false` seed (the zig
+/// test placeholder from `mixed_rail_fixture`) must still classify as create-once. ~keep
+#[test]
+fn a_genuine_create_once_seed_is_still_classified_as_create_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let outputs = managed(
+        "packages/zig/test/liter_llm_test.zig",
+        PLACEHOLDER_ZIG_SEED,
+        false,
+        dir.path(),
+    );
+
+    assert!(
+        outputs[0].create_once,
+        "a genuine human-grown seed must remain create-once, or --clobber-create-once-seeds \
+         stops protecting anything"
+    );
+}
+
+/// End-to-end: `alef adopt` must not refuse the ledger under a plain `--write`, with no
+/// `--clobber-create-once-seeds` escape hatch needed. This is the other half of the fix
+/// this module's header documents -- the write-time ownership guard alone does not
+/// unblock a regeneration while the adopt path still treats the ledger as create-once. ~keep
+#[test]
+fn adopt_does_not_refuse_the_snippet_coverage_ledger() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    let relative = Path::new("docs/snippets").join(crate::e2e::snippets::COVERAGE_MANIFEST);
+    let on_disk = "{\n  \"format_version\": 2,\n  \"generated_paths\": [\"a\"]\n}\n";
+    seed(base, relative.to_str().expect("utf8 path"), on_disk);
+    let generated = "{\n  \"format_version\": 2,\n  \"generated_paths\": [\"a\", \"b\"]\n}\n";
+    let outputs = managed_outputs(
+        &[GeneratedFile {
+            path: relative.clone(),
+            content: generated.to_owned(),
+            generated_header: false,
+        }],
+        base,
+    );
+
+    let report = run(&options(base, relative.to_str().expect("utf8 path"), true), &outputs).expect("adopt");
+
+    assert!(
+        report.skipped_create_once.is_empty(),
+        "the ledger must never be excluded as a create-once seed: {:?}",
+        report.skipped_create_once
+    );
+    assert_eq!(
+        report.adopted,
+        vec![relative],
+        "the ledger must be adopted under a plain --write, no clobber flag needed"
+    );
+}
