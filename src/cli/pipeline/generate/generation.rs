@@ -27,6 +27,13 @@ pub fn generate(
 ) -> anyhow::Result<Vec<(Language, Vec<GeneratedFile>)>> {
     let validated_api = validate_generation_api(api, config, languages)?;
 
+    // Every host-language backend derives its error dispatch from the same explicit
+    // `#[alef(error_code = N)]` taxonomy (see `ApiSurface::validate_error_taxonomy`), not just
+    // FFI's. Checking it once here — instead of only inside `FfiBackend::generate_bindings` —
+    // means a duplicate or reserved-domain (0-4) error code is a generation-time failure even
+    // for a `languages` list that omits `"ffi"`. ~keep
+    api.validate_error_taxonomy()?;
+
     let has_ffi = languages.contains(&Language::Ffi);
     for &lang in languages {
         if (lang == Language::Go || lang == Language::Java || lang == Language::Csharp) && !has_ffi {
