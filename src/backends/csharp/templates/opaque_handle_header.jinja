@@ -42,14 +42,6 @@ internal sealed class {{ class_name }}SafeHandle : SafeHandle
 
     internal static ulong Unpack(IntPtr value) => unchecked((ulong)(long)value);
 
-{% if has_consuming_methods %}
-    internal void Invalidate()
-    {
-        SetHandle(IntPtr.Zero);
-        SetHandleAsInvalid();
-    }
-
-{% endif %}
     protected override bool ReleaseHandle()
     {
         NativeMethods.{{ free_method }}(Unpack(handle));

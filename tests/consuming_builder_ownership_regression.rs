@@ -241,9 +241,15 @@ fn csharp_invalidates_the_consumed_safe_handle_before_observing_result() {
         wrapper.contains("SetHandleAsInvalid"),
         "SafeHandle must support non-freeing invalidation: {wrapper}"
     );
+    // `SetHandleAsInvalid()` alone (no `SetHandle(IntPtr.Zero)` needed) stops the CLR from ever
+    // calling `ReleaseHandle()` on a transferred-away SafeHandle, so no raw pointer zeroing is
+    // required to prevent a double free. Access is instead blocked one level up, before any
+    // native handle read: `ThrowIfHandleUnavailable()` gates every read behind `_handleUnavailable`
+    // (set inside `TakeHandle()`'s lock, before the transfer is even handed to the caller). ~keep
     assert!(
-        wrapper.contains("SetHandle(IntPtr.Zero)"),
-        "the consumed wrapper must not expose its stale native handle: {wrapper}"
+        wrapper.contains("        if (_handleUnavailable || _safeHandle.IsClosed || _safeHandle.IsInvalid)"),
+        "the consumed wrapper must gate handle access behind _handleUnavailable instead of \
+         exposing its stale native handle: {wrapper}"
     );
     assert!(
         native_call < invalidate,
@@ -252,6 +258,39 @@ fn csharp_invalidates_the_consumed_safe_handle_before_observing_result() {
     assert!(
         invalidate < error_check,
         "an error after native consumption must not retain the old owner: {method}"
+    );
+}
+
+/// The emitted `RouteBuilderSafeHandle` used to declare an `internal void Invalidate()` escape
+/// hatch with zero call sites -- the exact "zero call sites" shape that made `BorrowHandle`/
+/// `TakeHandle` themselves look like dead code before `2a91d92f0` wired them up. That escape
+/// hatch has been removed rather than left to invite the same mistake in reverse: someone
+/// later wiring a call to it and bypassing the lock-guarded `BorrowHandle`/`TakeHandle`/
+/// `Commit` machinery, reopening the race `2a91d92f0` closed. This pins the emitted handle
+/// class to the guarded mechanism only. ~keep
+#[test]
+fn csharp_safehandle_omits_bare_invalidate_and_keeps_only_the_guarded_mechanism() {
+    let files = CsharpBackend
+        .generate_bindings(&route_builder_api(), &config())
+        .expect("C# generation must succeed");
+    let wrapper = file_containing(&files, "RouteBuilder.cs");
+
+    assert!(
+        !wrapper.contains("Invalidate()"),
+        "the SafeHandle must not declare a bare Invalidate() escape hatch outside the \
+         lock-guarded BorrowHandle/TakeHandle/Commit machinery: {wrapper}"
+    );
+    assert!(
+        wrapper.contains("internal HandleLease BorrowHandle()"),
+        "the guarded borrow path must still be emitted: {wrapper}"
+    );
+    assert!(
+        wrapper.contains("private HandleTransfer TakeHandle()"),
+        "the guarded transfer path must still be emitted: {wrapper}"
+    );
+    assert!(
+        wrapper.contains("internal void Commit()"),
+        "the transfer must still commit through the guarded HandleTransfer type: {wrapper}"
     );
 }
 

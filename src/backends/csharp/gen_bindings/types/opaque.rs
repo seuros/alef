@@ -31,10 +31,6 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
         .iter()
         .any(|m| streaming_methods.contains(&m.name) && streaming_methods_meta.contains_key(&m.name));
     let has_methods = has_streaming || typ.methods.iter().any(|m| !streaming_methods.contains(&m.name));
-    let has_consuming_methods = typ
-        .methods
-        .iter()
-        .any(|method| method.receiver == Some(ReceiverKind::Owned));
     let uses_list = |tr: &TypeRef| -> bool {
         matches!(tr, TypeRef::Vec(_))
             || matches!(tr, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Vec(_)))
@@ -68,7 +64,6 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
             "needs_list": needs_list,
             "needs_async": needs_async,
             "needs_streaming": has_streaming,
-            "has_consuming_methods": has_consuming_methods,
             "doc": has_doc,
             "doc_lines": doc_lines,
         })),
