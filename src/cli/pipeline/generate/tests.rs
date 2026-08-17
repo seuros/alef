@@ -323,7 +323,7 @@ file_safety = { exclude = ["target/**"] }
             content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
             generated_header: true,
         };
-        write_scaffold_files_with_overwrite(&[generated.clone()], base, true).expect("first scaffold run");
+        write_scaffold_files_with_overwrite(std::slice::from_ref(&generated), base, true).expect("first scaffold run");
 
         std::fs::remove_dir_all(base.join(".alef")).ok();
         assert!(!base.join(".alef").exists(), "sanity: the machine-local cache is gone");

@@ -106,7 +106,7 @@ pub(super) fn render_snippet_body(
                 .and_then(|value| value.client_factory.as_deref())
         })
         .map(ToUpperCamelCase::to_upper_camel_case);
-    let client_args = render_client_factory_args(fixture, e2e_config, &call);
+    let client_args = render_client_factory_args(fixture, e2e_config, call);
     let namespace = overrides
         .and_then(|value| value.module.clone())
         .or_else(|| config.csharp.as_ref().and_then(|value| value.namespace.clone()))

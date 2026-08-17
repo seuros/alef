@@ -136,10 +136,8 @@ pub(crate) fn detect_workspace_inheritance_for_crate(
         .and_then(|contents| toml::from_str::<toml::Value>(&contents).ok())
         .filter(|doc| doc.get("workspace").is_some())
         .is_some_and(|doc| !crate_dir_is_excluded(&doc, crate_relative_dir));
-    if root_reaches {
-        if let Some(inheritance) = read_workspace_package_fields(root) {
-            return inheritance;
-        }
+    if root_reaches && let Some(inheritance) = read_workspace_package_fields(root) {
+        return inheritance;
     }
     read_workspace_package_fields(&root.join(crate_relative_dir)).unwrap_or_default()
 }

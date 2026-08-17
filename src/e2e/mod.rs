@@ -803,7 +803,7 @@ mod tests {
         assert!(
             files
                 .iter()
-                .any(|file| file.path == std::path::PathBuf::from("e2e/rust/Cargo.toml")),
+                .any(|file| file.path == *std::path::Path::new("e2e/rust/Cargo.toml")),
             "the `rust` backend's own e2e suite must survive an unrelated extension's failure: {files:?}"
         );
     }
