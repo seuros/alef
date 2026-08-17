@@ -1,10 +1,9 @@
-use crate::backends::php::gen_bindings::enum_helpers::{php_enum_case_value, sanitize_php_enum_case};
 use crate::backends::php::gen_bindings::functions::has_unsupported_static_params;
 use crate::backends::php::gen_bindings::php_types::{
-    php_phpdoc_type, php_phpdoc_type_fq, php_property_phpdoc, php_type, php_type_fq,
+    enum_aware_php_phpdoc_type, enum_aware_php_type, php_phpdoc_type_fq, php_property_phpdoc, php_type_fq,
 };
 use crate::backends::php::gen_bindings::types::{
-    flat_field_name, is_php_prop_scalar, is_tagged_data_enum, is_untagged_data_enum,
+    enum_constant_entries, flat_field_name, is_php_prop_scalar, is_tagged_data_enum, is_untagged_data_enum,
     php_field_can_be_constructor_param, ty_is_or_wraps_json, ty_references_untagged_data_enum,
 };
 use crate::backends::php::naming::php_autoload_namespace;
@@ -210,7 +209,7 @@ pub(super) fn generate_type_stubs(
                 for declaration in gen_kwargs_property_declarations(typ, &enum_names, serde_available) {
                     content.push_str(&declaration);
                 }
-                let params = gen_kwargs_constructor_stub_params(typ);
+                let params = gen_kwargs_constructor_stub_params(typ, &enum_names);
                 content.push_str(&crate::backends::php::template_env::render(
                     "php_constructor_method.jinja",
                     context! { params => &params.join(",\n") },
@@ -268,7 +267,7 @@ pub(super) fn generate_type_stubs(
                 // fields, regardless of the field's own optionality (structs.rs's getter body).
                 "?string".to_string()
             } else {
-                let ptype = php_type(&field.ty);
+                let ptype = enum_aware_php_type(&field.ty, &enum_names);
                 if php_field_effective_optional(typ, field, serde_available) && !ptype.starts_with('?') {
                     format!("?{ptype}")
                 } else {
@@ -324,7 +323,7 @@ pub(super) fn generate_type_stubs(
         for method in non_excluded_methods {
             let method_name = method.name.to_lower_camel_case();
             let is_static = method.receiver.is_none();
-            let return_type = php_type(&method.return_type);
+            let return_type = enum_aware_php_type(&method.return_type, &enum_names);
             // `Option`), emit an `@return array<T>` PHPDoc so PHPStan sees the iterable
             let return_inner = match &method.return_type {
                 TypeRef::Optional(inner) => inner.as_ref(),
@@ -340,7 +339,7 @@ pub(super) fn generate_type_stubs(
                 .iter()
                 .enumerate()
                 .map(|(idx, p)| {
-                    let ptype = php_type(&p.ty);
+                    let ptype = enum_aware_php_type(&p.ty, &enum_names);
                     if p.optional || first_optional_idx.is_some_and(|first| idx >= first) {
                         let nullable = if ptype.starts_with('?') { "" } else { "?" };
                         format!("{nullable}{ptype} ${} = null", p.name)
@@ -637,7 +636,7 @@ fn gen_struct_constructor_stub_params(
         .iter()
         .map(|f| {
             let optional = php_field_effective_optional(typ, f, serde_available);
-            let ptype = php_type(&f.ty);
+            let ptype = enum_aware_php_type(&f.ty, enum_names);
             let nullable = if optional && !ptype.starts_with('?') {
                 format!("?{ptype}")
             } else {
@@ -650,7 +649,7 @@ fn gen_struct_constructor_stub_params(
                 // on the extension's struct field) — a plain, non-promoted parameter.
                 return format!("        {nullable} ${php_name}{default}");
             }
-            let phpdoc_type = php_phpdoc_type(&f.ty);
+            let phpdoc_type = enum_aware_php_phpdoc_type(&f.ty, enum_names);
             let var_type = if optional && !phpdoc_type.starts_with('?') {
                 format!("?{phpdoc_type}")
             } else {
@@ -685,10 +684,10 @@ fn gen_struct_constructor_stub_params(
 /// nullable (`?T`) under the snake_case name while the backing field is non-nullable `T` (the
 /// runtime body applies `.unwrap_or(default)`) under the camelCase property name. The properties are
 /// declared separately by [`gen_kwargs_property_declarations`]. ~keep
-fn gen_kwargs_constructor_stub_params(typ: &crate::core::ir::TypeDef) -> Vec<String> {
+fn gen_kwargs_constructor_stub_params(typ: &crate::core::ir::TypeDef, enum_names: &AHashSet<String>) -> Vec<String> {
     binding_fields(&typ.fields)
         .map(|f| {
-            let ptype = php_type(&f.ty);
+            let ptype = enum_aware_php_type(&f.ty, enum_names);
             let nullable = if ptype.starts_with('?') {
                 ptype
             } else {
@@ -720,13 +719,13 @@ fn gen_kwargs_property_declarations(
             // alone under-reports nullability — the same widening the positional shape and the
             // getters apply.
             let optional = php_field_effective_optional(typ, f, serde_available);
-            let ptype = php_type(&f.ty);
+            let ptype = enum_aware_php_type(&f.ty, enum_names);
             let nullable = if optional && !ptype.starts_with('?') {
                 format!("?{ptype}")
             } else {
                 ptype
             };
-            let phpdoc_type = php_phpdoc_type(&f.ty);
+            let phpdoc_type = enum_aware_php_phpdoc_type(&f.ty, enum_names);
             let var_type = if optional && !phpdoc_type.starts_with('?') {
                 format!("?{phpdoc_type}")
             } else {
@@ -776,21 +775,32 @@ pub(super) fn struct_needs_from_json_stub(
 /// constants-only class via `gen_enum_constants`. Both arms live here so "which enum shapes get a
 /// `from_json`?" has exactly one answer site — the runtime emits it for the flat class and for
 /// nothing else, and an enum branch that answered that question independently of the runtime is what
-/// left `Message::from_json(..)` declared nowhere while the extension defined it. ~keep
+/// left `Message::from_json(..)` declared nowhere while the extension defined it.
+///
+/// The unit-enum arm declares a plain class with `const` members via [`enum_constant_entries`] — the
+/// same name/value derivation `gen_enum_constants` uses for the runtime `#[php_impl]` block — NOT a
+/// native PHP 8.1 `enum ... : string`. The extension registers no native enum at all
+/// (`gen_enum_constants` in `types/enums.rs` emits `#[php_class] pub struct {Name} {}` plus
+/// `pub const` members on a `#[php_impl]` block); a stub that instead declared
+/// `enum Foo: string { case Bar = 'bar'; }` described an API the extension never provides —
+/// `Foo::Bar` does not exist at runtime (PHP class constants are case-sensitive and an enum-case
+/// object is not a string), so a static analyser reported the *correct* call (`Foo::BAR`) as an
+/// error and the *broken* one as fine. Making the runtime actually register a native PHP enum is a
+/// much larger change to the ext-php-rs registration path and is deliberately not made here — the
+/// stub describes the runtime as it exists, not the other way round. ~keep
 fn gen_enum_stub(enum_def: &EnumDef, enum_names: &AHashSet<String>) -> String {
     let mut content = String::new();
     if !is_tagged_data_enum(enum_def) {
         content.push_str(&crate::backends::php::template_env::render(
-            "php_tagged_enum_declaration.jinja",
-            context! { enum_name => &enum_def.name },
+            "php_record_class_stub_declaration.jinja",
+            context! { class_name => &enum_def.name },
         ));
-        for variant in &enum_def.variants {
-            let case_name = sanitize_php_enum_case(&variant.name);
+        for (const_name, wire_value) in enum_constant_entries(enum_def) {
             content.push_str(&crate::backends::php::template_env::render(
-                "php_enum_variant_stub.jinja",
+                "php_enum_constant_stub.jinja",
                 context! {
-                    variant_name => case_name,
-                    value => &php_enum_case_value(enum_def, variant),
+                    const_name => const_name,
+                    value => &wire_value,
                 },
             ));
         }
@@ -834,7 +844,7 @@ fn gen_enum_stub(enum_def: &EnumDef, enum_names: &AHashSet<String>) -> String {
         },
     ));
 
-    for ctor in gen_data_enum_variant_constructor_stubs(enum_def) {
+    for ctor in gen_data_enum_variant_constructor_stubs(enum_def, enum_names) {
         content.push_str(&ctor);
     }
     content.push_str("}\n\n");
@@ -868,13 +878,13 @@ fn gen_data_enum_property_declarations(enum_def: &EnumDef, enum_names: &AHashSet
             // Every flat field is `Option<T>` on the binding struct regardless of the variant
             // field's own optionality — only one variant's fields are populated at a time — so
             // every property is nullable.
-            let ptype = flat_enum_property_php_type(&field.ty, enum_names);
+            let ptype = enum_aware_php_type(&field.ty, enum_names);
             let nullable = if ptype.starts_with('?') {
                 ptype
             } else {
                 format!("?{ptype}")
             };
-            let phpdoc_type = flat_enum_property_phpdoc_type(&field.ty, enum_names);
+            let phpdoc_type = enum_aware_php_phpdoc_type(&field.ty, enum_names);
             let var_type = if phpdoc_type.starts_with('?') {
                 phpdoc_type
             } else {
@@ -887,65 +897,23 @@ fn gen_data_enum_property_declarations(enum_def: &EnumDef, enum_names: &AHashSet
     declarations
 }
 
-/// PHP type hint for a flat-enum property, mirroring the type the runtime getter actually returns.
-///
-/// The getter's Rust return type is `Option<PhpMapper::map_type(field.ty)>`, so the mapping is
-/// [`php_type`]'s EXCEPT for one case `php_type` gets wrong here: `PhpMapper::named` lowers a
-/// unit-variant enum to `String` (ext-php-rs cannot carry a Rust enum), so such a field reads back
-/// from PHP as a plain `string`, not as the `enum <Name>: string` the stub declares elsewhere.
-/// Declaring the enum class name would type the property as something the extension never returns.
-///
-/// The other `PhpMapper` divergence — an untagged data enum lowering to `serde_json::Value` — is
-/// deliberately not modelled: ext-php-rs has no serde integration at all, so `Option<serde_json::Value>`
-/// has no `IntoZval` and a flat enum carrying such a field cannot compile in the first place. ~keep
-fn flat_enum_property_php_type(ty: &TypeRef, enum_names: &AHashSet<String>) -> String {
-    match ty {
-        TypeRef::Named(name) if enum_names.contains(name.as_str()) => "string".to_string(),
-        TypeRef::Optional(inner) => {
-            let inner_type = flat_enum_property_php_type(inner, enum_names);
-            if inner_type.starts_with('?') {
-                inner_type
-            } else {
-                format!("?{inner_type}")
-            }
-        }
-        _ => php_type(ty),
-    }
-}
-
-/// PHPDoc counterpart of [`flat_enum_property_php_type`], keeping the generic value types PHPStan
-/// needs on `array` properties (level max rejects a bare `array`).
-fn flat_enum_property_phpdoc_type(ty: &TypeRef, enum_names: &AHashSet<String>) -> String {
-    match ty {
-        TypeRef::Vec(inner) => format!("array<{}>", flat_enum_property_phpdoc_type(inner, enum_names)),
-        TypeRef::Map(key, value) => format!(
-            "array<{}, {}>",
-            flat_enum_property_phpdoc_type(key, enum_names),
-            flat_enum_property_phpdoc_type(value, enum_names)
-        ),
-        TypeRef::Optional(inner) => {
-            let inner_type = flat_enum_property_phpdoc_type(inner, enum_names);
-            if inner_type.starts_with('?') {
-                inner_type
-            } else {
-                format!("?{inner_type}")
-            }
-        }
-        _ => flat_enum_property_php_type(ty, enum_names),
-    }
-}
-
 /// Emit a static-factory stub for each per-variant constructor the flat PHP enum class exposes.
 ///
 /// The runtime binding exposes these under the camelCase host name (`to_php_name(<snake>)`), so the
-/// stub declares the same public name. Each param maps through the stub's [`php_type`] mapper — the
-/// same one DTO field/method stubs use — and the return type is the enum class. Optional fields gain
-/// a `?` prefix and a `= null` default, mirroring DTO method stubs. `collect_all_variant_constructors`
-/// owns the skip rules (unit / tuple / `binding_excluded` / sanitized-field variants) so the stub and
-/// runtime binding (`gen_flat_data_enum_variant_constructors` in `gen_bindings/types/enums.rs`) stay
-/// aligned — neither one suppresses a variant on a hand-written-method name collision, since
+/// stub declares the same public name. Each param maps through [`enum_aware_php_type`] — the same
+/// mapper DTO field/method stubs use, so a param whose own type is a unit-variant enum (e.g.
+/// `ContentPart::image(string $url, ImageDetail $detail)`) is typed `string` here exactly as the
+/// class's own properties are, rather than promising an object the factory can't actually accept —
+/// and the return type is the enum class. Optional fields gain a `?` prefix and a `= null` default,
+/// mirroring DTO method stubs. `collect_all_variant_constructors` owns the skip rules (unit / tuple /
+/// `binding_excluded` / sanitized-field variants) so the stub and runtime binding
+/// (`gen_flat_data_enum_variant_constructors` in `gen_bindings/types/enums.rs`) stay aligned —
+/// neither one suppresses a variant on a hand-written-method name collision, since
 /// `enum_def.methods` is never forwarded into the generated `#[php_impl]` block.
-fn gen_data_enum_variant_constructor_stubs(enum_def: &crate::core::ir::EnumDef) -> Vec<String> {
+fn gen_data_enum_variant_constructor_stubs(
+    enum_def: &crate::core::ir::EnumDef,
+    enum_names: &AHashSet<String>,
+) -> Vec<String> {
     use crate::codegen::generators::collect_all_variant_constructors;
 
     collect_all_variant_constructors(enum_def)
@@ -957,7 +925,7 @@ fn gen_data_enum_variant_constructor_stubs(enum_def: &crate::core::ir::EnumDef) 
                 .iter()
                 .enumerate()
                 .map(|(idx, p)| {
-                    let ptype = php_type(&p.ty);
+                    let ptype = enum_aware_php_type(&p.ty, enum_names);
                     if p.optional || first_optional_idx.is_some_and(|first| idx >= first) {
                         let nullable = if ptype.starts_with('?') { "" } else { "?" };
                         format!("{nullable}{ptype} ${} = null", to_php_name(&p.name))
@@ -971,7 +939,7 @@ fn gen_data_enum_variant_constructor_stubs(enum_def: &crate::core::ir::EnumDef) 
                 .params
                 .iter()
                 .filter(|p| matches!(&p.ty, TypeRef::Vec(_) | TypeRef::Map(_, _)))
-                .map(|p| format!("@param {} ${}", php_phpdoc_type(&p.ty), to_php_name(&p.name)))
+                .map(|p| format!("@param {} ${}", enum_aware_php_phpdoc_type(&p.ty, enum_names), to_php_name(&p.name)))
                 .collect();
             let doc_block = match phpdoc_params.len() {
                 0 => String::new(),

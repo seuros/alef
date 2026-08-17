@@ -320,8 +320,8 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/php_enum_stub_start.jinja"),
     ),
     (
-        "php_enum_variant_stub.jinja",
-        include_str!("templates/php_enum_variant_stub.jinja"),
+        "php_enum_constant_stub.jinja",
+        include_str!("templates/php_enum_constant_stub.jinja"),
     ),
     (
         "php_property_annotation.jinja",
@@ -364,10 +364,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/php_phpdoc_array_return.jinja"),
     ),
     ("php_getter_stub.jinja", include_str!("templates/php_getter_stub.jinja")),
-    (
-        "php_tagged_enum_declaration.jinja",
-        include_str!("templates/php_tagged_enum_declaration.jinja"),
-    ),
     (
         "php_method_call_statement.jinja",
         include_str!("templates/php_method_call_statement.jinja"),

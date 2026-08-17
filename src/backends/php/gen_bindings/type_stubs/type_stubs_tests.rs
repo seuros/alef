@@ -94,7 +94,7 @@ fn shape_enum() -> EnumDef {
 
 #[test]
 fn emits_static_factory_per_struct_variant() {
-    let stubs = gen_data_enum_variant_constructor_stubs(&shape_enum()).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&shape_enum(), &AHashSet::new()).join("");
 
     assert!(
         stubs.contains("public static function circle(float $radius): Shape"),
@@ -116,7 +116,7 @@ fn maps_named_dto_field_to_its_type() {
         )],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
 
     assert!(
         stubs.contains("public static function llm(LlmConfig $config): Source"),
@@ -148,7 +148,7 @@ fn emits_param_phpdoc_for_map_and_vec_variant_fields() {
         ],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
 
     assert!(
         stubs.contains("/** @param array<string, string> $config */"),
@@ -171,7 +171,7 @@ fn optional_field_is_nullable_with_default() {
         vec![variant("Tag", vec![field("label", TypeRef::String, true)])],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
 
     assert!(
         stubs.contains("public static function tag(?string $label = null): Source"),
@@ -200,7 +200,7 @@ fn skips_unit_tuple_excluded_and_sanitized_variants() {
         ],
     );
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
 
     assert!(!stubs.contains("function empty("), "{stubs}");
     assert!(!stubs.contains("function pair("), "{stubs}");
@@ -228,7 +228,7 @@ fn emits_factory_stub_even_with_colliding_hand_written_method() {
         ..shape_enum()
     };
 
-    let stubs = gen_data_enum_variant_constructor_stubs(&def).join("");
+    let stubs = gen_data_enum_variant_constructor_stubs(&def, &AHashSet::new()).join("");
 
     assert!(
         stubs.contains("public static function circle(float $radius): Shape"),
@@ -337,8 +337,195 @@ fn unit_variant_enum_stub_declares_no_from_json() {
     let stub = gen_enum_stub(&def, &AHashSet::new());
 
     assert!(!stub.contains("from_json"), "{stub}");
-    assert!(stub.contains("enum Level: string"), "{stub}");
-    assert!(stub.contains("case Low = 'Low';"), "{stub}");
+}
+
+fn snake_case_unit_enum() -> EnumDef {
+    let mut def = enum_def(
+        "BatchStatus",
+        vec![variant("InProgress", vec![]), variant("Failed", vec![])],
+    );
+    def.serde_rename_all = Some("snake_case".to_string());
+    def
+}
+
+/// The stub for a unit-variant enum must describe what the runtime actually registers: a
+/// constants-only class (`gen_enum_constants`, `types/enums.rs`), not a native PHP 8.1 `enum`.
+/// `BatchStatus::InProgress` (a native enum case) does not exist at runtime -- PHP class constants
+/// are case-sensitive and an enum-case object is not a string -- so a stub declaring
+/// `enum ... : string` describes an API the extension never provides, and a static analyser then
+/// reports the *correct* call (`BatchStatus::INPROGRESS`) as an error and the *broken* one as fine.
+///
+/// Negative control folded in: a generator that emitted BOTH the class-with-constants shape AND
+/// the native-enum shape (i.e. "emits everything") would still fail this test on the `enum` /
+/// `case` absence assertions below, so the presence assertions alone cannot pass vacuously. ~keep
+#[test]
+fn unit_variant_enum_stub_declares_a_constants_class_not_a_native_enum() {
+    let def = snake_case_unit_enum();
+
+    let stub = gen_enum_stub(&def, &AHashSet::new());
+
+    assert!(stub.contains("final class BatchStatus"), "{stub}");
+    assert!(stub.contains("public const INPROGRESS = 'in_progress';"), "{stub}");
+    assert!(stub.contains("public const FAILED = 'failed';"), "{stub}");
+    assert!(!stub.contains("enum BatchStatus"), "{stub}");
+    assert!(!stub.contains("case "), "{stub}");
+}
+
+/// The stub's constant names and values must be identical to what the runtime actually registers,
+/// not merely "some constants" -- so this cross-checks directly against `gen_enum_constants`
+/// (the runtime `#[php_impl]` generator) instead of duplicating expected strings that could drift
+/// from the runtime independently of the stub.
+#[test]
+fn unit_variant_enum_stub_constants_match_gen_enum_constants_exactly() {
+    use crate::backends::php::gen_bindings::types::gen_enum_constants;
+
+    let def = snake_case_unit_enum();
+
+    let stub = gen_enum_stub(&def, &AHashSet::new());
+    let runtime = gen_enum_constants(&def, None);
+
+    let runtime_consts: Vec<&str> = runtime
+        .lines()
+        .filter(|l| l.trim_start().starts_with("pub const"))
+        .collect();
+    assert_eq!(
+        runtime_consts.len(),
+        def.variants.len(),
+        "apparatus check: one `pub const` line must be extracted per variant, or the loop below \
+         asserts nothing. Extracted {runtime_consts:?} from:\n{runtime}"
+    );
+
+    for line in runtime_consts {
+        // `pub const INPROGRESS: &str = "in_progress";` (runtime) -> `public const INPROGRESS =
+        // 'in_progress';` (stub).
+        let rest = line.trim_start().strip_prefix("pub const ").expect("pub const prefix");
+        let (name, rest) = rest.split_once(':').expect("typed const declaration");
+        let value = rest
+            .split_once('"')
+            .and_then(|(_, r)| r.split_once('"'))
+            .expect("quoted value")
+            .0;
+        let expected = format!("public const {name} = '{value}';");
+        assert!(
+            stub.contains(&expected),
+            "expected `{expected}` (derived from runtime line `{line}`) in stub:\n{stub}"
+        );
+    }
+}
+
+/// `escape_php_reserved_constant` (shared via `enum_constant_entries`) must apply to the stub's
+/// constants exactly as it does to the runtime's -- a variant literally named `Default` or `Class`
+/// would otherwise emit a PHP-reserved constant name and fail to parse.
+#[test]
+fn unit_variant_enum_stub_escapes_reserved_word_constant_names() {
+    let def = enum_def("Mode", vec![variant("Default", vec![]), variant("Class", vec![])]);
+
+    let stub = gen_enum_stub(&def, &AHashSet::new());
+
+    assert!(stub.contains("public const DEFAULT_ = 'Default';"), "{stub}");
+    assert!(stub.contains("public const CLASS_ = 'Class';"), "{stub}");
+}
+
+/// `gen_struct_constructor_stub_params` types a required field via the promoted-property shape;
+/// a field whose type is a unit-variant enum must be typed `string`, matching what
+/// `PhpMapper::named` actually lowers it to at the FFI boundary, not the enum's own class name.
+#[test]
+fn struct_constructor_param_of_unit_enum_type_is_typed_string() {
+    let typ = TypeDef {
+        name: "Batch".to_string(),
+        has_serde: true,
+        fields: vec![field("status", TypeRef::Named("BatchStatus".to_string()), false)],
+        ..Default::default()
+    };
+    let enum_names: AHashSet<String> = ["BatchStatus".to_string()].into_iter().collect();
+
+    let params = gen_struct_constructor_stub_params(&typ, &enum_names, &AHashSet::new(), true);
+    let joined = params.join("\n");
+
+    assert!(joined.contains("public readonly string $status"), "{joined}");
+    assert!(!joined.contains("BatchStatus"), "{joined}");
+}
+
+/// Same fix, `Kwargs` shape: `gen_kwargs_constructor_stub_params` must also type a unit-enum field
+/// as a nullable `string`, not the enum's class name.
+#[test]
+fn kwargs_constructor_param_of_unit_enum_type_is_typed_string() {
+    let typ = TypeDef {
+        name: "Batch".to_string(),
+        has_default: true,
+        fields: vec![field("status", TypeRef::Named("BatchStatus".to_string()), false)],
+        ..Default::default()
+    };
+    let enum_names: AHashSet<String> = ["BatchStatus".to_string()].into_iter().collect();
+
+    let params = gen_kwargs_constructor_stub_params(&typ, &enum_names);
+
+    assert_eq!(params, vec!["        ?string $status = null".to_string()]);
+}
+
+/// Same fix, the `Kwargs` shape's separately-declared `#[php(prop)]` properties.
+#[test]
+fn kwargs_property_of_unit_enum_type_is_typed_string() {
+    let typ = TypeDef {
+        name: "Batch".to_string(),
+        has_default: true,
+        fields: vec![field("status", TypeRef::Named("BatchStatus".to_string()), false)],
+        ..Default::default()
+    };
+    let enum_names: AHashSet<String> = ["BatchStatus".to_string()].into_iter().collect();
+
+    let declarations = gen_kwargs_property_declarations(&typ, &enum_names, false);
+    let joined = declarations.join("");
+
+    assert!(joined.contains("public string $status;"), "{joined}");
+    assert!(!joined.contains("BatchStatus"), "{joined}");
+}
+
+/// End-to-end regression through the real `generate_type_stubs` pipeline (not just the isolated
+/// helper functions above): a struct field whose type is a unit-variant enum must be typed
+/// `string` in BOTH the promoted-constructor property AND the getter's return type, and the enum
+/// itself must get the constants-only class shape -- all three derived from the one `enum_names`
+/// set `generate_type_stubs` builds, so they cannot disagree with each other.
+#[test]
+fn stub_types_unit_enum_valued_struct_field_and_getter_as_string() {
+    use crate::core::config::resolved::ResolvedCrateConfig;
+    use crate::core::ir::ApiSurface;
+
+    let status_enum = snake_case_unit_enum();
+    let batch = TypeDef {
+        name: "Batch".to_string(),
+        rust_path: "test_lib::Batch".to_string(),
+        has_serde: true,
+        fields: vec![field("status", TypeRef::Named("BatchStatus".to_string()), false)],
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        crate_name: "my-crate".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![batch],
+        enums: vec![status_enum],
+        ..Default::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "my-crate".to_string(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let files = super::generate_type_stubs(&api, &config).unwrap();
+    let stub = &files[0].content;
+
+    assert!(
+        stub.contains("public readonly string $status"),
+        "constructor-promoted `status` property must be typed `string`, not `BatchStatus`:\n{stub}"
+    );
+    assert!(
+        stub.contains("function getStatus(): string"),
+        "the getter's declared return type must also be `string`:\n{stub}"
+    );
+    assert!(!stub.contains("readonly BatchStatus"), "{stub}");
+    assert!(stub.contains("final class BatchStatus"), "{stub}");
+    assert!(stub.contains("public const INPROGRESS = 'in_progress';"), "{stub}");
+    assert!(!stub.contains("enum BatchStatus"), "{stub}");
 }
 
 /// `#[php(getter)] pub fn get_<flat>(&self)` registers a read-only PHP PROPERTY named `<flat>`
@@ -792,7 +979,7 @@ fn kwargs_config_type() -> TypeDef {
 /// snake_case parameter names ext-php-rs registers verbatim.
 #[test]
 fn kwargs_constructor_stub_matches_the_runtime_signature_exactly() {
-    let params = gen_kwargs_constructor_stub_params(&kwargs_config_type());
+    let params = gen_kwargs_constructor_stub_params(&kwargs_config_type(), &AHashSet::new());
 
     assert_eq!(
         params,
@@ -822,7 +1009,7 @@ fn kwargs_constructor_stub_omits_binding_excluded_fields() {
     };
 
     assert_eq!(
-        gen_kwargs_constructor_stub_params(&typ),
+        gen_kwargs_constructor_stub_params(&typ, &AHashSet::new()),
         vec!["        ?bool $jitter = null".to_string()]
     );
 }

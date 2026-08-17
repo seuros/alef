@@ -475,3 +475,166 @@ fn the_generated_string_to_core_match_does_not_accept_the_rust_variant_name() {
          would be interchangeable and the assertion it anchors would prove nothing, got:\n{conversion}"
     );
 }
+
+/// `public_api.rs` generates the runtime facade class (e.g. `LiterLlm.php`) that composer
+/// autoloads and every caller actually executes -- it is not PHPStan-only prose. Its methods
+/// delegate positionally into the native `...Api` class (`\Ns\ClassApi::method($args)`), whose
+/// own params are typed by `PhpMapper::named`, which lowers a unit-variant enum to `String`. A
+/// bare `php_type` call here would type the facade param/return as the enum's own class name --
+/// a class `gen_enum_constants` declares with only `const` members, so no instance of it can ever
+/// exist. That is not a documentation nit: it makes the generated method statically uncallable
+/// with any value a caller could construct. This pins the facade to the enum-aware mapping.
+#[test]
+fn public_api_facade_types_unit_enum_param_and_return_as_string_not_enum_class() {
+    use crate::core::config::resolved::ResolvedCrateConfig;
+    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, FunctionDef, ParamDef, TypeDef, TypeRef};
+
+    let status_enum = EnumDef {
+        name: "Status".to_string(),
+        rust_path: "sample_crate::Status".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Active".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Inactive".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let config_type = TypeDef {
+        name: "Config".to_string(),
+        rust_path: "sample_crate::Config".to_string(),
+        fields: vec![FieldDef {
+            name: "name".to_string(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let set_status_fn = FunctionDef {
+        name: "set_status".to_string(),
+        rust_path: "sample_crate::set_status".to_string(),
+        params: vec![
+            ParamDef {
+                name: "status".to_string(),
+                ty: TypeRef::Named("Status".to_string()),
+                ..Default::default()
+            },
+            // Negative control: a non-enum named type must keep its own class name.
+            ParamDef {
+                name: "config".to_string(),
+                ty: TypeRef::Named("Config".to_string()),
+                ..Default::default()
+            },
+        ],
+        return_type: TypeRef::Named("Status".to_string()),
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        crate_name: "sample-crate".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![config_type],
+        enums: vec![status_enum],
+        functions: vec![set_status_fn],
+        ..Default::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "sample-crate".to_string(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let files = super::public_api::generate_public_api(&api, &config).unwrap();
+    let facade = files
+        .iter()
+        .find(|f| f.content.contains("setStatus("))
+        .expect("facade class file with the delegating setStatus method must be generated");
+
+    assert!(
+        facade.content.contains("string $status, Config $config): string"),
+        "a unit-enum param and return must be typed `string` (what PhpMapper::named actually \
+         lowers it to), while the sibling struct param keeps its own class name, got:\n{}",
+        facade.content
+    );
+    assert!(
+        !facade.content.contains("Status $status") && !facade.content.contains("): Status"),
+        "the facade must never type a unit-enum value as the enum's own (uninstantiable) class \
+         name, got:\n{}",
+        facade.content
+    );
+}
+
+/// Same defect, same fix, on the opaque-class stub side (`opaque_files.rs`): an opaque type's
+/// method that takes or returns a unit-variant enum must be typed `string`, exactly like the
+/// facade above -- `PhpMapper::named` does not distinguish free functions from methods.
+#[test]
+fn opaque_class_stub_types_unit_enum_method_param_and_return_as_string_not_enum_class() {
+    use crate::core::ir::{EnumDef, EnumVariant, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
+    use ahash::{AHashMap, AHashSet};
+
+    let status_enum = EnumDef {
+        name: "Status".to_string(),
+        rust_path: "sample_crate::Status".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Active".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Inactive".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let enum_names: AHashSet<String> = std::iter::once(status_enum.name.clone()).collect();
+
+    let session_type = TypeDef {
+        name: "Session".to_string(),
+        rust_path: "sample_crate::Session".to_string(),
+        is_opaque: true,
+        methods: vec![MethodDef {
+            name: "set_status".to_string(),
+            params: vec![
+                ParamDef {
+                    name: "status".to_string(),
+                    ty: TypeRef::Named("Status".to_string()),
+                    ..Default::default()
+                },
+                // Negative control: a non-enum named type must keep its own class name.
+                ParamDef {
+                    name: "meta".to_string(),
+                    ty: TypeRef::Named("Meta".to_string()),
+                    ..Default::default()
+                },
+            ],
+            return_type: TypeRef::Named("Status".to_string()),
+            receiver: Some(ReceiverKind::RefMut),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let content = super::opaque_files::gen_php_opaque_class_file(
+        &session_type,
+        "Sample\\Crate",
+        &[],
+        &AHashSet::default(),
+        &[],
+        &AHashMap::default(),
+        &enum_names,
+    );
+
+    assert!(
+        content.contains("string $status, Meta $meta): string"),
+        "an opaque-class method must type a unit-enum param and return as `string`, while a \
+         non-enum named param keeps its own class name, got:\n{content}"
+    );
+    assert!(
+        !content.contains("Status $status") && !content.contains("): Status"),
+        "an opaque-class method must never type a unit-enum value as the enum's own \
+         (uninstantiable) class name, got:\n{content}"
+    );
+}

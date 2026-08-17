@@ -1,21 +1,6 @@
 use crate::core::ir::{PrimitiveType, TypeRef};
+use ahash::AHashSet;
 use minijinja::context;
-
-pub(super) fn php_phpdoc_type(ty: &TypeRef) -> String {
-    match ty {
-        TypeRef::Vec(inner) => format!("array<{}>", php_phpdoc_type(inner)),
-        TypeRef::Map(k, v) => format!("array<{}, {}>", php_phpdoc_type(k), php_phpdoc_type(v)),
-        TypeRef::Optional(inner) => {
-            let inner_type = php_phpdoc_type(inner);
-            if inner_type.starts_with('?') {
-                inner_type
-            } else {
-                format!("?{inner_type}")
-            }
-        }
-        _ => php_type(ty),
-    }
-}
 
 /// Map an IR [`TypeRef`] to a fully-qualified PHPDoc type string with generics (e.g., `array<\Ns\T>`).
 pub(super) fn php_phpdoc_type_fq(ty: &TypeRef, namespace: &str) -> String {
@@ -148,4 +133,54 @@ pub(super) fn php_property_phpdoc(var_type: &str, doc: &str, indent: &str) -> St
         context! { indent => indent },
     ));
     out
+}
+
+/// `enum_names`-aware counterpart of [`php_type`]: `PhpMapper::named` (`type_map.rs`) lowers a
+/// unit-variant enum to `String` (ext-php-rs cannot carry a Rust enum), so any field, property,
+/// method/function param, or return of that enum's type crosses the FFI boundary as a plain PHP
+/// `string`, not as an instance of the constants-only class `gen_enum_constants` declares for the
+/// enum. Typing it as the enum's own class name would promise a value the extension never
+/// produces — for the PHPStan stub that's a false type declaration; for the generated `src/`
+/// facade and opaque-class files it is worse: `LiterLlm.php`-style facades pass the argument
+/// straight through to the native `...Api` class, so a bare enum-class type hint makes the method
+/// genuinely uncallable (the constants-only class has no instances a caller could ever pass).
+/// Shared by every PHP codegen site that types a value against an IR type — stub properties,
+/// struct constructor params, stub method params/returns, the runtime facade
+/// (`public_api.rs`), and opaque-class method stubs (`opaque_files.rs`) — so none of those sites
+/// can independently drift from what `PhpMapper` really emits. ~keep
+pub(super) fn enum_aware_php_type(ty: &TypeRef, enum_names: &AHashSet<String>) -> String {
+    match ty {
+        TypeRef::Named(name) if enum_names.contains(name.as_str()) => "string".to_string(),
+        TypeRef::Optional(inner) => {
+            let inner_type = enum_aware_php_type(inner, enum_names);
+            if inner_type.starts_with('?') {
+                inner_type
+            } else {
+                format!("?{inner_type}")
+            }
+        }
+        _ => php_type(ty),
+    }
+}
+
+/// PHPDoc counterpart of [`enum_aware_php_type`], keeping the generic value types PHPStan needs on
+/// `array` properties (level max rejects a bare `array`).
+pub(super) fn enum_aware_php_phpdoc_type(ty: &TypeRef, enum_names: &AHashSet<String>) -> String {
+    match ty {
+        TypeRef::Vec(inner) => format!("array<{}>", enum_aware_php_phpdoc_type(inner, enum_names)),
+        TypeRef::Map(key, value) => format!(
+            "array<{}, {}>",
+            enum_aware_php_phpdoc_type(key, enum_names),
+            enum_aware_php_phpdoc_type(value, enum_names)
+        ),
+        TypeRef::Optional(inner) => {
+            let inner_type = enum_aware_php_phpdoc_type(inner, enum_names);
+            if inner_type.starts_with('?') {
+                inner_type
+            } else {
+                format!("?{inner_type}")
+            }
+        }
+        _ => enum_aware_php_type(ty, enum_names),
+    }
 }

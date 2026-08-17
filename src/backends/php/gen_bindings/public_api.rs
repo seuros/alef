@@ -1,5 +1,6 @@
 use crate::backends::php::gen_bindings::opaque_files::gen_php_opaque_class_file;
-use crate::backends::php::gen_bindings::php_types::{php_phpdoc_type, php_type};
+use crate::backends::php::gen_bindings::php_types::{enum_aware_php_phpdoc_type, enum_aware_php_type};
+use crate::backends::php::gen_bindings::types::{is_tagged_data_enum, is_untagged_data_enum};
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::codegen::doc_emission;
 use crate::core::backend::GeneratedFile;
@@ -66,6 +67,19 @@ pub(super) fn generate_public_api(
         .map(|t| t.name.clone())
         .collect();
 
+    // Same universe `type_stubs.rs` derives for the PHPStan stub: a unit-variant enum lowers to a
+    // plain PHP `string` at runtime (`PhpMapper::named`), so this facade must type its params and
+    // return values the same way — it calls straight into the native `...Api` class positionally,
+    // so a bare enum-class type hint here isn't just misleading documentation, it makes the method
+    // uncallable (the constants-only class `gen_enum_constants` emits has no instances a caller
+    // could ever construct to satisfy the hint). ~keep
+    let enum_names: AHashSet<String> = api
+        .enums
+        .iter()
+        .filter(|e| !is_tagged_data_enum(e) && !is_untagged_data_enum(e))
+        .map(|e| e.name.clone())
+        .collect();
+
     for func in &api.functions {
         if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&func.name, &config.trait_bridges) {
             continue;
@@ -74,7 +88,7 @@ pub(super) fn generate_public_api(
             continue;
         }
         let method_name = func.name.to_lower_camel_case();
-        let return_php_type = php_type(&func.return_type);
+        let return_php_type = enum_aware_php_type(&func.return_type, &enum_names);
 
         let visible_params: Vec<_> = func
             .params
@@ -105,7 +119,7 @@ pub(super) fn generate_public_api(
             minijinja::Value::default(),
         ));
         for p in &visible_params {
-            let ptype = php_phpdoc_type(&p.ty);
+            let ptype = enum_aware_php_phpdoc_type(&p.ty, &enum_names);
             let nullable_prefix = if p.optional && !ptype.starts_with('?') { "?" } else { "" };
             content.push_str(&crate::backends::php::template_env::render(
                 "php_phpdoc_param_line.jinja",
@@ -116,7 +130,7 @@ pub(super) fn generate_public_api(
                 },
             ));
         }
-        let return_phpdoc = php_phpdoc_type(&func.return_type);
+        let return_phpdoc = enum_aware_php_phpdoc_type(&func.return_type, &enum_names);
         content.push_str(&crate::backends::php::template_env::render(
             "php_phpdoc_return_line.jinja",
             context! { return_type => &return_phpdoc },
@@ -158,7 +172,7 @@ pub(super) fn generate_public_api(
             .iter()
             .enumerate()
             .map(|(idx, p)| {
-                let ptype = php_type(&p.ty);
+                let ptype = enum_aware_php_type(&p.ty, &enum_names);
                 let type_is_nullable = ptype.starts_with('?');
                 let is_optional_in_ir = p.optional;
                 let can_be_optional =
@@ -418,6 +432,7 @@ pub(super) fn generate_public_api(
             &streaming_method_names,
             &config.trait_bridges,
             &handler_contract_map,
+            &enum_names,
         );
         files.push(GeneratedFile {
             path: PathBuf::from(&output_dir).join(format!("{}.php", typ.name)),

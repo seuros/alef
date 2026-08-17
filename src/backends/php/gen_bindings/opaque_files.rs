@@ -1,4 +1,4 @@
-use crate::backends::php::gen_bindings::php_types::{php_phpdoc_type, php_type};
+use crate::backends::php::gen_bindings::php_types::{enum_aware_php_phpdoc_type, enum_aware_php_type};
 use crate::codegen::doc_emission::{DocTarget, sanitize_rust_idioms};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::TypeRef;
@@ -13,6 +13,7 @@ pub(super) fn gen_php_opaque_class_file(
     streaming_method_names: &AHashSet<String>,
     trait_bridges: &[crate::core::config::TraitBridgeConfig],
     handler_contract_map: &ahash::AHashMap<(String, String, String), String>,
+    enum_names: &AHashSet<String>,
 ) -> String {
     let mut content = String::new();
     content.push_str(&crate::backends::php::template_env::render(
@@ -63,7 +64,7 @@ pub(super) fn gen_php_opaque_class_file(
 
     for method in method_order {
         let method_name = method.name.to_lower_camel_case();
-        let return_type = php_type(&method.return_type);
+        let return_type = enum_aware_php_type(&method.return_type, enum_names);
         let is_void = matches!(&method.return_type, TypeRef::Unit);
         let is_static = method.receiver.is_none();
 
@@ -78,7 +79,7 @@ pub(super) fn gen_php_opaque_class_file(
         let mut phpdoc_params: Vec<String> = vec![];
         for param in &method.params {
             if matches!(&param.ty, TypeRef::Vec(_) | TypeRef::Map(_, _)) {
-                let phpdoc_type = php_phpdoc_type(&param.ty);
+                let phpdoc_type = enum_aware_php_phpdoc_type(&param.ty, enum_names);
                 phpdoc_params.push(format!("@param {} ${}", phpdoc_type, param.name));
             }
         }
@@ -87,7 +88,7 @@ pub(super) fn gen_php_opaque_class_file(
         // Add @return PHPDoc for array types so PHPStan knows the element type
         let needs_return_phpdoc = matches!(&method.return_type, TypeRef::Vec(_) | TypeRef::Map(_, _));
         if needs_return_phpdoc {
-            let phpdoc_type = php_phpdoc_type(&method.return_type);
+            let phpdoc_type = enum_aware_php_phpdoc_type(&method.return_type, enum_names);
             doc_lines.push(format!("@return {phpdoc_type}"));
         }
 
@@ -116,7 +117,7 @@ pub(super) fn gen_php_opaque_class_file(
                     if handler_contract_map.contains_key(&(typ.name.clone(), method_name.clone(), p.name.clone())) {
                         "callable".to_owned()
                     } else {
-                        php_type(&p.ty)
+                        enum_aware_php_type(&p.ty, enum_names)
                     };
                 if p.optional || first_optional_idx.is_some_and(|first| idx >= first) {
                     let nullable = if ptype.starts_with('?') { "" } else { "?" };
@@ -146,7 +147,7 @@ pub(super) fn gen_php_opaque_class_file(
 
     for adapter in streaming_adapters {
         let item_type = adapter.item_type.as_deref().unwrap_or("array");
-        content.push_str(&gen_php_streaming_method_wrapper(adapter, item_type));
+        content.push_str(&gen_php_streaming_method_wrapper(adapter, item_type, enum_names));
         content.push('\n');
     }
 
@@ -175,13 +176,17 @@ pub(super) fn gen_php_opaque_class_file(
 /// For PHP, we generate a Generator method that calls the Rust streaming methods directly.
 /// Since PHP can't easily pass opaque types as function parameters, we skip the _start/_next/_free
 /// pattern and instead keep the streaming logic on the class.
-fn gen_php_streaming_method_wrapper(adapter: &crate::core::config::AdapterConfig, _item_type: &str) -> String {
+fn gen_php_streaming_method_wrapper(
+    adapter: &crate::core::config::AdapterConfig,
+    _item_type: &str,
+    enum_names: &AHashSet<String>,
+) -> String {
     let method_name = adapter.name.to_lower_camel_case();
 
     let mut params_vec: Vec<String> = Vec::new();
 
     for p in &adapter.params {
-        let ptype = php_type(&crate::core::ir::TypeRef::Named(p.ty.clone()));
+        let ptype = enum_aware_php_type(&crate::core::ir::TypeRef::Named(p.ty.clone()), enum_names);
         let nullable = if p.optional { "?" } else { "" };
         let default = if p.optional { " = null" } else { "" };
         params_vec.push(format!("{nullable}{ptype} ${}{default}", p.name));
