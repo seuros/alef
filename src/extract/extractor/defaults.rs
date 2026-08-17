@@ -24,15 +24,18 @@ const MAX_DELEGATION_DEPTH: usize = 4;
 
 /// Extract concrete default values from an `impl Default for T` block.
 ///
-/// Finds the `fn default() -> Self` method and reads its body one of two ways:
+/// Finds the `fn default() -> Self` method and reads its body one of three ways:
 ///
 /// 1. a struct literal (`Self { field: expr, ... }`), each initializer lowered to a
 ///    [`DefaultValue`]; or
 /// 2. a delegation to one of `T`'s own constructors (`Self::new("en")`), whose parameters are
 ///    bound to the literal arguments the delegation passed and whose struct literal is then
-///    read against that binding.
+///    read against that binding; or
+/// 3. for a single-field type, a bare associated-const path (`Self::ONE`, `Weight::ONE`) whose
+///    initializer is itself a foldable literal or single-argument tuple-struct literal of the
+///    same type (`const ONE: Weight = Weight(1);`) — see [`single_field_const_tail_default`].
 ///
-/// A body that is neither writes [`DefaultValue::Unresolved`] to every field. That is
+/// A body that is none of these writes [`DefaultValue::Unresolved`] to every field. That is
 /// **not** the same as [`DefaultValue::Empty`]: `Empty` claims the default *is* the type's
 /// zero, `Unresolved` records that alef could not read it. Collapsing the two is what let six
 /// backends emit their type-zero underneath a doc comment quoting the real Rust value; see
@@ -75,6 +78,8 @@ pub(crate) fn extract_default_values(
         struct_expr_defaults(struct_expr, &scope)
     } else if let Some(delegated) = follow_delegation(&default_fn.block, self_type, constructors, &scope, 0) {
         delegated
+    } else if let Some(single_field) = single_field_const_tail_default(&default_fn.block, fields, &scope) {
+        single_field
     } else {
         let body = default_fn.block.to_token_stream().to_string();
         tracing::warn!(
@@ -209,6 +214,23 @@ fn const_literal_value(expr: &syn::Expr) -> Option<DefaultValue> {
             DefaultValue::FloatLiteral(v) => Some(DefaultValue::FloatLiteral(-v)),
             _ => None,
         },
+        // A single-argument tuple-struct/newtype literal (`Weight(1)`) folds to the literal it
+        // wraps: `DefaultValue` has no struct-shaped variant, and for a single-field newtype
+        // that literal *is* the field's own default once flattened (see
+        // `single_field_const_tail_default`). Gated on an upper-case callee so an ordinary
+        // function call (`compute(1)`, conventionally snake_case) is never mistaken for a
+        // tuple-struct constructor and folded into a guess; a lower-case callee stays `None`
+        // rather than risk it. ~keep
+        syn::Expr::Call(call) if call.args.len() == 1 => {
+            let syn::Expr::Path(path) = &*call.func else {
+                return None;
+            };
+            let name = path.path.segments.last()?.ident.to_string();
+            if !name.starts_with(|c: char| c.is_ascii_uppercase()) {
+                return None;
+            }
+            const_literal_value(call.args.first()?)
+        }
         _ => None,
     }
 }
@@ -361,6 +383,53 @@ fn unwrap_to_call_expr(expr: &syn::Expr) -> Option<&syn::ExprCall> {
         syn::Expr::Call(call) => Some(call),
         syn::Expr::Block(b) => tail_call_expr(&b.block),
         syn::Expr::Return(ret) => ret.expr.as_deref().and_then(unwrap_to_call_expr),
+        _ => None,
+    }
+}
+
+/// `fn default() -> Self { Self::ONE }` for a single-field newtype (`pub struct Weight(u32);`):
+/// the tail expression is a bare associated-const path rather than a struct literal or a
+/// delegation call, but the const names a value of `Self` itself, and `Self` has exactly one
+/// field — so the const's value, once folded to a scalar by [`const_literal_value`], *is* that
+/// field's default.
+///
+/// Scoped to single-field types deliberately: a multi-field struct offers no way to know which
+/// field a lone `Self::NAME` scalar belongs to (`Self::NAME` could itself be a full struct
+/// literal, which [`const_literal_value`] does not attempt to read — see its doc comment).
+/// Guessing a field mapping would be worse than reporting `Unresolved`. ~keep
+fn single_field_const_tail_default(
+    block: &syn::Block,
+    fields: &[FieldDef],
+    scope: &EvalScope<'_>,
+) -> Option<AHashMap<String, DefaultValue>> {
+    let [field] = fields else {
+        return None;
+    };
+    let path = tail_path_expr(block)?;
+    let segments: Vec<String> = path.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let [owner, name] = segments.as_slice() else {
+        return None;
+    };
+    let value = scope.associated_const(owner, name)?;
+    let mut defaults = AHashMap::new();
+    defaults.insert(field.name.clone(), value);
+    Some(defaults)
+}
+
+/// The tail expression of a block, unwrapped to a bare path. Mirrors [`tail_call_expr`] for the
+/// `Self::NAME` shape [`single_field_const_tail_default`] reads.
+fn tail_path_expr(block: &syn::Block) -> Option<&syn::ExprPath> {
+    match block.stmts.last()? {
+        syn::Stmt::Expr(expr, _) => unwrap_to_path_expr(expr),
+        _ => None,
+    }
+}
+
+fn unwrap_to_path_expr(expr: &syn::Expr) -> Option<&syn::ExprPath> {
+    match expr {
+        syn::Expr::Path(path) => Some(path),
+        syn::Expr::Block(b) => tail_path_expr(&b.block),
+        syn::Expr::Return(ret) => ret.expr.as_deref().and_then(unwrap_to_path_expr),
         _ => None,
     }
 }
@@ -926,6 +995,48 @@ mod tests {
         );
     }
 
+    /// `pub const ONE: Weight = Weight(1);` — a single-argument tuple-struct literal — folds to
+    /// the literal it wraps. `DefaultValue` has no struct-shaped variant, so this is the only way
+    /// `Self::ONE` inside `impl Default for Weight` can ever resolve to anything but `Unresolved`.
+    #[test]
+    fn collect_literal_consts_folds_a_tuple_struct_literal_to_its_inner_scalar() {
+        let file: syn::File = syn::parse_str(
+            r#"
+                impl Weight {
+                    pub const ONE: Weight = Weight(1);
+                    pub const MAX: Weight = Weight(u32::MAX);
+                }
+            "#,
+        )
+        .expect("valid file");
+
+        let consts = collect_literal_consts(&file.items);
+
+        assert_eq!(consts.get("Weight::ONE"), Some(&DefaultValue::IntLiteral(1)));
+        assert_eq!(
+            consts.get("Weight::MAX"),
+            None,
+            "the inner expression `u32::MAX` is not itself a literal; guessing its value is worse \
+             than leaving the const unindexed"
+        );
+    }
+
+    /// A lower-case callee is a function by Rust convention, not a tuple-struct constructor, so
+    /// folding `compute(3)` the same way as `Weight(1)` would be interpreting code, not reading
+    /// a literal.
+    #[test]
+    fn collect_literal_consts_does_not_fold_a_lowercase_call_as_a_tuple_struct_literal() {
+        let file: syn::File = syn::parse_str(r#"const RETRY_LIMIT: u32 = compute(3);"#).expect("valid file");
+
+        let consts = collect_literal_consts(&file.items);
+
+        assert_eq!(
+            consts.get("RETRY_LIMIT"),
+            None,
+            "a snake_case call is a function invocation and must not be folded"
+        );
+    }
+
     /// Drive the whole extractor over a module source, returning the resolved defaults for
     /// the named type's `impl Default`. Reproduces exactly what `extractor::mod` does: build
     /// the const and constructor indexes from the module's items, then read the `impl Default`
@@ -1173,6 +1284,85 @@ mod tests {
             resolved[0].1,
             DefaultValue::Empty,
             "`Empty` would claim the default *is* the type-zero, which is the conflation this fixes"
+        );
+    }
+
+    /// The general shape the reported `Weight` warning is an instance of: a single-field
+    /// newtype (`pub struct Weight(pub u32)`) plus `pub const ONE: Weight = Weight(1);` plus
+    /// `impl Default { fn default() -> Self { Self::ONE } }`. `Self::ONE` is neither a struct
+    /// literal nor a delegation call — it names an associated const of `Self` — but `Weight` has
+    /// exactly one field and the const's tuple-struct literal folds all the way down to `1`.
+    ///
+    /// Note: the *inner field* must be `pub` for a real `pub struct Weight(u32)` to reach this
+    /// path through the full extractor — `extract_struct` (`extract::extractor::types`) only
+    /// extracts a single-unnamed-field tuple struct's field when `is_pub` holds for that field's
+    /// own visibility, not just the struct's. liter-llm's actual `Weight(u32)` has a *private*
+    /// inner field, so it is extracted as a fully opaque type with zero `FieldDef`s — the warning
+    /// still fires (this fn's `Unresolved` fallback logs unconditionally), but it is inert there:
+    /// `unreadable_field_default_diagnostics` iterates `typ.fields`, which is empty, so no
+    /// diagnostic and no wrong-`0` ever reaches a backend for that specific type today. This test
+    /// exercises `extract_default_values` directly (as every sibling test in this file does,
+    /// bypassing `extract_struct`'s field-visibility gate) to prove the fold works for the shape
+    /// that *does* reach a backend: any single-field newtype whose one field is `pub`. ~keep
+    #[test]
+    fn a_single_field_types_associated_const_tail_folds_to_the_consts_scalar() {
+        let resolved = defaults_for(
+            r#"
+                pub struct Weight(pub u32);
+
+                impl Weight {
+                    pub const ONE: Weight = Weight(1);
+                }
+
+                impl Default for Weight {
+                    fn default() -> Self {
+                        Self::ONE
+                    }
+                }
+            "#,
+            "Weight",
+            &["_0"],
+        );
+
+        assert_eq!(
+            resolved,
+            vec![("_0".to_string(), DefaultValue::IntLiteral(1))],
+            "a foldable associated-const tail must recover the real default, not `Unresolved` and not `0`"
+        );
+    }
+
+    /// Negative control for the same shape: when the const's own initializer is not itself
+    /// foldable (`Weight(u32::MAX)` — the inner expression is a path, not a literal), the field
+    /// must stay `Unresolved`. Without this, the fix above could pass by making every
+    /// `Self::NAME` tail fold to *something*, which is the failure mode that matters most here.
+    #[test]
+    fn an_associated_consts_unfoldable_inner_value_stays_unresolved_not_a_type_zero() {
+        let resolved = defaults_for(
+            r#"
+                pub struct Weight(pub u32);
+
+                impl Weight {
+                    pub const MAX: Weight = Weight(u32::MAX);
+                }
+
+                impl Default for Weight {
+                    fn default() -> Self {
+                        Self::MAX
+                    }
+                }
+            "#,
+            "Weight",
+            &["_0"],
+        );
+
+        assert!(
+            matches!(resolved.as_slice(), [(_, DefaultValue::Unresolved(_))]),
+            "an unfoldable const initializer must be reported, not guessed; got {resolved:?}"
+        );
+        assert_ne!(
+            resolved[0].1,
+            DefaultValue::IntLiteral(0),
+            "collapsing to a zero would be silently wrong: `u32::MAX` is not `0`"
         );
     }
 
