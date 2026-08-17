@@ -73,6 +73,41 @@ fn warn_if_snippet_validation_needs_build(config: &crate::core::config::Resolved
     );
 }
 
+/// Paths this run's ownership guard refused to write that fall inside the crate's
+/// configured `docs.snippets` roots (`dirs`, `inline_dirs`, minus `exclude`).
+///
+/// Mirrors the directory-level inclusion/exclusion `docs::build_snippet_context` applies
+/// before `discover_snippets` walks disk -- not a re-implementation of snippet discovery
+/// itself, just enough to tell whether a refusal earlier in this run landed inside the
+/// tree that `generate_docs_stage`'s snippet validation later reads back off disk. A
+/// non-empty result means that validation -- pass or fail -- was graded against bytes
+/// this run never wrote, which is invisible unless something correlates the two. ~keep
+fn refused_snippet_dir_paths(
+    refused_paths: &std::collections::BTreeSet<PathBuf>,
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+) -> Vec<PathBuf> {
+    let Some(snippet_cfg) = config.docs.as_ref().and_then(|docs| docs.snippets.as_ref()) else {
+        return Vec::new();
+    };
+    let snippet_dirs: Vec<PathBuf> = snippet_cfg
+        .dirs
+        .iter()
+        .chain(&snippet_cfg.inline_dirs)
+        .map(|dir| base_dir.join(dir))
+        .collect();
+    if snippet_dirs.is_empty() {
+        return Vec::new();
+    }
+    let excluded: Vec<PathBuf> = snippet_cfg.exclude.iter().map(|dir| base_dir.join(dir)).collect();
+    refused_paths
+        .iter()
+        .filter(|path| snippet_dirs.iter().any(|dir| path.starts_with(dir)))
+        .filter(|path| !excluded.iter().any(|prefix| path.starts_with(prefix)))
+        .cloned()
+        .collect()
+}
+
 fn sync_registry_versions_before_all(
     config_path: &std::path::Path,
     configs: &[&crate::core::config::ResolvedCrateConfig],
@@ -162,6 +197,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // command came to surface only the scaffold phase's refusals while omitting every
             // binding-phase one from the summary entirely. ~keep
             let mut refusals = pipeline::WriteReport::default();
+            // A per-crate docs/snippet validation failure must not short-circuit formatting, orphan
+            // sweeping, hash finalisation, deferred-formatting reporting or hook installation -- for
+            // this crate or for any crate later in this loop -- because the bindings those steps act
+            // on are already written to disk by the time the docs stage runs. Returning early there
+            // left them unformatted and unstamped, and an unstamped file has no provenance marker for
+            // the ownership guard to recognise next run, which manufactures fresh refusals from a
+            // failure that had nothing to do with writing. The first failure is what this function's
+            // `Result` reports; later ones are only `tracing::error!`-ed so a second crate's distinct
+            // docs failure in the same run is never silently dropped. ~keep
+            let mut docs_stage_error: Option<anyhow::Error> = None;
 
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
@@ -563,21 +608,65 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // run started, and a validation failure against it reads as a defect in freshly
                 // generated content when it is actually a defect in content this run never touched.
                 // Naming the refusal count on the error, right where it surfaces, is what makes that
-                // distinguishable without cross-referencing a warning log emitted stages earlier. ~keep
-                if let Err(error) = doc_result {
-                    if refusals.refused_count() > 0 {
-                        pipeline::report_refused_writes(&refusals);
-                        return Err(error.context(format!(
-                            "{} file write(s) earlier in this run were refused by the ownership guard \
-                             (see the refusal report above). Docs/snippet validation reads content from \
-                             disk, so a refused write leaves stale content in place for it to grade -- if \
-                             this failure looks like a content mismatch rather than a real defect, check \
-                             whether the affected path is among the refused writes and run \
-                             `alef adopt <path>`.",
-                            refusals.refused_count()
-                        )));
+                // distinguishable without cross-referencing a warning log emitted stages earlier.
+                //
+                // A failure here is deferred, not returned: the formatting/sweep/hash-finalisation/
+                // hook-installation steps below must still run for this crate (and this loop must
+                // still reach every later crate) even though its docs stage failed -- see
+                // `docs_stage_error`'s doc comment above the loop for why. `doc_result` is matched by
+                // value instead of re-testing `.is_err()` after this point, because the `Ok` arm right
+                // below still needs the snippet-refusal warning to run exactly once. ~keep
+                match doc_result {
+                    Ok(()) => {
+                        // An `Ok` snippet-validation verdict is not proof the validated content came
+                        // from this run. Same disk-read hazard as the `Err` arm above, just silent
+                        // instead of loud: a refused write inside `docs.snippets.dirs`/`inline_dirs`
+                        // leaves pre-run bytes in place for `discover_snippets` to grade, and a
+                        // validator that happens to accept those stale bytes reports success with no
+                        // trace that this run never produced what it graded. That is the "refused
+                        // 2,897 writes, reported success, validated two-day-old content" failure mode
+                        // -- attribute it here the same way the `Err` arm does. ~keep
+                        let snippet_refusals =
+                            refused_snippet_dir_paths(&refusals.refused_paths, resolved_cfg, &base_dir);
+                        if !snippet_refusals.is_empty() {
+                            tracing::warn!(
+                                "[{}] docs/snippet validation passed, but {} write(s) inside its \
+                                 docs.snippets root(s) were refused by the ownership guard this run -- \
+                                 validation graded stale, pre-run content at those paths, not anything \
+                                 this run rendered: {}",
+                                resolved_cfg.name,
+                                snippet_refusals.len(),
+                                snippet_refusals
+                                    .iter()
+                                    .map(|path| path.display().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                        }
                     }
-                    return Err(error);
+                    Err(error) => {
+                        let error = if refusals.refused_count() > 0 {
+                            pipeline::report_refused_writes(&refusals);
+                            error.context(format!(
+                                "{} file write(s) earlier in this run were refused by the ownership guard \
+                                 (see the refusal report above). Docs/snippet validation reads content from \
+                                 disk, so a refused write leaves stale content in place for it to grade -- if \
+                                 this failure looks like a content mismatch rather than a real defect, check \
+                                 whether the affected path is among the refused writes and run \
+                                 `alef adopt <path>`.",
+                                refusals.refused_count()
+                            ))
+                        } else {
+                            error
+                        };
+                        if docs_stage_error.is_some() {
+                            // A second (or later) crate's docs failure in the same multi-crate run.
+                            // Only one error becomes this function's `Result`; without this, every
+                            // failure past the first would vanish with no trace at all. ~keep
+                            tracing::error!("[{}] docs/snippet validation failed: {error:#}", resolved_cfg.name);
+                        }
+                        docs_stage_error.get_or_insert(error);
+                    }
                 }
 
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
@@ -638,6 +727,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!(
                 "Done: {grand_binding_count} binding files, {grand_stub_count} stub files, {grand_api_count} API files, {grand_scaffold_count} scaffold files, {grand_readme_count} readme files, {grand_e2e_count} e2e files, {grand_doc_count} doc files"
             );
+            // Propagated last, after every crate has been through formatting, orphan sweeping, hash
+            // finalisation and hook installation -- see `docs_stage_error`'s doc comment for why a
+            // docs/snippet validation failure must not reach this point any earlier than this. The
+            // run still exits non-zero and the error's context (including the refusal-count wrapping
+            // above) is untouched; only the timing of the `return` moved. ~keep
+            if let Some(error) = docs_stage_error {
+                return Err(error);
+            }
             Ok(None)
         }
         other => Ok(Some(other)),
