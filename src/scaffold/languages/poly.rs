@@ -169,21 +169,59 @@ const EXCLUDES: &[(&str, ExcludeScope)] = &[
 ];
 
 /// Build the `docs/snippets/**`-equivalent excludes from where the repo actually
-/// configured its snippet roots (`[workspace.docs.snippets] dirs`), instead of a
-/// hardcoded `docs/snippets/**` that assumes every consumer keeps a `docs/` tree.
-/// Snippets are compiled separately by the snippet runner and must not be
-/// linted/reformatted as ordinary source. Mirrors [`snippet_check_hook`]'s own
-/// read of `config.docs.snippets.dirs`. Returns no entries (not even a default)
-/// when the repo hasn't configured `dirs` — nothing to exclude yet, and guessing
-/// `docs/snippets` would reintroduce the phantom-path defect this replaces. ~keep
+/// configured its snippet roots, instead of a hardcoded `docs/snippets/**` that
+/// assumes every consumer keeps a `docs/` tree. Snippets are compiled separately
+/// by the snippet runner and must not be linted/reformatted as ordinary source.
+///
+/// Reads two independent config tables, not one:
+///
+/// - `[workspace.docs.snippets] dirs` — mirrors [`snippet_check_hook`]'s own read of
+///   `config.docs.snippets.dirs`: the roots snippet *validation* discovers files in.
+/// - `[crates.e2e.snippets] output` — the root [`crate::e2e::snippets`] actually
+///   *writes* generated fixture-snippet Markdown into. `docs.snippets` is a separate,
+///   optional feature (MkDocs `--8<--` include discovery); a consumer using only
+///   e2e-generated snippets has no reason to configure it too, and reading `dirs`
+///   alone left `[e2e.snippets] output` — the tree that exists as soon as
+///   `[e2e.snippets]` is configured at all — outside every exclude this function
+///   emits.
+///
+/// The hazard motivating the second table is **latent, not observed**, and deserves that
+/// label: poly's `[lint.uncomment]` pass (on by default in this same generated file) does
+/// not list alef's marker among its preserved patterns, so it *could* strip the
+/// `<!-- alef:hash: -->` comment `docs::render::with_html_header` embeds in generated
+/// snippet Markdown — the only ownership proof such a file carries, since
+/// `marker_comment_style` deliberately excludes `.md` (see its doc) — and losing it makes
+/// the write guard refuse that file permanently. Nobody has watched that happen. The gap
+/// also requires a consumer whose two keys *diverge*; in the trees surveyed they name the
+/// same directory, so it is inert there and none of them is a test case for it. Fixed
+/// because the divergent-key case is real and the fix is cheap, not because a live
+/// instance is known.
+///
+/// Returns no entries (not even a default) when the repo has configured neither —
+/// nothing to exclude yet, and guessing `docs/snippets` would reintroduce the
+/// phantom-path defect this replaces. Deduplicated so a consumer who points both
+/// configs at the same directory gets one exclude entry, not two identical ones. ~keep
 fn docs_snippets_excludes(config: &ResolvedCrateConfig) -> Vec<ExcludeEntry> {
-    let Some(snippets) = config.docs.as_ref().and_then(|d| d.snippets.as_ref()) else {
-        return Vec::new();
-    };
-    snippets
-        .dirs
-        .iter()
-        .map(|dir| ExcludeEntry::root(format!("{}/**", dir.to_string_lossy().trim_end_matches('/'))))
+    let mut dirs: Vec<String> = config
+        .docs
+        .as_ref()
+        .and_then(|docs| docs.snippets.as_ref())
+        .into_iter()
+        .flat_map(|snippets| snippets.dirs.iter())
+        .map(|dir| dir.to_string_lossy().trim_end_matches('/').to_string())
+        .collect();
+    if let Some(output) = config
+        .e2e
+        .as_ref()
+        .and_then(|e2e| e2e.snippets.as_ref())
+        .map(|snippets| snippets.output.trim_end_matches('/'))
+        && !output.is_empty()
+        && !dirs.iter().any(|dir| dir.as_str() == output)
+    {
+        dirs.push(output.to_string());
+    }
+    dirs.into_iter()
+        .map(|dir| ExcludeEntry::root(format!("{dir}/**")))
         .collect()
 }
 

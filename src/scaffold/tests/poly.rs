@@ -275,6 +275,100 @@ dirs = ["docs/snippets", "docs/more-snippets"]"#,
     assert!(c.contains("\"docs/more-snippets/**\""), "got:\n{c}");
 }
 
+/// Build a `ResolvedCrateConfig` with `[crates.e2e.snippets] output` set, and
+/// optionally an extra `[workspace.*]` table, so `docs_snippets_excludes` can be
+/// exercised against the tree `e2e::snippets` actually writes into, independent of
+/// the unrelated `[workspace.docs.snippets] dirs` table.
+fn test_config_with_e2e_snippet_output(output: &str, extra_workspace_toml: &str) -> ResolvedCrateConfig {
+    let cfg: NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["python"]
+
+{extra_workspace_toml}
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.scaffold]
+description = "Test library"
+license = "MIT"
+repository = "https://github.com/test/my-lib"
+authors = ["Alice"]
+keywords = ["test"]
+
+[crates.e2e]
+fixtures = "fixtures"
+
+[crates.e2e.call]
+
+[crates.e2e.snippets]
+output = "{output}"
+"#,
+    ))
+    .expect("valid toml");
+    cfg.resolve().expect("resolve ok").remove(0)
+}
+
+/// Regression for the gap that left `[e2e.snippets] output` unprotected: a repo that
+/// configures e2e-generated fixture snippets but never separately configures the
+/// unrelated `[workspace.docs.snippets] dirs` table (a different feature entirely --
+/// MkDocs `--8<--` include discovery) must still get its snippet output tree excluded
+/// from poly's discovery. Without this, poly's own `[lint.uncomment]` pass strips the
+/// un-`~keep`-marked `<!-- alef:hash: -->` marker that is the ONLY ownership proof a
+/// generated `.md` snippet carries, and the write guard then refuses every one of
+/// those files forever. ~keep
+#[test]
+fn poly_toml_discovery_excludes_e2e_snippet_output_without_docs_snippets_config() {
+    let config = test_config_with_e2e_snippet_output("docs-site/src/snippets/generated", "");
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        c.contains("\"docs-site/src/snippets/generated/**\""),
+        "e2e.snippets.output must be excluded from discovery even with no docs.snippets config; got:\n{c}"
+    );
+}
+
+/// The negative control for the regression above: no `[e2e.snippets]` and no
+/// `[workspace.docs.snippets]` configured at all must not hallucinate an exclude.
+#[test]
+fn poly_toml_omits_e2e_snippet_exclude_when_e2e_has_no_snippets_table() {
+    let config = test_config();
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+    let c = &poly_toml(&files).content;
+
+    assert!(
+        !c.contains("docs-site/src/snippets"),
+        "must not invent a snippet exclude with no e2e.snippets or docs.snippets config; got:\n{c}"
+    );
+}
+
+/// A consumer who points both `[e2e.snippets] output` and `[workspace.docs.snippets]
+/// dirs` at the identical directory must get exactly one exclude entry for it, not a
+/// duplicate — the two config tables serve different features but can legitimately
+/// name the same tree.
+#[test]
+fn poly_toml_dedupes_snippet_exclude_when_e2e_output_matches_docs_snippets_dir() {
+    let config = test_config_with_e2e_snippet_output(
+        "docs/snippets",
+        r#"[workspace.docs.snippets]
+dirs = ["docs/snippets"]"#,
+    );
+    let files = scaffold_poly_config(&config, &[Language::Python]);
+    let c = &poly_toml(&files).content;
+
+    // Root-scoped excludes are emitted leading-slash-anchored (`/docs/snippets/**`), same as the
+    // sibling `/.alef/**` and `/fixtures/**` entries. Matching on the unanchored spelling counts
+    // zero and would fail a working dedupe, so the anchored form is the one to assert. ~keep
+    assert_eq!(
+        c.matches("\"/docs/snippets/**\"").count(),
+        1,
+        "identical e2e.snippets.output and docs.snippets.dirs entries must not duplicate; got:\n{c}"
+    );
+}
+
 #[test]
 fn poly_toml_php_uses_mago_correctness_security() {
     let config = test_config();
