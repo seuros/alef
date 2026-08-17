@@ -49,7 +49,11 @@ pub fn collect_cfg_feature_names(cfg_str: &str, out: &mut BTreeSet<String>) {
 }
 
 /// Walk the full [`ApiSurface`] and return the set of feature names referenced
-/// by any cfg attribute on a type, field, enum variant, or top-level function.
+/// by any cfg attribute on a type, field, method, enum variant, or top-level function.
+///
+/// Methods count: a Rust-emitting backend re-emits a gated method's `#[cfg(feature = "X")]`
+/// verbatim into its binding crate, so `X` must exist in that crate's `[features]` table or
+/// the build fails with `unexpected cfg condition value: X`. ~keep
 ///
 /// The set is sorted (via `BTreeSet`) so the resulting Cargo.toml is stable
 /// across regenerations.
@@ -84,6 +88,11 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
                 collect_cfg_feature_names(cfg, &mut out);
             }
         }
+        for method in &typ.methods {
+            if let Some(cfg) = &method.cfg {
+                collect_cfg_feature_names(cfg, &mut out);
+            }
+        }
     }
     for enum_def in &api.enums {
         if !is_host(&enum_def.rust_path) {
@@ -94,6 +103,11 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
         }
         for variant in &enum_def.variants {
             if let Some(cfg) = &variant.cfg {
+                collect_cfg_feature_names(cfg, &mut out);
+            }
+        }
+        for method in &enum_def.methods {
+            if let Some(cfg) = &method.cfg {
                 collect_cfg_feature_names(cfg, &mut out);
             }
         }
@@ -350,6 +364,48 @@ mod tests {
         let features = collect_cfg_features(&api);
         let want: BTreeSet<String> = ["heic", "pdf"].into_iter().map(String::from).collect();
         assert_eq!(features, want);
+    }
+
+    #[test]
+    fn collect_cfg_features_includes_method_gates() {
+        // A Rust-emitting backend re-emits a gated method's `#[cfg(feature = "X")]` into its own
+        // crate, so `X` must reach that crate's `[features]` table or the build fails with
+        // `unexpected cfg condition value`. ~keep
+        use crate::core::ir::MethodDef;
+
+        let api = ApiSurface {
+            crate_name: "mylib".to_string(),
+            types: vec![TypeDef {
+                name: "Client".to_string(),
+                rust_path: "mylib::Client".to_string(),
+                methods: vec![
+                    MethodDef {
+                        name: "ping".to_string(),
+                        ..Default::default()
+                    },
+                    MethodDef {
+                        name: "stream".to_string(),
+                        cfg: Some(r#"feature = "streaming""#.to_string()),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            enums: vec![EnumDef {
+                name: "Format".to_string(),
+                rust_path: "mylib::Format".to_string(),
+                methods: vec![MethodDef {
+                    name: "from_mime".to_string(),
+                    cfg: Some(r#"all(feature = "mime", feature = "sniff")"#.to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let want: BTreeSet<String> = ["mime", "sniff", "streaming"].into_iter().map(String::from).collect();
+        assert_eq!(collect_cfg_features(&api), want);
     }
 
     #[test]

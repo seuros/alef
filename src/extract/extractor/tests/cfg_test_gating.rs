@@ -44,6 +44,119 @@ fn test_cfg_test_method_excluded_feature_method_retained() {
         method_names.contains(&"feature_config"),
         "#[cfg(feature = \"x\")] method must be retained, got {method_names:?}"
     );
+
+    // Retention used to be the whole contract: the gate itself was read and thrown away, so
+    // `feature_config` reached every backend as an unconditional method. That is now reversed —
+    // `MethodDef` carries `cfg`, because one `ApiSurface` is extracted once and handed to every
+    // backend with its own `features_for_language`, so the gate cannot be resolved at extraction
+    // time and must survive into the IR. ~keep
+    let feature_config = config
+        .methods
+        .iter()
+        .find(|m| m.name == "feature_config")
+        .expect("feature_config should be extracted");
+    assert_eq!(
+        feature_config.cfg.as_deref(),
+        Some("feature = \"x\""),
+        "a gated method must carry its own cfg into the IR"
+    );
+}
+
+/// A method's gate is the conjunction of its own `#[cfg]` and its `impl` block's: the method
+/// is compiled only when both hold. The block's gate used to be ignored entirely (only
+/// `is_test_gated` was consulted), so a method in a `#[cfg(feature = "x")] impl` block reached
+/// backends unconditionally.
+#[test]
+fn method_cfg_and_combines_with_its_impl_block_cfg() {
+    let source = r#"
+        pub struct Gauge {
+            pub value: u32,
+        }
+
+        #[cfg(feature = "metrics")]
+        impl Gauge {
+            pub fn read(&self) -> u32 {
+                self.value
+            }
+
+            #[cfg(feature = "histogram")]
+            pub fn buckets(&self) -> u32 {
+                self.value
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let gauge = surface
+        .types
+        .iter()
+        .find(|t| t.name == "Gauge")
+        .expect("Gauge should be extracted");
+
+    let read = gauge.methods.iter().find(|m| m.name == "read").expect("read");
+    assert_eq!(
+        read.cfg.as_deref(),
+        Some("feature = \"metrics\""),
+        "an ungated method inherits its impl block's gate verbatim"
+    );
+
+    let buckets = gauge.methods.iter().find(|m| m.name == "buckets").expect("buckets");
+    assert_eq!(
+        buckets.cfg.as_deref(),
+        Some("all(feature = \"metrics\", feature = \"histogram\")"),
+        "a gated method AND-combines with its impl block's gate"
+    );
+}
+
+/// The two halves of the contract, asserted together: extraction must *retain* the gate, and
+/// per-language filtering must then *use* it. Retention without filtering is as wrong as
+/// dropping — the gate would reach a backend that cannot express it and be emitted
+/// unconditionally, referencing an FFI symbol the linked library never compiled.
+#[test]
+fn gated_method_survives_extraction_then_drops_for_a_language_without_the_feature() {
+    let source = r#"
+        pub struct Client {
+            pub id: u32,
+        }
+
+        impl Client {
+            pub fn ping(&self) -> u32 {
+                self.id
+            }
+
+            #[cfg(feature = "streaming")]
+            pub fn stream(&self) -> u32 {
+                self.id
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let extracted: Vec<&str> = surface.types[0].methods.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(
+        extracted,
+        vec!["ping", "stream"],
+        "half one: extraction retains the gated method"
+    );
+
+    let with_feature: std::collections::HashSet<&str> = ["streaming"].into_iter().collect();
+    let kept = surface.with_cfg_filtered_deep(&with_feature);
+    let kept_names: Vec<&str> = kept.types[0].methods.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(
+        kept_names,
+        vec!["ping", "stream"],
+        "half two: a language whose feature set satisfies the gate keeps the method"
+    );
+
+    let without_feature: std::collections::HashSet<&str> = ["other"].into_iter().collect();
+    let dropped = surface.with_cfg_filtered_deep(&without_feature);
+    let dropped_names: Vec<&str> = dropped.types[0].methods.iter().map(|m| m.name.as_str()).collect();
+    assert_eq!(
+        dropped_names,
+        vec!["ping"],
+        "half two: a language whose feature set does not satisfy the gate drops the method, and \
+         the ungated control is unaffected"
+    );
 }
 
 /// A whole `#[cfg(test)]` impl block must be skipped, while its sibling normal impl

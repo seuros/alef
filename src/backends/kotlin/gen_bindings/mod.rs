@@ -639,6 +639,19 @@ impl Backend for KotlinBackend {
                  `alef-backend-kotlin-android` crate instead."
             );
         }
+        // Kotlin emits one host member per IR item with no Rust-cfg gating of its own, so every
+        // emission path below must first drop what this binding's feature set does not satisfy —
+        // cfg-gated methods included. Filtering here rather than per-path keeps the four targets
+        // (KMP, JNI, JVM, Native) from drifting apart. ~keep
+        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Kotlin);
+        let kotlin_features: std::collections::HashSet<&str> = config
+            .features_for_language(Language::Kotlin)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let cfg_filtered_api = api.with_cfg_filtered_deep(&kotlin_features);
+        let api = &cfg_filtered_api;
+
         if mode == Some("kmp") {
             let mut files = crate::backends::kotlin::gen_mpp::emit(api, config)?;
             post_process_kotlin_files(&mut files);

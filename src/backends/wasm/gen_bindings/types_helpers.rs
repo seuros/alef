@@ -1,14 +1,18 @@
 //! Shared helpers for WASM type generation.
 
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, MethodDef, TypeRef};
 use ahash::AHashSet;
 
-/// Return a WASM binding surface whose struct fields match the backend feature set.
+/// Return a WASM binding surface whose struct fields and methods match the backend feature set.
 ///
-/// The extractor can retain a cfg-gated field when the source crate was extracted with a
-/// broader feature set than the WASM binding crate uses. Downstream struct and conversion
-/// generators expect one coherent field list, so drop inactive fields and clear cfg markers
-/// from active fields before generating WASM bindings.
+/// The extractor can retain a cfg-gated field or method when the source crate was extracted with
+/// a broader feature set than the WASM binding crate uses. Downstream struct, method and
+/// conversion generators expect one coherent list, so drop inactive members and clear cfg markers
+/// from active ones before generating WASM bindings.
+///
+/// Methods matter as much as fields here: `wasm_bindgen` emits one JS-visible export per method
+/// with no Rust-cfg gating of its own, so a method left in place under a feature the binding
+/// crate does not enable becomes a call into a core method that is not compiled. ~keep
 pub(in crate::backends::wasm::gen_bindings) fn filter_cfg_fields_for_features(
     api: &ApiSurface,
     enabled_features: &[String],
@@ -30,8 +34,31 @@ pub(in crate::backends::wasm::gen_bindings) fn filter_cfg_fields_for_features(
         }
 
         typ.fields = fields;
+        typ.methods = retain_enabled_methods(std::mem::take(&mut typ.methods), enabled_features);
+    }
+    for enum_def in &mut filtered.enums {
+        enum_def.methods = retain_enabled_methods(std::mem::take(&mut enum_def.methods), enabled_features);
+    }
+    for error in &mut filtered.errors {
+        error.methods = retain_enabled_methods(std::mem::take(&mut error.methods), enabled_features);
     }
     filtered
+}
+
+fn retain_enabled_methods(methods: Vec<MethodDef>, enabled_features: &[String]) -> Vec<MethodDef> {
+    methods
+        .into_iter()
+        .filter_map(|mut method| {
+            let Some(cfg) = method.cfg.as_deref() else {
+                return Some(method);
+            };
+            if !super::super::cfg::cfg_condition_enabled(cfg, enabled_features) {
+                return None;
+            }
+            method.cfg = None;
+            Some(method)
+        })
+        .collect()
 }
 
 /// Returns `true` when `ty` is `Vec<Named>` where `Named` is a tagged-data enum.

@@ -268,6 +268,18 @@ impl Backend for JavaBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Java emits one host method per IR method and resolves native symbols eagerly at class
+        // init, so binding a symbol the FFI cdylib does not export fails the whole class, not the
+        // one call. Drop whatever this binding's feature set does not satisfy — cfg-gated methods
+        // included — before anything reads the surface. Mirrors `filtered_jni_api`. ~keep
+        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Java);
+        let java_features: HashSet<&str> = config
+            .features_for_language(Language::Java)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let cfg_filtered_api = api.with_cfg_filtered_deep(&java_features);
+        let api = &cfg_filtered_api;
         // The surface as the FFI backend sees it, kept alongside the Java-filtered one so
         // the trait-bridge loop can prove Java's vtable matches the Rust vtable struct. ~keep
         let source_api = api;

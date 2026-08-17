@@ -478,13 +478,24 @@ pub(super) fn gen_cbindgen_toml(
 }
 
 fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &str) -> Vec<(String, String)> {
+    // Method gates count as much as item gates: `gen_method_wrapper` emits `#[cfg(...)]` on the
+    // exported wrapper, and a feature missing from `[defines]` makes cbindgen emit that
+    // declaration *unguarded* rather than dropping or guarding it — see the note below. ~keep
+    let method_cfgs = api
+        .types
+        .iter()
+        .flat_map(|item| item.methods.iter())
+        .chain(api.enums.iter().flat_map(|item| item.methods.iter()))
+        .chain(api.errors.iter().flat_map(|item| item.methods.iter()))
+        .filter_map(|method| method.cfg.as_deref());
     let mut cfgs = api
         .types
         .iter()
         .filter_map(|item| item.cfg.as_deref())
         .chain(api.enums.iter().filter_map(|item| item.cfg.as_deref()))
         .chain(api.functions.iter().filter_map(|item| item.cfg.as_deref()))
-        .chain(api.services.iter().filter_map(|item| item.cfg.as_deref()));
+        .chain(api.services.iter().filter_map(|item| item.cfg.as_deref()))
+        .chain(method_cfgs);
     let mut features = std::collections::BTreeSet::new();
     for cfg in &mut cfgs {
         collect_cfg_feature_names(cfg, &mut features);

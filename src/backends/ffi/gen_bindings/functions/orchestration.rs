@@ -190,7 +190,11 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             fn_name => fn_name.clone(),
             params => params,
             return_type => return_type,
-            source_cfg => typ.cfg.as_deref().unwrap_or(""),
+            // The export exists only where both gates hold: the owning type's and the method's
+            // own (which already carries its `impl` block's, AND-combined at extraction). Every
+            // language backend that binds this symbol drops the method under the same predicate
+            // via `ApiSurface::with_cfg_filtered_deep`, so the two sides agree. ~keep
+            source_cfg => method.cfg_within(typ.cfg.as_deref()).unwrap_or_default(),
         },
     );
 
