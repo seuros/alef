@@ -521,6 +521,129 @@ fn dropped_streaming_field_assertion_carries_the_unsupported_field_marker() {
     );
 }
 
+/// Regression test: `render_streaming_test_method`'s non-chat-stream branch must gate field
+/// assertions on `e2e_config.effective_result_fields(call_config)`, not on
+/// `call_config.result_fields` directly. A per-call `result_fields` list REPLACES the global
+/// one rather than merging with it, so a crate that configures only `[crates.e2e].result_fields`
+/// leaves every per-call `result_fields` empty — and the gate this test exercises,
+/// `!result_fields.iter().any(|f| field.starts_with(f))`, is vacuously true on an empty set,
+/// which degraded every non-chat streaming assertion to a skip comment while the suite still
+/// reported green (fixed in 4fc82aca8).
+///
+/// The existing `emit_non_chat_stream_assertion`-level test in `streaming.rs` cannot catch this:
+/// it calls the leaf helper directly with a hand-built `HashSet`, so it never observes which set
+/// `render_streaming_test_method` actually threads through. This test goes through the real
+/// wiring instead — only `[e2e].result_fields` (the global set) names the asserted field; the
+/// call config's own `result_fields` is left empty, exactly the shape that reached production. ~keep
+#[test]
+fn render_streaming_test_method_gates_non_chat_assertions_on_the_effective_result_fields() {
+    let fixture = Fixture {
+        id: "stream_custom_field_smoke".into(),
+        description: "Streaming custom field smoke".into(),
+        assertions: vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("custom_field".into()),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    // No per-call override: `call_config.result_fields` is empty, as it always is for a crate
+    // that only ever configures the global `[e2e].result_fields`.
+    let call_config = CallConfig::default();
+    let e2e_config = E2eConfig {
+        result_fields: ["custom_field".to_string()].into_iter().collect::<HashSet<_>>(),
+        ..E2eConfig::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    super::render_streaming_test_method(
+        &mut out,
+        &fixture,
+        "Widget",
+        &call_config,
+        None,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        "WidgetException",
+        &[],
+        &config,
+        &[],
+        &[],
+        Some("ChunkItem"),
+    );
+
+    assert!(
+        out.contains("Assert.NotEmpty(chunks);"),
+        "expected a real assertion for a field named by the global result_fields set, got:\n{out}"
+    );
+    assert!(
+        !out.contains("skipped: streaming assertion on unsupported field 'custom_field'"),
+        "the globally-configured field must not degrade to a skip comment, got:\n{out}"
+    );
+}
+
+/// Negative control for the test above: a field that is genuinely absent from the effective
+/// `result_fields` set — global or per-call — must still degrade to a skip comment. Without
+/// this control, a "fix" that stopped gating on `result_fields` at all (emitting a real
+/// assertion for every field, tracked or not) would pass the positive test above while quietly
+/// destroying the skip mechanism `fail_on_unavailable_field_markers` depends on. ~keep
+#[test]
+fn render_streaming_test_method_still_skips_a_field_absent_from_the_effective_result_fields() {
+    let fixture = Fixture {
+        id: "stream_missing_field_smoke".into(),
+        description: "Streaming missing field smoke".into(),
+        assertions: vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("definitely_missing_field".into()),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    let call_config = CallConfig::default();
+    let e2e_config = E2eConfig {
+        result_fields: ["custom_field".to_string()].into_iter().collect::<HashSet<_>>(),
+        ..E2eConfig::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    super::render_streaming_test_method(
+        &mut out,
+        &fixture,
+        "Widget",
+        &call_config,
+        None,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        "WidgetException",
+        &[],
+        &config,
+        &[],
+        &[],
+        Some("ChunkItem"),
+    );
+
+    assert!(
+        out.contains("skipped: streaming assertion on unsupported field 'definitely_missing_field'"),
+        "a field absent from the effective result_fields set must still be skipped, got:\n{out}"
+    );
+    assert!(
+        !out.contains("Assert.NotEmpty(chunks);"),
+        "no real assertion should be emitted for an unsupported field, got:\n{out}"
+    );
+}
+
 /// Regression test for alef task #86: a `visitor` fixture whose options type resolves
 /// from neither `[e2e.call]` nor any `[[crates.trait_bridges]]` entry used to emit
 /// `[Fact] public void TestX() { return; }` — a test xUnit reports as PASSING while

@@ -842,7 +842,12 @@ fn render_test_method(
     // file-level `enum_fields` argument carries the default-call's override;
     // `cs_overrides.enum_fields` carries the per-fixture-call's override
     // (e.g. retrieve_batch.overrides.csharp.enum_fields).
-    let mut effective_enum_fields: std::collections::HashSet<String> = e2e_config.fields_enum.clone();
+    // Must be the EFFECTIVE set: a per-call `fields_enum` REPLACES the global rather than merging,
+    // so reading the global directly discards the override outright. Every other language resolves
+    // this through the accessor; C# was the only one reading the raw global. This is a different
+    // axis from the per-language `enum_fields` override maps merged in just below. ~keep
+    let mut effective_enum_fields: std::collections::HashSet<String> =
+        e2e_config.effective_fields_enum(call_config).clone();
     for k in enum_fields.keys() {
         effective_enum_fields.insert(k.clone());
     }
