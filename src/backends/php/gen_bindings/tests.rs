@@ -337,3 +337,141 @@ fn tagged_data_enum_forces_crate_wide_serde_even_when_probe_finds_none() {
         lib.content
     );
 }
+
+/// Fixture mirroring the shape that made the defect visible: a unit-variant enum carrying
+/// `#[serde(rename_all = "snake_case")]` and a multi-word variant. The `rename_all` is
+/// load-bearing, not decoration — without it `wire_variant_value` returns the Rust ident
+/// verbatim, the emitted match arm carries `"InProgress" | "inprogress"`, and a constant holding
+/// the Rust ident would match by accident. A fixture without `rename_all` therefore proves
+/// nothing about either side. ~keep
+fn snake_case_unit_enum() -> crate::core::ir::EnumDef {
+    use crate::core::ir::{EnumDef, EnumVariant};
+
+    EnumDef {
+        name: "BatchStatus".to_string(),
+        rust_path: "sample_crate::BatchStatus".to_string(),
+        serde_rename_all: Some("snake_case".to_string()),
+        variants: vec![
+            EnumVariant {
+                name: "InProgress".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Failed".to_string(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// A struct carrying that enum by value, which is what routes the field through
+/// `gen_string_to_enum_expr` and produces the binding->core match arms.
+fn struct_with_unit_enum_field() -> crate::core::ir::TypeDef {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    TypeDef {
+        name: "BatchObject".to_string(),
+        rust_path: "sample_crate::BatchObject".to_string(),
+        has_serde: true,
+        fields: vec![FieldDef {
+            name: "status".to_string(),
+            ty: TypeRef::Named("BatchStatus".to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// The PHP class constant the extension registers for a unit-variant enum must hold the serde
+/// wire value. It used to hold the Rust variant ident (`"InProgress"`), which is neither what the
+/// extension's binding->core match accepts nor what its core->binding direction
+/// (`serde_json::to_value`) produces.
+#[test]
+fn php_enum_class_constant_carries_the_serde_wire_value_not_the_rust_variant_name() {
+    let emitted = super::types::gen_enum_constants(&snake_case_unit_enum(), None);
+
+    assert!(
+        emitted.contains("pub const INPROGRESS: &str = \"in_progress\";"),
+        "the constant must carry the serde wire value, got:\n{emitted}"
+    );
+    assert!(
+        !emitted.contains("\"InProgress\""),
+        "the Rust variant ident must not survive as the constant's value, got:\n{emitted}"
+    );
+    assert!(
+        emitted.contains("pub const FAILED: &str = \"failed\";"),
+        "a single-word variant is renamed by `rename_all` too, so it must also carry the wire \
+         value rather than `\"Failed\"`, got:\n{emitted}"
+    );
+}
+
+/// The invariant that actually matters, asserted across the two generators rather than inside
+/// either: every value `gen_enum_constants` publishes as a PHP class constant must be a value the
+/// generated binding->core match accepts. Otherwise a caller who passes the extension's own
+/// constant hits the match's `_ =>` fallback and silently receives the default variant.
+#[test]
+fn php_enum_class_constant_values_are_all_accepted_by_the_generated_string_to_core_match() {
+    use ahash::AHashSet;
+
+    let enum_def = snake_case_unit_enum();
+    let enum_names: AHashSet<String> = std::iter::once("BatchStatus".to_string()).collect();
+    let conversion = super::helpers::gen_php_lossy_binding_to_core_fields(
+        &struct_with_unit_enum_field(),
+        "sample_crate",
+        &enum_names,
+        &AHashSet::new(),
+        std::slice::from_ref(&enum_def),
+    );
+
+    let constants = super::types::gen_enum_constants(&enum_def, None);
+    let values: Vec<String> = constants
+        .lines()
+        .filter_map(|line| line.split_once("= \"").and_then(|(_, rest)| rest.split_once('"')))
+        .map(|(value, _)| value.to_string())
+        .collect();
+
+    assert_eq!(
+        values.len(),
+        enum_def.variants.len(),
+        "apparatus check: one constant value must be extracted per variant, or the loop below \
+         asserts nothing. Extracted {values:?} from:\n{constants}"
+    );
+
+    for value in &values {
+        assert!(
+            conversion.contains(&format!("\"{value}\"")),
+            "the constant value `{value}` is not a match arm of the generated binding->core \
+             conversion, so passing it would fall through to the default variant. Conversion:\n{conversion}"
+        );
+    }
+}
+
+/// Negative control for the test above. It compares constant values against match arms, so it
+/// would pass vacuously if the match accepted *every* string. It does not: the Rust variant ident
+/// — the value the constant used to carry — is absent, which is precisely why the old constant was
+/// unusable.
+#[test]
+fn the_generated_string_to_core_match_does_not_accept_the_rust_variant_name() {
+    use ahash::AHashSet;
+
+    let enum_def = snake_case_unit_enum();
+    let enum_names: AHashSet<String> = std::iter::once("BatchStatus".to_string()).collect();
+    let conversion = super::helpers::gen_php_lossy_binding_to_core_fields(
+        &struct_with_unit_enum_field(),
+        "sample_crate",
+        &enum_names,
+        &AHashSet::new(),
+        std::slice::from_ref(&enum_def),
+    );
+
+    assert!(
+        conversion.contains("\"in_progress\""),
+        "apparatus check: the wire-named arm must be present, got:\n{conversion}"
+    );
+    assert!(
+        !conversion.contains("\"InProgress\""),
+        "the match must NOT accept the Rust variant ident -- if it did, the constant's value \
+         would be interchangeable and the assertion it anchors would prove nothing, got:\n{conversion}"
+    );
+}

@@ -31,14 +31,44 @@ pub(crate) fn gen_enum_constants(enum_def: &EnumDef, php_namespace: Option<&str>
     lines.push("#[php_impl]".to_string());
     lines.push(format!("impl {} {{", enum_def.name));
 
-    for variant in &enum_def.variants {
-        let const_name = escape_php_reserved_constant(&variant.name.to_uppercase());
-        lines.push(format!("    pub const {}: &str = \"{}\";", const_name, variant.name));
+    for (const_name, wire_value) in enum_constant_entries(enum_def) {
+        lines.push(format!("    pub const {const_name}: &str = \"{wire_value}\";"));
     }
 
     lines.push("}".to_string());
 
     lines.join("\n")
+}
+
+/// Compute each variant's `(PHP constant name, wire value)` pair for a unit-variant enum's
+/// constants-only class.
+///
+/// The VALUE is the serde wire name, not the Rust variant ident, because both directions of the
+/// extension's own conversion speak wire names: binding->core matches on `wire_variant_value`
+/// (`helpers::enum_defaults::gen_string_to_enum_expr`) and core->binding produces
+/// `serde_json::to_value(..)`. A constant carrying the Rust ident therefore matches nothing the
+/// extension accepts and equals nothing it returns — `BatchStatus::INPROGRESS` ("InProgress") falls
+/// through to the match's fallback arm and silently becomes the default variant, and
+/// `$obj->status === BatchStatus::INPROGRESS` is never true.
+///
+/// Shared by [`gen_enum_constants`] (the runtime `#[php_impl]` block) and the PHPStan stub's
+/// `gen_enum_stub` (`type_stubs.rs`), so the two surfaces cannot independently drift on member
+/// names or values — the stub declares exactly what this function tells the runtime to register,
+/// not a native PHP `enum` the extension never registers. ~keep
+pub(crate) fn enum_constant_entries(enum_def: &EnumDef) -> Vec<(String, String)> {
+    enum_def
+        .variants
+        .iter()
+        .map(|variant| {
+            let const_name = escape_php_reserved_constant(&variant.name.to_uppercase());
+            let wire_value = wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            (const_name, wire_value)
+        })
+        .collect()
 }
 
 /// PHP class constant names are case-insensitively reserved against PHP keywords.
