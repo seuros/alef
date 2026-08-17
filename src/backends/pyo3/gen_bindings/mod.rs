@@ -393,13 +393,34 @@ impl Backend for Pyo3Backend {
                             None
                         };
 
-                        if config_ref
-                            .resolve_field_name(crate::core::config::Language::Python, &type_name, &field.name)
-                            .is_some()
-                        {
+                        if let Some(binding_name) = config_ref.resolve_field_name(
+                            crate::core::config::Language::Python,
+                            &type_name,
+                            &field.name,
+                        ) {
+                            // Two different renames are folded into `resolve_field_name`, and they
+                            // need opposite treatment on the Python side. A configured
+                            // `rename_fields` entry renames the Rust field only, so `pyo3(name)`
+                            // hands the original name back to Python. A reserved-word escape
+                            // cannot: Python has no `r#`/backtick escape, so `obj.global` is a
+                            // SyntaxError no matter how the attribute was registered, and the
+                            // `.pyi` stub already declares the escaped spelling
+                            // (`gen_stubs::python_safe_name`). Exposing the escaped name is what
+                            // makes the stub and the runtime attribute agree.
+                            //
+                            // `serde(rename)` stays on the *wire* name in both cases, and prefers
+                            // the core type's own `#[serde(rename)]` when it has one -- deriving
+                            // the JSON key from the escaped Rust field name instead would silently
+                            // move it. ~keep
+                            let python_name = if crate::core::keywords::python_safe_name(&field.name).is_some() {
+                                binding_name
+                            } else {
+                                field.name.clone()
+                            };
+                            let wire_name = field.serde_rename.clone().unwrap_or_else(|| field.name.clone());
                             let mut attrs = vec![
-                                format!("pyo3(get, name = \"{}\")", field.name),
-                                format!("serde(rename = \"{}\")", field.name),
+                                format!("pyo3(get, name = \"{python_name}\")"),
+                                format!("serde(rename = \"{wire_name}\")"),
                             ];
                             if let Some(a) = json_attr {
                                 attrs.push(a);

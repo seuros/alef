@@ -80,7 +80,13 @@ pub(super) fn emit_converters(
             && !reexported_names.contains(type_name.as_str());
         let is_reexported = reexported_names.contains(type_name.as_str());
 
+        // `name` is a raw Rust field name, but what is being read here is the *emitted* Python
+        // attribute / TypedDict key, and both of those are already escaped (`types.rs` and
+        // `types/typeddict.rs` build them with `python_ident`). Reading `value.global` would be a
+        // SyntaxError, and `value.get("global")` would miss the `"global_"` key that is actually
+        // there. `python_ident` is idempotent, so non-keyword names are untouched. ~keep
         let field_access = |name: &str| -> String {
+            let name = crate::core::keywords::python_ident(name);
             if is_typeddict {
                 format!("value.get(\"{name}\")")
             } else {
@@ -569,7 +575,14 @@ pub(super) fn emit_converters(
                 final_accessor
             };
 
-            let pyo3_param_name = field.serde_rename.as_deref().unwrap_or(&field.name);
+            // This is the keyword-argument name in the emitted `_rust.{Type}(...)` call, so it must
+            // be exactly what the generated `#[new]` accepts. `constructors::resolve_param_ident`
+            // is that signature's single source of truth and applies `python_ident` to the same
+            // serde-rename-then-field-name resolution, so mirroring the escape here keeps the two
+            // in step; without it a field named `global` emits `_rust.T(global=...)`, which does
+            // not parse at all. ~keep
+            let pyo3_param_name =
+                crate::core::keywords::python_ident(field.serde_rename.as_deref().unwrap_or(&field.name));
 
             // If this field has a #[serde(default)] and is non-optional in the binding,
             let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
@@ -581,7 +594,7 @@ pub(super) fn emit_converters(
                 out.push_str(&crate::backends::pyo3::template_env::render(
                     "field_kwarg_optional_default.jinja",
                     minijinja::context! {
-                        name => pyo3_param_name,
+                        name => &pyo3_param_name,
                         raw_accessor => &raw_field_accessor,
                         final_accessor => &final_accessor,
                     },
@@ -590,7 +603,7 @@ pub(super) fn emit_converters(
                 out.push_str(&crate::backends::pyo3::template_env::render(
                     "field_kwarg.jinja",
                     minijinja::context! {
-                        name => pyo3_param_name,
+                        name => &pyo3_param_name,
                         accessor => &final_accessor,
                     },
                 ));

@@ -164,6 +164,13 @@ fn build_type(
     let mut entries: Vec<AliasEntry> = Vec::new();
     for field in binding_fields(&typ.fields) {
         let wire = wire_field_name(&field.name, field.serde_rename.as_deref(), rename_all);
+        // `rust` is looked up against the dict `dataclasses.asdict(value)` returns, so it has to be
+        // the *emitted* attribute name, not the Rust one — the dataclass field for `global` is
+        // `global_` (`types.rs`, via `python_ident`). This is also what decides whether a field
+        // needs an alias entry at all: a keyword field's attribute name differs from its wire name
+        // even when no `serde(rename)` is involved, so comparing the wire name against the raw Rust
+        // name would drop the entry and silently ship `{"global_": ...}` on the wire. ~keep
+        let python_attr = crate::core::keywords::python_ident(&field.name);
         match coercible_payload(&field.ty, coercible) {
             Some((dto_name, shape)) => {
                 let nested = if path.iter().any(|p| p == dto_name) {
@@ -173,16 +180,16 @@ fn build_type(
                     pyo3_wire_schema_const_name(dto_name)
                 };
                 entries.push(AliasEntry {
-                    rust: field.name.clone(),
+                    rust: python_attr,
                     wire,
                     kind: shape.wire_kind(),
                     nested,
                 });
             }
             None => {
-                if wire != field.name {
+                if wire != python_attr {
                     entries.push(AliasEntry {
-                        rust: field.name.clone(),
+                        rust: python_attr,
                         wire,
                         kind: "Leaf",
                         nested: "&[]".to_string(),

@@ -548,3 +548,121 @@ fn test_function_with_error_type() {
         "Function should have pyo3 signature attribute"
     );
 }
+
+/// Config identical to `make_config` but with stubs enabled, so one test can compare the
+/// generated binding against the `.pyi` that documents it.
+fn config_with_stubs() -> ResolvedCrateConfig {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.python]
+module_name = "_test_lib"
+
+[crates.python.stubs]
+output = "packages/python/src/"
+"#,
+    )
+    .unwrap();
+    cfg.resolve().unwrap().remove(0)
+}
+
+fn keyword_field_surface() -> ApiSurface {
+    ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Registry".to_string(),
+            rust_path: "test_lib::Registry".to_string(),
+            fields: vec![
+                make_field("global", TypeRef::String, false),
+                make_field("label", TypeRef::String, false),
+            ],
+            is_clone: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// `global` is a hard Python keyword: `obj.global` is a SyntaxError in every identifier
+/// position and Python offers no `r#`/backtick escape, so the only available fix is a rename.
+/// The rename has to reach the *Python-visible* name — emitting `#[pyo3(get, name = "global")]`
+/// over a Rust field called `global_` puts the keyword straight back on the class.
+#[test]
+fn should_rename_python_keyword_field_on_the_python_visible_surface() {
+    let files = Pyo3Backend
+        .generate_bindings(&keyword_field_surface(), &config_with_stubs())
+        .expect("bindings generate");
+    let content = &files[0].content;
+
+    assert!(
+        content.contains("global_"),
+        "Rust binding field should be escaped: {content}"
+    );
+    assert!(
+        content.contains(r#"pyo3(get, name = "global_")"#),
+        "PyO3 must publish the escaped name, not the keyword: {content}"
+    );
+    // Anchored on the `pyo3(get, ` prefix deliberately. A bare `name = "global")` also matches
+    // `serde(rename = "global")` -- the wire name the sibling test REQUIRES to stay unrenamed --
+    // so the loose form fails on correct output, and the only way to satisfy it would be to move
+    // the JSON key, which is the worse of the two bugs. ~keep
+    assert!(
+        !content.contains(r#"pyo3(get, name = "global")"#),
+        "the bare keyword must not survive as the Python attribute name: {content}"
+    );
+}
+
+/// The consistency half: a rename that moved the JSON key would be a worse bug than the
+/// SyntaxError it fixes, because it silently breaks every peer binding on the wire. The
+/// escape lives on the Python surface only — serde still spells the field `global`.
+#[test]
+fn should_keep_the_json_wire_name_when_a_python_keyword_field_is_renamed() {
+    let files = Pyo3Backend
+        .generate_bindings(&keyword_field_surface(), &config_with_stubs())
+        .expect("bindings generate");
+    let content = &files[0].content;
+
+    assert!(
+        content.contains(r#"serde(rename = "global")"#),
+        "the wire name must stay on the unescaped keyword: {content}"
+    );
+    assert!(
+        !content.contains(r#"serde(rename = "global_")"#),
+        "the escape must not leak into the wire format: {content}"
+    );
+}
+
+/// The other consistency half: the `.pyi` is what a type checker reads, so a binding whose
+/// runtime attribute disagrees with the stub is indistinguishable from no fix at all — the
+/// checker approves an attribute that raises `AttributeError`.
+#[test]
+fn should_declare_the_same_escaped_field_name_in_the_binding_and_the_stub() {
+    let api = keyword_field_surface();
+    let config = config_with_stubs();
+
+    let binding = Pyo3Backend.generate_bindings(&api, &config).expect("bindings generate")[0]
+        .content
+        .clone();
+    let stubs = Pyo3Backend.generate_type_stubs(&api, &config).expect("stubs generate");
+    let stub = stubs
+        .iter()
+        .map(|f| f.content.as_str())
+        .find(|content| content.contains("Registry"))
+        .expect("a stub declaring Registry");
+
+    assert!(
+        stub.contains("global_"),
+        "stub should declare the escaped attribute: {stub}"
+    );
+    assert!(
+        binding.contains(r#"pyo3(get, name = "global_")"#) && stub.contains("global_"),
+        "binding and stub must agree on the attribute name\nbinding: {binding}\nstub: {stub}"
+    );
+}

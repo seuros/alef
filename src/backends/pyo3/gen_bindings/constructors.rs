@@ -12,20 +12,41 @@ use std::collections::HashMap;
 /// then a per-language `rename_fields` entry, then the bare field name. Only applies a resolved name
 /// when it is a syntactically valid Rust identifier (e.g. `"self-harm"` falls back to the field
 /// name); a valid name that is also a Rust keyword (e.g. `"type"`) is escaped as `r#type`.
+///
+/// The resolved name is run through `python_ident` before the Rust escape because this identifier
+/// is not merely a Rust parameter — PyO3 publishes it verbatim as the keyword-argument name, and
+/// `r#` is stripped when it does. A wire name that is a Python keyword (`global`, either as the
+/// field name or as an explicit `#[serde(rename)]`) therefore reaches Python as `Type(global=...)`,
+/// which no amount of Rust-side escaping can make parse. Python has no escape mechanism, so the
+/// rename is forced; `python_ident` is the same helper the `.pyi` stubs and the dataclass/TypedDict
+/// field emitters already use, so escaping here converges those surfaces rather than adding a
+/// fourth spelling. The JSON wire name is unaffected — serde attributes carry it independently. ~keep
 pub(in crate::backends::pyo3) fn resolve_param_ident<'a>(
     field_name: &'a str,
     serde_rename: Option<&'a String>,
     config_renames: Option<&HashMap<String, String>>,
 ) -> String {
-    use crate::core::keywords::{is_valid_rust_ident_chars, rust_raw_ident};
+    use crate::core::keywords::{is_valid_rust_ident_chars, python_ident, rust_raw_ident};
     let wire_name = serde_rename
         .map(|s| s.as_str())
         .or_else(|| config_renames.and_then(|r| r.get(field_name)).map(|s| s.as_str()))
         .unwrap_or(field_name);
     if is_valid_rust_ident_chars(wire_name) {
-        rust_raw_ident(wire_name)
+        // The Rust escape wins when both apply. This is a RUST parameter identifier, and pyo3
+        // strips the `r#` when deriving the Python-visible name -- so `r#type` satisfies both
+        // sides, while `type_` satisfies neither the Rust parser nor a caller passing the wire
+        // name. The two escapes collide only for names in both keyword sets (`type`), and there
+        // the Python entry is over-broad anyway: `type` is a Python SOFT keyword, illegal only in
+        // a `type X = ...` statement and perfectly legal as a parameter. A name that is a Python
+        // keyword alone (`global`) still takes the rename. ~keep
+        let rust_escaped = rust_raw_ident(wire_name);
+        if rust_escaped == wire_name {
+            rust_raw_ident(&python_ident(wire_name))
+        } else {
+            rust_escaped
+        }
     } else {
-        field_name.to_string()
+        python_ident(field_name)
     }
 }
 
