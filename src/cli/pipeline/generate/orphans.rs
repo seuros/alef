@@ -291,13 +291,12 @@ pub fn sweep_manifest_orphans(
         // the rest of this function reclaims by, so a file this very run wrote moments ago but has
         // not yet reached `finalize_hashes` is never mistaken for an orphan, and `tracked` refuses
         // anything the walker's own blindness would otherwise let through. ~keep
-        for path in collect_alef_headered_paths(root) {
-            if keep.contains(&path) || !tracked.contains(&path) || !path_is_alef_owned(&path) {
-                continue;
-            }
-            std::fs::remove_file(&path).with_context(|| format!("failed to remove orphan {}", path.display()))?;
-            debug!("  swept disk-scanned orphan: {}", path.display());
-            removed += 1;
+        let candidates: Vec<_> = collect_alef_headered_paths(root)
+            .into_iter()
+            .filter(|path| !keep.contains(path) && tracked.contains(path) && path_is_alef_owned(path))
+            .collect();
+        if !candidates.is_empty() {
+            report_disk_scan_candidates(root, &candidates);
         }
     }
     // This function previously returned its count with no logging at any level, at any call
@@ -340,12 +339,13 @@ fn path_is_reclaimable(path: &Path) -> bool {
 /// actual `generated_header` value and content format in
 /// `src/scaffold/languages/*.rs` before adding it here.
 ///
-/// Also consulted by `write.rs`'s `existing_file_is_alef_owned` (the
-/// never-overwrite guard in `write_scaffold_files_report` / `write_files_report`):
-/// a name on this list is allowed to overwrite a pre-existing, unmarked file at
-/// write time for the same reason it is allowed to be reclaimed as an orphan
-/// here -- both routes trust the filename itself as proof, since content can
-/// never carry the marker. `pub(super)` for that second caller. ~keep
+/// **Scope: the orphan-reclaim path only.** An earlier version of this comment claimed the list
+/// was "also consulted by `write.rs`'s `existing_file_is_alef_owned`", the never-overwrite guard.
+/// No such function exists anywhere in this crate -- the only occurrence of that name was this
+/// comment. The write guard consults [`crate::cli::cache::is_scaffold_owned_path`] instead, and
+/// this list has no bearing on it. Corrected because the claim was quoted as if it described real
+/// behaviour: a doc comment describing a mechanism that does not exist is worse than none, since
+/// it is indistinguishable from a specification. ~keep
 const UNMARKABLE_ALEF_MANIFESTS: &[&str] = &["composer.json", "package.json"];
 
 pub(super) fn is_unmarkable_alef_manifest(path: &Path) -> bool {
@@ -460,6 +460,38 @@ pub fn collect_alef_headered_paths(root: &std::path::Path) -> std::collections::
 
 fn path_is_alef_owned(path: &Path) -> bool {
     std::fs::read_to_string(path).is_ok_and(|content| content_is_alef_owned(&content))
+}
+
+/// Report disk-scanned orphan candidates. **Reports only — never deletes.**
+///
+/// The deletion this replaces was gated on: alef marker, git-tracked, under an owned root, absent
+/// from this run's `keep`, and the root's manifest non-degenerate. Every one of those passed for a
+/// consumer's Java *public API class*, and for a second class a live test depends on. Neither was
+/// refused; the backend ran, emitted 56 files, and did not emit these two.
+///
+/// The rule's error is inferring **orphan** from **absent from this run's output**. Three
+/// different situations produce that absence and nothing here distinguishes them: the emitter
+/// stopped emitting the file (a true orphan), the emitter failed to emit it this run (a bug), or
+/// it is a create-once seed alef emits only when absent. The non-degeneracy clause certifies that
+/// the *backend* keeps books; it says nothing about whether *this file* was deliberately dropped.
+///
+/// The asymmetry decides it: a missed orphan leaves a stale file a human eventually notices, while
+/// a false orphan silently removes a public API from a generated tree nobody reads by hand. Only a
+/// positive assertion from the producer -- the generator recording that it no longer emits a path
+/// -- can separate "dropped" from "failed to emit", and that record does not exist yet. Until it
+/// does, this surface reports and a human decides. ~keep
+fn report_disk_scan_candidates(root: &Path, candidates: &[PathBuf]) {
+    tracing::warn!(
+        "{} alef-marked, git-tracked file(s) under {} were not emitted by this run. These are NOT \
+         deleted: absence from a run's output does not prove a file is an orphan (the emitter may \
+         have stopped emitting it, failed to emit it, or emit it only when absent). Review each and \
+         remove by hand if genuinely stale:",
+        candidates.len(),
+        root.display()
+    );
+    for path in candidates {
+        tracing::warn!("  unemitted alef-marked file: {}", path.display());
+    }
 }
 
 /// Git-tracked files under `root`, or `None` when tracked-ness cannot be determined (`root` is
@@ -827,8 +859,13 @@ mod sweep_roots_tests {
     /// disk (simulated here by a `previous_paths`/`keep` that never mention it at all) is
     /// unreachable by the `previous_paths` route no matter how correct today's bookkeeping is --
     /// only the marker on disk, under a root the caller has vouched for, can find it.
+    /// The disk-scan route REPORTS and never deletes. This test previously asserted the opposite
+    /// and is inverted deliberately: the same five-clause gate it encoded would have deleted a
+    /// consumer's Java public API class and a class a live test depended on, both of which passed
+    /// every clause. Absence from a run's output does not prove a file is an orphan. If this test
+    /// is ever "fixed" back to asserting deletion, read `report_disk_scan_candidates`' doc first. ~keep
     #[test]
-    fn manifest_sweep_disk_scan_reclaims_tracked_marked_orphan_absent_from_keep() {
+    fn manifest_sweep_disk_scan_reports_but_never_deletes_a_marked_file_absent_from_keep() {
         let dir = tempfile::tempdir().expect("tempdir");
         let package_dir = dir.path().join("packages/kotlin_android");
         std::fs::create_dir_all(&package_dir).expect("package dir");
@@ -854,8 +891,12 @@ mod sweep_roots_tests {
         )
         .expect("manifest sweep");
 
-        assert_eq!(removed, 1, "the disk-scanned orphan must be reclaimed");
-        assert!(!orphan.exists());
+        assert_eq!(removed, 0, "the disk-scan route must never delete");
+        assert!(
+            orphan.exists(),
+            "a marked, tracked file absent from keep must be REPORTED, not removed -- it may be a \
+             create-once seed or a file the emitter failed to emit this run"
+        );
         assert!(kept.exists(), "the file still recorded in keep must survive");
     }
 
