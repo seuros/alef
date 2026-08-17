@@ -37,6 +37,13 @@ fn native_go_dto_literal_at(
 ) -> Option<String> {
     let object = value.as_object()?;
     let definition = type_defs.iter().find(|definition| definition.name == type_name)?;
+    // Mirrors the `struct_names` set `binding_file.rs` builds for the real Go emitter (every
+    // non-opaque `TypeDef`) — see the `uses_pointer` comment below for why this must agree. ~keep
+    let struct_names: std::collections::HashSet<&str> = type_defs
+        .iter()
+        .filter(|t| !t.is_opaque)
+        .map(|t| t.name.as_str())
+        .collect();
     let field_values = definition
         .fields
         .iter()
@@ -58,8 +65,8 @@ fn native_go_dto_literal_at(
             // about pointer-ness is a Go compile error in the generated e2e suite. The former
             // extra `definition.has_default &&` conjunct was such a disagreement — the emitter
             // never consulted it. ~keep
-            let uses_pointer =
-                field.optional || (!field.optional && crate::backends::go::needs_omitempty_pointer(definition, field));
+            let uses_pointer = field.optional
+                || (!field.optional && crate::backends::go::needs_omitempty_pointer(definition, field, &struct_names));
             let inner = match &field.ty {
                 crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
                 other => other,

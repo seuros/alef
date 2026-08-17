@@ -107,7 +107,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             continue;
         }
 
-        let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
+        let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
 
         // A unit enum is emitted as a Go string type, so its zero value is `""` — never a valid
         // variant. When the key is wire-optional (its own `#[serde(default)]`, or the
@@ -204,7 +204,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                 field.serde_rename.as_deref(),
                 typ.serde_rename_all.as_deref(),
             );
-            let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
+            let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
             let is_named_enum = !field.optional
                 && !use_default_pointer
                 && (field.default.is_some() || typ.serde_container_default)
@@ -246,7 +246,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             }
             let go_field = to_go_name(&field.name);
             if matches!(&field.ty, TypeRef::Bytes) {
-                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
+                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
                 let is_pointer = field.optional || use_default_pointer;
                 if is_pointer {
                     out.push_str(&crate::backends::go::template_env::render(
@@ -350,7 +350,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                     },
                 ));
             } else {
-                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
+                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field, struct_names);
                 let is_named_enum = !field.optional
                     && !use_default_pointer
                     && (field.default.is_some() || typ.serde_container_default)

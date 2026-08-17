@@ -38,9 +38,29 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 /// - `FloatLiteral(f)` where f != 0.0 — Rust default is f, Go zero is 0.0
 /// - `StringLiteral(s)` where !s.is_empty() — Rust default is s, Go zero is ""
 /// - `EnumVariant(_)` — Rust default is a specific variant, Go zero is ""
-pub(crate) fn needs_omitempty_pointer(typ: &TypeDef, field: &FieldDef) -> bool {
+///
+/// A required field (fails the wire-optional check above) still needs pointer+omitempty when
+/// its type is itself a plain data struct — i.e. `field.ty` is `TypeRef::Named(name)` and
+/// `name` is in `struct_names` (every non-opaque `TypeDef` emitted as a Go struct in this
+/// binding). A struct field's Go zero value is a fully-populated substructure, never an
+/// "absent" marker, so leaving it a plain (non-pointer) field would silently `json.Marshal` an
+/// all-zero payload that Rust's `serde` happily accepts as genuinely-provided data — every leaf
+/// key is present, just wrong. Pointer+omitempty turns an unset Go value into a dropped key
+/// instead, so Rust rejects the call with `missing field` — a loud failure, and strictly better
+/// than a silent wrong value. This is deliberately narrower than gating on `TypeDef::has_default`
+/// (the mistake `serde_container_default` replaced, see above): it is keyed off `field.ty`
+/// itself, so it never touches a scalar or enum field, however many other fields on `typ` are
+/// wire-optional. Scalar zero values are the caller's own responsibility to set explicitly
+/// (no reason to force a pointer); unit-enum fields already fail loud on their own — they
+/// render as Go strings, and `""` is never a valid variant, so Rust already rejects a required
+/// enum field left at its Go zero without needing this. ~keep
+pub(crate) fn needs_omitempty_pointer(
+    typ: &TypeDef,
+    field: &FieldDef,
+    struct_names: &std::collections::HashSet<&str>,
+) -> bool {
     if field.default.is_none() && !typ.serde_container_default {
-        return false;
+        return matches!(&field.ty, TypeRef::Named(name) if struct_names.contains(name.as_str()));
     }
     if matches!(field.ty, TypeRef::Duration) {
         return true;

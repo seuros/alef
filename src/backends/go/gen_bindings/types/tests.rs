@@ -338,6 +338,7 @@ fn gen_config_options_defaults_data_enum_field_to_nil_not_composite_literal() {
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
         &data_enum_names,
+        &std::collections::HashSet::new(),
         &[],
     );
     // BUG fixed: previously emitted `Sizing: ChunkSizing{}` which is a Go compile
@@ -443,6 +444,7 @@ fn test_gen_config_options_emitted_when_in_allowlist() {
     };
     let out = gen_config_options(
         &typ,
+        &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
@@ -920,6 +922,60 @@ fn gen_struct_type_without_container_serde_default_keeps_required_fields_non_poi
     assert!(
         !out.contains(",omitempty") && !out.contains("*uint32") && !out.contains("*bool") && !out.contains("*string"),
         "no field of a struct without container #[serde(default)] may be pointer+omitempty; got:\n{out}"
+    );
+}
+
+/// The defect this pins: a required field whose *type* is itself a plain data struct (e.g.
+/// `HeuristicsConfig`, which derives `Serialize`/`Deserialize` but carries no container-level
+/// `#[serde(default)]`) has no wire-tolerant "absent" state as a plain Go value — Go's zero for
+/// a struct field is a fully-populated substructure, not a marker for "unset". Left as a plain
+/// field it would silently `json.Marshal` an all-zero payload that Rust's `serde` accepts as
+/// genuinely-provided data. It must become pointer+omitempty instead, so an unset Go value is
+/// dropped from the wire and Rust fails loudly with `missing field` — strictly better than a
+/// silent wrong value. Alongside it, this struct also carries the same required scalar fields
+/// as the test above, with the SAME `has_default: true` parent that caused the original
+/// `TypeDef::has_default`-gated regression — proving the new struct-typed-field signal is
+/// additive and does not fall back to treating a `Default` impl as license to touch them. ~keep
+#[test]
+fn gen_struct_type_required_struct_field_becomes_pointer_without_disturbing_required_scalars() {
+    let mut fields = non_zero_default_fields();
+    fields.push(simple_field(
+        "heuristics",
+        TypeRef::Named("HeuristicsConfig".to_string()),
+    ));
+    let typ = test_struct_type("CrawlOptions", fields, true);
+    let mut struct_names = std::collections::HashSet::new();
+    struct_names.insert("HeuristicsConfig");
+
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &struct_names,
+        &[],
+    );
+
+    assert!(
+        out.contains("Timeout uint32 `json:\"timeout\"`"),
+        "a required scalar field must stay a plain value even when a sibling struct field is \
+         pointer-worthy; got:\n{out}"
+    );
+    assert!(
+        out.contains("Enabled bool `json:\"enabled\"`"),
+        "a required scalar field must stay a plain value even when a sibling struct field is \
+         pointer-worthy; got:\n{out}"
+    );
+    assert!(
+        out.contains("Mode string `json:\"mode\"`"),
+        "a required scalar field must stay a plain value even when a sibling struct field is \
+         pointer-worthy; got:\n{out}"
+    );
+    assert!(
+        out.contains("Heuristics *HeuristicsConfig `json:\"heuristics,omitempty\"`"),
+        "a required struct-typed field with no serde default anywhere must become \
+         pointer+omitempty so an unset Go value drops the key instead of silently marshaling \
+         an all-zero substructure; got:\n{out}"
     );
 }
 

@@ -14,6 +14,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_config_options(
     enum_names: &std::collections::HashSet<&str>,
     passthrough_enum_names: &std::collections::HashSet<&str>,
     data_enum_names: &std::collections::HashSet<&str>,
+    struct_names: &std::collections::HashSet<&str>,
     trait_bridges: &[TraitBridgeConfig],
 ) -> String {
     let mut out = String::with_capacity(2048);
@@ -53,7 +54,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_config_options(
         let is_slice_or_map = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
         let is_sealed_interface = matches!(&field.ty, TypeRef::Named(n) if data_enum_names.contains(n.as_str()));
         let use_ptr = !is_visitor_field
-            && (field.optional || needs_omitempty_pointer(typ, field))
+            && (field.optional || needs_omitempty_pointer(typ, field, struct_names))
             && !is_slice_or_map
             && !is_sealed_interface;
         let assign_val = if use_ptr { "&v" } else { "v" };
@@ -82,7 +83,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_config_options(
         }
 
         let field_go_name = to_go_name(&field.name);
-        let default_val = if field.optional || needs_omitempty_pointer(typ, field) {
+        let default_val = if field.optional || needs_omitempty_pointer(typ, field, struct_names) {
             "nil".to_string()
         } else {
             let mut val = crate::codegen::config_gen::default_value_for_field(field, "go");
