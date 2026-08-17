@@ -883,4 +883,56 @@ mod tests {
             code
         );
     }
+
+    /// Regression: `bytes_result_call.jinja` used to call `NativeMethods.FreeBytes` on the
+    /// success path inside `try`, before `return result;`, while `finally` held only the
+    /// unrelated argument-marshalling `cleanup_block`. An exception from `Marshal.Copy` (between
+    /// obtaining the native buffer and freeing it) skipped the free and leaked it. The free must
+    /// now be the first statement in `finally`, guaranteed on every exit path. ~keep
+    #[test]
+    fn free_function_bytes_result_frees_inside_finally_not_inline() {
+        let func = FunctionDef {
+            name: "get_bytes".to_string(),
+            rust_path: "test::get_bytes".to_string(),
+            original_rust_path: "test::get_bytes".to_string(),
+            params: vec![],
+            return_type: TypeRef::Bytes,
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: VersionAnnotation::default(),
+        };
+
+        let code = gen_wrapper_function(
+            &func,
+            "TestException",
+            "sample_ffi",
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            &[],
+        );
+
+        let finally_pos = code
+            .find("        finally\n        {\n")
+            .expect("missing finally block");
+        let free_pos = code.find("NativeMethods.FreeBytes").expect("missing FreeBytes call");
+        let return_pos = code.find("return result;").expect("missing return result;");
+        assert!(
+            return_pos < finally_pos && finally_pos < free_pos,
+            "FreeBytes must run after the normal-path return, via `finally`, not inline before \
+             it:\n{code}"
+        );
+    }
 }

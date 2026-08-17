@@ -9,17 +9,23 @@
 {% if consumes_receiver %}
             _safeHandle.Invalidate();
 {% endif %}
-            if (rc != 0)
+            try
             {
-                var ec = NativeMethods.LastErrorCode();
-                var ctxPtr = NativeMethods.LastErrorContext();
-                var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-                throw new {{ exception_name }}(ec, msg);
+                if (rc != 0)
+                {
+                    var ec = NativeMethods.LastErrorCode();
+                    var ctxPtr = NativeMethods.LastErrorContext();
+                    var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
+                    throw new {{ exception_name }}(ec, msg);
+                }
+                var result = new byte[(int)outLen];
+                System.Runtime.InteropServices.Marshal.Copy(outPtr, result, 0, (int)outLen);
+                return result;
             }
-            var result = new byte[(int)outLen];
-            System.Runtime.InteropServices.Marshal.Copy(outPtr, result, 0, (int)outLen);
-            NativeMethods.FreeBytes(outPtr, outLen, outCap);
-            return result;
+            finally
+            {
+                NativeMethods.FreeBytes(outPtr, outLen, outCap);
+            }
         });
 {% else %}
         var rc = NativeMethods.{{ native_method_name }}(
@@ -30,15 +36,21 @@
 {% if consumes_receiver %}
         _safeHandle.Invalidate();
 {% endif %}
-        if (rc != 0)
+        try
         {
-            var ec = NativeMethods.LastErrorCode();
-            var ctxPtr = NativeMethods.LastErrorContext();
-            var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
-            throw new {{ exception_name }}(ec, msg);
+            if (rc != 0)
+            {
+                var ec = NativeMethods.LastErrorCode();
+                var ctxPtr = NativeMethods.LastErrorContext();
+                var msg = System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "Unknown error";
+                throw new {{ exception_name }}(ec, msg);
+            }
+            var result = new byte[(int)outLen];
+            System.Runtime.InteropServices.Marshal.Copy(outPtr, result, 0, (int)outLen);
+            return result;
         }
-        var result = new byte[(int)outLen];
-        System.Runtime.InteropServices.Marshal.Copy(outPtr, result, 0, (int)outLen);
-        NativeMethods.FreeBytes(outPtr, outLen, outCap);
-        return result;
+        finally
+        {
+            NativeMethods.FreeBytes(outPtr, outLen, outCap);
+        }
 {% endif %}

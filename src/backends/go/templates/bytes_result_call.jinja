@@ -7,6 +7,6 @@
 	if outPtr == nil {
 		return nil, lastError()
 	}
+	defer C.{{ ffi_prefix }}_free_bytes(outPtr, outLen, outCap)
 	result := C.GoBytes(unsafe.Pointer(outPtr), C.int(outLen))
-	C.{{ ffi_prefix }}_free_bytes(outPtr, outLen, outCap)
 	return result, nil

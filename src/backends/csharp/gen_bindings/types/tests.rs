@@ -687,3 +687,79 @@ fn record_type_field_without_any_default_still_emits_the_type_zero() {
     assert_eq!(csharp_initializer(&code, "Ratio"), "0.0f");
     assert_eq!(csharp_initializer(&code, "Enabled"), "false");
 }
+
+/// Regression: an opaque instance method returning bytes used to free the native buffer inline,
+/// right after `Marshal.Copy`, with no `try`/`finally` around it at all — an exception thrown by
+/// `Marshal.Copy` (or by `rc != 0`, before the buffer even existed) skipped the free entirely,
+/// leaking it. `NativeMethods.FreeBytes` is a safe no-op on a null pointer (see
+/// `{{ ffi_prefix }}_free_bytes` in the FFI crate), so calling it unconditionally from `finally`
+/// is correct on every exit path and cannot double-free — there is exactly one call site now. ~keep
+#[test]
+fn opaque_method_bytes_result_frees_inside_finally_not_inline() {
+    use crate::core::ir::{MethodDef, ReceiverKind};
+
+    let method = MethodDef {
+        name: "render".to_string(),
+        return_type: TypeRef::Bytes,
+        receiver: Some(ReceiverKind::Ref),
+        cfg: None,
+        ..Default::default()
+    };
+
+    let code = super::opaque::gen_opaque_method(
+        &method,
+        &[],
+        "Widget",
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains(
+            "        finally\n        {\n            NativeMethods.FreeBytes(outPtr, outLen, outCap);\n        }\n"
+        ),
+        "FreeBytes must be the sole statement in a guaranteed `finally` block:\n{code}"
+    );
+    let try_pos = code.find("        try\n        {\n").expect("missing try block");
+    let free_pos = code.find("NativeMethods.FreeBytes").expect("missing FreeBytes call");
+    let return_pos = code.find("return result;").expect("missing return result;");
+    assert!(
+        try_pos < return_pos && return_pos < free_pos,
+        "the free must come after the normal-path return, proving it only runs via `finally`, \
+         not inline before the return:\n{code}"
+    );
+}
+
+/// Same regression, async variant: `opaque_bytes_result_call.jinja`'s `is_async` branch had the
+/// identical inline-free defect inside the `Task.Run` lambda. ~keep
+#[test]
+fn opaque_method_async_bytes_result_frees_inside_finally_not_inline() {
+    use crate::core::ir::{MethodDef, ReceiverKind};
+
+    let method = MethodDef {
+        name: "render".to_string(),
+        return_type: TypeRef::Bytes,
+        receiver: Some(ReceiverKind::Ref),
+        is_async: true,
+        cfg: None,
+        ..Default::default()
+    };
+
+    let code = super::opaque::gen_opaque_method(
+        &method,
+        &[],
+        "Widget",
+        "DemoException",
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+
+    assert!(
+        code.contains(concat!(
+            "            finally\n            {\n                NativeMethods.FreeBytes(outPtr, outLen, outCap);\n",
+            "            }\n"
+        )),
+        "async FreeBytes must be the sole statement in a guaranteed `finally` block:\n{code}"
+    );
+}

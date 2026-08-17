@@ -232,6 +232,45 @@ fn test_gen_function_wrapper_bytes_result_emits_out_params() {
     assert!(out.contains("krz_free_bytes"), "missing krz_free_bytes in:\n{out}");
 }
 
+/// Regression: `bytes_result_call.jinja` used to free the native buffer inline, after
+/// `C.GoBytes`, with no `defer` at all — a panic during `C.GoBytes` (e.g. an allocation
+/// failure) skipped the free and leaked the buffer. The free must now be `defer`-registered
+/// before the fallible conversion runs, matching every other free in this backend's templates
+/// (`free_string.jinja`, `free_type.jinja`, `c_result_defer_free.jinja`). ~keep
+#[test]
+fn test_gen_function_wrapper_bytes_result_defers_free_before_conversion() {
+    let func = make_bytes_result_func("process_image", true);
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let bridge_names: HashSet<String> = HashSet::new();
+    let bridge_aliases: HashSet<String> = HashSet::new();
+    let value_only_types: HashSet<String> = HashSet::new();
+    let enum_names: HashSet<String> = HashSet::new();
+    let ffi_param_enum_names: HashSet<String> = HashSet::new();
+    let reserved_type_names: HashSet<String> = HashSet::new();
+    let out = gen_function_wrapper(
+        &func,
+        "krz",
+        &opaque,
+        &bridge_names,
+        &bridge_aliases,
+        &value_only_types,
+        &enum_names,
+        &ffi_param_enum_names,
+        &reserved_type_names,
+    );
+
+    let defer_pos = match out.find("defer C.krz_free_bytes") {
+        Some(pos) => pos,
+        None => panic!("free must be `defer`-registered, not called inline, in:\n{out}"),
+    };
+    let gobytes_pos = out.find("C.GoBytes").expect("missing C.GoBytes");
+    assert!(
+        defer_pos < gobytes_pos,
+        "the buffer free must be deferred before the fallible C.GoBytes conversion runs, so a \
+         panic during conversion still frees the native buffer, got:\n{out}"
+    );
+}
+
 #[test]
 fn test_gen_function_wrapper_infallible_bytes_uses_owned_buffer_abi() {
     let mut func = make_bytes_result_func("read_file", false);
