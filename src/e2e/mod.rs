@@ -190,12 +190,8 @@ pub fn generate_e2e(
 
     let generators = codegen::generators_for(&resolved_languages);
 
-    let mut all_files = Vec::new();
-    for generator in &generators {
-        let files = generator.generate(&groups, e2e_config, config, type_defs, enums, functions)?;
-        info!("  [{}] generated {} file(s)", generator.language_name(), files.len());
-        all_files.extend(files);
-    }
+    let (mut all_files, generator_failures) =
+        run_generators(&generators, &groups, e2e_config, config, type_defs, enums, functions);
 
     // Let registered extensions contribute e2e files per language. The default
     // `Extension::emit_e2e` returns empty, so consumers without an e2e extension
@@ -243,7 +239,76 @@ pub fn generate_e2e(
         all_files.extend(report.snippets.into_iter().map(|snippet| snippet.file));
     }
 
+    // Checked last, not with `?` at the loop itself: every backend that could succeed,
+    // and the snippet stage behind them, must still run and land in `all_files` before
+    // a single backend's codegen failure turns this into an `Err`. See
+    // `run_generators` for why the failure itself is not swallowed. ~keep
+    ensure_no_generator_failures(&generator_failures, generators.len())?;
+
     Ok(all_files)
+}
+
+/// Run every per-language e2e generator, isolating one backend's codegen failure from
+/// every other backend and from the snippet stage that runs after this in
+/// [`generate_e2e`].
+///
+/// Before this, the loop propagated a generator's `Err` with `?` immediately, which
+/// made one backend's localized problem abort the entire regen: every later-listed
+/// language never ran, and the snippet stage -- gated on this whole function returning
+/// `Ok` -- never started either, even though it does not read `all_files` and has
+/// nothing to do with the failing backend. That is not hypothetical: a consumer's C
+/// backend hit `ensure_leaf_field_exists`'s deliberate `bail!` (see
+/// `codegen::c::assertions::ensure_leaf_field_exists`) and the resulting abort left
+/// their snippet and docs trees stale for two days with `git status` reading clean,
+/// because nothing downstream of the C generator ever ran long enough to write
+/// anything. A backend's `bail!` is still the right call *for that backend* -- emitting
+/// a call to a symbol that does not exist is worse than skipping it -- but the fix
+/// belongs at this level, in how one backend's refusal is allowed to affect its
+/// siblings, not by weakening the per-symbol check itself. Each failure is still
+/// reported at `WARN` immediately (this repo's level contract: degraded, but the run
+/// continues) with the backend's own diagnostic verbatim, and the caller still sees a
+/// hard `Err` once every backend that could run has. ~keep
+fn run_generators(
+    generators: &[Box<dyn codegen::E2eCodegen>],
+    groups: &[fixture::FixtureGroup],
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> (Vec<GeneratedFile>, Vec<String>) {
+    let mut all_files = Vec::new();
+    let mut failures = Vec::new();
+    for generator in generators {
+        match generator.generate(groups, e2e_config, config, type_defs, enums, functions) {
+            Ok(files) => {
+                info!("  [{}] generated {} file(s)", generator.language_name(), files.len());
+                all_files.extend(files);
+            }
+            Err(error) => {
+                warn!(
+                    "  [{}] e2e codegen failed, skipping this backend: {error:#}",
+                    generator.language_name()
+                );
+                failures.push(format!("[{}] {error:#}", generator.language_name()));
+            }
+        }
+    }
+    (all_files, failures)
+}
+
+/// Turn the failures [`run_generators`] collected into the single `Err`
+/// [`generate_e2e`] returns once every backend that could run already has.
+fn ensure_no_generator_failures(failures: &[String], generator_count: usize) -> Result<()> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "e2e codegen failed for {} of {} backend(s) -- other backends and the snippet stage still ran: {}",
+        failures.len(),
+        generator_count,
+        failures.join("; ")
+    );
 }
 
 pub fn report_cached_snippet_coverage(path: &Path) -> Result<()> {
@@ -534,5 +599,112 @@ mod tests {
             .expect("generate empty E2E suite");
 
         assert!(!directory.path().join("schema.json").exists());
+    }
+
+    struct FailingGenerator;
+
+    impl codegen::E2eCodegen for FailingGenerator {
+        fn generate(
+            &self,
+            _groups: &[fixture::FixtureGroup],
+            _e2e_config: &E2eConfig,
+            _config: &ResolvedCrateConfig,
+            _type_defs: &[crate::core::ir::TypeDef],
+            _enums: &[crate::core::ir::EnumDef],
+            _functions: &[crate::core::ir::FunctionDef],
+        ) -> Result<Vec<GeneratedFile>> {
+            anyhow::bail!("simulated leaf-field resolution failure")
+        }
+
+        fn language_name(&self) -> &'static str {
+            "failing"
+        }
+    }
+
+    struct SucceedingGenerator;
+
+    impl codegen::E2eCodegen for SucceedingGenerator {
+        fn generate(
+            &self,
+            _groups: &[fixture::FixtureGroup],
+            _e2e_config: &E2eConfig,
+            _config: &ResolvedCrateConfig,
+            _type_defs: &[crate::core::ir::TypeDef],
+            _enums: &[crate::core::ir::EnumDef],
+            _functions: &[crate::core::ir::FunctionDef],
+        ) -> Result<Vec<GeneratedFile>> {
+            Ok(vec![GeneratedFile {
+                path: std::path::PathBuf::from("ok/output.txt"),
+                content: "generated".into(),
+                generated_header: false,
+            }])
+        }
+
+        fn language_name(&self) -> &'static str {
+            "succeeding"
+        }
+    }
+
+    /// The regression this guards: a consumer's C backend hit `ensure_leaf_field_exists`'s
+    /// `bail!`, and because the old loop propagated it with `?` immediately, every
+    /// later-listed language generator was skipped too -- not just the C backend. One
+    /// backend's codegen failure must not stop its siblings from generating.
+    #[test]
+    fn run_generators_isolates_one_backend_failure_from_the_rest() {
+        let generators: Vec<Box<dyn codegen::E2eCodegen>> =
+            vec![Box::new(FailingGenerator), Box::new(SucceedingGenerator)];
+
+        let (files, failures) = run_generators(
+            &generators,
+            &[],
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            &[],
+        );
+
+        assert_eq!(
+            files.len(),
+            1,
+            "the succeeding backend's file must still be produced: {files:?}"
+        );
+        assert_eq!(files[0].path, std::path::PathBuf::from("ok/output.txt"));
+        assert_eq!(
+            failures.len(),
+            1,
+            "the failing backend's failure must be recorded: {failures:?}"
+        );
+        assert!(
+            failures[0].contains("[failing]") && failures[0].contains("simulated leaf-field resolution failure"),
+            "failure must name the backend and carry its own diagnostic verbatim: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn ensure_no_generator_failures_passes_through_when_nothing_failed() {
+        ensure_no_generator_failures(&[], 3).expect("no failures must not error");
+    }
+
+    #[test]
+    fn ensure_no_generator_failures_names_every_failed_backend_and_the_total_count() {
+        let failures = vec![
+            "[c] simulated leaf-field resolution failure".to_string(),
+            "[go] simulated template error".to_string(),
+        ];
+
+        let message = ensure_no_generator_failures(&failures, 5)
+            .expect_err("collected failures must still fail the run")
+            .to_string();
+
+        assert!(
+            message.contains("2 of 5"),
+            "must report how many of the total backends failed: {message}"
+        );
+        assert!(
+            message.contains("[c] simulated leaf-field resolution failure"),
+            "{message}"
+        );
+        assert!(message.contains("[go] simulated template error"), "{message}");
     }
 }
