@@ -1604,3 +1604,90 @@ fn dto_with_instance_methods_emits_member_functions() {
         "method should call corresponding external function"
     );
 }
+
+/// `object` is a Kotlin *hard* keyword: `val object: String` and `fun object(...)` are both
+/// parse errors, in every position, with no contextual relaxation. Backticks rather than a
+/// trailing underscore because backticks are pure syntax — the property is still named
+/// `object`, so the JVM getter, the Jackson property and the JNI symbol all keep the name a
+/// rename would have moved.
+#[test]
+fn should_backtick_escape_a_kotlin_hard_keyword_property() {
+    let ty = make_type("Payload", vec![make_field("object", TypeRef::String, false)]);
+    let mut out = String::new();
+    let mut imports = std::collections::BTreeSet::new();
+    emit_type_pub(&ty, &mut out, &mut imports);
+
+    assert!(
+        out.contains("val `object`: String"),
+        "keyword property must be escaped: {out}"
+    );
+    assert!(!out.contains("val object:"), "the bare keyword must not survive: {out}");
+    assert!(
+        !out.contains("object_"),
+        "Kotlin must not use the trailing-underscore rename: {out}"
+    );
+}
+
+/// The consistency half. `emit_data_class` only emits `@JsonProperty` when the Rust field
+/// carries `#[serde(rename)]`; without one, Jackson derives the JSON key from the Kotlin
+/// property name. Backticks leave that name as `object`, so the wire key is unchanged and no
+/// annotation is needed — a rename to `object_` would silently have moved the key instead.
+#[test]
+fn should_keep_the_json_wire_key_when_a_kotlin_keyword_property_is_escaped() {
+    let ty = make_type("Payload", vec![make_field("object", TypeRef::String, false)]);
+    let mut out = String::new();
+    let mut imports = std::collections::BTreeSet::new();
+    emit_type_pub(&ty, &mut out, &mut imports);
+
+    assert!(
+        !out.contains("JsonProperty"),
+        "an unrenamed field needs no @JsonProperty; the escaped name still reads `object`: {out}"
+    );
+    assert!(
+        out.matches("`object`").count() >= 1 && !out.contains("\"object_\""),
+        "the escape must not reach the wire key: {out}"
+    );
+}
+
+/// Method and parameter positions were the gap: field names were escaped, `fun`/parameter
+/// names were not, so the same keyword broke depending only on where it appeared.
+#[test]
+fn should_backtick_escape_a_kotlin_hard_keyword_function_and_parameter() {
+    let f = FunctionDef {
+        name: "object".to_string(),
+        params: vec![make_param("when", TypeRef::String)],
+        return_type: TypeRef::String,
+        ..Default::default()
+    };
+    let mut out = String::new();
+    let mut imports = std::collections::BTreeSet::new();
+    alef::backends::kotlin::emit_function_jvm(&f, &mut out, &mut imports, "dev.sample_crate");
+
+    assert!(
+        out.contains("fun `object`("),
+        "keyword function name must be escaped: {out}"
+    );
+    assert!(
+        out.contains("`when`: String"),
+        "keyword parameter must be escaped: {out}"
+    );
+    assert!(!out.contains("fun object("), "the bare keyword must not survive: {out}");
+}
+
+/// Negative control, and the reason the backend's escape set is narrower than the docs gate's.
+/// `get` is a Kotlin *soft* keyword — the grammar's `simpleIdentifier` production lists it, so
+/// Kotlin accepts `val get` / `fun get` bare. Escaping it would rename a public member that
+/// compiles fine today, so the backend deliberately leaves it alone.
+#[test]
+fn should_not_escape_kotlin_soft_keyword_get() {
+    let ty = make_type("Registry", vec![make_field("get", TypeRef::String, false)]);
+    let mut out = String::new();
+    let mut imports = std::collections::BTreeSet::new();
+    emit_type_pub(&ty, &mut out, &mut imports);
+
+    assert!(out.contains("val get: String"), "soft keyword must stay bare: {out}");
+    assert!(
+        !out.contains("`get`"),
+        "soft keyword must not be backtick-escaped: {out}"
+    );
+}

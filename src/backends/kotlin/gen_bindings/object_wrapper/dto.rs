@@ -3,9 +3,8 @@ use std::collections::BTreeSet;
 
 use super::types::{escape_kotlin_string, fits_single_line, kotlin_field_default, kotlin_type_with_string_imports};
 use crate::backends::kotlin::gen_bindings::helpers::emit_cleaned_kdoc;
-use crate::backends::kotlin::gen_bindings::shared::{ValueMethodBridge, kotlin_field_name};
+use crate::backends::kotlin::gen_bindings::shared::{ValueMethodBridge, kotlin_field_name, to_lower_camel};
 use crate::core::jni::{bridge_method_name, bridgeable_value_methods, is_functional_ref_mut_value_method};
-use heck::ToLowerCamelCase;
 
 /// File-private Jackson mapper used to marshal `this` and the parameter object
 /// across the JNI boundary for value-type instance methods.
@@ -176,7 +175,7 @@ fn emit_value_method(
     imports: &mut BTreeSet<String>,
     bridge: ValueMethodBridge<'_>,
 ) {
-    let method_name = heck::AsLowerCamelCase(method.name.as_str()).to_string();
+    let method_name = to_lower_camel(&method.name);
     let returns_receiver = is_functional_ref_mut_value_method(method);
     let return_type = if returns_receiver {
         TypeRef::Named(ty.name.clone())
@@ -190,7 +189,7 @@ fn emit_value_method(
         .iter()
         .map(|p| {
             let ptype = kotlin_type_with_string_imports(&p.ty, p.optional, imports);
-            let pname = p.name.to_lower_camel_case();
+            let pname = to_lower_camel(&p.name);
             format!("{pname}: {ptype}")
         })
         .collect();
@@ -215,7 +214,7 @@ fn emit_value_method(
         ));
         for param in &method.params {
             let key = escape_kotlin_string(&param.name.replace('-', "_"));
-            let value = param.name.to_lower_camel_case();
+            let value = to_lower_camel(&param.name);
             out.push_str(&format!("                \"{key}\" to {value},\n"));
         }
         out.push_str("            ),\n        )\n");

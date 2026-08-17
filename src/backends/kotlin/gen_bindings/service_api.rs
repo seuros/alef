@@ -22,7 +22,7 @@ use crate::backends::kotlin::template_env;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, EntrypointDef, EntrypointKind, ParamDef, RegistrationVariant, ServiceDef, TypeRef};
-use heck::{ToLowerCamelCase, ToUpperCamelCase};
+use heck::ToUpperCamelCase;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -119,8 +119,8 @@ fn gen_registration_variant(
     _class_name: &str,
     java_package: &str,
 ) {
-    let variant_method_kt = variant.name.to_lower_camel_case();
-    let base_method_kt = base_reg.method.to_lower_camel_case();
+    let variant_method_kt = shared::to_lower_camel(&variant.name);
+    let base_method_kt = shared::to_lower_camel(&base_reg.method);
 
     let handler_param = "handler: (String) -> String".to_owned();
 
@@ -128,7 +128,7 @@ fn gen_registration_variant(
     param_parts.extend(variant.signature_params.iter().map(|p| {
         format!(
             "{}: {}",
-            p.name.to_lower_camel_case(),
+            shared::to_lower_camel(&p.name),
             kotlin_type_for_param(&p.ty, &ApiSurface::default()),
         )
     }));
@@ -142,7 +142,7 @@ fn gen_registration_variant(
                 crate::core::ir::WrapperConstructorArg::Fixed { value_expr, .. } => {
                     rust_enum_expr_to_kotlin(value_expr)
                 }
-                crate::core::ir::WrapperConstructorArg::Free { param } => param.name.to_lower_camel_case(),
+                crate::core::ir::WrapperConstructorArg::Free { param } => shared::to_lower_camel(&param.name),
             })
             .collect();
         let type_name = &wc.wrapper_type_name;
@@ -155,7 +155,7 @@ fn gen_registration_variant(
             args.push(rust_enum_expr_to_kotlin(&ov.value_expr));
         }
         for param in &variant.signature_params {
-            args.push(param.name.to_lower_camel_case());
+            args.push(shared::to_lower_camel(&param.name));
         }
         args.join(", ")
     };
@@ -200,7 +200,7 @@ fn gen_service_kotlin(api: &ApiSurface, service: &ServiceDef, package: &str, jav
     ));
 
     for reg in &service.registrations {
-        let reg_method_kt = reg.method.to_lower_camel_case();
+        let reg_method_kt = shared::to_lower_camel(&reg.method);
         let reg_method_camel = reg.method.to_upper_camel_case();
         let java_method = format!("register{class_name}{reg_method_camel}");
 
@@ -208,14 +208,14 @@ fn gen_service_kotlin(api: &ApiSurface, service: &ServiceDef, package: &str, jav
         for meta in &reg.metadata_params {
             params.push(format!(
                 "{}: {}",
-                meta.name.to_lower_camel_case(),
+                shared::to_lower_camel(&meta.name),
                 kotlin_type_for_param(&meta.ty, api)
             ));
         }
 
         let mut args: Vec<String> = vec!["Callable { request -> handler(request) }".to_owned()];
         for meta in &reg.metadata_params {
-            let name = meta.name.to_lower_camel_case();
+            let name = shared::to_lower_camel(&meta.name);
             if param_is_opaque_surface_type(meta, api) {
                 args.push(format!("{name}.inner"));
             } else {
@@ -254,14 +254,14 @@ fn gen_service_kotlin(api: &ApiSurface, service: &ServiceDef, package: &str, jav
             continue;
         }
 
-        let ep_method_kt = ep.method.to_lower_camel_case();
+        let ep_method_kt = shared::to_lower_camel(&ep.method);
         let params: Vec<String> = ep
             .params
             .iter()
             .map(|p| {
                 format!(
                     "{}: {}",
-                    p.name.to_lower_camel_case(),
+                    shared::to_lower_camel(&p.name),
                     kotlin_type_for_param(&p.ty, api)
                 )
             })
@@ -270,7 +270,7 @@ fn gen_service_kotlin(api: &ApiSurface, service: &ServiceDef, package: &str, jav
             .params
             .iter()
             .map(|p| {
-                let name = p.name.to_lower_camel_case();
+                let name = shared::to_lower_camel(&p.name);
                 if param_is_opaque_surface_type(p, api) {
                     format!("{name}.inner")
                 } else {

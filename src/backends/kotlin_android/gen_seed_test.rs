@@ -23,7 +23,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::backends::kotlin::to_lower_camel;
+use crate::backends::kotlin::to_lower_camel_unescaped;
 use crate::backends::kotlin_android::gen_bindings::effective_excluded_type_names;
 use crate::backends::kotlin_android::naming::{kotlin_package, package_path};
 use crate::codegen::naming::{kotlin_android_wrapper_object_name, wire_variant_value};
@@ -309,7 +309,7 @@ fn json_round_trip_case(type_name: &str, literals: &[String]) -> String {
     }}
 "#,
         type_name = type_name,
-        test_name = to_lower_camel(type_name),
+        test_name = to_lower_camel_unescaped(type_name),
         arguments = arguments,
         witness = witness,
     )
@@ -331,7 +331,7 @@ fn enum_wire_case(enum_name: &str, entry: &str, wire: &str) -> String {
         enum_name = enum_name,
         entry = entry,
         wire = wire,
-        test_name = to_lower_camel(enum_name),
+        test_name = to_lower_camel_unescaped(enum_name),
     )
 }
 
@@ -349,7 +349,7 @@ fn type_reference_case(package: &str, name: &str) -> String {
 "#,
         package = package,
         name = name,
-        test_name = to_lower_camel(name),
+        test_name = to_lower_camel_unescaped(name),
     )
 }
 

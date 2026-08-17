@@ -27,8 +27,28 @@ pub fn kotlin_pascal_case(name: &str) -> String {
 
 pub use kotlin_pascal_case as to_pascal_case;
 
-/// Convert a `snake_case` or `kebab-case` name to `lowerCamelCase`.
+/// Convert a `snake_case` or `kebab-case` name to `lowerCamelCase` and escape Kotlin
+/// keywords.
+///
+/// This is *the* sanitizer for every Kotlin member identifier the backend emits —
+/// property names, `fun` names, and parameter names alike. Escaping lives here rather
+/// than at the call sites because there are ~60 of them across the JVM, Native, MPP and
+/// Android emitters, and a keyword escape applied at only some of them is
+/// indistinguishable from no escape at all.
+///
+/// Use [`to_lower_camel_unescaped`] when the result is a *fragment* of a larger
+/// identifier rather than an identifier in its own right — backticks may not appear
+/// mid-identifier. ~keep
 pub fn to_lower_camel(name: &str) -> String {
+    escape_kotlin_ident(&to_lower_camel_unescaped(name))
+}
+
+/// `lowerCamelCase` conversion without keyword escaping.
+///
+/// Only correct where the result is concatenated into a longer identifier (a generated
+/// test-function name, for example); a bare emitted identifier must use
+/// [`to_lower_camel`]. ~keep
+pub fn to_lower_camel_unescaped(name: &str) -> String {
     let pascal = kotlin_pascal_case(name);
     let mut chars = pascal.chars();
     match chars.next() {
@@ -58,6 +78,14 @@ pub fn to_screaming_snake(name: &str) -> String {
 /// e.g. `val object: String` is a parse error. Wrapping in backticks
 /// (`val \`object\`: String`) keeps the wire name intact while satisfying
 /// the Kotlin grammar.
+///
+/// Deliberately *not* Kotlin's soft/modifier keywords (`get`, `set`, `value`, `field`,
+/// `by`, `where`, `init`, `constructor`, ...). Those are listed in the grammar's own
+/// `simpleIdentifier` production, so Kotlin accepts them bare as property, function and
+/// parameter names; escaping them would churn every consumer that has a field named
+/// `value` for no grammatical gain. `crate::docs::formatting::reserved_words` keeps a
+/// wider, deliberately conservative superset for the docs identifier gate — the two
+/// lists answer different questions and are expected to differ. ~keep
 const KOTLIN_HARD_KEYWORDS: &[&str] = &[
     "as",
     "break",
@@ -89,7 +117,15 @@ const KOTLIN_HARD_KEYWORDS: &[&str] = &[
     "while",
 ];
 
-fn escape_kotlin_keyword(name: &str) -> String {
+/// Backtick-escape `name` when it collides with a Kotlin hard keyword, leaving the
+/// spelling otherwise untouched.
+///
+/// Backticks rather than a trailing underscore: they are pure syntax, so the JVM member
+/// name, the Jackson property name derived from it, and the JNI symbol built from the
+/// same Rust name all still read `object`. A rename to `object_` would silently move the
+/// JSON key for every field that lacks an explicit `#[serde(rename)]`, since
+/// `emit_data_class` only emits `@JsonProperty` when the Rust field carries one. ~keep
+pub fn escape_kotlin_ident(name: &str) -> String {
     if KOTLIN_HARD_KEYWORDS.contains(&name) {
         format!("`{name}`")
     } else {
@@ -107,7 +143,7 @@ pub fn kotlin_field_name(raw: &str, idx: usize) -> String {
     if stripped.is_empty() || stripped.chars().all(|c| c.is_ascii_digit()) {
         return format!("field{idx}");
     }
-    escape_kotlin_keyword(&to_lower_camel(raw))
+    to_lower_camel(raw)
 }
 
 /// Derive a payload-informed field name for sealed-class tuple variants.
@@ -136,7 +172,7 @@ pub fn kotlin_field_name_with_type(
     let stripped = field_name.trim_start_matches('_');
 
     if !stripped.is_empty() && !stripped.chars().all(|c| c.is_ascii_digit()) {
-        return escape_kotlin_keyword(&to_lower_camel(field_name));
+        return to_lower_camel(field_name);
     }
 
     if total_fields == 1
@@ -145,7 +181,7 @@ pub fn kotlin_field_name_with_type(
         if let Some(remainder) = type_name.strip_prefix(variant_name) {
             let derived = to_lower_camel(remainder);
             if !derived.is_empty() {
-                return escape_kotlin_keyword(&derived);
+                return derived;
             }
         }
 

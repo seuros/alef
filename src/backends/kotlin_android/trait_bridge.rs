@@ -91,8 +91,6 @@ pub fn gen_jni_dispatcher_file(
     api: &crate::core::ir::ApiSurface,
     effective_excluded_types: &std::collections::HashSet<String>,
 ) -> (String, String) {
-    use heck::ToLowerCamelCase;
-
     let visible_type_names: std::collections::HashSet<&str> = api
         .types
         .iter()
@@ -115,7 +113,7 @@ pub fn gen_jni_dispatcher_file(
     let methods: Vec<minijinja::Value> = own_methods
         .iter()
         .map(|method| {
-            let method_camel = method.name.to_lower_camel_case();
+            let method_camel = crate::backends::kotlin::to_lower_camel(&method.name);
             let args = method
                 .params
                 .iter()

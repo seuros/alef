@@ -7,7 +7,9 @@
 use crate::core::ir::{EnumDef, ErrorDef, TypeDef};
 
 use super::native_type_str;
-use crate::backends::kotlin::gen_bindings::{kotlin_field_name, to_screaming_snake};
+use crate::backends::kotlin::gen_bindings::{
+    escape_kotlin_ident, kotlin_field_name, to_lower_camel, to_screaming_snake,
+};
 
 pub(super) fn emit_native_type(ty: &TypeDef, out: &mut String) {
     if !ty.doc.is_empty() {
@@ -60,15 +62,19 @@ pub(super) fn emit_native_type(ty: &TypeDef, out: &mut String) {
                 continue;
             }
 
-            let method_name = heck::AsLowerCamelCase(method.name.as_str()).to_string();
+            let method_name = to_lower_camel(&method.name);
             let return_type_str = native_type_str(&method.return_type, false);
 
+            // Parameters here keep their raw Rust `snake_case` spelling rather than being
+            // lower-camelCased like every other Kotlin parameter site; only the keyword
+            // escape is applied, so fixing the reserved-word break does not also migrate
+            // the parameter names of every existing Kotlin/Native consumer. ~keep
             let params_sig: Vec<String> = method
                 .params
                 .iter()
                 .map(|p| {
                     let ptype = native_type_str(&p.ty, p.optional);
-                    format!("{}: {ptype}", p.name)
+                    format!("{}: {ptype}", escape_kotlin_ident(&p.name))
                 })
                 .collect();
 
@@ -86,7 +92,7 @@ pub(super) fn emit_native_type(ty: &TypeDef, out: &mut String) {
             out.push_str("this");
             for p in &method.params {
                 out.push_str(", ");
-                out.push_str(&p.name);
+                out.push_str(&escape_kotlin_ident(&p.name));
             }
             out.push_str(")\n");
         }

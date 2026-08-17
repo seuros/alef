@@ -22,7 +22,10 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 pub(crate) use object_wrapper::default_constructible_type_names;
-pub use shared::{ValueMethodBridge, kotlin_field_name, to_lower_camel, to_pascal_case, to_screaming_snake};
+pub use shared::{
+    ValueMethodBridge, escape_kotlin_ident, kotlin_field_name, to_lower_camel, to_lower_camel_unescaped,
+    to_pascal_case, to_screaming_snake,
+};
 
 pub fn emit_type_pub(ty: &TypeDef, out: &mut String, imports: &mut BTreeSet<String>) {
     object_wrapper::emit_type_with_imports(
