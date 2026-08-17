@@ -107,11 +107,17 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             continue;
         }
 
-        let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
+        let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
 
+        // A unit enum is emitted as a Go string type, so its zero value is `""` — never a valid
+        // variant. When the key is wire-optional (its own `#[serde(default)]`, or the
+        // container's, which covers every field) it must carry `omitempty`, so an unset field is
+        // dropped and filled by the Rust default instead of marshaling `""` and failing
+        // deserialization with `unknown variant`. The value stays non-pointer: dropping `""` is
+        // exactly the wanted behavior, so no pointer is needed to express "unset". ~keep
         let is_named_enum = !field.optional
             && !use_default_pointer
-            && field.default.is_some()
+            && (field.default.is_some() || typ.serde_container_default)
             && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
 
         let is_sealed_interface = matches!(&field.ty, TypeRef::Named(n) if data_enum_names.contains(n.as_str()));
@@ -198,10 +204,10 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                 field.serde_rename.as_deref(),
                 typ.serde_rename_all.as_deref(),
             );
-            let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
+            let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
             let is_named_enum = !field.optional
                 && !use_default_pointer
-                && field.default.is_some()
+                && (field.default.is_some() || typ.serde_container_default)
                 && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
             let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
             let is_bytes = matches!(&field.ty, TypeRef::Bytes);
@@ -240,7 +246,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
             }
             let go_field = to_go_name(&field.name);
             if matches!(&field.ty, TypeRef::Bytes) {
-                let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
+                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
                 let is_pointer = field.optional || use_default_pointer;
                 if is_pointer {
                     out.push_str(&crate::backends::go::template_env::render(
@@ -344,10 +350,10 @@ pub(in crate::backends::go::gen_bindings) fn gen_struct_type(
                     },
                 ));
             } else {
-                let use_default_pointer = !field.optional && needs_omitempty_pointer(field);
+                let use_default_pointer = !field.optional && needs_omitempty_pointer(typ, field);
                 let is_named_enum = !field.optional
                     && !use_default_pointer
-                    && field.default.is_some()
+                    && (field.default.is_some() || typ.serde_container_default)
                     && matches!(&field.ty, TypeRef::Named(n) if enum_names.contains(n.as_str()));
                 let is_collection = matches!(&field.ty, TypeRef::Vec(_) | TypeRef::Map(_, _));
                 let field_type = if field.optional || use_default_pointer {

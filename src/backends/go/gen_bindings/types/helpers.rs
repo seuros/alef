@@ -1,4 +1,4 @@
-use crate::core::ir::{DefaultValue, FieldDef, TypeRef};
+use crate::core::ir::{DefaultValue, FieldDef, TypeDef, TypeRef};
 use minijinja::context;
 
 /// Returns true if a field is a tuple struct positional field (e.g., `_0`, `_1`, `0`, `1`).
@@ -11,14 +11,20 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 /// Returns true if a non-optional struct field should be emitted as a pointer type with
 /// `omitempty`.
 ///
-/// Gated on `field.default.is_some()` — the field carries an actual `#[serde(default...)]`,
-/// meaning the Rust side genuinely tolerates the key being absent from the JSON payload.
-/// `TypeDef::has_default` (whether the *container* derives `Default`) is NOT a substitute
-/// signal: a struct can implement `Default` while every individual field stays required at
-/// the serde level, and treating `has_default` as if it meant "this field is omittable"
-/// previously caused required fields (no `#[serde(default)]` at all) to be emitted as
-/// pointer+omitempty, silently dropping them from `json.Marshal` output and breaking
-/// deserialization on the Rust side (`missing field`). ~keep
+/// Gated on the field being *wire-optional*: either the field carries an actual
+/// `#[serde(default...)]` (`field.default.is_some()`), or its container carries a
+/// container-level `#[serde(default)]` (`TypeDef::serde_container_default`), which makes
+/// every key of that struct fillable from the container's `Default`. Either way the Rust
+/// side genuinely tolerates the key being absent from the JSON payload.
+///
+/// `TypeDef::has_default` (whether the container merely *has* a `Default` impl) is NOT a
+/// substitute signal: a struct can implement `Default` while every individual field stays
+/// required at the serde level, and treating `has_default` as if it meant "this field is
+/// omittable" previously caused required fields (no `#[serde(default)]` at all) to be emitted
+/// as pointer+omitempty, silently dropping them from `json.Marshal` output and breaking
+/// deserialization on the Rust side (`missing field`). `serde_container_default` is the
+/// narrower fact — the container carries the attribute, not just the impl — and is the only
+/// container-level signal admissible here. ~keep
 ///
 /// Once a field is confirmed wire-optional, pointer+omitempty is still only needed when the
 /// Go zero value for the field differs from the Rust default — otherwise an unset Go value
@@ -32,8 +38,8 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 /// - `FloatLiteral(f)` where f != 0.0 — Rust default is f, Go zero is 0.0
 /// - `StringLiteral(s)` where !s.is_empty() — Rust default is s, Go zero is ""
 /// - `EnumVariant(_)` — Rust default is a specific variant, Go zero is ""
-pub(crate) fn needs_omitempty_pointer(field: &FieldDef) -> bool {
-    if field.default.is_none() {
+pub(crate) fn needs_omitempty_pointer(typ: &TypeDef, field: &FieldDef) -> bool {
+    if field.default.is_none() && !typ.serde_container_default {
         return false;
     }
     if matches!(field.ty, TypeRef::Duration) {

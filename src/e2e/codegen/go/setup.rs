@@ -53,8 +53,13 @@ fn native_go_dto_literal_at(
             );
             let value = object.get(&wire_name).or_else(|| object.get(&field.name))?;
             let field_pointer = format!("{pointer}/{}", field.name);
-            let uses_pointer = field.optional
-                || (!field.optional && definition.has_default && crate::backends::go::needs_omitempty_pointer(field));
+            // Mirrors `gen_struct_type`'s `use_default_pointer` exactly. It must stay exact:
+            // the fixture literal is assigned to the emitted struct field, so any disagreement
+            // about pointer-ness is a Go compile error in the generated e2e suite. The former
+            // extra `definition.has_default &&` conjunct was such a disagreement — the emitter
+            // never consulted it. ~keep
+            let uses_pointer =
+                field.optional || (!field.optional && crate::backends::go::needs_omitempty_pointer(definition, field));
             let inner = match &field.ty {
                 crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
                 other => other,

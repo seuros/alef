@@ -47,6 +47,7 @@ fn test_struct_type(name: &str, fields: Vec<FieldDef>, has_default: bool) -> Typ
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -161,6 +162,7 @@ fn test_gen_struct_type_emits_json_tags() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -273,6 +275,7 @@ fn gen_struct_type_marshal_optional_bytes_field_does_not_dereference() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: true,
+        serde_container_default: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -318,6 +321,7 @@ fn gen_config_options_defaults_data_enum_field_to_nil_not_composite_literal() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -370,6 +374,7 @@ fn test_gen_struct_type_emits_no_config_options_by_default() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -426,6 +431,7 @@ fn test_gen_config_options_emitted_when_in_allowlist() {
         is_return_type: false,
         serde_rename_all: None,
         has_serde: false,
+        serde_container_default: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -833,6 +839,128 @@ fn gen_struct_type_required_named_enum_field_in_default_struct_stays_required() 
     assert!(
         out.contains("Enforcement Enforcement `json:\"enforcement\"`"),
         "expected a required, non-pointer, non-omitempty Enforcement field; got:\n{out}"
+    );
+}
+
+/// Three fields whose Rust defaults all differ from the Go zero value — the only shape that
+/// can tell "the key was omitted" apart from "the Go zero was marshaled". A default equal to
+/// the zero value proves nothing here. `default` stays `None` on every field: none carries a
+/// per-field `#[serde(default)]`, which is exactly the container-level case. ~keep
+fn non_zero_default_fields() -> Vec<FieldDef> {
+    let mut timeout = simple_field("timeout", TypeRef::Primitive(PrimitiveType::U32));
+    timeout.typed_default = Some(DefaultValue::IntLiteral(30));
+    let mut enabled = simple_field("enabled", TypeRef::Primitive(PrimitiveType::Bool));
+    enabled.typed_default = Some(DefaultValue::BoolLiteral(true));
+    let mut mode = simple_field("mode", TypeRef::String);
+    mode.typed_default = Some(DefaultValue::StringLiteral("fast".to_string()));
+    vec![timeout, enabled, mode]
+}
+
+/// A container-level `#[serde(default)]` makes every field absent-tolerant on the wire, so a
+/// field whose Rust default differs from the Go zero must be pointer+omitempty. Without it
+/// `json.Marshal` writes `{"timeout":0,"enabled":false,"mode":""}` for an untouched struct and
+/// the Rust side deserializes those zeros instead of `30` / `true` / `"fast"`.
+#[test]
+fn gen_struct_type_container_serde_default_emits_omitempty_pointers() {
+    let typ = TypeDef {
+        serde_container_default: true,
+        ..test_struct_type("RetryPolicy", non_zero_default_fields(), true)
+    };
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+    assert!(
+        out.contains("Timeout *uint32 `json:\"timeout,omitempty\"`"),
+        "container #[serde(default)] must make a non-zero-default u32 field a pointer; got:\n{out}"
+    );
+    assert!(
+        out.contains("Enabled *bool `json:\"enabled,omitempty\"`"),
+        "container #[serde(default)] must make a `true`-defaulting bool field a pointer; got:\n{out}"
+    );
+    assert!(
+        out.contains("Mode *string `json:\"mode,omitempty\"`"),
+        "container #[serde(default)] must make a non-empty-default string field a pointer; got:\n{out}"
+    );
+}
+
+/// The other direction, and the regression the `needs_omitempty_pointer` doc warns about: the
+/// same non-zero `impl Default` values on a struct carrying **no** container-level
+/// `#[serde(default)]` describe required wire keys. Emitting them as pointer+omitempty drops
+/// them from `json.Marshal` output and fails Rust deserialization with `missing field`.
+/// `has_default` is `true` here on purpose — having a `Default` impl must not be mistaken for
+/// carrying the serde attribute.
+#[test]
+fn gen_struct_type_without_container_serde_default_keeps_required_fields_non_pointer() {
+    let typ = test_struct_type("RetryPolicy", non_zero_default_fields(), true);
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+    assert!(
+        out.contains("Timeout uint32 `json:\"timeout\"`"),
+        "a required field must stay a plain value; got:\n{out}"
+    );
+    assert!(
+        out.contains("Enabled bool `json:\"enabled\"`"),
+        "a required field must stay a plain value; got:\n{out}"
+    );
+    assert!(
+        out.contains("Mode string `json:\"mode\"`"),
+        "a required field must stay a plain value; got:\n{out}"
+    );
+    assert!(
+        !out.contains(",omitempty") && !out.contains("*uint32") && !out.contains("*bool") && !out.contains("*string"),
+        "no field of a struct without container #[serde(default)] may be pointer+omitempty; got:\n{out}"
+    );
+}
+
+/// A unit-enum field under a container-level `#[serde(default)]` whose default resolves to
+/// `DefaultValue::Empty` (the `#[derive(Default)]` shape) gets `omitempty` on the value type:
+/// the Go zero for a unit enum is `""`, which is never a valid variant, so marshaling it fails
+/// Rust deserialization with `unknown variant`. Omitting the key lets the Rust default fill it.
+/// Without a container default the same field is a required key and must keep a plain tag.
+#[test]
+fn gen_struct_type_container_serde_default_marks_unit_enum_fields_omitempty() {
+    let mut enum_names = std::collections::HashSet::new();
+    enum_names.insert("Enforcement");
+    let mut field = simple_field("enforcement", TypeRef::Named("Enforcement".to_string()));
+    field.typed_default = Some(DefaultValue::Empty);
+
+    let emit = |typ: &TypeDef| {
+        gen_struct_type(
+            typ,
+            &enum_names,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &[],
+        )
+    };
+
+    let with_container_default = TypeDef {
+        serde_container_default: true,
+        ..test_struct_type("BudgetConfig", vec![field.clone()], true)
+    };
+    let out = emit(&with_container_default);
+    assert!(
+        out.contains("Enforcement Enforcement `json:\"enforcement,omitempty\"`"),
+        "expected an omitempty (but non-pointer) enum field; got:\n{out}"
+    );
+
+    let without_container_default = test_struct_type("BudgetConfig", vec![field], true);
+    let out = emit(&without_container_default);
+    assert!(
+        out.contains("Enforcement Enforcement `json:\"enforcement\"`"),
+        "a required enum field must keep a plain json tag; got:\n{out}"
     );
 }
 
