@@ -210,7 +210,15 @@ pub fn write_scaffold_files_report(
     }
     for file in prepared.into_values() {
         let full_path = base_dir.join(&file.path);
-        let can_skip = !overwrite && !file.generated_header && full_path.exists();
+        // `can_skip` runs BEFORE the ownership guard and consults no ownership signal at all, so a
+        // path alef demonstrably owns is still skipped outright by every `overwrite: false` writer.
+        // That is harmless for a file a human may grow past a placeholder -- which is what
+        // create-once exists for -- and wrong for pure derived output, whose whole contract is that
+        // alef replaces it wholesale. ~keep
+        let can_skip = !overwrite
+            && !file.generated_header
+            && full_path.exists()
+            && !crate::cli::cache::is_alef_derived_output(&full_path);
         if can_skip {
             report.expected_paths.insert(full_path.clone());
             debug!("  skipped (already exists): {}", full_path.display());
@@ -325,10 +333,18 @@ pub fn write_scaffold_files_report(
                 // could only ever have been created by a write this same guard forever
                 // blocks. See `e2e::snippets::is_snippet_coverage_manifest_path`'s doc for
                 // why this is not widened into a general filename allowlist. ~keep
+                // A generated snippet recorded in the PREVIOUS run's coverage ledger is owned by
+                // that record, not by an inference. `e2e::snippets::coverage::orphaned_paths`
+                // already treats `generated_metadata` as the one place alef records "I wrote this
+                // exact path", and alef already UNLINKS files on the strength of it -- refusing to
+                // overwrite the same recorded paths while being willing to delete them is
+                // incoherent. The snapshot is taken before generation, so this run's own
+                // intentions can never widen it. ~keep
                 let owned = has_marker
                     || (!is_markable
                         && (crate::cli::cache::is_scaffold_owned_path(base_dir, &full_path)
-                            || crate::e2e::snippets::is_snippet_coverage_manifest_path(&full_path)));
+                            || crate::e2e::snippets::is_snippet_coverage_manifest_path(&full_path)
+                            || crate::e2e::snippets::ownership::is_ledger_owned_snippet_path(base_dir, &full_path)));
                 if !owned {
                     warn!(
                         "refusing to write {}: pre-existing file carries no alef marker and \
@@ -348,7 +364,15 @@ pub fn write_scaffold_files_report(
         }
         super::write::atomic_write(&full_path, normalized.as_bytes())?;
         apply_shebang_chmod(&full_path, &normalized)?;
-        if !is_poly_merge_target && super::write::marker_comment_style(&full_path).is_none() {
+        // A snippet already owned by the coverage ledger is deliberately NOT copied into
+        // `.alef-ownership.toml`. Recording it would put one fact in two records that can then
+        // disagree -- the defect this release is named for -- and would add one committed line per
+        // generated snippet (thousands, on a consumer with a full snippet tree) to a file whose
+        // whole value is being readable. ~keep
+        if !is_poly_merge_target
+            && super::write::marker_comment_style(&full_path).is_none()
+            && !crate::e2e::snippets::ownership::is_ledger_owned_snippet_path(base_dir, &full_path)
+        {
             crate::cli::cache::record_scaffold_owned_path(base_dir, &full_path)?;
         }
         report.changed_paths.insert(full_path.clone());
@@ -637,7 +661,16 @@ fn merge_managed_toml_core(
     collect_arrays_by_path(generated_doc.as_table(), "", &mut current_generated_arrays);
 
     for (path, previous_values) in previous_generated_arrays {
-        let current_values = current_generated_arrays.get(path).map(Vec::as_slice).unwrap_or(&[]);
+        // A path this run did not emit AT ALL is unknown, not empty. `[lint.python.ruff]` and
+        // `[lint.php.mago]` are emitted only when their language is in scope, so a scoped run
+        // (`alef generate --lang java`) omits every other language's tables -- and reading that
+        // absence as "alef no longer proposes these values" prunes the consumer's entire rule
+        // selection out of a file alef only co-owns, leaving `select = []`, which every linter
+        // reads as "check nothing" while still exiting green. Only a path this run DID emit can
+        // testify that one of its values is gone. ~keep
+        let Some(current_values) = current_generated_arrays.get(path) else {
+            continue;
+        };
         let dropped: Vec<String> = previous_values
             .iter()
             .filter(|value| !current_values.contains(value))

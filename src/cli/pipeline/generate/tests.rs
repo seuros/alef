@@ -250,6 +250,55 @@ file_safety = { exclude = ["target/**"] }
         );
     }
 
+    /// A scoped run (`alef generate --lang java`) omits every out-of-scope language's
+    /// `[lint.<lang>.<tool>]` table entirely, because `scaffold/languages/poly.rs` gates
+    /// those blocks on `has(Language::Python)` / `has(Language::Php)`. The prune step must
+    /// not read that absence as "alef stopped proposing these values" -- doing so strips the
+    /// consumer's whole rule selection down to `select = []`, which every linter accepts and
+    /// then checks nothing, so the gate goes green while proving nothing.
+    ///
+    /// Absence-from-output has three causes -- dropped on purpose, out of scope this run, or
+    /// never reached -- and only the first licenses a removal. The contrast half of this test
+    /// is load-bearing: it pins that prune still fires for a value missing from a table the
+    /// run DID emit, so the fix cannot be satisfied by disabling prune altogether. ~keep
+    #[test]
+    fn poly_merge_never_prunes_a_table_a_scoped_run_did_not_emit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+
+        let all_languages = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"docs/assets/**\", \"target/**\"]\n\n\
+                      [lint.python.ruff]\nselect = [\"E\", \"F\"]\n"
+                .to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[all_languages], base, true).expect("all-languages run");
+
+        // `--lang java`: no `[lint.python.ruff]` at all, and `docs/assets/**` dropped from a
+        // table this run DOES emit.
+        let scoped = GeneratedFile {
+            path: PathBuf::from("poly.toml"),
+            content: "[discovery]\nexclude = [\"target/**\"]\n".to_owned(),
+            generated_header: true,
+        };
+        write_scaffold_files_with_overwrite(&[scoped], base, true).expect("scoped run");
+
+        let after = std::fs::read_to_string(base.join("poly.toml")).expect("read after scoped run");
+        assert!(
+            after.contains("\"E\"") && after.contains("\"F\""),
+            "a scoped run must not empty a lint selection it was never asked to generate; got:\n{after}"
+        );
+        assert!(
+            !after.contains("select = []"),
+            "an emptied `select` is a linter that checks nothing while still exiting green; got:\n{after}"
+        );
+        assert!(
+            !after.contains("docs/assets/**"),
+            "prune must still fire for a value missing from a table the run DID emit; got:\n{after}"
+        );
+    }
+
     /// The `poly.toml` prune baseline must be determinable from the repository alone,
     /// identically on a fresh clone and on the machine that generated it -- the same
     /// #80-shaped reproducibility property already covered for scaffold ownership in
