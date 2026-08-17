@@ -183,6 +183,32 @@ pub(super) fn emit_nested_accessor(
                 let _ = writeln!(out, "    {t} {local_var} = {accessor_fn}({current_handle});");
                 return Ok(Some(t.clone()));
             }
+            // Enum leaf: opaque enum pointer that needs `_to_string` conversion. Must run
+            // BEFORE the opaque-struct-leaf check below: `try_emit_enum_accessor` gates
+            // itself on `fields_enum` membership, but its `fields_c_types` value (the
+            // enum's PascalCase type name, e.g. `DataNodeKind`) is indistinguishable in
+            // shape from a struct's opaque type name -- both are non-primitive PascalCase
+            // strings. Checking the opaque-struct filter first would swallow every
+            // dotted-path enum leaf (it never inspects `fields_enum`) and hand back a bare
+            // handle for the caller to `strcmp` against, which aborts at runtime. The flat
+            // (single-segment) leaf path a few lines below in `test_function.rs` already
+            // orders enum-before-opaque; this nested-path leaf must match it. ~keep
+            if try_emit_enum_accessor(
+                out,
+                prefix,
+                &prefix_upper,
+                raw_field,
+                &seg_snake,
+                &current_snake_type,
+                &accessor_fn,
+                &current_handle,
+                local_var,
+                fields_c_types,
+                fields_enum,
+                intermediate_handles,
+            ) {
+                return Ok(None);
+            }
             // Opaque struct leaf: when fields_c_types maps "{parent}.{field}" to a
             // PascalCase type name (not a primitive, not "char*", not "skip"), the
             // accessor returns a struct pointer rather than a string. Emit the typed
@@ -208,23 +234,6 @@ pub(super) fn emit_nested_accessor(
                     let _ = writeln!(out, "    {prefix_upper}AlefHandle {local_var} = {handle_var};");
                 }
                 return Ok(Some(opaque_snake)); // return type name so caller can register opaque handle cleanup
-            }
-            // Enum leaf: opaque enum pointer that needs `_to_string` conversion.
-            if try_emit_enum_accessor(
-                out,
-                prefix,
-                &prefix_upper,
-                raw_field,
-                &seg_snake,
-                &current_snake_type,
-                &accessor_fn,
-                &current_handle,
-                local_var,
-                fields_c_types,
-                fields_enum,
-                intermediate_handles,
-            ) {
-                return Ok(None);
             }
             // Every branch above proved the leaf exists — an explicit `fields_c_types`
             // declaration, or an enum registration. This default proves nothing: it emits
@@ -363,59 +372,96 @@ struct ResolvedFieldChain {
     owner_type: String,
 }
 
-/// The dotted path from `root_type` down to the first field whose snake_case name is
-/// `field_snake`, or `None` if no type reachable from `root_type` has such a field.
+/// Every dotted path from `root_type` down to a field whose snake_case name is
+/// `field_snake`, one entry per distinct declaring type, shallowest first.
 ///
-/// Shallowest-first, and only through `TypeRef::Named` struct fields — the same hops
-/// [`emit_nested_accessor`] itself can walk, so a path this returns is one the C codegen
-/// could actually emit accessors for.
-fn find_field_path(
+/// Only through `TypeRef::Named` struct fields — the same hops [`emit_nested_accessor`]
+/// itself can walk, so a path this returns is one the C codegen could actually emit
+/// accessors for.
+///
+/// More than one entry means the field name is ambiguous below `root_type`: two unrelated
+/// types happen to share a field name (e.g. `kind` declared on both `DataNode`, values
+/// `object`/`array`/`scalar`, and `StructureItem`, values `function`/`class`). A caller that
+/// would otherwise propose a single alias fix MUST check `len() > 1` first and refuse to
+/// guess — silently picking one binds the fixture to a field with a different value domain
+/// instead of failing loudly. Finding this required tslp-owner to catch, by hand, a
+/// generated diagnostic that suggested exactly that corrupting alias. ~keep
+fn find_all_field_paths(
     root_type: &str,
     field_snake: &str,
     type_defs: &[crate::core::ir::TypeDef],
-) -> Option<ResolvedFieldChain> {
+) -> Vec<ResolvedFieldChain> {
     fn walk(
         type_name: &str,
         field_snake: &str,
         type_defs: &[crate::core::ir::TypeDef],
         depth: usize,
         seen: &mut HashSet<String>,
-    ) -> Option<ResolvedFieldChain> {
+        out: &mut Vec<ResolvedFieldChain>,
+    ) {
         if depth == 0 || !seen.insert(type_name.to_string()) {
-            return None;
+            return;
         }
-        let type_def = type_defs.iter().find(|type_def| type_def.name == type_name)?;
+        let Some(type_def) = type_defs.iter().find(|type_def| type_def.name == type_name) else {
+            return;
+        };
         if let Some(field) = type_def
             .fields
             .iter()
             .find(|field| field.name.to_snake_case() == field_snake)
         {
-            return Some(ResolvedFieldChain {
+            out.push(ResolvedFieldChain {
                 path: field.name.to_snake_case(),
                 owner_type: type_def.name.clone(),
             });
         }
+        // Keep walking nested fields even after a direct hit above: a distinct type
+        // reachable through a sibling or deeper field may ALSO declare `field_snake`, and
+        // that collision is exactly what this function exists to surface.
         for field in &type_def.fields {
             let Some(nested) = super::named_type(&field.ty) else {
                 continue;
             };
-            if let Some(found) = walk(nested, field_snake, type_defs, depth - 1, seen) {
-                return Some(ResolvedFieldChain {
-                    path: format!("{}.{}", field.name.to_snake_case(), found.path),
-                    owner_type: found.owner_type,
-                });
+            let before = out.len();
+            walk(nested, field_snake, type_defs, depth - 1, seen, out);
+            for chain in &mut out[before..] {
+                chain.path = format!("{}.{}", field.name.to_snake_case(), chain.path);
             }
         }
-        None
     }
 
+    let mut out = Vec::new();
     walk(
         root_type,
         field_snake,
         type_defs,
         MAX_FIELD_PATH_SEARCH_DEPTH,
         &mut HashSet::new(),
-    )
+        &mut out,
+    );
+    out.sort_by_key(|chain| chain.path.matches('.').count());
+    out
+}
+
+/// The dotted path from `root_type` down to a field whose snake_case name is
+/// `field_snake`, when the name is declared by exactly one reachable type.
+///
+/// Returns `None` both when no type reachable from `root_type` has such a field AND when
+/// more than one distinct type does — see [`find_all_field_paths`] for why an ambiguous
+/// name cannot collapse to a single answer here. Callers that need to tell those two cases
+/// apart (to phrase a different diagnostic for each) must call `find_all_field_paths`
+/// directly instead of this wrapper.
+///
+/// Test-only: every production caller needs the ambiguous and absent cases phrased differently, so
+/// they all call `find_all_field_paths`. The wrapper stays to pin the collapse rule itself. ~keep
+#[cfg(test)]
+fn find_field_path(
+    root_type: &str,
+    field_snake: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Option<ResolvedFieldChain> {
+    let mut chains = find_all_field_paths(root_type, field_snake, type_defs);
+    if chains.len() == 1 { chains.pop() } else { None }
 }
 
 /// The leading segments `resolved` lost to virtual-namespace stripping, if any.
@@ -534,8 +580,8 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
         );
     }
 
-    match find_field_path(result_type_name, seg_snake, type_defs) {
-        Some(chain) => {
+    match find_all_field_paths(result_type_name, seg_snake, type_defs).as_slice() {
+        [chain] => {
             let alias_key = match stripped_namespace_prefix(raw_field, resolved) {
                 Some(namespace) => format!("{namespace}.{}", segments_walked.join(".")),
                 None => segments_walked.join("."),
@@ -552,7 +598,7 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
                 owner = chain.owner_type,
             );
         }
-        None => {
+        [] => {
             let _ = write!(
                 message,
                 " No type reachable from `{result_type_name}` has a field named `{seg_snake}` either, so the \
@@ -560,9 +606,43 @@ fn missing_intermediate_type_diagnostic(context: MissingIntermediateType<'_>) ->
                  `{accessor_fn}()` exist."
             );
         }
+        chains => {
+            let _ = write!(
+                message,
+                "{}",
+                ambiguous_field_name_suffix(seg_snake, result_type_name, chains)
+            );
+        }
     }
 
     message
+}
+
+/// Describe an ambiguous field name (declared by more than one distinct type reachable from
+/// `result_type_name`) without picking one for the caller.
+///
+/// Shared by both diagnostics that would otherwise call [`find_field_path`] and silently take
+/// its `None` for "field does not exist" -- an ambiguous name is a different failure mode
+/// entirely, and conflating the two is how this diagnostic once recommended a corrupting
+/// fix: `find_field_path` returned whichever same-named field it found first (e.g.
+/// `DataNode.kind`, values `object`/`array`/`scalar`, vs an unrelated `StructureItem.kind`,
+/// values `function`/`class`), and the message confidently suggested aliasing to it. Naming
+/// every candidate chain, and refusing to recommend any single one of them, is the fix: the
+/// operator -- who knows which chain the fixture actually means -- has to pick. ~keep
+fn ambiguous_field_name_suffix(seg_snake: &str, result_type_name: &str, chains: &[ResolvedFieldChain]) -> String {
+    let candidates: Vec<String> = chains
+        .iter()
+        .map(|chain| format!("\"{}\" (declared on `{}`)", chain.path, chain.owner_type))
+        .collect();
+    format!(
+        " Field `{seg_snake}` is declared on {count} unrelated types reachable from `{result_type_name}`, with \
+         different chains: {candidates} -- alef cannot tell which one the fixture means, and guessing risks \
+         binding the assertion to a field with a different value domain than intended. Fix: add \
+         \"<fixture path>\" = \"<the correct chain from the list above>\" under `[crates.e2e.fields]` yourself, \
+         after checking which candidate actually matches this fixture's data.",
+        count = chains.len(),
+        candidates = candidates.join(", "),
+    )
 }
 
 /// Inputs for [`ensure_leaf_field_exists`]. A struct, not a handful of positional
@@ -686,13 +766,26 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
         );
     }
 
-    let Some(chain) = find_field_path(result_type_name, seg_snake, type_defs) else {
-        let _ = write!(
-            message,
-            " No type reachable from `{result_type_name}` has a field named `{seg_snake}` either, so the fixture's \
-             field path is the thing to fix -- there is no config entry that can spell a chain which does not exist."
-        );
-        return message;
+    let chains = find_all_field_paths(result_type_name, seg_snake, type_defs);
+    let chain = match chains.as_slice() {
+        [chain] => chain,
+        [] => {
+            let _ = write!(
+                message,
+                " No type reachable from `{result_type_name}` has a field named `{seg_snake}` either, so the \
+                 fixture's field path is the thing to fix -- there is no config entry that can spell a chain which \
+                 does not exist."
+            );
+            return message;
+        }
+        chains => {
+            let _ = write!(
+                message,
+                "{}",
+                ambiguous_field_name_suffix(seg_snake, result_type_name, chains)
+            );
+            return message;
+        }
     };
 
     let real_path = &chain.path;
@@ -1974,6 +2067,173 @@ mod tests {
     #[test]
     fn explicitly_declared_flat_leaf_type_overrides_the_ir_check() {
         check_ts_pack_stripped_leaf(true).expect("an explicit fields_c_types declaration is authoritative");
+    }
+
+    /// The full `ProcessResult.data -> DataNode.kind` shape once `data` is correctly
+    /// registered in `result_fields` and `fields_c_types` names both hops (`data` ->
+    /// `DataNode`, and the enum leaf `kind` -> `DataNodeKind`) — the "config already correct
+    /// and complete" state a fixture author reaches after following `ts_pack_types`'s
+    /// diagnostic. `data` is `Optional<Named>` here, matching the real IR (`pub data:
+    /// Option<DataNode>`), not the bare `Named` `ts_pack_types` uses — this is the actual
+    /// shape `emit_nested_accessor` must walk through the `Option`. ~keep
+    fn ts_pack_types_with_optional_data_and_enum_kind() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "ProcessResult".into(),
+                fields: vec![FieldDef {
+                    name: "data".into(),
+                    ty: TypeRef::Optional(Box::new(TypeRef::Named("DataNode".into()))),
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "DataNode".into(),
+                fields: vec![
+                    FieldDef {
+                        name: "kind".into(),
+                        ty: TypeRef::Named("DataNodeKind".into()),
+                        ..FieldDef::default()
+                    },
+                    FieldDef {
+                        name: "children".into(),
+                        ty: TypeRef::Vec(Box::new(TypeRef::Named("DataNode".into()))),
+                        ..FieldDef::default()
+                    },
+                ],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    /// Both halves of the ts-pack fix at once: the walk must go through the `Option<DataNode>`
+    /// hop AND land on the enum branch, not the opaque-struct branch, for the `DataNodeKind`
+    /// leaf. Before the branch-ordering fix, this leaf matched the opaque-struct filter first
+    /// (`DataNodeKind` is PascalCase, non-primitive, not `char*`/`skip`) and emitted a bare
+    /// handle the caller would `strcmp` against instead of a `_to_string`-converted `char*`.
+    #[test]
+    fn dotted_path_through_optional_field_reaches_enum_leaf() {
+        let types = ts_pack_types_with_optional_data_and_enum_kind();
+        let fields_c_types = HashMap::from([
+            ("process_result.data".to_string(), "DataNode".to_string()),
+            ("data_node.kind".to_string(), "DataNodeKind".to_string()),
+        ]);
+        let fields_enum: HashSet<String> = ["data.kind".to_string()].into_iter().collect();
+        let mut output = String::new();
+        let mut handles = Vec::new();
+
+        let result = emit_nested_accessor(
+            &mut output,
+            "ts_pack",
+            "data.kind",
+            "data_kind",
+            "result",
+            &fields_c_types,
+            &fields_enum,
+            &mut handles,
+            "ProcessResult",
+            "data.kind",
+            &types,
+        )
+        .expect("the Option<DataNode> hop and the enum leaf both resolve");
+
+        assert_eq!(
+            result, None,
+            "an enum leaf returns Ok(None) (render_assertion reads it as a plain char*), not \
+             Ok(Some(opaque_type)) -- a Some here would mean the opaque-struct branch fired instead"
+        );
+        assert!(
+            output.contains("data_handle = ts_pack_process_result_data(result)"),
+            "must walk into the Option<DataNode> field via the FFI accessor: {output}"
+        );
+        assert!(
+            output.contains("ts_pack_data_node_kind_to_string("),
+            "must convert the enum leaf via its _to_string accessor, proving the enum branch \
+             (not the opaque-struct branch) fired: {output}"
+        );
+        assert!(
+            !output.contains("AlefHandle data_kind = kind_handle"),
+            "must not fall through to the opaque-struct branch's bare handle assignment: {output}"
+        );
+    }
+
+    /// Two unrelated types below the same result type declaring a field with the same name
+    /// (`DataNode.kind`, values object/array/scalar, vs `StructureItem.kind`, values
+    /// function/class) must not collapse into a single confident alias suggestion — this is
+    /// the tslp scenario that motivated the fix: the pre-fix diagnostic would have proposed
+    /// exactly `"data.kind" = "structure.kind"`, silently rebinding the assertion to the
+    /// wrong field.
+    #[test]
+    fn ambiguous_leaf_field_name_does_not_suggest_a_specific_alias() {
+        let types = vec![
+            TypeDef {
+                name: "ProcessResult".into(),
+                fields: vec![
+                    FieldDef {
+                        name: "data".into(),
+                        ty: TypeRef::Named("DataNode".into()),
+                        ..FieldDef::default()
+                    },
+                    FieldDef {
+                        name: "structure".into(),
+                        ty: TypeRef::Named("StructureItem".into()),
+                        ..FieldDef::default()
+                    },
+                ],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "DataNode".into(),
+                fields: vec![FieldDef {
+                    name: "kind".into(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "StructureItem".into(),
+                fields: vec![FieldDef {
+                    name: "kind".into(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                ..TypeDef::default()
+            },
+        ];
+
+        let message = ensure_leaf_field_exists(LeafFieldCheck {
+            prefix: "ts_pack",
+            accessor_fn: "ts_pack_process_result_kind",
+            resolved: "kind",
+            raw_field: "data.kind",
+            segment: "kind",
+            parent_snake_type: "process_result",
+            parent_is_ir_type: true,
+            declared_in_fields_c_types: false,
+            result_type_name: "ProcessResult",
+            type_defs: &types,
+        })
+        .expect_err("`kind` is not a field of `ProcessResult` itself")
+        .to_string();
+
+        assert!(
+            !message.contains("\"data.kind\" = \"structure.kind\""),
+            "must never suggest binding DataNode.kind's field onto the unrelated \
+             StructureItem.kind: {message}"
+        );
+        assert!(
+            message.contains("\"data.kind\""),
+            "must still name the ambiguous candidate chain rooted at `data`: {message}"
+        );
+        assert!(
+            message.contains("\"structure.kind\""),
+            "must still name the ambiguous candidate chain rooted at `structure`: {message}"
+        );
+        assert!(
+            message.contains("DataNode") && message.contains("StructureItem"),
+            "must name both declaring types so the operator can tell them apart: {message}"
+        );
     }
 
     fn test_backend_arg(trait_name: &str) -> crate::e2e::config::ArgMapping {
