@@ -141,9 +141,9 @@ pub(super) fn php_property_phpdoc(var_type: &str, doc: &str, indent: &str) -> St
 /// `string`, not as an instance of the constants-only class `gen_enum_constants` declares for the
 /// enum. Typing it as the enum's own class name would promise a value the extension never
 /// produces — for the PHPStan stub that's a false type declaration; for the generated `src/`
-/// facade and opaque-class files it is worse: `LiterLlm.php`-style facades pass the argument
-/// straight through to the native `...Api` class, so a bare enum-class type hint makes the method
-/// genuinely uncallable (the constants-only class has no instances a caller could ever pass).
+/// facade and opaque-class files it is worse: a facade class passes the argument straight through
+/// to the native `...Api` class, so a bare enum-class type hint makes the method genuinely
+/// uncallable (the constants-only class has no instances a caller could ever pass).
 /// Shared by every PHP codegen site that types a value against an IR type — stub properties,
 /// struct constructor params, stub method params/returns, the runtime facade
 /// (`public_api.rs`), and opaque-class method stubs (`opaque_files.rs`) — so none of those sites
