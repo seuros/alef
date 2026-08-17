@@ -1005,3 +1005,105 @@ fn public_associated_default_bypasses_structural_deserialize_placeholders() {
         "sample_core::NetworkPolicy::from_environment()"
     );
 }
+
+/// The bug this fix targets: alef could not constant-fold `impl Default`'s body
+/// (`Unresolved`), and the shared renderer used to answer that exactly like `Empty` — the
+/// field type's own zero — underneath a doc comment quoting the real (unreadable) default.
+/// `Unresolved` only exists because a real `fn default()` was found and could not be read
+/// through, so `TypeDef::has_default` is guaranteed `true`; that impl is real, compiled Rust
+/// the generated crate can call directly, so `default_value_for_field_in_type` must recover
+/// the actual value the same way it already does for `TupleVariant`/`StructVariant`, rather
+/// than merely refusing to guess.
+#[test]
+fn unresolved_default_recovers_the_real_value_via_the_owning_types_default_impl() {
+    let typ = TypeDef {
+        has_default: true,
+        rust_path: "demo::Settings".to_string(),
+        ..make_test_type()
+    };
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::Unresolved("Self::builder().build()".to_string())),
+        ..make_field("mode", TypeRef::Primitive(PrimitiveType::U64))
+    };
+
+    let rendered = default_value_for_field_in_type(&field, "rust", &typ);
+
+    assert_eq!(
+        rendered, "<demo::Settings as ::core::default::Default>::default().mode",
+        "must read the real default back off the owning type's own `Default` impl"
+    );
+    assert!(
+        !rendered.contains("Default::default()") && !rendered.trim_start().starts_with('0'),
+        "must not substitute the field type's own zero: {rendered}"
+    );
+}
+
+/// When the owning type has no `Default` impl to read back from — `has_default: false`, the
+/// mark-unresolved path can only be reached via a nested/inherited context, but the guard
+/// itself must not assume one exists — generation must fail loudly rather than guess. The
+/// message must name the crate, the type, and the field, the same contract
+/// `contextual_failure_names_crate_type_field_and_uncallable_function` pins for `FunctionCall`.
+#[test]
+fn unresolved_default_without_a_default_impl_to_read_back_from_fails_loudly() {
+    let typ = TypeDef {
+        has_default: false,
+        rust_path: "demo::Settings".to_string(),
+        ..make_test_type()
+    };
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::Unresolved("Self::builder().build()".to_string())),
+        ..make_field("mode", TypeRef::Primitive(PrimitiveType::U64))
+    };
+
+    let message = default_value_for_field_in_type(&field, "rust", &typ);
+
+    assert!(message.starts_with("compile_error!"), "must fail rather than guess: {message}");
+    for needle in ["demo::Settings", "Settings", "mode"] {
+        assert!(
+            message.contains(needle),
+            "contextual failure must name `{needle}`: {message}"
+        );
+    }
+    assert!(
+        !message.contains("Default::default()"),
+        "a failed recovery must not fall back to the field type's own zero: {message}"
+    );
+}
+
+/// `default_value_for_field` (no owning-`TypeDef` context) mirrors the `FunctionCall` contract:
+/// `"rust"` fails loudly rather than guess, and every other language answers "no value" instead
+/// of the field type's zero. Every production "rust"-emitting caller (Magnus, PHP, NAPI,
+/// Rustler) goes through `default_value_for_field_in_type` instead — see
+/// `unresolved_default_recovers_the_real_value_via_the_owning_types_default_impl` above — so this
+/// exercises only the context-free path directly.
+#[test]
+fn unresolved_default_without_type_context_never_fabricates_a_zero() {
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::Unresolved("Self::builder().build()".to_string())),
+        ..make_field("retries", TypeRef::Primitive(PrimitiveType::U32))
+    };
+
+    let message = default_value_for_field(&field, "rust");
+    assert!(
+        message.starts_with("compile_error!") && message.contains("retries"),
+        "must fail rather than guess, naming the field: {message}"
+    );
+
+    assert_eq!(default_value_for_field(&field, "python"), "None");
+    assert_eq!(default_value_for_field(&field, "ruby"), "nil");
+    assert_eq!(default_value_for_field(&field, "go"), "nil");
+}
+
+/// Negative control: `Empty` really does mean "the default IS the type's own zero", so it must
+/// still render the type-zero table `Unresolved` no longer shares. Without this, a fix that
+/// suppressed every default (rather than only `Unresolved`) would pass the positive tests above
+/// while silently dropping a legitimate one.
+#[test]
+fn empty_default_still_renders_the_type_zero_table_go() {
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::Empty),
+        ..make_field("retries", TypeRef::Primitive(PrimitiveType::U32))
+    };
+
+    assert_eq!(default_value_for_field(&field, "go"), "0");
+}
