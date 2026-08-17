@@ -1430,6 +1430,211 @@ mod snippet_tests {
         }
     }
 
+    /// Identifiers a snippet guard may name without a preceding local declaration. ~keep
+    const GUARD_FREE_IDENTIFIERS: &[&str] = &["NULL", "EXIT_FAILURE", "EXIT_SUCCESS", "true", "false", "sizeof"];
+
+    /// The condition of an `if (...)` guard, paren-balanced so a call inside it does not
+    /// terminate the scan early.
+    fn guard_condition(line: &str) -> Option<&str> {
+        let rest = line.trim().strip_prefix("if (")?;
+        let mut depth = 1usize;
+        for (index, character) in rest.char_indices() {
+            match character {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&rest[..index]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Identifiers a condition reads as values: call names, string-literal contents and
+    /// numeric literals are excluded.
+    fn condition_identifiers(condition: &str) -> Vec<String> {
+        let characters: Vec<char> = condition.chars().collect();
+        let mut identifiers = Vec::new();
+        let mut index = 0;
+        let mut in_string = false;
+        while index < characters.len() {
+            let character = characters[index];
+            if in_string {
+                index += if character == '\\' { 2 } else { 1 };
+                if character == '"' {
+                    in_string = false;
+                }
+                continue;
+            }
+            if character == '"' {
+                in_string = true;
+                index += 1;
+                continue;
+            }
+            if character.is_alphabetic() || character == '_' {
+                let start = index;
+                while index < characters.len() && (characters[index].is_alphanumeric() || characters[index] == '_') {
+                    index += 1;
+                }
+                if characters.get(index) != Some(&'(') {
+                    identifiers.push(characters[start..index].iter().collect());
+                }
+                continue;
+            }
+            index += 1;
+        }
+        identifiers
+    }
+
+    /// The variable a statement declares. Deliberately reimplemented here rather than shared
+    /// with `test_function::declared_variable`: a checker that reuses the emitter's own
+    /// heuristic cannot fail when that heuristic is what is wrong. ~keep
+    fn declared_name(line: &str) -> Option<String> {
+        let statement = line.trim().trim_end_matches(';');
+        let declarator = statement.split('=').next()?.trim();
+        if declarator.contains(['(', ')', '{', '}', '!', '<', '>', ',', '#'])
+            || declarator.split_whitespace().count() < 2
+        {
+            return None;
+        }
+        let last = declarator.split_whitespace().next_back()?;
+        let name = last.trim_start_matches('*').split('[').next()?;
+        (!name.is_empty()).then(|| name.to_string())
+    }
+
+    fn guard_uses_before_declaration(snippet: &str) -> Vec<String> {
+        let mut declared: HashSet<String> = HashSet::new();
+        let mut violations = Vec::new();
+        for line in snippet.lines() {
+            if let Some(condition) = guard_condition(line) {
+                for identifier in condition_identifiers(condition) {
+                    if !GUARD_FREE_IDENTIFIERS.contains(&identifier.as_str()) && !declared.contains(&identifier) {
+                        violations.push(format!("`{identifier}` read by guard `{}`", line.trim()));
+                    }
+                }
+            }
+            if let Some(name) = declared_name(line) {
+                declared.insert(name);
+            }
+        }
+        violations
+    }
+
+    fn error_fixture(id: &str) -> Fixture {
+        let mut fixture = Fixture {
+            id: id.into(),
+            description: "Expected to fail".into(),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            ..Default::default()
+        });
+        fixture
+    }
+
+    /// Property, not string: whatever a generated C snippet's `if (...)` guards read must
+    /// already be declared above them, because a snippet is a standalone translation unit and
+    /// a use-before-declaration is a hard compile error, not a failing assertion.
+    ///
+    /// The checker is a whole-snippet scan, so it also covers the `free`-guards the
+    /// engine-factory and client paths emit — not just the error-path failure guard. ~keep
+    #[test]
+    fn every_guard_identifier_in_a_generated_snippet_is_declared_before_it_is_read() {
+        let sample = || ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut client_e2e = E2eConfig::default();
+        client_e2e.call.function = "chat".into();
+        client_e2e.call.overrides.insert(
+            "c".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+        let client_config = ResolvedCrateConfig {
+            adapters: vec![
+                serde_json::from_value(serde_json::json!({
+                    "name": "chat",
+                    "pattern": "async_method",
+                    "core_path": "sample::chat",
+                    "owner_type": "DefaultClient"
+                }))
+                .expect("client adapter config"),
+            ],
+            ..sample()
+        };
+
+        let mut raw_e2e = E2eConfig::default();
+        raw_e2e.call.function = "parse_input".into();
+        raw_e2e.call.result_var = "result".into();
+        raw_e2e.call.result_is_simple = true;
+        raw_e2e.call.overrides.insert(
+            "c".into(),
+            crate::core::config::e2e::CallOverride {
+                raw_c_result_type: Some("char*".into()),
+                ..Default::default()
+            },
+        );
+
+        let mut handle_e2e = E2eConfig::default();
+        handle_e2e.call.function = "sample_parse".into();
+
+        let cases: Vec<(&str, Fixture, E2eConfig, ResolvedCrateConfig)> = vec![
+            (
+                "client-factory error",
+                error_fixture("chat_auth_401"),
+                client_e2e,
+                client_config,
+            ),
+            ("raw-result error", error_fixture("parse_invalid"), raw_e2e, sample()),
+            (
+                "opaque-handle error",
+                error_fixture("parse_failed"),
+                handle_e2e,
+                sample(),
+            ),
+        ];
+
+        for (label, fixture, e2e, config) in cases {
+            let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("snippet renders");
+            let violations = guard_uses_before_declaration(&rendered);
+            assert!(
+                violations.is_empty(),
+                "{label}: guard reads an undeclared identifier: {violations:?}\n{rendered}"
+            );
+        }
+    }
+
+    /// Negative control for the checker above. This is the exact shape alef 0.60.0 published for
+    /// every error fixture with a client factory: the client-construction assertion was rewritten
+    /// into the result guard, so the guard named a variable declared on the next line. A checker
+    /// that cannot see this defect proves nothing about the snippets that pass it. ~keep
+    #[test]
+    fn guard_checker_rejects_the_historic_use_before_declaration_snippet() {
+        let historic = concat!(
+            "int main(void) {\n",
+            "    SAMPLEDefaultClient* client = sample_create_client(\"test-key\", NULL);\n",
+            "    if (result != NULL) { return EXIT_FAILURE; }\n",
+            "    SAMPLEBatchObject* result = sample_default_client_cancel_batch(client, \"batch-1\");\n",
+            "    sample_default_client_free(client);\n",
+            "    if (result != NULL) { return EXIT_FAILURE; }\n",
+            "    return EXIT_SUCCESS;\n",
+            "}\n",
+        );
+
+        let violations = guard_uses_before_declaration(historic);
+
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert!(violations[0].contains("`result`"), "{violations:?}");
+    }
+
     #[test]
     fn raw_result_test_function_asserts_failure_per_result_type() {
         // Direct test of the real e2e-test-file emitter (render_test_function),

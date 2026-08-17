@@ -59,6 +59,66 @@ fn is_expected_result_assertion(line: &str, result_var: &str) -> bool {
     line.trim_start().starts_with("assert(") && line.contains(result_var) && line.contains("expected call to fail")
 }
 
+/// The variable a C declaration statement introduces, if the line is one.
+///
+/// Recognises the declarator shapes the C emitters produce — `TYPE name`, `TYPE* name`,
+/// `const TYPE *name` — and rejects anything whose left-hand side is a condition, a call or a
+/// bare re-assignment, so `assert(result == 0 …)` and `if (result != 0) …` never read as
+/// declarations of `result`. ~keep
+fn declared_variable(line: &str) -> Option<&str> {
+    let (declarator, _) = line.split_once('=')?;
+    let declarator = declarator.trim();
+    if declarator.contains(['(', ')', '{', '}', '!', '<', '>', ',']) || declarator.ends_with(['*', '=']) {
+        return None;
+    }
+    if declarator.split_whitespace().count() < 2 {
+        return None;
+    }
+    declarator
+        .rsplit(|character: char| character.is_whitespace() || character == '*')
+        .next()
+}
+
+/// Assemble a documentation snippet body from the rendered e2e test function.
+///
+/// An `expects_error` fixture's `expected call to fail` assertion becomes a
+/// `return EXIT_FAILURE` guard naming `result_var`. That guard is only legal C once the call
+/// declaring `result_var` has been emitted, so the walk carries the declaration state and pairs
+/// the rewrite with it: a matching assertion reached before the declaration is an upstream
+/// emitter defect and is reported here rather than published as use-before-declaration C, which
+/// no snippet-level test could catch because the translation unit would not compile at all. ~keep
+fn assemble_snippet_body(
+    function: &str,
+    result_var: &str,
+    expects_error: bool,
+    fixture_id: &str,
+) -> anyhow::Result<String> {
+    let failure_check = format!("if ({result_var} != 0) {{ return EXIT_FAILURE; }}");
+    let body_line_count = function.lines().count().saturating_sub(3);
+    let mut result_declared = false;
+    let mut lines: Vec<String> = Vec::new();
+    for raw_line in function.lines().skip(2).take(body_line_count) {
+        if !expects_error && raw_line.trim_start().starts_with("assert(") {
+            continue;
+        }
+        let line = raw_line.strip_prefix("    ").unwrap_or(raw_line);
+        if declared_variable(line) == Some(result_var) {
+            result_declared = true;
+        } else if expects_error && is_expected_result_assertion(line, result_var) {
+            if !result_declared {
+                anyhow::bail!(
+                    "C e2e generator: fixture `{fixture_id}` would emit the `{result_var}` failure guard before \
+                     `{result_var}` is declared; the call producing `{result_var}` must be emitted first"
+                );
+            }
+            lines.push(failure_check.clone());
+            continue;
+        }
+        lines.push(line.to_string());
+    }
+    Ok(lines.join("\n"))
+}
+
 pub(super) struct SnippetContext<'a> {
     pub fixture: &'a Fixture,
     pub e2e_config: &'a crate::e2e::config::E2eConfig,
@@ -185,26 +245,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         true,
         &config_sources,
     )?;
-    let failure_check = format!("if ({result_var} != 0) {{ return EXIT_FAILURE; }}");
-    let body_line_count = function.lines().count().saturating_sub(3);
-    let body = function
-        .lines()
-        .skip(2)
-        .take(body_line_count)
-        .filter(|line| {
-            let trimmed = line.trim_start();
-            expects_error || !trimmed.starts_with("assert(")
-        })
-        .map(|line| line.strip_prefix("    ").unwrap_or(line))
-        .map(|line| {
-            if expects_error && is_expected_result_assertion(line, result_var) {
-                failure_check.clone()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let body = assemble_snippet_body(&function, result_var, expects_error, &fixture.id)?;
     Ok(crate::e2e::template_env::render(
         "c/snippet_body.jinja",
         minijinja::context! { header => header, declarations => snippet_declarations(&body), body => body },
@@ -1226,7 +1267,20 @@ fn render_typed_arg_cleanup(out: &mut String, prefix: &str, handles: &[(String, 
 
 #[cfg(test)]
 mod snippet_tests {
-    use super::{is_expected_result_assertion, snippet_declarations};
+    use super::{assemble_snippet_body, declared_variable, is_expected_result_assertion, snippet_declarations};
+
+    /// Wrap body lines the way `render_test_function` does, so `assemble_snippet_body`'s
+    /// two-line header / one-line footer trim lands on the same rows it does in production. ~keep
+    fn rendered_function(body_lines: &[&str]) -> String {
+        let mut function = String::from("void test_fixture(void) {\n    /* Fixture */\n");
+        for line in body_lines {
+            function.push_str("    ");
+            function.push_str(line);
+            function.push('\n');
+        }
+        function.push_str("}\n");
+        function
+    }
 
     #[test]
     fn standalone_snippet_declares_success_guard() {
@@ -1245,5 +1299,96 @@ mod snippet_tests {
             "assert(result == 0 && \"expected call to fail\");",
             "result",
         ));
+    }
+
+    #[test]
+    fn declared_variable_reads_declarations_and_not_conditions() {
+        assert_eq!(
+            declared_variable("SAMPLEAlefHandle result = sample_chat(client);"),
+            Some("result")
+        );
+        assert_eq!(
+            declared_variable("char* result = sample_list_formats();"),
+            Some("result")
+        );
+        assert_eq!(
+            declared_variable("const TSLanguage *result = sample_language();"),
+            Some("result")
+        );
+        assert_eq!(
+            declared_variable("const char* api_key = getenv(\"API_KEY\");"),
+            Some("api_key")
+        );
+        assert_eq!(
+            declared_variable("assert(result == 0 && \"expected call to fail\");"),
+            None
+        );
+        assert_eq!(declared_variable("if (result != 0) { return EXIT_FAILURE; }"), None);
+        assert_eq!(declared_variable("result = sample_chat(client);"), None);
+    }
+
+    #[test]
+    fn failure_guard_is_emitted_with_the_declaration_it_names() {
+        let function = rendered_function(&[
+            "const char* api_key = getenv(\"API_KEY\");",
+            "assert(api_key != NULL && \"API_KEY must be set\");",
+            "SAMPLEAlefHandle client = sample_create_client(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL);",
+            "assert(client != 0 && \"failed to create client\");",
+            "SAMPLEAlefHandle result = sample_default_client_chat(client);",
+            "sample_default_client_free(client);",
+            "assert(result == 0 && \"expected call to fail\");",
+        ]);
+
+        let body = assemble_snippet_body(&function, "result", true, "chat_auth_401").expect("body assembles");
+
+        let guard = body
+            .lines()
+            .position(|line| line.contains("if (result != 0) { return EXIT_FAILURE; }"))
+            .expect("failure guard is emitted");
+        let declaration = body
+            .lines()
+            .position(|line| line.contains("SAMPLEAlefHandle result ="))
+            .expect("result is declared");
+        assert!(declaration < guard, "guard precedes its declaration:\n{body}");
+        assert!(
+            body.contains("assert(client != 0 && \"failed to create client\");"),
+            "the client assertion must survive untouched:\n{body}"
+        );
+    }
+
+    /// Regression control for the 0.60.0 shape: back then every `assert(` line in an
+    /// error fixture became the `result` guard, so the client assertion turned into a guard
+    /// naming a variable declared on the next line. Feeding that ordering back in must be
+    /// rejected outright rather than published as C that cannot compile. ~keep
+    #[test]
+    fn failure_guard_before_its_declaration_is_rejected() {
+        let function = rendered_function(&[
+            "SAMPLEAlefHandle client = sample_create_client(api_key, NULL, (uint64_t)-1, (uint32_t)-1, NULL);",
+            "assert(result == 0 && \"expected call to fail\");",
+            "SAMPLEAlefHandle result = sample_default_client_chat(client);",
+        ]);
+
+        let error = assemble_snippet_body(&function, "result", true, "chat_auth_401")
+            .expect_err("a guard preceding its declaration must be rejected");
+
+        assert!(error.to_string().contains("before `result` is declared"), "{error}");
+    }
+
+    #[test]
+    fn success_snippets_drop_assertions_without_touching_declarations() {
+        let function = rendered_function(&[
+            "SAMPLEAlefHandle result = sample_default_client_chat(client);",
+            "assert(result != 0 && \"expected call to succeed\");",
+            "sample_chat_response_free(result);",
+        ]);
+
+        let body = assemble_snippet_body(&function, "result", false, "chat_basic").expect("body assembles");
+
+        assert!(!body.contains("assert("), "{body}");
+        assert!(
+            body.contains("SAMPLEAlefHandle result = sample_default_client_chat(client);"),
+            "{body}"
+        );
+        assert!(body.contains("sample_chat_response_free(result);"), "{body}");
     }
 }
