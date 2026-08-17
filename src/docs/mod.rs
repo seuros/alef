@@ -113,7 +113,12 @@ pub fn reference_output_dir(config: &ResolvedCrateConfig) -> PathBuf {
 /// silently froze the *entire* published API reference at whatever version last validated
 /// cleanly — worse than the failure it was trying to report, and with no signal to the caller
 /// that anything was skipped. Callers must write `.0` unconditionally and only then propagate
-/// `.1`. ~keep
+/// `.1`.
+///
+/// That guarantee is not limited to the API reference pages: `generate_docs_stage_extras` orders
+/// its steps so `cli.md`, `mcp.md`, `llms.txt` and every `SKILL.md` are emitted *before* snippet
+/// validation runs, precisely so a strict bail cannot amputate the returned set. See that
+/// function's doc for the false-orphan residue that ordering fixes. ~keep
 pub fn generate_docs_stage(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -147,10 +152,53 @@ pub fn generate_docs_stage(
     (files, result)
 }
 
-/// Everything past the API reference pages: snippet discovery/validation, CLI/MCP extraction and
-/// adoption checks, and llms/skills rendering. Takes `files` by mutable reference specifically so
-/// an early `?` return here only unwinds this function — `generate_docs_stage`'s `files` keeps
-/// every page pushed onto it before the failure. ~keep
+/// The one way a page enters the docs stage's emitted set.
+///
+/// `files` is not a convenience buffer, it is the record every downstream consumer of this stage
+/// reads to decide what alef owns: `write_scaffold_files_report` writes it and records each
+/// unmarkable path in `.alef-ownership.toml`, `alef all`/`alef docs` derive the orphan sweep's
+/// `keep` set from it, and `bin_cli::helpers::collect_managed_surface` hands it to `alef verify`'s
+/// frozen report and `alef adopt`'s candidate set. A page missing from it is indistinguishable, to
+/// all of them, from a file alef has stopped emitting — an orphan.
+///
+/// Pairing the two appends in one function, instead of leaving each caller to remember a separate
+/// `context.references.push`, is the point: the separate call is exactly the shape that left
+/// `llms.txt` and every `SKILL.md` out of `references` while `cli.md`/`mcp.md` were in it. Passing
+/// `None` is now a visible decision at the call site rather than a forgotten line. ~keep
+fn emit_page(
+    files: &mut Vec<GeneratedFile>,
+    context: &mut DocsRenderContext,
+    file: GeneratedFile,
+    reference: Option<(&str, &str)>,
+) {
+    if let Some((kind, title)) = reference {
+        context.references.push(context::ReferenceDoc {
+            kind: kind.to_string(),
+            title: title.to_string(),
+            path: file.path.to_string_lossy().to_string(),
+        });
+    }
+    files.push(file);
+}
+
+/// Everything past the API reference pages: CLI/MCP extraction and adoption checks, snippet
+/// discovery, llms/skills rendering, and snippet validation. Takes `files` by mutable reference
+/// specifically so an early `?` return here only unwinds this function — `generate_docs_stage`'s
+/// `files` keeps every page pushed onto it before the failure. ~keep
+///
+/// THE ORDER OF THE STEPS BELOW IS LOAD-BEARING, and is the whole reason this function reads the
+/// way it does: every step that *emits* a page runs before the fallible step that emits none.
+/// Snippet validation used to run first (it was fused into `build_snippet_context`), so any
+/// strict bail, gap failure or audit failure — none of which say anything about the CLI or MCP
+/// surface — returned before `cli.md`, `mcp.md`, `llms.txt` and every `SKILL.md` were ever pushed.
+/// `generate_docs_stage`'s "the Vec is never dropped on failure" guarantee then covered only the
+/// API reference pages, and the pages that vanished were *silently* absent rather than reported:
+/// downstream, absence from this Vec is read as "alef no longer emits this", so a validation
+/// failure in one part of the docs stage manufactured false orphans in another. Two consumer
+/// repos show exactly that residue — `cli.md`/`mcp.md`/`SKILL.md` present on disk, alef-marked,
+/// and absent from `.alef-ownership.toml` while every version-bearing API page is listed.
+///
+/// Anything fallible added here must go after the last `emit_page`, or be an emitter itself. ~keep
 fn generate_docs_stage_extras(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -160,75 +208,79 @@ fn generate_docs_stage_extras(
     files: &mut Vec<GeneratedFile>,
 ) -> anyhow::Result<()> {
     let mut context = build_base_context(api, config, languages, files.as_slice());
-    let snippet_dirs = build_snippet_context(config, workspace_root, &mut context)?;
+    let Some(docs_cfg) = &config.docs else {
+        return Ok(());
+    };
 
-    if let Some(docs_cfg) = &config.docs {
-        if let Some(cli_cfg) = &docs_cfg.cli
-            && cli_cfg.is_enabled()
-        {
-            let explicit_sources = !cli_cfg.sources.is_empty();
-            let sources = docs_sources(config, &cli_cfg.sources, workspace_root);
-            warn_missing_explicit_sources("CLI", &cli_cfg.sources, workspace_root);
-            let surface = rust_static::extract_cli_surface(&sources)?;
-            if surface.commands.is_empty() {
-                if explicit_sources {
-                    tracing::warn!("docs.cli was configured but no clap commands were discovered");
-                }
-            } else {
-                let path = cli_cfg
-                    .output
-                    .clone()
-                    .unwrap_or_else(|| reference_output.join("cli.md"));
-                render::ensure_managed_or_adopted(workspace_root, &path, cli_cfg.adopt_existing)?;
-                files.push(render::generate_cli_doc(&surface, path.clone()));
-                context.references.push(context::ReferenceDoc {
-                    kind: "cli".to_string(),
-                    title: "CLI Reference".to_string(),
-                    path: path.to_string_lossy().to_string(),
-                });
-                context.cli = surface;
+    if let Some(cli_cfg) = &docs_cfg.cli
+        && cli_cfg.is_enabled()
+    {
+        let explicit_sources = !cli_cfg.sources.is_empty();
+        let sources = docs_sources(config, &cli_cfg.sources, workspace_root);
+        warn_missing_explicit_sources("CLI", &cli_cfg.sources, workspace_root);
+        let surface = rust_static::extract_cli_surface(&sources)?;
+        if surface.commands.is_empty() {
+            if explicit_sources {
+                tracing::warn!("docs.cli was configured but no clap commands were discovered");
             }
+        } else {
+            let path = cli_cfg
+                .output
+                .clone()
+                .unwrap_or_else(|| reference_output.join("cli.md"));
+            render::ensure_managed_or_adopted(workspace_root, &path, cli_cfg.adopt_existing)?;
+            let page = render::generate_cli_doc(&surface, path);
+            emit_page(files, &mut context, page, Some(("cli", "CLI Reference")));
+            context.cli = surface;
         }
+    }
 
-        if let Some(mcp_cfg) = &docs_cfg.mcp
-            && mcp_cfg.is_enabled()
-        {
-            let explicit_sources = !mcp_cfg.sources.is_empty();
-            let sources = docs_sources(config, &mcp_cfg.sources, workspace_root);
-            warn_missing_explicit_sources("MCP", &mcp_cfg.sources, workspace_root);
-            let surface = rust_static::extract_mcp_surface(&sources)?;
-            if surface.tools.is_empty() && surface.prompts.is_empty() && surface.resources.is_empty() {
-                if explicit_sources {
-                    tracing::warn!("docs.mcp was configured but no rmcp tools, prompts, or resources were discovered");
-                }
-            } else {
-                let path = mcp_cfg
-                    .output
-                    .clone()
-                    .unwrap_or_else(|| reference_output.join("mcp.md"));
-                render::ensure_managed_or_adopted(workspace_root, &path, mcp_cfg.adopt_existing)?;
-                files.push(render::generate_mcp_doc(&surface, path.clone()));
-                context.references.push(context::ReferenceDoc {
-                    kind: "mcp".to_string(),
-                    title: "MCP Reference".to_string(),
-                    path: path.to_string_lossy().to_string(),
-                });
-                context.mcp = surface;
+    if let Some(mcp_cfg) = &docs_cfg.mcp
+        && mcp_cfg.is_enabled()
+    {
+        let explicit_sources = !mcp_cfg.sources.is_empty();
+        let sources = docs_sources(config, &mcp_cfg.sources, workspace_root);
+        warn_missing_explicit_sources("MCP", &mcp_cfg.sources, workspace_root);
+        let surface = rust_static::extract_mcp_surface(&sources)?;
+        if surface.tools.is_empty() && surface.prompts.is_empty() && surface.resources.is_empty() {
+            if explicit_sources {
+                tracing::warn!("docs.mcp was configured but no rmcp tools, prompts, or resources were discovered");
             }
+        } else {
+            let path = mcp_cfg
+                .output
+                .clone()
+                .unwrap_or_else(|| reference_output.join("mcp.md"));
+            render::ensure_managed_or_adopted(workspace_root, &path, mcp_cfg.adopt_existing)?;
+            let page = render::generate_mcp_doc(&surface, path);
+            emit_page(files, &mut context, page, Some(("mcp", "MCP Reference")));
+            context.mcp = surface;
         }
+    }
 
-        if let Some(llms_cfg) = &docs_cfg.llms {
-            files.push(render::render_llms(llms_cfg, &context, workspace_root, &snippet_dirs)?);
-        }
+    let snippets = build_snippet_context(config, workspace_root, &mut context)?;
+    let snippet_dirs: &[PathBuf] = snippets.as_ref().map_or(&[], |stage| stage.dirs.as_slice());
 
-        if let Some(skills_cfg) = &docs_cfg.skills {
-            files.extend(render::render_skills(
-                skills_cfg,
-                &context,
-                workspace_root,
-                &snippet_dirs,
-            )?);
+    if let Some(llms_cfg) = &docs_cfg.llms {
+        let page = render::render_llms(llms_cfg, &context, workspace_root, snippet_dirs)?;
+        emit_page(files, &mut context, page, None);
+    }
+
+    if let Some(skills_cfg) = &docs_cfg.skills {
+        let pages = render::render_skills(skills_cfg, &context, workspace_root, snippet_dirs)?;
+        for page in pages {
+            emit_page(files, &mut context, page, None);
         }
+    }
+
+    if let Some(stage) = &snippets {
+        validate_snippets(
+            config,
+            workspace_root,
+            stage.config,
+            &stage.absolute_dirs,
+            &stage.snippets,
+        )?;
     }
 
     Ok(())
@@ -282,13 +334,32 @@ fn build_base_context(
     }
 }
 
-fn build_snippet_context(
-    config: &ResolvedCrateConfig,
+/// The discovered snippet corpus, carried from discovery to validation.
+///
+/// Discovery has to happen before `llms.txt`/`SKILL.md` render (it populates `context.snippets`
+/// and supplies the roots the `include_snippet` filter searches); validation must happen after
+/// they have been emitted. Holding the corpus in one value is what lets the two sit on opposite
+/// sides of the emitting steps without discovering twice. ~keep
+struct SnippetStage<'cfg> {
+    config: &'cfg crate::core::config::DocsSnippetsConfig,
+    dirs: Vec<PathBuf>,
+    absolute_dirs: Vec<PathBuf>,
+    snippets: Vec<crate::snippets::types::Snippet>,
+}
+
+/// Discover the configured snippet corpus and record it in `context`.
+///
+/// `Ok(None)` means there is nothing to validate later either — no `docs.snippets` section, or a
+/// section with no discovery roots at all. Both cases previously returned an empty dir list and
+/// skipped validation; returning `None` keeps that coupling explicit instead of leaving the
+/// deferred `validate_snippets` call to re-derive it from an empty vector. ~keep
+fn build_snippet_context<'cfg>(
+    config: &'cfg ResolvedCrateConfig,
     workspace_root: &Path,
     context: &mut DocsRenderContext,
-) -> anyhow::Result<Vec<PathBuf>> {
+) -> anyhow::Result<Option<SnippetStage<'cfg>>> {
     let Some(snippet_cfg) = config.docs.as_ref().and_then(|docs| docs.snippets.as_ref()) else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
 
     for dir in snippet_cfg.dirs.iter().chain(&snippet_cfg.inline_dirs) {
@@ -312,7 +383,7 @@ fn build_snippet_context(
         if snippet_cfg.validation_level.is_some() || !snippet_cfg.required_languages.is_empty() {
             tracing::warn!("docs.snippets is configured for validation but docs.snippets.dirs is empty");
         }
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
     let absolute_snippet_dirs = snippet_dirs
@@ -354,8 +425,12 @@ fn build_snippet_context(
         counts_by_language,
     };
 
-    validate_snippets(config, workspace_root, snippet_cfg, &absolute_snippet_dirs, &snippets)?;
-    Ok(snippet_dirs)
+    Ok(Some(SnippetStage {
+        config: snippet_cfg,
+        dirs: snippet_dirs,
+        absolute_dirs: absolute_snippet_dirs,
+        snippets,
+    }))
 }
 
 fn validate_snippets(

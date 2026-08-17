@@ -262,6 +262,161 @@ sources = ["src/lib.rs"]
     );
 }
 
+/// A tree exercising every emitter the docs stage has past the API reference pages: CLI, MCP,
+/// llms and skills. Deliberately the full set — a fixture that only reaches some of them makes
+/// [`every_page_the_docs_stage_emits_survives_a_later_validation_failure`] pass vacuously. ~keep
+fn write_full_docs_stage_fixture(root: &Path) {
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("templates/skills/api")).unwrap();
+    fs::create_dir_all(root.join("templates/skills/cli")).unwrap();
+    fs::create_dir_all(root.join("templates/skills/mcp")).unwrap();
+    fs::create_dir_all(root.join("docs/snippets/python")).unwrap();
+
+    fs::write(
+        root.join("src/cli.rs"),
+        r#"
+        use clap::{Parser, Subcommand};
+        #[derive(Parser)]
+        #[command(name = "mylib", about = "My CLI")]
+        struct Cli {
+            #[command(subcommand)]
+            command: Commands,
+        }
+        #[derive(Subcommand)]
+        enum Commands {
+            /// Run the thing.
+            Run {
+                /// Input file
+                input: String,
+            },
+        }
+        "#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/mcp.rs"),
+        r#"
+        struct Server;
+        #[tool_router]
+        impl Server {
+            #[tool(description = "Run MCP work", annotations(title = "Run Work", read_only_hint = true))]
+            async fn run_work(&self, Parameters(params): Parameters<crate::Params>) {}
+        }
+        "#,
+    )
+    .unwrap();
+    fs::write(root.join("templates/llms.txt.jinja"), "Project {{ krate.name }}\n").unwrap();
+    fs::write(root.join("templates/skills/api/SKILL.md.jinja"), "# API Skill\n").unwrap();
+    fs::write(root.join("templates/skills/cli/SKILL.md.jinja"), "# CLI Skill\n").unwrap();
+    fs::write(root.join("templates/skills/mcp/SKILL.md.jinja"), "# MCP Skill\n").unwrap();
+    fs::write(
+        root.join("docs/snippets/python/example.md"),
+        "```python\nprint('ok')\n```\n",
+    )
+    .unwrap();
+}
+
+/// The fixture's config. `extra_snippet_keys` is spliced into `[workspace.docs.snippets]` so a
+/// caller can turn snippet *validation* on or off without touching anything that decides which
+/// pages get emitted — which is what makes the two runs below a controlled comparison. ~keep
+fn full_docs_stage_config(extra_snippet_keys: &str) -> ResolvedCrateConfig {
+    config_from_toml(&format!(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.cli]
+sources = ["src/cli.rs"]
+
+[workspace.docs.mcp]
+sources = ["src/mcp.rs"]
+
+[workspace.docs.llms]
+template = "templates/llms.txt.jinja"
+
+[workspace.docs.skills]
+template_dir = "templates/skills"
+outputs = [".codex/skills"]
+
+[workspace.docs.snippets]
+dirs = ["docs/snippets"]
+{extra_snippet_keys}
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#
+    ))
+}
+
+fn emitted_paths(files: &[crate::core::backend::GeneratedFile]) -> Vec<String> {
+    let mut paths = files
+        .iter()
+        .map(|file| file.path.to_string_lossy().replace('\\', "/"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+}
+
+/// THE INVARIANT: the set of pages the docs stage emits does not depend on whether a later,
+/// non-emitting step succeeded.
+///
+/// The returned `Vec<GeneratedFile>` is the record every downstream consumer reads to decide what
+/// alef owns (`.alef-ownership.toml` via `write_scaffold_files_report`, the orphan sweep's `keep`
+/// set, `alef verify`'s frozen report, `alef adopt`'s candidate set), and absence from it is read
+/// as "alef no longer emits this". So a page dropped because snippet validation bailed does not
+/// merely go unwritten — it is actively reported, everywhere downstream, as an orphan.
+///
+/// Asserted differentially rather than against a literal page list on purpose. There is no way to
+/// derive "every page this stage emits" in a test without re-implementing the stage, and a list of
+/// names (`cli.md`, `mcp.md`, ...) would pin today's emitters and say nothing about the next one
+/// added after the fallible step — which is exactly how the current gap arose. Comparing a clean
+/// run against a run that differs *only* in whether snippet validation fails catches any such
+/// page, named or not.
+///
+/// What it does not catch: a page dropped by a failure *before* the emitters (a nonexistent
+/// `docs.snippets.dirs` root still bails in discovery, which llms/skills genuinely depend on), and
+/// anything about whether the emitted paths are subsequently written or recorded — that happens in
+/// `cli::pipeline::generate`, past this stage's boundary. ~keep
+#[test]
+fn every_page_the_docs_stage_emits_survives_a_later_validation_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    write_full_docs_stage_fixture(root);
+    let api = make_minimal_api("1.0.0");
+
+    let clean_config = full_docs_stage_config("");
+    let (clean_files, clean_result) = generate_docs_stage(&api, &clean_config, &[Language::Python], None, root);
+    clean_result.expect("the fixture must validate cleanly when no snippet gap is required");
+
+    // `required_languages` makes gap detection run and fail (the corpus has a python variant and
+    // no go one). It is a pure validation knob: it reaches no emitter, so any difference in the
+    // emitted set between these two runs is the bug, not the fixture. ~keep
+    let failing_config = full_docs_stage_config("required_languages = [\"go\"]\n");
+    let (failing_files, failing_result) = generate_docs_stage(&api, &failing_config, &[Language::Python], None, root);
+    failing_result.expect_err("a required-language snippet gap must still fail the docs stage");
+
+    // Apparatus check, not the invariant: if the fixture reached no emitter past the API reference
+    // pages, both sets would be equal for the wrong reason and the assertion below would be
+    // vacuous. Compared against `generate_docs` rather than a page count so it stays honest as the
+    // reference-page set changes. ~keep
+    let reference_pages =
+        generate_docs(&api, &clean_config, &[Language::Python], "docs/reference").expect("reference pages render");
+    assert!(
+        clean_files.len() > reference_pages.len(),
+        "fixture must exercise emitters past the API reference pages, or this test proves nothing: \
+         {} emitted vs {} reference pages",
+        clean_files.len(),
+        reference_pages.len()
+    );
+
+    assert_eq!(
+        emitted_paths(&clean_files),
+        emitted_paths(&failing_files),
+        "a snippet-validation failure must not change which pages the docs stage emits -- every \
+         page missing from the failing run is reported downstream as an orphan alef no longer emits"
+    );
+}
+
 #[test]
 fn should_error_with_actionable_message_when_snippet_reference_unresolved() {
     let tmp = tempfile::tempdir().unwrap();
