@@ -77,8 +77,30 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
         false
     });
 
-    let can_delegate =
-        shared::can_auto_delegate_function(func, opaque_types) || has_default_params || has_batch_vec_params;
+    // `can_auto_delegate_function` disqualifies any required (non-`Option`) non-opaque `&Named`
+    // param via `is_named_ref_param` — sound in general, since most backends' call-arg builders
+    // only know how to `.into()` an *owned* value. This generator is not most backends: the
+    // call-args closure below already converts that exact shape (`&{name}.clone().into()`), which
+    // type-checks because every non-opaque Named binding type derives `Clone` (see
+    // gen_bindings/types.rs) and relies on the same `From<BindingType> for CoreType` conversion the
+    // non-ref `.into()` arm already uses. Recognize that case here so such functions delegate
+    // instead of falling through to `gen_rustler_unimplemented_body`, which — for a non-fallible
+    // return like a bare `f64` — emits `compile_error!` into the consumer's default build path.
+    // Optional `&Named` params and `Vec<&Named>`/`Vec<&str>` params are left excluded: this
+    // generator has no exercised call-site for those shapes, so a false positive here would trade
+    // one compile break for a less obvious one. ~keep
+    let can_delegate_with_required_named_ref_params = !func.sanitized
+        && func.params.iter().all(|p| {
+            !p.sanitized
+                && shared::is_delegatable_param(&p.ty, opaque_types)
+                && (!shared::is_named_ref_param_pub(p, opaque_types)
+                    || (!p.optional && matches!(&p.ty, TypeRef::Named(name) if !opaque_types.contains(name.as_str()))))
+        })
+        && shared::is_delegatable_return(&func.return_type);
+    let can_delegate = shared::can_auto_delegate_function(func, opaque_types)
+        || has_default_params
+        || has_batch_vec_params
+        || can_delegate_with_required_named_ref_params;
     let deserialization_introduces_result =
         crate::backends::rustler::gen_bindings::public_api_args::function_deserialization_introduces_result(
             func,
@@ -458,4 +480,61 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_nif_function(
         },
     ));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gen_nif_function;
+    use crate::backends::rustler::type_map::RustlerMapper;
+    use crate::core::ir::{FunctionDef, ParamDef, PrimitiveType, TypeRef};
+    use ahash::{AHashMap, AHashSet};
+
+    fn required_named_ref_param(name: &str, type_name: &str) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            ty: TypeRef::Named(type_name.to_string()),
+            is_ref: true,
+            ..ParamDef::default()
+        }
+    }
+
+    /// Regression test for a shipped defect: a free function whose only non-delegatable params are
+    /// required (non-`Option`) `&Named` non-opaque references, returning a bare non-fallible `f64`,
+    /// used to fall through to `gen_rustler_unimplemented_body` and emit `compile_error!` into the
+    /// consumer's default build path (`max_sim_score(query: &MultiVectorEmbedding, doc:
+    /// &MultiVectorEmbedding) -> f64`). It must now delegate to the real core call, since this
+    /// generator's own call-arg closure already knows how to convert a required `&Named` param via
+    /// `&{name}.clone().into()`.
+    #[test]
+    fn required_named_ref_params_with_bare_f64_return_delegate_instead_of_compile_error() {
+        let func = FunctionDef {
+            name: "max_sim_score".to_string(),
+            rust_path: "xberg::late_interaction::max_sim_score".to_string(),
+            params: vec![
+                required_named_ref_param("query", "MultiVectorEmbedding"),
+                required_named_ref_param("doc", "MultiVectorEmbedding"),
+            ],
+            return_type: TypeRef::Primitive(PrimitiveType::F64),
+            ..FunctionDef::default()
+        };
+
+        let body = gen_nif_function(
+            &func,
+            &RustlerMapper,
+            &AHashSet::default(),
+            &AHashSet::default(),
+            "xberg",
+            &AHashSet::default(),
+            &AHashMap::default(),
+        );
+
+        assert!(
+            !body.contains("compile_error!"),
+            "a required &Named param must not force compile_error! for a non-fallible return: {body}"
+        );
+        assert!(
+            body.contains("late_interaction::max_sim_score(&query.clone().into(), &doc.clone().into())"),
+            "expected the function to delegate to the real core call, got: {body}"
+        );
+    }
 }

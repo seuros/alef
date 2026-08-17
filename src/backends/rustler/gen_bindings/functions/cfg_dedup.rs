@@ -32,6 +32,7 @@
 //! entirely — exactly the desired result (no ungated duplicate). All other backends and the e2e
 //! validator continue to see the untouched multi-entry surface.
 
+use crate::codegen::cfg::{CfgPredicate, parse_cfg_predicate};
 use crate::core::ir::FunctionDef;
 use ahash::AHashMap;
 
@@ -96,18 +97,50 @@ fn is_mixed_gated_group(indices: &[usize], functions: &[FunctionDef]) -> bool {
 ///
 /// Returns `None` when no member is gated (caller guards against this via `is_mixed_gated_group`).
 /// A single distinct gated cfg is returned verbatim; multiple are wrapped in `any(...)`.
+///
+/// Dedup is semantic, not textual: a predicate whose `any(...)` arms (or itself, if it isn't an
+/// `any(...)`) are already covered by an already-accumulated predicate's arms is dropped instead of
+/// appended. Without this, a group with a compound gated arm (e.g. `any(feature = "a", feature =
+/// "b")`) and a second gated arm that is one of that arm's own disjuncts (e.g. bare `feature =
+/// "b"`) would OR-merge into the redundant `any(any(feature = "a", feature = "b"), feature = "b")`
+/// instead of the equivalent, minimal `any(feature = "a", feature = "b")`. ~keep
 fn merge_gated_cfgs<'a>(cfgs: impl Iterator<Item = Option<&'a str>>) -> Option<String> {
-    let mut distinct: Vec<&str> = Vec::new();
+    let mut distinct: Vec<(&'a str, CfgPredicate)> = Vec::new();
     for cfg in cfgs.flatten() {
-        if !distinct.contains(&cfg) {
-            distinct.push(cfg);
+        if distinct.iter().any(|(raw, _)| *raw == cfg) {
+            continue;
         }
+        let parsed = parse_cfg_predicate(cfg);
+        if distinct.iter().any(|(_, existing)| predicate_covers(existing, &parsed)) {
+            continue;
+        }
+        distinct.retain(|(_, existing)| !predicate_covers(&parsed, existing));
+        distinct.push((cfg, parsed));
     }
     match distinct.len() {
         0 => None,
-        1 => Some(distinct[0].to_string()),
-        _ => Some(format!("any({})", distinct.join(", "))),
+        1 => Some(distinct[0].0.to_string()),
+        _ => Some(format!(
+            "any({})",
+            distinct.iter().map(|(raw, _)| *raw).collect::<Vec<_>>().join(", ")
+        )),
     }
+}
+
+/// A predicate's top-level OR-disjuncts: an `any(...)`'s own arms, or the predicate itself as a
+/// single-element list when it isn't an `any(...)`.
+fn cfg_disjuncts(predicate: &CfgPredicate) -> Vec<&CfgPredicate> {
+    match predicate {
+        CfgPredicate::Any(arms) => arms.iter().collect(),
+        other => vec![other],
+    }
+}
+
+/// Whether `covering`'s disjuncts already contain every one of `covered`'s disjuncts, i.e.
+/// `covering` holds whenever `covered` does, making `covered` redundant to OR in alongside it.
+fn predicate_covers(covering: &CfgPredicate, covered: &CfgPredicate) -> bool {
+    let covering_arms = cfg_disjuncts(covering);
+    cfg_disjuncts(covered).iter().all(|arm| covering_arms.contains(arm))
 }
 
 #[cfg(test)]
