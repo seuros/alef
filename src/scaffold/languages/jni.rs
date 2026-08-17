@@ -121,6 +121,33 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
             &api.version,
         ));
     }
+
+    // Capsule types (e.g. tree-sitter's `Language`) make the JNI shim emit
+    // `value.into_raw() as *const {into_raw_type}` casts (see
+    // `method_capsule_return.rs.jinja`). When `into_raw_type` names a type from an
+    // external crate, that crate must be a direct dependency of this manifest or the
+    // cast is an unresolved-module compile error. `jni_capsule_types` is the exact
+    // filter the JNI backend uses to decide which casts it emits, so reusing it here
+    // keeps the declared deps and the emitted casts from drifting apart. ~keep
+    for capsule in crate::backends::jni::jni_capsule_types(config).values() {
+        let (Some(package), Some(version)) = (capsule.package.as_ref(), capsule.package_version.as_ref()) else {
+            continue;
+        };
+        let dep_prefix = format!("{package} ");
+        let dep_dot_prefix = format!("{package}.");
+        if dep_lines
+            .iter()
+            .any(|l| l.starts_with(&dep_prefix) || l.starts_with(&dep_dot_prefix))
+        {
+            continue;
+        }
+        dep_lines.push(crate::scaffold::render_workspace_dep_or(
+            config,
+            package,
+            &format!("\"{version}\""),
+        ));
+    }
+
     dep_lines.sort();
     let deps_section = dep_lines.join("\n");
 
@@ -837,6 +864,147 @@ features = ["android-http"]
         assert!(
             !cargo_toml.contains("native-http"),
             "top-level features must not leak in when overridden; got:\n{cargo_toml}"
+        );
+    }
+
+    /// A capsule type configured in BOTH `[crates.ffi.capsule_types]` and
+    /// `[crates.kotlin_android.capsule_types]` makes the JNI shim emit a
+    /// `value.into_raw() as *const {into_raw_type}` cast (see
+    /// `jni_capsule_types`/`method_capsule_return.rs.jinja`), so the crate providing
+    /// `into_raw_type` must be a direct dependency or the cast is an unresolved-module
+    /// compile error. With no workspace-level entry for the package, the manifest must
+    /// fall back to a literal pinned version rather than an unresolved `.workspace = true`.
+    #[test]
+    fn scaffold_jni_declares_capsule_package_dependency_when_cast_is_emitted() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-lang-pack"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example.demo"
+namespace = "dev.example.demo"
+
+[crates.kotlin_android.capsule_types.Language]
+host_type = "org.example.TSLanguage"
+
+[crates.ffi.capsule_types.Language]
+into_raw_type = "tree_sitter::ffi::TSLanguage"
+c_return_type = "TSLanguage"
+package = "tree-sitter"
+package_version = "0.26"
+"#,
+        );
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        assert!(
+            cargo_toml.contains("tree-sitter = \"0.26\""),
+            "JNI Cargo.toml must declare the capsule package dependency backing \
+             `tree_sitter::ffi::TSLanguage`; got:\n{cargo_toml}"
+        );
+        toml::from_str::<toml::Value>(cargo_toml).expect("generated JNI Cargo.toml must be valid TOML");
+    }
+
+    /// When the consumer's root `Cargo.toml` already declares the capsule package under
+    /// `[workspace.dependencies]`, the JNI manifest must inherit it (`pkg.workspace = true`)
+    /// like every other JNI dependency, rather than pinning a second, possibly divergent
+    /// version literal.
+    #[test]
+    fn scaffold_jni_capsule_package_dependency_inherits_workspace_entry() {
+        let workspace = tempfile::tempdir().expect("create workspace");
+        std::fs::write(
+            workspace.path().join("Cargo.toml"),
+            r#"
+[workspace]
+members = []
+
+[workspace.dependencies]
+tree-sitter = "0.26"
+"#,
+        )
+        .expect("write workspace manifest");
+        let mut config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-lang-pack"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example.demo"
+namespace = "dev.example.demo"
+
+[crates.kotlin_android.capsule_types.Language]
+host_type = "org.example.TSLanguage"
+
+[crates.ffi.capsule_types.Language]
+into_raw_type = "tree_sitter::ffi::TSLanguage"
+c_return_type = "TSLanguage"
+package = "tree-sitter"
+package_version = "0.26"
+"#,
+        );
+        config.workspace_root = Some(workspace.path().to_path_buf());
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        assert!(
+            cargo_toml.contains("tree-sitter.workspace = true"),
+            "JNI Cargo.toml must inherit the workspace-declared capsule package; got:\n{cargo_toml}"
+        );
+        assert!(
+            !cargo_toml.contains("tree-sitter = \"0.26\""),
+            "must not also pin a literal version when a workspace entry exists; got:\n{cargo_toml}"
+        );
+    }
+
+    /// A capsule type declared only in `[crates.ffi.capsule_types]` — with no matching
+    /// entry in `[crates.kotlin_android.capsule_types]` — is one the JNI backend never
+    /// emits a cast for (see `jni_capsule_types`'s intersection filter). The manifest
+    /// must not declare the package dependency in that case: an unused dep is exactly
+    /// the false-positive `cargo machete` would need a fresh `ignored` entry to suppress.
+    #[test]
+    fn scaffold_jni_omits_capsule_package_dependency_when_kotlin_android_lacks_the_type() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo-lang-pack"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example.demo"
+namespace = "dev.example.demo"
+
+[crates.ffi.capsule_types.Language]
+into_raw_type = "tree_sitter::ffi::TSLanguage"
+c_return_type = "TSLanguage"
+package = "tree-sitter"
+package_version = "0.26"
+"#,
+        );
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        assert!(
+            !cargo_toml.contains("tree-sitter"),
+            "capsule package dep must not be emitted when kotlin_android has no matching \
+             capsule_types entry (the JNI backend never emits the cast in that case); got:\n{cargo_toml}"
         );
     }
 }

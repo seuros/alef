@@ -1575,6 +1575,177 @@ mod scaffold_ownership_guard_tests {
         );
         assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
     }
+
+    /// Counterpart to the dart preserve case above: when the target does not exist yet,
+    /// the seed must still be created normally -- the guard only ever protects a file
+    /// that is already there.
+    #[test]
+    fn dart_test_seed_is_created_when_the_target_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/dart/test/my_lib_test.dart");
+        let seed_content = "import 'package:test/test.dart';\n\nvoid main() {\n  test('placeholder', () {\n    expect(1 + 1, equals(2));\n  });\n}\n";
+
+        let placeholder_seed = GeneratedFile {
+            path: target_relative.clone(),
+            content: seed_content.to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[placeholder_seed], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(base.join(&target_relative)).expect("read after"),
+            seed_content,
+            "an absent target must be created with exactly the seed's content"
+        );
+        assert_eq!(report.changed_count(), 1, "creating a new seed counts as a change");
+        assert!(
+            report.refused_paths.is_empty(),
+            "creating a brand-new path must never be refused, got: {:?}",
+            report.refused_paths
+        );
+    }
+
+    /// The zig half of the same incident, pinned separately from the dart case above:
+    /// `packages/zig/test/{module}_test.zig` is the exact path `scaffold_zig` seeds and
+    /// `build.zig`'s `test_module` compiles (see `scaffold_zig_test`'s doc), so a real,
+    /// hand-written suite living there is exactly what `alef version`'s
+    /// `regenerate_scaffold_after_sync` calls `write_scaffold_files_with_overwrite(..,
+    /// overwrite: true)` against. This reproduces a real consumer suite shape (multiple
+    /// `test` blocks asserting real values against the generated bindings, not the
+    /// single-assertion placeholder `scaffold_zig_test` would emit) to prove the guard
+    /// does not merely tolerate a trivially different placeholder but leaves a
+    /// genuinely different, larger hand-written file untouched byte-for-byte.
+    #[test]
+    fn zig_test_seed_with_a_real_hand_written_suite_is_not_replaced_under_overwrite_true() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/zig/test/xberg_test.zig");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+
+        let hand_written_suite = "const std = @import(\"std\");\nconst testing = std.testing;\nconst xberg = @import(\"xberg\");\n\ntest \"xberg.version returns a non-empty string\" {\n    const version = xberg.version();\n    try testing.expect(version.len > 0);\n}\n\ntest \"xberg.add sums two integers\" {\n    try testing.expectEqual(@as(i64, 5), xberg.add(2, 3));\n}\n";
+        std::fs::write(&target, hand_written_suite).expect("seed hand-written suite");
+
+        let placeholder_seed = GeneratedFile {
+            path: target_relative.clone(),
+            content: "const xberg = @import(\"xberg\");\n\ntest \"xberg.version symbol resolves\" {\n    _ = &xberg.version;\n}\n".to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[placeholder_seed], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            hand_written_suite,
+            "a real, hand-written zig test suite must survive overwrite: true byte-for-byte"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
+        assert!(
+            report.refused_paths.contains(&target),
+            "the refusal (and its tracing::warn!) must name this exact path, got: {:?}",
+            report.refused_paths
+        );
+    }
+
+    /// Counterpart: when the target does not exist yet, the seed must still be created
+    /// normally — the guard only ever protects a file that is already there.
+    #[test]
+    fn zig_test_seed_is_created_when_the_target_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/zig/test/xberg_test.zig");
+        let seed_content = "const xberg = @import(\"xberg\");\n\ntest \"xberg.version symbol resolves\" {\n    _ = &xberg.version;\n}\n";
+
+        let placeholder_seed = GeneratedFile {
+            path: target_relative.clone(),
+            content: seed_content.to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[placeholder_seed], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(base.join(&target_relative)).expect("read after"),
+            seed_content,
+            "an absent target must be created with exactly the seed's content"
+        );
+        assert_eq!(report.changed_count(), 1, "creating a new seed counts as a change");
+        assert!(
+            report.refused_paths.is_empty(),
+            "creating a brand-new path must never be refused, got: {:?}",
+            report.refused_paths
+        );
+    }
+
+    /// The swift third of the same incident: `packages/swift/Tests/{module}Tests/{module}Tests.swift`
+    /// is the exact path `scaffold_swift` seeds with `generated_header: false` (see
+    /// `scaffold_swift`'s doc). A real, hand-written XCTest suite (multiple real
+    /// assertions, not the single tautological `XCTAssertTrue(true)` placeholder
+    /// `migrate_swift_placeholder_test` is scoped to) must survive `alef version`'s
+    /// `overwrite: true` write byte-for-byte.
+    #[test]
+    fn swift_test_seed_with_a_real_hand_written_suite_is_not_replaced_under_overwrite_true() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/swift/Tests/RustLibTests/RustLibTests.swift");
+        let target = base.join(&target_relative);
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+
+        let hand_written_suite = "import XCTest\n@testable import RustLib\n\nfinal class RustLibTests: XCTestCase {\n    func testVersionIsNonEmpty() throws {\n        XCTAssertFalse(RustLib.version().isEmpty)\n    }\n\n    func testAddSumsTwoIntegers() throws {\n        XCTAssertEqual(RustLib.add(2, 3), 5)\n    }\n}\n";
+        std::fs::write(&target, hand_written_suite).expect("seed hand-written suite");
+
+        let placeholder_seed = GeneratedFile {
+            path: target_relative.clone(),
+            content: "import XCTest\n@testable import RustLib\n\nfinal class RustLibTests: XCTestCase {\n    func testModuleLoads() throws {\n        XCTAssertTrue(true)\n    }\n}\n".to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[placeholder_seed], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(&target).expect("read after"),
+            hand_written_suite,
+            "a real, hand-written swift test suite must survive overwrite: true byte-for-byte"
+        );
+        assert_eq!(report.changed_count(), 0, "a refused write must not count as a change");
+        assert!(
+            report.refused_paths.contains(&target),
+            "the refusal (and its tracing::warn!) must name this exact path, got: {:?}",
+            report.refused_paths
+        );
+    }
+
+    /// Counterpart: when the target does not exist yet, the swift seed must still be
+    /// created normally.
+    #[test]
+    fn swift_test_seed_is_created_when_the_target_is_absent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let target_relative = PathBuf::from("packages/swift/Tests/RustLibTests/RustLibTests.swift");
+        let seed_content = "import XCTest\n@testable import RustLib\n\nfinal class RustLibTests: XCTestCase {\n    func testModuleLoads() throws {\n        XCTAssertTrue(true)\n    }\n}\n";
+
+        let placeholder_seed = GeneratedFile {
+            path: target_relative.clone(),
+            content: seed_content.to_owned(),
+            generated_header: false,
+        };
+
+        let report = write_scaffold_files_report(&[placeholder_seed], base, true).expect("write ok");
+
+        assert_eq!(
+            std::fs::read_to_string(base.join(&target_relative)).expect("read after"),
+            seed_content,
+            "an absent target must be created with exactly the seed's content"
+        );
+        assert_eq!(report.changed_count(), 1, "creating a new seed counts as a change");
+        assert!(
+            report.refused_paths.is_empty(),
+            "creating a brand-new path must never be refused, got: {:?}",
+            report.refused_paths
+        );
+    }
 }
 
 #[cfg(test)]
