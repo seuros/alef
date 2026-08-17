@@ -197,6 +197,41 @@ pub fn parse_cfg_predicate(cfg_str: &str) -> CfgPredicate {
     CfgPredicate::Other
 }
 
+/// The gate for an item that sits behind both `owner_cfg` and its own `member_cfg`.
+///
+/// Returns `member_cfg` alone when satisfying it already guarantees `owner_cfg`. A member declared
+/// inside `#[cfg(X)] impl T` inherits `X` into its own gate at extraction time, so combining
+/// textually yields `all(X, all(X, Y))` — logically right, but it churns the gate line of every
+/// affected item on every regen and reads as a generator bug in the diff. ~keep
+#[must_use]
+pub fn combine_gates(owner_cfg: &str, member_cfg: &str) -> String {
+    let (owner, member) = (owner_cfg.trim(), member_cfg.trim());
+    if predicate_implies(&parse_cfg_predicate(member), &parse_cfg_predicate(owner)) {
+        return member.to_string();
+    }
+    format!("all({owner}, {member})")
+}
+
+/// Whether `predicate` holding guarantees `required` holds.
+///
+/// Deliberately incomplete: it recognises only conjunction, which is the shape gate inheritance
+/// produces. Anything it cannot prove is reported as "does not imply", so the caller keeps both
+/// operands — a redundant gate is noise, a dropped one silently compiles the wrong code out.
+fn predicate_implies(predicate: &CfgPredicate, required: &CfgPredicate) -> bool {
+    // `Other` is the parser's catch-all, so two unrecognised predicates compare equal without
+    // being the same condition. Implication must never be inferred from one. ~keep
+    if matches!(required, CfgPredicate::Other) {
+        return false;
+    }
+    if predicate == required {
+        return true;
+    }
+    match predicate {
+        CfgPredicate::All(arms) => arms.iter().any(|arm| predicate_implies(arm, required)),
+        _ => false,
+    }
+}
+
 fn parse_cfg_list(s: &str) -> Vec<String> {
     let mut result = Vec::new();
     let mut depth = 0usize;
@@ -232,6 +267,47 @@ fn parse_cfg_list(s: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, TypeDef};
+
+    #[test]
+    fn combine_gates_drops_an_owner_the_member_already_requires() {
+        assert_eq!(
+            combine_gates(
+                r#"feature = "client""#,
+                r#"all(feature = "client", feature = "streaming")"#
+            ),
+            r#"all(feature = "client", feature = "streaming")"#
+        );
+    }
+
+    #[test]
+    fn combine_gates_keeps_both_operands_when_the_member_does_not_imply_the_owner() {
+        assert_eq!(
+            combine_gates(r#"feature = "client""#, r#"feature = "streaming""#),
+            r#"all(feature = "client", feature = "streaming")"#
+        );
+    }
+
+    #[test]
+    fn combine_gates_does_not_collapse_two_predicates_the_parser_cannot_read() {
+        // Both sides parse to `CfgPredicate::Other`, which compares equal without being the same
+        // condition. Collapsing here would compile the member in on a target the owner excludes.
+        assert_eq!(
+            combine_gates("target_os = \"macos\"", "target_os = \"linux\""),
+            "all(target_os = \"macos\", target_os = \"linux\")"
+        );
+    }
+
+    #[test]
+    fn combine_gates_does_not_treat_a_disjunct_as_implying_the_owner() {
+        // `any(a, b)` holding does not guarantee `a`; only conjunction licenses the drop.
+        assert_eq!(
+            combine_gates(
+                r#"feature = "client""#,
+                r#"any(feature = "client", feature = "server")"#
+            ),
+            r#"all(feature = "client", any(feature = "client", feature = "server"))"#
+        );
+    }
 
     #[test]
     fn collect_cfg_feature_names_simple_feature() {

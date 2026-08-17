@@ -282,7 +282,7 @@ impl MethodDef {
     pub fn cfg_within(&self, owner_cfg: Option<&str>) -> Option<String> {
         match (owner_cfg, self.cfg.as_deref()) {
             (Some(owner), Some(own)) if owner.trim() == own.trim() => Some(owner.to_string()),
-            (Some(owner), Some(own)) => Some(format!("all({owner}, {own})")),
+            (Some(owner), Some(own)) => Some(crate::codegen::cfg::combine_gates(owner, own)),
             (Some(owner), None) => Some(owner.to_string()),
             (None, own) => own.map(str::to_string),
         }
