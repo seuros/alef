@@ -12,11 +12,22 @@ use super::field_types::{
 };
 use super::rustdoc::extract_doc_comments;
 
-/// Extract a struct field into a `FieldDef`.
+/// Extract a struct field into a `FieldDef`, alongside the serde reader's own idea of the
+/// field's default.
+///
+/// The second element is the serde reader's default, kept separate from
+/// `FieldDef::typed_default` because a later `#[derive(Default)]` or manual `impl Default`
+/// write unconditionally overwrites that field (see `extract::extractor::types::extract_struct`
+/// and `extract::extractor::defaults::extract_default_values`) — nothing on `FieldDef` itself
+/// survives to be compared against. Callers that need the comparison (struct field extraction)
+/// keep this value out-of-band; callers that don't (enum variant fields, which carry no
+/// `impl Default` of their own) simply discard it. `#[serde(default = "path")]` becomes
+/// `FunctionCall(path)`; bare `#[serde(default)]` becomes `Empty`, the same "known type-zero"
+/// `#[derive(Default)]` asserts for every field elsewhere. ~keep
 ///
 /// When `crate_name` is provided, `crate::` prefixes in field type paths are resolved
 /// to the crate name, enabling disambiguation of types with the same short name.
-pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> FieldDef {
+pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> (FieldDef, Option<DefaultValue>) {
     let name = field.ident.as_ref().map(|i| i.to_string()).unwrap_or_default();
     let doc = extract_doc_comments(&field.attrs);
     let cfg = extract_cfg_condition(&field.attrs);
@@ -46,28 +57,38 @@ pub(crate) fn extract_field(field: &syn::Field, crate_name: Option<&str>) -> Fie
         None => None,
     };
 
-    FieldDef {
-        name,
-        ty,
-        optional,
-        default,
-        doc,
-        sanitized: false,
-        is_boxed,
-        type_rust_path,
-        cfg,
-        typed_default: serde_default_path.map(DefaultValue::FunctionCall),
-        core_wrapper,
-        vec_inner_core_wrapper,
-        newtype_wrapper: None,
-        serde_rename,
-        serde_flatten,
-        serde_with,
-        binding_excluded,
-        binding_exclusion_reason,
-        original_type: None,
-        version,
-    }
+    let typed_default = serde_default_path.map(DefaultValue::FunctionCall);
+    let serde_typed_default = match &typed_default {
+        Some(value) => Some(value.clone()),
+        None if has_serde_default_attr => Some(DefaultValue::Empty),
+        None => None,
+    };
+
+    (
+        FieldDef {
+            name,
+            ty,
+            optional,
+            default,
+            doc,
+            sanitized: false,
+            is_boxed,
+            type_rust_path,
+            cfg,
+            typed_default,
+            core_wrapper,
+            vec_inner_core_wrapper,
+            newtype_wrapper: None,
+            serde_rename,
+            serde_flatten,
+            serde_with,
+            binding_excluded,
+            binding_exclusion_reason,
+            original_type: None,
+            version,
+        },
+        serde_typed_default,
+    )
 }
 
 /// Returns true if any subtype within `ty` is a trait object (`dyn Trait`).

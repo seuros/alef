@@ -23,6 +23,7 @@ fn extract_from_source(source: &str) -> ApiSurface {
     };
     let mut visited = Vec::new();
     let mut rwa = ahash::AHashSet::new();
+    let mut pending_serde_defaults = SerdeDefaultsByType::default();
     extract_items(
         &file.items,
         Path::new("test.rs"),
@@ -32,6 +33,7 @@ fn extract_from_source(source: &str) -> ApiSurface {
         None,
         &mut visited,
         &mut rwa,
+        &mut pending_serde_defaults,
     )
     .unwrap();
     resolve_public_default_functions(&mut surface);

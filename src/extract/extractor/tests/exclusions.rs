@@ -85,7 +85,7 @@ fn test_alef_skip_excludes_positional_fields() {
     "#;
 
     let item: syn::ItemStruct = syn::parse_str("pub struct Identifier(#[alef(skip)] pub String);").unwrap();
-    let identifier = extract_struct(&item, "test_crate", "").unwrap();
+    let (identifier, _serde_defaults) = extract_struct(&item, "test_crate", "").unwrap();
     assert!(identifier.fields[0].binding_excluded);
     assert_eq!(
         identifier.fields[0].binding_exclusion_reason.as_deref(),

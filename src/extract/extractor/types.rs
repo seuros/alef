@@ -1,7 +1,9 @@
 use crate::core::ir::{CoreWrapper, DefaultValue, EnumDef, ErrorDef, ErrorVariant, FieldDef, TypeDef};
+use ahash::AHashMap;
 use syn;
 
 use super::helpers::extract_binding_exclusion_reason;
+use super::postprocess::warn_on_default_disagreement;
 use crate::extract::type_resolver;
 
 use super::helpers::{
@@ -77,7 +79,14 @@ fn extract_serde_content(attrs: &[syn::Attribute]) -> Option<String> {
 /// directly exposed to FFI. Structs with only lifetime parameters (e.g. `Foo<'a>`) are
 /// accepted; `has_lifetime_params` is set to `true` so backends can emit the appropriate
 /// lifetime placeholders in `From<T<'_>>` and `T<'static>` positions. ~keep
-pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_path: &str) -> Option<TypeDef> {
+/// Returns the extracted `TypeDef` alongside the serde reader's per-field defaults (field name →
+/// value), for the caller to thread on to `functions::impl_blocks` so a later manual
+/// `impl Default` can still be compared against them — see `serde_defaults` above. ~keep
+pub(crate) fn extract_struct(
+    item: &syn::ItemStruct,
+    crate_name: &str,
+    module_path: &str,
+) -> Option<(TypeDef, AHashMap<String, DefaultValue>)> {
     let has_non_lifetime = item
         .generics
         .params
@@ -97,7 +106,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
         _ => false,
     };
 
-    let mut fields = match &item.fields {
+    let extracted_fields: Vec<(FieldDef, Option<DefaultValue>)> = match &item.fields {
         syn::Fields::Named(named) => named
             .named
             .iter()
@@ -106,12 +115,25 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
             .collect(),
         syn::Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 && is_pub(&unnamed.unnamed[0].vis) => {
             let field = &unnamed.unnamed[0];
-            let mut extracted = extract_field(field, Some(crate_name));
+            let (mut extracted, serde_default) = extract_field(field, Some(crate_name));
             extracted.name = "_0".to_string();
-            vec![extracted]
+            vec![(extracted, serde_default)]
         }
         _ => vec![],
     };
+
+    // The serde reader's own default for each field, captured here because
+    // `#[derive(Default)]` below — or a manual `impl Default`, folded later by
+    // `functions::impl_blocks` — unconditionally overwrites `FieldDef::typed_default` and would
+    // otherwise erase it. Compared against the final value by
+    // `postprocess::warn_on_default_disagreement`: immediately below for the derived case, and
+    // from `functions::impl_blocks` for the manual case via the `pending_serde_defaults` map
+    // threaded through `extract::extractor::mod::extract_items`. ~keep
+    let serde_defaults: AHashMap<String, DefaultValue> = extracted_fields
+        .iter()
+        .filter_map(|(field, serde_default)| serde_default.clone().map(|value| (field.name.clone(), value)))
+        .collect();
+    let mut fields: Vec<FieldDef> = extracted_fields.into_iter().map(|(field, _)| field).collect();
 
     let is_clone = has_derive(item.attrs.as_slice(), "Clone");
     let is_copy = has_derive(item.attrs.as_slice(), "Copy");
@@ -134,6 +156,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
         for field in &mut fields {
             field.typed_default = Some(DefaultValue::Empty);
         }
+        warn_on_default_disagreement(&rust_path, &fields, &serde_defaults);
     }
 
     let has_stripped_cfg_fields = fields.iter().any(|f| f.cfg.is_some());
@@ -165,7 +188,7 @@ pub(crate) fn extract_struct(item: &syn::ItemStruct, crate_name: &str, module_pa
     };
     typedef.has_lifetime_params = has_lifetime_params;
     typedef.has_private_fields = has_private_fields;
-    Some(typedef)
+    Some((typedef, serde_defaults))
 }
 
 /// Extract a public enum into an `EnumDef`.
@@ -249,7 +272,9 @@ pub(crate) fn extract_error_enum(item: &syn::ItemEnum, crate_name: &str, module_
                                 from = true;
                                 source = true; // #[from] implies source ~keep
                             }
-                            extract_field(f, Some(crate_name))
+                            // Error-enum fields carry no `impl Default` of their own; the serde
+                            // default half of `extract_field`'s return is discarded. ~keep
+                            extract_field(f, Some(crate_name)).0
                         })
                         .collect();
                     (fields, source, from, false, false)

@@ -1,8 +1,10 @@
 use crate::core::ir::{ApiSurface, DefaultValue, MethodDef, TypeDef, UnsupportedPublicItem};
 use ahash::AHashMap;
 
+use super::super::SerdeDefaultsByType;
 use super::super::defaults::{ConstructorIndex, extract_default_values};
 use super::super::helpers::{build_rust_path, extract_binding_exclusion_reason, extract_cfg_condition, is_test_gated};
+use super::super::postprocess::warn_on_default_disagreement;
 use super::extract_method;
 
 fn has_non_lifetime_generics(generics: &syn::Generics) -> bool {
@@ -56,6 +58,7 @@ pub(crate) fn extract_impl_block(
     result_wrapping_aliases: &ahash::AHashSet<String>,
     literal_consts: &AHashMap<String, DefaultValue>,
     constructors: &ConstructorIndex<'_>,
+    pending_serde_defaults: &SerdeDefaultsByType,
 ) {
     // Honor `#[cfg_attr(alef, alef(skip))]` (or bare `#[alef(skip)]`) on the impl block
     if extract_binding_exclusion_reason(&item.attrs).is_some() {
@@ -76,6 +79,7 @@ pub(crate) fn extract_impl_block(
             literal_consts,
             impl_cfg.as_deref(),
             constructors,
+            pending_serde_defaults,
         );
         return;
     }
@@ -246,6 +250,7 @@ fn extract_trait_impl_methods(
     literal_consts: &AHashMap<String, DefaultValue>,
     impl_cfg: Option<&str>,
     constructors: &ConstructorIndex<'_>,
+    pending_serde_defaults: &SerdeDefaultsByType,
 ) {
     let type_name = match &*item.self_ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -332,6 +337,9 @@ fn extract_trait_impl_methods(
         let self_type = type_def.name.clone();
         type_def.has_default = true;
         extract_default_values(item, &self_type, &mut type_def.fields, literal_consts, constructors);
+        if let Some(serde_defaults) = pending_serde_defaults.get(&type_def.rust_path) {
+            warn_on_default_disagreement(&type_def.rust_path, &type_def.fields, serde_defaults);
+        }
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {

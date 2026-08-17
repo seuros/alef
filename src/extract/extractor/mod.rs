@@ -10,7 +10,7 @@ mod types;
 
 use std::path::{Path, PathBuf};
 
-use crate::core::ir::{ApiSurface, MethodDef, TypeDef, TypeRef, UnsupportedPublicItem};
+use crate::core::ir::{ApiSurface, DefaultValue, MethodDef, TypeDef, TypeRef, UnsupportedPublicItem};
 use ahash::AHashMap;
 use anyhow::{Context, Result};
 
@@ -28,6 +28,21 @@ use self::paths::{apply_parent_reexport_shortening, derive_module_path};
 use self::postprocess::{resolve_newtypes, resolve_public_default_functions, resolve_trait_sources};
 use self::reexports::{extract_module, resolve_use_tree};
 use self::types::{extract_enum, extract_error_enum, extract_struct};
+
+/// A struct's field name → the serde reader's default for that field, keyed by the struct's
+/// `rust_path` at the moment it was extracted. Threaded from `extract_struct`
+/// (`extract::extractor::types`) through `extract_items`/`extract_module` down to
+/// `functions::impl_blocks`, so a manual `impl Default` — parsed later, possibly from a
+/// different source file — can still be compared against the serde reader's value. See
+/// `postprocess::warn_on_default_disagreement`.
+///
+/// Keyed by `rust_path` as extracted, not re-resolved after reexport shortening or
+/// disambiguation rename the path: both of those run only after the struct's own
+/// `extract_items` call returns, so a manual `impl Default` in the *same* module tree is always
+/// compared before its type's path could drift. A manual `impl Default` reached only through a
+/// later-renamed cross-module path silently loses the comparison instead of risking a false
+/// positive against the wrong key. ~keep
+pub(crate) type SerdeDefaultsByType = AHashMap<String, AHashMap<String, DefaultValue>>;
 
 /// Extract the public API surface from Rust source files.
 ///
@@ -47,6 +62,10 @@ pub fn extract(
     };
 
     let mut visited = Vec::<PathBuf>::new();
+    // Spans the whole `sources` loop below (not reset per file, unlike `result_wrapping_aliases`):
+    // a struct and the manual `impl Default` that overwrites its fields' defaults may live in
+    // different source files. ~keep
+    let mut pending_serde_defaults: SerdeDefaultsByType = AHashMap::new();
 
     type_resolver::reset_result_error_hints();
 
@@ -81,6 +100,7 @@ pub fn extract(
             workspace_root,
             &mut visited,
             &mut result_wrapping_aliases,
+            &mut pending_serde_defaults,
         )?;
 
         if !module_path.is_empty() {
@@ -174,6 +194,7 @@ fn extract_items(
     workspace_root: Option<&Path>,
     visited: &mut Vec<PathBuf>,
     result_wrapping_aliases: &mut ahash::AHashSet<String>,
+    pending_serde_defaults: &mut SerdeDefaultsByType,
 ) -> Result<()> {
     let reexport_map = collect_reexport_map(items);
 
@@ -234,7 +255,10 @@ fn extract_items(
                     }
                     continue;
                 }
-                if let Some(td) = extract_struct(item_struct, crate_name, module_path) {
+                if let Some((td, serde_defaults)) = extract_struct(item_struct, crate_name, module_path) {
+                    if !serde_defaults.is_empty() {
+                        pending_serde_defaults.insert(td.rust_path.clone(), serde_defaults);
+                    }
                     surface.types.push(td);
                 }
             }
@@ -466,6 +490,7 @@ fn extract_items(
                         surface,
                         workspace_root,
                         visited,
+                        pending_serde_defaults,
                     )?;
                 }
             }
@@ -523,6 +548,7 @@ fn extract_items(
                 result_wrapping_aliases,
                 &literal_consts,
                 &constructors,
+                &*pending_serde_defaults,
             );
         }
     }

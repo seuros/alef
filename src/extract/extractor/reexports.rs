@@ -83,6 +83,9 @@ fn resolve_external_use(
     // type surface in the other's signatures. ~keep
     let _isolated_result_hints = crate::extract::type_resolver::IsolatedResultHintsGuard::enter();
     let mut rwa = ahash::AHashSet::new();
+    // Scoped to this one extraction of the sibling crate into `ext_surface`: nothing outside
+    // this function needs to compare against the external crate's serde defaults. ~keep
+    let mut pending_serde_defaults = super::SerdeDefaultsByType::default();
     super::extract_items(
         &file.items,
         &canonical,
@@ -92,6 +95,7 @@ fn resolve_external_use(
         workspace_root,
         visited,
         &mut rwa,
+        &mut pending_serde_defaults,
     )?;
 
     let filter = collect_use_names(subtree);
@@ -261,6 +265,7 @@ pub(crate) fn extract_module(
     surface: &mut ApiSurface,
     workspace_root: Option<&Path>,
     visited: &mut Vec<PathBuf>,
+    pending_serde_defaults: &mut super::SerdeDefaultsByType,
 ) -> Result<()> {
     let mod_name = item_mod.ident.to_string();
 
@@ -296,6 +301,7 @@ pub(crate) fn extract_module(
             workspace_root,
             visited,
             &mut rwa,
+            pending_serde_defaults,
         )?;
     } else {
         let parent_dir = source_path.parent().unwrap_or_else(|| Path::new("."));
@@ -331,6 +337,7 @@ pub(crate) fn extract_module(
                     workspace_root,
                     visited,
                     &mut rwa2,
+                    pending_serde_defaults,
                 )?;
                 found = true;
                 break;

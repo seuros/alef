@@ -7,14 +7,17 @@ use super::rustdoc::extract_doc_comments;
 /// Extract an enum variant with its fields.
 pub(crate) fn extract_enum_variant(v: &syn::Variant) -> EnumVariant {
     let is_tuple = matches!(&v.fields, syn::Fields::Unnamed(_));
+    // The serde-default half of `extract_field`'s return is discarded here: a variant's fields
+    // never go through `#[derive(Default)]`/manual `impl Default` folding, so there is nothing
+    // for `postprocess::warn_on_default_disagreement` to compare it against. ~keep
     let variant_fields = match &v.fields {
-        syn::Fields::Named(named) => named.named.iter().map(|f| extract_field(f, None)).collect(),
+        syn::Fields::Named(named) => named.named.iter().map(|f| extract_field(f, None).0).collect(),
         syn::Fields::Unnamed(unnamed) => unnamed
             .unnamed
             .iter()
             .enumerate()
             .map(|(i, f)| {
-                let mut field = extract_field(f, None);
+                let (mut field, _) = extract_field(f, None);
                 field.name = format!("_{i}");
                 field
             })
