@@ -770,7 +770,15 @@ fn finalize_result(
     let classification = classify_result(snippet, validator, config, effective_level, status);
     let status = classification.status;
     let message = if classification.downgrade_reason == Some(DowngradeReason::Declared) {
-        Some(format!("validated at declared level {effective_level}"))
+        // Naming `config.level` here, not just `effective_level`, is load-bearing: a `Declared`
+        // `Pass` is the one downgrade classification `print_summary` used to leave unreported
+        // (see `reason_line` in `snippets::output`), so this is the only place an operator who
+        // configured a stronger level than a snippet's front-matter `level:` allows learns both
+        // halves of the gap — what they asked for and what actually ran. ~keep
+        Some(format!(
+            "requested {}, validated at declared level {effective_level}",
+            config.level
+        ))
     } else if status == SnippetStatus::Downgraded {
         Some(format!("requested {}, validated at {}", config.level, effective_level))
     } else if classification.capability_capped {
@@ -1641,8 +1649,75 @@ mod tests {
         assert_eq!(summary.results[0].downgrade_reason, Some(DowngradeReason::Declared));
         assert_eq!(
             summary.results[0].message.as_deref(),
-            Some("validated at declared level syntax")
+            Some("requested typecheck, validated at declared level syntax")
         );
+    }
+
+    /// Regression for the `docs.snippets.validation_level = "run"` reported as unreachable: an
+    /// e2e-generated fixture snippet's front matter always declares `level: typecheck` (see
+    /// `e2e::snippets::render_snippet_markdown`), which caps `effective_validation_level` below
+    /// any stronger `config.level` a consumer configures — `run` included. That cap is legitimate
+    /// (the snippet's own contract, `DowngradeReason::Declared`), so this does not turn it into a
+    /// failure; what it must not do is stay silent about the gap. Before the `finalize_result`
+    /// message fix, this asserted `"validated at declared level typecheck"`, which never named
+    /// what was actually requested — indistinguishable from an ordinary declared-level snippet
+    /// with no gap at all. ~keep
+    #[test]
+    fn declared_typecheck_ceiling_names_the_clamped_run_request() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(CappedValidator {
+            language: crate::snippets::types::Language::Rust,
+            ceiling: ValidationLevel::Run,
+        }));
+        let mut snippet = network_snippet();
+        snippet.metadata.level = Some(ValidationLevel::TypeCheck);
+        let config = RunnerConfig {
+            level: ValidationLevel::Run,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[snippet], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Pass);
+        assert_eq!(summary.results[0].effective_level, ValidationLevel::TypeCheck);
+        assert_eq!(summary.results[0].downgrade_reason, Some(DowngradeReason::Declared));
+        assert_eq!(
+            summary.results[0].message.as_deref(),
+            Some("requested run, validated at declared level typecheck"),
+            "a `run` request clamped by a snippet's declared level must name both the request and \
+             the level it was clamped to, not just the clamped level"
+        );
+    }
+
+    /// Negative control for the same clamp path: a consumer who legitimately configures a lower
+    /// `validation_level` (not `run`) against a snippet with no front-matter `level:` contract at
+    /// all must validate normally, with no downgrade classification and no clamp message —
+    /// `effective_validation_level` has nothing to fold against `requested`, so it passes through
+    /// unchanged. ~keep
+    #[test]
+    fn legitimately_configured_lower_level_has_no_downgrade_reason() {
+        let mut registry = ValidatorRegistry::new();
+        registry.register(Box::new(CappedValidator {
+            language: crate::snippets::types::Language::Rust,
+            ceiling: ValidationLevel::Run,
+        }));
+        let config = RunnerConfig {
+            level: ValidationLevel::TypeCheck,
+            parallelism: 1,
+            cache_dir: None,
+            allowed_side_effects: vec![SideEffectClass::Network],
+            ..RunnerConfig::default()
+        };
+
+        let summary = run_validation(&[network_snippet()], &registry, &config).expect("validation completes");
+
+        assert_eq!(summary.results[0].status, SnippetStatus::Pass);
+        assert_eq!(summary.results[0].effective_level, ValidationLevel::TypeCheck);
+        assert_eq!(summary.results[0].downgrade_reason, None);
+        assert_eq!(summary.results[0].message, None);
     }
 
     /// A declared `level:` is a contract for what was requested, not a guarantee the environment

@@ -366,6 +366,15 @@ pub struct RunSummary {
     /// Reported so a strict run can say what it accepted rather than hiding it. ~keep
     #[serde(default)]
     pub capability_capped: usize,
+    /// Passing snippets whose level was limited by their own front-matter `level:` contract
+    /// (`DowngradeReason::Declared`) rather than by the validator's capability. Tracked
+    /// separately from `capability_capped` for the same reason that one is tracked at all: a
+    /// consumer who configured `docs.snippets.validation_level = "run"` and sees every result
+    /// pass has no way to learn that some of them never actually ran, only typechecked, because a
+    /// snippet's own declared `level:` clamped it first — that includes every fixture snippet
+    /// `alef e2e generate` emits, which stamps `level: typecheck` unconditionally. ~keep
+    #[serde(default)]
+    pub declared_capped: usize,
     pub results: Vec<ValidationResult>,
 }
 
@@ -382,12 +391,16 @@ impl RunSummary {
             errors: 0,
             unavailable: 0,
             capability_capped: 0,
+            declared_capped: 0,
             results,
         };
 
         for result in &summary.results {
             if result.capability_capped {
                 summary.capability_capped += 1;
+            }
+            if result.downgrade_reason == Some(DowngradeReason::Declared) {
+                summary.declared_capped += 1;
             }
             match result.status {
                 SnippetStatus::Pass => summary.passed += 1,

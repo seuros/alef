@@ -562,6 +562,24 @@ fn enforce_snippet_summary(
             attribute_capability_capped(summary)
         );
     }
+    // `declared_capped` results pass exactly like `capability_capped` ones do, and for the same
+    // structural reason this function already warns about the latter: a bare "N passed" leaves a
+    // consumer with no way to learn that `docs.snippets.validation_level` was not actually applied
+    // to every snippet. The gap this closes is concrete, not hypothetical: `alef e2e generate`
+    // stamps every fixture snippet's front matter with `level: typecheck` (see
+    // `e2e::snippets::render_snippet_markdown`), which silently caps `validation_level = "run"`
+    // down to typecheck for all of them — previously reported as an unqualified `Pass` with no
+    // trace anywhere in this pipeline's output. ~keep
+    if summary.declared_capped > 0 {
+        tracing::warn!(
+            declared_capped = summary.declared_capped,
+            "docs.snippets validated {} snippet(s) below the requested level because their own front-matter \
+             `level:` declares a lower ceiling; these pass strict mode as a satisfied per-snippet contract, \
+             but the requested level was not actually applied to them{}",
+            summary.declared_capped,
+            attribute_declared_capped(summary)
+        );
+    }
     if summary.unavailable > 0 {
         tracing::warn!(
             "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable",
@@ -623,6 +641,17 @@ fn attribute_results(
 /// climb still needs to know which snippets and why. ~keep
 fn attribute_capability_capped(summary: &crate::snippets::types::RunSummary) -> String {
     attribute(summary, |result| result.capability_capped)
+}
+
+/// Same attribution, for the `Pass` results a snippet's own front-matter `level:` contract capped
+/// below the requested level (`DowngradeReason::Declared`). These never fail strict either, but
+/// unlike `capability_capped` this ceiling came from the snippet's content, not its language — a
+/// consumer needs to know that too, especially when the "author" is a code generator that stamped
+/// the same declared level onto every snippet it emitted rather than a person choosing it. ~keep
+fn attribute_declared_capped(summary: &crate::snippets::types::RunSummary) -> String {
+    attribute(summary, |result| {
+        result.downgrade_reason == Some(crate::snippets::types::DowngradeReason::Declared)
+    })
 }
 
 fn attribute(

@@ -1,4 +1,4 @@
-use crate::docs::{attribute_capability_capped, attribute_results};
+use crate::docs::{attribute_capability_capped, attribute_declared_capped, attribute_results};
 use crate::snippets::types::{
     DowngradeReason, Language, RunSummary, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel,
     ValidationResult,
@@ -20,6 +20,14 @@ fn capability_capped(id: &str, language: Language) -> ValidationResult {
         status: SnippetStatus::Pass,
         capability_capped: true,
         downgrade_reason: Some(DowngradeReason::ValidatorCapability),
+        ..result(id, language, SnippetStatus::Pass)
+    }
+}
+
+fn declared_capped(id: &str, language: Language) -> ValidationResult {
+    ValidationResult {
+        status: SnippetStatus::Pass,
+        downgrade_reason: Some(DowngradeReason::Declared),
         ..result(id, language, SnippetStatus::Pass)
     }
 }
@@ -179,4 +187,39 @@ fn attribution_capability_capped_names_the_validator_reason() {
     assert!(detail.contains("php: 1"), "got: {detail}");
     assert!(detail.contains("ruby: 1"), "got: {detail}");
     assert!(detail.contains("validator cannot reach this level: 1"), "got: {detail}");
+}
+
+/// `declared_capped` results are `Pass` too, but for a distinct reason from `capability_capped`:
+/// the snippet's own front-matter `level:` set the ceiling, not the validator. This is the path
+/// every `alef e2e generate` fixture snippet takes (they all declare `level: typecheck`), so a
+/// consumer who configured `validation_level = "run"` needs `attribute_declared_capped` to say
+/// which snippets never actually reached `run`, not just watch the summary count climb silently. ~keep
+#[test]
+fn attribution_declared_capped_names_the_front_matter_reason() {
+    let summary = RunSummary::from_results(vec![
+        declared_capped("fixture_go_smoke", Language::Go),
+        declared_capped("fixture_java_smoke", Language::Java),
+    ]);
+
+    let detail = attribute_declared_capped(&summary);
+
+    assert!(detail.contains("fixture_go_smoke"), "got: {detail}");
+    assert!(detail.contains("go: 1"), "got: {detail}");
+    assert!(detail.contains("java: 1"), "got: {detail}");
+    assert!(
+        detail.contains("author declared this level via front matter: 1"),
+        "got: {detail}"
+    );
+}
+
+/// `attribute_declared_capped` must not absorb `capability_capped` results — they are `Pass` too,
+/// but for a different reason, and collapsing them would misattribute a validator ceiling as a
+/// snippet's own declared contract. ~keep
+#[test]
+fn attribution_declared_capped_does_not_absorb_capability_capped_results() {
+    let summary = RunSummary::from_results(vec![capability_capped("fixture_ruby_typecheck", Language::Ruby)]);
+
+    let detail = attribute_declared_capped(&summary);
+
+    assert_eq!(detail, "", "got: {detail}");
 }

@@ -1,7 +1,9 @@
 use crate::docs::enforce_snippet_summary;
 use crate::snippets::types::{
-    Language, RunSummary, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel, ValidationResult,
+    DowngradeReason, Language, RunSummary, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel,
+    ValidationResult,
 };
+use tracing_test::traced_test;
 
 fn result(id: &str, status: SnippetStatus) -> ValidationResult {
     ValidationResult {
@@ -86,4 +88,44 @@ fn non_strict_mode_never_bails_on_a_downgrade() {
     let summary = RunSummary::from_results(vec![result("fixture_downgraded", SnippetStatus::Downgraded)]);
 
     enforce_snippet_summary("fixture-crate", false, &summary).expect("non-strict must not bail");
+}
+
+/// Regression for `docs.snippets.validation_level = "run"` reported as unreachable: `alef e2e
+/// generate` stamps every fixture snippet's front matter with `level: typecheck` (see
+/// `e2e::snippets::render_snippet_markdown`), which caps `effective_validation_level` below any
+/// stronger configured level. That is a legitimate per-snippet contract (`DowngradeReason::
+/// Declared`), so it must not fail even in strict mode — but before this, it also produced no
+/// trace anywhere that the configured level was not actually applied. A `Declared`-capped `Pass`
+/// must warn, the same way a `capability_capped` one already does. ~keep
+#[traced_test]
+#[test]
+fn declared_capped_results_warn_but_do_not_bail_even_in_strict_mode() {
+    let summary = RunSummary::from_results(vec![ValidationResult {
+        status: SnippetStatus::Pass,
+        downgrade_reason: Some(DowngradeReason::Declared),
+        message: Some("requested run, validated at declared level typecheck".to_string()),
+        ..result("fixture_e2e_typecheck", SnippetStatus::Pass)
+    }]);
+
+    enforce_snippet_summary("fixture-crate", true, &summary).expect("a declared cap must not bail, even strict");
+
+    assert!(
+        logs_contain("front-matter `level:`"),
+        "a declared-level cap must be warned about, not silently passed"
+    );
+}
+
+/// Negative control: an ordinary clean run — nothing capped, nothing downgraded, a legitimately
+/// configured lower level applied without any gap — must not trip the new warning path at all. ~keep
+#[traced_test]
+#[test]
+fn an_ordinary_clean_run_emits_no_declared_capped_warning() {
+    let summary = RunSummary::from_results(vec![result("fixture_ok", SnippetStatus::Pass)]);
+
+    enforce_snippet_summary("fixture-crate", true, &summary).expect("a clean run must not bail");
+
+    assert!(
+        !logs_contain("front-matter `level:`"),
+        "an ordinary clean run must not warn about a declared-level cap that never happened"
+    );
 }

@@ -6,7 +6,7 @@
 #![allow(clippy::print_stdout)]
 
 use crate::snippets::error::Result;
-use crate::snippets::types::{RunSummary, Snippet, SnippetStatus};
+use crate::snippets::types::{RunSummary, Snippet, SnippetStatus, ValidationResult};
 use std::path::Path;
 
 pub fn print_summary(summary: &RunSummary, show_code: bool) {
@@ -75,20 +75,8 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
             }
 
             println!();
-        } else if result.status == SnippetStatus::Downgraded || result.capability_capped {
-            // `finalize_result` computes a `message` naming the requested/effective level and, for
-            // a capability ceiling, which validator caps it — but until now that message was only
-            // ever printed for `Fail`/`Error`, so a `DOWNGRADE` row (or a capability-capped `Pass`)
-            // gave a reader the level gap with no reason attached, indistinguishable in the
-            // human-readable report from an unexplained regression. Printed as its own one-line
-            // reason rather than joining the `Source`/`Error`/`Code` block above, which is about
-            // showing a failing snippet's content — nothing failed here. ~keep
-            if let Some(message) = &result.message {
-                let trimmed = message.trim();
-                if !trimmed.is_empty() {
-                    println!("  Reason: {trimmed}");
-                }
-            }
+        } else if let Some(line) = reason_line(result) {
+            println!("{line}");
         }
     }
 
@@ -104,6 +92,18 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
         summary.unavailable
     );
     println!();
+}
+
+/// The `  Reason: ...` line for a row whose effective level differs from what was requested, or
+/// `None` for a clean result. Covers every `downgrade_reason` the runner sets, not just
+/// `Downgraded`/`capability_capped` — a `Pass` clamped by a snippet's own declared `level:`
+/// (`DowngradeReason::Declared`) carries a reason too, and leaving it out of this table is what
+/// let `docs.snippets.validation_level = "run"` clamp silently down to a fixture's stamped
+/// `typecheck` ceiling with no visible trace in the human-readable report. ~keep
+fn reason_line(result: &ValidationResult) -> Option<String> {
+    result.downgrade_reason?;
+    let message = result.message.as_deref()?.trim();
+    (!message.is_empty()).then(|| format!("  Reason: {message}"))
 }
 
 /// Write validation results to a JSON file.
@@ -199,5 +199,72 @@ fn truncate(value: &str, max: usize) -> String {
         value.to_string()
     } else {
         format!("{}...", &value[..max.saturating_sub(3)])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::snippets::types::{DowngradeReason, Language, SnippetMetadata, SourceOrigin, ValidationLevel};
+
+    fn sample_result(
+        status: SnippetStatus,
+        downgrade_reason: Option<DowngradeReason>,
+        message: Option<&str>,
+    ) -> ValidationResult {
+        ValidationResult {
+            snippet: Snippet {
+                id: None,
+                path: "example.md".into(),
+                language: Language::Rust,
+                title: None,
+                code: "fn main() {}".into(),
+                start_line: 1,
+                block_index: 0,
+                annotation: None,
+                metadata: SnippetMetadata::default(),
+                source_origin: SourceOrigin {
+                    path: "example.md".into(),
+                    line: 1,
+                    block_index: 0,
+                },
+            },
+            status,
+            level: ValidationLevel::TypeCheck,
+            requested_level: ValidationLevel::Run,
+            effective_level: ValidationLevel::TypeCheck,
+            message: message.map(str::to_owned),
+            duration_ms: 0,
+            capability_capped: false,
+            downgrade_reason,
+        }
+    }
+
+    /// The regression this exists for: a `Pass` clamped by a snippet's own declared `level:`
+    /// front matter used to print nothing at all — `print_summary`'s reason line only fired for
+    /// `Downgraded` or `capability_capped` rows, so `docs.snippets.validation_level = "run"`
+    /// clamped to a fixture's stamped `typecheck` ceiling with no visible trace anywhere in the
+    /// human-readable report. ~keep
+    #[test]
+    fn declared_downgrade_reason_produces_a_reason_line() {
+        let result = sample_result(
+            SnippetStatus::Pass,
+            Some(DowngradeReason::Declared),
+            Some("requested run, validated at declared level typecheck"),
+        );
+
+        assert_eq!(
+            reason_line(&result),
+            Some("  Reason: requested run, validated at declared level typecheck".to_string())
+        );
+    }
+
+    /// Negative control: an ordinary `Pass` for a legitimately-configured level with nothing
+    /// clamped carries no `downgrade_reason` and must produce no reason line at all. ~keep
+    #[test]
+    fn ordinary_pass_with_no_downgrade_reason_has_no_reason_line() {
+        let result = sample_result(SnippetStatus::Pass, None, None);
+
+        assert_eq!(reason_line(&result), None);
     }
 }
