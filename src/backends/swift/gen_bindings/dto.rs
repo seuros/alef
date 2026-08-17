@@ -426,6 +426,8 @@ pub(crate) fn swift_typed_default_literal(dv: &DefaultValue) -> Option<String> {
         DefaultValue::EnumVariant(_) => None,
         DefaultValue::Empty
         | DefaultValue::Unresolved(_)
+        | DefaultValue::TupleVariant(..)
+        | DefaultValue::StructVariant(..)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,
@@ -508,15 +510,22 @@ pub(super) fn emit_decoder_init(mapper: &SwiftMapper, visible_fields: &[&FieldDe
         let fallback = literal.or_else(|| {
             // The type-based zero is only a legitimate stand-in when the Rust default *is* the
             // type's own default. `FunctionCall`/`PublicFunctionCall` (a `#[serde(default =
-            // "path")]` whose body alef never sees) and `EnumVariant` (whose enum path the
-            // extractor discards) both mean "there is a default and it is not this zero";
-            // answering them with `0`/`""`/`false` is a silent disagreement with the source
-            // crate. Emitting the plain required `decode` instead makes an absent key throw a
-            // `DecodingError` the caller can see. ~keep
+            // "path")]` whose body alef never sees), `EnumVariant` (whose enum path the
+            // extractor discards), `Unresolved` (an `impl Default` body alef could not
+            // constant-fold), and `TupleVariant`/`StructVariant` (a resolved enum-variant
+            // default this renderer has no per-argument Swift expression for) all mean "there is
+            // a default and it is not this zero"; answering them with `0`/`""`/`false` is a
+            // silent disagreement with the source crate. Emitting the plain required `decode`
+            // instead makes an absent key throw a `DecodingError` the caller can see. ~keep
             if matches!(
                 field.typed_default,
                 Some(
-                    DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) | DefaultValue::EnumVariant(_)
+                    DefaultValue::FunctionCall(_)
+                        | DefaultValue::PublicFunctionCall(_)
+                        | DefaultValue::EnumVariant(_)
+                        | DefaultValue::Unresolved(_)
+                        | DefaultValue::TupleVariant(..)
+                        | DefaultValue::StructVariant(..)
                 )
             ) {
                 return None;

@@ -1020,6 +1020,98 @@ fn gen_struct_type_container_serde_default_marks_unit_enum_fields_omitempty() {
     );
 }
 
+/// The bug this fix targets: alef could not read the real default out of `impl Default`
+/// (`Unresolved`), and `needs_omitempty_pointer` used to fall through its `_ => false` catch-all
+/// for it — the same path a field whose Rust default genuinely equals the Go zero takes. That
+/// left the field a plain, non-pointer value, so an untouched Go caller marshals the *Go* zero
+/// onto the wire as though it were a deliberate choice, even though alef has no idea whether the
+/// real (unreadable) Rust default agrees with it. Pointer+omitempty is the fix: an unset field
+/// drops the key and lets the real Rust default apply.
+#[test]
+fn gen_struct_type_unresolved_default_field_becomes_pointer_omitempty() {
+    let mut field = simple_field("retries", TypeRef::Primitive(PrimitiveType::U32));
+    field.default = Some("/* serde(default) */".to_string());
+    field.typed_default = Some(DefaultValue::Unresolved("Self::builder().build()".to_string()));
+    let typ = test_struct_type("RetryPolicy", vec![field], true);
+
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+
+    assert!(
+        out.contains("Retries *uint32 `json:\"retries,omitempty\"`"),
+        "an unresolved default must become a pointer+omitempty field, not a plain value; got:\n{out}"
+    );
+}
+
+/// Negative control: `Empty` really does mean "the Rust default IS the Go zero", so a
+/// wire-optional field carrying it must stay a plain, non-pointer value — pointer+omitempty would
+/// cost ergonomics for no correctness gain. Without this, a fix that pointer-ized every default
+/// (rather than only the unrenderable ones) would pass the positive test above while silently
+/// regressing every already-correct field.
+#[test]
+fn gen_struct_type_empty_default_field_stays_the_plain_go_zero() {
+    let mut field = simple_field("retries", TypeRef::Primitive(PrimitiveType::U32));
+    field.default = Some("/* serde(default) */".to_string());
+    field.typed_default = Some(DefaultValue::Empty);
+    let typ = test_struct_type("RetryPolicy", vec![field], true);
+
+    let out = gen_struct_type(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+
+    assert!(
+        out.contains("Retries uint32 `json:\"retries\"`"),
+        "an `Empty` default must stay a plain, non-pointer, non-omitempty field; got:\n{out}"
+    );
+    assert!(
+        !out.contains("*uint32") && !out.contains(",omitempty"),
+        "an `Empty` default must not be pointer-ized; got:\n{out}"
+    );
+}
+
+/// End-to-end: the functional-options `New()` constructor must never seed an unresolved-default
+/// field with the fabricated Go zero (`0`). `nil` is the pointer zero — valid Go for any type,
+/// including a scalar — and matches the pointer+omitempty component type
+/// `gen_struct_type_unresolved_default_field_becomes_pointer_omitempty` pins for the same field.
+#[test]
+fn gen_config_options_unresolved_default_field_new_constructor_seeds_nil_not_zero() {
+    let mut field = simple_field("retries", TypeRef::Primitive(PrimitiveType::U32));
+    field.default = Some("/* serde(default) */".to_string());
+    field.typed_default = Some(DefaultValue::Unresolved("Self::builder().build()".to_string()));
+    let typ = test_struct_type("RetryPolicy", vec![field], true);
+
+    let out = gen_config_options(
+        &typ,
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    );
+
+    assert!(
+        !out.contains("Retries: 0"),
+        "the New() constructor must never seed an unresolved default with the fabricated Go \
+         zero:\n{out}"
+    );
+    assert!(
+        out.contains("Retries: nil"),
+        "expected the New() constructor to seed `nil`, letting the real Rust default apply once \
+         the pointer is omitted from the wire; got:\n{out}"
+    );
+}
+
 /// Regression (Defect 4): the sealed-interface doc comment lists every variant, cased with
 /// the same `to_go_name` initialism rule as the emitted struct identifiers — not just the
 /// first two, and not the raw Rust variant spelling.

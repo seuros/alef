@@ -27,6 +27,20 @@ pub enum DefaultValue {
     IntLiteral(i64),
     FloatLiteral(f64),
     EnumVariant(String),
+    /// A tuple-variant enum default (`Mode::Custom(5)`), each positional argument folded
+    /// independently and kept in source order. Distinct from [`DefaultValue::EnumVariant`],
+    /// which names a bare unit-variant path with no arguments of its own.
+    ///
+    /// Produced only when every argument itself folds to a value-carrying `DefaultValue` (see
+    /// `extract::extractor::defaults::carries_value`); a call with even one unfoldable argument
+    /// keeps the whole field [`DefaultValue::Unresolved`] rather than a partially-known payload
+    /// — rendering some arguments as literals and silently dropping the rest would be a subtler
+    /// instance of the fabrication `Unresolved` exists to prevent. ~keep
+    TupleVariant(String, Vec<DefaultValue>),
+    /// A struct-variant enum default (`Kind::Curated { label: "balanced".to_string() }`), each
+    /// named field folded independently and kept in source order. Same all-or-nothing rule and
+    /// rationale as [`DefaultValue::TupleVariant`]. ~keep
+    StructVariant(String, Vec<(String, DefaultValue)>),
     /// A zero-argument Rust function that supplies the value at runtime. ~keep
     FunctionCall(String),
     /// A public zero-argument Rust function callable from generated binding crates. ~keep

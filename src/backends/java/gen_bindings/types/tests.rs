@@ -816,6 +816,153 @@ fn reference_typed_defaults_are_left_to_the_rust_side() {
     );
 }
 
+/// The bug this fix targets: alef could not read the real default out of `impl Default`
+/// (`Unresolved`), and the builder used to fall through to the type-based fallback and emit the
+/// unboxed primitive's own zero — a value the source crate never actually specified, underneath a
+/// doc comment quoting the real (unreadable) Rust default. `null` on a boxed component is the
+/// honest rendering: it is visibly "not supplied" rather than a guessed `0`.
+#[test]
+fn unresolved_default_scalar_field_is_boxed_with_no_fabricated_zero() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "retries",
+        TypeRef::Primitive(PrimitiveType::U32),
+        DefaultValue::Unresolved("Self::builder().build()".to_string()),
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        out.contains("@Nullable"),
+        "alef could not read the real default, so the component must be nullable, not a fabricated zero:\n{out}"
+    );
+    assert!(
+        out.contains("Integer retries"),
+        "an unresolved default must box the primitive so `null` can mean 'not supplied':\n{out}"
+    );
+    assert!(
+        !out.contains("int retries"),
+        "the field must not stay an unboxed primitive, whose only sentinel is the type-zero:\n{out}"
+    );
+    assert!(
+        !out.contains("retries == null"),
+        "there is no literal to restore, so the compact constructor must not gain a restore line:\n{out}"
+    );
+    assert!(
+        !out.contains("retries = 0"),
+        "the builder must never initialize the field to the fabricated type-zero:\n{out}"
+    );
+}
+
+/// A field can carry both a `#[serde(default)]` marker (which alone would route the builder
+/// through the enum-default lookup) and an unresolved `impl Default` at once — the marker records
+/// only that some default exists, not what it is. The dedicated `Unresolved` handling must win
+/// regardless, or the marker smuggles a guessed enum variant back in.
+#[test]
+fn unresolved_default_wins_over_a_serde_default_enum_lookup() {
+    let mut mode_field = impl_default_field(
+        "mode",
+        TypeRef::Named("Mode".to_string()),
+        DefaultValue::Unresolved("Self::builder().build()".to_string()),
+    );
+    mode_field.default = Some("/* serde(default) */".to_string());
+    let typ = impl_default_record(vec![mode_field]);
+
+    let mut enum_defaults = ahash::AHashMap::default();
+    enum_defaults.insert(
+        "Mode".to_string(),
+        crate::extract::default_value_for_enum::DefaultEnumVariant {
+            variant_name: "Fast".to_string(),
+            is_zero_field: true,
+        },
+    );
+
+    let out = gen_record_type(
+        "dev.sample_crate",
+        &typ,
+        &AHashSet::default(),
+        &AHashSet::default(),
+        "SNAKE_CASE",
+        &[],
+        "SampleCrawler",
+        JavaBuilderMode::Auto,
+        &enum_defaults,
+        &AHashSet::default(),
+        &HashSet::default(),
+    );
+
+    assert!(
+        !out.contains("Mode.Fast"),
+        "a `#[serde(default)]` marker must not smuggle an unresolved default into a guessed enum variant:\n{out}"
+    );
+}
+
+/// The same defect on a collection field: `should_emit_required`'s Java analogue
+/// (`boxes_to_carry_literal_default`) reports `false` for a type it cannot restore, but the old
+/// code used that as license to fall back to `List.of()` — a real, if empty, value the source
+/// crate's unreadable default may not actually hold.
+#[test]
+fn unresolved_default_collection_field_is_not_the_empty_collection_literal() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "tags",
+        TypeRef::Vec(Box::new(TypeRef::String)),
+        DefaultValue::Unresolved("Self::builder().build()".to_string()),
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        !out.contains("List.of()"),
+        "an unresolved default must never fall back to the empty-collection literal:\n{out}"
+    );
+    assert!(
+        out.contains("@Nullable"),
+        "the field must be nullable so 'not supplied' is a value the generated code can see:\n{out}"
+    );
+}
+
+/// Negative control for the fix above: `Empty` really does mean "the type's own zero", so a
+/// collection field carrying it must still emit the empty-collection literal. Without this, a fix
+/// that suppressed every default (rather than only `Unresolved`) would pass every positive test
+/// above while silently dropping a legitimate one.
+#[test]
+fn empty_default_collection_field_still_emits_the_empty_collection_literal() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "tags",
+        TypeRef::Vec(Box::new(TypeRef::String)),
+        DefaultValue::Empty,
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        out.contains("List.of()"),
+        "`Empty` is exactly the type's own zero and must still render the empty-collection literal:\n{out}"
+    );
+}
+
+/// Negative control, scalar case: `Empty` on a primitive must stay unboxed at the Java type-zero,
+/// the same outcome `defaults_equal_to_the_java_type_zero_stay_unboxed` pins for an explicit
+/// zero-valued literal — `Empty` is the variant real fixtures actually carry for this case.
+#[test]
+fn empty_default_scalar_field_stays_unboxed_at_the_type_zero() {
+    let typ = impl_default_record(vec![impl_default_field(
+        "retries",
+        TypeRef::Primitive(PrimitiveType::U32),
+        DefaultValue::Empty,
+    )]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        !out.contains("@Nullable"),
+        "`Empty` is the type's own zero and must not widen the component to nullable:\n{out}"
+    );
+    assert!(
+        out.contains("int retries"),
+        "the component must stay the unboxed primitive, whose implicit zero already matches `Empty`:\n{out}"
+    );
+}
+
 /// A `#[alef(skip)]`ped field is not a record component, so a compact-constructor line naming it
 /// would not compile. The old loop read `typ.fields` directly and only escaped this because the
 /// single variant it handled rarely coincided with an excluded field.

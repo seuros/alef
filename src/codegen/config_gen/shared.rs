@@ -179,10 +179,7 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                     },
                 }
             }
-            // Grouped with `Empty` deliberately: see the note in `codegen::shared`'s
-            // `format_default_value`. A renderer cannot fail, so `Unresolved` only reaches here
-            // when the refusal was suppressed. ~keep
-            DefaultValue::Empty | DefaultValue::Unresolved(_) => match &field.ty {
+            DefaultValue::Empty => match &field.ty {
                 TypeRef::Vec(_) => match language {
                     "python" | "ruby" | "csharp" => "[]".to_string(),
                     "go" => "nil".to_string(),
@@ -237,6 +234,25 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                     _ => "null".to_string(),
                 },
             },
+            // Distinct from `Empty` on purpose: `Empty` asserts "the default IS the type's own
+            // zero", which is exactly what the type-zero table above renders. `Unresolved`
+            // asserts alef could not read the value at all — rendering the same table here would
+            // ship a value the source crate never actually specified, underneath a doc comment
+            // quoting the real (unreadable) default. This has no type context to attempt the
+            // `core_default_field_access` recovery `default_value_for_field_in_type` does for
+            // `"rust"`, so it fails loudly there and — like `FunctionCall`/`TupleVariant` below —
+            // answers every other language with "no value" rather than a guess. ~keep
+            DefaultValue::Unresolved(_) => match language {
+                "python" => "None".to_string(),
+                "ruby" => "nil".to_string(),
+                "go" => "nil".to_string(),
+                "rust" => format!(
+                    "compile_error!(r#\"cannot render an unresolved `impl Default` for field `{field_name}` \
+                     without its owning type context\"#)",
+                    field_name = field.name,
+                ),
+                _ => "null".to_string(),
+            },
             DefaultValue::None => match language {
                 "python" => "None".to_string(),
                 "ruby" => "nil".to_string(),
@@ -278,6 +294,25 @@ pub fn default_value_for_field(field: &FieldDef, language: &str) -> String {
                 "ruby" => "nil".to_string(),
                 "go" => "nil".to_string(),
                 "rust" => format!("{path}()"),
+                _ => "null".to_string(),
+            },
+            // Neither payload is a spellable literal in any target language on its own — the
+            // enclosing enum's path is not part of either variant, only the bare variant/field
+            // names are. Callers that know the owning `TypeDef` MUST go through
+            // [`default_value_for_field_in_type`] instead, which recovers the real value by
+            // reading it back off `<CoreType as Default>::default().field` when the owning type
+            // has one. This arm has no type context and so cannot attempt that recovery; it
+            // fails loudly for "rust" (the one language this ever compiles) rather than
+            // substituting `Default::default()`, for the same reason `FunctionCall` does above. ~keep
+            DefaultValue::TupleVariant(variant, _) | DefaultValue::StructVariant(variant, _) => match language {
+                "python" => "None".to_string(),
+                "ruby" => "nil".to_string(),
+                "go" => "nil".to_string(),
+                "rust" => format!(
+                    "compile_error!(r#\"cannot render tuple/struct-variant default `{variant}` for field \
+                     `{field_name}` without its owning type context\"#)",
+                    field_name = field.name,
+                ),
                 _ => "null".to_string(),
             },
         };
@@ -433,6 +468,50 @@ pub fn default_value_for_field_in_type(field: &FieldDef, language: &str, typ: &T
             field_name = field.name,
         );
     }
+    // Neither payload is a spellable Rust literal on its own — the enclosing enum's path is
+    // not part of either variant, only the bare variant/field names are — but the owning
+    // struct's own `Default` impl, when it has one, already computed the real value; reading
+    // it back off `<CoreType as Default>::default().field` (the same recovery
+    // `codegen::shared::format_default_value` uses for `EnumVariant`) asks the source crate
+    // instead of guessing at a spelling. ~keep
+    if language == "rust"
+        && let Some(DefaultValue::TupleVariant(variant, _) | DefaultValue::StructVariant(variant, _)) =
+            &field.typed_default
+    {
+        if let Some(expr) = crate::codegen::shared::core_default_field_access(field, typ) {
+            return expr;
+        }
+        let crate_name = typ.rust_path.split("::").next().unwrap_or(typ.rust_path.as_str());
+        return format!(
+            "compile_error!(r#\"cannot render tuple/struct-variant default `{variant}` for \
+             `{crate_name}::{type_name}.{field_name}` without a `Default` impl on the owning type to read it back \
+             from\"#)",
+            type_name = typ.name,
+            field_name = field.name,
+        );
+    }
+    // `Unresolved` means alef could not constant-fold `impl Default`'s body, not that no such
+    // impl exists — `extract_default_values` only marks a field `Unresolved` after finding a
+    // real `fn default()` it could not read through. That impl is real, compiled Rust the
+    // generated crate can call directly: `<CoreType as Default>::default().field` (the same
+    // recovery `TupleVariant`/`StructVariant` use above) asks the source crate for the actual
+    // value instead of guessing at a spelling — sidestepping alef's static-analysis limit
+    // entirely rather than merely refusing to guess. ~keep
+    if language == "rust"
+        && let Some(DefaultValue::Unresolved(_)) = &field.typed_default
+    {
+        if let Some(expr) = crate::codegen::shared::core_default_field_access(field, typ) {
+            return expr;
+        }
+        let crate_name = typ.rust_path.split("::").next().unwrap_or(typ.rust_path.as_str());
+        return format!(
+            "compile_error!(r#\"cannot render an unresolved `impl Default` for \
+             `{crate_name}::{type_name}.{field_name}` without a `Default` impl on the owning type to read it back \
+             from\"#)",
+            type_name = typ.name,
+            field_name = field.name,
+        );
+    }
     default_value_for_field(field, language)
 }
 
@@ -558,6 +637,8 @@ fn config_scalar_default(item: &DefaultValue, language: &str) -> Option<String> 
         DefaultValue::FloatLiteral(f) => Some(f.to_string()),
         DefaultValue::ListLiteral(_)
         | DefaultValue::EnumVariant(_)
+        | DefaultValue::TupleVariant(_, _)
+        | DefaultValue::StructVariant(_, _)
         | DefaultValue::Empty
         | DefaultValue::Unresolved(_)
         | DefaultValue::None

@@ -245,7 +245,18 @@ fn render_default_value(
                 None => zero_value_for_type(ty, type_defs, enums),
             }
         }
-        DefaultValue::Empty | DefaultValue::Unresolved(_) => zero_value_for_type(ty, type_defs, enums),
+        DefaultValue::Empty => zero_value_for_type(ty, type_defs, enums),
+        // `Unresolved`: alef could not read the real default out of `impl Default`.
+        // `TupleVariant`/`StructVariant`: alef read the value, but this renderer has no Dart
+        // expression for "construct enum variant X with these field values" the way it does for
+        // a bare `EnumVariant`. Both used to fall through to `zero_value_for_type` (as `Empty`
+        // still does above), which ships the *type's* zero underneath a doc comment quoting the
+        // real (unrendered) Rust default — a value the source never actually specified.
+        // Returning `None` here, like `FunctionCall` below, is what lets the `?` in
+        // `default_expression_for_named_type` bail the whole synthesized literal out to
+        // `config_default_expression`'s JSON round-trip fallback, which is faithful rather than
+        // a guess. ~keep
+        DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..) => None,
         DefaultValue::None => Some("null".to_string()),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => None,
     }

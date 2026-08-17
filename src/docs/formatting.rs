@@ -99,6 +99,30 @@ pub(crate) fn format_field_default(field: &FieldDef, lang: Language, api: &ApiSu
     "—".to_string()
 }
 
+/// Qualifies a bare variant name (`Curated`) with its owning enum type when `field_ty` names
+/// one, mirroring the fallback branch of the `DefaultValue::EnumVariant` case below — shared so
+/// `TupleVariant` and `StructVariant` document a variant reference the same way a unit variant
+/// does. Unlike `EnumVariant`, `TupleVariant`/`StructVariant` never carry a `Type::Variant`
+/// qualified string, so there is no `splitn` case to mirror. ~keep
+fn enum_variant_doc_label(variant: &str, field_ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
+    let enum_type_name_str = match field_ty {
+        TypeRef::Named(n) => Some(n.as_str()),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(n) => Some(n.as_str()),
+            _ => None,
+        },
+        _ => None,
+    };
+    match enum_type_name_str {
+        Some(type_str) => {
+            let etype = type_name(type_str, lang, ffi_prefix);
+            let vname = enum_variant_name(variant, lang, ffi_prefix);
+            format_enum_variant_ref(&etype, &vname, lang, ffi_prefix)
+        }
+        None => variant.to_string(),
+    }
+}
+
 pub(crate) fn format_typed_default(
     val: &DefaultValue,
     field_ty: &TypeRef,
@@ -165,6 +189,40 @@ pub(crate) fn format_typed_default(
                     format!("`{v}`")
                 }
             }
+        }
+        // A tuple- or struct-variant default carries its own values, so — unlike the bare
+        // `EnumVariant` case — there is always something concrete to document; each argument or
+        // field routes back through this same function, the way `ListLiteral`'s elements do. ~keep
+        DefaultValue::TupleVariant(variant, values) => {
+            let rendered: Vec<String> = values
+                .iter()
+                .map(|item| {
+                    format_typed_default(item, field_ty, lang, api, ffi_prefix, optional)
+                        .trim_matches('`')
+                        .to_string()
+                })
+                .collect();
+            format!(
+                "`{}({})`",
+                enum_variant_doc_label(variant, field_ty, lang, ffi_prefix),
+                rendered.join(", ")
+            )
+        }
+        DefaultValue::StructVariant(variant, fields) => {
+            let rendered: Vec<String> = fields
+                .iter()
+                .map(|(name, item)| {
+                    let value = format_typed_default(item, field_ty, lang, api, ffi_prefix, optional)
+                        .trim_matches('`')
+                        .to_string();
+                    format!("{name}: {value}")
+                })
+                .collect();
+            format!(
+                "`{} {{ {} }}`",
+                enum_variant_doc_label(variant, field_ty, lang, ffi_prefix),
+                rendered.join(", ")
+            )
         }
         // `Unresolved` documents the type-zero, same as `Empty`. That is the prose half of the
         // very drift this variant exists to expose — generated docs claiming `0ms` for a default
@@ -1947,6 +2005,56 @@ mod tests {
         assert_eq!(
             format_field_default(&field, Language::Php, &api, TEST_PREFIX),
             "`HeadingStyle::Atx`"
+        );
+    }
+
+    #[test]
+    fn test_format_default_tuple_variant_qualifies_variant_and_renders_arguments() {
+        let api = empty_api();
+        let field = make_field(
+            "kind",
+            TypeRef::Named("Kind".to_string()),
+            false,
+            Some(DefaultValue::TupleVariant(
+                "Scaled".to_string(),
+                vec![
+                    DefaultValue::IntLiteral(5),
+                    DefaultValue::StringLiteral("x".to_string()),
+                ],
+            )),
+        );
+        assert_eq!(
+            format_field_default(&field, Language::Rust, &api, TEST_PREFIX),
+            "`Kind::Scaled(5, \"x\")`"
+        );
+        assert_eq!(
+            format_field_default(&field, Language::Python, &api, TEST_PREFIX),
+            "`Kind.SCALED(5, \"x\")`"
+        );
+    }
+
+    #[test]
+    fn test_format_default_struct_variant_qualifies_variant_and_renders_named_fields() {
+        let api = empty_api();
+        let field = make_field(
+            "kind",
+            TypeRef::Named("Kind".to_string()),
+            false,
+            Some(DefaultValue::StructVariant(
+                "Curated".to_string(),
+                vec![
+                    ("label".to_string(), DefaultValue::StringLiteral("balanced".to_string())),
+                    ("weight".to_string(), DefaultValue::IntLiteral(3)),
+                ],
+            )),
+        );
+        assert_eq!(
+            format_field_default(&field, Language::Rust, &api, TEST_PREFIX),
+            "`Kind::Curated { label: \"balanced\", weight: 3 }`"
+        );
+        assert_eq!(
+            format_field_default(&field, Language::Python, &api, TEST_PREFIX),
+            "`Kind.CURATED { label: \"balanced\", weight: 3 }`"
         );
     }
 

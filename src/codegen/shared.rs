@@ -474,7 +474,14 @@ fn rust_scalar_default(item: &DefaultValue) -> Option<String> {
             })
         }
         DefaultValue::EnumVariant(v) => Some(v.clone()),
-        DefaultValue::ListLiteral(_)
+        // Neither variant's own payload is a spellable Rust path on its own (the enclosing enum
+        // type is not in reach here), and this position has no `typ` to recover the real value
+        // through `core_default_field_access` the way `format_default_value` does. Matches the
+        // rest of this all-or-nothing group: the caller falls back to `Default::default()` for
+        // the whole collection rather than a partial literal. ~keep
+        DefaultValue::TupleVariant(_, _)
+        | DefaultValue::StructVariant(_, _)
+        | DefaultValue::ListLiteral(_)
         | DefaultValue::Empty
         | DefaultValue::Unresolved(_)
         | DefaultValue::None
@@ -521,7 +528,7 @@ pub fn maps_to_js_value(mapped_ty: &str) -> bool {
 /// recovery in `codegen::config_gen::default_value_for_field_in_type` already emits. Unlike that
 /// recovery this needs no `Deserialize` impl and cannot panic at runtime — but it is only valid
 /// where the owning type really implements `Default`, hence the `has_default` guard. ~keep
-fn core_default_field_access(field: &FieldDef, typ: &TypeDef) -> Option<String> {
+pub(crate) fn core_default_field_access(field: &FieldDef, typ: &TypeDef) -> Option<String> {
     if !typ.has_default || typ.rust_path.is_empty() {
         return None;
     }
@@ -575,6 +582,17 @@ pub fn format_default_value(field: &FieldDef, typ: &TypeDef, mapped_ty: &str) ->
             Some(access) => convert_core_default_expr(field, mapped_ty, access),
             None => v.clone(),
         },
+        // Neither payload is a spellable Rust literal on its own — the enclosing enum's path is
+        // not part of either variant, only the bare variant/field names are — but the owning
+        // struct's own `Default` impl, when it has one, already computed the real value; reading
+        // it back off `<CoreType as Default>::default().field` (the same recovery `EnumVariant`
+        // uses above) asks the source crate instead of guessing at a spelling. ~keep
+        DefaultValue::TupleVariant(_, _) | DefaultValue::StructVariant(_, _) => {
+            match core_default_field_access(field, typ) {
+                Some(access) => convert_core_default_expr(field, mapped_ty, access),
+                None => "Default::default()".to_string(),
+            }
+        }
         DefaultValue::ListLiteral(items) => {
             let rendered: Option<Vec<String>> = items.iter().map(rust_scalar_default).collect();
             // A non-scalar element falls back to `Default::default()` rather than a partial

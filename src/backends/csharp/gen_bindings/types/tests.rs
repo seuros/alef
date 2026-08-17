@@ -688,6 +688,103 @@ fn record_type_field_without_any_default_still_emits_the_type_zero() {
     assert_eq!(csharp_initializer(&code, "Enabled"), "false");
 }
 
+/// Negative control for the `Unresolved` fix below: `Empty` really does mean "the type's own
+/// zero", so a field carrying it must still emit the type-zero initializer. Without this, a fix
+/// that suppressed every default (rather than only `Unresolved`) would pass every positive test
+/// while silently dropping a legitimate one.
+#[test]
+fn record_type_empty_typed_default_still_emits_the_type_zero() {
+    let mut retries = field("retries", TypeRef::Primitive(PrimitiveType::U32));
+    retries.typed_default = Some(DefaultValue::Empty);
+    let typ = record_type(vec![retries]);
+
+    let code = render_plain_record(&typ);
+
+    assert_eq!(csharp_initializer(&code, "Retries"), "0");
+    assert!(
+        !code.contains("public required"),
+        "an `Empty` default is exact and must not force `required`:\n{code}"
+    );
+}
+
+/// The bug this whole fix targets: `Unresolved` means alef could not read the real Rust default,
+/// so C# must never guess the type's zero underneath a doc comment quoting a value it did not
+/// actually use. `required` is the honest outcome, for every type shape — including `Vec`, which
+/// `should_emit_required` normally reports as not required.
+#[test]
+fn record_type_unresolved_typed_default_scalar_field_is_required_not_a_type_zero() {
+    let mut retries = field("retries", TypeRef::Primitive(PrimitiveType::U32));
+    retries.typed_default = Some(DefaultValue::Unresolved("Self::builder().build()".to_string()));
+    let mut tags = field("tags", TypeRef::Vec(Box::new(TypeRef::String)));
+    tags.typed_default = Some(DefaultValue::Unresolved("Self::builder().build()".to_string()));
+    let typ = record_type(vec![retries, tags]);
+
+    let code = render_plain_record(&typ);
+
+    assert!(
+        code.contains("public required uint Retries { get; init; }"),
+        "an unresolved scalar default must become required, not `= 0`:\n{code}"
+    );
+    assert!(
+        code.contains("public required List<string> Tags { get; init; }"),
+        "an unresolved default must become required even where `should_emit_required` is false for the type:\n{code}"
+    );
+    assert!(
+        !code.contains(" Retries { get; init; } = "),
+        "no initializer may follow a required property:\n{code}"
+    );
+    assert!(
+        !code.contains(" Tags { get; init; } = "),
+        "no initializer may follow a required property:\n{code}"
+    );
+}
+
+/// A field can carry both a `#[serde(default)]` marker (`field.default.is_some()`) and an
+/// unresolved `impl Default` (`typed_default: Unresolved`) at once — the marker records only that
+/// *some* default exists, not what it is. The dedicated `Unresolved` arm must win regardless, or
+/// the `field.default.is_some() || carries_renderable_default(..)` gate lets the fabricated-zero
+/// bug back in through the `field.default` side.
+#[test]
+fn record_type_unresolved_typed_default_wins_over_a_serde_default_marker() {
+    let mut retries = field("retries", TypeRef::Primitive(PrimitiveType::U32));
+    retries.default = Some("/* serde(default) */".to_string());
+    retries.typed_default = Some(DefaultValue::Unresolved("Self::builder().build()".to_string()));
+    let typ = record_type(vec![retries]);
+
+    let code = render_plain_record(&typ);
+
+    assert!(
+        code.contains("public required uint Retries { get; init; }"),
+        "a `#[serde(default)]` marker must not smuggle an unresolved default into a type-zero:\n{code}"
+    );
+}
+
+/// Mirrors `record_type_nested_record_with_a_required_member_falls_back_to_a_nullable_property`:
+/// a nested record whose only field carries an unresolved default must itself be reported
+/// not-default-constructible, or the outer field emits `new ContentConfig()` against a type that
+/// (post-fix) declares a `required` member — `CS9035` in the consumer's build.
+#[test]
+fn record_type_nested_record_with_an_unresolved_default_member_falls_back_to_a_nullable_property() {
+    let mut name = field("name", TypeRef::String);
+    name.typed_default = Some(DefaultValue::Unresolved("Self::builder().build()".to_string()));
+    let nested = named_record_type("ContentConfig", vec![name]);
+
+    let mut content = field("content", TypeRef::Named("ContentConfig".to_string()));
+    content.default = Some("/* serde(default) */".to_string());
+    let typ = record_type(vec![content]);
+
+    let nested_code = render_record_with_types(&nested, std::slice::from_ref(&nested));
+    assert!(
+        nested_code.contains("public required string Name { get; init; }"),
+        "the fixture must actually declare a required member:\n{nested_code}"
+    );
+
+    let code = render_record_with_types(&typ, std::slice::from_ref(&nested));
+
+    assert_eq!(csharp_initializer(&code, "Content"), "null");
+    assert_eq!(csharp_property_type(&code, "Content"), "ContentConfig?");
+}
+
 /// Regression: an opaque instance method returning bytes used to free the native buffer inline,
 /// right after `Marshal.Copy`, with no `try`/`finally` around it at all — an exception thrown by
 /// `Marshal.Copy` (or by `rc != 0`, before the buffer even existed) skipped the free entirely,

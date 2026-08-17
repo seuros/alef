@@ -2,7 +2,7 @@ use crate::backends::java::type_map::{java_boxed_type, java_type};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{JavaBuilderMode, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
-use crate::core::ir::{MethodDef, TypeDef, TypeRef};
+use crate::core::ir::{DefaultValue, MethodDef, TypeDef, TypeRef};
 use ahash::AHashSet;
 
 use super::builders::{gen_builder_nested_class, should_emit_builder};
@@ -43,6 +43,20 @@ pub(crate) fn gen_record_type(
         // Non-optional fields with #[serde(default)] must use boxed types in the record
         let has_serde_default = is_serde_default_marker(f.default.as_deref());
 
+        // alef could not read the real value out of `impl Default`. `java_literal_default`
+        // correctly refuses to restore a guessed literal for this in the compact constructor
+        // below, but that guarantee only holds if the component is boxed (nullable) too —
+        // otherwise the unboxed primitive's own implicit zero fabricates the exact value the
+        // restore logic was written to avoid. ~keep
+        // `TupleVariant`/`StructVariant` are resolved values (alef read them), not `Unresolved`,
+        // but this backend has no per-argument Java expression for "construct enum variant X
+        // with these field values" either — grouping them here keeps a resolved-but-unrenderable
+        // default from falling through to the unboxed primitive's own implicit zero. ~keep
+        let is_unresolved_default = matches!(
+            &f.typed_default,
+            Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..))
+        );
+
         let resolved_ty = resolve_field_type(&f.ty, visible_type_names);
 
         let f_optional_no_wrapper = f.optional && !matches!(resolved_ty, TypeRef::Optional(_));
@@ -58,10 +72,12 @@ pub(crate) fn gen_record_type(
             java_boxed_type(&resolved_ty).to_string()
         } else if has_serde_default
             || matches!(resolved_ty, TypeRef::Duration)
+            || is_unresolved_default
             || boxes_to_carry_literal_default(&f.ty, f.typed_default.as_ref())
         {
-            // Non-optional fields with #[serde(default)], Duration, or a literal default
-            // use boxed types so the compact constructor can tell "unset" from a real value
+            // Non-optional fields with #[serde(default)], Duration, an unresolved default, or a
+            // literal default use boxed types so the compact constructor can tell "unset" from
+            // a real value
             java_boxed_type(&resolved_ty).to_string()
         } else {
             java_type(&resolved_ty).to_string()
@@ -87,6 +103,7 @@ pub(crate) fn gen_record_type(
         let has_nullable = f.optional
             || has_serde_default
             || matches!(resolved_ty, TypeRef::Duration)
+            || is_unresolved_default
             || boxes_to_carry_literal_default(&f.ty, f.typed_default.as_ref());
 
         let mut decl = String::new();

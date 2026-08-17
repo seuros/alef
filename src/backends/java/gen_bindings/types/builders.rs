@@ -105,6 +105,21 @@ pub(super) fn gen_builder_nested_class(
         // Similarly, non-optional fields with #[serde(default)] use boxed types so that
         let has_serde_default = is_serde_default_marker(field.default.as_deref());
 
+        // alef could not read the real value out of `impl Default`: no Java literal can restore
+        // it, so this field must box (to carry `null` as "not set") and never fall through to
+        // the type-zero table below — a zero there would ship a value the source never
+        // specified, underneath a doc comment quoting the real (unreadable) Rust default. ~keep
+        // `TupleVariant`/`StructVariant` are resolved values (alef read them), not `Unresolved`,
+        // but this backend has no per-argument Java expression for "construct enum variant X
+        // with these field values" either — the type-zero table below has no arm for them, and
+        // without this guard they would fall to its `_ => "0"` catch-all exactly like
+        // `Unresolved` used to. Grouping them here is what keeps that incidental safety net from
+        // becoming load-bearing. ~keep
+        let is_unresolved_default = matches!(
+            &field.typed_default,
+            Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..))
+        );
+
         let resolved_field_ty = resolve_field_type(&field.ty, visible_type_names);
 
         let field_is_optional_in_binding = field.optional && !matches!(resolved_field_ty, TypeRef::Optional(_));
@@ -121,9 +136,12 @@ pub(super) fn gen_builder_nested_class(
             java_boxed_type(&resolved_field_ty).to_string()
         } else if matches!(resolved_field_ty, TypeRef::Duration) {
             java_boxed_type(&resolved_field_ty).to_string()
-        } else if has_serde_default || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref()) {
-            // Non-optional fields with #[serde(default)] or a literal default use boxed types
-            // so null can represent "not set"
+        } else if has_serde_default
+            || is_unresolved_default
+            || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref())
+        {
+            // Non-optional fields with #[serde(default)], an unresolved default, or a literal
+            // default use boxed types so null can represent "not set"
             java_boxed_type(&resolved_field_ty).to_string()
         } else {
             java_type(&resolved_field_ty).to_string()
@@ -134,6 +152,11 @@ pub(super) fn gen_builder_nested_class(
         } else if is_flattened_json {
             "new java.util.HashMap<>()".to_string()
         } else if field_is_optional_in_binding {
+            "null".to_string()
+        } else if !field.optional && is_unresolved_default {
+            // Always `null`, regardless of `field.default`/type kind — never consult the
+            // enum-default lookup or the type-zero table below, both of which would fabricate a
+            // value alef never actually read. ~keep
             "null".to_string()
         } else if field.optional {
             // when a field carries #[serde(default)] — they must NOT be emitted as a
@@ -237,6 +260,7 @@ pub(super) fn gen_builder_nested_class(
         let needs_nullable_annotation = !is_visitor_field
             && (field_is_optional_in_binding
                 || matches!(resolved_field_ty, TypeRef::Duration)
+                || is_unresolved_default
                 || (has_serde_default && !matches!(resolved_field_ty, TypeRef::Optional(_))));
 
         body.push_str("        ");
@@ -296,6 +320,16 @@ pub(super) fn gen_builder_nested_class(
         let is_visitor_field = visitor_trait_name.is_some();
         let is_flattened_json = field.serde_flatten && matches!(&field.ty, TypeRef::Json);
         let has_serde_default = is_serde_default_marker(field.default.as_deref());
+        // `TupleVariant`/`StructVariant` are resolved values (alef read them), not `Unresolved`,
+        // but this backend has no per-argument Java expression for "construct enum variant X
+        // with these field values" either — the type-zero table below has no arm for them, and
+        // without this guard they would fall to its `_ => "0"` catch-all exactly like
+        // `Unresolved` used to. Grouping them here is what keeps that incidental safety net from
+        // becoming load-bearing. ~keep
+        let is_unresolved_default = matches!(
+            &field.typed_default,
+            Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..))
+        );
 
         let resolved_field_ty = resolve_field_type(&field.ty, visible_type_names);
 
@@ -307,10 +341,11 @@ pub(super) fn gen_builder_nested_class(
             java_boxed_type(&resolved_field_ty).to_string()
         } else if has_serde_default
             || matches!(resolved_field_ty, TypeRef::Duration)
+            || is_unresolved_default
             || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref())
         {
-            // Non-optional fields with #[serde(default)], Duration, or a literal default
-            // must box the parameter type
+            // Non-optional fields with #[serde(default)], Duration, an unresolved default, or a
+            // literal default must box the parameter type
             java_boxed_type(&resolved_field_ty).to_string()
         } else {
             java_type(&resolved_field_ty).to_string()
@@ -355,6 +390,7 @@ pub(super) fn gen_builder_nested_class(
         let needs_nullable_on_param = (field.optional
             || has_serde_default
             || matches!(field.ty, TypeRef::Duration)
+            || is_unresolved_default
             || boxes_to_carry_literal_default(&field.ty, field.typed_default.as_ref()))
             && !is_visitor_field;
         if needs_nullable_on_param {

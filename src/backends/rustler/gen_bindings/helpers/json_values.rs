@@ -263,7 +263,18 @@ pub(in crate::backends::rustler::gen_bindings) fn elixir_field_default(
                     None => elixir_zero_value(ty, enum_defaults),
                 }
             }
-            DefaultValue::Empty | DefaultValue::Unresolved(_) => elixir_zero_value(ty, enum_defaults),
+            DefaultValue::Empty => elixir_zero_value(ty, enum_defaults),
+            // `Unresolved`: alef could not read the real default out of `impl Default`.
+            // `TupleVariant`/`StructVariant`: alef read the value, but this renderer has no
+            // Elixir expression for "construct enum variant X with these field values" the way
+            // it does for a bare `EnumVariant`. Falling through to `elixir_zero_value` (as this
+            // used to, for `Unresolved`) would ship the *type's* zero underneath a doc comment
+            // quoting the real (unrendered) Rust default — a value the source never actually
+            // specified. `nil` is the same "a default exists, this renderer cannot spell it"
+            // signal already used for `FunctionCall`/`PublicFunctionCall` below. ~keep
+            DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..) => {
+                "nil".to_string()
+            }
             DefaultValue::None => "nil".to_string(),
             DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => "nil".to_string(),
         };
@@ -288,6 +299,8 @@ fn elixir_scalar_default(item: &crate::core::ir::DefaultValue) -> Option<String>
         DefaultValue::ListLiteral(_)
         | DefaultValue::Empty
         | DefaultValue::Unresolved(_)
+        | DefaultValue::TupleVariant(..)
+        | DefaultValue::StructVariant(..)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,

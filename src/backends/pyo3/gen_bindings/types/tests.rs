@@ -1,6 +1,6 @@
-use super::{EmitContext, python_field_type, type_has_from_json};
-use crate::core::ir::{ApiSurface, FieldDef, PrimitiveType, TypeDef, TypeRef};
-use ahash::AHashSet;
+use super::{EmitContext, python_field_type, type_has_from_json, typed_default_to_python};
+use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
+use ahash::{AHashMap, AHashSet};
 
 /// Build the three name-sets `python_field_type` consults: plain enums, data enums, and the
 /// subset of data enums that also accept a bare string tag (those with a unit variant).
@@ -306,4 +306,74 @@ fn type_has_from_json_false_for_an_opaque_type() {
     };
 
     assert!(!type_has_from_json(&typ, &api, true));
+}
+
+/// The bug this fix targets: alef could not read the real default out of `impl Default`
+/// (`Unresolved`), and this renderer used to fall through to the same branch as `Empty` and
+/// spell the *type's* zero underneath a doc comment quoting the real (unreadable) Rust default —
+/// a value the source never actually specified. `None` is the only honest rendering, and the
+/// dataclass field emitter (`gen_options_py`) already widens the type hint to `T | None`
+/// whenever the default string is exactly `"None"`, so this reuses that mechanism rather than
+/// guessing a type-specific zero.
+#[test]
+fn unresolved_default_renders_as_none_not_a_type_zero() {
+    let enum_defaults: AHashMap<String, String> = AHashMap::default();
+    let data_enum_names: AHashSet<&str> = AHashSet::default();
+    let unresolved = DefaultValue::Unresolved("Self::builder().build()".to_string());
+
+    for ty in [
+        TypeRef::Primitive(PrimitiveType::U32),
+        TypeRef::Primitive(PrimitiveType::Bool),
+        TypeRef::Primitive(PrimitiveType::F64),
+        TypeRef::String,
+        TypeRef::Vec(Box::new(TypeRef::String)),
+        TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+    ] {
+        let rendered = typed_default_to_python(&unresolved, &ty, &enum_defaults, &data_enum_names);
+        assert_eq!(
+            rendered, "None",
+            "an unresolved default must render as `None` for {ty:?}, not a fabricated zero, got `{rendered}`"
+        );
+    }
+}
+
+/// `Empty` on a `Named` enum field legitimately consults `enum_defaults` to name the type's own
+/// `#[default]` variant — but `Unresolved` must never do that lookup, since alef does not
+/// actually know the default is that variant. Sharing the `Empty` arm let this guess leak through
+/// even though the type happened to be an enum.
+#[test]
+fn unresolved_default_on_a_named_enum_does_not_guess_the_default_variant() {
+    let mut enum_defaults: AHashMap<String, String> = AHashMap::default();
+    enum_defaults.insert("Mode".to_string(), "Fast".to_string());
+    let data_enum_names: AHashSet<&str> = AHashSet::default();
+    let ty = TypeRef::Named("Mode".to_string());
+    let unresolved = DefaultValue::Unresolved("Self::builder().build()".to_string());
+
+    let rendered = typed_default_to_python(&unresolved, &ty, &enum_defaults, &data_enum_names);
+
+    assert_eq!(
+        rendered, "None",
+        "an unresolved default must not guess the enum's default variant, got `{rendered}`"
+    );
+}
+
+/// Negative control: `Empty` really does mean "the type's own zero", so it must still render the
+/// type-zero table this same function used to share with `Unresolved`. Without this, a fix that
+/// suppressed every default (rather than only `Unresolved`) would pass the positive tests above
+/// while silently dropping a legitimate one.
+#[test]
+fn empty_default_still_renders_the_type_zero() {
+    let enum_defaults: AHashMap<String, String> = AHashMap::default();
+    let data_enum_names: AHashSet<&str> = AHashSet::default();
+
+    let cases: [(TypeRef, &str); 4] = [
+        (TypeRef::Primitive(PrimitiveType::U32), "0"),
+        (TypeRef::Primitive(PrimitiveType::Bool), "False"),
+        (TypeRef::String, "\"\""),
+        (TypeRef::Vec(Box::new(TypeRef::String)), "field(default_factory=list)"),
+    ];
+    for (ty, expected) in cases {
+        let rendered = typed_default_to_python(&DefaultValue::Empty, &ty, &enum_defaults, &data_enum_names);
+        assert_eq!(rendered, expected, "`Empty` must still render the type zero for {ty:?}");
+    }
 }

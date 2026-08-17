@@ -38,6 +38,11 @@ pub(in crate::backends::go::gen_bindings) fn is_tuple_field(field: &FieldDef) ->
 /// - `FloatLiteral(f)` where f != 0.0 — Rust default is f, Go zero is 0.0
 /// - `StringLiteral(s)` where !s.is_empty() — Rust default is s, Go zero is ""
 /// - `EnumVariant(_)` — Rust default is a specific variant, Go zero is ""
+/// - `Unresolved(_)` — alef could not read the real default, so it cannot be known to agree
+///   with the Go zero; assume it does not, the same way `Duration` always does
+/// - `TupleVariant(_, _)` / `StructVariant(_, _)` — a resolved enum-variant default this
+///   renderer has no per-argument Go expression for, so it is unrenderable exactly like
+///   `Unresolved` even though alef did read the value
 ///
 /// A required field (fails the wire-optional check above) still needs pointer+omitempty when
 /// its type is itself a plain data struct — i.e. `field.ty` is `TypeRef::Named(name)` and
@@ -71,7 +76,27 @@ pub(crate) fn needs_omitempty_pointer(
         Some(DefaultValue::FloatLiteral(f)) if *f != 0.0 => true,
         Some(DefaultValue::StringLiteral(s)) if !s.is_empty() => true,
         Some(DefaultValue::EnumVariant(_)) => true,
-        _ => false,
+        // `Unresolved`: alef could not read the real default out of `impl Default`, so there is
+        // no way to know it agrees with the Go zero — assume it does not, the same way `Duration`
+        // always does above. `TupleVariant`/`StructVariant`: alef read the value, but this
+        // renderer has no Go expression for "construct enum variant X with these field values"
+        // the way it does for a bare `EnumVariant` (which is unconditionally `true` just above).
+        // Leaving either at `false` here reaches `default_value_for_field`'s type-zero table,
+        // which then gets marshaled onto the wire as though the caller had chosen it — the exact
+        // silent-wrong-data defect this predicate exists to prevent. ~keep
+        Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..)) => true,
+        Some(
+            DefaultValue::BoolLiteral(false)
+            | DefaultValue::IntLiteral(_)
+            | DefaultValue::FloatLiteral(_)
+            | DefaultValue::StringLiteral(_)
+            | DefaultValue::ListLiteral(_)
+            | DefaultValue::Empty
+            | DefaultValue::None
+            | DefaultValue::FunctionCall(_)
+            | DefaultValue::PublicFunctionCall(_),
+        )
+        | None => false,
     }
 }
 

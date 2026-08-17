@@ -297,6 +297,8 @@ fn carries_value(value: &DefaultValue) -> bool {
             | DefaultValue::IntLiteral(_)
             | DefaultValue::FloatLiteral(_)
             | DefaultValue::EnumVariant(_)
+            | DefaultValue::TupleVariant(_, _)
+            | DefaultValue::StructVariant(_, _)
             | DefaultValue::ListLiteral(_)
     )
 }
@@ -548,6 +550,10 @@ fn admits_enum_variant(field_ty: Option<&TypeRef>) -> bool {
 /// - `Vec::new()`, `vec![]` → `Empty`
 /// - `SomeType::default()`, `Default::default()` → `Empty`
 /// - `SomeEnum::Variant`, where the field's declared type can hold one → `EnumVariant("Variant")`
+/// - `SomeEnum::Variant(a, b)`, an upper-case-callee call with foldable arguments →
+///   `TupleVariant("Variant", [a, b])`
+/// - `SomeEnum::Variant { a: .., b: .. }`, a struct expression with foldable fields →
+///   `StructVariant("Variant", [(a, ..), (b, ..)])`
 /// - `CONST_NAME.to_string()` / `.to_owned()` / `.into()`, or a bare `CONST_NAME`,
 ///   where `CONST_NAME` resolves via `scope.literal_consts` → the constant's value
 /// - `Self::CONST_NAME` / `Type::CONST_NAME`, where the associated literal const is declared in
@@ -746,11 +752,59 @@ fn expr_to_default_value(expr: &syn::Expr, scope: &EvalScope<'_>, field_ty: Opti
                     return DefaultValue::Empty;
                 }
 
+                // A tuple-variant or tuple-struct constructor call whose arguments each fold
+                // independently (`Mode::Custom(5)`, `Weight(1)`). Gated on an upper-case callee
+                // for the same reason `const_literal_value` gates its tuple-struct fold: a
+                // lower-case callee is a function by Rust convention, and reading through it
+                // would be interpretation, not reading. All-or-nothing like `ListLiteral`: one
+                // unfoldable argument leaves the whole call unreadable rather than a
+                // partially-known payload. ~keep
+                if !call.args.is_empty()
+                    && let Some(variant) = segments.last()
+                    && variant.starts_with(|c: char| c.is_ascii_uppercase())
+                {
+                    let mut values = Vec::with_capacity(call.args.len());
+                    for argument in &call.args {
+                        let value = expr_to_default_value(argument, scope, None);
+                        if !carries_value(&value) {
+                            return unreadable(expr);
+                        }
+                        values.push(value);
+                    }
+                    return DefaultValue::TupleVariant(variant.clone(), values);
+                }
+
                 if call.args.is_empty() {
                     return DefaultValue::FunctionCall(segments.join("::"));
                 }
             }
             unreadable(expr)
+        }
+
+        // A struct-variant enum default (`Kind::Curated { label: "x".to_string() }`) or a plain
+        // nested struct-literal default, each named field folded independently. Same
+        // all-or-nothing rule as `TupleVariant`/`ListLiteral`: one unfoldable field, or a `..`
+        // base that could carry fields this pass never saw, leaves the whole expression
+        // unreadable rather than a partially-known payload. ~keep
+        syn::Expr::Struct(struct_expr) => {
+            if struct_expr.rest.is_some() {
+                return unreadable(expr);
+            }
+            let Some(variant) = struct_expr.path.segments.last().map(|s| s.ident.to_string()) else {
+                return unreadable(expr);
+            };
+            let mut fields = Vec::with_capacity(struct_expr.fields.len());
+            for field_value in &struct_expr.fields {
+                let Some(name) = field_value.member_named() else {
+                    return unreadable(expr);
+                };
+                let value = expr_to_default_value(&field_value.expr, scope, None);
+                if !carries_value(&value) {
+                    return unreadable(expr);
+                }
+                fields.push((name.to_string(), value));
+            }
+            DefaultValue::StructVariant(variant, fields)
         }
 
         syn::Expr::Path(path) => {
@@ -1955,6 +2009,182 @@ mod tests {
                 .or(consts.get("LlmConfig::NOT_A_CONSTRUCTOR")),
             None,
             "trait-impl associated consts are not inherent consts of the type"
+        );
+    }
+
+    /// The reported defect, reduced with synthetic names. A tagged enum used as a field default
+    /// via its struct variant — the ordinary way to spell "the default is this preset" — must
+    /// fold into its own field values rather than leaving the whole field `Unresolved`.
+    #[test]
+    fn a_struct_variant_default_folds_with_its_field_values() {
+        let resolved = defaults_for_typed(
+            r#"
+                pub struct Cfg { pub kind: Kind }
+
+                impl Default for Cfg {
+                    fn default() -> Self {
+                        Self { kind: Kind::Curated { label: "balanced".to_string(), weight: 3 } }
+                    }
+                }
+            "#,
+            "Cfg",
+            &[("kind", TypeRef::Named("Kind".to_string()))],
+        );
+
+        assert_eq!(
+            resolved,
+            vec![(
+                "kind".to_string(),
+                DefaultValue::StructVariant(
+                    "Curated".to_string(),
+                    vec![
+                        ("label".to_string(), DefaultValue::StringLiteral("balanced".to_string())),
+                        ("weight".to_string(), DefaultValue::IntLiteral(3)),
+                    ],
+                ),
+            )],
+            "a struct-variant enum default must fold into its own field values, not stay Unresolved"
+        );
+    }
+
+    /// A tuple-variant enum default folds the same way, keyed by argument position rather than
+    /// field name.
+    #[test]
+    fn a_tuple_variant_default_folds_with_its_argument_values() {
+        let resolved = defaults_for_typed(
+            r#"
+                pub struct Cfg { pub kind: Kind }
+
+                impl Default for Cfg {
+                    fn default() -> Self {
+                        Self { kind: Kind::Scaled(5, "x".to_string()) }
+                    }
+                }
+            "#,
+            "Cfg",
+            &[("kind", TypeRef::Named("Kind".to_string()))],
+        );
+
+        assert_eq!(
+            resolved,
+            vec![(
+                "kind".to_string(),
+                DefaultValue::TupleVariant(
+                    "Scaled".to_string(),
+                    vec![
+                        DefaultValue::IntLiteral(5),
+                        DefaultValue::StringLiteral("x".to_string())
+                    ],
+                ),
+            )],
+            "a tuple-variant enum default must fold into its own argument values, not stay Unresolved"
+        );
+    }
+
+    /// The control: a bare unit-variant path already folded to `EnumVariant` before this change
+    /// (see `a_genuine_enum_variant_default_still_lowers_to_an_enum_variant`); this pins that a
+    /// unit variant reached as the sole field of a struct literal is unaffected by adding
+    /// `TupleVariant`/`StructVariant`.
+    #[test]
+    fn a_unit_variant_default_still_folds_to_a_bare_enum_variant() {
+        let resolved = defaults_for_typed(
+            r#"
+                pub struct Cfg { pub kind: Kind }
+
+                impl Default for Cfg {
+                    fn default() -> Self {
+                        Self { kind: Kind::Auto }
+                    }
+                }
+            "#,
+            "Cfg",
+            &[("kind", TypeRef::Named("Kind".to_string()))],
+        );
+
+        assert_eq!(
+            resolved,
+            vec![("kind".to_string(), DefaultValue::EnumVariant("Auto".to_string()))],
+            "a unit-variant default already folded before this change and must keep doing so"
+        );
+    }
+
+    /// The invariant this whole feature exists to protect: a struct variant with even one
+    /// unfoldable field must stay `Unresolved` as a whole, never `Empty` and never a
+    /// partially-known payload that silently drops the field it could not read.
+    #[test]
+    fn a_struct_variants_unfoldable_field_keeps_the_whole_default_unresolved_not_empty() {
+        let resolved = defaults_for_typed(
+            r#"
+                pub struct Cfg { pub kind: Kind }
+
+                impl Default for Cfg {
+                    fn default() -> Self {
+                        Self { kind: Kind::Curated { label: compute_label() } }
+                    }
+                }
+            "#,
+            "Cfg",
+            &[("kind", TypeRef::Named("Kind".to_string()))],
+        );
+
+        assert!(
+            matches!(resolved.as_slice(), [(_, DefaultValue::Unresolved(_))]),
+            "an unfoldable inner field must leave the whole variant default Unresolved; got {resolved:?}"
+        );
+        assert_ne!(
+            resolved[0].1,
+            DefaultValue::Empty,
+            "collapsing an unfoldable struct-variant field to `Empty` is the conflation this fixes"
+        );
+    }
+
+    /// The same invariant for the tuple-variant fold.
+    #[test]
+    fn a_tuple_variants_unfoldable_argument_keeps_the_whole_default_unresolved_not_empty() {
+        let resolved = defaults_for_typed(
+            r#"
+                pub struct Cfg { pub kind: Kind }
+
+                impl Default for Cfg {
+                    fn default() -> Self {
+                        Self { kind: Kind::Scaled(compute_scale()) }
+                    }
+                }
+            "#,
+            "Cfg",
+            &[("kind", TypeRef::Named("Kind".to_string()))],
+        );
+
+        assert!(
+            matches!(resolved.as_slice(), [(_, DefaultValue::Unresolved(_))]),
+            "an unfoldable argument must leave the whole variant default Unresolved; got {resolved:?}"
+        );
+    }
+
+    /// A `..base` spread inside a struct-variant literal could carry fields this pass never
+    /// saw (`Kind::Curated { label: "x".to_string(), ..Default::default() }` might have more
+    /// fields than `label` alone). Folding without accounting for `rest` would be a guess, so
+    /// the whole expression stays `Unresolved` instead.
+    #[test]
+    fn a_struct_variant_with_a_rest_base_stays_unresolved() {
+        let resolved = defaults_for_typed(
+            r#"
+                pub struct Cfg { pub kind: Kind }
+
+                impl Default for Cfg {
+                    fn default() -> Self {
+                        Self { kind: Kind::Curated { label: "x".to_string(), ..Default::default() } }
+                    }
+                }
+            "#,
+            "Cfg",
+            &[("kind", TypeRef::Named("Kind".to_string()))],
+        );
+
+        assert!(
+            matches!(resolved.as_slice(), [(_, DefaultValue::Unresolved(_))]),
+            "a `..base` spread can carry fields this pass never saw; folding without it would guess; \
+             got {resolved:?}"
         );
     }
 }

@@ -634,7 +634,7 @@ fn typed_default_to_python(
             // goes through `default_factory` — the same mechanism the empty case already uses. ~keep
             format!("field(default_factory=lambda: [{}])", rendered.join(", "))
         }
-        DefaultValue::Empty | DefaultValue::Unresolved(_) => {
+        DefaultValue::Empty => {
             if let TypeRef::Named(name) = ty
                 && data_enum_names.contains(name.as_str())
             {
@@ -660,6 +660,21 @@ fn typed_default_to_python(
                 _ => "None".to_string(),
             }
         }
+        // alef could not read the real default out of `impl Default`. Falling through to the
+        // `Empty` arm above (as this used to) renders the *type's* zero — or even guesses an
+        // enum's default variant — underneath a doc comment quoting the real (unreadable) Rust
+        // default: a value the source never actually specified. `None` is the only honest
+        // rendering with no fabrication; the call site already widens the type hint to `T | None`
+        // whenever the default is `"None"`, so this reuses that existing mechanism rather than
+        // guessing a type- or enum-specific zero. ~keep
+        DefaultValue::Unresolved(_) => "None".to_string(),
+        // alef DID read this value — it is a resolved tuple/struct-variant enum default, not
+        // `Unresolved` — but this renderer has no Python expression for "construct enum variant
+        // X with these field values" the way it does for a bare `EnumVariant`. `None` is still
+        // the honest answer: guessing at the variant's arguments (or falling back to the
+        // enum's `#[default]` variant, which may not even be this one) would render a value
+        // this field's real default may not hold. ~keep
+        DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..) => "None".to_string(),
         DefaultValue::None => "None".to_string(),
         DefaultValue::FunctionCall(_) | DefaultValue::PublicFunctionCall(_) => "None".to_string(),
     }

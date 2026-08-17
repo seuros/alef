@@ -162,6 +162,32 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 "property_with_default.jinja",
                 minijinja::context! { field_type, cs_name, default_val => "null" },
             ));
+        } else if matches!(
+            &field.typed_default,
+            Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..))
+        ) {
+            // `Unresolved`: alef could not read the real default out of `impl Default`.
+            // `TupleVariant`/`StructVariant`: alef read the value, but this renderer has no C#
+            // expression for "construct enum variant X with these field values" — neither
+            // payload's arguments have a per-arg literal path here, unlike the bare
+            // `EnumVariant` case below. Either way, emitting this type's zero (or a partial
+            // guess at the variant's arguments) underneath a doc comment quoting the real value
+            // would ship data the source never specified — silent wrong data. `required` is
+            // always valid for any C# type, so it is unconditionally the honest answer here,
+            // independent of `field.default`/`carries_renderable_default` and of the field's
+            // type kind. ~keep
+            let field_type = if is_complex {
+                "JsonElement".to_string()
+            } else {
+                csharp_type_for_dto_field(&field.ty).to_string()
+            };
+            if matches!(&field.ty, TypeRef::Duration) {
+                out.push_str("    [JsonConverter(typeof(DurationMillisJsonConverter))]\n");
+            }
+            out.push_str(&render(
+                "property_required_init.jinja",
+                minijinja::context! { field_type, cs_name },
+            ));
         } else if field.default.is_some() || carries_renderable_default(field, is_complex) {
             let base_type = if is_complex {
                 "JsonElement".to_string()
@@ -232,7 +258,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                         None => "[]".to_string(),
                     }
                 }
-                Some(DefaultValue::Empty | DefaultValue::Unresolved(_)) | None => match &field.ty {
+                Some(DefaultValue::Empty) | None => match &field.ty {
                     TypeRef::Vec(_) if field.sanitized => "null".to_string(),
                     TypeRef::Named(name) => {
                         let pascal = csharp_type_name(name);
@@ -250,6 +276,16 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                     }
                     other => csharp_type_zero_initializer(other).unwrap_or_else(|| "null".to_string()),
                 },
+                // The `matches!` arm above routes `Unresolved`/`TupleVariant`/`StructVariant` to
+                // `required` before this match ever runs, so these arms are unreachable — kept
+                // explicit rather than folded into `Empty` so a future gate change fails loudly
+                // instead of silently reintroducing the fabricated-zero bug. ~keep
+                Some(DefaultValue::Unresolved(_)) => {
+                    unreachable!("Unresolved typed_default is handled by the branch above")
+                }
+                Some(DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..)) => {
+                    unreachable!("TupleVariant/StructVariant typed_default is handled by the branch above")
+                }
             };
 
             let field_type = if (default_val == "null" && !base_type.ends_with('?')) || is_complex {
@@ -785,6 +821,16 @@ fn field_becomes_required_property(field: &crate::core::ir::FieldDef, is_complex
     if field.optional || (field.serde_flatten && matches!(&field.ty, TypeRef::Json)) {
         return false;
     }
+    // Mirrors the dedicated `Unresolved`/`TupleVariant`/`StructVariant` arm in
+    // `gen_record_type`'s field loop: none of the three renders, so all three always render
+    // `required`, regardless of `field.default`/type kind, so a nested record that has one is
+    // never reported default-constructible. ~keep
+    if matches!(
+        &field.typed_default,
+        Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..))
+    ) {
+        return true;
+    }
     if field.default.is_some() || carries_renderable_default(field, is_complex) {
         return false;
     }
@@ -815,7 +861,23 @@ fn field_becomes_required_property(field: &crate::core::ir::FieldDef, is_complex
 fn carries_renderable_default(field: &crate::core::ir::FieldDef, is_complex: bool) -> bool {
     match &field.typed_default {
         Some(DefaultValue::Empty) => is_complex || !matches!(&field.ty, TypeRef::Named(_) | TypeRef::Duration),
-        Some(_) => true,
+        // Neither carries a value this renderer can spell: `Unresolved` because alef could not
+        // read it, `TupleVariant`/`StructVariant` because this renderer has no C# expression for
+        // "construct enum variant X with these arguments". Both callers must treat this exactly
+        // like "no default" rather than opting into an initializer branch that would fabricate
+        // the type's zero (or a partial guess at the variant's arguments). ~keep
+        Some(DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..)) => false,
+        Some(
+            DefaultValue::BoolLiteral(_)
+            | DefaultValue::StringLiteral(_)
+            | DefaultValue::IntLiteral(_)
+            | DefaultValue::FloatLiteral(_)
+            | DefaultValue::EnumVariant(_)
+            | DefaultValue::FunctionCall(_)
+            | DefaultValue::PublicFunctionCall(_)
+            | DefaultValue::ListLiteral(_)
+            | DefaultValue::None,
+        ) => true,
         None => false,
     }
 }
@@ -845,6 +907,8 @@ fn csharp_scalar_default(item: &DefaultValue) -> Option<String> {
         DefaultValue::ListLiteral(_)
         | DefaultValue::Empty
         | DefaultValue::Unresolved(_)
+        | DefaultValue::TupleVariant(..)
+        | DefaultValue::StructVariant(..)
         | DefaultValue::None
         | DefaultValue::FunctionCall(_)
         | DefaultValue::PublicFunctionCall(_) => None,
