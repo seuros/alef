@@ -1,5 +1,6 @@
 //! R e2e assertion rendering.
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::fmt::Write as FmtWrite;
@@ -187,7 +188,11 @@ pub(super) fn render_assertion(
             // ---- keywords / keywords_count ----
             // R ProcessingResult does not expose result_keywords; skip.
             "keywords" | "keywords_count" => {
-                let _ = writeln!(out, "  # skipped: field '{f}' not available on R ProcessingResult");
+                let _ = writeln!(
+                    out,
+                    "  # skipped: {}",
+                    FieldSkip::NotAvailableOnRProcessingResult.message(f)
+                );
                 return;
             }
             _ => {}
@@ -203,7 +208,7 @@ pub(super) fn render_assertion(
     {
         // Allow "result" field on simple-type returns
         if !(context.result_is_simple && f == "result") {
-            let _ = writeln!(out, "  # skipped: field '{f}' not available on result type");
+            let _ = writeln!(out, "  # skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
             return;
         }
     }
@@ -220,7 +225,8 @@ pub(super) fn render_assertion(
         {
             let _ = writeln!(
                 out,
-                "  # skipped: result_is_simple for field '{f}' not available on result type"
+                "  # skipped: {}",
+                FieldSkip::ResultIsSimpleForFieldNotAvailable.message(f)
             );
             return;
         }

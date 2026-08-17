@@ -1,6 +1,7 @@
 //! Gleam fixture test-case renderer.
 
 use crate::e2e::codegen::declared_error_value;
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{escape_gleam, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
@@ -212,7 +213,11 @@ pub(super) fn render_test_case(
             && let Some(f) = &assertion.field
             && !f.is_empty()
         {
-            let _ = writeln!(out, "  // skipped: field '{f}' not accessible on simple result type");
+            let _ = writeln!(
+                out,
+                "  // skipped: {}",
+                FieldSkip::NotAccessibleOnSimpleResultType.message(f)
+            );
             continue;
         }
         render_assertion(

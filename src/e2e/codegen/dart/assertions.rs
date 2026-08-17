@@ -1,3 +1,4 @@
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use heck::ToLowerCamelCase;
@@ -62,7 +63,11 @@ pub(super) fn render_assertion_dart(
         // only checks the first path component.
         let head = f.split("[].").next().unwrap_or(f);
         if !head.is_empty() && !field_resolver.is_valid_for_result(head) {
-            let _ = writeln!(out, "    // skipped: field '{f}' not available on dart result type");
+            let _ = writeln!(
+                out,
+                "    // skipped: {}",
+                FieldSkip::NotAvailableOnDartResultType.message(f)
+            );
             return;
         }
     }
@@ -78,7 +83,8 @@ pub(super) fn render_assertion_dart(
     {
         let _ = writeln!(
             out,
-            "    // skipped: field '{f}' crosses a tagged-union variant boundary (not expressible in Dart)"
+            "    // skipped: {}",
+            FieldSkip::CrossesTaggedUnionBoundaryInDart.message(f)
         );
         return;
     }

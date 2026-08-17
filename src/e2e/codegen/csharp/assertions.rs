@@ -1,5 +1,6 @@
 //! C# assertion rendering for generated e2e tests.
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::escape_csharp;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -269,7 +270,7 @@ pub(super) fn render_assertion(
             // ---- keywords / keywords_count ----
             // The generated C# result type does not expose this fixture alias; skip.
             "keywords" | "keywords_count" => {
-                let skipped_reason = format!("field '{f}' not available on the generated C# result type");
+                let skipped_reason = FieldSkip::NotAvailableOnGeneratedCsharpResultType.message(f);
                 let rendered = crate::e2e::template_env::render(
                     "csharp/assertion.jinja",
                     minijinja::context! {
@@ -288,7 +289,7 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let skipped_reason = format!("field '{f}' not available on result type");
+        let skipped_reason = FieldSkip::NotAvailableOnResultType.message(f);
         let rendered = crate::e2e::template_env::render(
             "csharp/assertion.jinja",
             minijinja::context! {

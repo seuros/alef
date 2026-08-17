@@ -1,4 +1,5 @@
 use crate::core::hash::{self, CommentStyle};
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{escape_shell, sanitize_filename, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
@@ -404,7 +405,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "  # skipped: field '{f}' not available on result type");
+        let _ = writeln!(out, "  # skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
         return;
     }
 

@@ -1,6 +1,7 @@
 //! C e2e assertion and accessor rendering helpers.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::escape_c;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
@@ -927,7 +928,11 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !_field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+        let _ = writeln!(
+            out,
+            "    // skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
 
@@ -946,7 +951,11 @@ pub(super) fn render_assertion(
     // If the field was marked with the "__skip__" sentinel (fields_c_types = "skip"),
     // the accessor was never emitted — skip the assertion silently.
     if primitive_locals.get(&field_expr).is_some_and(|t| t == "__skip__") {
-        let _ = writeln!(out, "    // skipped: field '{field_expr}' not available in C FFI");
+        let _ = writeln!(
+            out,
+            "    // skipped: {}",
+            FieldSkip::NotAvailableInCFfi.message(&field_expr)
+        );
         return;
     }
 

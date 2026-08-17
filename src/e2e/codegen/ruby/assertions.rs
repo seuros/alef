@@ -1,5 +1,6 @@
 //! Ruby assertion helpers.
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -68,7 +69,8 @@ pub(super) fn render_assertion(
             }
             _ => {
                 out.push_str(&format!(
-                    "    # skipped: field '{f}' not applicable for simple result type\n"
+                    "    # skipped: {}\n",
+                    FieldSkip::NotApplicableForSimpleResultType.message(f)
                 ));
                 return;
             }
@@ -81,7 +83,8 @@ pub(super) fn render_assertion(
         // FormatMetadata to JSON, so variants are unavailable in Ruby
         if f.contains("metadata.format.") && f.contains(".") {
             out.push_str(&format!(
-                "    # skipped: enum variant accessor '{f}' not available on Ruby (serialized to Hash)\n"
+                "    # skipped: {}\n",
+                FieldSkip::EnumVariantAccessorNotAvailableInRuby.message(f)
             ));
             return;
         }
@@ -89,7 +92,10 @@ pub(super) fn render_assertion(
         // For metadata.format (enum, serialized to Hash), skip since the serialization
         // format differs between languages and doesn't preserve Display formatting
         if f == "metadata.format" {
-            out.push_str("    # skipped: metadata.format enum field serialization differs in Ruby\n");
+            out.push_str(&format!(
+                "    # skipped: {}\n",
+                FieldSkip::EnumSerializationDiffersInRuby.message(f)
+            ));
             return;
         }
 
@@ -113,7 +119,8 @@ pub(super) fn render_assertion(
             }
             "chunks_have_heading_context" | "first_chunk_starts_with_heading" => {
                 out.push_str(&format!(
-                    "    # skipped: synthetic field '{f}' not available on Ruby Chunk binding\n"
+                    "    # skipped: {}\n",
+                    FieldSkip::SyntheticNotAvailableOnRubyChunkBinding.message(f)
                 ));
                 return;
             }
@@ -222,7 +229,8 @@ pub(super) fn render_assertion(
             // Ruby ProcessingResult does not expose result_keywords; skip.
             "keywords" | "keywords_count" => {
                 out.push_str(&format!(
-                    "    # skipped: field '{f}' not available on Ruby ProcessingResult\n"
+                    "    # skipped: {}\n",
+                    FieldSkip::NotAvailableOnRubyProcessingResult.message(f)
                 ));
                 return;
             }
@@ -235,7 +243,10 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        out.push_str(&format!("    # skipped: field '{f}' not available on result type\n"));
+        out.push_str(&format!(
+            "    # skipped: {}\n",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        ));
         return;
     }
 

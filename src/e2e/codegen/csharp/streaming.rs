@@ -1,6 +1,7 @@
 //! C# streaming e2e test method rendering.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::{Assertion, Fixture};
 use heck::{ToSnakeCase, ToUpperCamelCase};
@@ -423,7 +424,8 @@ fn emit_non_chat_stream_assertion(
     if !result_fields.iter().any(|f| field.starts_with(f)) {
         let _ = writeln!(
             out,
-            "        // skipped: streaming assertion on unsupported field '{field}'"
+            "        // skipped: {}",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
         );
         return;
     }
@@ -479,7 +481,8 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
     if matches!(kind, Kind::Unsupported) {
         let _ = writeln!(
             out,
-            "        // skipped: streaming assertion on unsupported field '{field}'"
+            "        // skipped: {}",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
         );
         return;
     }

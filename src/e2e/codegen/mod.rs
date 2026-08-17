@@ -26,6 +26,7 @@ pub mod csharp;
 pub mod dart;
 mod dart_visitors;
 pub mod elixir;
+pub(crate) mod field_skip;
 pub mod gleam;
 pub mod go;
 pub mod homebrew;
@@ -242,9 +243,12 @@ pub(crate) fn preserved_url_list(preserve: bool, value: &serde_json::Value) -> O
 /// field the availability oracle (`FieldResolver::is_valid_for_result`) rejects.
 ///
 /// ~keep Every backend's `render_assertion` downgrades a rejected field to a
-/// `// skipped: field '<name>' not available ...`-shaped comment and returns —
+/// `<comment-open> skipped: <`[`field_skip::FieldSkip`]`>` comment and returns —
 /// the generated test still compiles and still passes, because nothing asserted
-/// anything. That is the defect this module addresses: unset (or any value other
+/// anything. Each backend keeps its own reason prose; recognition is shared, so
+/// registering a new wording as a `FieldSkip` variant is what arms it here and no
+/// backend can emit a skip this gate cannot count. That is the defect this
+/// module addresses: unset (or any value other
 /// than `"1"`/`"true"`), [`fail_on_unavailable_field_markers`] is a pure no-op and
 /// every backend's generated output is byte-identical to before this file changed.
 /// Set, it turns the same skip comment into a generation-time panic naming the
@@ -294,32 +298,16 @@ pub(crate) fn unavailable_field_diagnostic(language: &str, fixture_id: &str, fie
     )
 }
 
-/// Pull the field name out of a single rendered line carrying one of this
-/// codebase's two "field unavailable" comment shapes:
-/// `field '<name>' not available ...` (the common case, every backend's
-/// `is_valid_for_result` skip branch) or `unsupported field '<name>'` (csharp's
-/// separate streaming skip path, `csharp/streaming.rs`). Returns `None` for any
-/// other line, including the unrelated "unsupported assertion type on synthetic
-/// field '<name>'" comments — a fixture using an assertion type a synthetic
-/// handler doesn't support is a different defect (bad assertion shape, not a
-/// missing field) and must not be conflated with this one.
+/// Pull the field name out of a single rendered line carrying any wording registered in
+/// [`field_skip::FieldSkip`].
+///
+/// ~keep This used to match two hand-written substring patterns, which recognised only the
+/// wordings this module happened to know about and silently ignored every backend that invented
+/// its own (dart/swift's tagged-union boundary, ruby's serialized-enum accessor, every
+/// `result_is_simple` branch, ...). Recognition now shares its per-variant shape table with the
+/// renderer, so a wording cannot be emitted without being counted.
 fn extract_unavailable_field_name(line: &str) -> Option<&str> {
-    if let Some((name, after_quote)) = extract_quoted_after(line, "field '")
-        && after_quote.contains("not available")
-    {
-        return Some(name);
-    }
-    extract_quoted_after(line, "unsupported field '").map(|(name, _)| name)
-}
-
-/// Find `marker` in `line`, then split the text after it at the closing `'`.
-/// Returns `(quoted_name, text_after_the_closing_quote)`, or `None` if `marker`
-/// is absent or its quote is never closed.
-fn extract_quoted_after<'a>(line: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
-    let start = line.find(marker)? + marker.len();
-    let rest = &line[start..];
-    let end = rest.find('\'')?;
-    Some((&rest[..end], &rest[end..]))
+    field_skip::FieldSkip::extract(line)
 }
 
 /// Env-independent core of the loud-failure path: scans every line of a
@@ -426,6 +414,62 @@ mod unavailable_field_marker_tests {
             "csharp",
             "stream_smoke",
         );
+    }
+
+    /// Coverage-loss regression: dart's traversal limit emits its own wording from
+    /// `dart/assertions.rs`, not `mod.rs`'s `not available` shape. Before the shared
+    /// [`super::field_skip::FieldSkip`] table it was emitted but never counted, so an armed run
+    /// passed while the field went unasserted.
+    #[test]
+    #[should_panic(expected = "[dart] fixture `union_smoke`: assertion references field `payload.tags`")]
+    fn armed_counts_the_dart_tagged_union_boundary_wording() {
+        let body = "    // skipped: field 'payload.tags' crosses a tagged-union variant boundary \
+                    (not expressible in Dart)\n";
+        fail_on_unavailable_field_markers_if(true, body, "dart", "union_smoke");
+    }
+
+    #[test]
+    #[should_panic(expected = "[swift] fixture `union_smoke`: assertion references field `payload.tags`")]
+    fn armed_counts_the_swift_tagged_union_boundary_wording() {
+        let body = "    // skipped: field 'payload.tags' crosses a tagged-union variant boundary \
+                    (not expressible in Swift)\n";
+        fail_on_unavailable_field_markers_if(true, body, "swift", "union_smoke");
+    }
+
+    /// ruby's wording names an "enum variant accessor", never the word `field`, so the old
+    /// `field '<name>'` pattern could not have matched it under any suffix.
+    #[test]
+    #[should_panic(expected = "[ruby] fixture `union_smoke`: assertion references field `metadata.format.excel`")]
+    fn armed_counts_the_ruby_serialized_enum_accessor_wording() {
+        let body = "    # skipped: enum variant accessor 'metadata.format.excel' not available on Ruby \
+                    (serialized to Hash)\n";
+        fail_on_unavailable_field_markers_if(true, body, "ruby", "union_smoke");
+    }
+
+    /// The `result_is_simple` branch of `templates/{java,php}/synthetic_assertion.jinja` says
+    /// `not on simple result type`, never `not available`.
+    #[test]
+    #[should_panic(expected = "[php] fixture `simple_smoke`: assertion references field `metadata.title`")]
+    fn armed_counts_the_result_is_simple_template_wording() {
+        let body = "        // skipped: result_is_simple, field 'metadata.title' not on simple result type\n";
+        fail_on_unavailable_field_markers_if(true, body, "php", "simple_smoke");
+    }
+
+    /// python/typescript/ruby's simple-result branch says `not applicable`, not `not available`.
+    #[test]
+    #[should_panic(expected = "[python] fixture `simple_smoke`: assertion references field `structure.headings`")]
+    fn armed_counts_the_not_applicable_for_simple_result_wording() {
+        let body = "    # skipped: field 'structure.headings' not applicable for simple result type\n";
+        fail_on_unavailable_field_markers_if(true, body, "python", "simple_smoke");
+    }
+
+    /// swift's binding-exclusion skip in `swift/test_method.rs` uses a third wording again.
+    #[test]
+    #[should_panic(expected = "[swift] fixture `excluded_smoke`: assertion references field `usage.tokens`")]
+    fn armed_counts_the_swift_binding_exclusion_wording() {
+        let body = "        // skipped: field 'usage.tokens' references a field or type excluded from \
+                    the Swift binding\n";
+        fail_on_unavailable_field_markers_if(true, body, "swift", "excluded_smoke");
     }
 
     #[test]

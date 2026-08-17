@@ -1,6 +1,7 @@
 //! C e2e streaming adapter test generation.
 
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig};
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::codegen::transform_json_keys_for_language;
 use crate::e2e::escape::escape_c;
 use crate::e2e::fixture::{Assertion, Fixture};
@@ -321,7 +322,8 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
     if matches!(kind, Kind::Unsupported) {
         let _ = writeln!(
             out,
-            "    /* skipped: streaming assertion on unsupported field '{field}' */"
+            "    /* skipped: {} */",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
         );
         return;
     }

@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
@@ -38,7 +39,11 @@ pub(super) fn render_assertion(
                 || f_lower == "output_format"
                 || f_lower == "extraction_method")
         {
-            let _ = writeln!(out, "    # skipped: field '{f}' not applicable for simple result type");
+            let _ = writeln!(
+                out,
+                "    # skipped: {}",
+                FieldSkip::NotApplicableForSimpleResultType.message(f)
+            );
             return;
         }
     }
@@ -55,7 +60,7 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "    # skipped: field '{f}' not available on result type");
+        let _ = writeln!(out, "    # skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
         return;
     }
 
@@ -235,7 +240,8 @@ fn render_synthetic_field(out: &mut String, assertion: &Assertion, result_var: &
         "keywords" | "keywords_count" => {
             let _ = writeln!(
                 out,
-                "    # skipped: field '{field}' not available on Python ProcessingResult"
+                "    # skipped: {}",
+                FieldSkip::NotAvailableOnPythonProcessingResult.message(field)
             );
             true
         }

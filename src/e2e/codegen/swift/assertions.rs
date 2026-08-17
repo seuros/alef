@@ -1,3 +1,4 @@
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::collections::{HashMap, HashSet};
@@ -119,7 +120,11 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
+        let _ = writeln!(
+            out,
+            "        // skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
 
@@ -137,7 +142,11 @@ pub(super) fn render_assertion(
         && !collection.is_empty()
         && !field_resolver.leaf_is_vec_via_swift_map(field_resolver.resolve(collection))
     {
-        let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
+        let _ = writeln!(
+            out,
+            "        // skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
 
@@ -151,7 +160,8 @@ pub(super) fn render_assertion(
     {
         let _ = writeln!(
             out,
-            "        // skipped: field '{f}' crosses a tagged-union variant boundary (not expressible in Swift)"
+            "        // skipped: {}",
+            FieldSkip::CrossesTaggedUnionBoundaryInSwift.message(f)
         );
         return;
     }

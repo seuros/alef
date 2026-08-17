@@ -1,3 +1,4 @@
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use heck::ToPascalCase;
@@ -271,7 +272,7 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "  // skipped: field '{f}' not available on result type");
+        let _ = writeln!(out, "  // skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
         return;
     }
 
@@ -297,7 +298,8 @@ pub(super) fn render_assertion(
         if has_index {
             let _ = writeln!(
                 out,
-                "  // skipped: array element field '{f}' not yet supported in Gleam e2e"
+                "  // skipped: {}",
+                FieldSkip::ArrayElementNotSupportedInGleam.message(f)
             );
             return;
         }

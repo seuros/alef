@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{ruby_regex_literal, ruby_string_literal, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
@@ -276,7 +277,8 @@ pub(super) fn emit_chat_stream_assertion(
 
     if matches!(kind, Kind::Unsupported) {
         out.push_str(&format!(
-            "    # skipped: streaming assertion on unsupported field '{field}'\n"
+            "    # skipped: {}\n",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
         ));
         return;
     }

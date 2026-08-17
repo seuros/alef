@@ -1,5 +1,6 @@
 //! Go assertion rendering.
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::go_string_literal;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -202,7 +203,11 @@ pub(super) fn render_assertion(
                 return;
             }
             "keywords" | "keywords_count" => {
-                let _ = writeln!(out, "\t// skipped: field '{f}' not available on Go ProcessingResult");
+                let _ = writeln!(
+                    out,
+                    "\t// skipped: {}",
+                    FieldSkip::NotAvailableOnGoProcessingResult.message(f)
+                );
                 return;
             }
             _ => {}
@@ -310,7 +315,7 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "\t// skipped: field '{f}' not available on result type");
+        let _ = writeln!(out, "\t// skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
         return;
     }
 

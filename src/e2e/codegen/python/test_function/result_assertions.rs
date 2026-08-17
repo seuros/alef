@@ -2,6 +2,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
@@ -98,7 +99,8 @@ pub(super) fn emit_result_and_assertions(
             if let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty()) {
                 let _ = writeln!(
                     streaming_assertions,
-                    "    # skipped: field '{f}' not available on streaming result type"
+                    "    # skipped: {}",
+                    FieldSkip::NotAvailableOnStreamingResultType.message(f)
                 );
             }
         }
@@ -155,7 +157,11 @@ fn emit_streaming_virtual_assertion(out: &mut String, assertion: &Assertion, fie
     use crate::e2e::codegen::streaming_assertions::StreamingFieldResolver;
 
     let Some(expr) = StreamingFieldResolver::accessor(field, "python", chunks_var) else {
-        let _ = writeln!(out, "    # skipped: streaming field '{field}': no python accessor");
+        let _ = writeln!(
+            out,
+            "    # skipped: {}",
+            FieldSkip::NoPythonStreamingAccessor.message(field)
+        );
         return;
     };
 

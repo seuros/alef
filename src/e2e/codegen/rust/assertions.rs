@@ -2,6 +2,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::escape_rust;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -385,14 +386,22 @@ pub fn render_assertion_with_streaming(
         && !f.is_empty()
     {
         if f.starts_with("error.") && !is_error_context {
-            let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+            let _ = writeln!(
+                out,
+                "    // skipped: {}",
+                FieldSkip::NotAvailableOnResultType.message(f)
+            );
             return;
         }
         // When result_is_simple the function returns a plain scalar/string type —
         // `field_access` uses `effective_result_var` directly regardless of the
         // field name, so the skip guard must not fire for these calls.
         if !f.starts_with("error.") && !result_is_simple && !field_resolver.is_valid_for_result(f) {
-            let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+            let _ = writeln!(
+                out,
+                "    // skipped: {}",
+                FieldSkip::NotAvailableOnResultType.message(f)
+            );
             return;
         }
     }

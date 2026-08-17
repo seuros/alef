@@ -1,4 +1,5 @@
 use super::*;
+use crate::e2e::codegen::field_skip::FieldSkip;
 
 /// Variant names of `FormatMetadata` (snake_case, from `#[serde(rename_all = "snake_case")]`).
 ///
@@ -146,7 +147,8 @@ fn render_wildcard_json_assertion(
     if element_sub_path.contains("[]") {
         let _ = writeln!(
             out,
-            "    // skipped: nested array-wildcard field '{field_name}' not supported in zig"
+            "    // skipped: {}",
+            FieldSkip::NestedArrayWildcardNotSupportedInZig.message(field_name)
         );
         return;
     }
@@ -403,7 +405,8 @@ pub(super) fn render_json_assertion(
             "keywords" | "keywords_count" => {
                 let _ = writeln!(
                     out,
-                    "    // skipped: field '{f}' not available on the JSON-struct result"
+                    "    // skipped: {}",
+                    FieldSkip::NotAvailableOnJsonStructResult.message(f)
                 );
                 return;
             }
@@ -416,7 +419,11 @@ pub(super) fn render_json_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "    // skipped: field '{f}' not available on result type");
+        let _ = writeln!(
+            out,
+            "    // skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
     // error/not_error are handled at the call level, not assertion level.
@@ -760,7 +767,11 @@ pub(super) fn render_assertion(
             && f_lower != "content"
             && (f_lower.starts_with("metadata") || f_lower.starts_with("document") || f_lower.starts_with("structure"))
         {
-            let _ = writeln!(out, "    // skipped: field '{}' not available when result_is_simple", f);
+            let _ = writeln!(
+                out,
+                "    // skipped: {}",
+                FieldSkip::NotAvailableWhenResultIsSimple.message(f)
+            );
             return;
         }
     }
@@ -819,7 +830,11 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "    // skipped: field '{{f}}' not available on result type");
+        let _ = writeln!(
+            out,
+            "    // skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
 

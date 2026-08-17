@@ -3,6 +3,7 @@
 use heck::ToLowerCamelCase;
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::escape_kotlin;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -184,7 +185,11 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "        // skipped: field '{f}' not available on result type");
+        let _ = writeln!(
+            out,
+            "        // skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
 

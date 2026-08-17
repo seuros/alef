@@ -1,5 +1,6 @@
 use crate::codegen::keywords::swift_ident;
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::{FieldResolver, SwiftFirstClassMap};
 use crate::e2e::fixture::Fixture;
@@ -494,7 +495,8 @@ pub(super) fn render_test_method(
             ) {
                 let _ = writeln!(
                     body_buffer,
-                    "        // skipped: field '{f}' references a field or type excluded from the Swift binding"
+                    "        // skipped: {}",
+                    FieldSkip::ExcludedFromSwiftBinding.message(f)
                 );
                 continue;
             }

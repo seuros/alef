@@ -1,5 +1,6 @@
 //! Assertion rendering for TypeScript e2e tests.
 
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
@@ -71,7 +72,8 @@ pub(super) fn render_assertion(
             }
             _ => {
                 out.push_str(&format!(
-                    "    // skipped: field '{f}' not applicable for simple result type\n"
+                    "    // skipped: {}\n",
+                    FieldSkip::NotApplicableForSimpleResultType.message(f)
                 ));
                 return;
             }
@@ -91,7 +93,10 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        out.push_str(&format!("    // skipped: field '{f}' not available on result type\n"));
+        out.push_str(&format!(
+            "    // skipped: {}\n",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        ));
         return;
     }
 
@@ -275,7 +280,8 @@ fn render_synthetic_field_assertion(
         }
         "keywords" | "keywords_count" => {
             out.push_str(&format!(
-                "    // skipped: field '{field}' not available on Node JsProcessingResult\n"
+                "    // skipped: {}\n",
+                FieldSkip::NotAvailableOnNodeProcessingResult.message(field)
             ));
             true
         }

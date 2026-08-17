@@ -1,3 +1,4 @@
+use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::escape::escape_elixir;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -181,7 +182,11 @@ pub(super) fn render_assertion(
                 return;
             }
             "keywords" | "keywords_count" => {
-                let _ = writeln!(out, "      # skipped: field '{f}' not available on Elixir result type");
+                let _ = writeln!(
+                    out,
+                    "      # skipped: {}",
+                    FieldSkip::NotAvailableOnElixirResultType.message(f)
+                );
                 return;
             }
             _ => {}
@@ -256,7 +261,11 @@ pub(super) fn render_assertion(
         && !f.is_empty()
         && !field_resolver.is_valid_for_result(f)
     {
-        let _ = writeln!(out, "      # skipped: field '{f}' not available on result type");
+        let _ = writeln!(
+            out,
+            "      # skipped: {}",
+            FieldSkip::NotAvailableOnResultType.message(f)
+        );
         return;
     }
 
