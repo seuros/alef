@@ -44,6 +44,7 @@ pub enum ValidationCode {
     JsonValueResolutionAmbiguous,
     BackendStubPath,
     UnconsumedConfig,
+    UnreadableFieldDefault,
 }
 
 /// Diagnostics that are never safe to suppress globally.
@@ -64,6 +65,7 @@ impl fmt::Display for ValidationCode {
             Self::JsonValueResolutionAmbiguous => f.write_str("json_value_resolution_ambiguous"),
             Self::BackendStubPath => f.write_str("backend_stub_path"),
             Self::UnconsumedConfig => f.write_str("unconsumed_config"),
+            Self::UnreadableFieldDefault => f.write_str("unreadable_field_default"),
         }
     }
 }

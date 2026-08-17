@@ -1,6 +1,6 @@
 use crate::cli::registry;
 use crate::core::config::{Language, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, DefaultValue, TypeRef};
 use crate::core::validation::{ValidatedApiSurface, ValidationCode, ValidationDiagnostic, ValidationSeverity};
 
 pub(super) fn validate_generation_api<'a>(
@@ -78,6 +78,81 @@ fn language_backend_readiness_diagnostics(
     diagnostics.extend(service_api_capability_diagnostics(api, config, languages));
     diagnostics.extend(ffi_json_return_diagnostics(api, config, languages));
     diagnostics.extend(unconsumed_custom_modules_diagnostics(config));
+    diagnostics.extend(unreadable_field_default_diagnostics(api, config));
+    diagnostics
+}
+
+/// Refuse to generate a binding for a field whose Rust default alef could not read.
+///
+/// This is the doctrine already established for `DefaultValue::FunctionCall` in
+/// [`crate::codegen::config_gen::validate_rust_default_functions`] — a binding must never
+/// silently ship a value that differs from the source crate's — extended to the case the
+/// extractor reports as [`DefaultValue::Unresolved`]. Without it, every backend that spells a
+/// per-field initializer (C#, Java, Kotlin, Swift, Python, Dart, Ruby, Elixir, Go, Wasm) emits
+/// its own target-language zero, and it does so directly beneath a generated doc comment
+/// quoting the real Rust default, because the doc prose and the initializer are produced from
+/// different sources.
+///
+/// Deliberately not scoped to the languages being generated. The zero only *crosses* the FFI
+/// for a per-field-literal backend, but the unreadable default also lands in the generated
+/// docs for every target, and the classification of which backends carry a literal lives in
+/// one place (`backends::default_agreement_tests::carries_per_field_default`) that this must
+/// not fork. A crate that genuinely wants the type-zero opts out per-crate with
+/// `suppress_validation_codes = ["unreadable_field_default"]`. ~keep
+fn unreadable_field_default_diagnostics(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<ValidationDiagnostic> {
+    // Suppression is honoured here, not by the caller: `validate_generation_api` applies
+    // `suppress_validation_codes` only to `validation_report.errors()`, and every
+    // language-readiness diagnostic is fatal unconditionally. Emitting an unsuppressible error
+    // would leave a crate that genuinely accepts the type-zero with no way forward. ~keep
+    if config
+        .suppress_validation_codes
+        .iter()
+        .any(|code| code == &ValidationCode::UnreadableFieldDefault.to_string())
+    {
+        return Vec::new();
+    }
+
+    let mut diagnostics = Vec::new();
+    for typ in api.types.iter().filter(|typ| !typ.binding_excluded) {
+        let unreadable: Vec<&str> = typ
+            .fields
+            .iter()
+            .filter(|field| !field.binding_excluded)
+            .filter(|field| matches!(field.typed_default, Some(DefaultValue::Unresolved(_))))
+            .map(|field| field.name.as_str())
+            .collect();
+        if unreadable.is_empty() {
+            continue;
+        }
+        let body = typ
+            .fields
+            .iter()
+            .find_map(|field| match &field.typed_default {
+                Some(DefaultValue::Unresolved(body)) => Some(body.as_str()),
+                _ => None,
+            })
+            .unwrap_or("<unknown>");
+        diagnostics.push(ValidationDiagnostic {
+            severity: ValidationSeverity::Error,
+            code: ValidationCode::UnreadableFieldDefault,
+            crate_name: config.name.clone(),
+            language: None,
+            item_path: Some(typ.rust_path.clone()),
+            reason: format!(
+                "`impl Default for {}` could not be read into concrete values, so the defaults for {} \
+                 ({}) are unknown; every binding would emit its own target-language zero underneath a \
+                 doc comment quoting the real Rust default. Body: `{body}`",
+                typ.name,
+                if unreadable.len() == 1 { "field" } else { "fields" },
+                unreadable.join(", "),
+            ),
+            suggested_fix: "spell the defaults as a struct literal in `fn default()`, or delegate to an \
+                            associated function in the same module that returns a struct literal built from \
+                            the literal arguments passed (`Self::new(\"en\")`), or accept the type-zero \
+                            explicitly with `suppress_validation_codes = [\"unreadable_field_default\"]`"
+                .to_string(),
+        });
+    }
     diagnostics
 }
 
@@ -303,6 +378,7 @@ mod validation_tests {
             error_type: None,
             doc: String::new(),
             receiver: None,
+            cfg: None,
             sanitized: false,
             trait_source: None,
             returns_ref: false,
