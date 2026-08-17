@@ -5,11 +5,7 @@ use super::super::version_text::*;
 use super::*;
 use crate::cli::pipeline::generate;
 use crate::core::config::{CitationAuthor, CitationConfig};
-
-/// Serialize tests that mutate process-global CWD. `std::env::set_current_dir`
-/// is shared across the test binary, so concurrent tempdir-based `sync_versions`
-/// tests would race without this guard.
-static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use crate::test_support::CWD_LOCK;
 
 #[path = "version_tests/basic.rs"]
 mod basic;

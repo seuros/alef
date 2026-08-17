@@ -1,4 +1,4 @@
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, EmittedSignature, GeneratedFile};
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
 use heck::AsSnakeCase;
@@ -38,6 +38,67 @@ fn signature_references_excluded(
         || params
             .iter()
             .any(|param| type_references_excluded(&param.ty, exclude_types))
+}
+
+/// Names of types the Zig wrapper renders as a serde struct (JSON-encoded across the
+/// wrapper boundary). Shared by `generate_bindings` and `public_function_signatures` so
+/// both agree on which `Named` types the emitted signature treats as opaque-JSON. ~keep
+fn zig_struct_names(api: &ApiSurface) -> std::collections::HashSet<String> {
+    api.types
+        .iter()
+        .filter(|t| !t.is_trait && !t.is_opaque && t.has_serde)
+        .map(|t| t.name.clone())
+        .collect()
+}
+
+/// Maps an opaque type name to `(creator function name, creator's config param name in
+/// snake_case)`, used to render a parameter/return of that type as the JSON-string wrapper
+/// boundary rather than a raw handle. Shared by `generate_bindings` and
+/// `public_function_signatures` for the same reason as `zig_struct_names`. ~keep
+fn zig_opaque_creator_map(api: &ApiSurface) -> std::collections::HashMap<String, (String, String)> {
+    let mut map = std::collections::HashMap::new();
+    for opaque_ty in api
+        .types
+        .iter()
+        .filter(|t| !t.is_trait && (t.is_opaque || !t.has_serde))
+    {
+        if let Some(creator) = api
+            .functions
+            .iter()
+            .find(|f| matches!(&f.return_type, crate::core::ir::TypeRef::Named(n) if n == &opaque_ty.name))
+            && let Some(config_param) = creator.params.first()
+            && let Some(config_name) = functions::opaque_type_name_inner(&config_param.ty)
+        {
+            map.insert(
+                opaque_ty.name.clone(),
+                (creator.name.clone(), heck::AsSnakeCase(config_name).to_string()),
+            );
+        }
+    }
+    map
+}
+
+/// Function names `generate_bindings`'s top-level loop skips because a trait bridge emits
+/// them itself (see `emit_trait_bridge`) instead of the ordinary `emit_function` path.
+/// Shared with `public_function_signatures` for the same reason as `zig_struct_names`. ~keep
+fn zig_trait_bridge_fn_names(api: &ApiSurface, config: &ResolvedCrateConfig) -> std::collections::HashSet<String> {
+    config
+        .trait_bridges
+        .iter()
+        .filter(|b| !b.exclude_languages.iter().any(|lang| lang == "zig"))
+        .flat_map(|b| {
+            let mut names = Vec::new();
+            if let Some(trait_def) = api.types.iter().find(|t| t.name == b.trait_name && t.is_trait) {
+                let snake = heck::AsSnakeCase(&trait_def.name).to_string();
+                names.push(format!("register_{snake}"));
+                names.push(format!("unregister_{snake}"));
+            }
+            if let Some(clear_fn) = b.clear_fn.as_deref() {
+                names.push(clear_fn.to_string());
+            }
+            names
+        })
+        .collect()
 }
 
 impl Backend for ZigBackend {
@@ -219,53 +280,11 @@ impl Backend for ZigBackend {
         for en in &api.enums {
             top_level_names.insert(en.name.clone());
         }
-        let struct_names: std::collections::HashSet<String> = api
-            .types
-            .iter()
-            .filter(|t| !t.is_trait && !t.is_opaque && t.has_serde)
-            .map(|t| t.name.clone())
-            .collect();
+        let struct_names = zig_struct_names(&api);
         let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
-        let opaque_creator_map: std::collections::HashMap<String, (String, String)> = {
-            let mut map = std::collections::HashMap::new();
-            for opaque_ty in api
-                .types
-                .iter()
-                .filter(|t| !t.is_trait && (t.is_opaque || !t.has_serde))
-            {
-                if let Some(creator) = api
-                    .functions
-                    .iter()
-                    .find(|f| matches!(&f.return_type, crate::core::ir::TypeRef::Named(n) if n == &opaque_ty.name))
-                    && let Some(config_param) = creator.params.first()
-                    && let Some(config_name) = functions::opaque_type_name_inner(&config_param.ty)
-                {
-                    map.insert(
-                        opaque_ty.name.clone(),
-                        (creator.name.clone(), heck::AsSnakeCase(config_name).to_string()),
-                    );
-                }
-            }
-            map
-        };
+        let opaque_creator_map = zig_opaque_creator_map(&api);
 
-        let trait_bridge_fn_names: std::collections::HashSet<String> = config
-            .trait_bridges
-            .iter()
-            .filter(|b| !b.exclude_languages.iter().any(|lang| lang == "zig"))
-            .flat_map(|b| {
-                let mut names = Vec::new();
-                if let Some(trait_def) = api.types.iter().find(|t| t.name == b.trait_name && t.is_trait) {
-                    let snake = heck::AsSnakeCase(&trait_def.name).to_string();
-                    names.push(format!("register_{snake}"));
-                    names.push(format!("unregister_{snake}"));
-                }
-                if let Some(clear_fn) = b.clear_fn.as_deref() {
-                    names.push(clear_fn.to_string());
-                }
-                names
-            })
-            .collect();
+        let trait_bridge_fn_names = zig_trait_bridge_fn_names(&api, config);
         for f in api.functions.iter().filter(|f| !exclude_functions.contains(&f.name)) {
             if trait_bridge_fn_names.contains(&f.name) {
                 continue;
@@ -364,6 +383,56 @@ impl Backend for ZigBackend {
             content,
             generated_header: false,
         }])
+    }
+
+    /// Signatures for the breaking-signature-change baseline (see
+    /// `cli::breaking_changes`). Mirrors `generate_bindings`'s filtering closely enough to
+    /// stay accurate for the common case, but is deliberately not identical: it does not
+    /// apply `exclude_types`'s deep retain over `api.functions`/`api.types`/`api.enums`, so
+    /// a function hidden from Zig output entirely via that config still appears here. That
+    /// is harmless rather than a false negative -- a function alef never actually emits has
+    /// no real caller to attribute, so `check_signature_breakage`'s "callers must exist"
+    /// gate suppresses it. Capsule-return functions (`emit_capsule_function`'s path) are
+    /// excluded outright rather than approximated, since that path's return-type rule
+    /// differs from the ordinary wrapper's. ~keep
+    fn public_function_signatures(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<EmittedSignature> {
+        let api = api.with_deduped_functions();
+        let enabled_features: std::collections::HashSet<&str> = config
+            .features_for_language(Language::Zig)
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let api = api.with_cfg_filtered_deep(&enabled_features);
+
+        let declared_errors: Vec<String> = api.errors.iter().map(|e| e.name.clone()).collect();
+        let struct_names = zig_struct_names(&api);
+        let opaque_creator_map = zig_opaque_creator_map(&api);
+        let trait_bridge_fn_names = zig_trait_bridge_fn_names(&api, config);
+        let zig_capsule_types: std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig> =
+            config.zig.as_ref().map(|c| c.capsule_types.clone()).unwrap_or_default();
+        let mut exclude_functions: std::collections::HashSet<String> = config
+            .zig
+            .as_ref()
+            .map(|c| c.exclude_functions.iter().cloned().collect())
+            .unwrap_or_default();
+        if let Some(ffi) = &config.ffi {
+            exclude_functions.extend(ffi.exclude_functions.iter().cloned());
+        }
+
+        api.functions
+            .iter()
+            .filter(|f| !exclude_functions.contains(&f.name))
+            .filter(|f| !trait_bridge_fn_names.contains(&f.name))
+            .filter(|f| {
+                functions::opaque_type_name_inner(&f.return_type)
+                    .is_none_or(|name| !zig_capsule_types.contains_key(name))
+            })
+            .map(|f| EmittedSignature {
+                symbol: f.name.clone(),
+                params: functions::wrapper_param_types(f, &struct_names, &opaque_creator_map).join(", "),
+                return_type: functions::wrapper_return_type(f, &declared_errors, &struct_names, &opaque_creator_map),
+            })
+            .collect()
     }
 
     fn generate_service_api(
@@ -468,5 +537,102 @@ sources = ["src/lib.rs"]
 
         assert_eq!(lines.next(), Some("// Generated by alef. Do not edit by hand."));
         assert_eq!(lines.next(), Some(expected_stamp.as_str()));
+    }
+}
+
+#[cfg(test)]
+mod public_function_signatures_tests {
+    use super::*;
+    use crate::core::backend::EmittedSignature;
+    use crate::core::ir::FunctionDef;
+
+    fn zig_config() -> ResolvedCrateConfig {
+        let cfg: crate::core::config::new_config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["zig"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        cfg.resolve().unwrap().remove(0)
+    }
+
+    fn api_with_function(f: FunctionDef, errors: Vec<crate::core::ir::ErrorDef>) -> ApiSurface {
+        ApiSurface {
+            crate_name: "test-lib".to_string(),
+            version: "0.1.0".to_string(),
+            functions: vec![f],
+            errors,
+            ..ApiSurface::default()
+        }
+    }
+
+    fn my_error_def() -> crate::core::ir::ErrorDef {
+        crate::core::ir::ErrorDef {
+            name: "MyError".to_string(),
+            rust_path: "sample::MyError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                error_code: None,
+                name: "Boom".to_string(),
+                is_unit: true,
+                ..Default::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// The motivating regression this whole mechanism exists for: a function that returns a
+    /// plain type in one run and gains a declared `error_type` (an error union, Zig's `!T`)
+    /// in the next -- exactly the shape of change a hand-written Zig test would not survive
+    /// uncompiled, and the case reported against the real bug this module fixes. ~keep
+    #[test]
+    fn gaining_a_declared_error_type_changes_the_captured_return_signature() {
+        let config = zig_config();
+        let plain_fn = FunctionDef {
+            name: "do_thing".to_string(),
+            return_type: crate::core::ir::TypeRef::Unit,
+            ..Default::default()
+        };
+        let fallible_fn = FunctionDef {
+            error_type: Some("MyError".to_string()),
+            ..plain_fn.clone()
+        };
+
+        let before = ZigBackend.public_function_signatures(&api_with_function(plain_fn, vec![]), &config);
+        let after =
+            ZigBackend.public_function_signatures(&api_with_function(fallible_fn, vec![my_error_def()]), &config);
+
+        assert_eq!(
+            before,
+            vec![EmittedSignature {
+                symbol: "do_thing".to_string(),
+                params: String::new(),
+                return_type: "void".to_string(),
+            }]
+        );
+        assert_eq!(
+            after,
+            vec![EmittedSignature {
+                symbol: "do_thing".to_string(),
+                params: String::new(),
+                return_type: "MyError!void".to_string(),
+            }]
+        );
+
+        let changes = crate::cli::breaking_changes::detect_breaking_changes(&before, &after);
+        assert_eq!(
+            changes.len(),
+            1,
+            "the error-union transition must be detected as breaking: {changes:?}"
+        );
+        assert_eq!(changes[0].symbol, "do_thing");
     }
 }

@@ -65,7 +65,10 @@ fn all_upgrade_preserves_inline_managed_output_and_unmanaged_scaffold_from_old_m
     let keep = managed_output_paths(&generated_outputs, dir.path());
     finalize_hashes(&keep, "sources", b"config").expect("finalize inline output");
     let previous_paths = vec![inline_path.clone(), scaffold_path.clone()];
-    let removed = sweep_manifest_orphans(&previous_paths, &keep, &[selected]).expect("all cleanup selection");
+    // Empty disk-scan roots: this pins the manifest route, whose ownership evidence is
+    // `previous_paths` membership. Passing the root here too would additionally exercise the
+    // disk-scan route and make a pass ambiguous about which route reclaimed the file. ~keep
+    let removed = sweep_manifest_orphans(&previous_paths, &keep, &[selected], &[]).expect("all cleanup selection");
 
     let inline = std::fs::read_to_string(&inline_path).expect("inline output survives");
     let inputs_hash = hash::compute_inputs_hash("sources", b"config");

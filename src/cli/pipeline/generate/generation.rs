@@ -113,6 +113,19 @@ pub fn generate(
                 let output_paths: Vec<std::path::PathBuf> = files.iter().map(|f| base_dir.join(&f.path)).collect();
                 cache::write_lang_hash(&config.name, lang_str, lang_hash, &output_paths)
                     .with_context(|| format!("failed to write language hash for {lang_str}"))?;
+
+                // Read-only callers (`write_cache = false`, e.g. `alef verify`'s in-memory
+                // regeneration) must not gain this as a side effect either, for the same
+                // reason `write_lang_hash` above is gated: a command not meant to touch the
+                // cache still must not touch it just because it happens to also regenerate.
+                // ~keep
+                let current_signatures = backend.public_function_signatures(validated_api.api(), config);
+                crate::cli::breaking_changes::check_signature_breakage(
+                    *lang,
+                    &config.name,
+                    &base_dir,
+                    &current_signatures,
+                );
             }
             Ok((*lang, files))
         })
@@ -509,12 +522,6 @@ mod tests {
         }
     }
 
-    /// `hashes_dir` in `cli::cache` resolves `.alef/<crate>/hashes/` relative to
-    /// CWD, so this test (like the equivalent CWD-changing tests in `cli::cache`
-    /// and `cli::pipeline::version_tests`) needs its own chdir guard; the mutex
-    /// is local to this module by the same existing convention. ~keep
-    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// Regression for making `alef verify` read-only again: its missing-file
     /// check regenerates bindings in memory only to look for absent files, and
     /// must not leave `.alef/<crate>/hashes/<lang>.{hash,manifest}` behind —
@@ -523,10 +530,8 @@ mod tests {
     /// pass) must still record the cache normally. ~keep
     #[test]
     fn write_cache_flag_gates_the_lang_hash_cache_write() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let dir = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(dir.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(dir.path());
 
         let api = ApiSurface::default();
         let config = ResolvedCrateConfig {
@@ -541,8 +546,6 @@ mod tests {
 
         let writing_result = generate(&api, &config, &[Language::Ffi], true, config_path, true);
         let existed_after_write = hash_path.exists();
-
-        let _ = std::env::set_current_dir(&original_cwd);
 
         read_only_result.expect("write_cache=false must not turn a successful generate into an error");
         writing_result.expect("write_cache=true must not turn a successful generate into an error");
@@ -576,10 +579,8 @@ mod tests {
     /// orphans in production regardless of whether any genuinely existed. ~keep
     #[test]
     fn lang_manifest_baseline_self_erases_before_the_orphan_sweep_ever_reads_it() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let dir = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(dir.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(dir.path());
 
         let result = (|| -> anyhow::Result<()> {
             let package_dir = dir.path().join("packages/python");
@@ -593,7 +594,12 @@ mod tests {
             // above (not simulated here -- assumed already on disk from that
             // run) and recorded it in the language manifest via the exact
             // `write_lang_hash` call `generate`'s `write_cache` branch makes. ~keep
-            cache::write_lang_hash("sample", "python", "hash-n-minus-1", &[dropped_type_file.clone()])?;
+            cache::write_lang_hash(
+                "sample",
+                "python",
+                "hash-n-minus-1",
+                std::slice::from_ref(&dropped_type_file),
+            )?;
 
             // Run N: the type folded into a capsule type, so this run's
             // generated file list no longer includes it. `generate` calls
@@ -612,7 +618,7 @@ mod tests {
             );
 
             let keep = std::collections::HashSet::new();
-            let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir])?;
+            let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir], &[])?;
 
             assert_eq!(
                 removed, 0,
@@ -627,7 +633,6 @@ mod tests {
             Ok(())
         })();
 
-        let _ = std::env::set_current_dir(&original_cwd);
         result.expect("reproduction body");
     }
 }

@@ -378,7 +378,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
                 let scaffold_keep: std::collections::HashSet<PathBuf> = scaffold_output_paths.iter().cloned().collect();
                 let scaffold_sweep_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
-                pipeline::sweep_manifest_orphans(&previous_scaffold_paths, &scaffold_keep, &scaffold_sweep_roots)?;
+                pipeline::sweep_manifest_orphans(&previous_scaffold_paths, &scaffold_keep, &scaffold_sweep_roots, &[])?;
                 cache::write_scaffold_manifest(&resolved_cfg.name, &scaffold_output_paths)?;
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
@@ -576,7 +576,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             e2e_stage_error.get_or_insert(error);
                         } else {
                             let e2e_output_root = base_dir.join(&e2e_config.output);
-                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root])?;
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root], &[])?;
 
                             cache::write_stage_hash(&resolved_cfg.name, "e2e", &e2e_stage_hash, &output_paths)?;
                         }
@@ -646,7 +646,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             e2e_stage_error.get_or_insert(error);
                         } else {
                             let test_apps_root = base_dir.join(registry_e2e_ref.effective_output());
-                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[test_apps_root])?;
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[test_apps_root], &[])?;
 
                             cache::write_stage_hash(
                                 &resolved_cfg.name,
@@ -772,7 +772,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // name would let `alef all` silently truncate the broader baseline `alef generate`
                 // relies on the next time the two commands are run back to back. ~keep
                 let previous_paths: Vec<_> = previous_binding_ownership.into_values().flatten().collect();
-                pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots)?;
+                // `cleanup_roots` doubles as the disk-scan candidate list -- see the matching
+                // comment at the `alef generate` call site (`core_commands.rs`) for why this is
+                // safe: `sweep_manifest_orphans` only scans a root once it independently confirms
+                // both `previous_paths` and `current_gen_paths` carry an entry under it. That
+                // per-root check is what keeps a language `pipeline::generate`'s per-language cache
+                // skipped this run -- which leaves `current_gen_paths` with zero entries under that
+                // language's root, not merely a stale one -- from being scanned at all. ~keep
+                pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots, &cleanup_roots)?;
                 for (language, paths) in &binding_ownership {
                     cache::write_stage_hash(
                         &resolved_cfg.name,

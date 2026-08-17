@@ -320,7 +320,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             e2e_stage_error.get_or_insert(error);
                         } else {
                             let previous_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
-                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots, &[])?;
 
                             cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
                         }
@@ -600,7 +600,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                             e2e_stage_error.get_or_insert(error);
                         } else {
-                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots)?;
+                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots, &[])?;
 
                             cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
                         }

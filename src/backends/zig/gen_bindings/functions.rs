@@ -150,36 +150,7 @@ pub(crate) fn emit_function(
         .as_ref()
         .map(|e| resolve_zig_error_type(e, declared_errors));
 
-    let body_needs_try = f.params.iter().any(needs_alloc_param)
-        || matches!(
-            &f.return_type,
-            TypeRef::String
-                | TypeRef::Char
-                | TypeRef::Path
-                | TypeRef::Json
-                | TypeRef::Bytes
-                | TypeRef::Vec(_)
-                | TypeRef::Map(_, _)
-        )
-        || return_uses_bytes_out_params(&f.return_type)
-        || matches!(&f.return_type, TypeRef::Named(name) if struct_names.contains(name));
-    let body_needs_invalid_json = f
-        .params
-        .iter()
-        .any(|p| needs_from_json_param(p, struct_names, opaque_creator_map));
-
-    let return_ty = if let Some(error_type) = &zig_error_type {
-        format!("{}!{}", error_type, zig_return_type(&f.return_type, struct_names))
-    } else if body_needs_try || body_needs_invalid_json {
-        let err_set = if body_needs_invalid_json {
-            "error{OutOfMemory,InvalidJson}"
-        } else {
-            "error{OutOfMemory}"
-        };
-        format!("{err_set}!{}", zig_return_type(&f.return_type, struct_names))
-    } else {
-        zig_return_type(&f.return_type, struct_names)
-    };
+    let return_ty = wrapper_return_type(f, declared_errors, struct_names, opaque_creator_map);
 
     out.push_str(&crate::backends::zig::template_env::render(
         "function_signature.jinja",
@@ -496,6 +467,73 @@ fn format_param_wrapper(
 ) -> String {
     let ty_str = zig_param_type(&p.ty, p.optional, struct_names, opaque_creator_map);
     format!("{}: {}", p.name, ty_str)
+}
+
+/// The Zig wrapper's return-type text: an error union (`<Set>!<T>`) if the function is
+/// fallible in Zig, or the bare type otherwise. Fallibility is inferred exactly as
+/// `emit_function`'s body infers it -- from a declared `error_type`, or from any
+/// parameter/return conversion that itself needs `try` (`error{OutOfMemory}` /
+/// `error{OutOfMemory,InvalidJson}`) -- so this is the single place both `emit_function`
+/// and the breaking-signature-change baseline
+/// (`ZigBackend::public_function_signatures`) compute it, and the two can never quietly
+/// disagree about what "the emitted return type" is. ~keep
+pub(crate) fn wrapper_return_type(
+    f: &FunctionDef,
+    declared_errors: &[String],
+    struct_names: &std::collections::HashSet<String>,
+    opaque_creator_map: &std::collections::HashMap<String, (String, String)>,
+) -> String {
+    let zig_error_type = f
+        .error_type
+        .as_ref()
+        .map(|e| resolve_zig_error_type(e, declared_errors));
+
+    let body_needs_try = f.params.iter().any(needs_alloc_param)
+        || matches!(
+            &f.return_type,
+            TypeRef::String
+                | TypeRef::Char
+                | TypeRef::Path
+                | TypeRef::Json
+                | TypeRef::Bytes
+                | TypeRef::Vec(_)
+                | TypeRef::Map(_, _)
+        )
+        || return_uses_bytes_out_params(&f.return_type)
+        || matches!(&f.return_type, TypeRef::Named(name) if struct_names.contains(name));
+    let body_needs_invalid_json = f
+        .params
+        .iter()
+        .any(|p| needs_from_json_param(p, struct_names, opaque_creator_map));
+
+    if let Some(error_type) = &zig_error_type {
+        format!("{}!{}", error_type, zig_return_type(&f.return_type, struct_names))
+    } else if body_needs_try || body_needs_invalid_json {
+        let err_set = if body_needs_invalid_json {
+            "error{OutOfMemory,InvalidJson}"
+        } else {
+            "error{OutOfMemory}"
+        };
+        format!("{err_set}!{}", zig_return_type(&f.return_type, struct_names))
+    } else {
+        zig_return_type(&f.return_type, struct_names)
+    }
+}
+
+/// The Zig-wrapper parameter *types* only, in call order, without the parameter labels
+/// `format_param_wrapper` includes. Zig calls are positional, so a caller's build
+/// compatibility depends on the type/count/order of this list, not on what the wrapper
+/// happens to label a parameter -- the breaking-signature-change baseline compares this so
+/// a cosmetic parameter rename does not read as a breaking change. ~keep
+pub(crate) fn wrapper_param_types(
+    f: &FunctionDef,
+    struct_names: &std::collections::HashSet<String>,
+    opaque_creator_map: &std::collections::HashMap<String, (String, String)>,
+) -> Vec<String> {
+    f.params
+        .iter()
+        .map(|p| zig_param_type(&p.ty, p.optional, struct_names, opaque_creator_map))
+        .collect()
 }
 
 /// Zig type used at the wrapper boundary for a function parameter.

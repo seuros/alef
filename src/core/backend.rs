@@ -161,6 +161,25 @@ impl GeneratedFile {
     }
 }
 
+/// One backend's rendered text for a single public function's parameter list and return
+/// type, captured for the breaking-signature-change baseline
+/// (`cli::breaking_changes::check_signature_breakage`).
+///
+/// Comparison against a prior run's baseline is textual, not a semantic parse of the
+/// target language — a backend that reformats an otherwise-unchanged signature between
+/// runs reads as changed. That trade favors over-reporting a false positive (a `WARN`) over
+/// silently missing a real breaking change. ~keep
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmittedSignature {
+    /// The symbol name a hand-written caller would reference (the emitted function name).
+    pub symbol: String,
+    /// The emitted parameter list, in call order. Format is backend-defined; only equality
+    /// across runs is load-bearing.
+    pub params: String,
+    /// The emitted return type, including any error-union/Result-like wrapper.
+    pub return_type: String,
+}
+
 /// Capabilities supported by a backend.
 #[derive(Debug, Clone, Default)]
 pub struct Capabilities {
@@ -200,6 +219,16 @@ pub trait Backend: Send + Sync {
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
         self.generate_bindings(api.api(), config)
+    }
+
+    /// Currently-emitted public function signatures, for the breaking-signature-change
+    /// baseline (`cli::breaking_changes::check_signature_breakage`). Optional — default
+    /// returns empty, meaning this backend is not (yet) covered by that check: a signature
+    /// only ever enters the baseline once a backend starts returning it here, so an
+    /// uncovered backend silently detects nothing rather than erroring or fabricating
+    /// signatures it did not actually render. ~keep
+    fn public_function_signatures(&self, _api: &ApiSurface, _config: &ResolvedCrateConfig) -> Vec<EmittedSignature> {
+        Vec::new()
     }
 
     /// Generate type stubs (.pyi, .rbs, .d.ts). Optional — default returns empty.

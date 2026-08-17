@@ -359,7 +359,7 @@ fn all_docs_stage_failure_does_not_return_before_formatting_and_hash_stamping() 
         .find("pipeline::finalize_hashes_sweeping(")
         .expect("hash stamping must still run after the docs stage");
     let sweep_manifest_orphans = source
-        .find("pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots)")
+        .find("pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots, &cleanup_roots)")
         .expect("orphan sweeping must still run after the docs stage");
 
     assert!(
@@ -435,29 +435,9 @@ fn all_propagates_the_deferred_docs_error_only_after_hook_installation() {
 /// `.alef/` cache, `version_from`) against `std::env::current_dir()`, not against the
 /// config file's directory (see `let base_dir = std::env::current_dir()?;` at the top of
 /// the "All" arm) -- so driving it against an isolated fixture requires actually changing
-/// the process's working directory. `std::env::set_current_dir` is process-global, so this
-/// is serialized against every other test in this binary that does the same via a static
-/// mutex, mirroring `tests/pipeline_regeneration_gate.rs`'s `WorkspaceCwd`. ~keep
-struct E2eDeferCwdGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
-    original: std::path::PathBuf,
-}
-
-impl E2eDeferCwdGuard {
-    fn enter(root: &std::path::Path) -> Self {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let lock = LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original = std::env::current_dir().expect("read current directory");
-        std::env::set_current_dir(root).expect("enter fixture workspace");
-        Self { _lock: lock, original }
-    }
-}
-
-impl Drop for E2eDeferCwdGuard {
-    fn drop(&mut self) {
-        let _ = std::env::set_current_dir(&self.original);
-    }
-}
+/// the process's working directory. `crate::test_support::CwdGuard` serializes that against
+/// every other cwd-mutating test in the crate, not only the ones in this binary. ~keep
+use crate::test_support::CwdGuard as E2eDeferCwdGuard;
 
 const E2E_DEFER_FIXTURE_SOURCE: &str = r#"
 pub struct Metadata {

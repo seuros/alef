@@ -386,7 +386,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     .collect();
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
                 let previous_paths: Vec<_> = previous_generation_owned.into_values().flatten().collect();
-                pipeline::sweep_manifest_orphans(&previous_paths, &cleanup_keep_paths, &cleanup_roots)?;
+                // `cleanup_roots` doubles as the disk-scan candidate list: `sweep_manifest_orphans`
+                // only actually scans a root once it has independently verified both `previous_paths`
+                // and `cleanup_keep_paths` carry at least one entry under it (plus git-tracked-ness),
+                // so a language this run skipped or whose bookkeeping is broken is refused, not
+                // scanned -- see that function's doc for the measured evidence behind the gate. ~keep
+                pipeline::sweep_manifest_orphans(&previous_paths, &cleanup_keep_paths, &cleanup_roots, &cleanup_roots)?;
                 for (language, paths) in &generation_owned_paths {
                     let paths: Vec<_> = paths.iter().cloned().collect();
                     cache::write_stage_hash(

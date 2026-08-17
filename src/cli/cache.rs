@@ -974,12 +974,6 @@ mod tests {
         assert!(!outputs_exist(&manifest));
     }
 
-    /// Serialize tests that mutate the process-global current directory, mirroring
-    /// the lock in `cli::pipeline::version_tests` -- `write_scaffold_manifest`/
-    /// `read_scaffold_manifest` resolve `.alef/<crate>/hashes/` relative to CWD,
-    /// so concurrent tempdir-based tests below would race without it. ~keep
-    static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     /// `write_scaffold_manifest` must round-trip through `read_scaffold_manifest`,
     /// sorted and deduplicated like every other manifest. This is the durable
     /// record `sweep_manifest_orphans`'s unmarkable-manifest route depends on to
@@ -988,17 +982,14 @@ mod tests {
     /// cannot be called at all.
     #[test]
     fn scaffold_manifest_round_trips_through_write_and_read() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
 
         let composer = tmp.path().join("packages/php/composer.json");
         let cargo_toml = tmp.path().join("Cargo.toml");
         let write_result = write_scaffold_manifest("sample-crate", &[composer.clone(), cargo_toml.clone()]);
         let read_back = read_scaffold_manifest("sample-crate");
 
-        let _ = std::env::set_current_dir(&original_cwd);
         write_result.expect("write scaffold manifest");
         assert_eq!(
             read_back,
@@ -1013,14 +1004,11 @@ mod tests {
     /// proof nothing was ever scaffolded.
     #[test]
     fn scaffold_manifest_reads_empty_when_never_written() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
 
         let read_back = read_scaffold_manifest("never-scaffolded-crate");
 
-        let _ = std::env::set_current_dir(&original_cwd);
         assert_eq!(read_back, Vec::<PathBuf>::new());
     }
 
@@ -1039,10 +1027,8 @@ mod tests {
     /// failing the `assert_eq!(removed, 1, ...)` below.
     #[test]
     fn scaffold_manifest_wiring_lets_next_run_reclaim_dropped_manifest() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
 
         let package_dir = tmp.path().join("packages/php");
         std::fs::create_dir_all(&package_dir).expect("create package dir");
@@ -1053,10 +1039,9 @@ mod tests {
 
         let previous_scaffold = read_scaffold_manifest("sample-php");
         let keep = std::collections::HashSet::new();
-        let removed =
-            crate::cli::pipeline::sweep_manifest_orphans(&previous_scaffold, &keep, &[package_dir]).expect("sweep");
+        let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_scaffold, &keep, &[package_dir], &[])
+            .expect("sweep");
 
-        let _ = std::env::set_current_dir(&original_cwd);
         assert_eq!(
             removed, 1,
             "composer.json recorded by run 1's manifest must be reclaimed in run 2"
@@ -1077,11 +1062,9 @@ mod tests {
     /// does not share that fate.
     #[test]
     fn all_bindings_ownership_baseline_survives_the_lang_manifest_collision_that_used_to_erase_it() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let tmp = tempfile::tempdir().expect("tempdir");
         let dropped_type_file = tmp.path().join("packages/python/dropped_type.py");
-        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
 
         let result = (|| -> anyhow::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
             // Run N-1's write-back: the dedicated ownership stage records the file that still
@@ -1090,7 +1073,7 @@ mod tests {
                 "sample",
                 "all-bindings-python-ownership",
                 "sources-hash-n-minus-1",
-                &[dropped_type_file.clone()],
+                std::slice::from_ref(&dropped_type_file),
             )?;
 
             // Run N: the type folded into a capsule type, so `pipeline::generate` no longer emits
@@ -1103,7 +1086,6 @@ mod tests {
             Ok((dedicated_baseline, lang_manifest))
         })();
 
-        let _ = std::env::set_current_dir(&original_cwd);
         let (dedicated_baseline, lang_manifest) = result.expect("baseline read");
         assert_eq!(
             dedicated_baseline,
@@ -1140,7 +1122,7 @@ mod tests {
         keep.insert(kept_file.clone());
 
         let removed =
-            crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir]).expect("sweep");
+            crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir], &[]).expect("sweep");
 
         assert_eq!(removed, 1, "exactly the dropped binding must be swept");
         assert!(
@@ -1177,7 +1159,7 @@ mod tests {
 
         let keep = std::collections::HashSet::new();
         let removed =
-            crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir]).expect("sweep");
+            crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir], &[]).expect("sweep");
 
         assert_eq!(removed, 0, "a missing baseline must sweep nothing, never everything");
         assert!(
@@ -1192,10 +1174,8 @@ mod tests {
     /// accepts, and a file absent from it must be invisible to the sweep regardless of location.
     #[test]
     fn all_bindings_ownership_never_owned_path_is_left_untouched_even_when_present_in_sweep_root() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
 
         let result = (|| -> anyhow::Result<(usize, bool, bool, bool)> {
             let package_dir = tmp.path().join("packages/python");
@@ -1213,17 +1193,16 @@ mod tests {
                 "sample",
                 "all-bindings-python-ownership",
                 "sources-hash",
-                &[owned_file.clone()],
+                std::slice::from_ref(&owned_file),
             )?;
             let previous_paths = read_stage_paths("sample", "all-bindings-python-ownership");
             let leaked = previous_paths.iter().any(|path| path.ends_with("hand_written.py"));
 
             let keep = std::collections::HashSet::new();
-            let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir])?;
+            let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir], &[])?;
             Ok((removed, owned_file.exists(), foreign_file.exists(), leaked))
         })();
 
-        let _ = std::env::set_current_dir(&original_cwd);
         let (removed, owned_exists, foreign_exists, leaked) = result.expect("sweep");
         assert!(!leaked, "the never-owned file must not have leaked into the baseline");
         assert_eq!(removed, 1, "only the recorded, owned path may be removed");
@@ -1459,10 +1438,8 @@ mod tests {
     /// disk the whole time.
     #[test]
     fn scaffold_owned_path_matches_across_absolute_and_relative_base_dir_spellings() {
-        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let original_cwd = std::env::current_dir().expect("cwd");
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
 
         let absolute_base = std::env::current_dir().expect("absolute cwd");
         let relative_base = Path::new(".");
@@ -1480,7 +1457,6 @@ mod tests {
             Ok((found_from_relative, found_from_absolute))
         })();
 
-        let _ = std::env::set_current_dir(&original_cwd);
         let (found_from_relative, found_from_absolute) = result.expect("record/check round-trip");
         assert!(
             found_from_relative,
