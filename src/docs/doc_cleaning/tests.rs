@@ -35,6 +35,78 @@ fn test_clean_doc_bare_rust_links() {
 }
 
 #[test]
+fn test_rust_links_to_plain_degrades_plain_text_intradoc_link() {
+    let doc = "Returns the configured [timeout](Self::set_timeout), or a default.";
+    assert_eq!(
+        rust_links_to_plain(doc),
+        "Returns the configured timeout, or a default."
+    );
+}
+
+#[test]
+fn test_rust_links_to_plain_degrades_plain_text_link_with_crate_path() {
+    let doc = "Raised when the request exceeds [the limit](crate::Error::Timeout).";
+    assert_eq!(rust_links_to_plain(doc), "Raised when the request exceeds the limit.");
+}
+
+#[test]
+fn test_rust_links_to_plain_degrades_bare_identifier_target() {
+    let doc = "See [the setting](max_bytes) for defaults.";
+    assert_eq!(rust_links_to_plain(doc), "See the setting for defaults.");
+}
+
+#[test]
+fn test_rust_links_to_plain_preserves_backticked_link_regression() {
+    let doc = "See [`field`](Self::field) for details.";
+    assert_eq!(rust_links_to_plain(doc), "See `field` for details.");
+}
+
+#[test]
+fn test_rust_links_to_plain_preserves_relative_markdown_link() {
+    let doc = "See the [Configuration Reference](configuration.md) for defaults.";
+    assert_eq!(
+        rust_links_to_plain(doc),
+        doc,
+        "genuine relative link must survive untouched"
+    );
+}
+
+#[test]
+fn test_rust_links_to_plain_preserves_anchor_link() {
+    let doc = "Jump to [the errors section](#errors) for details.";
+    assert_eq!(rust_links_to_plain(doc), doc, "anchor link must survive untouched");
+}
+
+#[test]
+fn test_rust_links_to_plain_preserves_absolute_url() {
+    let doc = "See [the guide](https://example.com/guide) for details.";
+    assert_eq!(rust_links_to_plain(doc), doc, "absolute URL must survive untouched");
+}
+
+#[test]
+fn test_clean_doc_degrades_plain_text_intradoc_link_for_non_rust_language() {
+    let doc = "Returns the configured [timeout](Self::set_timeout), or a default.";
+    let cleaned = clean_doc(doc, Language::Python);
+    assert_eq!(cleaned, "Returns the configured timeout, or a default.");
+}
+
+#[test]
+fn test_clean_doc_plain_text_intradoc_link_degrades_for_double_colon_languages() {
+    let doc = "Returns the configured [timeout](Self::set_timeout), or a default.";
+    let expected = "Returns the configured timeout, or a default.";
+    assert_eq!(
+        clean_doc(doc, Language::Rust),
+        expected,
+        "Rust must not keep a relative link that resolves nowhere in the emitted doc"
+    );
+    assert_eq!(
+        clean_doc(doc, Language::Php),
+        expected,
+        "PHP must not keep a relative link that resolves nowhere in the emitted doc"
+    );
+}
+
+#[test]
 fn test_collapse_adjacent_code_spans_merges_wrapped_link() {
     let input = "JSON-serialised `Vec<``StructuredOutput``>` (a JSON array).";
     let merged = collapse_adjacent_code_spans(input);

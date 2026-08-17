@@ -837,40 +837,121 @@ pub(crate) fn extract_param_docs(doc: &str) -> std::collections::HashMap<String,
 }
 
 /// Convert `` [`text`](path) `` and bare `` [`text`] `` patterns to `` `text` ``.
+///
+/// Also degrades a plain-text intra-doc link — `[text](Self::method)`, with no
+/// backticks in the link text — to plain `text` when the target looks like a
+/// Rust path. This must run before [`rust_paths_to_dot_notation`], which
+/// otherwise idiom-translates `::` inside the link target and leaves a
+/// relative link that resolves nowhere in the emitted doc. ~keep
 pub(crate) fn rust_links_to_plain(doc: &str) -> String {
     let mut result = String::with_capacity(doc.len());
     let chars: Vec<char> = doc.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        if i + 1 < chars.len() && chars[i] == '[' && chars[i + 1] == '`' {
-            let start = i + 1;
-            let mut j = start;
-            while j < chars.len() && chars[j] != ']' {
-                j += 1;
-            }
-            if j < chars.len() {
-                let text: String = chars[start..j].iter().collect();
-                if j + 1 < chars.len() && chars[j + 1] == '(' {
-                    let mut k = j + 2;
-                    while k < chars.len() && chars[k] != ')' {
-                        k += 1;
-                    }
-                    if k < chars.len() {
-                        result.push_str(&text);
-                        i = k + 1;
-                        continue;
-                    }
-                } else {
+        if chars[i] == '[' {
+            if i + 1 < chars.len() && chars[i + 1] == '`' {
+                if let Some((text, next)) = parse_backticked_bracket_link(&chars, i) {
                     result.push_str(&text);
-                    i = j + 1;
+                    i = next;
                     continue;
                 }
+            } else if let Some((text, next)) = parse_plain_rust_path_link(&chars, i) {
+                result.push_str(&text);
+                i = next;
+                continue;
             }
         }
         result.push(chars[i]);
         i += 1;
     }
     result
+}
+
+/// Parse `` [`text`](target) `` or bare `` [`text`] `` starting at the `[` at index
+/// `i`. Returns the backticked text and the index following the whole match.
+fn parse_backticked_bracket_link(chars: &[char], i: usize) -> Option<(String, usize)> {
+    let start = i + 1;
+    let mut j = start;
+    while j < chars.len() && chars[j] != ']' {
+        j += 1;
+    }
+    if j >= chars.len() {
+        return None;
+    }
+    let text: String = chars[start..j].iter().collect();
+    if j + 1 < chars.len() && chars[j + 1] == '(' {
+        let mut k = j + 2;
+        while k < chars.len() && chars[k] != ')' {
+            k += 1;
+        }
+        if k < chars.len() {
+            return Some((text, k + 1));
+        }
+        return None;
+    }
+    Some((text, j + 1))
+}
+
+/// Parse `[text](target)` (no backticks in `text`) starting at the `[` at index
+/// `i`. Returns `(text, index-after-match)` only when `target` looks like a
+/// rustdoc intra-doc path rather than a genuine Markdown link, so real relative
+/// links, anchors, and URLs are left for the caller to emit untouched.
+fn parse_plain_rust_path_link(chars: &[char], i: usize) -> Option<(String, usize)> {
+    let start = i + 1;
+    let mut j = start;
+    while j < chars.len() && chars[j] != ']' && chars[j] != '[' {
+        j += 1;
+    }
+    if j >= chars.len() || chars[j] != ']' || j + 1 >= chars.len() || chars[j + 1] != '(' {
+        return None;
+    }
+    let target_start = j + 2;
+    let mut k = target_start;
+    while k < chars.len() && chars[k] != ')' {
+        k += 1;
+    }
+    if k >= chars.len() {
+        return None;
+    }
+    let target: String = chars[target_start..k].iter().collect();
+    if !looks_like_rust_doc_path(&target) {
+        return None;
+    }
+    let text: String = chars[start..j].iter().collect();
+    Some((text, k + 1))
+}
+
+/// Return `true` when a `[text](target)` link `target` looks like a rustdoc
+/// intra-doc path — `Self::foo`, `crate::Bar::baz`, or a bare identifier —
+/// rather than a genuine Markdown document link, anchor, or URL.
+fn looks_like_rust_doc_path(target: &str) -> bool {
+    let target = target.trim();
+    if target.is_empty() || is_document_link_target(target) {
+        return false;
+    }
+    let Some(first) = target.chars().next() else {
+        return false;
+    };
+    if !(first.is_alphabetic() || first == '_') {
+        return false;
+    }
+    target
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == ':' || c == '(' || c == ')')
+}
+
+/// Return `true` when `target` looks like a genuine Markdown document link,
+/// anchor, or URL that must never be treated as a rustdoc path.
+fn is_document_link_target(target: &str) -> bool {
+    let lower = target.to_ascii_lowercase();
+    target.starts_with('#')
+        || target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("mailto:")
+        || target.starts_with("www.")
+        || target.contains('/')
+        || lower.ends_with(".md")
+        || lower.ends_with(".html")
 }
 
 /// Collapse abutting single-backtick code spans into one span.
