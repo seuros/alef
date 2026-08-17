@@ -11,11 +11,11 @@ use std::fmt::Write as FmtWrite;
 
 use super::docs_input::render_c_docs_json;
 use super::{
-    LeafFieldCheck, build_args_string_c, c_optional_sentinel, emit_nested_accessor, ensure_leaf_field_exists,
-    infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, json_to_c, render_assertion,
-    render_bytes_test_function, render_c_diagnostic_skip, render_engine_factory_test_function,
-    render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter, try_emit_enum_accessor,
-    validate_c_snippet_metadata,
+    LeafFieldCheck, ResultFieldsSource, build_args_string_c, c_optional_sentinel, describe_result_fields_source,
+    emit_nested_accessor, ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
+    json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
+    render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
+    resolve_c_streaming_adapter, try_emit_enum_accessor, validate_c_snippet_metadata,
 };
 
 /// Snippet-local definition of the `ALEF_TEST_SKIP` guard macro.
@@ -154,6 +154,10 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     if !expects_error {
         call_fixture.assertions.clear();
     }
+    // Same shadowing rule as the main test-file emitter (`render_test_file` in `c.rs`):
+    // a nested-field diagnostic raised while rendering this snippet must name whichever
+    // `result_fields` key actually governs `call`, not always the global default. ~keep
+    let result_fields_source = describe_result_fields_source(e2e_config, call);
     let mut function = String::new();
     render_test_function(
         &mut function,
@@ -178,6 +182,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         config,
         type_defs,
         true,
+        &result_fields_source,
     )?;
     let failure_check = format!("if ({result_var} != 0) {{ return EXIT_FAILURE; }}");
     let body_line_count = function.lines().count().saturating_sub(3);
@@ -229,6 +234,7 @@ pub(super) fn render_test_function(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     documentation_snippet: bool,
+    result_fields_source: &ResultFieldsSource,
 ) -> anyhow::Result<()> {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -309,6 +315,7 @@ pub(super) fn render_test_function(
             expects_error,
             raw_c_result_type,
             type_defs,
+            result_fields_source,
         )?;
         return Ok(());
     }
@@ -603,6 +610,7 @@ pub(super) fn render_test_function(
                         result_type_name,
                         f,
                         type_defs,
+                        result_fields_source,
                     )?;
                     if let Some(prim) = leaf_primitive {
                         primitive_locals.insert(local_var.clone(), prim);
@@ -658,6 +666,7 @@ pub(super) fn render_test_function(
                             declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
                             result_type_name,
                             type_defs,
+                            result_fields_source,
                         })?;
                         let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                     }
@@ -1089,6 +1098,7 @@ pub(super) fn render_test_function(
                     result_type_name,
                     f,
                     type_defs,
+                    result_fields_source,
                 )?;
                 if let Some(returned_type) = leaf_result {
                     // Could be a primitive type (primitive_locals) or opaque handle type
@@ -1146,6 +1156,7 @@ pub(super) fn render_test_function(
                         declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
                         result_type_name,
                         type_defs,
+                        result_fields_source,
                     })?;
                     let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({result_var});");
                 }

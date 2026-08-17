@@ -56,6 +56,26 @@ fn is_skipped_c_field(fields_c_types: &HashMap<String, String>, parent_snake: &s
     fields_c_types.get(&key).is_some_and(|t| t == "skip")
 }
 
+/// Field names whose declared `fields_c_types` type is a real IR enum, derived from the
+/// IR rather than authored in config. `fields_enum` membership is `try_emit_enum_accessor`'s
+/// gate (see below): a field absent from it falls through to `infer_opaque_handle_type`,
+/// whose match condition (non-primitive, non-`char*`) is a strict superset of the enum
+/// arm's — so a genuinely enum-typed field that a config entry simply forgot to list
+/// silently renders as an opaque handle instead, and `render_assertion` then emits
+/// `strcmp()` against a `uint64_t`. Returning these field names lets the caller union
+/// them into the effective `fields_enum` set so the IR can independently satisfy the
+/// gate — an override, not the sole source of truth. ~keep
+fn enum_fields_from_ir(
+    fields_c_types: &HashMap<String, String>,
+    enums: &[crate::core::ir::EnumDef],
+) -> HashSet<String> {
+    fields_c_types
+        .iter()
+        .filter(|(_, type_name)| enums.iter().any(|e| &e.name == *type_name))
+        .filter_map(|(key, _)| key.rsplit('.').next().map(str::to_string))
+        .collect()
+}
+
 /// The C ABI represents every opaque/named type (`TypeRef::Named`) as the
 /// scalar generational handle `AlefHandle` (`typedef uint64_t {PREFIX}AlefHandle`)
 /// — see `src/backends/ffi/type_map.rs::c_param_optional`/`c_return_optional`.
@@ -180,7 +200,7 @@ impl E2eCodegen for CCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -329,6 +349,7 @@ impl E2eCodegen for CCodegen {
                 &field_resolver,
                 config,
                 type_defs,
+                enums,
                 ir,
             )?;
             files.push(GeneratedFile {
@@ -547,6 +568,7 @@ fn resolve_call_info(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> ResolvedC
     let result_type_name = overrides
         .and_then(|o| o.result_type.as_ref())
         .cloned()
+        .inspect(|configured| warn_if_result_type_override_disables_verification(configured, call, lang))
         .or_else(|| resolve_ir_result_type(call, lang, ir))
         .unwrap_or_else(|| fallback_result_type_name(call, lang, ir));
     let options_type_name = overrides
@@ -636,6 +658,35 @@ fn resolve_ir_result_type(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> Opti
     named_type(signature.return_type).map(str::to_string)
 }
 
+/// Warn when a per-language `result_type` override names a primitive/pointer C spelling
+/// (`char*`, `int32_t`, `uintptr_t`, ...) rather than the PascalCase IR struct name the field
+/// doc describes.
+///
+/// `overrides.result_type` short-circuits [`resolve_call_info`]'s `.or_else()` chain before
+/// both `resolve_ir_result_type` and [`fallback_result_type_name`] ever run — so unlike the
+/// unresolvable-call case those two cover (which does warn, per the `~keep` above), a
+/// primitive spelling typed into `result_type` reaches no diagnostic at all. It still becomes
+/// `result_type_name`, which is both the accessor prefix and the `parent_is_ir_type` flag
+/// `ensure_leaf_field_exists` reads — no IR type is ever named `"char*"`, so nested-field
+/// verification silently turns off for the call, exactly as it would via the fallback path,
+/// but invisibly. A call whose result genuinely carries no named fields has a documented way
+/// to say so (`result_is_bytes` / `result_is_simple` / the Zig-only `result_is_json_struct`,
+/// all checked at the fallback site) — `result_type` is not it. ~keep
+fn warn_if_result_type_override_disables_verification(configured: &str, call: &CallConfig, lang: &str) {
+    if is_primitive_c_type(configured) || configured == "char*" || configured.ends_with('*') {
+        tracing::warn!(
+            call = %call.function,
+            language = %lang,
+            result_type = %configured,
+            "call/override declares `result_type` as a primitive/pointer C spelling rather than \
+             a PascalCase IR type name, which disables nested-field verification for this call \
+             because no IR type will ever match this name — if the result genuinely carries no \
+             named fields to verify, declare that with `result_is_bytes` / `result_is_simple` \
+             instead"
+        );
+    }
+}
+
 /// Last-resort result type when neither config nor the IR names one: PascalCase the call's
 /// function name.
 ///
@@ -670,6 +721,16 @@ fn fallback_result_type_name(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> S
             %result_type,
             "no core IR available to this generator; result type derived from the call name"
         );
+    } else if call_declares_non_struct_result(call, lang) {
+        tracing::debug!(
+            call = %call.function,
+            language = %lang,
+            %result_type,
+            "call did not resolve to a core IR function or method with a named return type, but \
+             the call/override already declares the result carries no named fields \
+             (result_is_bytes / result_is_simple / result_is_json_struct) — there is no named \
+             type to set and no nested field for the fabricated type to hide"
+        );
     } else {
         tracing::warn!(
             call = %call.function,
@@ -681,6 +742,26 @@ fn fallback_result_type_name(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> S
         );
     }
     result_type
+}
+
+/// True when the call/override already declares that the result carries no named fields to
+/// verify: `result_is_bytes` (raw byte buffer), `result_is_simple` (a bare scalar), or the
+/// Zig-only `result_is_json_struct` escape hatch (an opaque JSON blob the Zig generator parses
+/// and verifies structurally, not through named-field lookup). [`fallback_result_type_name`]'s
+/// warning exists to catch a genuine authoring gap — a call that SHOULD have resolved to a named
+/// IR type but didn't, silently disabling nested-field verification — and none of these three
+/// flags describe that gap: they are the config's own declaration that there is no named type and
+/// no nested field to check, so the fabricated PascalCase name the fallback invents is provably
+/// unused for verification. Checking only `result_is_bytes` would still fire the warning on every
+/// declared-simple or declared-json-struct call, which is the same false alarm with a narrower
+/// blast radius. ~keep
+fn call_declares_non_struct_result(call: &CallConfig, lang: &str) -> bool {
+    if call.result_is_simple || call.result_is_bytes {
+        return true;
+    }
+    call.overrides
+        .get(lang)
+        .is_some_and(|o| o.result_is_simple || o.result_is_bytes || o.result_is_json_struct)
 }
 
 /// Resolve call info for a fixture, with fallback to default call's client_factory.
@@ -791,7 +872,8 @@ mod trait_bridge_snippet;
 mod visitor;
 
 use assertions::{
-    LeafFieldCheck, build_args_string_c, emit_nested_accessor, ensure_leaf_field_exists, render_assertion,
+    LeafFieldCheck, ResultFieldsSource, build_args_string_c, describe_result_fields_source, emit_nested_accessor,
+    ensure_leaf_field_exists, render_assertion,
 };
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
 use project::{render_download_script, render_gitignore, render_makefile};
@@ -815,6 +897,7 @@ fn render_test_file(
     field_resolver: &FieldResolver,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     ir: CallIr<'_>,
 ) -> anyhow::Result<String> {
     let mut out = String::new();
@@ -864,6 +947,14 @@ fn render_test_file(
                 effective_fields_enum.insert(k.clone());
             }
         }
+        // `fields_enum` above is config-declared and can miss a field the IR itself
+        // already proves is enum-shaped — union in every field whose `fields_c_types`
+        // entry names a real IR enum so a missing declaration falls back to IR truth
+        // instead of silently falling through to the opaque-handle arm (which emits
+        // `strcmp()` against a `uint64_t` handle). This only ever ADDS field names: an
+        // explicit config entry the IR check doesn't independently confirm (e.g. a
+        // synthetic field with no `fields_c_types` entry) still passes through untouched. ~keep
+        effective_fields_enum.extend(enum_fields_from_ir(&e2e_config.fields_c_types, enums));
 
         // Per-call field resolver: overrides the top-level resolver when this call
         // declares its own result_fields / fields / fields_optional / fields_array.
@@ -881,6 +972,12 @@ fn render_test_file(
         .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
         let _ = field_resolver; // top-level resolver retained for compat; per-call wins
         let field_resolver = &per_call_field_resolver;
+
+        // Which `result_fields` set governs THIS fixture's call, by the identical
+        // shadowing rule `effective_result_fields` just applied above — a nested-field
+        // diagnostic must name the same key that actually shaped `field_resolver`, or it
+        // sends an operator's edit to a config key their call ignores. ~keep
+        let result_fields_source = describe_result_fields_source(e2e_config, fixture_call);
 
         // `out` accumulates every fixture's rendered function in this file, so the
         // strict-availability scan below must only look at the text THIS fixture's
@@ -910,6 +1007,7 @@ fn render_test_file(
             config,
             type_defs,
             false,
+            &result_fields_source,
         )?;
         crate::e2e::codegen::fail_on_unavailable_field_markers(&out[fixture_start..], "c", &fixture.id);
         if i + 1 < fixtures.len() {
@@ -1386,6 +1484,7 @@ mod snippet_tests {
                 &config,
                 &[],
                 false,
+                &ResultFieldsSource::Global,
             )
             .expect("test fixture renders");
 
@@ -1452,6 +1551,7 @@ mod snippet_tests {
                 &config,
                 &[],
                 false,
+                &ResultFieldsSource::Global,
             )
             .expect("test fixture renders");
 
@@ -1484,6 +1584,82 @@ mod snippet_tests {
         assert!(rendered.contains("sample_clear_formats();"), "{rendered}");
         assert!(!rendered.contains("result ="), "{rendered}");
         assert!(!rendered.contains("_free("), "{rendered}");
+    }
+
+    /// `enum_fields_from_ir` must recover exactly the field a config author forgot to
+    /// list in `fields_enum` -- this is the reported mechanism behind the `strcmp()`-on-
+    /// `uint64_t` defect: `BatchObject.status` maps to the real IR enum `BatchStatus` in
+    /// `fields_c_types`, but nothing in this config declares `status` an enum field.
+    #[test]
+    fn enum_fields_from_ir_recovers_field_missing_from_declared_fields_enum() {
+        let fields_c_types = HashMap::from([("batch_object.status".to_string(), "BatchStatus".to_string())]);
+        let enums = vec![crate::core::ir::EnumDef {
+            name: "BatchStatus".into(),
+            ..crate::core::ir::EnumDef::default()
+        }];
+
+        let derived = enum_fields_from_ir(&fields_c_types, &enums);
+
+        assert_eq!(derived, HashSet::from(["status".to_string()]));
+    }
+
+    /// A field whose `fields_c_types` type does NOT name a real IR enum must not be
+    /// swept in by the override — otherwise a genuine opaque-struct field would be
+    /// misrouted through the enum accessor and the codegen would call a
+    /// `_to_string` function cbindgen never generated for it.
+    #[test]
+    fn enum_fields_from_ir_ignores_a_field_whose_type_is_not_a_registered_enum() {
+        let fields_c_types = HashMap::from([("batch_object.usage".to_string(), "BatchUsage".to_string())]);
+        let enums = vec![crate::core::ir::EnumDef {
+            name: "BatchStatus".into(),
+            ..crate::core::ir::EnumDef::default()
+        }];
+
+        let derived = enum_fields_from_ir(&fields_c_types, &enums);
+
+        assert!(derived.is_empty(), "got: {derived:?}");
+    }
+
+    /// End-to-end proof that the override reaches `try_emit_enum_accessor`: with
+    /// `fields_enum` empty (the reported gap) but the IR-derived override unioned in — the
+    /// same composition `render_test_file` performs — the enum arm must fire and convert
+    /// via `_to_string`, not leave a bare `AlefHandle` for the caller to `strcmp` against.
+    #[test]
+    fn try_emit_enum_accessor_fires_for_a_field_ir_proves_is_an_enum_even_when_fields_enum_omits_it() {
+        let fields_c_types = HashMap::from([("batch_object.status".to_string(), "BatchStatus".to_string())]);
+        let enums = vec![crate::core::ir::EnumDef {
+            name: "BatchStatus".into(),
+            ..crate::core::ir::EnumDef::default()
+        }];
+        let mut fields_enum: HashSet<String> = HashSet::new();
+        fields_enum.extend(enum_fields_from_ir(&fields_c_types, &enums));
+
+        let mut out = String::new();
+        let mut handles = Vec::new();
+        let fired = try_emit_enum_accessor(
+            &mut out,
+            "sample",
+            "SAMPLE",
+            "status",
+            "status",
+            "batch_object",
+            "sample_batch_object_status",
+            "result",
+            "status",
+            &fields_c_types,
+            &fields_enum,
+            &mut handles,
+        );
+
+        assert!(
+            fired,
+            "enum accessor must fire once the IR-derived override is unioned in"
+        );
+        assert!(
+            out.contains("sample_batch_status_to_string("),
+            "must convert via _to_string, not leave a bare handle for strcmp: {out}"
+        );
+        assert!(!out.contains("strcmp"), "{out}");
     }
 }
 
@@ -1619,6 +1795,115 @@ mod result_type_resolution_tests {
         );
     }
 
+    /// The warning fires when a call genuinely has an unresolvable name AND no config
+    /// declaration explains why — the authoring gap the warning exists to catch. The IR is
+    /// deliberately non-empty (a real crate to consult, so `ir.is_absent()` is false) but does
+    /// not name this call, distinguishing this from the "no IR at all" debug case above.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fallback_result_type_name_warns_for_an_unresolvable_call_with_no_declaration() {
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+
+        let result_type = fallback_result_type_name(&call_named("mystery_call"), "c", ir_functions(&functions));
+
+        assert_eq!(result_type, "MysteryCall".to_string());
+        assert!(
+            logs_contain("disables nested-field verification"),
+            "an unresolvable call with no result_is_bytes/simple/json_struct declaration must warn"
+        );
+    }
+
+    /// Negative control / regression for the false alarm this fix addresses: a call whose
+    /// result is declared `result_is_bytes` under the C override has no named type to set and
+    /// no nested field to verify, so the warning's suggested fix ("set `result_type`") is
+    /// meaningless here — and it must not fire. Mirrors the real bug report's exact shape:
+    /// `[crates.e2e.calls.speech.overrides.c] result_is_bytes = true` against a call whose
+    /// IR-side type (`bytes::Bytes`) has no `pub struct`/`pub enum` in core at all.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fallback_result_type_name_stays_silent_for_a_declared_bytes_result() {
+        use crate::e2e::config::CallOverride;
+
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+        let mut call = call_named("speech");
+        call.overrides.insert(
+            "c".to_string(),
+            CallOverride {
+                result_is_bytes: true,
+                ..CallOverride::default()
+            },
+        );
+
+        fallback_result_type_name(&call, "c", ir_functions(&functions));
+
+        assert!(
+            !logs_contain("disables nested-field verification"),
+            "a declared-bytes result has no named type and no nested field to check; warning to \
+             set `result_type` on it is a false alarm"
+        );
+        assert!(
+            logs_contain("carries no named fields"),
+            "apparatus check: the debug-level explanation must actually fire, or the silence \
+             above proves nothing about which branch ran"
+        );
+    }
+
+    /// The call-level `result_is_simple` flag — identical semantics to `result_is_bytes`: no
+    /// named struct, nothing to verify — must suppress the warning too, not just the
+    /// byte-buffer case.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fallback_result_type_name_stays_silent_for_a_call_level_simple_result() {
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+        let mut call = call_named("ping");
+        call.result_is_simple = true;
+
+        fallback_result_type_name(&call, "c", ir_functions(&functions));
+
+        assert!(!logs_contain("disables nested-field verification"));
+        assert!(logs_contain("carries no named fields"));
+    }
+
+    /// The Zig-only `result_is_json_struct` override flag makes the same "opaque, verified
+    /// structurally, not by named-field lookup" declaration and belongs in the same
+    /// suppression set as `result_is_bytes` / `result_is_simple`.
+    #[tracing_test::traced_test]
+    #[test]
+    fn fallback_result_type_name_stays_silent_for_a_declared_json_struct_result() {
+        use crate::e2e::config::CallOverride;
+
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+        let mut call = call_named("extract");
+        call.overrides.insert(
+            "c".to_string(),
+            CallOverride {
+                result_is_json_struct: true,
+                ..CallOverride::default()
+            },
+        );
+
+        fallback_result_type_name(&call, "c", ir_functions(&functions));
+
+        assert!(!logs_contain("disables nested-field verification"));
+        assert!(logs_contain("carries no named fields"));
+    }
+
     /// The other half of the gap this module documents: `ApiSurface::functions` holds free
     /// `pub fn`s only, so a call naming an inherent or trait method — liter-llm's `chat`, the
     /// motivating case — is absent from it no matter how well `functions` is threaded. The
@@ -1724,6 +2009,62 @@ mod result_type_resolution_tests {
         assert_eq!(
             resolve_call_info(&call_named("complete"), "c", CallIr::default()).result_type_name,
             "Complete".to_string()
+        );
+    }
+
+    /// Task 4: an operator-set `result_type` override short-circuits BOTH the IR lookup and
+    /// `fallback_result_type_name` — so a primitive/pointer spelling there (a call override
+    /// typo, or copy-pasting `raw_c_result_type`'s valid values into the wrong field) reached
+    /// no diagnostic at all before this, unlike the unresolvable-call case one test above,
+    /// which does warn. This is the positive case: the warning must fire.
+    #[tracing_test::traced_test]
+    #[test]
+    fn resolve_call_info_warns_when_result_type_override_is_a_primitive_spelling() {
+        use crate::e2e::config::CallOverride;
+
+        let mut call = call_named("speech");
+        call.overrides.insert(
+            "c".to_string(),
+            CallOverride {
+                result_type: Some("char*".to_string()),
+                ..CallOverride::default()
+            },
+        );
+
+        let result_type_name = resolve_call_info(&call, "c", CallIr::default()).result_type_name;
+
+        assert_eq!(result_type_name, "char*".to_string());
+        assert!(
+            logs_contain("disables nested-field verification"),
+            "a primitive/pointer result_type override must warn that it disables verification"
+        );
+    }
+
+    /// Negative control: a genuine PascalCase override is exactly what the `result_type`
+    /// field's own doc comment (and `fallback_result_type_name`'s "set `result_type` on the
+    /// call override" advice) recommend when the IR cannot model a call at all. That legitimate
+    /// use must stay silent.
+    #[tracing_test::traced_test]
+    #[test]
+    fn resolve_call_info_stays_silent_for_a_genuine_pascal_case_result_type_override() {
+        use crate::e2e::config::CallOverride;
+
+        let mut call = call_named("legacy_export");
+        call.overrides.insert(
+            "c".to_string(),
+            CallOverride {
+                result_type: Some("LegacyExportResult".to_string()),
+                ..CallOverride::default()
+            },
+        );
+
+        let result_type_name = resolve_call_info(&call, "c", CallIr::default()).result_type_name;
+
+        assert_eq!(result_type_name, "LegacyExportResult".to_string());
+        assert!(
+            !logs_contain("disables nested-field verification"),
+            "a real PascalCase type name plugging an IR gap is the documented, intended use and \
+             must not warn"
         );
     }
 }

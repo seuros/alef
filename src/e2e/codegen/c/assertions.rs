@@ -2,6 +2,7 @@
 
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::config::{CallConfig, E2eConfig};
 use crate::e2e::escape::escape_c;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
@@ -37,6 +38,7 @@ pub(super) fn emit_nested_accessor(
     result_type_name: &str,
     raw_field: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    result_fields_source: &ResultFieldsSource,
 ) -> anyhow::Result<Option<String>> {
     let segments: Vec<&str> = resolved.split('.').collect();
     // cbindgen's `[export] prefix` is shouty-snake, not uppercase; re-deriving it here as
@@ -258,6 +260,7 @@ pub(super) fn emit_nested_accessor(
                 declared_in_fields_c_types: fields_c_types.contains_key(&lookup_key),
                 result_type_name,
                 type_defs,
+                result_fields_source,
             })?;
             let _ = writeln!(out, "    char* {local_var} = {accessor_fn}({current_handle});");
         } else {
@@ -646,6 +649,47 @@ fn ambiguous_field_name_suffix(seg_snake: &str, result_type_name: &str, chains: 
     )
 }
 
+/// Where the `result_fields` set actually governing a call came from: the per-call
+/// override, or the global `[crates.e2e].result_fields` default that only applies when
+/// the call declares no override of its own.
+///
+/// Exists so a diagnostic can name the ONE config key an edit will actually reach.
+/// `E2eConfig::effective_result_fields` REPLACES the global set outright when a call's
+/// own `result_fields` is non-empty — it never merges the two — so a message that always
+/// names the global key is actively wrong for every call with an override. That exact
+/// wrongness shipped once already: it told a consumer with a per-call override to edit
+/// the global key, they did, nothing changed, and they filed it as a codegen blocker. ~keep
+pub(super) enum ResultFieldsSource {
+    /// The global `[crates.e2e].result_fields` set is what's in effect for this call.
+    Global,
+    /// A per-call override is what's in effect, named by its TOML table path (e.g.
+    /// `"[crates.e2e.calls.crawl]"`, or the unnamed default `"[crates.e2e.call]"`).
+    PerCall(String),
+}
+
+/// Determine which `result_fields` set governs `call`, by the same rule
+/// [`E2eConfig::effective_result_fields`] applies: a non-empty per-call `result_fields`
+/// wins outright, it never merges with the global default.
+///
+/// `call` is matched against `e2e_config.calls`/`e2e_config.call` by pointer identity
+/// rather than by name, because a caller that reached `call` through
+/// `resolve_call_for_fixture`'s `select_when` auto-routing does not get the matched key
+/// back — the resolved `&CallConfig` reference is the only thing both the explicit-name
+/// path and the auto-routed path have in common. ~keep
+pub(super) fn describe_result_fields_source(e2e_config: &E2eConfig, call: &CallConfig) -> ResultFieldsSource {
+    if call.result_fields.is_empty() {
+        return ResultFieldsSource::Global;
+    }
+    match e2e_config
+        .calls
+        .iter()
+        .find(|(_, candidate)| std::ptr::eq(*candidate, call))
+    {
+        Some((name, _)) => ResultFieldsSource::PerCall(format!("[crates.e2e.calls.{name}]")),
+        None => ResultFieldsSource::PerCall("[crates.e2e.call]".to_string()),
+    }
+}
+
 /// Inputs for [`ensure_leaf_field_exists`]. A struct, not a handful of positional
 /// `&str`s, for the same reason [`MissingIntermediateType`] is one.
 pub(super) struct LeafFieldCheck<'a> {
@@ -671,6 +715,9 @@ pub(super) struct LeafFieldCheck<'a> {
     /// The type the walk started from.
     pub result_type_name: &'a str,
     pub type_defs: &'a [crate::core::ir::TypeDef],
+    /// Which `result_fields` set governs the call this leaf belongs to — threaded through
+    /// so the diagnostic can name the one config key an edit will actually reach.
+    pub result_fields_source: &'a ResultFieldsSource,
 }
 
 /// Reject a leaf field the IR positively says the parent type does not have.
@@ -710,6 +757,7 @@ pub(super) fn ensure_leaf_field_exists(check: LeafFieldCheck<'_>) -> anyhow::Res
             parent_type: &parent.name,
             result_type_name: check.result_type_name,
             type_defs: check.type_defs,
+            result_fields_source: check.result_fields_source,
         })
     )
 }
@@ -726,6 +774,7 @@ struct UnknownLeafField<'a> {
     parent_type: &'a str,
     result_type_name: &'a str,
     type_defs: &'a [crate::core::ir::TypeDef],
+    result_fields_source: &'a ResultFieldsSource,
 }
 
 /// Explain a leaf segment that names no field of the type the walk arrived at.
@@ -747,6 +796,7 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
         parent_type,
         result_type_name,
         type_defs,
+        result_fields_source,
     } = context;
 
     let mut message = format!(
@@ -805,9 +855,19 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
     // fixture path genuinely names a chain that does not exist and needs an alias. ~keep
     match namespace.filter(|namespace| real_path.starts_with(&format!("{namespace}."))) {
         Some(namespace) => {
+            // `result_fields` here means whichever set `effective_result_fields` actually
+            // resolved for THIS call -- a non-empty per-call override replaces the global
+            // default outright (see `E2eConfig::effective_result_fields`), so naming the
+            // global key when a per-call override shadows it sends an edit nowhere: a
+            // consumer followed exactly that instruction, edited the global key, and it
+            // changed nothing because their call had its own `result_fields`. ~keep
+            let result_fields_key = match result_fields_source {
+                ResultFieldsSource::Global => "`[crates.e2e].result_fields`".to_string(),
+                ResultFieldsSource::PerCall(label) => format!("`{label}.result_fields`"),
+            };
             let _ = write!(
                 message,
-                " Fix: add \"{namespace}\" to `[crates.e2e].result_fields` so alef stops treating it as a virtual \
+                " Fix: add \"{namespace}\" to {result_fields_key} so alef stops treating it as a virtual \
                  namespace prefix and walks it as the real field it is. An alias here would be an identity mapping \
                  and would not stop the stripping."
             );
@@ -961,10 +1021,13 @@ pub(super) fn render_assertion(
 
     let field_is_primitive = primitive_locals.contains_key(&field_expr);
     let field_primitive_type = primitive_locals.get(&field_expr).cloned();
-    // Opaque-handle fields (e.g. `usage` → SAMPLELLMUsage*) cannot be treated
-    // as C strings — `strlen` / `strcmp` on a struct pointer is undefined
-    // behavior (SIGABRT in practice). `not_empty` / `is_empty` collapse to
-    // NULL checks; other string assertions are skipped for these fields.
+    // Opaque-handle fields (e.g. `usage` → SAMPLELLMUsage*, or an enum field a missing
+    // `fields_enum`/IR-enum declaration failed to route through `try_emit_enum_accessor`)
+    // cannot be treated as C strings — `strlen`/`strcmp`/`strstr`/`regexec` on a scalar
+    // `AlefHandle` (`uint64_t`) is undefined behavior at best and a type error at worst.
+    // Every string-shaped assertion arm below guards on this flag and falls back to a
+    // non-zero existence check (matching the sentinel the handle actually uses) rather
+    // than emitting a comparison against a value the ABI carries as an integer. ~keep
     let field_is_opaque_handle = opaque_handle_locals.contains_key(&field_expr);
     // Map-access fields are extracted via `alef_json_get_string` and end up
     // as char*. When the assertion expects a numeric or boolean value, we
@@ -1022,6 +1085,20 @@ pub(super) fn render_assertion(
                             "    assert({field_expr} == {cmp_val} && \"equals assertion failed\");"
                         );
                     }
+                } else if field_is_opaque_handle {
+                    if expected.is_number() {
+                        // A numeric expected value compares exactly against the handle.
+                        let _ = writeln!(
+                            out,
+                            "    assert({field_expr} == {c_val} && \"equals assertion failed\");"
+                        );
+                    } else {
+                        // A string expected value against a handle means the field should
+                        // have been routed through `try_emit_enum_accessor` and wasn't;
+                        // `field_expr == "..."` would compile as a pointer comparison that
+                        // always lies, so weaken to existence instead of emitting that.
+                        let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+                    }
                 } else if expected.is_string() {
                     let _ = writeln!(
                         out,
@@ -1057,7 +1134,9 @@ pub(super) fn render_assertion(
             }
         }
         "contains" => {
-            if let Some(expected) = &assertion.value {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);
                 let _ = writeln!(
                     out,
@@ -1066,7 +1145,9 @@ pub(super) fn render_assertion(
             }
         }
         "contains_all" => {
-            if let Some(values) = &assertion.values {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(values) = &assertion.values {
                 for val in values {
                     let c_val = json_to_c(val);
                     let _ = writeln!(
@@ -1077,7 +1158,9 @@ pub(super) fn render_assertion(
             }
         }
         "not_contains" => {
-            if let Some(expected) = &assertion.value {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);
                 let _ = writeln!(
                     out,
@@ -1116,7 +1199,9 @@ pub(super) fn render_assertion(
             }
         }
         "contains_any" => {
-            if let Some(values) = &assertion.values {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(values) = &assertion.values {
                 let _ = writeln!(out, "    {{");
                 let _ = writeln!(out, "        int found = 0;");
                 for val in values {
@@ -1192,7 +1277,9 @@ pub(super) fn render_assertion(
             }
         }
         "starts_with" => {
-            if let Some(expected) = &assertion.value {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);
                 let _ = writeln!(
                     out,
@@ -1201,7 +1288,9 @@ pub(super) fn render_assertion(
             }
         }
         "ends_with" => {
-            if let Some(expected) = &assertion.value {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);
                 let _ = writeln!(out, "    assert(strlen({field_expr}) >= strlen({c_val}) && ");
                 let _ = writeln!(
@@ -1211,7 +1300,9 @@ pub(super) fn render_assertion(
             }
         }
         "min_length" => {
-            if let Some(val) = &assertion.value
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
                 let _ = writeln!(
@@ -1221,7 +1312,9 @@ pub(super) fn render_assertion(
             }
         }
         "max_length" => {
-            if let Some(val) = &assertion.value
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
                 let _ = writeln!(
@@ -1286,7 +1379,9 @@ pub(super) fn render_assertion(
             }
         }
         "matches_regex" => {
-            if let Some(expected) = &assertion.value {
+            if field_is_opaque_handle {
+                let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
+            } else if let Some(expected) = &assertion.value {
                 let c_val = json_to_c(expected);
                 let _ = writeln!(out, "    {{");
                 let _ = writeln!(out, "        regex_t _re;");
@@ -1562,6 +1657,93 @@ mod tests {
         assert!(out.contains("skipped"), "got: {out}");
     }
 
+    /// Task 1c backstop: even after the enum-vs-opaque-handle classification gap is
+    /// fixed elsewhere, a field `render_assertion` is told is a genuine opaque handle
+    /// must never be compared via `strcmp` — the ABI carries it as a scalar `uint64_t`
+    /// `AlefHandle`, and `strcmp` on that is undefined behavior, not merely wrong. A
+    /// numeric `equals` value must compare exactly instead.
+    #[test]
+    fn equals_assertion_on_opaque_handle_compares_numerically_not_via_strcmp() {
+        let reachable: HashSet<String> = ["status".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("status".to_string()),
+            value: Some(serde_json::json!(2)),
+            ..Default::default()
+        };
+        let accessed_fields = [("status".to_string(), "status".to_string(), false)];
+        let mut opaque_handle_locals = HashMap::new();
+        opaque_handle_locals.insert("status".to_string(), "batch_status".to_string());
+
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            &resolver,
+            &accessed_fields,
+            &HashMap::new(),
+            &opaque_handle_locals,
+        );
+
+        assert!(out.contains("status == 2"), "got: {out}");
+        assert!(!out.contains("strcmp"), "must not strcmp a uint64_t handle: {out}");
+    }
+
+    /// Negative control / companion: a string expected value against an opaque handle
+    /// means the field should have matched `try_emit_enum_accessor` and didn't. Rather
+    /// than emit `status == "completed"` — a pointer comparison against a string literal
+    /// that compiles cleanly and always lies — this weakens to an honest existence check,
+    /// mirroring the precedent already established for `not_empty`/`is_empty`.
+    #[test]
+    fn equals_assertion_on_opaque_handle_with_string_value_falls_back_to_existence_check() {
+        let reachable: HashSet<String> = ["status".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(reachable, HashSet::new());
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("status".to_string()),
+            value: Some(serde_json::Value::String("completed".to_string())),
+            ..Default::default()
+        };
+        let accessed_fields = [("status".to_string(), "status".to_string(), false)];
+        let mut opaque_handle_locals = HashMap::new();
+        opaque_handle_locals.insert("status".to_string(), "batch_status".to_string());
+
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "sample",
+            &resolver,
+            &accessed_fields,
+            &HashMap::new(),
+            &opaque_handle_locals,
+        );
+
+        assert!(out.contains("status != 0"), "got: {out}");
+        assert!(
+            !out.contains("strcmp"),
+            "must not compare a uint64_t handle to a string literal: {out}"
+        );
+    }
+
     #[test]
     fn nested_optional_handle_type_comes_from_ir_when_config_mapping_is_absent() {
         let types = [
@@ -1599,6 +1781,7 @@ mod tests {
             "ExtractionResult",
             "summary.processed",
             &types,
+            &ResultFieldsSource::Global,
         )
         .expect("every hop resolves");
 
@@ -1659,6 +1842,7 @@ mod tests {
             "ScrapeResult",
             "article.tags.length",
             &crawlberg_article_types(),
+            &ResultFieldsSource::Global,
         )
         .expect_err("`tags` is not a field of ScrapeResult")
     }
@@ -1739,6 +1923,7 @@ mod tests {
             "ScrapeResult",
             "nowhere.length",
             &crawlberg_article_types(),
+            &ResultFieldsSource::Global,
         )
         .expect_err("`nowhere` is not a field of anything");
 
@@ -1862,6 +2047,7 @@ mod tests {
             "CompletionResponse",
             raw_field,
             &completion_response_types(),
+            &ResultFieldsSource::Global,
         )?;
         Ok((output, leaf))
     }
@@ -1972,6 +2158,7 @@ mod tests {
             "UnmodelledResult",
             "metadata.title",
             &completion_response_types(),
+            &ResultFieldsSource::Global,
         )
         .expect("an unmodelled parent type must not be treated as proof the leaf is absent");
 
@@ -2017,7 +2204,10 @@ mod tests {
         ]
     }
 
-    fn check_ts_pack_stripped_leaf(declared_in_fields_c_types: bool) -> anyhow::Result<()> {
+    fn check_ts_pack_stripped_leaf(
+        declared_in_fields_c_types: bool,
+        result_fields_source: &ResultFieldsSource,
+    ) -> anyhow::Result<()> {
         let types = ts_pack_types();
         ensure_leaf_field_exists(LeafFieldCheck {
             prefix: "ts_pack",
@@ -2030,12 +2220,13 @@ mod tests {
             declared_in_fields_c_types,
             result_type_name: "ProcessResult",
             type_defs: &types,
+            result_fields_source,
         })
     }
 
     #[test]
     fn namespace_stripped_leaf_that_is_not_a_result_type_field_is_rejected() {
-        let message = check_ts_pack_stripped_leaf(false)
+        let message = check_ts_pack_stripped_leaf(false, &ResultFieldsSource::Global)
             .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
             .to_string();
 
@@ -2056,10 +2247,11 @@ mod tests {
     /// The remedy differs from the aliasable case and the message must not confuse them: an
     /// alias here would be `"data.kind" = "data.kind"`, an identity mapping that leaves
     /// `namespace_stripped_path` (which reads `result_fields`, not the alias table) stripping
-    /// exactly as before.
+    /// exactly as before. This is the global-in-effect case: no per-call override, so the
+    /// global key really is the one an edit reaches.
     #[test]
     fn stripped_leaf_diagnostic_names_result_fields_not_an_identity_alias() {
-        let message = check_ts_pack_stripped_leaf(false)
+        let message = check_ts_pack_stripped_leaf(false, &ResultFieldsSource::Global)
             .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
             .to_string();
 
@@ -2073,9 +2265,84 @@ mod tests {
         );
     }
 
+    /// The defect this type exists to prevent: a per-call `result_fields` override
+    /// REPLACES the global default outright (`E2eConfig::effective_result_fields`), so
+    /// when a per-call override is what's in effect, the "Fix:" must name that call's own
+    /// key -- never the global one, which a consumer reported editing to no effect
+    /// because their call's per-call list is what actually governed the walk.
+    #[test]
+    fn stripped_leaf_diagnostic_names_the_per_call_result_fields_when_that_is_what_shadows() {
+        let source = ResultFieldsSource::PerCall("[crates.e2e.calls.crawl]".to_string());
+        let message = check_ts_pack_stripped_leaf(false, &source)
+            .expect_err("`kind` is a field of `DataNode`, not of `ProcessResult`")
+            .to_string();
+
+        assert!(
+            message.contains("add \"data\" to `[crates.e2e.calls.crawl].result_fields`"),
+            "must name the per-call key that actually governs this call: {message}"
+        );
+        assert!(
+            !message.contains("`[crates.e2e].result_fields`"),
+            "must not point at the global key when a per-call override shadows it: {message}"
+        );
+    }
+
+    /// The unnamed default call (`[crates.e2e.call]`) can also carry its own
+    /// `result_fields` override -- it is looked up the same way a named call is, just
+    /// with no entry in `e2e_config.calls` to match by pointer. The message must still
+    /// name it, not fall back to claiming it's the global key.
+    #[test]
+    fn describe_result_fields_source_names_the_unnamed_default_call() {
+        let e2e_config = E2eConfig::default();
+        let call = CallConfig {
+            result_fields: HashSet::from(["pages".to_string()]),
+            ..CallConfig::default()
+        };
+
+        let source = describe_result_fields_source(&e2e_config, &call);
+
+        match source {
+            ResultFieldsSource::PerCall(label) => assert_eq!(label, "[crates.e2e.call]"),
+            ResultFieldsSource::Global => panic!("a non-empty call.result_fields must never resolve to Global"),
+        }
+    }
+
+    /// The common case: a named call in `[crates.e2e.calls]` with its own override must be
+    /// identified by that name, so the operator can find the exact TOML table to edit.
+    #[test]
+    fn describe_result_fields_source_names_a_call_matched_by_pointer_identity() {
+        let mut e2e_config = E2eConfig::default();
+        let crawl_call = CallConfig {
+            result_fields: HashSet::from(["pages".to_string()]),
+            ..CallConfig::default()
+        };
+        e2e_config.calls.insert("crawl".to_string(), crawl_call);
+
+        let source = describe_result_fields_source(&e2e_config, &e2e_config.calls["crawl"]);
+
+        match source {
+            ResultFieldsSource::PerCall(label) => assert_eq!(label, "[crates.e2e.calls.crawl]"),
+            ResultFieldsSource::Global => panic!("a non-empty call.result_fields must never resolve to Global"),
+        }
+    }
+
+    /// A call with no `result_fields` override always defers to the global default,
+    /// regardless of whether it is named or the unnamed default call.
+    #[test]
+    fn describe_result_fields_source_is_global_when_the_call_declares_no_override() {
+        let e2e_config = E2eConfig::default();
+        let call = CallConfig::default();
+
+        assert!(matches!(
+            describe_result_fields_source(&e2e_config, &call),
+            ResultFieldsSource::Global
+        ));
+    }
+
     #[test]
     fn explicitly_declared_flat_leaf_type_overrides_the_ir_check() {
-        check_ts_pack_stripped_leaf(true).expect("an explicit fields_c_types declaration is authoritative");
+        check_ts_pack_stripped_leaf(true, &ResultFieldsSource::Global)
+            .expect("an explicit fields_c_types declaration is authoritative");
     }
 
     /// The full `ProcessResult.data -> DataNode.kind` shape once `data` is correctly
@@ -2143,6 +2410,7 @@ mod tests {
             "ProcessResult",
             "data.kind",
             &types,
+            &ResultFieldsSource::Global,
         )
         .expect("the Option<DataNode> hop and the enum leaf both resolve");
 
@@ -2222,6 +2490,7 @@ mod tests {
             declared_in_fields_c_types: false,
             result_type_name: "ProcessResult",
             type_defs: &types,
+            result_fields_source: &ResultFieldsSource::Global,
         })
         .expect_err("`kind` is not a field of `ProcessResult` itself")
         .to_string();
