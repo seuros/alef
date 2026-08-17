@@ -549,8 +549,8 @@ fn type_stubs_honor_php_excludes_and_enum_wire_values() {
         "excluded function leaked into stubs:\n{content}"
     );
     assert!(
-        content.contains("case PlainText = 'plain-text';"),
-        "enum stub must use serde wire value:\n{content}"
+        content.contains("public const PLAINTEXT = 'plain-text';"),
+        "enum stub constant must use serde wire value, not the ident:\n{content}"
     );
 }
 

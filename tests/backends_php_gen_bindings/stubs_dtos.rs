@@ -495,8 +495,13 @@ fn test_dto_properties_use_camel_case_php_names() {
     );
 }
 
+/// The extension registers a unit-variant enum as `#[php_class] pub struct {Name} {}` plus a
+/// `#[php_impl]` block of `pub const` members (`gen_enum_constants`, `types/enums.rs`) — ext-php-rs
+/// has no native-enum registration path, so a stub describing anything else would be a false
+/// declaration. Named for what it actually asserts now; it used to assert the native `enum ...
+/// : string` shape before that shape was found to describe an API the extension never provides.
 #[test]
-fn test_unit_enums_emit_native_php_81_backed_enums() {
+fn test_unit_enums_emit_constants_class_with_wire_values() {
     let backend = PhpBackend;
 
     let api = ApiSurface {
@@ -558,7 +563,7 @@ fn test_unit_enums_emit_native_php_81_backed_enums() {
             serde_tag: None,
             serde_content: None,
             serde_untagged: false,
-            serde_rename_all: None,
+            serde_rename_all: Some("snake_case".to_string()),
             binding_excluded: false,
             binding_exclusion_reason: None,
             excluded_variants: vec![],
@@ -581,24 +586,25 @@ fn test_unit_enums_emit_native_php_81_backed_enums() {
     let content = &stubs.content;
 
     assert!(
-        content.contains("enum OutputFormat: string"),
-        "Unit-variant enum should be emitted as PHP 8.1+ native enum with string backing\nContent:\n{content}"
+        content.contains("final class OutputFormat"),
+        "Unit-variant enum should be emitted as the constants-only class the extension registers\nContent:\n{content}"
     );
     assert!(
-        content.contains("case Text = "),
-        "Enum case Text should be present with value\nContent:\n{content}"
+        content.contains("public const TEXT = 'text';"),
+        "Enum constant TEXT should carry the serde wire value, not the ident\nContent:\n{content}"
     );
     assert!(
-        content.contains("case Markdown = "),
-        "Enum case Markdown should be present with value\nContent:\n{content}"
+        content.contains("public const MARKDOWN = 'markdown';"),
+        "Enum constant MARKDOWN should carry the serde wire value, not the ident\nContent:\n{content}"
     );
     assert!(
-        content.contains("case Html = "),
-        "Enum case Html should be present with value\nContent:\n{content}"
+        content.contains("public const HTML = 'html';"),
+        "Enum constant HTML should carry the serde wire value, not the ident\nContent:\n{content}"
     );
 
     assert!(
-        !content.contains("final class OutputFormat") && !content.contains("public const Text"),
-        "Unit-variant enum should NOT be emitted as a class with constants\nContent:\n{content}"
+        !content.contains("enum OutputFormat: string") && !content.contains("case Text"),
+        "Unit-variant enum should NOT be emitted as a native PHP enum — the extension never \
+         registers one\nContent:\n{content}"
     );
 }

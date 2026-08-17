@@ -426,6 +426,26 @@ fn unit_variant_enum_stub_escapes_reserved_word_constant_names() {
     assert!(stub.contains("public const CLASS_ = 'Class';"), "{stub}");
 }
 
+/// Pins the property that made the tagged-enum-declaration/constant-stub swap safe: the stub
+/// constant's value must be the serde wire value, not the Rust variant ident, even when only a
+/// per-variant `serde_rename` is set (no `serde_rename_all`) -- `enum_constant_entries` must feed
+/// `variant.serde_rename` into `wire_variant_value`, not skip it. Without this, a caller comparing
+/// against the extension's own published constant would silently never match, and passing the
+/// constant back in would fall through to the default variant.
+#[test]
+fn unit_variant_enum_stub_constant_value_is_serde_rename_not_ident() {
+    let mut renamed = variant("InProgress", vec![]);
+    renamed.serde_rename = Some("in_progress_wire".to_string());
+    let def = enum_def("Status", vec![renamed, variant("Done", vec![])]);
+
+    let stub = gen_enum_stub(&def, &AHashSet::new());
+
+    assert!(stub.contains("final class Status"), "{stub}");
+    assert!(stub.contains("public const INPROGRESS = 'in_progress_wire';"), "{stub}");
+    assert!(!stub.contains("public const INPROGRESS = 'InProgress';"), "{stub}");
+    assert!(stub.contains("public const DONE = 'Done';"), "{stub}");
+}
+
 /// `gen_struct_constructor_stub_params` types a required field via the promoted-property shape;
 /// a field whose type is a unit-variant enum must be typed `string`, matching what
 /// `PhpMapper::named` actually lowers it to at the FFI boundary, not the enum's own class name.

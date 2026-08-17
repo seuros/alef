@@ -316,10 +316,6 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("php_doc_line.jinja", include_str!("templates/php_doc_line.jinja")),
     (
-        "php_enum_stub_start.jinja",
-        include_str!("templates/php_enum_stub_start.jinja"),
-    ),
-    (
         "php_enum_constant_stub.jinja",
         include_str!("templates/php_enum_constant_stub.jinja"),
     ),
