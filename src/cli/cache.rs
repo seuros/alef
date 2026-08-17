@@ -1064,6 +1064,176 @@ mod tests {
         assert!(!composer_json.exists(), "orphaned composer.json must be deleted");
     }
 
+    /// Regression for the `alef all` binding-orphan sweep's baseline collision: `alef all`'s
+    /// dedicated `all-bindings-{lang}-ownership` stage manifest (read via [`read_stage_paths`],
+    /// written via [`write_stage_hash`]) must be a distinct file from `<lang>.manifest`, so that
+    /// `write_lang_hash` -- the call `pipeline::generate` makes unconditionally for every language
+    /// it regenerates -- can never clobber it. Before `bin_cli/all_commands.rs` moved off
+    /// `read_lang_manifest`, reading `<lang>.manifest` as the "previous run" baseline after
+    /// `pipeline::generate` had already overwritten it with THIS run's own output meant a dropped
+    /// binding could never be seen as missing -- see
+    /// `cli::pipeline::generate::generation::lang_manifest_baseline_self_erases_before_the_orphan_sweep_ever_reads_it`
+    /// for the pinned reproduction of that old behaviour. This test proves the replacement baseline
+    /// does not share that fate.
+    #[test]
+    fn all_bindings_ownership_baseline_survives_the_lang_manifest_collision_that_used_to_erase_it() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dropped_type_file = tmp.path().join("packages/python/dropped_type.py");
+        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+
+        let result = (|| -> anyhow::Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+            // Run N-1's write-back: the dedicated ownership stage records the file that still
+            // existed back then.
+            write_stage_hash(
+                "sample",
+                "all-bindings-python-ownership",
+                "sources-hash-n-minus-1",
+                &[dropped_type_file.clone()],
+            )?;
+
+            // Run N: the type folded into a capsule type, so `pipeline::generate` no longer emits
+            // it, and calls `write_lang_hash` (unconditionally, for every regenerated language) with
+            // the smaller list -- exactly the call that used to be misread as the sweep's baseline.
+            write_lang_hash("sample", "python", "lang-hash-n", &[])?;
+
+            let dedicated_baseline = read_stage_paths("sample", "all-bindings-python-ownership");
+            let lang_manifest = read_lang_manifest("sample", "python");
+            Ok((dedicated_baseline, lang_manifest))
+        })();
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        let (dedicated_baseline, lang_manifest) = result.expect("baseline read");
+        assert_eq!(
+            dedicated_baseline,
+            vec![dropped_type_file],
+            "the dedicated ownership stage must still report last run's file list, unaffected by \
+             `write_lang_hash` overwriting the unrelated `<lang>.manifest` file"
+        );
+        assert!(
+            lang_manifest.is_empty(),
+            "`<lang>.manifest` itself is expected to have been overwritten by `write_lang_hash` -- \
+             that overwrite is legitimate cache-invalidation behaviour; the fix is to stop reading \
+             this file as the sweep baseline, not to change what it stores"
+        );
+    }
+
+    /// With a correct baseline in place, a binding this run no longer emits must be swept -- the
+    /// behaviour that never worked while `alef all` read `<lang>.manifest` as its baseline (see
+    /// [`all_bindings_ownership_baseline_survives_the_lang_manifest_collision_that_used_to_erase_it`]).
+    #[test]
+    fn all_bindings_ownership_correct_baseline_sweeps_a_binding_this_run_no_longer_emits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package_dir = dir.path().join("packages/python");
+        std::fs::create_dir_all(&package_dir).expect("create package dir");
+
+        let kept_file = package_dir.join("kept_type.py");
+        let dropped_file = package_dir.join("dropped_type.py");
+        std::fs::write(&kept_file, "kept\n").expect("write kept file");
+        let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+        let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+        std::fs::write(&dropped_file, &hashed).expect("write dropped file");
+
+        let previous_paths = vec![kept_file.clone(), dropped_file.clone()];
+        let mut keep = std::collections::HashSet::new();
+        keep.insert(kept_file.clone());
+
+        let removed =
+            crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir]).expect("sweep");
+
+        assert_eq!(removed, 1, "exactly the dropped binding must be swept");
+        assert!(
+            !dropped_file.exists(),
+            "the binding this run no longer emits must be deleted"
+        );
+        assert!(
+            kept_file.exists(),
+            "a binding still in this run's keep set must survive"
+        );
+    }
+
+    /// A missing baseline -- the state of a fresh `.alef/` cache, or of every crate on the first
+    /// `alef all` run after this fix ships -- must sweep nothing. Getting this backwards would
+    /// delete a consumer's entire generated tree on upgrade: non-negotiable.
+    #[test]
+    fn all_bindings_ownership_missing_baseline_sweeps_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package_dir = dir.path().join("packages/python");
+        std::fs::create_dir_all(&package_dir).expect("create package dir");
+
+        let untouched_file = package_dir.join("untouched_type.py");
+        let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+        let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+        std::fs::write(&untouched_file, &hashed).expect("write file");
+
+        // No prior `write_stage_hash` call for this stage at all -- `read_stage_paths` degrades to
+        // an empty `Vec`, mirroring the crate-fresh / upgrade case.
+        let previous_paths = read_stage_paths(
+            "crate-with-no-prior-all-bindings-ownership-record",
+            "all-bindings-python-ownership",
+        );
+        assert!(previous_paths.is_empty(), "a never-written stage must read back empty");
+
+        let keep = std::collections::HashSet::new();
+        let removed =
+            crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir]).expect("sweep");
+
+        assert_eq!(removed, 0, "a missing baseline must sweep nothing, never everything");
+        assert!(
+            untouched_file.exists(),
+            "a file must never be deleted on the strength of an absent baseline"
+        );
+    }
+
+    /// A path alef never recorded owning must never be swept, even when it sits inside a directory
+    /// the sweep is allowed to touch and even when nothing this run keeps. Non-negotiable negative
+    /// control: `previous_paths` membership is the only ownership evidence `sweep_manifest_orphans`
+    /// accepts, and a file absent from it must be invisible to the sweep regardless of location.
+    #[test]
+    fn all_bindings_ownership_never_owned_path_is_left_untouched_even_when_present_in_sweep_root() {
+        let _guard = CWD_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let original_cwd = std::env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::env::set_current_dir(tmp.path()).expect("chdir into tempdir");
+
+        let result = (|| -> anyhow::Result<(usize, bool, bool, bool)> {
+            let package_dir = tmp.path().join("packages/python");
+            std::fs::create_dir_all(&package_dir)?;
+
+            let owned_file = package_dir.join("owned_type.py");
+            let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+            let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+            std::fs::write(&owned_file, &hashed)?;
+
+            let foreign_file = package_dir.join("hand_written.py");
+            std::fs::write(&foreign_file, "# never generated by alef\n")?;
+
+            write_stage_hash(
+                "sample",
+                "all-bindings-python-ownership",
+                "sources-hash",
+                &[owned_file.clone()],
+            )?;
+            let previous_paths = read_stage_paths("sample", "all-bindings-python-ownership");
+            let leaked = previous_paths.iter().any(|path| path.ends_with("hand_written.py"));
+
+            let keep = std::collections::HashSet::new();
+            let removed = crate::cli::pipeline::sweep_manifest_orphans(&previous_paths, &keep, &[package_dir])?;
+            Ok((removed, owned_file.exists(), foreign_file.exists(), leaked))
+        })();
+
+        let _ = std::env::set_current_dir(&original_cwd);
+        let (removed, owned_exists, foreign_exists, leaked) = result.expect("sweep");
+        assert!(!leaked, "the never-owned file must not have leaked into the baseline");
+        assert_eq!(removed, 1, "only the recorded, owned path may be removed");
+        assert!(!owned_exists, "the recorded, no-longer-kept binding must be swept");
+        assert!(
+            foreign_exists,
+            "a path alef never recorded owning must survive the sweep"
+        );
+    }
+
     #[test]
     fn scaffold_owned_path_round_trips_and_is_idempotent() {
         let dir = tempfile::tempdir().expect("tempdir");

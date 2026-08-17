@@ -245,8 +245,58 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // docs all still run; reported once the pipeline has completed. ~keep
                 let mut deferred_formatting: Vec<crate::e2e::format::DeferredFormatting> = Vec::new();
 
+                // The binding-orphan sweep below needs last run's per-language output list as its
+                // baseline. It cannot read that from `<lang>.manifest` (`cache::read_lang_manifest`):
+                // `pipeline::generate` unconditionally overwrites that same file, for every language it
+                // regenerates, via `write_lang_hash` a few lines down -- so by the time the sweep ran, a
+                // "previous" read of `<lang>.manifest` was actually reading THIS run's own freshly
+                // written output for any language that regenerated, and a path this run stopped emitting
+                // could never appear there to be swept. `all-bindings-{lang}-ownership` is a dedicated
+                // stage manifest `pipeline::generate` never touches, so reading it here -- before
+                // `pipeline::generate` runs -- returns last run's binding list untouched. See
+                // `binding_ownership`'s write-back below the sweep for the other half. ~keep
+                let previous_binding_ownership: std::collections::HashMap<crate::core::config::Language, Vec<PathBuf>> =
+                    languages
+                        .iter()
+                        .map(|language| {
+                            (
+                                *language,
+                                cache::read_stage_paths(
+                                    &resolved_cfg.name,
+                                    &format!("all-bindings-{language}-ownership"),
+                                ),
+                            )
+                        })
+                        .collect();
+
                 tracing::info!("Generating bindings...");
                 let bindings = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path, true)?;
+                // This run's per-language binding ownership: the exact file list `pipeline::generate`
+                // just produced for every language it regenerated, plus -- unchanged -- last run's
+                // recorded list for any language `pipeline::generate` skipped as cached (it is present
+                // as a key here iff `pipeline::generate` regenerated it, even if that produced zero
+                // files). A cache hit must not be read as "this language emitted nothing", or the sweep
+                // below would delete every file a cached, unregenerated language still legitimately
+                // owns. ~keep
+                let mut binding_ownership: std::collections::HashMap<crate::core::config::Language, Vec<PathBuf>> =
+                    bindings
+                        .iter()
+                        .map(|(language, generated)| {
+                            (
+                                *language,
+                                generated.iter().map(|file| base_dir.join(&file.path)).collect(),
+                            )
+                        })
+                        .collect();
+                for language in languages.iter() {
+                    if binding_ownership.contains_key(language) {
+                        continue;
+                    }
+                    binding_ownership.insert(
+                        *language,
+                        previous_binding_ownership.get(language).cloned().unwrap_or_default(),
+                    );
+                }
 
                 let mut binding_count: usize = 0;
                 for (lang, lang_files) in &bindings {
@@ -710,11 +760,27 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 let cleanup_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
-                let previous_paths: Vec<_> = languages
-                    .iter()
-                    .flat_map(|language| cache::read_lang_manifest(&resolved_cfg.name, &language.to_string()))
-                    .collect();
+                // `previous_binding_ownership` (read above, before `pipeline::generate` could ever
+                // overwrite `<lang>.manifest`) is the correct baseline -- see its doc comment for why
+                // `read_lang_manifest` cannot be used here. `binding_ownership` is written back as the
+                // new baseline only now, after the sweep has consumed the old one, mirroring
+                // `generate-{language}-ownership`'s read-before / write-after ordering in
+                // `alef generate` (`bin_cli/core_commands.rs`). Kept as its own dedicated stage rather
+                // than sharing that exact stage name: `generate-{language}-ownership` also folds in
+                // service-API, stub and public-API paths that `alef all` tracks and sweeps separately
+                // (or not at all here), so writing this narrower, bindings-only list under the shared
+                // name would let `alef all` silently truncate the broader baseline `alef generate`
+                // relies on the next time the two commands are run back to back. ~keep
+                let previous_paths: Vec<_> = previous_binding_ownership.into_values().flatten().collect();
                 pipeline::sweep_manifest_orphans(&previous_paths, &current_gen_paths, &cleanup_roots)?;
+                for (language, paths) in &binding_ownership {
+                    cache::write_stage_hash(
+                        &resolved_cfg.name,
+                        &format!("all-bindings-{language}-ownership"),
+                        &sources_hash,
+                        paths,
+                    )?;
+                }
 
                 if !changed_languages.is_empty() {
                     tracing::info!("Formatting generated files...");
