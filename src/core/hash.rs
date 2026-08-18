@@ -199,7 +199,36 @@ pub fn content_has_alef_marker(content: &str) -> bool {
 }
 
 /// How far into a file the header marker is searched for.
+///
+/// Deliberately 10 and not 11, even though `poly`'s built-in generated-file skip scans the first
+/// **11** lines for a `<tool>:hash:<40-or-64 hex>` line. The two bounds measure different things:
+/// this one bounds where the *prose* marker may sit, and [`inject_hash_line`] always writes the
+/// `alef:hash:` line on the line *immediately after* it. A marker on lines 1..=10 therefore puts
+/// its hash on lines 2..=11 — exactly poly's window, with nothing to spare. Widening this to 11
+/// would let a marker on line 11 push its hash to line 12, where poly no longer sees it, so alef
+/// would claim a file poly still reformats: the ping-pong this bound exists to prevent,
+/// re-introduced at the boundary. If poly's window ever widens, this may follow it — never lead
+/// it. ~keep
 const MARKER_SCAN_LINES: usize = 10;
+
+/// How many leading lines `poly`'s built-in generated-file skip reads when looking for a
+/// `<tool>:hash:<40-or-64 hex>` line.
+///
+/// Measured against poly 0.21.6 by bisection, with `[discovery] exclude = []` and nothing else
+/// configured: a marker on line 11 is skipped, one on line 12 is not. The skip is compiled into
+/// the poly binary — no `poly.toml` key drives it, and the `<tool>` segment is not alef-specific —
+/// so alef cannot negotiate this bound, only stay inside it. Held as a constant rather than
+/// described in prose so [`MARKER_SCAN_LINES`]'s relationship to it is checkable by a test. ~keep
+pub const POLY_GENERATED_SCAN_LINES: usize = 11;
+
+/// The last line number (1-based) on which [`inject_hash_line`] can place an `alef:hash:` line,
+/// given a marker anywhere in [`MARKER_SCAN_LINES`]. Must stay `<= POLY_GENERATED_SCAN_LINES` or
+/// alef claims files poly still reformats.
+#[must_use]
+pub const fn deepest_hash_line() -> usize {
+    MARKER_SCAN_LINES + 1
+}
+
 /// Blake3 hash of a content string, returned as hex.
 ///
 /// Used by the IR / language caches and any caller that needs a hash of an
@@ -405,8 +434,13 @@ pub fn compute_file_hash(sources_hash: &str, content: &str) -> String {
 }
 
 /// Inject an `alef:hash:<hex>` line immediately after the first header marker
-/// line found in the first 10 lines.  The comment syntax is inferred from the
-/// marker line itself.
+/// line found in the first [`MARKER_SCAN_LINES`] lines. The comment syntax is
+/// inferred from the marker line itself.
+///
+/// The window must stay tied to [`MARKER_SCAN_LINES`] rather than repeat its value: a marker this
+/// function declines to stamp is still one [`content_has_alef_marker`] claims, and a claimed but
+/// unstamped file is invisible to poly's hash-keyed skip. See that constant for why 10 is the
+/// value both sides carry. ~keep
 ///
 /// If no marker line is found, the content is returned unchanged.
 pub fn inject_hash_line(content: &str, hash: &str) -> String {
@@ -417,7 +451,7 @@ pub fn inject_hash_line(content: &str, hash: &str) -> String {
         result.push_str(line);
         result.push('\n');
 
-        if !injected && i < 10 && (line.contains(HEADER_MARKER) || line.contains(ALT_HEADER_MARKER)) {
+        if !injected && i < MARKER_SCAN_LINES && (line.contains(HEADER_MARKER) || line.contains(ALT_HEADER_MARKER)) {
             let trimmed = line.trim();
             let hash_line = if trimmed.starts_with("<!--") {
                 format!("<!-- {HASH_PREFIX}{hash} -->")

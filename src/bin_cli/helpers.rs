@@ -285,6 +285,35 @@ const VERIFY_SKIP_DIRS: &[&str] = &[
     "out",
     ".idea",
     ".vscode",
+    // A nested git worktree (`git worktree add .claude/worktrees/<name>`) is a second, complete
+    // checkout of the same repository. Walking it would report another branch's stamps as this
+    // tree's, and it only became reachable once `.claude` was taken off the blanket dot-directory
+    // prune below. A worktree's `.git` is a FILE, not a directory, so the `.git` entry above does
+    // not stop the descent. ~keep
+    "worktrees",
+];
+
+/// Dot-directories [`collect_alef_hashes`] descends into despite its blanket dot-directory prune.
+///
+/// The prune exists to keep the walk out of tool caches, but it is a proxy — "starts with a dot"
+/// is not "is a cache" — and alef writes stamped, alef-owned output into several dot-directories:
+/// `.cargo/config.toml` from [`crate::scaffold::scaffold`], and every `SKILL.md` under an agent
+/// skills root. Those files were stamped and then never read back: the walk pruned their parent
+/// before opening them, so `alef verify` could not report them stale no matter how far they
+/// drifted. Refusing to *stamp* them instead would be worse — the stamp is also what makes poly's
+/// built-in generated-file skip leave them alone, so unstamping them hands their formatting to
+/// poly and their staleness to nobody.
+///
+/// Incomplete by construction, and knowingly so: skills roots are pure configuration
+/// (`DocsSkillsConfig::outputs`), so a consumer that writes skills into a dot-directory not named
+/// here is still invisible to the walk. Closing that fully requires the walk to consult the
+/// resolved config, which it currently has no access to. ~keep
+const VERIFY_SCAN_DOT_DIRS: &[&str] = &[
+    ".cargo", ".github",
+    // Agent-skill roots observed in consumer ownership records (`.alef-ownership.toml` lists
+    // `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`), so these are not speculative:
+    // alef is already writing stamped `SKILL.md` files under them. ~keep
+    ".agents", ".claude", ".codex", ".cursor", ".gemini",
 ];
 
 /// Extensions the ownership walk will open. A generated file whose extension is absent here is
@@ -408,7 +437,8 @@ fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, O
             };
             if file_type.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if VERIFY_SKIP_DIRS.contains(&name) || name.starts_with('.') {
+                let pruned_as_dotfile = name.starts_with('.') && !VERIFY_SCAN_DOT_DIRS.contains(&name);
+                if VERIFY_SKIP_DIRS.contains(&name) || pruned_as_dotfile {
                     continue;
                 }
                 stack.push(path);
@@ -870,6 +900,89 @@ e2e = "cargo test"
             .collect();
         found.sort();
         found
+    }
+
+    /// Seed one stamped file per relative path (creating parent directories) and return the
+    /// repository-relative paths the ownership walk actually opened, sorted.
+    fn scanned_relative_paths(relative_paths: &[&str]) -> Vec<String> {
+        let directory = tempfile::tempdir().expect("temporary project");
+        for relative in relative_paths {
+            let path = directory.path().join(relative);
+            std::fs::create_dir_all(path.parent().expect("seeded path has a parent")).expect("seed parent directory");
+            let marker = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+            std::fs::write(&path, format!("{marker}\nseeded = true\n")).expect("seed stamped file");
+        }
+        let mut found: Vec<String> = collect_alef_hashes(directory.path())
+            .into_iter()
+            .filter_map(|(path, _, _)| {
+                path.strip_prefix(directory.path())
+                    .ok()?
+                    .to_str()
+                    .map(|value| value.replace('\\', "/"))
+            })
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// alef stamps files inside dot-directories (`.cargo/config.toml`, agent-skill `SKILL.md`s)
+    /// that the walk used to prune wholesale, so those stamps were written and never read: no
+    /// amount of drift could make `alef verify` report them.
+    ///
+    /// Paired control in one run, because a walk that finds nothing and a walk that finds
+    /// everything are the same green: a stamped file in an ordinary directory must be found (the
+    /// walk works at all), a stamped file in `.cargo` must now also be found (the fix), and a
+    /// stamped file in `.venv` must still be missed (the prune still keeps the walk out of tool
+    /// caches — the fix is an allowlist, not a removal).
+    #[test]
+    fn the_ownership_walk_reaches_the_dot_directories_alef_stamps() {
+        let found = scanned_relative_paths(&[
+            "packages/reachable.toml",
+            ".cargo/config.toml",
+            ".github/skills/api/SKILL.md",
+            ".venv/lib/cached.toml",
+        ]);
+
+        assert!(
+            found.contains(&"packages/reachable.toml".to_string()),
+            "control: a stamped file outside every dot-directory must be found, else this test \
+             proves nothing about the dot-directory cases; walk returned {found:?}"
+        );
+        assert!(
+            found.contains(&".cargo/config.toml".to_string()),
+            "alef writes and stamps `.cargo/config.toml` itself; a stamp nothing ever reads back \
+             is not a freshness check. Walk returned {found:?}"
+        );
+        assert!(
+            found.contains(&".github/skills/api/SKILL.md".to_string()),
+            "generated agent skills are stamped alef output and must be verifiable; walk returned \
+             {found:?}"
+        );
+        assert!(
+            !found.contains(&".venv/lib/cached.toml".to_string()),
+            "the dot-directory prune must still keep the walk out of tool caches -- the fix is an \
+             allowlist of the dot-directories alef writes into, not a removal of the prune. Walk \
+             returned {found:?}"
+        );
+    }
+
+    /// A nested git worktree is a second checkout of the same repository. It became reachable the
+    /// moment `.claude` came off the blanket prune, and walking it reports another branch's
+    /// stamps as this tree's.
+    #[test]
+    fn the_ownership_walk_does_not_descend_into_a_nested_worktree() {
+        let found = scanned_relative_paths(&[".claude/skills/api/SKILL.md", ".claude/worktrees/other/config.toml"]);
+
+        assert!(
+            found.contains(&".claude/skills/api/SKILL.md".to_string()),
+            "control: `.claude` must be walked, else the exclusion below is vacuous; walk \
+             returned {found:?}"
+        );
+        assert!(
+            !found.contains(&".claude/worktrees/other/config.toml".to_string()),
+            "a nested worktree is a different checkout of this repository; its stamps are not \
+             this tree's. Walk returned {found:?}"
+        );
     }
 
     /// THE AGREEMENT CANARY. `alef verify`'s frozen-file report and `alef adopt`'s candidate
