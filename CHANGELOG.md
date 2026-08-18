@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.0] - 2026-08-18
+
 ### Added
 
 - **`MethodDef` carries its `#[cfg]`**: it was the only IR node without one, and extraction saw the attribute and
@@ -27,7 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release valve. This is the shape that shipped `DetDbThresh = 0.0f` into generated C# beneath a doc comment
   reading "default: 0.3". Still conflated: a field initializer that cannot be read *inside* an otherwise-readable
   struct literal, which remains `Empty`.
-
 - **`validate versions` distinguishes unresolvable-until-publish drift from stale manifests.** A `Cargo.lock` whose
   own manifest depends on a workspace crate *from the registry* at exactly the version being released cannot be
   refreshed at all until that release is published — cargo cannot resolve `x = "1.15.1"` while the index tops out
@@ -58,7 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-  emitter, so a literal that had fallen behind wrote itself back over the consumer's own bump on every run — the
+- **emitter, so a literal that had fallen behind wrote itself back over the consumer's own bump on every run — the
   reported shape was a repo on `base64 = "0.23"` being handed `base64 = "0.22"` and hand-reverting it after each
   regeneration. Before a rendered manifest is returned, each requirement is now compared against the one the
   committed manifest declares for the same crate and the higher lower-bound wins. **This makes emitted manifests a
@@ -69,40 +70,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requirement, or a manifest that is not valid TOML all leave the emitted value untouched.
 
 - **scaffold**: the `[lints.clippy]` rationale alef stamps into every generated binding manifest now carries a
-  `~keep` marker. It did not, so poly's uncomment pass — which runs *between* regenerations and strips any comment
-  without a marker — deleted it, and the deletion landed in a commit that read as unrelated formatting. Where alef
-  overwrites a consumer's own `~keep`-marked rationale above that block (it does; these manifests have no
-  comment-preserving merge, unlike `poly.toml`), what replaces it is now at least as durable as what it displaced.
-  This is the mirror image of 0.61.0's fix for alef *leaking* `~keep` into generated output, and does not collide
-  with it: `strip_internal_doc_markers` runs only inside `normalize_rustdoc`, on doc comments harvested from a
-  consumer's Rust source, never on scaffold-emitted TOML. The literal also no longer carries trailing whitespace on
-  every line, which made the in-memory `GeneratedFile` content disagree with the whitespace-normalised bytes on
-  disk.
+  `~keep` marker. It did not, so poly's uncomment pass — which runs *between* regenerations and strips any
+  comment without a marker — deleted it, and the deletion landed in a commit that read as unrelated formatting.
+  Where alef overwrites a consumer's own `~keep`-marked rationale above that block (it does; these manifests have
+  no comment-preserving merge, unlike `poly.toml`), what replaces it is now at least as durable as what it
+  displaced. This is the mirror image of 0.61.0's fix for alef *leaking* `~keep` into generated output, and does
+  not collide with it: `strip_internal_doc_markers` runs only inside `normalize_rustdoc`, on doc comments harvested
+  from a consumer's Rust source, never on scaffold-emitted TOML. The literal also no longer carries trailing
+  whitespace on every line, which made the in-memory `GeneratedFile` content disagree with the whitespace-normalised
+  bytes on disk.
 - **renovate**: the `customManager` regex matched `pub const [A-Z_]+`, which excludes every constant whose name
   contains a digit. `PYO3` and `PYO3_ASYNC_RUNTIMES` were therefore never bump-proposed and had no way to be — and
   a const is indistinguishable, from outside, from one nobody has needed to bump. `base64` and `jni` are hoisted
-  out of `scaffold::languages::jni` into `template_versions.rs` in the same change, which only means anything now
-  that the regex can see them. `phpunit/phpunit` and `guzzlehttp/guzzle` remain unreachable on purpose: their
+  out of `scaffold::languages::jni` into `template_versions.rs` in the same change, which only means anything
+  now that the regex can see them. `phpunit/phpunit` and `guzzlehttp/guzzle` remain unreachable on purpose: their
   rationale comments sit between the marker and the const, and their compound `||` constraints span several majors
   deliberately, so an auto-bump would collapse exactly what they exist to express.
-
 - **records**: indent `.alef-toml-merge-provenance.toml` arrays like `.alef-ownership.toml`. The two records sit
   side by side in a consumer's repo root and pass through the same `poly fmt --check` gate, but the array indent was
   derived twice: the ownership record hand-rendered two spaces while the provenance record inherited four from
   `toml::to_string_pretty`, whose pretty serializer hard-codes `"    "` per element. Every generated tree therefore
   carried one standing "would reformat" file that no consumer could repair — hand-formatting is overwritten by the
-  next `alef generate`, which the record's own header says. The provenance record is now rendered like the ownership
-  one, both read the indent from a single constant, and a test compares the two writers' actual output so the next
-  divergence fails whichever side moves. Regenerating rewrites the whole record once, whitespace only.
+  next `alef generate`, which the record's own header says. The provenance record is now rendered like the
+  ownership one, both read the indent from a single constant, and a test compares the two writers' actual output so
+  the next divergence fails whichever side moves. Regenerating rewrites the whole record once, whitespace only.
 - **validate**: `alef validate versions` now discovers manifests through git, not through a disk walk, and reports
   which mismatches cannot be fixed in-tree. A consumer at `1.15.1` got five mismatches of which two were real. Two
   rows described `packages/ruby/tmp/ruby/stage/**` — gem-build staging, `tracked=no, ignored=yes` — whose tracked
   originals were correct. The third was worse: a *tracked* `Cargo.lock` reading `1.15.1` was reported as a
   mismatch while every other `1.15.1` row printed `ok`, because the staged copy of that crate's `Cargo.toml`
-  declares the same package name at the previous version, and `cargo_manifest_versions` keys its map by name
-  alone — glob order puts the staged copy last, so it became the *expected* value for the live lockfile. This is
-  the third instance of the same shape (`vendor/`, `deps/`, now build staging), and directory-name blocklists
-  cannot close it: `tmp`/`dist`/`build`/`stage` are per-tool names, whereas "not committed" is the property that
+  declares the same package name at the previous version, and `cargo_manifest_versions` keys its map by name alone
+  — glob order puts the staged copy last, so it became the *expected* value for the live lockfile. This is the
+  third instance of the same shape (`vendor/`, `deps/`, now build staging), and directory-name blocklists cannot
+  close it: `tmp`/`dist`/`build`/`stage` are per-tool names, whereas "not committed" is the property that
   actually separates a consumer's manifests from a build tool's copies. Both the `Cargo.toml` scan and the
   `Cargo.lock` check (and the `.csproj` scan) are now filtered to git-tracked paths; when git cannot answer (no
   work tree, no `git` binary) the previous unfiltered walk still runs, with a warning. The name-based exclusions
@@ -115,8 +115,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entire test, and the deleted set included a class per configured bridge `context_type`/`result_type`: names taken
   from the consumer's own config. The disabled branch was weaker still — `config.ffi` is an `Option`, so never
   having written an `[ffi]` section read identically to having disabled the feature.
-- **c**: refuse to name a result type rather than inventing one. The old fallback derived it from the call name,
-  and that name feeds three things — the accessor prefix, the `_free` cleanup, and the `parent_is_ir_type` flag
+- **c**: refuse to name a result type rather than inventing one. The old fallback derived it from the call name, and
+  that name feeds three things — the accessor prefix, the `_free` cleanup, and the `parent_is_ir_type` flag
   `ensure_leaf_field_exists` reads. Because an invented name matches no IR type, that check returned `Ok` before
   examining anything: the fabrication switched off the check that would have caught the fabrication. Resolution now
   yields `Resolved` / `Unverified` / `Unresolvable` and fails at the point of emission. Trait-bridge registry calls
@@ -149,7 +149,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `__destroy_into_raw` on its argument and `free()` has no null guard, so releasing the request would have been a
   null-pointer free in most snippets, strictly worse than the leak it targeted. Java, Kotlin and Dart are staged
   separately.
-
 - **csharp**: keep every vtable slot the Rust struct declares. C# carried the same unguarded `exclude_types` prune
   that cost Java a slot, and builds a positional `IntPtr` vtable, so a pruned trait method shifted every later
   function pointer and the last read ran past the allocation. Latent, but not for the assumed reason —
@@ -172,8 +171,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **e2e (ruby)**: assert streaming completion instead of dropping it. `stream_complete` and `no_chunks_after_done`
   matched a `None` accessor the resolver never returns, so both arms were unreachable — and the compensating
   assertion is suppressed precisely when a fixture asserts that field.
-
-## [0.61.0] - 2026-08-17
 
 ### Two invariants
 
