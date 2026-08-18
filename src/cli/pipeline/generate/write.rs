@@ -263,11 +263,29 @@ pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
         }
         _ => {}
     }
-    match path.extension().and_then(|extension| extension.to_str()) {
+    // Case-folded, unlike the ownership predicate above. An extension's case is a spelling
+    // convention, not a format: `.R` is THE conventional extension for an R script, and alef emits
+    // `install.R`, `run_tests.R` and every `packages/r/R/*.R` with `generated_header: true` — all of
+    // which `marker_comment_style`'s lowercase-only `"r"` arm skipped, so `ensure_generated_header`
+    // returned them unstamped and the write guard then froze them for want of a marker nothing had
+    // been emitting.
+    //
+    // Folding is confined to this emit predicate on purpose. Case-folding `marker_comment_style`
+    // would reclassify `.R` from unmarkable to markable, and an unmarkable path proves ownership
+    // through the committed record instead — so every already-committed `.R` in every consumer tree
+    // would flip from "owned by the record" to "markable but unmarked", i.e. frozen, which is the
+    // exact retroactive trap that function's doc warns against. Widening the emit side can only ever
+    // add a header to a write the guard already authorised. ~keep
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
         Some("cmake" | "gemspec") => Some(MarkerSyntax::Comment(hash::CommentStyle::Hash)),
         Some("zon") => Some(MarkerSyntax::Comment(hash::CommentStyle::DoubleSlash)),
         Some("xml" | "csproj") => Some(MarkerSyntax::Html),
-        _ => None,
+        Some(other) => marker_comment_style(Path::new("x").with_extension(other).as_path()).map(MarkerSyntax::Comment),
+        None => None,
     }
 }
 

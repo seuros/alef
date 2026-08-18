@@ -1,12 +1,320 @@
+use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+/// javac stops reporting after 100 errors and 100 warnings by default. Per snippet that cap is
+/// harmless; across one batched invocation it is a correctness defect, because every snippet whose
+/// diagnostics fell past the cap would be attributed nothing and reported as a pass. ~keep
+const DIAGNOSTIC_LIMIT: &str = "100000";
+
+/// Package prefix that isolates one batched snippet's top-level types from every other snippet's.
+/// Java resolves duplicate class names per *package*, not per source directory, so a unique
+/// directory alone still makes two `Snippet` classes collide — and `wrap_if_fragment` names every
+/// wrapped fragment `Snippet`. ~keep
+const BATCH_PACKAGE_PREFIX: &str = "alef_snippet_";
+
+const BATCH_DIRECTORY_PREFIX: &str = "alef-java-batch-";
+
+/// javac diagnostic headers, as `<path>:<line>: <severity>: <message>`.
+const DIAGNOSTIC_MARKERS: [(&str, DiagnosticSeverity); 2] = [
+    (": error: ", DiagnosticSeverity::Error),
+    (": warning: ", DiagnosticSeverity::Warning),
+];
+
+/// Lines that terminate a diagnostic block instead of continuing it: javac's trailing summary
+/// (`2 errors`), its `-Werror` roll-up (`error: warnings found ...`) and `Note:` advisories all
+/// start at column zero with no path, so without this they would be glued onto whichever snippet
+/// happened to report last. ~keep
+const DIAGNOSTIC_TERMINATORS: [&str; 3] = ["Note:", "error:", "warning:"];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+struct JavaDiagnostic {
+    path: String,
+    severity: DiagnosticSeverity,
+    text: String,
+}
+
+/// One snippet's compilation unit inside a batch: a source file, plus the directory component that
+/// attributes a javac diagnostic path back to it. The directory is the attribution token rather
+/// than the file name because every wrapped fragment compiles to the same `Snippet.java`.
+struct JavaBatchUnit {
+    directory: String,
+    file_name: String,
+    source: String,
+}
 
 pub struct JavaValidator;
 
 impl JavaValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        if level == ValidationLevel::Run {
+            return None;
+        }
+        let units = Self::plan_batch(snippets, level, session)?;
+        Some(Self::compile_batch(&units, level, timeout_secs, session))
+    }
+
+    /// Builds one compilation unit per snippet, or declines the batch.
+    ///
+    /// A snippet that declares its own `package` keeps it, because rewriting a declared package
+    /// would break the qualified references and same-package imports inside it. Two such snippets
+    /// sharing a package can genuinely redeclare each other's classes, and there is no reliable way
+    /// to tell that apart from the compiler's own duplicate-class error — so the batch is declined
+    /// and the runner falls back to one process per snippet, which cannot collide at all. ~keep
+    fn plan_batch(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        session: Option<&ValidationSession>,
+    ) -> Option<Vec<JavaBatchUnit>> {
+        let fingerprint = session.map(|value| value.fingerprint.as_str());
+        let mut declared_packages: HashMap<String, String> = HashMap::new();
+        let mut units = Vec::with_capacity(snippets.len());
+        for snippet in snippets {
+            let wrapped = Self::wrap_if_fragment(&snippet.code);
+            let identifier = ValidationCache::key(snippet, level, fingerprint);
+            let source = match Self::declared_package(&wrapped) {
+                Some(package) => {
+                    let owner = declared_packages.entry(package).or_insert_with(|| identifier.clone());
+                    if owner != &identifier {
+                        return None;
+                    }
+                    wrapped.clone()
+                }
+                None => Self::with_package(&wrapped, &format!("{BATCH_PACKAGE_PREFIX}{identifier}")),
+            };
+            units.push(JavaBatchUnit {
+                directory: format!("s{identifier}"),
+                file_name: format!("{}.java", Self::extract_class_name(&wrapped)),
+                source,
+            });
+        }
+        Some(units)
+    }
+
+    fn compile_batch(
+        units: &[JavaBatchUnit],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let root = match session {
+            Some(session) => session.external_workspace_directory()?,
+            None => std::env::temp_dir(),
+        };
+        let batch = tempfile::Builder::new()
+            .prefix(BATCH_DIRECTORY_PREFIX)
+            .tempdir_in(&root)
+            .map_err(|error| {
+                crate::snippets::error::Error::Other(format!(
+                    "allocating Java snippet batch directory in {}: {error}",
+                    root.display()
+                ))
+            })?;
+        let sources = Self::write_batch_sources(units, batch.path())?;
+        let classes = batch.path().join("classes");
+        std::fs::create_dir_all(&classes)?;
+        let mut command = Self::batch_command(&sources, &classes, level, session)?;
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::batch_results(
+            units,
+            level == ValidationLevel::TypeCheck,
+            success,
+            &output,
+        ))
+    }
+
+    /// Writes every unit and returns the deduplicated source list javac is invoked with. Two
+    /// byte-identical snippets share an identifier and therefore a path; handing javac the same
+    /// file twice is a `duplicate class` error, while writing it twice is not. ~keep
+    fn write_batch_sources(units: &[JavaBatchUnit], batch: &Path) -> Result<Vec<PathBuf>> {
+        let mut sources = Vec::with_capacity(units.len());
+        let mut seen = HashSet::new();
+        for unit in units {
+            let directory = batch.join(&unit.directory);
+            std::fs::create_dir_all(&directory)?;
+            let path = directory.join(&unit.file_name);
+            std::fs::write(&path, &unit.source)?;
+            if seen.insert(path.clone()) {
+                sources.push(path);
+            }
+        }
+        Ok(sources)
+    }
+
+    fn batch_command(
+        sources: &[PathBuf],
+        classes: &Path,
+        level: ValidationLevel,
+        session: Option<&ValidationSession>,
+    ) -> Result<std::process::Command> {
+        let mut command = std::process::Command::new("javac");
+        command.args(["-Xmaxerrs", DIAGNOSTIC_LIMIT, "-Xmaxwarns", DIAGNOSTIC_LIMIT]);
+        command.arg(if level == ValidationLevel::TypeCheck {
+            "-Xlint:all"
+        } else {
+            "-Xlint:none"
+        });
+        if level == ValidationLevel::TypeCheck {
+            command.arg("-Werror");
+        }
+        command.args(["-d"]).arg(classes).args(sources);
+        if let Some(value) = session {
+            value.apply(&mut command);
+            if let Some(manifest) = &value.manifest {
+                let class_path = Self::class_path(manifest)?;
+                command.args(["--class-path", class_path.to_string_lossy().as_ref()]);
+            }
+        }
+        Ok(command)
+    }
+
+    fn batch_results(
+        units: &[JavaBatchUnit],
+        warnings_fail: bool,
+        success: bool,
+        output: &str,
+    ) -> BatchValidation {
+        let (diagnostics, mut unmatched) = Self::split_diagnostics(output);
+        let mut attributed = vec![Vec::<String>::new(); units.len()];
+        for diagnostic in diagnostics {
+            if diagnostic.severity == DiagnosticSeverity::Warning && !warnings_fail {
+                continue;
+            }
+            let owners = Self::owning_units(units, &diagnostic.path);
+            if owners.is_empty() {
+                unmatched.push(diagnostic.text);
+                continue;
+            }
+            for owner in owners {
+                attributed[owner].push(diagnostic.text.clone());
+            }
+        }
+        let attributed_any = attributed.iter().any(|messages| !messages.is_empty());
+        let fallback = (!success && !attributed_any).then(|| {
+            if unmatched.is_empty() {
+                "javac failed without a snippet-specific diagnostic".to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        attributed
+            .into_iter()
+            .map(|messages| match (messages.is_empty(), &fallback) {
+                (true, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (true, None) => (SnippetStatus::Pass, None),
+                (false, _) => (SnippetStatus::Fail, Some(messages.join("\n"))),
+            })
+            .collect()
+    }
+
+    fn split_diagnostics(output: &str) -> (Vec<JavaDiagnostic>, Vec<String>) {
+        let mut diagnostics: Vec<JavaDiagnostic> = Vec::new();
+        let mut other = Vec::new();
+        let mut open = false;
+        for line in output.lines() {
+            if let Some((path, severity)) = Self::diagnostic_header(line) {
+                diagnostics.push(JavaDiagnostic {
+                    path: path.to_owned(),
+                    severity,
+                    text: line.to_owned(),
+                });
+                open = true;
+            } else if Self::terminates_a_diagnostic(line) {
+                other.push(line.to_owned());
+                open = false;
+            } else if let Some(last) = diagnostics.last_mut().filter(|_| open) {
+                last.text.push('\n');
+                last.text.push_str(line);
+            } else {
+                other.push(line.to_owned());
+            }
+        }
+        (diagnostics, other)
+    }
+
+    fn diagnostic_header(line: &str) -> Option<(&str, DiagnosticSeverity)> {
+        for (marker, severity) in DIAGNOSTIC_MARKERS {
+            let Some(index) = line.find(marker) else {
+                continue;
+            };
+            let (path, number) = line[..index].rsplit_once(':')?;
+            if !path.is_empty() && !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Some((path, severity));
+            }
+        }
+        None
+    }
+
+    fn terminates_a_diagnostic(line: &str) -> bool {
+        DIAGNOSTIC_TERMINATORS.iter().any(|marker| line.starts_with(marker))
+            || line
+                .split_once(' ')
+                .is_some_and(|(count, rest)| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()) && rest.starts_with(|c: char| c == 'e' || c == 'w'))
+    }
+
+    fn owning_units(units: &[JavaBatchUnit], path: &str) -> Vec<usize> {
+        Path::new(path)
+            .components()
+            .filter_map(|component| component.as_os_str().to_str())
+            .flat_map(|component| {
+                units
+                    .iter()
+                    .enumerate()
+                    .filter(move |(_, unit)| unit.directory == component)
+                    .map(|(index, _)| index)
+            })
+            .collect()
+    }
+
+    fn declared_package(code: &str) -> Option<String> {
+        code.lines().find_map(|line| {
+            let rest = line.trim().strip_prefix("package ")?;
+            Some(rest.trim().trim_end_matches(';').trim().to_owned())
+        })
+    }
+
+    fn with_package(code: &str, package: &str) -> String {
+        let lines: Vec<&str> = code.lines().collect();
+        let insertion = lines
+            .iter()
+            .position(|line| Self::is_declaration_line(line))
+            .unwrap_or(lines.len());
+        let mut rendered = String::new();
+        for line in &lines[..insertion] {
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+        rendered.push_str(&format!("package {package};\n\n"));
+        rendered.push_str(&lines[insertion..].join("\n"));
+        rendered.push('\n');
+        rendered
+    }
+
+    /// Whether a line is real code rather than the leading blank/comment run a `package`
+    /// declaration is still allowed to follow.
+    fn is_declaration_line(line: &str) -> bool {
+        let trimmed = line.trim();
+        !trimmed.is_empty()
+            && !trimmed.starts_with("//")
+            && !trimmed.starts_with("/*")
+            && !trimmed.starts_with('*')
+    }
+
     fn validate_with_context(
         snippet: &Snippet,
         level: ValidationLevel,
@@ -189,6 +497,20 @@ impl SnippetValidator for JavaValidator {
         session: Option<&ValidationSession>,
     ) -> Result<(SnippetStatus, Option<String>)> {
         Self::validate_with_context(snippet, level, timeout_secs, session)
+    }
+
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        Self::validate_batch_with_context(snippets, level, timeout_secs, session)
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
     }
 
     fn max_level(&self) -> ValidationLevel {

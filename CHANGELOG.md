@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An uppercase `.R` script now receives the generated header.** `.R` is the conventional extension for an R
+  script and alef emits `install.R`, `run_tests.R` and every `packages/r/R/*.R` with `generated_header: true`, but
+  the emit predicate matched a lowercase `"r"` only — so every one of them was written unstamped and then frozen
+  by the write guard for want of a marker nothing had been emitting. Extension matching is now case-folded on the
+  emit side only; the ownership predicate is deliberately unchanged, because reclassifying `.R` from unmarkable to
+  markable would retroactively freeze every already-committed `.R` that proves ownership through the record.
+
 - **Go snippets pass an absent options object by address when the binding takes a pointer.** Six of the seven
   `json_object` branches in the Go snippet argument builder consult `options_ptr`; the native-DTO branch that
   handles a fixture supplying *no* options never did. On any crate whose options parameter is `Option<T>` — a

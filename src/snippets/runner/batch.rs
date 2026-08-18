@@ -1,0 +1,387 @@
+use super::{
+    BatchKey, FailureReporter, RunnerConfig, ValidationOutcome, batch_level, finalize_result, result, session_for,
+    session_key, session_preparation_error,
+};
+use crate::snippets::error::Result;
+use crate::snippets::session::ValidationSession;
+use crate::snippets::types::{Snippet, SnippetStatus, ValidationLevel, ValidationResult};
+use crate::snippets::validators::{SnippetValidator, ValidatorRegistry};
+use rayon::prelude::*;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex;
+use std::time::Instant;
+
+/// The shared, read-only halves of a batch pass, so a per-group function stays inside the
+/// argument budget while the pass runs its groups concurrently. Every field is a shared reference,
+/// which is what lets one context be borrowed by every rayon worker at once. ~keep
+struct BatchContext<'a> {
+    snippets: &'a [Snippet],
+    registry: &'a ValidatorRegistry,
+    config: &'a RunnerConfig,
+    sessions: &'a HashMap<String, ValidationSession>,
+    session_locks: &'a HashMap<String, Mutex<()>>,
+    reporter: &'a FailureReporter,
+}
+
+struct GroupedSnippets {
+    groups: BTreeMap<BatchKey, Vec<usize>>,
+    results: Vec<Option<ValidationResult>>,
+}
+
+pub(super) fn validate_batches(
+    snippets: &[Snippet],
+    registry: &ValidatorRegistry,
+    config: &RunnerConfig,
+    sessions: &HashMap<String, ValidationSession>,
+    session_errors: &HashMap<String, String>,
+    session_locks: &HashMap<String, Mutex<()>>,
+    reporter: &FailureReporter,
+) -> Vec<Option<ValidationResult>> {
+    let GroupedSnippets { groups, mut results } =
+        group_batchable_snippets(snippets, registry, config, sessions, session_errors, reporter);
+    let context = BatchContext {
+        snippets,
+        registry,
+        config,
+        sessions,
+        session_locks,
+        reporter,
+    };
+    for (index, validated) in dispatch_groups(&context, groups) {
+        results[index] = Some(validated);
+    }
+    results
+}
+
+/// Partitions the run into batch groups, resolving the snippets that never reach a validator at
+/// all (a failed session preparation) on the spot.
+fn group_batchable_snippets(
+    snippets: &[Snippet],
+    registry: &ValidatorRegistry,
+    config: &RunnerConfig,
+    sessions: &HashMap<String, ValidationSession>,
+    session_errors: &HashMap<String, String>,
+    reporter: &FailureReporter,
+) -> GroupedSnippets {
+    let mut results = vec![None; snippets.len()];
+    let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
+    for (index, snippet) in snippets.iter().enumerate() {
+        if let Some(message) = session_preparation_error(snippet, sessions, session_errors) {
+            let failure = result(
+                snippet,
+                SnippetStatus::Error,
+                config.level,
+                config.level,
+                Some(message.to_owned()),
+                0,
+            );
+            reporter.record(&failure);
+            results[index] = Some(failure);
+            continue;
+        }
+        let session = session_for(snippet, sessions);
+        if let Some(level) = batch_level(snippet, registry, config, session) {
+            let key = (
+                snippet.language,
+                session_key(snippet, sessions).map(str::to_string),
+                level,
+            );
+            groups.entry(key).or_default().push(index);
+        }
+    }
+    GroupedSnippets { groups, results }
+}
+
+/// Runs every batch group concurrently and returns the positioned results to merge.
+///
+/// Two groups with different session keys hold different locks, run different toolchains and
+/// touch different scratch trees, so nothing serializes them but this dispatch — with sixteen
+/// languages configured, running them one after another made the batch pass as long as the sum of
+/// its slowest members. Groups that *do* share a session key still serialize, on that session's
+/// mutex, exactly as they did before. ~keep
+///
+/// Each group returns its own `(index, result)` pairs rather than writing into a shared `Vec`, so
+/// the position-indexed merge stays a single-threaded step the parallelism cannot race. ~keep
+fn dispatch_groups(context: &BatchContext<'_>, groups: BTreeMap<BatchKey, Vec<usize>>) -> Vec<(usize, ValidationResult)> {
+    // A rayon worker does not inherit the calling thread's current span (see `run_validation`'s
+    // note on `pool.install`), so every group's Starting/Finished pair would lose its span context
+    // the moment the groups stopped running on the caller's thread. ~keep
+    let span = tracing::Span::current();
+    groups
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(key, indices)| span.in_scope(|| validate_group(context, &key, &indices)))
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize]) -> Vec<(usize, ValidationResult)> {
+    let (language, session_target, level) = key;
+    let validator = context.registry.get(*language).expect("batch group validator");
+    let session = session_target.as_deref().and_then(|value| context.sessions.get(value));
+    let batch_snippets = indices.iter().map(|index| &context.snippets[*index]).collect::<Vec<_>>();
+    tracing::info!(
+        language = %language,
+        snippet_count = batch_snippets.len(),
+        timeout_secs = context.config.timeout_secs,
+        "Starting batched snippet validation"
+    );
+    let started = Instant::now();
+    let batch = run_batch(context, validator, session, session_target.as_deref(), *level, &batch_snippets);
+    // `supports_batching` only screens out languages that never batch; a validator that
+    // does support it (rust) can still decline a specific group — e.g. `Run` snippets, which
+    // must execute one at a time — and return `None` here. Every `Starting` above must reach
+    // a matching resolution, so this is logged explicitly instead of silently falling through
+    // to the per-snippet path the caller reports on separately. ~keep
+    let Some(batch) = batch else {
+        tracing::info!(
+            language = %language,
+            snippet_count = batch_snippets.len(),
+            "Batch validation declined for this group; falling back to per-snippet validation"
+        );
+        return Vec::new();
+    };
+    let values = batch_statuses(batch, indices.len());
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    tracing::info!(
+        language = %language,
+        snippet_count = batch_snippets.len(),
+        duration_ms,
+        "Finished batched snippet validation"
+    );
+    finalize_group(context, validator, session, *level, &batch_snippets, values, indices, duration_ms)
+}
+
+/// Invokes the group's validator, holding the session's lock for the whole invocation when the
+/// group has one.
+fn run_batch(
+    context: &BatchContext<'_>,
+    validator: &dyn SnippetValidator,
+    session: Option<&ValidationSession>,
+    session_target: Option<&str>,
+    level: ValidationLevel,
+    batch_snippets: &[&Snippet],
+) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
+    let validation = || validator.validate_batch_in_session(batch_snippets, level, context.config.timeout_secs, session);
+    match session_target.and_then(|value| context.session_locks.get(value)) {
+        Some(lock) => lock.lock().ok().and_then(|_guard| validation()),
+        None => validation(),
+    }
+}
+
+/// Normalizes a batch validator's return into exactly one status per snippet, so a validator that
+/// miscounts or fails outright still resolves every snippet the group claimed.
+fn batch_statuses(
+    batch: Result<Vec<(SnippetStatus, Option<String>)>>,
+    expected: usize,
+) -> Vec<(SnippetStatus, Option<String>)> {
+    match batch {
+        Ok(values) if values.len() == expected => values,
+        Ok(values) => {
+            let message = format!("batch validator returned {} results for {expected} snippets", values.len());
+            vec![(SnippetStatus::Error, Some(message)); expected]
+        }
+        Err(error) => vec![(SnippetStatus::Error, Some(error.to_string())); expected],
+    }
+}
+
+#[expect(clippy::too_many_arguments, reason = "one call site; splitting it further would only move the arguments")]
+fn finalize_group(
+    context: &BatchContext<'_>,
+    validator: &dyn SnippetValidator,
+    session: Option<&ValidationSession>,
+    level: ValidationLevel,
+    batch_snippets: &[&Snippet],
+    values: Vec<(SnippetStatus, Option<String>)>,
+    indices: &[usize],
+    duration_ms: u64,
+) -> Vec<(usize, ValidationResult)> {
+    let mut finalized = Vec::with_capacity(indices.len());
+    for ((index, snippet), (status, message)) in indices.iter().copied().zip(batch_snippets).zip(values) {
+        let value = finalize_result(
+            snippet,
+            validator,
+            context.config,
+            session,
+            level,
+            ValidationOutcome {
+                status,
+                message,
+                duration_ms,
+            },
+        );
+        context.reporter.record(&value);
+        finalized.push((index, value));
+    }
+    finalized
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::snippets::runner::{RunnerConfig, run_validation};
+    use crate::snippets::types::{
+        Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel, ValidationResult,
+    };
+    use crate::snippets::validators::{SnippetValidator, ValidatorRegistry};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    /// How long a probing validator waits for a sibling group to join it before giving up and
+    /// letting the assertion report the observed peak. Long enough to absorb thread-pool startup
+    /// on a loaded machine, short enough that a regression fails the test instead of hanging it.
+    const CONCURRENCY_PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+    #[derive(Default)]
+    struct ConcurrencyProbe {
+        in_flight: AtomicUsize,
+        peak: AtomicUsize,
+    }
+
+    struct ProbingBatchValidator {
+        language: Language,
+        probe: Arc<ConcurrencyProbe>,
+    }
+
+    impl SnippetValidator for ProbingBatchValidator {
+        fn language(&self) -> Language {
+            self.language
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+        ) -> crate::snippets::error::Result<(SnippetStatus, Option<String>)> {
+            Ok((SnippetStatus::Pass, None))
+        }
+
+        fn validate_batch_in_session(
+            &self,
+            snippets: &[&Snippet],
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+            _session: Option<&crate::snippets::session::ValidationSession>,
+        ) -> Option<crate::snippets::error::Result<Vec<(SnippetStatus, Option<String>)>>> {
+            let entered = self.probe.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            self.probe.peak.fetch_max(entered, Ordering::SeqCst);
+            let deadline = Instant::now() + CONCURRENCY_PROBE_TIMEOUT;
+            while self.probe.peak.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            self.probe.in_flight.fetch_sub(1, Ordering::SeqCst);
+            let language = self.language;
+            Some(Ok(snippets
+                .iter()
+                .map(|_| (SnippetStatus::Fail, Some(format!("{language} batch"))))
+                .collect()))
+        }
+
+        fn supports_batching(&self) -> bool {
+            true
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+
+        fn is_dependency_error(&self, _output: &str) -> bool {
+            false
+        }
+    }
+
+    fn snippet(language: Language) -> Snippet {
+        Snippet {
+            id: None,
+            path: "example.md".into(),
+            language,
+            title: None,
+            code: "example".into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: SnippetMetadata::default(),
+            source_origin: SourceOrigin {
+                path: "example.md".into(),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+
+    fn probing_registry(probe: &Arc<ConcurrencyProbe>) -> ValidatorRegistry {
+        let mut registry = ValidatorRegistry::new();
+        for language in [Language::Rust, Language::Java] {
+            registry.register(Box::new(ProbingBatchValidator {
+                language,
+                probe: Arc::clone(probe),
+            }));
+        }
+        registry
+    }
+
+    fn batch_config() -> RunnerConfig {
+        RunnerConfig {
+            level: ValidationLevel::Compile,
+            parallelism: 4,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        }
+    }
+
+    /// Two groups keyed on different languages share no session lock, no toolchain and no scratch
+    /// tree, so nothing but the dispatch itself can serialize them. Each validator refuses to
+    /// return until it has seen a second group in flight, so a sequential dispatch cannot record a
+    /// peak above one. ~keep
+    #[test]
+    fn batch_groups_with_different_keys_run_concurrently() {
+        let probe = Arc::new(ConcurrencyProbe::default());
+        let registry = probing_registry(&probe);
+        let snippets = [snippet(Language::Rust), snippet(Language::Java)];
+
+        let summary = run_validation(&snippets, &registry, &batch_config()).expect("validation completes");
+
+        assert_eq!(summary.results.len(), 2);
+        assert_eq!(probe.peak.load(Ordering::SeqCst), 2);
+    }
+
+    /// Concurrency must not disturb result placement: every result has to land back on the snippet
+    /// position it was produced for, whichever group finished first. ~keep
+    #[test]
+    fn concurrent_groups_keep_results_at_their_snippet_positions() {
+        let probe = Arc::new(ConcurrencyProbe::default());
+        let registry = probing_registry(&probe);
+        let snippets = [
+            snippet(Language::Rust),
+            snippet(Language::Java),
+            snippet(Language::Java),
+            snippet(Language::Rust),
+        ];
+
+        let summary = run_validation(&snippets, &registry, &batch_config()).expect("validation completes");
+
+        let messages = summary
+            .results
+            .iter()
+            .map(|result: &ValidationResult| result.message.clone().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            messages,
+            vec![
+                "rust batch".to_string(),
+                "java batch".to_string(),
+                "java batch".to_string(),
+                "rust batch".to_string(),
+            ]
+        );
+        assert_eq!(summary.failed, 4);
+    }
+}

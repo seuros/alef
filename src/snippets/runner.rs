@@ -11,6 +11,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::time::Instant;
 
+mod batch;
+
+use batch::validate_batches;
+
 pub struct RunnerConfig {
     pub level: ValidationLevel,
     pub parallelism: usize,
@@ -335,110 +339,6 @@ struct ValidationOutcome {
     status: SnippetStatus,
     message: Option<String>,
     duration_ms: u64,
-}
-
-fn validate_batches(
-    snippets: &[Snippet],
-    registry: &ValidatorRegistry,
-    config: &RunnerConfig,
-    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
-    session_errors: &HashMap<String, String>,
-    session_locks: &HashMap<String, Mutex<()>>,
-    reporter: &FailureReporter,
-) -> Vec<Option<ValidationResult>> {
-    let mut results = vec![None; snippets.len()];
-    let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
-    for (index, snippet) in snippets.iter().enumerate() {
-        if let Some(message) = session_preparation_error(snippet, sessions, session_errors) {
-            let failure = result(
-                snippet,
-                SnippetStatus::Error,
-                config.level,
-                config.level,
-                Some(message.to_owned()),
-                0,
-            );
-            reporter.record(&failure);
-            results[index] = Some(failure);
-            continue;
-        }
-        let session = session_for(snippet, sessions);
-        if let Some(level) = batch_level(snippet, registry, config, session) {
-            let key = (
-                snippet.language,
-                session_key(snippet, sessions).map(str::to_string),
-                level,
-            );
-            groups.entry(key).or_default().push(index);
-        }
-    }
-
-    for ((language, key, level), indices) in groups {
-        let validator = registry.get(language).expect("batch group validator");
-        let session = key.as_deref().and_then(|value| sessions.get(value));
-        let batch_snippets = indices.iter().map(|index| &snippets[*index]).collect::<Vec<_>>();
-        tracing::info!(
-            language = %language,
-            snippet_count = batch_snippets.len(),
-            timeout_secs = config.timeout_secs,
-            "Starting batched snippet validation"
-        );
-        let started = Instant::now();
-        let validation = || validator.validate_batch_in_session(&batch_snippets, level, config.timeout_secs, session);
-        let batch = match key.as_deref().and_then(|value| session_locks.get(value)) {
-            Some(lock) => lock.lock().ok().and_then(|_guard| validation()),
-            None => validation(),
-        };
-        // `supports_batching` only screens out languages that never batch; a validator that
-        // does support it (rust) can still decline a specific group — e.g. `Run` snippets, which
-        // must execute one at a time — and return `None` here. Every `Starting` above must reach
-        // a matching resolution, so this is logged explicitly instead of silently falling through
-        // to the per-snippet path the caller reports on separately. ~keep
-        let Some(batch) = batch else {
-            tracing::info!(
-                language = %language,
-                snippet_count = batch_snippets.len(),
-                "Batch validation declined for this group; falling back to per-snippet validation"
-            );
-            continue;
-        };
-        let values = match batch {
-            Ok(values) if values.len() == indices.len() => values,
-            Ok(values) => {
-                let message = format!(
-                    "batch validator returned {} results for {} snippets",
-                    values.len(),
-                    indices.len()
-                );
-                vec![(SnippetStatus::Error, Some(message)); indices.len()]
-            }
-            Err(error) => vec![(SnippetStatus::Error, Some(error.to_string())); indices.len()],
-        };
-        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        tracing::info!(
-            language = %language,
-            snippet_count = batch_snippets.len(),
-            duration_ms,
-            "Finished batched snippet validation"
-        );
-        for ((index, snippet), (status, message)) in indices.into_iter().zip(batch_snippets).zip(values) {
-            let finalized = finalize_result(
-                snippet,
-                validator,
-                config,
-                session,
-                level,
-                ValidationOutcome {
-                    status,
-                    message,
-                    duration_ms,
-                },
-            );
-            reporter.record(&finalized);
-            results[index] = Some(finalized);
-        }
-    }
-    results
 }
 
 fn batch_level(
