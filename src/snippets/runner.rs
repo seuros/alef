@@ -218,6 +218,7 @@ const FAILURE_MESSAGE_PREVIEW_CHARS: usize = 400;
 struct LanguageTally {
     completed: usize,
     failed: usize,
+    unavailable: usize,
 }
 
 /// Emits snippet failures *while* a validation pass is running.
@@ -259,6 +260,14 @@ impl FailureReporter {
     fn record(&self, result: &ValidationResult) {
         let language = result.snippet.language;
         let failed = matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
+        // `Unavailable` is tallied separately rather than folded into `failed`, and it is tallied at
+        // all because it is not the harmless outcome its name suggests: under `strict` it fails the
+        // run exactly like a `Fail`, and the `unresolved_dependency` reclassification below turns a
+        // real validator `Fail` -- diagnostic and all -- into one. Counting only `Fail | Error` is
+        // how 566 snippets across two languages reached the final summary as
+        // "283 unresolved dependency" apiece with not one line anywhere in the log saying WHICH
+        // dependency, while the validator's own message sat unread on every result. ~keep
+        let unavailable = matches!(result.status, SnippetStatus::Unavailable);
         // A poisoned tally lock costs reporting only. Unwrapping here would let a panic in some
         // other worker's reporting turn a reportable run into an aborted one, which is exactly the
         // failure mode this reporter exists to prevent. ~keep
@@ -269,6 +278,9 @@ impl FailureReporter {
         tally.completed += 1;
         if failed {
             tally.failed += 1;
+        }
+        if unavailable {
+            tally.unavailable += 1;
         }
         let tally = *tally;
         drop(tallies);
@@ -283,6 +295,16 @@ impl FailureReporter {
                     snippet_count = snippet_count,
                     error = %failure_preview(result.message.as_deref()),
                     "First snippet validation failure for this language"
+                );
+            } else if unavailable && tally.unavailable == 1 {
+                tracing::warn!(
+                    language = %language,
+                    path = %result.snippet.source_origin.path.display(),
+                    line = result.snippet.source_origin.line,
+                    snippet_count = snippet_count,
+                    unresolved_dependency = result.unresolved_dependency,
+                    error = %failure_preview(result.message.as_deref()),
+                    "First snippet validation unavailability for this language"
                 );
             } else if failed && tally.failed % FAILURE_PROGRESS_STRIDE == 0 {
                 tracing::warn!(
@@ -300,8 +322,16 @@ impl FailureReporter {
                 tracing::warn!(
                     language = %language,
                     failed = tally.failed,
+                    unavailable = tally.unavailable,
                     snippet_count = snippet_count,
                     "Finished snippet validation for this language with failures"
+                );
+            } else if tally.unavailable > 0 {
+                tracing::warn!(
+                    language = %language,
+                    unavailable = tally.unavailable,
+                    snippet_count = snippet_count,
+                    "Finished snippet validation for this language with every result unvalidated"
                 );
             } else {
                 tracing::debug!(
@@ -1864,6 +1894,64 @@ mod tests {
         assert!(logs_contain("First snippet validation failure for this language"));
         assert!(logs_contain("cannot find symbol | symbol: class Missing"));
         assert!(!logs_contain("Finished snippet validation for this language"));
+    }
+
+    fn unavailable_result(snippet: &Snippet, message: &str) -> ValidationResult {
+        let mut value = result(
+            snippet,
+            SnippetStatus::Unavailable,
+            ValidationLevel::Compile,
+            ValidationLevel::Compile,
+            Some(message.to_string()),
+            1,
+        );
+        value.unresolved_dependency = true;
+        value
+    }
+
+    /// `Unavailable` is not the harmless outcome its name suggests: under `strict` it fails the run
+    /// exactly like a `Fail`, and the `unresolved_dependency` reclassification turns a real
+    /// validator failure -- diagnostic and all -- into one. Tallying only `Fail | Error` is how 566
+    /// snippets across two languages reached the final summary as "283 unresolved dependency"
+    /// apiece with not one line anywhere saying WHICH dependency, while the validator's own message
+    /// sat unread on every result. ~keep
+    #[traced_test]
+    #[test]
+    fn a_languages_first_unavailable_result_is_reported_with_the_validator_message() {
+        let snippets = vec![
+            failing_snippet(crate::snippets::types::Language::Csharp),
+            failing_snippet(crate::snippets::types::Language::Csharp),
+        ];
+        let reporter = FailureReporter::new(&snippets);
+
+        reporter.record(&unavailable_result(
+            &snippets[0],
+            "error NU1101: Unable to find package XbergIo.Sample",
+        ));
+
+        assert!(logs_contain("First snippet validation unavailability for this language"));
+        assert!(logs_contain("Unable to find package XbergIo.Sample"));
+    }
+
+    /// A language whose every snippet came back unvalidated must say so at the end of its stage. It
+    /// used to fall through to the `debug!` "Finished" arm reserved for a clean run, so a total
+    /// blackout logged exactly like a total pass. ~keep
+    #[traced_test]
+    #[test]
+    fn a_language_with_no_validated_result_at_all_is_not_reported_as_finished_clean() {
+        let snippets = vec![
+            failing_snippet(crate::snippets::types::Language::Csharp),
+            failing_snippet(crate::snippets::types::Language::Csharp),
+        ];
+        let reporter = FailureReporter::new(&snippets);
+
+        for snippet in &snippets {
+            reporter.record(&unavailable_result(snippet, "error NU1101: Unable to find package"));
+        }
+
+        assert!(logs_contain(
+            "Finished snippet validation for this language with every result unvalidated"
+        ));
     }
 
     /// The other half of the requirement: visible, but not a firehose. Failure two emits nothing

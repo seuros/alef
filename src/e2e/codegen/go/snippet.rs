@@ -199,15 +199,23 @@ pub(super) fn render_snippet_body(
         );
         package_decls.push(declaration);
         setup_lines.push(format!("visitor := &{struct_name}{{}}"));
-        setup_lines.push(format!("opts := &{import_alias}.{options_type}{{}}"));
-        setup_lines.push("opts.Visitor = visitor".to_string());
-        // `replace_go_options` only replaces an existing `nil` slot in place (no arity
-        // change) when `args` already ends with one; every other case appends `opts` as
-        // a new trailing argument. ~keep
-        if !args.ends_with(", nil") {
-            configured_arg_count += 1;
+        // Attach the visitor to the options value the call ALREADY binds, when there is one.
+        // Unconditionally introducing a second `opts` object was wrong twice over: the call then
+        // carried both bindings (`Convert(html, &options, opts)`, a hard "too many arguments" from
+        // the Go compiler, since `replace_go_options` only recognised a literal trailing `nil` and
+        // appended in every other case), and the fresh empty object silently discarded whatever
+        // options the fixture had actually configured. ~keep
+        match bound_options_argument(&setup_lines, &args, recipe.args, options_type) {
+            Some(name) => setup_lines.push(format!("{name}.Visitor = visitor")),
+            None => {
+                setup_lines.push(format!("opts := &{import_alias}.{options_type}{{}}"));
+                setup_lines.push("opts.Visitor = visitor".to_string());
+                if !args.ends_with(", nil") {
+                    configured_arg_count += 1;
+                }
+                args = replace_go_options(&args);
+            }
         }
-        args = replace_go_options(&args);
     }
     if !recipe.extra_args.is_empty() {
         // Bridge/visitor parameters (per `config.trait_bridges`) are real parameters on
@@ -349,6 +357,32 @@ pub(super) fn render_snippet_body(
     .to_string())
 }
 
+/// The local variable the call's options argument is already bound to, when the argument builder
+/// emitted one and the call passes it in the trailing slot.
+///
+/// Anchored at the end of `args` rather than split on commas: an earlier argument can be a raw
+/// backtick string literal containing commas, so only a suffix match is safe here. ~keep
+fn bound_options_argument(
+    setup_lines: &[String],
+    args: &str,
+    configured_args: &[crate::e2e::config::ArgMapping],
+    options_type: &str,
+) -> Option<String> {
+    let candidate = configured_args
+        .iter()
+        .rev()
+        .find(|arg| arg.arg_type == "json_object")
+        .map(|arg| arg.name.clone())?;
+    let binds_it = setup_lines.iter().any(|line| line.starts_with(&format!("{candidate} := ")));
+    let passes_it = args.ends_with(&format!(", &{candidate}")) || args.ends_with(&format!(", {candidate}"));
+    // The binding is only reusable when it really is an options object; a `json_object` argument of
+    // some other DTO type carries no `Visitor` field to set. ~keep
+    let is_options = setup_lines
+        .iter()
+        .any(|line| line.starts_with(&format!("{candidate} := ")) && line.contains(options_type));
+    (binds_it && passes_it && is_options).then_some(candidate)
+}
+
 fn replace_go_options(args: &str) -> String {
     if let Some(prefix) = args.strip_suffix(", nil") {
         format!("{prefix}, opts")
@@ -375,6 +409,76 @@ fn snippet_setup_line(line: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A visitor fixture whose call already binds an options value must attach the visitor to THAT
+    /// binding. Introducing a second `opts` object made the call carry both — `Convert(html,
+    /// &options, opts)`, which is a hard "too many arguments" from the Go compiler — and threw away
+    /// whatever options the fixture had configured. ~keep
+    #[test]
+    fn a_visitor_attaches_to_the_options_value_the_call_already_binds() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({ "html": "<p>hi</p>" });
+        fixture.visitor = serde_json::from_value(serde_json::json!({
+            "callbacks": {"visit_link": {"action": "skip"}}
+        }))
+        .expect("visitor spec");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![
+            crate::e2e::config::ArgMapping {
+                name: "html".into(),
+                field: "html".into(),
+                arg_type: "string".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            },
+            crate::e2e::config::ArgMapping {
+                name: "options".into(),
+                field: "options".into(),
+                arg_type: "json_object".into(),
+                optional: true,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            },
+        ];
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                module: Some("github.com/example/sample".into()),
+                options_type: Some("SampleConfig".into()),
+                options_ptr: true,
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleConfig".into(),
+                fields: Vec::new(),
+                ..TypeDef::default()
+            }],
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(body.contains("options := pkg.SampleConfig{}"), "{body}");
+        assert!(body.contains("options.Visitor = visitor"), "{body}");
+        assert!(!body.contains("opts := "), "no second options object: {body}");
+        assert!(!body.contains(", opts)"), "the call must not carry two options: {body}");
+        assert!(body.contains(", &options)"), "{body}");
+    }
 
     #[test]
     fn visitor_options_replace_nil_argument() {

@@ -24,7 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it — failed to find the header. The Zig snippet validator reads the rebased binding back correctly, and
   now resolves manifest-declared include paths against the manifest's own directory rather than the
   session's working directory.
-
 - **`alef adopt` no longer lets one unusable target cancel every remaining one.** `run` bails whenever a
   target resolves to nothing adoptable — no match, or (far more common on a repo-wide sweep) only
   create-once seeds — and that error propagated straight out of the per-target loop. A single `config.m4`
@@ -107,6 +106,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emit side only; the ownership predicate is deliberately unchanged, because reclassifying `.R` from unmarkable to
   markable would retroactively freeze every already-committed `.R` that proves ownership through the record.
 
+- **A Go visitor fixture attaches its visitor to the options value the call already binds.** The
+  generator unconditionally introduced a second `opts` object, which was wrong twice over: the call then
+  carried both bindings — `Convert(html, &options, opts)`, a hard "too many arguments" from the Go
+  compiler, because the substitution helper only recognised a literal trailing `nil` and appended in
+  every other case — and the fresh empty object silently discarded whatever options the fixture had
+  configured.
+- **A snippet result that comes back `Unavailable` is now reported per language, with the validator's
+  message.** Only `Fail` and `Error` were tallied, but `Unavailable` fails the run under `strict`, and the
+  `unresolved_dependency` reclassification turns a real validator failure — diagnostic and all — into one.
+  That is how 566 snippets across two languages reached the final summary as "283 unresolved dependency"
+  apiece without one line anywhere saying *which* dependency, while the message sat unread on every
+  result. A language whose every result came back unvalidated also no longer logs like a clean pass.
 - **Go snippets pass an absent options object by address when the binding takes a pointer.** Six of the seven
   `json_object` branches in the Go snippet argument builder consult `options_ptr`; the native-DTO branch that
   handles a fixture supplying *no* options never did. On any crate whose options parameter is `Option<T>` — a
