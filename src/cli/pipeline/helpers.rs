@@ -373,7 +373,21 @@ pub(crate) fn run_before(lang: Language, before: Option<&StringOrVec>) -> anyhow
 }
 
 /// Initialize a new alef.toml config file.
+///
+/// Refuses to run against a path that already exists: `alef.toml` is the single most
+/// hand-edited file alef ever touches (crate list, extensions, scaffold overrides), and an
+/// unconditional `std::fs::write` here had no guard of any kind — not even the wrong-node
+/// `exists()` check the fixture scaffolder mistakenly used elsewhere, just no check at all. A
+/// second `alef init` in an already-initialized repo (muscle memory from another project, a
+/// typo'd flag) would have silently discarded every hand-edit with no diagnostic. ~keep
 pub fn init(config_path: &std::path::Path, languages: Option<Vec<String>>) -> anyhow::Result<()> {
+    if config_path.exists() {
+        anyhow::bail!(
+            "refusing to overwrite existing config at {}; edit it directly, or remove it first if you really want \
+             a fresh one",
+            config_path.display()
+        );
+    }
     let metadata = read_crate_metadata()?;
 
     let langs = languages.unwrap_or_else(|| vec!["python".to_string(), "node".to_string(), "ffi".to_string()]);
@@ -581,6 +595,23 @@ mod tests {
     fn run_before_with_multiple_commands_all_succeed_returns_ok() {
         let cmd = StringOrVec::Multiple(vec!["true".to_string(), "true".to_string()]);
         run_before(Language::Python, Some(&cmd)).expect("run_before with all-successful commands should return Ok");
+    }
+
+    #[test]
+    fn init_refuses_to_overwrite_an_existing_config() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let config_path = directory.path().join("alef.toml");
+        let hand_edited = "[workspace]\nlanguages = [\"python\"]\n\n[[crates]]\nname = \"hand-edited\"\n";
+        std::fs::write(&config_path, hand_edited).expect("seed hand-edited config");
+
+        let result = init(&config_path, Some(vec!["node".to_string()]));
+
+        assert!(result.is_err(), "init must refuse an already-initialized config path");
+        let preserved = std::fs::read_to_string(&config_path).expect("read config after refused init");
+        assert_eq!(
+            preserved, hand_edited,
+            "a refused init must leave the existing config byte-for-byte untouched"
+        );
     }
 
     #[test]
