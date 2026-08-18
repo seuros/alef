@@ -740,7 +740,10 @@ fn render_snippet_markdown(
             side_effect => side_effect_name(docs.side_effects),
             target => target,
             title => language.display_name(),
-            body => body,
+            // Generators end their body with a newline; the template adds its own before the
+            // closing fence, so passing the body through verbatim put a blank line inside every
+            // one of the thousands of generated code fences. ~keep
+            body => body.trim_end(),
         },
     );
     crate::docs::with_html_header(rendered, SNIPPET_REGENERATE_COMMAND)
@@ -1665,6 +1668,43 @@ mod tests {
             "one extra front-matter line must push the marker out of the scan window -- \
              the budget this test guards is exactly zero lines"
         );
+    }
+
+    /// Every generator hands `render_snippet_markdown` a body that already ends in a newline, and
+    /// the template emits its own before the closing fence. Passing the body through verbatim put
+    /// a blank line inside all several-thousand generated code fences — invisible in a diff,
+    /// visible on every rendered docs page. ~keep
+    #[test]
+    fn a_body_ending_in_a_newline_does_not_open_a_blank_line_before_the_closing_fence() {
+        let docs = FixtureDocs {
+            topic: "smoke".into(),
+            stem: None,
+            paths: BTreeMap::new(),
+            title: None,
+            description: None,
+            input: None,
+            shows: Vec::new(),
+            error: None,
+            presentation: None,
+            client: None,
+            side_effects: SideEffectClass::Safe,
+            coverage_exceptions: BTreeMap::new(),
+        };
+        let rendered = render_snippet_markdown(
+            "example()\n",
+            &documented_fixture(),
+            &docs,
+            "python",
+            DocumentationLanguage::Binding(Language::Python),
+        );
+
+        assert!(
+            rendered.ends_with("example()\n```\n"),
+            "closing fence must follow the last code line directly: {rendered:?}"
+        );
+        let blocks = crate::snippets::parser::extract_fenced_blocks(&rendered);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].code, "example()");
     }
 
     /// The header must not disturb the two structures the snippet pipeline parses out of these

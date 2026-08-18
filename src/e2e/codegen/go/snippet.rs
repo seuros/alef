@@ -667,10 +667,79 @@ mod tests {
             "{body}"
         );
         assert!(body.contains("config := pkg.SampleConfig{}"), "{body}");
-        assert!(body.contains("pkg.Process(payload, config)"), "{body}");
+        // `options_ptr` is set, so the binding's signature takes `*SampleConfig`; the bound DTO has
+        // to be passed by address. This assertion read `pkg.Process(payload, config)` while the
+        // branch that emits it ignored `options_ptr` entirely -- it pinned the defect. ~keep
+        assert!(body.contains("pkg.Process(payload, &config)"), "{body}");
         assert!(!body.contains("pkg.Process(payload, nil)"), "{body}");
         assert!(!body.contains("json.Unmarshal"), "{body}");
         assert!(!body.contains("encoding/json"), "{body}");
+    }
+
+    /// A fixture that supplies no options at all still reaches the binding through the
+    /// native-DTO branch, which binds a typed empty literal and passes it by name. That branch was
+    /// the only one of the seven `json_object` paths that never consulted `options_ptr`, so on a
+    /// crate whose options parameter is `Option<T>` (pointer in Go) every optionless fixture --
+    /// the majority of them -- emitted `Convert(html, options)` against `func Convert(html string,
+    /// options *ConversionOptions)` and failed to compile. ~keep
+    #[test]
+    fn an_absent_options_object_is_passed_by_address_when_the_binding_takes_a_pointer() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({ "html": "<p>hi</p>" });
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.args = vec![
+            crate::e2e::config::ArgMapping {
+                name: "html".into(),
+                field: "html".into(),
+                arg_type: "string".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            },
+            crate::e2e::config::ArgMapping {
+                name: "options".into(),
+                field: "options".into(),
+                arg_type: "json_object".into(),
+                optional: true,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            },
+        ];
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                module: Some("github.com/example/sample".into()),
+                options_type: Some("SampleConfig".into()),
+                options_ptr: true,
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &e2e,
+            &ResolvedCrateConfig::default(),
+            &[TypeDef {
+                name: "SampleConfig".into(),
+                fields: Vec::new(),
+                ..TypeDef::default()
+            }],
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(body.contains("options := pkg.SampleConfig{}"), "{body}");
+        assert!(body.contains(", &options)"), "{body}");
+        assert!(!body.contains(", options)"), "{body}");
     }
 
     #[test]

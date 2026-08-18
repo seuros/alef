@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Go snippets pass an absent options object by address when the binding takes a pointer.** Six of the seven
+  `json_object` branches in the Go snippet argument builder consult `options_ptr`; the native-DTO branch that
+  handles a fixture supplying *no* options never did. On any crate whose options parameter is `Option<T>` — a
+  `*T` in the emitted Go signature — every optionless fixture, which is most of them, produced
+  `Convert(html, options)` against `func Convert(html string, options *ConversionOptions)` and failed to compile.
+- **Generated snippet bodies no longer open a blank line before the closing fence.** Generators hand the renderer
+  a body already ending in a newline and the template emits its own, so every generated code fence carried a
+  trailing blank line.
+
 - **A subscripted `fields_optional` / `fields_array` entry is a claim about the element, not the container.**
   `validate_field_classifications` stripped the `[...]` suffix and ruled on the field it was attached to, so
   `metadata.document.open_graph[title]` — a key lookup on a `HashMap<String, String>`, optional in every host

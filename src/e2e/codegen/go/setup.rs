@@ -674,7 +674,16 @@ pub(super) fn build_args_and_setup(
             )?
         {
             setup_lines.push(format!("{} := {literal}", arg.name));
-            parts.push(arg.name.clone());
+            // Every other `json_object` branch below consults `options_ptr` before deciding how to
+            // pass the value; this one did not, so a fixture that supplies no options at all bound a
+            // typed empty DTO and then handed the binding a value where its signature declares `*T`.
+            // That is the whole of the "cannot use options (variable of struct type X) as *X" wall
+            // -- it hit every fixture without an options object, which is most of them. ~keep
+            parts.push(if Some(type_name) == options_type && options_ptr {
+                format!("&{}", arg.name)
+            } else {
+                arg.name.clone()
+            });
             continue;
         }
 
