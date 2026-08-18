@@ -2,7 +2,7 @@ use crate::codegen::shared::binding_fields;
 use crate::core::config::Language;
 use crate::core::ir::EnumDef;
 use crate::docs::descriptions::generate_enum_variant_description;
-use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings};
+use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use crate::docs::formatting::escape_table_cell;
 use crate::docs::naming::{enum_variant_name, field_name, type_name};
 use crate::docs::{clean_doc, doc_type, template_env, version_labels};
@@ -21,7 +21,12 @@ pub(super) fn render_enum(en: &EnumDef, lang: Language, ffi_prefix: &str) -> Str
     push_version_annotation(&mut out, &en.version);
 
     let doc = clean_doc(&en.doc, lang);
-    let doc = demote_headings(&doc, 2);
+    // Nest under the `####` heading emitted just above, rather than shifting by a fixed
+    // number of levels. A fixed `+2` assumes the doc comment starts at `#`, and a section that
+    // starts anywhere else lands ABOVE its own parent: a rustdoc `# Observability` surfaced as
+    // `###` under a `####` item, so it read as a sibling of the page's `### Functions` section and
+    // took a bogus entry in the table of contents with it. ~keep
+    let doc = demote_headings_to_start_at(&doc, 5);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');

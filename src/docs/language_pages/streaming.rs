@@ -1,6 +1,6 @@
 use crate::core::config::{AdapterConfig, AdapterPattern, Language, ResolvedCrateConfig};
 use crate::core::ir::{MethodDef, TypeRef};
-use crate::docs::doc_cleaning::{demote_headings, extract_param_docs};
+use crate::docs::doc_cleaning::{demote_headings_to_start_at, extract_param_docs};
 use crate::docs::examples::MethodExampleOverride;
 use crate::docs::examples::render_method_example_with_override;
 use crate::docs::naming::{func_name, lang_code_fence, method_name, type_name};
@@ -435,7 +435,12 @@ pub(super) fn render_method(
     let param_docs = extract_param_docs(&method.doc);
 
     let doc = clean_doc(&method.doc, lang);
-    let doc = demote_headings(&doc, 4);
+    // Nest under the `######` heading emitted just above, rather than shifting by a fixed
+    // number of levels. A fixed `+2` assumes the doc comment starts at `#`, and a section that
+    // starts anywhere else lands ABOVE its own parent: a rustdoc `# Observability` surfaced as
+    // `###` under a `####` item, so it read as a sibling of the page's `### Functions` section and
+    // took a bogus entry in the table of contents with it. ~keep
+    let doc = demote_headings_to_start_at(&doc, 6);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');

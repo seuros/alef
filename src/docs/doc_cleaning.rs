@@ -717,12 +717,16 @@ pub(crate) fn strip_rust_sections(doc: &str) -> String {
 
         if skip_section {
             let trimmed = line.trim();
+            // Indentation is read from the RAW line. The two continuation arms below used to test
+            // the TRIMMED one, which cannot begin with whitespace by construction -- so they never
+            // matched, and a wrapped bullet ended the skip and leaked its own tail into the page.
+            // `* \`options\` — conversion options. Rust accepts bare [\`ConversionOptions\`],` wraps
+            // onto two indented lines, and those two lines were published verbatim as a headless
+            // paragraph, mid-sentence, in every generated reference page. ~keep
             let is_section_content = trimmed.is_empty()
-                || trimmed.starts_with('*')
-                || trimmed.starts_with('-')
-                || trimmed.starts_with('+')
-                || trimmed.starts_with("  ")
-                || trimmed.starts_with('\t');
+                || trimmed.starts_with(['*', '-', '+'])
+                || line.starts_with("  ")
+                || line.starts_with('\t');
             if is_section_content {
                 continue;
             }

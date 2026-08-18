@@ -106,6 +106,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emit side only; the ownership predicate is deliberately unchanged, because reclassifying `.R` from unmarkable to
   markable would retroactively freeze every already-committed `.R` that proves ownership through the record.
 
+- **A stripped `# Arguments` bullet no longer leaks its own continuation lines into the reference
+  page.** The two arms that recognise a wrapped bullet tested the TRIMMED line for leading
+  whitespace, which cannot match by construction, so the skip ended at the first wrapped line and
+  published the bullet's tail — mid-sentence, with no heading above it — into every generated
+  reference page.
+- **Doc-comment sections nest under the item that owns them.** Function, error, enum and streaming
+  pages shifted rustdoc headings by a fixed number of levels, which assumes the doc comment starts at
+  `#`. A `# Observability` section under a `####` item surfaced as `###`, reading as a sibling of the
+  page's `### Functions` section and taking a bogus table-of-contents entry with it. Each now demotes
+  so the first heading starts one level below its own parent.
 - **A C# snippet's visitor class is emitted at file scope without the e2e test class's nesting
   indent**, and the batch validator finds the statement/declaration boundary by brace depth rather
   than by column. Either half alone left the class inside the wrapper method, where C# does not allow

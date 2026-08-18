@@ -838,3 +838,47 @@ fn test_clean_doc_normalizes_asterisk_list_markers_to_dash() {
         "raw asterisk list markers should not remain"
     );
 }
+
+/// A `# Arguments` bullet that wraps onto continuation lines must be stripped whole. The
+/// continuation arms tested the TRIMMED line for leading whitespace, which cannot match by
+/// construction, so the skip ended at the first wrapped line and published the bullet's tail —
+/// mid-sentence, with no heading above it — into every generated reference page. ~keep
+#[test]
+fn a_wrapped_arguments_bullet_is_stripped_including_its_continuation_lines() {
+    let doc = "Convert HTML.\n\n\
+               # Arguments\n\n\
+               * `html` — the HTML string to convert.\n\
+               * `options` — conversion options. Rust accepts bare [`ConversionOptions`],\n  \
+               `Some(options)`, or `None`. Language bindings expose the same option\n  \
+               fields through native constructors or optional parameters.\n\n\
+               # Errors\n\n\
+               Returns an error if HTML parsing fails.\n";
+
+    let cleaned = clean_doc(doc, Language::Python);
+
+    assert!(cleaned.contains("Convert HTML."), "the summary survives: {cleaned}");
+    assert!(
+        !cleaned.contains("Some(options)"),
+        "the wrapped continuation must not leak: {cleaned}"
+    );
+    assert!(
+        !cleaned.contains("native constructors"),
+        "no line of the stripped bullet may survive: {cleaned}"
+    );
+    assert!(
+        cleaned.contains("Returns an error if HTML parsing fails."),
+        "the section AFTER the stripped one must still be emitted: {cleaned}"
+    );
+}
+
+/// The control: an unindented paragraph after a stripped section is genuinely new content and
+/// must end the skip, or a `# Arguments` section would swallow the rest of the doc comment.
+#[test]
+fn an_unindented_paragraph_after_a_stripped_section_ends_the_skip() {
+    let doc = "Summary.\n\n# Arguments\n\n* `a` — first.\n\nBack to prose.\n";
+
+    let cleaned = clean_doc(doc, Language::Python);
+
+    assert!(cleaned.contains("Back to prose."), "{cleaned}");
+    assert!(!cleaned.contains("first."), "{cleaned}");
+}

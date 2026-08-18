@@ -3,7 +3,7 @@ use crate::core::config::Language;
 use crate::core::ir::ErrorDef;
 use crate::core::keywords::swift_case_ident;
 use crate::docs::descriptions::generate_error_variant_description;
-use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings};
+use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use crate::docs::formatting::escape_table_cell;
 use crate::docs::naming::{enum_variant_name, type_name};
 use crate::docs::{clean_doc, template_env};
@@ -44,7 +44,12 @@ pub(super) fn render_error(err: &ErrorDef, all_errors: &[ErrorDef], lang: Langua
     ));
 
     let doc = clean_doc(&err.doc, lang);
-    let doc = demote_headings(&doc, 2);
+    // Nest under the `####` heading emitted just above, rather than shifting by a fixed
+    // number of levels. A fixed `+2` assumes the doc comment starts at `#`, and a section that
+    // starts anywhere else lands ABOVE its own parent: a rustdoc `# Observability` surfaced as
+    // `###` under a `####` item, so it read as a sibling of the page's `### Functions` section and
+    // took a bogus entry in the table of contents with it. ~keep
+    let doc = demote_headings_to_start_at(&doc, 5);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');
