@@ -1018,7 +1018,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path, true)?;
+                // `write_cache: false` -- `alef diff` is documented as "without writing" (see its
+                // clap doc comment) and must stay read-only the same way `alef verify` does. Passing
+                // `true` here regenerated bindings in memory only to preview a diff, yet still ran
+                // `pipeline::generate`'s internal `write_lang_hash`, which unconditionally overwrites
+                // `<lang>.manifest` with just this call's own file list -- discarding whatever fuller
+                // manifest `alef generate`/`alef all` had folded in from later phases (public_api,
+                // stubs, service API) via `write_lang_manifest`. For a backend whose core bindings
+                // step emits only its Rust glue crate (python/node/ruby/elixir/php/wasm), every `alef
+                // diff` run silently regressed `<lang>.manifest` back down to that one file. ~keep
+                let bindings = pipeline::generate(&api, resolved_cfg, &languages, true, config_path, false)?;
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
                 let scaffold = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 all_diffs.extend(pipeline::diff_files(&bindings, &base_dir)?);
@@ -1074,6 +1083,8 @@ fn ensure_required_records_tracked(untracked: &[&'static str], report_only: bool
 #[cfg(test)]
 mod tests {
     use super::ensure_required_records_tracked;
+    use crate::bin_cli::args::Commands;
+    use crate::bin_cli::dispatch::DispatchContext;
     use crate::cli::cache;
     use std::path::Path;
 
@@ -1165,5 +1176,104 @@ mod tests {
         );
 
         ensure_required_records_tracked(&untracked, true).expect("--report-only keeps a successful exit status");
+    }
+
+    const DIFF_FIXTURE_SOURCE: &str = "pub fn greet(name: String) -> String {\n    name\n}\n";
+    const DIFF_FIXTURE_CARGO_TOML: &str = "[package]\nname = \"test-lib\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
+
+    /// `[crates.python.stubs]` is required for the stubs phase to emit anything and also pins
+    /// the public-API phase's output directory (see the identical fixture this mirrors,
+    /// `LANG_MANIFEST_FIXTURE_ALEF_TOML` in `all_commands_tests.rs`), so this crate's Python
+    /// output spans three phases -- bindings, stubs, and public API -- exactly like the real
+    /// consumer tree that measured `python 1/6`. ~keep
+    const DIFF_FIXTURE_ALEF_TOML: &str = r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+version_from = "Cargo.toml"
+
+[crates.python]
+module_name = "test_lib"
+
+[crates.python.stubs]
+output = "packages/python/test_lib"
+"#;
+
+    fn write_diff_fixture_workspace(root: &Path) {
+        std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
+        std::fs::write(root.join("src/lib.rs"), DIFF_FIXTURE_SOURCE).expect("write fixture source");
+        std::fs::write(root.join("Cargo.toml"), DIFF_FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
+        std::fs::write(root.join("alef.toml"), DIFF_FIXTURE_ALEF_TOML).expect("write fixture alef.toml");
+    }
+
+    /// Regression for the second half of alef#158: `alef generate` already reconciles every
+    /// phase's alef-marked output into `<lang>.manifest` via `cache::write_lang_manifest` (see
+    /// `write_lang_manifest_records_the_full_union_once_every_phase_is_reconciled` in
+    /// `cli/pipeline/generate/generation.rs`), so a fresh `alef generate` run on this fixture
+    /// records all six Python files below -- the "N files emitted, N paths recorded" property,
+    /// proven through the real dispatch path rather than by constructing a manifest by hand.
+    ///
+    /// `alef diff` is documented as "without writing", so it must never be able to move that
+    /// number. Before this fix, `Commands::Diff` called `pipeline::generate` with
+    /// `write_cache: true`, so its internal `write_lang_hash` unconditionally overwrote
+    /// `<lang>.manifest` with just the bindings phase's own file (`packages/python/lib.rs`),
+    /// regressing the manifest `alef generate` had just built from 6 entries back down to 1 --
+    /// the exact ratio measured on the real consumer tree. This is the mandatory control: the
+    /// backend already recorded correctly (via `alef generate`) before `alef diff` ran, and its
+    /// recorded set must be byte-identical after `alef diff` runs, proving the fix rather than
+    /// merely a manifest that happens to be non-empty. The wiring under test here is generic
+    /// over every language `Commands::Diff` iterates, so this one fixture stands in for all of
+    /// python/node/ruby/elixir/php/wasm rather than repeating the same assertion four times. ~keep
+    #[test]
+    fn diff_does_not_regress_a_language_manifest_generate_already_reconciled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+        write_diff_fixture_workspace(&root);
+        let _cwd = crate::test_support::CwdGuard::enter(&root);
+
+        let context = DispatchContext {
+            config_path: root.join("alef.toml"),
+            crate_filter: Vec::new(),
+        };
+
+        super::handle(
+            Commands::Generate {
+                lang: None,
+                clean: false,
+                skip_frb: false,
+            },
+            &context,
+        )
+        .expect("alef generate must succeed against the fixture");
+
+        let mut before = cache::read_lang_manifest("test-lib", "python");
+        before.sort();
+        let mut expected = vec![
+            root.join("packages/python/lib.rs"),
+            root.join("packages/python/test_lib/test_lib.pyi"),
+            root.join("packages/python/test_lib/options.py"),
+            root.join("packages/python/test_lib/api.py"),
+            root.join("packages/python/test_lib/exceptions.py"),
+            root.join("packages/python/test_lib/__init__.py"),
+        ];
+        expected.sort();
+        assert_eq!(
+            before, expected,
+            "sanity: alef generate must record all six alef-marked Python files before alef diff \
+             ever runs, or the assertion below would pass even if diff wiped the manifest clean"
+        );
+
+        super::handle(Commands::Diff { exit_code: false }, &context).expect("alef diff must succeed");
+
+        let mut after = cache::read_lang_manifest("test-lib", "python");
+        after.sort();
+        assert_eq!(
+            after, before,
+            "alef diff is documented as \"without writing\" and must not regress \
+             <lang>.manifest -- got {after:?}, expected the unchanged pre-diff set {before:?}"
+        );
     }
 }
