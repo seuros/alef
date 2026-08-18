@@ -92,7 +92,14 @@ fn test_render_method_signature_ffi_respects_explicit_return_type_override() {
         return_type: Some("void".to_string()),
         ..Default::default()
     };
-    let sig = render_method_signature_with_override(&method, "Client", Language::Ffi, TEST_PREFIX, Some(&override_));
+    let sig = render_method_signature_with_override(
+        &method,
+        "Client",
+        Language::Ffi,
+        TEST_PREFIX,
+        TEST_CRATE_NAME,
+        Some(&override_),
+    );
     assert!(
         sig.starts_with("void"),
         "an explicit override must win over the status-code inference: {sig}"
@@ -117,7 +124,7 @@ fn test_c_signature_and_error_phrase_agree_on_fallible_void_status_value() {
         false,
         Some("InitError"),
     );
-    let signature = render_function_signature(&func, Language::C, TEST_PREFIX);
+    let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
     let error_phrase = crate::docs::formatting::format_error_phrase(
         func.error_type.as_deref().expect("fallible"),
         &func.return_type,
@@ -139,7 +146,7 @@ fn test_c_signature_and_error_phrase_agree_named_return_uses_integer_not_null() 
         false,
         Some("ParseError"),
     );
-    let signature = render_function_signature(&func, Language::C, TEST_PREFIX);
+    let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
     let error_phrase = crate::docs::formatting::format_error_phrase(
         func.error_type.as_deref().expect("fallible"),
         &func.return_type,

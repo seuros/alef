@@ -29,6 +29,47 @@ pub(super) fn is_handle_type(ty: &TypeRef) -> bool {
 /// (Dart declares `Pointer<Void>`, Zig a `*const` extern). ~keep
 pub(super) const CAPSULE_PINVOKE_RETURN_TYPE: &str = "IntPtr";
 
+/// The P/Invoke type of an alef-owned `AlefHandle` — the handle-registry key the FFI crate
+/// emits as `type AlefHandle = u64` / `typedef uint64_t {PREFIX}AlefHandle`. Every declaration
+/// in this backend that carries a handle across the boundary reads this constant, including the
+/// hand-rolled streaming `extern`s in `functions::gen_native_methods`, so the width is stated
+/// once instead of being spelled `"ulong"` at each emitter.
+///
+/// It does **not** unify how the two `SafeHandle` templates *store* that value, and those two
+/// conventions are still live and deliberately left alone:
+/// `templates/opaque_handle_header.jinja:41` packs the `ulong` bit-pattern into `SafeHandle`'s
+/// single `IntPtr` slot (`Pack`/`Unpack`), while `templates/service_class_header.jinja:15-19`
+/// keeps a private `ulong _nativeHandle` and stores `new IntPtr(1)` in the slot as a
+/// liveness sentinel. They differ in what `IsInvalid` and `ReleaseHandle` read, so collapsing
+/// them changes finalization behaviour, not just spelling — it needs its own change with its
+/// own generated-output verification. ~keep
+pub(super) const HANDLE_PINVOKE_TYPE: &str = "ulong";
+
+/// Which FFI emitter produced the C symbol a `[DllImport]` binds to.
+///
+/// The two FFI emitters do **not** agree about capsule returns, and the disagreement is
+/// deliberate rather than a bug to paper over — so the C# declaration has to mirror whichever C
+/// signature actually exists. This enum is the one place that shape rule is written down; both
+/// P/Invoke emitters derive their return type through [`pinvoke_return_type_with_capsules`]
+/// rather than each deciding for itself. ~keep
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FfiEmitter {
+    /// `backends::ffi::gen_bindings::functions::orchestration::gen_free_function` is
+    /// capsule-aware: at `orchestration.rs:723` a configured capsule return is emitted as
+    /// `capsule::capsule_c_return_type` — `*const {into_raw_type}`, owned by the host runtime —
+    /// so the value crosses as a real pointer and is declared [`CAPSULE_PINVOKE_RETURN_TYPE`].
+    FreeFunction,
+    /// `...::orchestration::gen_method_wrapper` (`orchestration.rs:69`) takes no capsule config
+    /// at all and falls through to `c_return_type_with_paths`, which maps every `Named` to
+    /// `AlefHandle` (`backends/ffi/type_map.rs:279`). Commit `6855c6d57` made that intentional: a
+    /// capsule type reachable as a method return keeps its opaque `_new`/`_free` exports (the
+    /// `capsule_used_as_opaque` sets at `ffi/gen_bindings/lib_rs.rs:176` and
+    /// `ffi/gen_bindings/helpers.rs:396`) and is boxed by alef, so the method's C signature really
+    /// is `uint64_t`. Declaring [`CAPSULE_PINVOKE_RETURN_TYPE`] on this path would be a live ABI
+    /// mismatch, not a fix.
+    Method,
+}
+
 /// True when `ty` is a host-native capsule return whose value crosses as a raw pointer.
 ///
 /// Deliberately matches only a bare `Named`, exactly like the capsule-wrapper router in
@@ -84,7 +125,7 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
         TypeRef::Primitive(PrimitiveType::Usize) => "ulong",
         TypeRef::Primitive(PrimitiveType::Isize) => "long",
         TypeRef::Duration => "ulong",
-        _ if is_handle_type(ty) => "ulong",
+        _ if is_handle_type(ty) => HANDLE_PINVOKE_TYPE,
         TypeRef::String
         | TypeRef::Char
         | TypeRef::Bytes
@@ -99,13 +140,17 @@ pub(super) fn pinvoke_return_type(ty: &TypeRef) -> &'static str {
 
 /// Returns the C# `[DllImport]` return type, accounting for host-native capsule returns.
 ///
-/// This is the one function the `extern` signature is emitted from; pair it with
-/// [`zero_sentinel_for_pinvoke_type`] to derive the matching null check.
+/// This is the one function every `extern` return type is emitted from — free functions and
+/// methods alike — so the two P/Invoke emitters can no longer disagree by simply not knowing
+/// capsules exist. `emitter` selects which FFI-side C signature is being mirrored; see
+/// [`FfiEmitter`] for why the two answers legitimately differ. Pair the result with
+/// [`zero_sentinel_for_pinvoke_type`] to derive the matching null check. ~keep
 pub(super) fn pinvoke_return_type_with_capsules(
     ty: &TypeRef,
     capsule_types: &HashMap<String, HostCapsuleTypeConfig>,
+    emitter: FfiEmitter,
 ) -> &'static str {
-    if is_capsule_return(ty, capsule_types) {
+    if emitter == FfiEmitter::FreeFunction && is_capsule_return(ty, capsule_types) {
         CAPSULE_PINVOKE_RETURN_TYPE
     } else {
         pinvoke_return_type(ty)
@@ -121,7 +166,7 @@ pub(super) fn pinvoke_return_type_with_capsules(
 pub(super) fn pinvoke_param_type(ty: &TypeRef) -> &'static str {
     match ty {
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "string",
-        _ if is_handle_type(ty) => "ulong",
+        _ if is_handle_type(ty) => HANDLE_PINVOKE_TYPE,
         TypeRef::Named(_) | TypeRef::Vec(_) | TypeRef::Map(_, _) | TypeRef::Bytes | TypeRef::Optional(_) => "IntPtr",
         TypeRef::Unit => "void",
         TypeRef::Primitive(PrimitiveType::Bool) => "int",

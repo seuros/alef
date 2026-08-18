@@ -193,26 +193,74 @@ pub(super) fn render_chat_stream_example(
 
     // Build aggregators inside a block so the iterator drives the stream synchronously.
     out.push_str("    chunks = []\n");
-    out.push_str("    stream_complete = false\n");
     out.push_str(&format!("    {call_expr} do |chunk|\n"));
     out.push_str("      chunks << chunk\n");
     out.push_str("    end\n");
-    out.push_str("    stream_complete = true\n");
+
+    // `stream_complete` is defined -- for every backend, see `streaming_assertions/model.rs`'s
+    // field table -- as "the last collected chunk carries a terminal finish_reason". Only a
+    // chat-shaped chunk has one, and the probe for that is the same set of chat pseudo-fields
+    // `csharp/streaming.rs` gates its aggregators on: reaching for `chunk.choices` on any other
+    // item type raises NoMethodError at spec runtime.
+    //
+    // This local used to be assigned `false` and then `true` unconditionally, one line above
+    // `expect(stream_complete).to be(true)` -- a green check that could not fail whatever the
+    // stream did. Deriving it from the collected chunks (via the resolver's own ruby accessor, so
+    // ruby means by the field exactly what the other backends mean) is what makes it falsifiable.
+    // ~keep
+    let is_chat_stream = fixture.assertions.iter().any(|a| {
+        matches!(
+            a.field.as_deref(),
+            Some(
+                "stream_content"
+                    | "finish_reason"
+                    | "tool_calls"
+                    | "tool_calls[0].function.name"
+                    | "usage.total_tokens"
+            )
+        )
+    });
+    let stream_complete_expr = if is_chat_stream {
+        crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor("stream_complete", "ruby", "chunks")
+    } else {
+        None
+    };
+    if let Some(expr) = &stream_complete_expr {
+        out.push_str(&format!("    stream_complete = {expr}\n"));
+    }
 
     // Render assertions on the local aggregator vars.
     for assertion in &fixture.assertions {
-        emit_chat_stream_assertion(&mut out, assertion, e2e_config, streaming_item_type);
+        emit_chat_stream_assertion(
+            &mut out,
+            assertion,
+            e2e_config,
+            streaming_item_type,
+            stream_complete_expr.is_some(),
+        );
     }
 
-    // Always assert that the stream completed cleanly so non-empty test bodies
-    // are guaranteed by RSpec's at-least-one-expectation requirement.
+    // Ride the implicit "the stream finished" check along only where `stream_complete` was
+    // actually derived. Synthesising a passing expectation for an assertion no fixture declared
+    // is exactly the vacuous green this path is being pulled back from, so the alternative is a
+    // marker the skip ledger can see rather than a check that cannot fail. ~keep
     if !fixture
         .assertions
         .iter()
         .any(|a| a.field.as_deref() == Some("stream_complete"))
     {
-        out.push_str("    expect(stream_complete).to be(true)\n");
+        if stream_complete_expr.is_some() {
+            out.push_str("    expect(stream_complete).to be(true)\n");
+        } else {
+            out.push_str(&format!(
+                "    # skipped: {}; this stream's chunks carry no terminal finish_reason, \
+so completion is not observable here\n",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message("stream_complete")
+            ));
+        }
     }
+
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&out, "ruby", &fixture.id, &fixture.assertions);
 
     // Trait-bridge teardown (e.g. unregister test backend) so RSpec's
     // shared-process registry state is restored between tests.
@@ -233,12 +281,34 @@ pub(super) fn emit_chat_stream_assertion(
     assertion: &Assertion,
     _e2e_config: &E2eConfig,
     streaming_item_type: Option<&str>,
+    stream_complete_is_derived: bool,
 ) {
     let atype = assertion.assertion_type.as_str();
     if atype == "not_error" || atype == "error" {
         return;
     }
     let field = assertion.field.as_deref().unwrap_or("");
+
+    // Ruby drives the stream with a block, so by the time the call returns there is no iterator
+    // left to ask for one more element -- the only way to observe a chunk arriving after done.
+    // `csharp/streaming.rs` can probe its enumerator and does; ruby cannot, and the previous
+    // mapping papered over that by aliasing this field onto the `stream_complete` local, so two
+    // different assertions rendered one identical check that could not fail either way. ~keep
+    if field == "no_chunks_after_done" {
+        out.push_str(&format!(
+            "    # skipped: {}; a block-driven ruby stream exposes no post-completion probe\n",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
+        ));
+        return;
+    }
+    if field == "stream_complete" && !stream_complete_is_derived {
+        out.push_str(&format!(
+            "    # skipped: {}; this stream's chunks carry no terminal finish_reason, \
+so completion is not observable here\n",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
+        ));
+        return;
+    }
 
     enum Kind {
         Chunks,
@@ -266,12 +336,12 @@ pub(super) fn emit_chat_stream_assertion(
         ("tool_calls", Some(expr)) => (expr, Kind::Json),
         ("tool_calls[0].function.name", Some(expr)) => (expr, Kind::Str),
         ("usage.total_tokens", Some(expr)) => (expr, Kind::IntTokens),
-        // Match on the field alone: the resolver answers `Some` for both of these for every
-        // language, so a `None` pattern here is unreachable and silently dropped the assertion
-        // into the `Unsupported` arm. Ruby deliberately ignores the resolver's chunk expression
-        // and asserts the `stream_complete` local the spec body already maintains. ~keep
+        // Match on the field alone: the resolver answers `Some` here for every language, so a
+        // `None` pattern would be unreachable and would silently drop the assertion into the
+        // `Unsupported` arm. The spec body binds `stream_complete` to this very resolver
+        // expression, so asserting the local and asserting the accessor are the same check;
+        // `no_chunks_after_done` is refused above rather than aliased onto it. ~keep
         ("stream_complete", _) => ("stream_complete".to_string(), Kind::Bool),
-        ("no_chunks_after_done", _) => ("stream_complete".to_string(), Kind::Bool),
         _ => ("".to_string(), Kind::Unsupported),
     };
 

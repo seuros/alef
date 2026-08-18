@@ -403,10 +403,18 @@ pub(crate) fn emit_cargo_toml(
         },
     );
 
+    // `.toml` is on `generate::write::marker_comment_style`'s *ownership* list, where a missing
+    // provenance marker is read as proof alef never authored the file: `write_files_report`
+    // refuses the write, so the marker never lands, so it refuses forever. This manifest's
+    // `[features]` table and `lib.rs`'s `#[cfg(feature = "...")]` gates are derived from one
+    // `collect_cfg_features` call on one surface and cannot disagree in memory — they disagree on
+    // disk when only the self-marking `lib.rs` is written, which is how a newly cfg-gated item
+    // reaches the generated crate as `unexpected_cfg`. Stamping keeps both files on the same
+    // rail. ~keep
     GeneratedFile {
         path: PathBuf::from(format!("{rust_dir}/Cargo.toml")),
         content,
-        generated_header: false,
+        generated_header: true,
     }
 }
 
@@ -420,10 +428,12 @@ pub(crate) fn emit_build_rs(rust_dir: &str, package_name: &str, module_name: &st
             cfg_gates_fn => cfg_gates_fn.as_str(),
         },
     );
+    // Same ownership rail as the manifest above: `.rs` is markable, so an unmarked build.rs is
+    // frozen out of every later regen. ~keep
     GeneratedFile {
         path: PathBuf::from(format!("{rust_dir}/build.rs")),
         content,
-        generated_header: false,
+        generated_header: true,
     }
 }
 
@@ -495,10 +505,12 @@ pub(crate) fn emit_frb_yaml(rust_dir: &str, module_name: &str) -> GeneratedFile 
             module_name => module_name,
         },
     );
+    // Same ownership rail as the manifest above: `.yaml` is markable, so an unmarked config is
+    // frozen out of every later regen. ~keep
     GeneratedFile {
         path: PathBuf::from(format!("{rust_dir}/flutter_rust_bridge.yaml")),
         content,
-        generated_header: false,
+        generated_header: true,
     }
 }
 
@@ -1212,5 +1224,90 @@ mod build_rs_tests {
             "build.rs must target the generated frb rust file"
         );
         syn::parse_file(&file.content).expect("generated build.rs must be valid Rust");
+    }
+
+    /// The manifest and `lib.rs` are derived from one `collect_cfg_features` call on one surface,
+    /// so they cannot disagree in memory. They disagreed on disk: `generate::write` treats a
+    /// missing provenance marker on a *markable* extension (`.toml`, `.rs`, `.yaml` — see
+    /// `generate::write::marker_comment_style`) as proof of foreign authorship and refuses the
+    /// write, permanently, while `lib.rs` stamps its own header and is rewritten every run. A
+    /// newly cfg-gated item then reached the generated crate as `#[cfg(feature = "X")]` against a
+    /// frozen `[features]` table — `unexpected_cfg` for every re-emission of that gate.
+    ///
+    /// Asserts the positive first: the fixture really does emit a gate and the matching feature
+    /// key, so the ownership assertion below is not passing over an empty surface. ~keep
+    #[test]
+    fn every_markable_dart_rust_crate_file_carries_a_provenance_marker_on_disk() {
+        use crate::cli::pipeline::{ensure_generated_header, marker_comment_style};
+        use crate::core::hash::content_has_alef_marker;
+        use crate::core::ir::FunctionDef;
+
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                name: "count_tokens".to_string(),
+                rust_path: "sample_lib::text::count_tokens".to_string(),
+                cfg: Some(r#"feature = "text-metrics""#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let config = ResolvedCrateConfig {
+            name: "sample-lib".to_string(),
+            ..Default::default()
+        };
+
+        let files = crate::backends::dart::gen_rust_crate::emit(&api, &config).expect("dart backend generates files");
+
+        let lib_rs = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("src/lib.rs"))
+            .expect("lib.rs is generated");
+        assert!(
+            lib_rs.content.contains("#[cfg(feature = \"text-metrics\")]"),
+            "control: the fixture must emit a cfg-gated bridge fn into lib.rs; got:\n{}",
+            lib_rs.content
+        );
+        let cargo_toml = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml is generated");
+        let parsed: toml::Value = toml::from_str(&cargo_toml.content).expect("generated Cargo.toml must be valid TOML");
+        assert!(
+            parsed["features"]
+                .as_table()
+                .expect("[features] is a table")
+                .contains_key("text-metrics"),
+            "control: the manifest must declare the gate's feature in memory; got:\n{}",
+            cargo_toml.content
+        );
+
+        let markable: Vec<&str> = files
+            .iter()
+            .filter(|f| marker_comment_style(&f.path).is_some())
+            .filter_map(|f| f.path.to_str())
+            .collect();
+        for name in ["Cargo.toml", "build.rs", "flutter_rust_bridge.yaml", "src/lib.rs"] {
+            assert!(
+                markable.iter().any(|path| path.ends_with(name)),
+                "control: {name} must be on the ownership predicate, else this test examines nothing; \
+                 markable set was {markable:?}"
+            );
+        }
+
+        for file in files.iter().filter(|f| marker_comment_style(&f.path).is_some()) {
+            let on_disk = if file.generated_header {
+                ensure_generated_header(&file.path, &file.content)
+            } else {
+                file.content.clone()
+            };
+            assert!(
+                content_has_alef_marker(&on_disk),
+                "{} is written on a markable extension with no alef provenance marker, so \
+                 `generate::write::write_files_report` refuses to overwrite it forever and its \
+                 content freezes while lib.rs keeps regenerating; got:\n{}",
+                file.path.display(),
+                on_disk.lines().take(5).collect::<Vec<_>>().join("\n")
+            );
+        }
     }
 }

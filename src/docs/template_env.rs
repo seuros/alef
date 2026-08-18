@@ -45,6 +45,7 @@ pub(crate) fn render(template_name: &str, ctx: minijinja::Value) -> String {
         .unwrap_or_else(|_| panic!("template {template_name} not found"))
         .render(ctx)
         .unwrap_or_else(|e| panic!("template {template_name} failed to render: {e}"));
+    let rendered = crate::core::keep_marker::strip_keep_markers(&rendered);
     if matches!(template_name, "heading.jinja" | "version_heading.jinja") && !rendered.ends_with("\n\n") {
         return format!("{rendered}\n");
     }

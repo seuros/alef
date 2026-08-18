@@ -5,12 +5,19 @@ use crate::docs::naming::{field_name, func_name, method_name, to_camel_case, typ
 use crate::docs::type_mapping::{FFI_HANDLE_TYPE_NAME, doc_type};
 use heck::ToSnakeCase;
 
-pub(crate) fn render_function_signature(func: &FunctionDef, lang: Language, ffi_prefix: &str) -> String {
+/// `crate_name` is the `ApiSurface::crate_name` the backends are generated from; the Java arm
+/// needs it to name the exception class the Java backend declares. ~keep
+pub(crate) fn render_function_signature(
+    func: &FunctionDef,
+    lang: Language,
+    ffi_prefix: &str,
+    crate_name: &str,
+) -> String {
     match lang {
         Language::Python => render_python_fn_sig(func, ffi_prefix),
         Language::Node | Language::Wasm => render_typescript_fn_sig(func, ffi_prefix),
         Language::Go => render_go_fn_sig(func, ffi_prefix),
-        Language::Java => render_java_fn_sig(func, ffi_prefix),
+        Language::Java => render_java_fn_sig(func, ffi_prefix, crate_name),
         Language::Ruby => render_ruby_fn_sig(func),
         Language::Ffi | Language::C | Language::Jni => render_c_fn_sig(func, ffi_prefix),
         Language::Php => render_php_fn_sig(func, ffi_prefix),
@@ -144,7 +151,7 @@ pub(crate) fn render_go_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
     }
 }
 
-pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
+pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str, crate_name: &str) -> String {
     // ~keep Routed through `func_name` rather than a bare `to_camel_case`: a free function
     // named `new` or `default` used to reach the gate unrenamed (only `method_name`'s opaque
     // methods went through `func_name`'s Java table), so this closes the same gap on the
@@ -172,7 +179,15 @@ pub(crate) fn render_java_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
     // with no `error_type`-gated branch. The FFI crossing itself (marshaling, allocation) can
     // fail even when the wrapped Rust function is infallible, so `func.error_type` (a fact
     // about the *core* Rust signature) is the wrong oracle for this clause.
-    let throws = format!(" throws {ffi_prefix}RsException");
+    //
+    // ~keep The class is named by `backends::java::naming::exception_class_name`, the same
+    // derivation `JavaBackend::resolve_main_class` feeds into `<MainClass>Exception.java`.
+    // Building it from `ffi_prefix` here documented a class no generated package declares
+    // whenever `[ffi] prefix` differed from the crate name.
+    let throws = format!(
+        " throws {}",
+        crate::backends::java::naming::exception_class_name(crate_name)
+    );
     format!("public static {} {}({}){}", ret, name, params.join(", "), throws)
 }
 
@@ -579,21 +594,35 @@ pub(crate) struct MethodSignatureOverride {
     pub(crate) signature: Option<String>,
 }
 
-#[allow(dead_code)]
+/// Test-only convenience wrapper: no production caller renders a method signature without an
+/// override slot, so the crate name is pinned to the docs test fixture's rather than added to
+/// ~90 call sites. Java assertions that turn on the exception class must use
+/// `render_method_signature_with_override` and pass a crate name explicitly. ~keep
+#[cfg(test)]
 pub(crate) fn render_method_signature(
     method: &MethodDef,
     type_name_str: &str,
     lang: Language,
     ffi_prefix: &str,
 ) -> String {
-    render_method_signature_with_override(method, type_name_str, lang, ffi_prefix, None)
+    render_method_signature_with_override(
+        method,
+        type_name_str,
+        lang,
+        ffi_prefix,
+        crate::docs::test_helpers::TEST_CRATE_NAME,
+        None,
+    )
 }
 
+/// `crate_name` is the `ApiSurface::crate_name` the backends are generated from; the Java arm
+/// needs it to name the exception class the Java backend declares. ~keep
 pub(crate) fn render_method_signature_with_override(
     method: &MethodDef,
     type_name_str: &str,
     lang: Language,
     ffi_prefix: &str,
+    crate_name: &str,
     signature_override: Option<&MethodSignatureOverride>,
 ) -> String {
     if let Some(signature) = signature_override.and_then(|override_| override_.signature.as_deref()) {
@@ -738,10 +767,18 @@ pub(crate) fn render_method_signature_with_override(
             // Rust method returns a bare `T`, so `method.error_type` (a fact about the *core*
             // Rust signature) is the wrong oracle here -- it must always be present and must
             // always name the FFI exception, never the domain error type.
+            //
+            // ~keep The class is named by `backends::java::naming::exception_class_name`, the
+            // same derivation the Java backend declares the class with -- not a second
+            // spelling built from `ffi_prefix`, which is a C symbol prefix and is free to
+            // differ from the crate name.
             let throws = if method.name == "clone" {
                 String::new()
             } else {
-                format!(" throws {ffi_prefix}RsException")
+                format!(
+                    " throws {}",
+                    crate::backends::java::naming::exception_class_name(crate_name)
+                )
             };
             if method.is_static {
                 format!("public static {} {}({}){}", ret, name, params.join(", "), throws)

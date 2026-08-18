@@ -704,11 +704,12 @@ pub(crate) fn make_env() -> Environment<'static> {
 }
 
 pub(crate) fn render(template_name: &str, ctx: minijinja::Value) -> String {
-    make_env()
+    let rendered = make_env()
         .get_template(template_name)
         .unwrap_or_else(|_| panic!("template {template_name} not found"))
         .render(ctx)
-        .unwrap_or_else(|e| panic!("template {template_name} failed to render: {e}"))
+        .unwrap_or_else(|e| panic!("template {template_name} failed to render: {e}"));
+    crate::core::keep_marker::strip_keep_markers(&rendered)
 }
 
 #[cfg(test)]

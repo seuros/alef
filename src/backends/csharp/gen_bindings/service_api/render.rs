@@ -60,7 +60,15 @@ fn param_decl_list(params: &[ParamDef], api: &ApiSurface, named_records: bool) -
         .join(", ")
 }
 
-fn native_type(ty: &TypeRef, api: &ApiSurface, canonical_named: bool) -> &'static str {
+/// P/Invoke parameter types for the service-API `extern`s.
+///
+/// A `Named` param crosses as the scalar [`HANDLE_PINVOKE_TYPE`] `AlefHandle` — the same fact
+/// `marshalling::pinvoke_param_type` states for every other C# `[DllImport]`, read from the same
+/// constant so the two cannot drift apart on handle width. This map is *not* a duplicate of that
+/// one and must not be folded into it blindly: it still disagrees on `Usize`/`Isize`
+/// (`nuint`/`nint` here, `ulong`/`long` there) and has no `Duration` arm at all, so those fall to
+/// `IntPtr`. Reconciling those three positions is a live ABI question, not a refactor. ~keep
+fn native_type(ty: &TypeRef, api: &ApiSurface) -> &'static str {
     use crate::core::ir::PrimitiveType;
     match ty {
         TypeRef::String | TypeRef::Char => "string",
@@ -77,17 +85,17 @@ fn native_type(ty: &TypeRef, api: &ApiSurface, canonical_named: bool) -> &'stati
         TypeRef::Primitive(PrimitiveType::F64) => "double",
         TypeRef::Primitive(PrimitiveType::Usize) => "nuint",
         TypeRef::Primitive(PrimitiveType::Isize) => "nint",
-        TypeRef::Named(name) if canonical_named && is_enum(api, name) => "int",
-        TypeRef::Named(_) if canonical_named => "ulong",
+        TypeRef::Named(name) if is_enum(api, name) => "int",
+        TypeRef::Named(_) => super::super::HANDLE_PINVOKE_TYPE,
         _ => "IntPtr",
     }
 }
 
-fn pinvoke_param_lines(params: &[ParamDef], api: &ApiSurface, canonical_named: bool) -> String {
+fn pinvoke_param_lines(params: &[ParamDef], api: &ApiSurface) -> String {
     params
         .iter()
         .map(|param| {
-            let ty = native_type(&param.ty, api, canonical_named);
+            let ty = native_type(&param.ty, api);
             format!(",\n        {ty} {}", param.name)
         })
         .collect()
@@ -457,7 +465,7 @@ fn render_native_declaration(
             return_type,
             method_name => format!("{}_{}_{}", prefix.to_lowercase(), service_snake, suffix),
             base_params,
-            param_lines => pinvoke_param_lines(params, api, true),
+            param_lines => pinvoke_param_lines(params, api),
         },
     ));
 }

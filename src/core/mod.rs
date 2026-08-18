@@ -8,6 +8,7 @@ pub mod extension;
 pub mod hash;
 pub mod ir;
 pub mod jni;
+pub mod keep_marker;
 pub mod keywords;
 pub mod template_env;
 pub mod template_versions;

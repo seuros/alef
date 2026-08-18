@@ -198,14 +198,14 @@ fn test_render_java_fn_sig_basic() {
         false,
         None,
     );
-    let sig = render_java_fn_sig(&func, TEST_PREFIX);
+    let sig = render_java_fn_sig(&func, TEST_PREFIX, TEST_CRATE_NAME);
     assert_eq!(sig, "public static String convert(String source) throws HtmRsException");
 }
 
 #[test]
 fn test_render_java_fn_sig_async() {
     let func = make_function("fetch", vec![], TypeRef::String, true, None);
-    let sig = render_java_fn_sig(&func, TEST_PREFIX);
+    let sig = render_java_fn_sig(&func, TEST_PREFIX, TEST_CRATE_NAME);
     assert_eq!(sig, "public static String fetch() throws HtmRsException");
 }
 
@@ -218,7 +218,7 @@ fn test_render_java_fn_sig_optional_param() {
         false,
         None,
     );
-    let sig = render_java_fn_sig(&func, TEST_PREFIX);
+    let sig = render_java_fn_sig(&func, TEST_PREFIX, TEST_CRATE_NAME);
     assert_eq!(
         sig,
         "public static List<String> search(int limit) throws HtmRsException"
@@ -237,7 +237,7 @@ fn test_render_java_fn_sig_error_type() {
         false,
         Some("ParseError"),
     );
-    let sig = render_java_fn_sig(&func, TEST_PREFIX);
+    let sig = render_java_fn_sig(&func, TEST_PREFIX, TEST_CRATE_NAME);
     assert_eq!(sig, "public static Ast parse(String source) throws HtmRsException");
 }
 
@@ -248,7 +248,7 @@ fn test_render_java_fn_sig_error_type() {
 #[test]
 fn test_render_java_fn_sig_declares_throws_even_when_infallible() {
     let func = make_function("current_version", vec![], TypeRef::String, false, None);
-    let sig = render_java_fn_sig(&func, TEST_PREFIX);
+    let sig = render_java_fn_sig(&func, TEST_PREFIX, TEST_CRATE_NAME);
     assert_eq!(sig, "public static String currentVersion() throws HtmRsException");
 }
 

@@ -196,7 +196,14 @@ pub(super) fn render_type(
             minijinja::context! { marker => "#####", title => methods_heading },
         ));
         for method in methods {
-            out.push_str(&render_method(method, &ty.name, lang, config, ffi_prefix));
+            out.push_str(&render_method(
+                method,
+                &ty.name,
+                lang,
+                config,
+                ffi_prefix,
+                &api.crate_name,
+            ));
         }
     }
 

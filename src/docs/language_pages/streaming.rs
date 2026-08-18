@@ -24,6 +24,7 @@ pub(super) fn streaming_method_docs_override(
     type_name_str: &str,
     lang: Language,
     ffi_prefix: &str,
+    crate_name: &str,
 ) -> Option<MethodDocsOverride> {
     let adapter = config.adapters.iter().find(|adapter| {
         matches!(adapter.pattern, AdapterPattern::Streaming)
@@ -34,7 +35,7 @@ pub(super) fn streaming_method_docs_override(
     let item_type = adapter.item_type.as_deref()?;
     let heading_name = streaming_method_name(adapter, method, lang, ffi_prefix);
     let signature =
-        streaming_method_signature_override(config, adapter, method, type_name_str, item_type, lang, ffi_prefix);
+        streaming_method_signature_override(adapter, method, type_name_str, item_type, lang, ffi_prefix, crate_name);
     let return_type = streaming_return_type(adapter, type_name_str, item_type, lang, ffi_prefix, true);
     let example = MethodExampleOverride {
         body: streaming_example(config, adapter, method, type_name_str, item_type, lang, ffi_prefix),
@@ -99,13 +100,13 @@ fn streaming_method_name(adapter: &AdapterConfig, method: &MethodDef, lang: Lang
 }
 
 fn streaming_method_signature_override(
-    config: &ResolvedCrateConfig,
     adapter: &AdapterConfig,
     method: &MethodDef,
     type_name_str: &str,
     item_type: &str,
     lang: Language,
     ffi_prefix: &str,
+    crate_name: &str,
 ) -> MethodSignatureOverride {
     let name = streaming_method_name(adapter, method, lang, ffi_prefix);
     let return_type = streaming_return_type(adapter, type_name_str, item_type, lang, ffi_prefix, false);
@@ -122,12 +123,16 @@ fn streaming_method_signature_override(
             first_param_type(method, Language::Rust, ffi_prefix),
             return_type
         )),
+        // ~keep Named by `backends::java::naming::exception_class_name`, the same derivation
+        // `JavaBackend::resolve_main_class` feeds into `<MainClass>Exception.java`. This arm
+        // used to pascal-case the crate name itself, which is a third spelling of the class
+        // alongside the non-streaming signature renderer's and the backend's.
         Language::Java => Some(format!(
-            "public java.util.stream.Stream<{}> {}({} req) throws {}RsException",
+            "public java.util.stream.Stream<{}> {}({} req) throws {}",
             type_name(item_type, lang, ffi_prefix),
             name,
             first_param_type(method, lang, ffi_prefix),
-            java_streaming_exception_prefix(config, ffi_prefix)
+            crate::backends::java::naming::exception_class_name(crate_name)
         )),
         Language::Csharp => Some(format!(
             "public async IAsyncEnumerable<{}> {}({} req, CancellationToken cancellationToken = default)",
@@ -173,15 +178,6 @@ fn first_param_type(method: &MethodDef, lang: Language, ffi_prefix: &str) -> Str
         .first()
         .map(|param| doc_type(&param.ty, lang, ffi_prefix))
         .unwrap_or_else(|| "void".to_string())
-}
-
-fn java_streaming_exception_prefix(config: &ResolvedCrateConfig, ffi_prefix: &str) -> String {
-    let crate_name = config.name.trim();
-    if crate_name.is_empty() {
-        ffi_prefix.to_pascal_case()
-    } else {
-        crate_name.to_pascal_case()
-    }
 }
 
 fn streaming_return_type(
@@ -420,9 +416,10 @@ pub(super) fn render_method(
     lang: Language,
     config: &ResolvedCrateConfig,
     ffi_prefix: &str,
+    crate_name: &str,
 ) -> String {
     let mut out = String::new();
-    let docs_override = streaming_method_docs_override(config, method, type_name_str, lang, ffi_prefix);
+    let docs_override = streaming_method_docs_override(config, method, type_name_str, lang, ffi_prefix, crate_name);
     let mname = docs_override
         .as_ref()
         .map(|override_| override_.heading_name.clone())
@@ -451,6 +448,7 @@ pub(super) fn render_method(
         type_name_str,
         lang,
         ffi_prefix,
+        crate_name,
         docs_override.as_ref().map(|override_| &override_.signature),
     );
     out.push_str("**Signature:**\n\n");
@@ -485,7 +483,7 @@ pub(super) fn render_method(
 mod tests {
     use super::*;
     use crate::core::config::AdapterParam;
-    use crate::docs::test_helpers::{TEST_PREFIX, make_method, make_param};
+    use crate::docs::test_helpers::{TEST_CRATE_NAME, TEST_PREFIX, make_method, make_param};
 
     fn make_adapter(name: &str, owner: &str, item_type: &str) -> AdapterConfig {
         AdapterConfig {
@@ -560,7 +558,7 @@ mod tests {
             None,
         );
         let config = ResolvedCrateConfig::default();
-        let doc = render_method(&method, "Converter", Language::C, &config, TEST_PREFIX);
+        let doc = render_method(&method, "Converter", Language::C, &config, TEST_PREFIX, TEST_CRATE_NAME);
         let expected_symbol = method_name("Converter", &method.name, Language::C, TEST_PREFIX);
         assert_eq!(expected_symbol, "htm_converter_convert");
         assert!(

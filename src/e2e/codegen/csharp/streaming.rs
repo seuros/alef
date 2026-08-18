@@ -284,9 +284,27 @@ pub(super) fn render_streaming_test_method(
     if asserts_total_tokens {
         body.push_str("        long? totalTokens = null;\n");
     }
-    body.push_str("        var streamComplete = false;\n");
-    let _ = writeln!(body, "        await foreach (var chunk in {call_expr})");
-    body.push_str("        {\n");
+    // `no_chunks_after_done` is only observable by asking the enumerator for one more element
+    // AFTER it has already reported completion -- the one thing `await foreach` hides. Fixtures
+    // asserting it therefore get the manual-enumerator shape so the flag carries a real probe
+    // result; every other fixture keeps the `await foreach` body byte-for-byte. This field used to
+    // be aliased onto `streamComplete`, so two distinct assertions rendered one same check. ~keep
+    let asserts_no_chunks_after_done = fixture
+        .assertions
+        .iter()
+        .any(|a| a.field.as_deref() == Some("no_chunks_after_done"));
+    if asserts_no_chunks_after_done {
+        let _ = writeln!(
+            body,
+            "        await using var streamEnumerator = {call_expr}.GetAsyncEnumerator();"
+        );
+        body.push_str("        while (await streamEnumerator.MoveNextAsync())\n");
+        body.push_str("        {\n");
+        body.push_str("            var chunk = streamEnumerator.Current;\n");
+    } else {
+        let _ = writeln!(body, "        await foreach (var chunk in {call_expr})");
+        body.push_str("        {\n");
+    }
     body.push_str("            chunks.Add(chunk);\n");
 
     if is_chat_stream {
@@ -343,7 +361,20 @@ pub(super) fn render_streaming_test_method(
         }
     }
     body.push_str("        }\n");
-    body.push_str("        streamComplete = true;\n");
+    if asserts_no_chunks_after_done {
+        body.push_str("        var noChunksAfterDone = !(await streamEnumerator.MoveNextAsync());\n");
+    }
+    if is_chat_stream {
+        // `stream_complete` means here what `StreamingFieldResolver`'s accessor means for every
+        // other language (see `streaming_assertions/model.rs`'s field table): the LAST collected
+        // chunk carries a terminal finish_reason. Deriving it from the collected chunks is what
+        // lets `Assert.True(streamComplete)` fail at all -- the unconditional `streamComplete =
+        // true` that used to sit immediately above the assertion could not. ~keep
+        body.push_str("        var streamComplete = chunks.Count > 0\n");
+        body.push_str("            && chunks[chunks.Count - 1].Choices != null\n");
+        body.push_str("            && chunks[chunks.Count - 1].Choices.Count > 0\n");
+        body.push_str("            && chunks[chunks.Count - 1].Choices[0].FinishReason.HasValue;\n");
+    }
 
     // Emit assertions on local aggregator vars or result_fields.
     let mut had_explicit_complete = false;
@@ -362,7 +393,11 @@ pub(super) fn render_streaming_test_method(
             emit_non_chat_stream_assertion(&mut body, assertion, e2e_config.effective_result_fields(call_config));
         }
     }
-    if !had_explicit_complete {
+    // Only a chat-shaped stream declares `streamComplete`, so the implicit "the stream finished"
+    // check rides along only there. A non-chat item type has no terminal marker to read, and
+    // synthesising a passing check for an assertion no fixture declared is exactly the vacuous
+    // green this whole path is being pulled back from. ~keep
+    if !had_explicit_complete && is_chat_stream {
         body.push_str("        Assert.True(streamComplete);\n");
     }
 
@@ -395,15 +430,37 @@ fn emit_non_chat_stream_assertion(
 
     // Virtual fields that don't depend on result_fields
     match field {
+        // A non-chat stream item type carries no terminal finish_reason, which is the only thing
+        // `stream_complete` is defined by. The previous `Assert.True(streamComplete)` here read a
+        // local the body assigned `true` unconditionally, so it could never fail; refusing loudly
+        // is the honest reading, and the wording feeds `fail_on_unavailable_field_markers`. ~keep
         "stream_complete" => {
-            let _ = writeln!(out, "        Assert.True(streamComplete);");
-            return;
-        }
-        "no_chunks_after_done" => {
             let _ = writeln!(
                 out,
-                "        Assert.True(true); // virtual field, always true for collected streams"
+                "        // skipped: {}; this stream's item type carries no terminal finish_reason, \
+so completion is not observable here",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
             );
+            return;
+        }
+        // Rendered against the post-completion enumerator probe `render_streaming_test_method`
+        // emits whenever a fixture asserts this field. It replaces a literal `Assert.True(true)`,
+        // which asserted nothing whatever the stream did. ~keep
+        "no_chunks_after_done" => {
+            match atype {
+                "is_true" => {
+                    let _ = writeln!(out, "        Assert.True(noChunksAfterDone);");
+                }
+                "is_false" => {
+                    let _ = writeln!(out, "        Assert.False(noChunksAfterDone);");
+                }
+                _ => {
+                    let _ = writeln!(
+                        out,
+                        "        // skipped: assertion type '{atype}' on field '{field}' not yet supported for streaming"
+                    );
+                }
+            }
             return;
         }
         "chunks" | "stream.items" => match atype {
@@ -474,7 +531,10 @@ fn emit_chat_stream_assertion(out: &mut String, assertion: &Assertion) {
         "chunks" => ("chunks", Kind::Chunks),
         "stream_content" => ("streamContent.ToString()", Kind::Str),
         "stream_complete" => ("streamComplete", Kind::Bool),
-        "no_chunks_after_done" => ("streamComplete", Kind::Bool),
+        // Distinct local, distinct fact. Aliasing this onto `streamComplete` collapsed two
+        // assertions onto one flag the body assigned `true` unconditionally, so a fixture
+        // asserting both got one unfalsifiable check rendered twice. ~keep
+        "no_chunks_after_done" => ("noChunksAfterDone", Kind::Bool),
         "finish_reason" => ("lastFinishReason", Kind::Str),
         "tool_calls" => ("toolCallsJson", Kind::Json),
         "tool_calls[0].function.name" => ("toolCalls0FunctionName", Kind::Str),

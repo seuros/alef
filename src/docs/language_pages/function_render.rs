@@ -65,7 +65,7 @@ pub(super) fn render_function(
 
     out.push_str("**Signature:**\n\n");
     let lang_code = lang_code_fence(lang);
-    let sig = render_function_signature(func, lang, ffi_prefix);
+    let sig = render_function_signature(func, lang, ffi_prefix, &api.crate_name);
     out.push_str(&template_env::render(
         "code_block.jinja",
         minijinja::context! { lang_code => lang_code, body => sig },
@@ -199,7 +199,7 @@ pub(super) fn push_errors(out: &mut String, error_type: Option<&str>, return_typ
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::docs::test_helpers::{TEST_PREFIX, make_function, make_param};
+    use crate::docs::test_helpers::{TEST_CRATE_NAME, TEST_PREFIX, make_function, make_param};
 
     /// ~keep The signature line and the "Returns:" prose are two independent renderers
     /// describing the same function on the same generated page. For a fallible Ffi/C
@@ -219,7 +219,7 @@ mod tests {
             Some("InitError"),
         );
 
-        let signature = render_function_signature(&func, Language::C, TEST_PREFIX);
+        let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
 
         let mut returns_prose = String::new();
         push_returns(
@@ -245,7 +245,7 @@ mod tests {
     fn test_c_signature_and_returns_prose_agree_infallible_void_stays_silent() {
         let func = make_function("touch", vec![], TypeRef::Unit, false, None);
 
-        let signature = render_function_signature(&func, Language::C, TEST_PREFIX);
+        let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
 
         let mut returns_prose = String::new();
         push_returns(

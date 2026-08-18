@@ -1,4 +1,3 @@
-use crate::codegen::naming::to_class_name;
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::{BridgeBinding, JavaBuilderMode, Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, TypeRef};
@@ -47,16 +46,11 @@ pub struct JavaBackend;
 impl JavaBackend {
     /// Convert crate name to main class name (PascalCase + "Rs" suffix).
     ///
-    /// The "Rs" suffix ensures the raw FFI wrapper class has a distinct name from
-    /// the public facade class (which strips the "Rs" suffix). Without this, the
-    /// facade would delegate to itself, causing infinite recursion.
+    /// Delegates to `backends::java::naming::main_class_name` so the docs emitter, which quotes
+    /// `throws <MainClass>Exception` verbatim, can name the class this backend really declares
+    /// instead of re-deriving a spelling of its own. ~keep
     fn resolve_main_class(api: &ApiSurface) -> String {
-        let base = to_class_name(&api.crate_name.replace('-', "_"));
-        if base.ends_with("Rs") {
-            base
-        } else {
-            format!("{}Rs", base)
-        }
+        crate::backends::java::naming::main_class_name(&api.crate_name)
     }
 }
 

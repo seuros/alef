@@ -187,7 +187,7 @@ fn test_native_methods_declarations_without_unregister() {
     let bridge_cfg = make_bridge_cfg("TextBackend", None);
     let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["TextBackend"].into_iter().collect();
-    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types, false);
 
     assert!(content.contains("RegisterTextBackend"));
     assert!(!content.contains("UnregisterTextBackend"));
@@ -204,7 +204,7 @@ fn test_native_methods_declarations_with_configured_unregister() {
     bridge_cfg.unregister_fn = Some("sample_crate_unregister_text_backend".to_string());
     let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["TextBackend"].into_iter().collect();
-    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types, false);
 
     assert!(content.contains("RegisterTextBackend"));
     assert!(content.contains("UnregisterTextBackend"));
@@ -222,7 +222,7 @@ fn test_native_methods_register_unregister_use_derived_ffi_symbol_not_alias() {
     bridge_cfg.clear_fn = Some("clear_renderers".to_string());
     let bridges = vec![("Renderer".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["Renderer"].into_iter().collect();
-    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types, false);
 
     assert!(content.contains("EntryPoint = \"sample_crate_register_renderer\""));
     assert!(content.contains("EntryPoint = \"sample_crate_unregister_renderer\""));
@@ -240,7 +240,7 @@ fn test_native_methods_clear_uses_derived_ffi_symbol_not_alias() {
     bridge_cfg.clear_fn = Some("clear_text_backends".to_string());
     let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["TextBackend"].into_iter().collect();
-    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types, false);
 
     assert!(content.contains("EntryPoint = \"sample_crate_clear_text_backend\""));
     assert!(!content.contains("sample_crate_clear_text_backends"));
@@ -254,7 +254,7 @@ fn test_native_methods_omits_clear_when_not_configured() {
     let bridge_cfg = make_bridge_cfg("TextBackend", None);
     let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
     let visible_types: HashSet<&str> = vec!["TextBackend"].into_iter().collect();
-    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types);
+    let content = gen_native_methods_trait_bridges("SampleCrate", "sample_crate", &bridges, &visible_types, false);
 
     assert!(!content.contains("sample_crate_clear_text_backend"));
     assert!(!content.contains("ClearTextBackend("));

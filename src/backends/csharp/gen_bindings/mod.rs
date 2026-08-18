@@ -11,9 +11,9 @@ use files::{
     strip_trailing_whitespace, superseded_visitor_filenames,
 };
 use marshalling::{
-    CAPSULE_PINVOKE_RETURN_TYPE, bytes_len_arg, emit_named_param_setup, emit_named_param_teardown,
-    emit_named_param_teardown_indented, is_bridge_param, is_capsule_return, native_call_arg, needs_param_teardown,
-    pinvoke_param_type, pinvoke_return_type, pinvoke_return_type_with_capsules, returns_bool_via_int,
+    CAPSULE_PINVOKE_RETURN_TYPE, FfiEmitter, HANDLE_PINVOKE_TYPE, bytes_len_arg, emit_named_param_setup,
+    emit_named_param_teardown, emit_named_param_teardown_indented, is_bridge_param, is_capsule_return, native_call_arg,
+    needs_param_teardown, pinvoke_param_type, pinvoke_return_type_with_capsules, returns_bool_via_int,
     returns_json_object, returns_ptr, returns_string, zero_sentinel, zero_sentinel_for_pinvoke_type,
 };
 

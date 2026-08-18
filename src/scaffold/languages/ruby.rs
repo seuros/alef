@@ -1373,4 +1373,52 @@ exclude_types = ["Excluded"]
         assert_eq!(spec.path.to_string_lossy(), "packages/ruby/spec/my_lib_spec.rb");
         assert!(!spec.generated_header, "the seed must stay create-only");
     }
+
+    /// The `~keep` in this seed's rationale is load-bearing, unlike the markers the
+    /// render-time strip (`core::keep_marker`) removes from `.jinja` output. The seed is
+    /// create-only, so alef never rewrites it and the consumer's own `poly` uncomment pass is
+    /// what reads it — without the marker the rationale is deleted by the next `poly fmt`.
+    /// Pinned across every tier so a broadening of the strip cannot silently take it. ~keep
+    #[test]
+    fn every_seed_tier_keeps_its_uncomment_pass_marker() {
+        let config = minimal_config();
+        let tiers = [
+            (
+                "call",
+                ApiSurface {
+                    functions: vec![zero_arg_function("ping", TypeRef::Primitive(PrimitiveType::Bool))],
+                    ..Default::default()
+                },
+            ),
+            (
+                "construct",
+                ApiSurface {
+                    types: vec![dto("Widget", vec![simple_field("label", TypeRef::String)])],
+                    ..Default::default()
+                },
+            ),
+            (
+                "constant",
+                ApiSurface {
+                    types: vec![dto(
+                        "Widget",
+                        vec![
+                            simple_field("label", TypeRef::String),
+                            simple_field("nested", TypeRef::Named("Other".to_string())),
+                        ],
+                    )],
+                    ..Default::default()
+                },
+            ),
+            ("version", ApiSurface::default()),
+        ];
+
+        for (tier, api) in tiers {
+            let out = scaffold_ruby_spec(&api, &config, "my_lib");
+            assert!(
+                out.contains("replace it with a real suite. ~keep") || out.contains("break on the next release. ~keep"),
+                "the {tier} tier lost its uncomment-pass marker, got:\n{out}"
+            );
+        }
+    }
 }

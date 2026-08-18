@@ -2,6 +2,10 @@ use crate::core::ir::{ApiSurface, CoreWrapper, DefaultValue, FieldDef, FunctionD
 
 pub(crate) const TEST_PREFIX: &str = "Htm";
 
+/// Crate name paired with [`TEST_PREFIX`]: `exception_class_name("htm")` is `HtmRsException`,
+/// which is what the Java signature tests assert. ~keep
+pub(crate) const TEST_CRATE_NAME: &str = "htm";
+
 pub(crate) fn make_param(name: &str, ty: TypeRef, optional: bool) -> crate::core::ir::ParamDef {
     crate::core::ir::ParamDef {
         name: name.to_string(),

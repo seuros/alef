@@ -265,8 +265,8 @@ fn test_generate_docs_multiple_languages_produce_correct_slugs() {
 
 #[test]
 fn streaming_adapter_docs_use_language_native_stream_types() {
-    let api = streaming_adapter_api();
     let config = streaming_adapter_config("");
+    let api = streaming_adapter_api(&config);
     let files = generate_docs(
         &api,
         &config,
@@ -381,8 +381,8 @@ fn streaming_adapter_docs_use_language_native_stream_types() {
 
 #[test]
 fn streaming_adapter_docs_respect_skip_languages_canonical_names() {
-    let api = streaming_adapter_api();
     let config = streaming_adapter_config("skip_languages = [\"node\"]");
+    let api = streaming_adapter_api(&config);
     let files = generate_docs(&api, &config, &[Language::Node, Language::Java], "out").unwrap();
 
     let typescript = doc_content(&files, "api-typescript");
@@ -399,8 +399,8 @@ fn streaming_adapter_docs_respect_skip_languages_canonical_names() {
 
 #[test]
 fn streaming_adapter_docs_use_crate_exception_for_short_core_paths() {
-    let api = streaming_adapter_api();
     let mut config = streaming_adapter_config("");
+    let api = streaming_adapter_api(&config);
     config.adapters[0].core_path = "chat_stream".to_string();
     let files = generate_docs(&api, &config, &[Language::Java], "out").unwrap();
 
@@ -486,8 +486,13 @@ type = "ChatCompletionRequest"
     ))
 }
 
-fn streaming_adapter_api() -> ApiSurface {
+/// Takes its `crate_name` from `config` so the fixture cannot drift from the production
+/// invariant that `ApiSurface::crate_name` is seeded from `[[crates]] name`
+/// (`cli/pipeline/extract/raw.rs`). The Java exception class the docs print is derived from
+/// it, so a fixture that disagrees would test a state that cannot occur. ~keep
+fn streaming_adapter_api(config: &ResolvedCrateConfig) -> ApiSurface {
     let mut api = make_minimal_api("1.6.0");
+    api.crate_name = config.name.clone();
     let mut client = empty_type("DefaultClient");
     client.is_opaque = true;
     client.methods = vec![make_method(

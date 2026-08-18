@@ -42,6 +42,7 @@ fn empty_type(name: &str) -> TypeDef {
 mod generate_docs;
 mod generated_stage;
 mod headings;
+mod java_exception_agreement;
 mod language_pages;
 mod markdown_quality;
 mod shared_docs;

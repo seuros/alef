@@ -2,6 +2,7 @@
 
 pub mod gen_bindings;
 pub mod gen_visitor;
+pub(crate) mod naming;
 pub(crate) mod template_env;
 pub(crate) mod type_map;
 

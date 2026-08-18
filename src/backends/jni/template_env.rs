@@ -197,10 +197,12 @@ static TEMPLATES: &[(&str, &str)] = &[
 
 pub(crate) fn render(name: &str, context: minijinja::Value) -> String {
     let env = make_env();
-    env.get_template(name)
+    let rendered = env
+        .get_template(name)
         .unwrap_or_else(|err| panic!("missing JNI template {name}: {err}"))
         .render(context)
-        .unwrap_or_else(|err| panic!("failed to render JNI template {name}: {err}"))
+        .unwrap_or_else(|err| panic!("failed to render JNI template {name}: {err}"));
+    crate::core::keep_marker::strip_keep_markers(&rendered)
 }
 
 fn make_env() -> Environment<'static> {

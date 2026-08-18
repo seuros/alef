@@ -1,7 +1,8 @@
 //! C# NativeMethods (P/Invoke) code generation.
 
 use super::{
-    StreamingMethodMeta, is_bridge_param, pinvoke_param_type, pinvoke_return_type, pinvoke_return_type_with_capsules,
+    FfiEmitter, HANDLE_PINVOKE_TYPE, StreamingMethodMeta, is_bridge_param, pinvoke_param_type,
+    pinvoke_return_type_with_capsules,
 };
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::TraitBridgeConfig;
@@ -369,7 +370,12 @@ pub(super) fn gen_native_methods(
             let c_method_name = format!("{}_{}_{}", prefix, type_snake, method.name.to_lowercase());
             let cs_method_name = format!("{}{}", csharp_type_name(&typ.name), to_csharp_name(&method.name));
             if emitted.insert(c_method_name.clone()) {
-                out.push_str(&gen_pinvoke_for_method(&c_method_name, &cs_method_name, method));
+                out.push_str(&gen_pinvoke_for_method(
+                    &c_method_name,
+                    &cs_method_name,
+                    method,
+                    capsule_types,
+                ));
             }
         }
     }
@@ -391,8 +397,8 @@ pub(super) fn gen_native_methods(
                 &mut streaming_signatures,
                 start_entry,
                 &start_cs,
-                "ulong",
-                "ulong client, ulong req",
+                HANDLE_PINVOKE_TYPE,
+                &format!("{HANDLE_PINVOKE_TYPE} client, {HANDLE_PINVOKE_TYPE} req"),
             )?;
 
             let next_entry = format!("{}_{}_{}_next", prefix, type_snake, method.name.to_lowercase());
@@ -403,8 +409,8 @@ pub(super) fn gen_native_methods(
                 &mut streaming_signatures,
                 next_entry,
                 &next_cs,
-                "ulong",
-                "ulong handle",
+                HANDLE_PINVOKE_TYPE,
+                &format!("{HANDLE_PINVOKE_TYPE} handle"),
             )?;
 
             let free_entry = format!("{}_{}_{}_free", prefix, type_snake, method.name.to_lowercase());
@@ -416,7 +422,7 @@ pub(super) fn gen_native_methods(
                 free_entry,
                 &free_cs,
                 "void",
-                "ulong handle",
+                &format!("{HANDLE_PINVOKE_TYPE} handle"),
             )?;
         }
     }
@@ -439,8 +445,8 @@ pub(super) fn gen_native_methods(
                 &mut streaming_signatures,
                 start_entry,
                 &start_cs,
-                "ulong",
-                "ulong engine, ulong req",
+                HANDLE_PINVOKE_TYPE,
+                &format!("{HANDLE_PINVOKE_TYPE} engine, {HANDLE_PINVOKE_TYPE} req"),
             )?;
 
             let next_entry = format!("{}_{}_{}_next", prefix, owner_snake, adapter_snake);
@@ -451,8 +457,8 @@ pub(super) fn gen_native_methods(
                 &mut streaming_signatures,
                 next_entry,
                 &next_cs,
-                "ulong",
-                "ulong handle",
+                HANDLE_PINVOKE_TYPE,
+                &format!("{HANDLE_PINVOKE_TYPE} handle"),
             )?;
 
             let free_entry = format!("{}_{}_{}_free", prefix, owner_snake, adapter_snake);
@@ -464,7 +470,7 @@ pub(super) fn gen_native_methods(
                 free_entry,
                 &free_cs,
                 "void",
-                "ulong handle",
+                &format!("{HANDLE_PINVOKE_TYPE} handle"),
             )?;
         }
     }
@@ -583,6 +589,7 @@ pub(super) fn gen_native_methods(
                     prefix,
                     &bridges,
                     &visible_type_names,
+                    has_visitor_callbacks,
                 ),
             );
         }
@@ -637,7 +644,11 @@ pub(super) fn gen_pinvoke_for_func(
     if is_bytes_result {
         out.push_str("int");
     } else {
-        out.push_str(pinvoke_return_type_with_capsules(&func.return_type, capsule_types));
+        out.push_str(pinvoke_return_type_with_capsules(
+            &func.return_type,
+            capsule_types,
+            FfiEmitter::FreeFunction,
+        ));
     }
 
     out.push(' ');
@@ -694,7 +705,16 @@ pub(super) fn gen_pinvoke_for_func(
     out
 }
 
-pub(super) fn gen_pinvoke_for_method(c_name: &str, cs_name: &str, method: &MethodDef) -> String {
+/// `capsule_types` is threaded in so this emitter derives its return type from the same
+/// authority as [`gen_pinvoke_for_func`] instead of from a map that cannot see capsules at all.
+/// It resolves to [`FfiEmitter::Method`], which for a capsule return deliberately keeps the
+/// `AlefHandle` declaration — see [`FfiEmitter`] for the FFI-side reason. ~keep
+pub(super) fn gen_pinvoke_for_method(
+    c_name: &str,
+    cs_name: &str,
+    method: &MethodDef,
+    capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+) -> String {
     use crate::backends::csharp::template_env::render;
 
     let is_bytes_result = is_bytes_result_method(method);
@@ -705,7 +725,11 @@ pub(super) fn gen_pinvoke_for_method(c_name: &str, cs_name: &str, method: &Metho
     if is_bytes_result {
         out.push_str("int");
     } else {
-        out.push_str(pinvoke_return_type(&method.return_type));
+        out.push_str(pinvoke_return_type_with_capsules(
+            &method.return_type,
+            capsule_types,
+            FfiEmitter::Method,
+        ));
     }
 
     out.push(' ');

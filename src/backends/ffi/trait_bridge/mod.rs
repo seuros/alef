@@ -280,9 +280,7 @@ pub fn gen_bridge_new_free(prefix: &str, pascal_prefix: &str, trait_name: &str) 
     let bridge_name = format!("{pascal_prefix}{trait_name}Bridge");
     let vtable_name = format!("{pascal_prefix}{trait_name}VTable");
 
-    let bridge_snake = ffi_symbol_component(&bridge_name);
-    let fn_new = format!("{prefix}_{bridge_snake}_new");
-    let fn_free = format!("{prefix}_{bridge_snake}_free");
+    let (fn_new, fn_free) = bridge_new_free_symbols(prefix, pascal_prefix, trait_name);
 
     format!(
         r#"/// Create a new `{bridge_name}` from a vtable and opaque user_data pointer.
@@ -332,6 +330,20 @@ pub unsafe extern "C" fn {fn_free}(handle: AlefHandle) {{
     }}
     }})
 }}"#,
+    )
+}
+
+/// The exported `new`/`free` C symbol names that [`gen_bridge_new_free`] emits, as `(new, free)`.
+///
+/// Host backends must declare these entry points themselves. Deriving the names here — instead of
+/// restating the format string per backend — keeps every declaration in lockstep with the single
+/// emitter: a P/Invoke or cgo declaration naming a symbol the crate never exports links cleanly
+/// and fails only when it is first called. ~keep
+pub fn bridge_new_free_symbols(prefix: &str, pascal_prefix: &str, trait_name: &str) -> (String, String) {
+    let bridge_snake = ffi_symbol_component(&format!("{pascal_prefix}{trait_name}Bridge"));
+    (
+        format!("{prefix}_{bridge_snake}_new"),
+        format!("{prefix}_{bridge_snake}_free"),
     )
 }
 

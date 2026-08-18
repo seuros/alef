@@ -1062,4 +1062,108 @@ mod tests {
              pairs with:\n{body}"
         );
     }
+
+    fn method_returning(name: &str, return_type: TypeRef) -> crate::core::ir::MethodDef {
+        crate::core::ir::MethodDef {
+            name: name.to_string(),
+            return_type,
+            is_static: true,
+            ..Default::default()
+        }
+    }
+
+    fn pinvoke_method(
+        method: &crate::core::ir::MethodDef,
+        capsule_types: &HashMap<String, HostCapsuleTypeConfig>,
+    ) -> String {
+        super::super::super::functions::gen_pinvoke_for_method(
+            &format!("sample_ffi_registry_{}", method.name),
+            "RegistryGetLanguage",
+            method,
+            capsule_types,
+        )
+    }
+
+    /// The declared return type of a `[DllImport]`, or `None` when no declaration was emitted.
+    /// Returning `Option` is what lets the cross-shape tests below prove they compared two real
+    /// declarations instead of two empty strings. ~keep
+    fn declared_return_type(declaration: &str) -> Option<&str> {
+        const MARKER: &str = "internal static extern ";
+        let rest = declaration.split_once(MARKER)?.1;
+        rest.split_whitespace().next()
+    }
+
+    /// The invariant the extraction shape must never decide on its own: with no capsule config,
+    /// the same `Named` return declares the same P/Invoke type whether the API surface presents
+    /// it as a `FunctionDef` or as a `MethodDef`. Both emitters now derive that through
+    /// `pinvoke_return_type_with_capsules`, so they cannot drift apart. ~keep
+    #[test]
+    fn named_return_declares_same_pinvoke_type_for_function_and_method_shapes() {
+        let func = func_returning("get_language", TypeRef::Named("Language".into()));
+        let method = method_returning("get_language", TypeRef::Named("Language".into()));
+
+        let func_decl = pinvoke(&func, &HashMap::new());
+        let method_decl = pinvoke_method(&method, &HashMap::new());
+        let func_ty =
+            declared_return_type(&func_decl).expect("the function shape must actually emit a `[DllImport]` to compare");
+        let method_ty =
+            declared_return_type(&method_decl).expect("the method shape must actually emit a `[DllImport]` to compare");
+
+        assert_eq!(
+            func_ty, method_ty,
+            "the same `Named` return must declare the same P/Invoke type in both shapes; \
+             function said `{func_ty}`, method said `{method_ty}`"
+        );
+        assert_eq!(
+            func_ty, "ulong",
+            "an alef-owned handle crosses as the `AlefHandle` scalar"
+        );
+    }
+
+    /// The one place the two shapes legitimately disagree, pinned so it can only change
+    /// deliberately.
+    ///
+    /// The FFI backend emits a capsule return differently per shape and the C# declaration must
+    /// mirror whichever C signature exists: `gen_free_function` returns the host-owned
+    /// `*const T` from `capsule::capsule_c_return_type` (`ffi/gen_bindings/functions/
+    /// orchestration.rs:723`), while `gen_method_wrapper` (`orchestration.rs:69`) takes no capsule
+    /// config and falls through to `AlefHandle` (`ffi/type_map.rs:279`) — made intentional by
+    /// commit `6855c6d57`, which keeps a capsule type's opaque `_new`/`_free` exports alive
+    /// precisely when it is reachable as a method return. Declaring `IntPtr` on the method path
+    /// would therefore be a live ABI mismatch against a `uint64_t` symbol, not a fix. If the FFI
+    /// method wrapper ever becomes capsule-aware, flip `FfiEmitter::Method` and this test
+    /// together. ~keep
+    #[test]
+    fn capsule_return_shape_split_mirrors_the_ffi_emitter_that_produced_the_symbol() {
+        let capsule_types: HashMap<String, HostCapsuleTypeConfig> = [(
+            "Language".to_string(),
+            HostCapsuleTypeConfig {
+                host_type: "TreeSitter.Language".to_string(),
+                construct_expr: "new TreeSitter.Language({ptr})".to_string(),
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect();
+
+        let func = func_returning("get_language", TypeRef::Named("Language".into()));
+        let method = method_returning("get_language", TypeRef::Named("Language".into()));
+
+        let func_decl = pinvoke(&func, &capsule_types);
+        let method_decl = pinvoke_method(&method, &capsule_types);
+        let func_ty =
+            declared_return_type(&func_decl).expect("the function shape must actually emit a `[DllImport]` to compare");
+        let method_ty =
+            declared_return_type(&method_decl).expect("the method shape must actually emit a `[DllImport]` to compare");
+
+        assert_eq!(
+            func_ty, "IntPtr",
+            "a capsule return from a free function crosses as the host-owned `*const T`"
+        );
+        assert_eq!(
+            method_ty, "ulong",
+            "a capsule return from a method is boxed by alef and crosses as `AlefHandle`; \
+             declaring `IntPtr` here would not match the emitted C symbol"
+        );
+    }
 }

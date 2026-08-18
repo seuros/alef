@@ -14,4 +14,17 @@
     internal static extern int Clear{{ bridge.trait_name }}(out IntPtr outError);
 {% endif %}
 
+{% if bridge.has_new_free %}
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.new_fn }}")]
+    internal static extern ulong {{ bridge.trait_pascal }}BridgeNew(IntPtr vtable, IntPtr userData);
+
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.free_fn }}")]
+    internal static extern void {{ bridge.trait_pascal }}BridgeFree(ulong handle);
+{% endif %}
+
+{% if bridge.has_options_setter %}
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.options_set_fn }}")]
+    internal static extern void {{ bridge.options_pascal }}Set{{ bridge.options_field_pascal }}(ulong options, ulong bridge);
+{% endif %}
+
 {% endfor %}
