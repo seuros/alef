@@ -32,6 +32,14 @@ pub(super) fn build_args_and_setup(
     let mut arg_bindings = Vec::new();
     let mut kwarg_exprs = Vec::new();
     let mut teardown = String::new();
+    // Positions in `kwarg_exprs` holding nothing but a `None` placeholder for an absent optional
+    // argument. A placeholder is load-bearing only while a real argument follows it; a run of them
+    // at the END of the list is pure noise, and the trailing run is the common case -- optional
+    // arguments are conventionally declared last, so a fixture supplying none of them rendered
+    // `convert(html, None)` where the binding's own signature reads `options=None`. Recorded here
+    // rather than inferred afterwards, because a *real* argument whose value is legitimately `None`
+    // is indistinguishable from a placeholder once it is in the list. ~keep
+    let mut placeholder_positions: HashSet<usize> = HashSet::new();
 
     for arg in fixture.resolved_args(call_config) {
         let var_name = &arg.name;
@@ -146,6 +154,7 @@ pub(super) fn build_args_and_setup(
             // index alignment. With kwarg emission this would just be skipped, but
             // since we emit positional args (commit 40ff92c9), an omitted optional
             // arg in the middle would shift later args into the wrong position.
+            placeholder_positions.insert(kwarg_exprs.len());
             kwarg_exprs.push("None".to_string());
             continue;
         }
@@ -201,6 +210,14 @@ pub(super) fn build_args_and_setup(
         };
         arg_bindings.push(format!("    {var_name} = {literal}{noqa}"));
         kwarg_exprs.push(var_name.to_string());
+    }
+
+    while kwarg_exprs
+        .len()
+        .checked_sub(1)
+        .is_some_and(|last| placeholder_positions.contains(&last))
+    {
+        kwarg_exprs.pop();
     }
 
     (arg_bindings, kwarg_exprs, teardown)

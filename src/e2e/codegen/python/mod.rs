@@ -576,12 +576,62 @@ headingStyle = "HeadingStyle"
 
         assert!(rendered.contains("HeadingStyle(\"atx\")"), "{rendered}");
         assert!(rendered.contains("ConversionOptions("), "{rendered}");
-        assert!(rendered.contains("convert(html, options, None)"), "{rendered}");
+        // `label` is a TRAILING absent optional, so its `None` placeholder is dropped: the binding
+        // declares `label=None` itself, and spelling it at the call site is noise in a docs
+        // example. The middle case is the control below. ~keep
+        assert!(rendered.contains("convert(html, options)"), "{rendered}");
+        assert!(!rendered.contains("convert(html, options, None)"), "{rendered}");
         assert!(rendered.contains("from example_api import"), "{rendered}");
         assert!(rendered.contains("convert"), "{rendered}");
         assert!(rendered.contains("def main() -> None:"), "{rendered}");
         assert!(!rendered.contains("pytest"), "{rendered}");
         assert!(!rendered.contains("def test_"), "{rendered}");
+    }
+
+    /// The control for the trailing-placeholder trim above: an absent optional with a real argument
+    /// AFTER it is load-bearing. These calls are rendered positionally, so dropping the middle
+    /// `None` would silently slide `label`'s value into `options`' slot. ~keep
+    #[test]
+    fn an_absent_optional_followed_by_a_real_argument_keeps_its_none_placeholder() {
+        use crate::core::config::NewAlefConfig;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["python"]
+[[crates]]
+name = "example-core"
+sources = ["src/lib.rs"]
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "convert"
+module = "example_api"
+args = [
+  { name = "html", field = "html", type = "string" },
+  { name = "options", field = "options", type = "json_object", optional = true },
+  { name = "label", field = "label", type = "string", optional = true },
+]
+[crates.e2e.call.overrides.python]
+options_type = "ConversionOptions"
+"#,
+        )
+        .expect("snippet config must parse");
+        let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+        let resolved = cfg.resolve().expect("config resolves").remove(0);
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "labelled",
+            "description": "convert markup with a label",
+            "input": {"html": "<h1>Hello</h1>", "label": "docs"},
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture must parse");
+
+        let rendered = PythonE2eCodegen
+            .render_snippet_body(&fixture, &e2e, &resolved, &[], &[])
+            .expect("snippet renders");
+
+        assert!(rendered.contains("convert(html, None, label)"), "{rendered}");
     }
 
     #[test]

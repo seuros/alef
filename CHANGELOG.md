@@ -16,7 +16,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reporting only that path. Each target is now reported independently and the run fails at the end iff
   any did.
 
+### Added
+
+- **`alef snippets check --lang <tag>`** validates only the named languages. Diagnosing one backend's
+  snippets previously meant paying for all of them: a full consumer tree is thousands of snippets across
+  sixteen toolchains. The audit and gap passes still see the whole corpus, because an unreferenced snippet
+  or a missing language variant cannot be judged from a subset.
+
 ### Changed
+
+- **TypeScript, Python and Go snippets validate in one compiler invocation per language instead of one per
+  snippet.** Only Rust batched before; every other language paid a full `tsc` / interpreter / `go build`
+  startup per snippet, and all of a language's snippets were serialised behind its session lock, so the
+  cost was fully additive. On a consumer tree with ~283 snippets per language this is 283 processes to 1
+  at every non-`Run` level. `Run` still validates per snippet by design — each one's stdout, exit status
+  and side effects belong to it alone. Batch diagnostics are attributed back per file, and a compiler
+  failure that no file owns fails every snippet in the batch with the real output rather than passing them.
+- **Python snippets omit a trailing `None` for an absent optional argument.** `convert(html, None)` now
+  renders as `convert(html)`, matching the binding's own `options=None` signature. A placeholder in the
+  MIDDLE of the argument list is still emitted — these calls are positional, so dropping one there would
+  slide the following argument into the wrong slot.
 
 - **`alef adopt` and `alef verify` render the managed surface in parallel.** Every stage reads the same
   IR and config and returns owned files, so rendering them concurrently is safe; absorption stays strictly

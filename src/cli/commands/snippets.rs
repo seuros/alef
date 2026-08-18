@@ -31,6 +31,18 @@ pub enum SnippetsAction {
         strict: bool,
         #[arg(long, default_value = "on", value_parser = ["on", "off"])]
         cache: String,
+
+        /// Validate only these languages, by fence tag (`--lang go --lang zig`, or
+        /// `--lang go,zig`).
+        ///
+        /// Diagnosing one language's snippets otherwise means paying for all of them: a full
+        /// consumer tree is thousands of snippets across sixteen toolchains, and every
+        /// iteration on a single backend's codegen re-ran the lot. The audit and gap passes
+        /// still see the whole corpus, because both are cross-language questions — an
+        /// unreferenced snippet or a missing language variant cannot be judged from a subset.
+        /// ~keep
+        #[arg(long = "lang", value_delimiter = ',', num_args = 1..)]
+        languages: Option<Vec<String>>,
     },
 
     /// Parse a single file and print its code blocks.
@@ -72,7 +84,12 @@ pub enum SnippetsAction {
 pub fn run(action: SnippetsAction) -> ExitCode {
     match action {
         SnippetsAction::List { snippets, languages } => run_list(&snippets, languages.as_ref()),
-        SnippetsAction::Check { config, strict, cache } => run_check(&config, strict, cache != "off"),
+        SnippetsAction::Check {
+            config,
+            strict,
+            cache,
+            languages,
+        } => run_check(&config, strict, cache != "off", languages.as_deref()),
         SnippetsAction::Parse { file } => run_parse(&file),
         SnippetsAction::Audit {
             snippets,
@@ -118,7 +135,7 @@ fn run_list(snippets: &[PathBuf], languages: Option<&Vec<String>>) -> ExitCode {
     }
 }
 
-fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCode {
+fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages: Option<&[String]>) -> ExitCode {
     let (_, resolved) = match crate::bin_cli::helpers::load_config(config_path) {
         Ok(config) => config,
         Err(error) => {
@@ -163,10 +180,27 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool) -> ExitCod
         .parse::<ValidationLevel>()
         .unwrap_or(ValidationLevel::Syntax);
     let strict = force_strict || config.strict;
-    let found = match discovery::discover_snippets(&directories, None) {
+    // An unrecognised `--lang` must not silently widen the run back to everything.
+    // `parse_language_filter` drops `Language::Unknown`, so a typo'd tag would otherwise leave an
+    // empty-but-`Some` filter that discovery treats as "match nothing", and the run would exit on
+    // "returned no snippets" naming the directories rather than the tag. ~keep
+    let language_filter = parse_language_filter(languages);
+    if let (Some(requested), Some(parsed)) = (languages, language_filter.as_deref())
+        && parsed.len() != requested.len()
+    {
+        let recognised: Vec<String> = parsed.iter().map(ToString::to_string).collect();
+        tracing::error!(
+            "unrecognised --lang value(s) in {requested:?}; recognised: {recognised:?}.              Use a snippet fence tag (`go`, `typescript`, `kotlin`, ...)"
+        );
+        return ExitCode::FAILURE;
+    }
+    let found = match discovery::discover_snippets(&directories, language_filter.as_deref()) {
         Ok(found) if !found.is_empty() => found,
         Ok(_) => {
-            tracing::error!("snippet discovery returned no snippets");
+            match &language_filter {
+                Some(filter) => tracing::error!("no snippets matched --lang {filter:?}"),
+                None => tracing::error!("snippet discovery returned no snippets"),
+            }
             return ExitCode::FAILURE;
         }
         Err(error) => {
@@ -688,6 +722,37 @@ fn run_gaps(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--lang` narrows a run to one backend's snippets. `parse_language_filter` silently drops
+    /// `Language::Unknown`, so the caller cannot tell a recognised tag from a typo by looking at
+    /// the filter alone -- the count comparison `run_check` makes is the whole check, and this
+    /// pins both sides of it. ~keep
+    #[test]
+    fn a_language_filter_keeps_every_recognised_fence_tag() {
+        let requested = ["go".to_string(), "typescript".to_string(), "zig".to_string()];
+        let parsed = parse_language_filter(Some(&requested)).expect("a filter was requested");
+
+        assert_eq!(parsed, vec![Language::Go, Language::TypeScript, Language::Zig]);
+        assert_eq!(parsed.len(), requested.len(), "no recognised tag may be dropped");
+    }
+
+    #[test]
+    fn a_language_filter_drops_an_unrecognised_tag_so_the_caller_can_detect_it() {
+        let requested = ["go".to_string(), "nosuchlang".to_string()];
+        let parsed = parse_language_filter(Some(&requested)).expect("a filter was requested");
+
+        assert_eq!(parsed, vec![Language::Go]);
+        assert_ne!(
+            parsed.len(),
+            requested.len(),
+            "the length gap is what `run_check` turns into an error naming the bad tag"
+        );
+    }
+
+    #[test]
+    fn no_language_argument_means_no_filter_at_all() {
+        assert!(parse_language_filter(None).is_none());
+    }
 
     #[test]
     fn strict_coverage_rejects_every_non_validation_status() {

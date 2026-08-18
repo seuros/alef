@@ -2,11 +2,132 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
 
 pub struct GoValidator;
 
+const ISOLATED_GO_MODULE: &str = "module snippet\n\ngo 1.21\n";
+const BATCH_FILE_NAME: &str = "snippet.go";
+
+/// Every snippet is its own `package main` with its own `func main`, so they cannot share one
+/// package directory — `go build` would reject the batch with `main redeclared in this block`
+/// before compiling any snippet's actual code. Each snippet gets a directory of its own under a
+/// single module instead, and one `go build ./...` covers them all. ~keep
+const BATCH_DIRECTORY_PREFIX: &str = "snippet_batch_";
+
+const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "the go toolchain failed without a snippet-specific diagnostic";
+const BATCH_RUN_UNSUPPORTED: &str = "Go batch validation does not cover the run level";
+
 impl GoValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let dir = match session {
+            Some(session) => ScratchDir::for_session(session)?,
+            None => ScratchDir::isolated()?,
+        };
+        let mut files = Vec::with_capacity(snippets.len());
+        let mut directories = Vec::with_capacity(snippets.len());
+        for (index, snippet) in snippets.iter().enumerate() {
+            let directory_name = format!("{BATCH_DIRECTORY_PREFIX}{index}");
+            let package_directory = dir.path().join(&directory_name);
+            std::fs::create_dir_all(&package_directory)?;
+            std::fs::write(
+                package_directory.join(BATCH_FILE_NAME),
+                Self::wrap_if_fragment(&snippet.code),
+            )?;
+            files.push(format!("{directory_name}/{BATCH_FILE_NAME}"));
+            directories.push(directory_name);
+        }
+        if session.is_none() && level != ValidationLevel::Syntax {
+            std::fs::write(dir.path().join("go.mod"), ISOLATED_GO_MODULE)?;
+        }
+        let mut command = Self::batch_command(level, &files)?;
+        Self::apply_build_cache(&mut command, dir.path());
+        Self::apply_dependency_caches(&mut command);
+        command.current_dir(dir.path());
+        if let Some(session) = session {
+            session.apply_environment(&mut command);
+        }
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::batch_results(&files, &directories, success, &output))
+    }
+
+    fn batch_command(level: ValidationLevel, files: &[String]) -> Result<std::process::Command> {
+        Ok(match level {
+            ValidationLevel::Syntax => {
+                let mut command = std::process::Command::new("gofmt");
+                command.args(["-e", "-l"]).args(files);
+                command
+            }
+            ValidationLevel::Compile => {
+                let mut command = std::process::Command::new("go");
+                command.args(["build", "./..."]);
+                command
+            }
+            ValidationLevel::TypeCheck => {
+                let mut command = std::process::Command::new("go");
+                command.args(["vet", "./..."]);
+                command
+            }
+            ValidationLevel::Run => {
+                return Err(crate::snippets::error::Error::Other(BATCH_RUN_UNSUPPORTED.to_string()));
+            }
+        })
+    }
+
+    /// Attributes toolchain output back to the snippet that owns it. Diagnostics name their file
+    /// (`snippet_batch_2/snippet.go:4:9: …`), while `go build`/`go vet` precede a failing package's
+    /// diagnostics with a `# <import path>` header whose last component is that snippet's
+    /// directory — so a line carrying no path of its own stays with the package last announced. ~keep
+    fn batch_results(files: &[String], directories: &[String], success: bool, output: &str) -> BatchValidation {
+        let mut diagnostics = vec![Vec::new(); files.len()];
+        let mut unmatched = Vec::new();
+        let mut current = None;
+        for line in output.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || files.iter().any(|file| trimmed == file) {
+                continue;
+            }
+            if let Some(header) = trimmed.strip_prefix("# ") {
+                current = Self::package_owner(directories, header);
+                continue;
+            }
+            match Self::file_owner(files, line).or(current) {
+                Some(index) => diagnostics[index].push(line.to_string()),
+                None => unmatched.push(line.to_string()),
+            }
+        }
+        let attributed = diagnostics.iter().any(|messages| !messages.is_empty());
+        let fallback = (!success && !attributed).then(|| {
+            if unmatched.is_empty() {
+                BATCH_FAILED_WITHOUT_DIAGNOSTIC.to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        diagnostics
+            .into_iter()
+            .map(|messages| match (messages.is_empty(), &fallback) {
+                (true, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (true, None) => (SnippetStatus::Pass, None),
+                (false, _) => (SnippetStatus::Fail, Some(messages.join("\n"))),
+            })
+            .collect()
+    }
+
+    fn file_owner(files: &[String], line: &str) -> Option<usize> {
+        files.iter().position(|file| line.contains(file.as_str()))
+    }
+
+    fn package_owner(directories: &[String], import_path: &str) -> Option<usize> {
+        let name = import_path.trim_matches(['[', ']']).rsplit('/').next()?;
+        directories.iter().position(|directory| directory == name)
+    }
+
     fn validate_with_context(
         snippet: &Snippet,
         level: ValidationLevel,
@@ -20,7 +141,7 @@ impl GoValidator {
         let file = dir.path().join("snippet.go");
         std::fs::write(&file, Self::wrap_if_fragment(&snippet.code))?;
         if session.is_none() && level != ValidationLevel::Syntax {
-            std::fs::write(dir.path().join("go.mod"), "module snippet\n\ngo 1.21\n")?;
+            std::fs::write(dir.path().join("go.mod"), ISOLATED_GO_MODULE)?;
         }
         let mut command = match level {
             ValidationLevel::Syntax => {
@@ -204,6 +325,23 @@ impl SnippetValidator for GoValidator {
         Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
+    /// `Run` is declined: `go run` executes one program and its stdout, exit status and side
+    /// effects belong to that snippet alone. ~keep
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        (level != ValidationLevel::Run)
+            .then(|| Self::validate_batch_with_context(snippets, level, timeout_secs, session))
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
+    }
+
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Run
     }
@@ -384,6 +522,255 @@ mod tests {
             remaining, 0,
             "scratch left behind under the cache root after a failing snippet validation"
         );
+    }
+
+    #[test]
+    fn batch_declines_run_so_each_snippet_executes_on_its_own() {
+        let only = snippet("package main\n\nfunc main() {}\n");
+
+        let declined = GoValidator.validate_batch_in_session(&[&only], ValidationLevel::Run, 10, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn batch_returns_one_result_per_snippet_in_input_order() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let first = snippet("package main\n\nfunc main() { _ = 1 }\n");
+        let second = snippet("package main\n\nfunc main() { _ = 2 }\n");
+        let third = snippet("package main\n\nfunc main() { _ = 3 }\n");
+
+        let results = GoValidator::validate_batch_with_context(
+            &[&first, &second, &third],
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None)
+            ]
+        );
+    }
+
+    /// Each snippet is its own `package main` with its own `func main`; sharing one package
+    /// directory would fail the whole batch on `main redeclared` before any snippet's own code was
+    /// judged. ~keep
+    #[test]
+    fn batch_build_fails_only_the_broken_snippet_and_passes_its_neighbours() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let first = snippet("package main\n\nfunc main() { _ = 1 }\n");
+        let broken = snippet("package main\n\nfunc main() { undefinedBatchCall() }\n");
+        let third = snippet("package main\n\nfunc main() { _ = 3 }\n");
+
+        let results = GoValidator::validate_batch_with_context(
+            &[&first, &broken, &third],
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("undefinedBatchCall")),
+            "{:?}",
+            results[1].1
+        );
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    #[test]
+    fn batch_vet_fails_only_the_snippet_the_toolchain_names() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let first = snippet("package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Printf(\"%d\\n\", 1) }\n");
+        let broken = snippet("package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Printf(\"%d\\n\", \"text\") }\n");
+        let third = snippet("package main\n\nimport \"fmt\"\n\nfunc main() { fmt.Printf(\"%d\\n\", 3) }\n");
+
+        let results = GoValidator::validate_batch_with_context(
+            &[&first, &broken, &third],
+            ValidationLevel::TypeCheck,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    #[test]
+    fn batch_syntax_fails_only_the_snippet_gofmt_cannot_parse() {
+        if which::which("gofmt").is_err() {
+            return;
+        }
+        let first = snippet("package main\n\nfunc main() { _ = 1 }\n");
+        let broken = snippet("package main\n\nfunc main() { this is not go }\n");
+        let third = snippet("package main\n\nfunc main() { _ = 3 }\n");
+
+        let results = GoValidator::validate_batch_with_context(
+            &[&first, &broken, &third],
+            ValidationLevel::Syntax,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    #[test]
+    fn batch_in_a_session_resolves_the_local_module_the_manifest_declares() {
+        if which::which("go").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let working = root.path().join("working");
+        let project = root.path().join("project");
+        std::fs::create_dir_all(&working).expect("working directory");
+        std::fs::create_dir_all(project.join("localpkg")).expect("local package directory");
+        std::fs::write(project.join("go.mod"), "module example.test/local\n\ngo 1.24\n").expect("go manifest");
+        std::fs::write(project.join("localpkg/value.go"), "package localpkg\nconst Value = 1\n").expect("go package");
+        let session = ValidationSession {
+            language: Language::Go,
+            working_directory: working,
+            manifest: Some(project.join("go.mod")),
+            fingerprint: "batch-fixture".into(),
+            env: BTreeMap::from([(
+                "GOCACHE".into(),
+                root.path().join("go-cache").to_string_lossy().into_owned(),
+            )]),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let valid = snippet("package main\nimport \"example.test/local/localpkg\"\nfunc main() { _ = localpkg.Value }");
+        let broken =
+            snippet("package main\nimport \"example.test/local/localpkg\"\nfunc main() { _ = localpkg.Missing }");
+
+        let results = GoValidator::validate_batch_with_context(
+            &[&valid, &broken, &valid],
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            Some(&session),
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    #[test]
+    fn package_header_lines_route_their_followers_to_the_owning_snippet() {
+        let files = vec![
+            "snippet_batch_0/snippet.go".to_string(),
+            "snippet_batch_1/snippet.go".to_string(),
+        ];
+        let directories = vec!["snippet_batch_0".to_string(), "snippet_batch_1".to_string()];
+        let output = "# snippet/snippet_batch_1\nvet: snippet_batch_1/snippet.go:3:15: undefined: missing\n";
+
+        let results = GoValidator::batch_results(&files, &directories, false, output);
+
+        assert_eq!(results[0], (SnippetStatus::Pass, None));
+        assert_eq!(
+            results[1],
+            (
+                SnippetStatus::Fail,
+                Some("vet: snippet_batch_1/snippet.go:3:15: undefined: missing".to_string())
+            )
+        );
+    }
+
+    /// A header for a package outside the batch — a dependency of a snippet, say — must clear the
+    /// package the parser is attributing to, or the diagnostics that follow it would be charged to
+    /// whichever batched snippet happened to be announced last. ~keep
+    #[test]
+    fn a_header_for_a_package_outside_the_batch_stops_attributing_to_the_previous_one() {
+        let files = vec![
+            "snippet_batch_0/snippet.go".to_string(),
+            "snippet_batch_1/snippet.go".to_string(),
+        ];
+        let directories = vec!["snippet_batch_0".to_string(), "snippet_batch_1".to_string()];
+        let output = concat!(
+            "# snippet/snippet_batch_0\n",
+            "snippet_batch_0/snippet.go:3:2: declared and not used: value\n",
+            "# example.test/dependency\n",
+            "dependency.go:9:1: syntax error\n"
+        );
+
+        let results = GoValidator::batch_results(&files, &directories, false, output);
+
+        assert_eq!(
+            results[0],
+            (
+                SnippetStatus::Fail,
+                Some("snippet_batch_0/snippet.go:3:2: declared and not used: value".to_string())
+            )
+        );
+        assert_eq!(results[1], (SnippetStatus::Pass, None));
+    }
+
+    /// `gofmt -l` lists every file whose formatting differs, with no error attached and no effect
+    /// on the exit status. Reading those bare filenames as diagnostics would fail well-formed
+    /// snippets for being unformatted. ~keep
+    #[test]
+    fn gofmt_listing_lines_are_not_read_as_failures() {
+        let files = vec![
+            "snippet_batch_0/snippet.go".to_string(),
+            "snippet_batch_1/snippet.go".to_string(),
+        ];
+        let directories = vec!["snippet_batch_0".to_string(), "snippet_batch_1".to_string()];
+        let output = "snippet_batch_0/snippet.go\nsnippet_batch_1/snippet.go\n";
+
+        let results = GoValidator::batch_results(&files, &directories, true, output);
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// A toolchain failure no snippet owns — an unusable module, a missing build cache — must fail
+    /// every snippet carrying the real output rather than silently passing them all. ~keep
+    #[test]
+    fn a_toolchain_failure_naming_no_snippet_fails_the_whole_batch_with_the_real_output() {
+        let files = vec![
+            "snippet_batch_0/snippet.go".to_string(),
+            "snippet_batch_1/snippet.go".to_string(),
+        ];
+        let directories = vec!["snippet_batch_0".to_string(), "snippet_batch_1".to_string()];
+        let output = "go: go.mod file not found in current directory or any parent directory\n";
+
+        let results = GoValidator::batch_results(&files, &directories, false, output);
+
+        assert_eq!(results.len(), 2);
+        for result in &results {
+            assert_eq!(result.0, SnippetStatus::Fail);
+            assert_eq!(
+                result.1.as_deref(),
+                Some("go: go.mod file not found in current directory or any parent directory")
+            );
+        }
     }
 
     fn snippet(code: &str) -> Snippet {

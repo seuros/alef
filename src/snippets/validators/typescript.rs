@@ -2,7 +2,7 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{BatchValidation, SnippetValidator, SnippetValidation, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidation, SnippetValidator, run_command};
 use std::io::Write;
 
 pub struct TypeScriptValidator;
@@ -504,7 +504,8 @@ mod tests {
             rust_features: Vec::new(),
             rust_dependencies: BTreeMap::new(),
         };
-        let valid = snippet("import { value } from 'sample-binding';\nconst result: number = value;\nconsole.log(result);");
+        let valid =
+            snippet("import { value } from 'sample-binding';\nconst result: number = value;\nconsole.log(result);");
         let invalid =
             snippet("import { value } from 'sample-binding';\nconst result: string = value;\nconsole.log(result);");
 
@@ -575,7 +576,10 @@ mod tests {
         assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
         assert_eq!(results[1].0, SnippetStatus::Fail);
         assert!(
-            results[1].1.as_deref().is_some_and(|message| message.contains("TS2322")),
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("TS2322")),
             "the failing snippet must carry its own diagnostic: {:?}",
             results[1].1
         );
@@ -647,7 +651,10 @@ mod tests {
         assert_eq!(results.len(), 2);
         for result in &results {
             assert_eq!(result.0, SnippetStatus::Fail);
-            assert_eq!(result.1.as_deref(), Some("error TS5083: Cannot read file 'tsconfig.json'."));
+            assert_eq!(
+                result.1.as_deref(),
+                Some("error TS5083: Cannot read file 'tsconfig.json'.")
+            );
         }
     }
 
