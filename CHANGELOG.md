@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **records**: indent `.alef-toml-merge-provenance.toml` arrays like `.alef-ownership.toml`. The two records sit
+  side by side in a consumer's repo root and pass through the same `poly fmt --check` gate, but the array indent was
+  derived twice: the ownership record hand-rendered two spaces while the provenance record inherited four from
+  `toml::to_string_pretty`, whose pretty serializer hard-codes `"    "` per element. Every generated tree therefore
+  carried one standing "would reformat" file that no consumer could repair — hand-formatting is overwritten by the
+  next `alef generate`, which the record's own header says. The provenance record is now rendered like the ownership
+  one, both read the indent from a single constant, and a test compares the two writers' actual output so the next
+  divergence fails whichever side moves. Regenerating rewrites the whole record once, whitespace only.
 - **csharp**: report unemitted visitor support files instead of deleting them. `generate_bindings` ran two
   `fs::remove_file` loops from inside the stage `collect_managed_surface` documents as "a pure in-memory render;
   nothing here writes to disk". `alef verify`, `alef adopt` — including without `--write`, since the delete fired

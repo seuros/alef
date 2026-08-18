@@ -465,6 +465,35 @@ fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// The indentation every committed record alef writes uses for one array element per line.
+///
+/// One fact, one definition. Consumers gate their commits on `poly fmt --check`, whose TOML
+/// formatter normalises array elements to two spaces, and a record that indents differently is a
+/// gate failure they cannot repair: the next `alef generate` overwrites any hand-formatting. The
+/// two sibling records at the repo root used to derive this separately -- the ownership record
+/// hand-rendered two spaces while the merge-provenance record inherited four from
+/// `toml::to_string_pretty` (whose pretty serializer writes a hard-coded `"    "` per element,
+/// with nothing to configure) -- and so disagreed for as long as nothing compared them. ~keep
+const RECORD_ARRAY_INDENT: &str = "  ";
+
+/// Render `values` as a multi-line TOML array body -- `[`, one element per line at
+/// [`RECORD_ARRAY_INDENT`], trailing comma, `]` -- with no trailing newline.
+///
+/// Element reprs come from `toml_edit` rather than a hand-rolled escape so a value carrying a
+/// quote, a backslash or a control character cannot produce a record that no longer parses. An
+/// unparseable record is silent by design (it reads as "alef owns nothing" / "alef proposed
+/// nothing"), so a bad escape would not announce itself. ~keep
+fn render_record_array(values: &[String]) -> String {
+    let mut rendered = String::from("[\n");
+    for value in values {
+        rendered.push_str(RECORD_ARRAY_INDENT);
+        rendered.push_str(&toml_edit::Value::from(value.as_str()).to_string());
+        rendered.push_str(",\n");
+    }
+    rendered.push(']');
+    rendered
+}
+
 /// Render the manifest by hand rather than through `toml::to_string`.
 ///
 /// This file is read in `git diff` far more often than by a parser, and a
@@ -473,15 +502,10 @@ fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
 /// which is precisely the shape that hides an unintended ownership claim from a
 /// reviewer. One path per line makes every claim its own `+` line. ~keep
 fn render_ownership_manifest(paths: &[String]) -> String {
-    let mut content = String::from(OWNERSHIP_MANIFEST_HEADER);
-    content.push_str("\nowned_paths = [\n");
-    for path in paths {
-        content.push_str("  \"");
-        content.push_str(&path.replace('\\', "\\\\").replace('"', "\\\""));
-        content.push_str("\",\n");
-    }
-    content.push_str("]\n");
-    content
+    format!(
+        "{OWNERSHIP_MANIFEST_HEADER}\nowned_paths = {}\n",
+        render_record_array(paths)
+    )
 }
 
 /// Record `path` (relative to `base_dir`, or already `base_dir`-joined -- see
@@ -838,14 +862,19 @@ const TOML_MERGE_PROVENANCE_HEADER: &str = "\
 # with consumer content. Do not hand-edit; it is rewritten on every `alef generate`.
 ";
 
-#[derive(serde::Serialize, serde::Deserialize)]
+/// Deserialize-only on purpose: the record is *written* by
+/// [`render_toml_merge_provenance`], because `toml::to_string_pretty` indents array elements
+/// four spaces and `toml::to_string` puts the whole array on one line -- neither matches the
+/// sibling ownership record or the `poly fmt` gate consumers run. Deriving `Serialize` would put
+/// the discarded route back within reach of the next edit. ~keep
+#[derive(serde::Deserialize)]
 struct TomlMergeProvenanceEntry {
     relative_path: String,
     key_path: String,
     values: Vec<String>,
 }
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, serde::Deserialize)]
 struct TomlMergeProvenanceFile {
     #[serde(default)]
     entries: Vec<TomlMergeProvenanceEntry>,
@@ -891,6 +920,49 @@ pub fn read_toml_merge_provenance(
         .unwrap_or_default()
 }
 
+/// Render the record body: one `[[entries]]` table per entry, blank-line separated, arrays
+/// indented at [`RECORD_ARRAY_INDENT`] like the sibling ownership record.
+///
+/// Hand-rendered for the indentation, which `toml::to_string_pretty` hard-codes at four spaces
+/// while `poly fmt` -- the gate consumers commit through -- normalises to two, leaving this file
+/// permanently "would reformat" in every repo alef generates into and unfixable by hand, since
+/// the next `alef generate` rewrites it.
+///
+/// Arrays shorter than two elements stay inline (`values = ["one"]`), which is the shape
+/// `to_string_pretty` already emitted and which the committed records prove `poly fmt` accepts.
+/// Spelling *those* multi-line as well would be a second, unmeasured bet on how the formatter
+/// treats a collapsible array; this change is indentation only. ~keep
+fn render_toml_merge_provenance(entries: &[TomlMergeProvenanceEntry]) -> String {
+    let mut body = String::new();
+    for entry in entries {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str("[[entries]]\n");
+        for (key, value) in [("relative_path", &entry.relative_path), ("key_path", &entry.key_path)] {
+            body.push_str(key);
+            body.push_str(" = ");
+            body.push_str(&toml_edit::Value::from(value.as_str()).to_string());
+            body.push('\n');
+        }
+        body.push_str("values = ");
+        if entry.values.len() < 2 {
+            let inline: Vec<String> = entry
+                .values
+                .iter()
+                .map(|value| toml_edit::Value::from(value.as_str()).to_string())
+                .collect();
+            body.push('[');
+            body.push_str(&inline.join(", "));
+            body.push(']');
+        } else {
+            body.push_str(&render_record_array(&entry.values));
+        }
+        body.push('\n');
+    }
+    body
+}
+
 /// Replace the recorded array values for `relative_path` with
 /// `arrays_by_key_path` -- this run's freshly generated content, captured
 /// before merging with consumer content -- for the next run's comparison.
@@ -926,7 +998,7 @@ pub fn write_toml_merge_provenance(
         .collect();
 
     fs::create_dir_all(base_dir)?;
-    let body = toml::to_string_pretty(&TomlMergeProvenanceFile { entries })?;
+    let body = render_toml_merge_provenance(&entries);
     fs::write(&manifest_path, format!("{TOML_MERGE_PROVENANCE_HEADER}\n{body}"))?;
     if is_new_manifest {
         tracing::info!(
@@ -2094,5 +2166,92 @@ mod tests {
             "recording a second merge target's provenance must leave the first's untouched"
         );
         assert_eq!(read_toml_merge_provenance(base, Path::new("other.toml")), other_arrays);
+    }
+
+    /// The leading whitespace of every array-element line in a rendered record.
+    ///
+    /// An element line is any line between one ending in `= [` and the `]` that closes it, which
+    /// is the only structure both records share -- deliberately derived from the rendered bytes
+    /// rather than from [`RECORD_ARRAY_INDENT`], so the comparison below cannot agree with itself
+    /// by construction. ~keep
+    fn array_element_indents(rendered: &str) -> Vec<String> {
+        let mut indents = Vec::new();
+        let mut inside_array = false;
+        for line in rendered.lines() {
+            let trimmed = line.trim();
+            if inside_array {
+                if trimmed == "]" {
+                    inside_array = false;
+                } else {
+                    indents.push(line.chars().take_while(|character| character.is_whitespace()).collect());
+                }
+            } else if trimmed.ends_with("= [") {
+                inside_array = true;
+            }
+        }
+        indents
+    }
+
+    /// The two committed records sit side by side in a consumer's repo root and pass through the
+    /// same `poly fmt --check` gate, so how they indent an array element is one fact -- and it was
+    /// derived in two places that never compared notes: the ownership record hand-rendered two
+    /// spaces while the provenance record inherited `toml::to_string_pretty`'s four, which made
+    /// every regenerated tree unreleasable downstream (the gate says "would reformat", and
+    /// hand-formatting is overwritten by the next `alef generate`).
+    ///
+    /// Comparing the two writers' actual output, rather than pinning the literal two spaces, is
+    /// what makes the next divergence fail here whichever side moves. ~keep
+    #[test]
+    fn both_committed_records_indent_array_elements_identically() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let values = vec!["target/**".to_string(), "docs/assets/**".to_string()];
+        let mut arrays = std::collections::BTreeMap::new();
+        arrays.insert("discovery.exclude".to_string(), values.clone());
+
+        write_toml_merge_provenance(base, Path::new("poly.toml"), &arrays).expect("write provenance");
+        let provenance = std::fs::read_to_string(base.join(TOML_MERGE_PROVENANCE_MANIFEST)).expect("read provenance");
+        let ownership = render_ownership_manifest(&values);
+
+        let provenance_indents = array_element_indents(&provenance);
+        let ownership_indents = array_element_indents(&ownership);
+        assert_eq!(
+            ownership_indents.len(),
+            values.len(),
+            "apparatus check: the ownership record must render one element line per value, got:\n{ownership}"
+        );
+        assert_eq!(
+            provenance_indents.len(),
+            values.len(),
+            "apparatus check: the provenance record must render one element line per value, got:\n{provenance}"
+        );
+        assert_eq!(
+            provenance_indents, ownership_indents,
+            "the two committed records must indent array elements identically, got \
+             {provenance_indents:?} for the provenance record and {ownership_indents:?} for the \
+             ownership record"
+        );
+    }
+
+    /// A value carrying a quote or a backslash must survive the hand-rolled provenance writer,
+    /// for the same reason [`ownership_record_escapes_paths_that_need_it`] pins it for the other
+    /// record: the record is written by hand rather than by a serializer, and an unparseable one
+    /// reads as "alef proposed nothing", so a bad escape silently disables pruning instead of
+    /// failing. ~keep
+    #[test]
+    fn toml_merge_provenance_escapes_values_that_need_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let awkward = vec!["we\"ird\\value/**".to_string(), "plain/**".to_string()];
+        let mut arrays = std::collections::BTreeMap::new();
+        arrays.insert("discovery.ex\"clude".to_string(), awkward);
+
+        write_toml_merge_provenance(base, Path::new("poly.toml"), &arrays).expect("write provenance");
+
+        assert_eq!(
+            read_toml_merge_provenance(base, Path::new("poly.toml")),
+            arrays,
+            "an awkward key path and value must round-trip through the hand-rolled writer unchanged"
+        );
     }
 }
