@@ -97,7 +97,7 @@ fn named_type(ty: &TypeRef) -> Option<String> {
 }
 
 /// Build a visitor-handle setup block and append it to `setup_lines`. Returns
-/// the dart variable name holding the visitor handle (always `_visitor`).
+/// the dart variable name holding the visitor handle (always `visitor`).
 pub(super) fn build_dart_visitor(
     setup_lines: &mut Vec<String>,
     visitor_spec: &VisitorSpec,
@@ -129,14 +129,14 @@ pub(super) fn build_dart_visitor(
     // indentation matches the standard test-body indent (4 spaces inside the
     // test closure) so the emitted file reads cleanly.
     let factory_name = format!("create{}", visitor_config.trait_name.to_upper_camel_case());
-    let mut block = format!("final _visitor = await {factory_name}(\n");
+    let mut block = format!("final visitor = await {factory_name}(\n");
     for (i, arg) in named_args.iter().enumerate() {
         let sep = if i + 1 == named_args.len() { "" } else { "," };
         let _ = writeln!(block, "      {arg}{sep}");
     }
     block.push_str("    );");
     setup_lines.push(block);
-    "_visitor".to_string()
+    "visitor".to_string()
 }
 
 /// Dart closure parameter list for visitor methods. Parameter names mirror
@@ -279,7 +279,7 @@ mod tests {
             ),
             &visitor_config(&["visit_audio", "visit_text"]),
         );
-        assert_eq!(name, "_visitor");
+        assert_eq!(name, "visitor");
         assert_eq!(lines.len(), 1);
         let block = &lines[0];
         assert!(block.contains("createRenderVisitor("), "got: {block}");

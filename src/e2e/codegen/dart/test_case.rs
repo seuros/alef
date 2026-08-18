@@ -588,7 +588,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     if arg_value.is_object() {
                         let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                         let escaped_json = escape_dart(&json_str);
-                        let var_name = format!("_{}", arg_def.name);
+                        let var_name = snake_to_camel(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(elem_type);
                         let json_source = if crate::e2e::codegen::value_contains_mock_url_placeholder(arg_value) {
                             setup_lines.push(format!(
@@ -710,7 +710,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                                 &fixture.docs_files_for_arg(&arg_def.field),
                             )
                         {
-                            let var_name = format!("_{}", arg_def.name);
+                            let var_name = snake_to_camel(&arg_def.name);
                             setup_lines.push(format!("final {var_name} = {expression};"));
                             args.push(format!("req: {var_name}"));
                             continue;
@@ -719,7 +719,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         // Escape for Dart single-quoted string literal (handles embedded quotes,
                         // backslashes, and interpolation markers).
                         let escaped_json = escape_dart(&json_str);
-                        let var_name = format!("_{}", arg_def.name);
+                        let var_name = snake_to_camel(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
                         // FRB bridge method param name is `req` for all single-request methods.
@@ -728,7 +728,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     }
                 } else if call_recipe.should_materialize_json_object(arg_def, arg_value) && arg_value.is_null() {
                     if let Some(opts_type) = options_type {
-                        let var_name = format!("_{}", arg_def.name);
+                        let var_name = snake_to_camel(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
                         // The declaration this call has to match is emitted by
@@ -773,7 +773,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                                 .unwrap_or(&arg_def.name);
                             let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                             let escaped_json = escape_dart(&json_str);
-                            let var_name = format!("_{}", arg_def.name);
+                            let var_name = snake_to_camel(&arg_def.name);
                             let dart_fn = type_name_to_create_from_json_dart(opts_type);
                             setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
                             if is_config_positional(opts_type) {
@@ -794,7 +794,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                                 .or(arg_def.element_type.as_deref())
                                 .or(options_type);
                             if let Some(opts_type) = opts_type {
-                                let var_name = format!("_{}", arg_def.name);
+                                let var_name = snake_to_camel(&arg_def.name);
                                 let dart_fn = type_name_to_create_from_json_dart(opts_type);
                                 setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
                                 if is_config_positional(opts_type) {
@@ -820,7 +820,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                             call_recipe.json_object_arg_has_default(arg_def)
                                 || call_recipe.should_materialize_json_object(arg_def, arg_value)
                         }) {
-                            let var_name = format!("_{}", arg_def.name);
+                            let var_name = snake_to_camel(&arg_def.name);
                             let dart_fn = type_name_to_create_from_json_dart(opts_type);
                             setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{{}}');"));
                             if is_config_positional(opts_type) {
@@ -857,7 +857,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     // When the fixture also carries a visitor spec, swap to the
                     // `create<OptionsType>FromJsonWithVisitor(json, visitor)` helper
                     // (emitted by `alef-backend-dart` for trait bridges with `type_alias`
-                    // + `options_field` binding). The `_visitor` variable is materialised
+                    // + `options_field` binding). The `visitor` variable is materialised
                     // in the visitor block below — its setup line is inserted ahead of
                     // this options call by `build_dart_visitor`.
                     if !map.is_empty()
@@ -868,11 +868,11 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                         let json_str = serde_json::to_string(&arg_value).unwrap_or_default();
                         let escaped_json = escape_dart(&json_str);
                         let dart_param_name = snake_to_camel(&arg_def.name);
-                        let var_name = format!("_{}", arg_def.name);
+                        let var_name = snake_to_camel(&arg_def.name);
                         let dart_fn = type_name_to_create_from_json_dart(opts_type);
                         if fixture.visitor.is_some() {
                             setup_lines.push(format!(
-                                    "final {var_name} = await {dart_fn}WithVisitor(json: '{escaped_json}', visitor: _visitor);"
+                                    "final {var_name} = await {dart_fn}WithVisitor(json: '{escaped_json}', visitor: visitor);"
                                 ));
                         } else {
                             setup_lines.push(format!("final {var_name} = await {dart_fn}(json: '{escaped_json}');"));
@@ -888,14 +888,14 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     }
 
     // Fixture-driven visitor handle. When `fixture.visitor` is set we build a
-    // `_visitor` via the generated visitor factory (emitted by
+    // `visitor` via the generated visitor factory (emitted by
     // `alef-backend-dart`'s trait-bridge generator in the `type_alias` mode)
     // and thread it into the options blob via the
     // `create<OptionsType>FromJsonWithVisitor(json, visitor)` helper (handled
     // a few lines above in the json_object arg branch).
     //
     // The visitor setup line is INSERTED at the front of `setup_lines` so
-    // `_visitor` is defined before any `_options` line that references it.
+    // `visitor` is defined before any `options` line that references it.
     // Fixtures without an `options` json_object in input still need an options
     // blob to carry the visitor through to the configured call — we synthesise an empty
     // options call with the configured options type here when no `options` arg was emitted in the loop
@@ -910,7 +910,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         );
         let _ =
             crate::e2e::codegen::dart_visitors::build_dart_visitor(&mut visitor_setup, visitor_spec, &visitor_config);
-        // Prepend the visitor block so `_visitor` is in scope by the time the
+        // Prepend the visitor block so `visitor` is in scope by the time the
         // options call (which may reference it) runs.
         for line in visitor_setup.into_iter().rev() {
             setup_lines.insert(0, line);
@@ -919,24 +919,24 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         // If no `options` arg was emitted by the loop above (the fixture has no
         // input.options block), build an empty options-with-visitor and add it as
         // an `options:` named arg so the visitor reaches the convert call.
-        let already_has_options = args.iter().any(|a| a.starts_with("options:") || a == "_options");
+        let already_has_options = args.iter().any(|a| a.starts_with("options:") || a == "options");
         if !already_has_options {
             if let Some(opts_type) = options_type {
                 let dart_fn = type_name_to_create_from_json_dart(opts_type);
                 setup_lines.push(format!(
-                    "final _options = await {dart_fn}WithVisitor(json: '{{}}', visitor: _visitor);"
+                    "final options = await {dart_fn}WithVisitor(json: '{{}}', visitor: visitor);"
                 ));
-                args.push("options: _options".to_string());
+                args.push("options: options".to_string());
             }
         } else if let Some(opts_type) = options_type {
             // The args loop already emitted a non-WithVisitor options call (e.g.
             // for `options: {}` or `options: {some: value}`). Without the visitor
-            // attached the convert call ignores `_visitor` — rewrite the
+            // attached the convert call ignores `visitor` — rewrite the
             // emitted call to its `WithVisitor` sibling so the visitor reaches
             // the converter.
             let dart_fn = type_name_to_create_from_json_dart(opts_type);
             let needle = format!("await {dart_fn}(json:");
-            let replacement = format!("await {dart_fn}WithVisitor(visitor: _visitor, json:");
+            let replacement = format!("await {dart_fn}WithVisitor(visitor: visitor, json:");
             for line in setup_lines.iter_mut() {
                 if line.contains(&needle) {
                     *line = line.replace(&needle, &replacement);
@@ -1005,9 +1005,9 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 .map(|base_url| format!(", baseUrl: '{}'", escape_dart(base_url)))
                 .unwrap_or_default();
             let create_line = format!(
-                "final apiKey = Platform.environment['{api_key_var}'];\n  if (apiKey == null || apiKey.isEmpty) {{ throw StateError('{api_key_var} must be set'); }}\n  final _client = await {receiver_class}.{factory}(apiKey{base_url_arg});"
+                "final apiKey = Platform.environment['{api_key_var}'];\n  if (apiKey == null || apiKey.isEmpty) {{ throw StateError('{api_key_var} must be set'); }}\n  final client = await {receiver_class}.{factory}(apiKey{base_url_arg});"
             );
-            ("_client".to_string(), Some(create_line))
+            ("client".to_string(), Some(create_line))
         } else {
             let has_mock_url = fixture
                 .resolved_args(call_config)
@@ -1032,13 +1032,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 "_mockUrl".to_string()
             };
             let create_line =
-                format!("final _client = await {receiver_class}.{factory}('test-key', baseUrl: {url_expr});");
+                format!("final client = await {receiver_class}.{factory}('test-key', baseUrl: {url_expr});");
             let full_setup = if let Some(url_line) = mock_url_setup {
                 Some(format!("{url_line}\n    {create_line}"))
             } else {
                 Some(create_line)
             };
-            ("_client".to_string(), full_setup)
+            ("client".to_string(), full_setup)
         }
     } else {
         (receiver_class.clone(), None)

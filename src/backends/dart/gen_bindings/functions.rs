@@ -496,8 +496,8 @@ mod call_shape_agreement_tests {
             .render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), type_defs, &[])
             .expect("snippet");
 
-        let named = body.contains("embed(config: _config)");
-        let positional = body.contains("embed(_config)");
+        let named = body.contains("embed(config: config)");
+        let positional = body.contains("embed(config)");
         assert!(
             named != positional,
             "snippet must pass the config in exactly one of the two shapes:\n{body}"

@@ -543,4 +543,75 @@ mod tests {
             "void call must still be awaited directly without a binding:\n{body}"
         );
     }
+
+    // ~keep Regression test: `dart analyze --fatal-infos` enforces Dart's
+    // `no_leading_underscores_for_local_identifiers` lint. A Dart local variable cannot be
+    // library-private (privacy is a library-scope concept in Dart), so a `_`-prefixed local
+    // only trips this lint for no benefit -- it was a naming convention carried over from
+    // languages (e.g. Python) where a leading underscore does mean something on a local.
+    // `dart/test_case.rs` used to build these two scratch-variable families with a literal
+    // `_` prefix (`format!("_{}", arg_def.name)` and the hardcoded `"_client"` receiver);
+    // together they accounted for most of the 188 originally failing published snippets.
+    // Exercises both fixed families in one fixture: the `client_factory` receiver and a
+    // generic `json_object` arg. Asserts the snippet is non-trivially emitted (the two
+    // locals and the call that uses them are all present) before asserting the negative
+    // (no local declaration starts with `_`), so this cannot pass vacuously against empty
+    // output. Paired with `snippet_hoists_test_backend_stub_class_and_factory_above_main`
+    // above, which is the control: `_createTestStubRegisterBackendWrapper` is a *module-scope*
+    // private function (real Dart privacy applies there) and must keep its underscore.
+    #[test]
+    fn snippet_client_and_json_object_locals_have_no_leading_underscore() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "chat_basic", "description": "Send a chat request",
+            "input": {"request": {"model": "gpt-4o", "messages": []}}
+        }))
+        .expect("fixture");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "chat".into();
+        e2e_config.call.result_var = "result".into();
+        e2e_config.call.options_type = Some("ChatRequest".into());
+        e2e_config.call.overrides.insert(
+            "dart".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("create_client".into()),
+                ..Default::default()
+            },
+        );
+        e2e_config.call.args.push(crate::e2e::config::ArgMapping {
+            name: "request".into(),
+            field: "input.request".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        });
+
+        let body =
+            render_snippet_body(&fixture, &e2e_config, &ResolvedCrateConfig::default(), &[], &[]).expect("snippet");
+
+        // Non-vacuous first: both scratch locals, and the call that consumes them, are
+        // really emitted -- proving the assertions below aren't vacuously true against
+        // empty or dropped output.
+        assert!(
+            body.contains("final client = await Bridge.createClient(apiKey)"),
+            "client local must be emitted:\n{body}"
+        );
+        assert!(
+            body.contains("final request = await createChatRequestFromJson("),
+            "request local must be emitted:\n{body}"
+        );
+        assert!(
+            body.contains("client.chat(request: request)"),
+            "the call must use both locals by their new (underscore-free) names:\n{body}"
+        );
+
+        assert!(
+            !body.lines().any(|line| line.trim_start().starts_with("final _")),
+            "no local declaration may start with `_` -- Dart locals cannot be private, so a \
+             leading underscore only trips `no_leading_underscores_for_local_identifiers`:\n{body}"
+        );
+    }
 }

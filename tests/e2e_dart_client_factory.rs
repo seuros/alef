@@ -99,7 +99,7 @@ type = "json_object"
 /// When `client_factory` is set, the generated test must:
 ///   1. derive the mock URL for the fixture
 ///   2. create a client via the named factory (camelCased)
-///   3. call the method on the client instance (_client.chat)
+///   3. call the method on the client instance (client.chat)
 ///   4. NOT use the static bridge-class call directly
 #[test]
 fn with_client_factory_emits_client_instantiation() {
@@ -117,7 +117,7 @@ client_factory = "create_client"
         "must call createClient factory (camelCased). Rendered:\n{rendered}"
     );
     assert!(
-        rendered.contains("_client.chat("),
+        rendered.contains("client.chat("),
         "must call chat on client instance. Rendered:\n{rendered}"
     );
     assert!(
@@ -145,7 +145,7 @@ fn without_client_factory_emits_static_bridge_call() {
         "must NOT call createClient when client_factory is absent. Rendered:\n{rendered}"
     );
     assert!(
-        !rendered.contains("final _client") && !rendered.contains(" _client."),
-        "must NOT reference _client when client_factory is absent. Rendered:\n{rendered}"
+        !rendered.contains("final client =") && !rendered.contains(" client."),
+        "must NOT reference client when client_factory is absent. Rendered:\n{rendered}"
     );
 }
