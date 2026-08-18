@@ -164,7 +164,7 @@ pub(super) fn render_snippet_body(
         "php/snippet_body.jinja",
         minijinja::context! {
             namespace => namespace, class_name => class_name, setup_lines => setup_lines,
-            client_factory => client_factory, call_expr => call_expr, result_var => call.result_var,
+            client_factory => client_factory, call_expr => call_expr, result_var => call.effective_result_var(),
             returns_void => call.returns_void, is_streaming => is_streaming, imported_types => imported_types,
             expects_error => expects_error, presentation => presentation, api_key_var => api_key_var,
         },

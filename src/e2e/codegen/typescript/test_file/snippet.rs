@@ -188,7 +188,8 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         minijinja::context! {
             imports => imports.into_iter().collect::<Vec<_>>(), module => module,
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
-            result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
+            result_var => call.effective_result_var(),
+            is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
             expects_error => expects_error, client_release => client_release,
             error_type => error_type_name.clone(),
             thrown_value_is_opaque => lang == "wasm",

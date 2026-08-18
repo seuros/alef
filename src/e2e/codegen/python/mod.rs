@@ -236,7 +236,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
                 imports => imports, body => body, is_async => is_async, presentation => presentation,
                 expects_error => expects_error,
                 error_type => error_type,
-                result_var => call.result_var,
+                result_var => call.effective_result_var(),
                 returns_void => call.returns_void,
             },
         ))

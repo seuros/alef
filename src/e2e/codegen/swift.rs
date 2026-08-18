@@ -68,7 +68,7 @@ impl E2eCodegen for SwiftE2eCodegen {
             .and_then(|o| o.function.as_ref())
             .cloned()
             .unwrap_or_else(|| call.function.clone());
-        let result_var = &call.result_var;
+        let result_var = call.effective_result_var();
         let result_is_simple = overrides.is_some_and(|o| o.result_is_simple);
 
         // Resolve package config.

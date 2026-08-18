@@ -97,7 +97,7 @@ impl E2eCodegen for CSharpCodegen {
                 }
             });
         let result_is_simple = call.result_is_simple || overrides.is_some_and(|o| o.result_is_simple);
-        let result_var = &call.result_var;
+        let result_var = call.effective_result_var();
         let is_async = call.r#async;
 
         // Resolve package config.
@@ -525,10 +525,9 @@ fn render_test_method(
         }
         name
     };
-    let effective_result_var = &call_config.result_var;
     let effective_is_async = cs_overrides.and_then(|o| o.r#async).unwrap_or(call_config.r#async);
     let function_name = effective_function_name.as_str();
-    let result_var = effective_result_var.as_str();
+    let result_var = call_config.effective_result_var();
     let is_async = effective_is_async;
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call_config, type_defs);
     let args = recipe.args;

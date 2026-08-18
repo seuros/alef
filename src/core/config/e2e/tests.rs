@@ -746,3 +746,67 @@ fn unknown_top_level_e2e_key_is_rejected_not_silently_dropped() {
         "error must be serde's unknown-field diagnostic: {message}"
     );
 }
+
+/// `[e2e.call]` is a required table, so a real `alef.toml` always runs `result_var` through
+/// serde and the field arrives populated. This pins that entry point: it is the reason an
+/// unset `result_var` is not reachable by *omitting* the key.
+#[test]
+fn an_omitted_result_var_deserialises_to_the_documented_default() {
+    let call: CallConfig = toml::from_str("function = \"process\"\n").expect("a call without result_var must load");
+    assert_eq!(call.result_var, "result");
+    assert_eq!(call.effective_result_var(), "result");
+}
+
+/// The one origin serde does not cover. `#[serde(default)]` fires on an absent key, never on a
+/// present-but-blank one, and nothing validates the value, so `result_var = ""` reaches the
+/// emitters as an empty identifier. Resolving it here is what keeps that out of generated code.
+#[test]
+fn an_explicitly_blank_result_var_resolves_to_the_documented_default() {
+    for blank in ["\"\"", "\"   \""] {
+        let call: CallConfig =
+            toml::from_str(&format!("result_var = {blank}\n")).expect("a blank result_var must load");
+        assert_eq!(
+            call.effective_result_var(),
+            "result",
+            "a blank result_var ({blank}) must resolve to the documented default"
+        );
+    }
+}
+
+/// The control for both tests above: resolution must not overwrite a name someone chose.
+#[test]
+fn an_explicit_result_var_is_returned_verbatim() {
+    let call: CallConfig = toml::from_str("result_var = \"captured\"\n").expect("an explicit result_var must load");
+    assert_eq!(call.result_var, "captured");
+    assert_eq!(call.effective_result_var(), "captured");
+    assert_eq!(
+        CallConfig {
+            result_var: "captured".into(),
+            ..CallConfig::default()
+        }
+        .effective_result_var(),
+        "captured"
+    );
+}
+
+/// A programmatically built `CallConfig` must carry exactly what a TOML-loaded one carries.
+///
+/// `result_var` is the field where the two disagreed: the serde default said "result" and the
+/// derived `Default` said `""`, and every consumer that read the field rather than resolving it
+/// picked up whichever derivation its caller happened to use. Comparing the two whole structs
+/// rather than that one field is deliberate — the next field with a non-trivial serde default
+/// would otherwise reintroduce the same split with no signal. ~keep
+#[test]
+fn default_matches_the_serde_defaults() {
+    let from_serde: CallConfig = toml::from_str("").expect("every CallConfig field carries a serde default");
+    assert_eq!(
+        serde_json::to_value(CallConfig::default()).expect("CallConfig serialises"),
+        serde_json::to_value(&from_serde).expect("CallConfig serialises"),
+        "`Default for CallConfig` has drifted from the serde defaults; a field's default is now \
+         two different values depending on how the call was built"
+    );
+    assert_eq!(
+        from_serde.result_var, "result",
+        "the comparison above is only meaningful while the serde default is a real name"
+    );
+}

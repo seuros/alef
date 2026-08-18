@@ -62,7 +62,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     let field_resolver = &call_field_resolver;
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let function_name = resolve_node_function_name(call_config);
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let call_is_async = call_config
         .overrides
         .get(lang)

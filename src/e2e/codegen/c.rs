@@ -212,7 +212,7 @@ impl E2eCodegen for CCodegen {
         // Resolve default call config with overrides.
         let call = &e2e_config.call;
         let overrides = call.overrides.get(lang);
-        let result_var = &call.result_var;
+        let result_var = call.effective_result_var();
         let prefix = overrides
             .and_then(|o| o.prefix.as_ref())
             .cloned()

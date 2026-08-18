@@ -60,7 +60,7 @@ impl E2eCodegen for GleamE2eCodegen {
             .and_then(|o| o.function.as_ref())
             .cloned()
             .unwrap_or_else(|| call.function.clone());
-        let result_var = &call.result_var;
+        let result_var = call.effective_result_var();
 
         // Resolve package config.
         let gleam_pkg = e2e_config.resolve_package("gleam");

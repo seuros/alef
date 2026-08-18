@@ -65,7 +65,7 @@ pub(super) fn render_test_case(
         .and_then(|o| o.function.as_ref())
         .cloned()
         .unwrap_or_else(|| call_config.function.clone());
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     // Per-fixture call configs (e.g. `list_document_extractors`) may set
     // `result_is_simple = true` even when the default `[e2e.call]` does not.
     // Without this lookup the registry/detection wrappers (which return scalar

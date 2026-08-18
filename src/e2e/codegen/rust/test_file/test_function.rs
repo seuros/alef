@@ -101,7 +101,7 @@ pub fn render_test_function(
     let function_name = resolve_function_name_for_call(call_config);
     let function_name_snake = function_name.to_snake_case();
     let module = resolve_module_for_call(call_config, dep_name);
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let has_mock = fixture.mock_response.is_some();
 
     // Resolve Rust-specific overrides early since we need them for returns_result.
@@ -378,7 +378,7 @@ pub fn render_test_function(
         format!("{function_name}({args_str})")
     };
 
-    let result_is_tree = call_config.result_var == "tree";
+    let result_is_tree = call_config.effective_result_var() == "tree";
     // When the call config or rust override sets result_is_simple, the function
     // returns a plain type (String, Vec<T>, etc.) — field-access assertions use
     // the result var directly.

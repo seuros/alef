@@ -61,7 +61,7 @@ pub(super) fn render_test_function(
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
     let field_resolver = &call_field_resolver;
     let function_name = resolve_function_name_for_call(call_config);
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
 
     let python_override = call_config.overrides.get("python");
     // `result_is_simple` is a Rust-side property of the call's return type and

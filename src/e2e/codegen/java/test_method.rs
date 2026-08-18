@@ -88,9 +88,8 @@ pub(super) fn render_test_method(
         .and_then(|o| o.function.as_ref())
         .cloned()
         .unwrap_or_else(|| call_config.function.to_lower_camel_case());
-    let effective_result_var = &call_config.result_var;
     let function_name = effective_function_name.as_str();
-    let result_var = effective_result_var.as_str();
+    let result_var = call_config.effective_result_var();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let args: &[crate::e2e::config::ArgMapping] = recipe.args;
 

@@ -142,7 +142,7 @@ pub(super) fn render_test_case(
     } else {
         super::values::elixir_module_name(&raw_module)
     };
-    let result_var = call_config.result_var.clone();
+    let result_var = call_config.effective_result_var().to_string();
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
     // Validation-category fixtures expect engine creation itself to fail (bad config).

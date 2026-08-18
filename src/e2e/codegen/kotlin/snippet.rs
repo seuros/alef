@@ -218,15 +218,7 @@ pub(crate) fn render_snippet_body(
     };
 
     let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
-    // An unset `result_var` would render `val  = ...` -- syntactically invalid Kotlin, since the
-    // template splices the name straight into a binding. `presentation::resolve` above already
-    // defaults the same field to "result" for the printed lines, so leaving it raw here also let
-    // the two disagree about what the variable is called. ~keep
-    let result_var = if call.result_var.is_empty() {
-        "result"
-    } else {
-        &call.result_var
-    };
+    let result_var = call.effective_result_var();
     Ok(crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",
         minijinja::context! {

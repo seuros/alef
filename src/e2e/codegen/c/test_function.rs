@@ -244,11 +244,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let result_var = if call.result_var.is_empty() {
-        "result"
-    } else {
-        &call.result_var
-    };
+    let result_var = call.effective_result_var();
     let mut call_fixture = fixture.clone();
     if !expects_error {
         call_fixture.assertions.clear();

@@ -11,6 +11,8 @@ mod snippets;
 #[cfg(test)]
 mod raw_function_reads;
 #[cfg(test)]
+mod raw_result_var_reads;
+#[cfg(test)]
 mod tests;
 
 pub use call::{ArgMapping, CallConfig, CallOverride, StreamingConfig, StreamingRecipe};

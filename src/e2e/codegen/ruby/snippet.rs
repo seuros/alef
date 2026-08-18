@@ -86,7 +86,8 @@ pub(super) fn render_snippet_body(
         "ruby/snippet_body.jinja",
         minijinja::context! {
             require_path => require_path, receiver => receiver, setup_lines => setup_lines, client_factory => client_factory,
-            call_receiver => call_receiver, function => function, args => args, result_var => call.result_var,
+            call_receiver => call_receiver, function => function, args => args,
+            result_var => call.effective_result_var(),
             returns_void => call.returns_void, is_streaming => is_streaming,
             expects_error => expects_error, presentation => presentation, api_key_var => api_key_var,
         },

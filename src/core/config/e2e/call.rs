@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 /// Configuration for the function call in each test.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CallConfig {
     /// Per-call override for `result_fields`.
@@ -74,6 +74,13 @@ pub struct CallConfig {
     #[serde(default)]
     pub module: String,
     /// Variable name for the return value (default: "result").
+    ///
+    /// **Do not read this field to emit an identifier.** A TOML-loaded call always carries a
+    /// name — the serde default below supplies one — but a programmatically built call or an
+    /// explicit `result_var = ""` leaves it blank, and every emitter that splices it straight
+    /// into a binding then writes the binding with no identifier at all (`val  = ...`), which
+    /// is not valid source in any target language. Read [`CallConfig::effective_result_var`]
+    /// instead; it is the only place the blank-means-default rule is decided.
     #[serde(default = "default_result_var")]
     pub result_var: String,
     /// Whether the function is async.
@@ -202,7 +209,72 @@ pub struct CallConfig {
     pub options_type: Option<String>,
 }
 
+/// Hand-written rather than derived because one field — `result_var` — has a serde default that
+/// is not its type's default, and a derived `Default` would hand every programmatically built
+/// call an empty name while a TOML-loaded one got "result". Two derivations of the same default
+/// disagreeing is exactly how `val  = ...` reached the Kotlin emitter. Listing the fields makes
+/// the compiler demand an entry for each new one, and `default_matches_the_serde_defaults` in
+/// `tests.rs` pins the two against each other for every field, not just this one. ~keep
+impl Default for CallConfig {
+    fn default() -> Self {
+        Self {
+            result_fields: HashSet::new(),
+            fields: HashMap::new(),
+            fields_optional: HashSet::new(),
+            fields_array: HashSet::new(),
+            fields_method_calls: HashSet::new(),
+            fields_enum: HashSet::new(),
+            fields_display_as_text: HashSet::new(),
+            fields_c_types: HashMap::new(),
+            fields_json_scalar: HashSet::new(),
+            assertion_recipes: HashSet::new(),
+            function: String::new(),
+            module: String::new(),
+            result_var: default_result_var(),
+            r#async: false,
+            path: None,
+            method: None,
+            args: Vec::new(),
+            overrides: HashMap::new(),
+            returns_result: default_returns_result(),
+            returns_void: false,
+            skip_languages: Vec::new(),
+            unsupported_in: HashMap::new(),
+            result_is_simple: false,
+            result_is_vec: false,
+            result_is_array: false,
+            result_is_bytes: false,
+            streaming: None,
+            result_is_option: false,
+            result_element_is_string: false,
+            select_when: None,
+            options_type: None,
+        }
+    }
+}
+
 impl CallConfig {
+    /// The identifier a generated binding must bind this call's return value to.
+    ///
+    /// Blank counts as unset rather than as the empty identifier: a call built in code, or one
+    /// that spells `result_var = ""` in `alef.toml`, carries no name, and every emitter that
+    /// splices the raw field into a binding writes `val  = ...` / `let  = ...` — source that no
+    /// target language parses. Four emitters had each re-derived this fallback locally and the
+    /// other thirty-odd had not, so the same call rendered under two different names depending
+    /// on which emitter you read.
+    ///
+    /// Every consumer that needs "what is this call's result called here" must resolve it
+    /// through this one method, including the ones that only compare the name against a literal
+    /// — a comparison against the raw blank field silently answers for a name the generated code
+    /// never uses.
+    pub fn effective_result_var(&self) -> &str {
+        if self.result_var.trim().is_empty() {
+            DEFAULT_RESULT_VAR
+        } else {
+            &self.result_var
+        }
+    }
+
     /// The function identity this call names for `language`, or `None` when it names none.
     ///
     /// A per-language `[e2e.calls.<name>.overrides.<language>] function` outranks the base

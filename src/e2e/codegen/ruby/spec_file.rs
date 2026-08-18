@@ -128,7 +128,7 @@ pub(super) fn render_spec_file(
                 out.push_str("  end\n");
                 examples.push(out);
             } else {
-                let fixture_result_var = &fixture_call.result_var;
+                let fixture_result_var = fixture_call.effective_result_var();
                 // Use fixture.resolved_args() so per-fixture args (e.g. trait-bridge
                 // test_backend stubs) take precedence over the call-config default.
                 let fixture_args = fixture.resolved_args(fixture_call);

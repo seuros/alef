@@ -77,7 +77,7 @@ impl E2eCodegen for JavaCodegen {
             .cloned()
             .unwrap_or_else(|| config.name.to_upper_camel_case());
         let result_is_simple = overrides.is_some_and(|o| o.result_is_simple);
-        let result_var = &call.result_var;
+        let result_var = call.effective_result_var();
 
         // Resolve package config.
         let java_pkg = e2e_config.resolve_package("java");

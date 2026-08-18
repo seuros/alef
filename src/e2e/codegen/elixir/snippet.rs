@@ -97,7 +97,7 @@ pub(super) fn render_snippet_body(
     Ok(crate::e2e::template_env::render(
         "elixir/snippet_body.jinja",
         minijinja::context! {
-            setup_lines => setup_lines, call_expr => call_expr, result_var => call.result_var,
+            setup_lines => setup_lines, call_expr => call_expr, result_var => call.effective_result_var(),
             returns_void => call.returns_void, is_streaming => is_streaming,
             expects_error => expects_error, presentation => presentation,
         },

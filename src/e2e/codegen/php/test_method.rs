@@ -154,7 +154,7 @@ pub(super) fn render_test_method(
     if !has_override {
         function_name = function_name.to_lower_camel_case();
     }
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let args = recipe.args;
 

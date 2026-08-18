@@ -66,15 +66,7 @@ pub(crate) fn resolve_with(
         &fixture.tags,
         &fixture.input,
     );
-    // `CallConfig`'s `result_var` serde default only applies when the call comes from
-    // TOML; a `CallConfig::default()` leaves it empty. The Swift, Zig and C emitters all
-    // bind `result` in that case, so anchoring the accessors anywhere else would emit
-    // reads against a variable the snippet never declared. ~keep
-    let result_var = if call.result_var.is_empty() {
-        "result"
-    } else {
-        call.result_var.as_str()
-    };
+    let result_var = call.effective_result_var();
     let result_root = root_variable(language, result_var);
     let operations = docs
         .shows

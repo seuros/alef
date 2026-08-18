@@ -192,7 +192,7 @@ impl E2eCodegen for RCodegen {
         let body = if call.returns_void || expects_error || !presentation.is_empty() {
             body
         } else {
-            format!("{body}\nprint({})", call.result_var)
+            format!("{body}\nprint({})", call.effective_result_var())
         };
         let package = e2e_config
             .resolve_package("r")

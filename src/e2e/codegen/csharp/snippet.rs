@@ -149,7 +149,7 @@ pub(super) fn render_snippet_body(
             client_args => client_args,
             function_name => function_name,
             args => args,
-            result_var => call.result_var,
+            result_var => call.effective_result_var(),
             returns_void => returns_void,
             is_async => is_async,
             needs_json => needs_json,

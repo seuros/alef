@@ -245,7 +245,7 @@ impl E2eCodegen for RustE2eCodegen {
             .into_iter()
             .map(|line| {
                 if display_result {
-                    line.replacen("let _ =", &format!("let {} =", call.result_var), 1)
+                    line.replacen("let _ =", &format!("let {} =", call.effective_result_var()), 1)
                 } else {
                     line.to_string()
                 }
@@ -255,7 +255,7 @@ impl E2eCodegen for RustE2eCodegen {
             "rust/snippet_body.rs.jinja",
             minijinja::context! {
                 imports => imports, body => body, is_async => is_async, presentation => presentation,
-                display_result => display_result, result_var => call.result_var,
+                display_result => display_result, result_var => call.effective_result_var(),
                 expects_error => expects_error, returns_void => call.returns_void,
             },
         ))

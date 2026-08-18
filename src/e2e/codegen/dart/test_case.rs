@@ -145,7 +145,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         })
         .collect::<Vec<_>>()
         .join("");
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let description = escape_dart(&fixture.description);
     let fixture_id = &fixture.id;
     // `is_async` retained for future use (e.g. non-FRB backends); unused with FRB since

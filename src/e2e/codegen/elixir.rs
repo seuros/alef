@@ -67,7 +67,7 @@ impl E2eCodegen for ElixirCodegen {
         let handle_atom_list_fields = overrides
             .map(|o| &o.handle_atom_list_fields)
             .unwrap_or(&empty_atom_fields);
-        let result_var = &call.result_var;
+        let result_var = call.effective_result_var();
 
         // Check if any fixture in any group is an HTTP test.
         let has_http_tests = groups.iter().any(|g| g.fixtures.iter().any(|f| f.is_http_test()));

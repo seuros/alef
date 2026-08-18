@@ -143,7 +143,7 @@ fn render_test_fn(
         .and_then(|o| o.function.as_ref())
         .cloned()
         .unwrap_or_else(|| call_config.function.clone());
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let args = recipe.args;
     // Client factory: when set, the test instantiates a client object via
@@ -632,11 +632,7 @@ pub(super) fn render_snippet_body(
         &fixture.tags,
         &fixture.input,
     );
-    let result_var = if call.result_var.is_empty() {
-        "result"
-    } else {
-        call.result_var.as_str()
-    };
+    let result_var = call.effective_result_var();
     let expects_error = fixture
         .assertions
         .iter()

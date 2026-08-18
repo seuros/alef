@@ -52,11 +52,7 @@ pub(super) fn render(
     let module = package.to_upper_camel_case();
     let first_class_map = values::build_swift_first_class_map(type_defs, enums, e2e_config, call);
     let override_config = call.overrides.get("swift");
-    let result_var = if call.result_var.is_empty() {
-        "result"
-    } else {
-        call.result_var.as_str()
-    };
+    let result_var = call.effective_result_var();
     let mut call_fixture = fixture.clone();
     if !expects_error {
         call_fixture.assertions.clear();
@@ -97,14 +93,15 @@ pub(super) fn render(
         .take(body_line_count)
         .map(|line| line.strip_prefix("        ").unwrap_or(line))
         .map(|line| {
+            // `render_test_method` binds either `let <result_var> =` or `_ =`, never a blank
+            // `let  =`: the name comes from `CallConfig::effective_result_var`, which has no
+            // empty case. The two repairs that used to rewrite `let  =` here were a second
+            // derivation of the same blank-name rule, and they disagreed with the emitter
+            // about which of `_ =` and `let =` a blank meant. ~keep
             if !expects_error && !call.returns_void {
-                line.replacen("_ =", &format!("let {result_var} ="), 1).replacen(
-                    "let  =",
-                    &format!("let {result_var} ="),
-                    1,
-                )
+                line.replacen("_ =", &format!("let {result_var} ="), 1)
             } else {
-                line.replacen("let  =", "_ =", 1)
+                line.to_string()
             }
         })
         .filter(|line| !line.trim_start().starts_with("let _baseUrl: String? ="))

@@ -91,7 +91,7 @@ pub(super) fn render_test_case(
                 .unwrap_or_default()
         });
     let extra_args: Vec<String> = call_overrides.map(|o| o.extra_args.clone()).unwrap_or_default();
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let args = fixture.resolved_args(call_config);
 
     let raw_name = sanitize_ident(&fixture.id);
