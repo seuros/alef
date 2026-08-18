@@ -1,11 +1,151 @@
 use super::{
-    handle, refused_snippet_dir_paths, snippet_validation_needs_build_artifacts, sync_registry_versions_before_all,
-    warn_if_snippet_validation_needs_build,
+    create_once_overwrite, handle, refused_snippet_dir_paths, snippet_validation_needs_build_artifacts,
+    sync_registry_versions_before_all, warn_if_snippet_validation_needs_build,
 };
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
 use crate::cli::cache;
+use crate::core::backend::GeneratedFile;
 use crate::core::config::NewAlefConfig;
+
+/// A `composer.json` a consumer has grown past alef's placeholder: real scripts, a real
+/// autoload map. `generated_header: false` on an extension no `CommentStyle` can mark, which
+/// is the exact shape whose only protection is `write_scaffold_files_report`'s `can_skip`. ~keep
+const HAND_GROWN_COMPOSER_JSON: &str = concat!(
+    "{\n",
+    "  \"name\": \"consumer/sample-lib\",\n",
+    "  \"scripts\": { \"test\": \"vendor/bin/phpunit --testdox\" },\n",
+    "  \"autoload\": { \"psr-4\": { \"Consumer\\\\\": \"src/\" } }\n",
+    "}\n",
+);
+
+const GENERATED_COMPOSER_PLACEHOLDER: &str = concat!(
+    "{\n",
+    "  \"name\": \"alef/placeholder\",\n",
+    "  \"require\": {}\n",
+    "}\n",
+);
+
+const CREATE_ONCE_SEED_PATH: &str = "packages/php/composer.json";
+
+/// Puts the seed on disk *and* records alef as its author.
+///
+/// The record is not incidental setup: on an unmarkable extension the ownership guard refuses
+/// every pre-existing file it cannot vouch for, so without it all three tests below would pass
+/// for the wrong reason -- refused by the guard rather than skipped (or written) by
+/// `overwrite` -- and would keep passing if `overwrite` stopped being consulted at all. Each
+/// test asserts `refused_paths` is empty for the same reason. ~keep
+fn seed_hand_grown_create_once_file(base: &std::path::Path) -> std::path::PathBuf {
+    let relative = std::path::PathBuf::from(CREATE_ONCE_SEED_PATH);
+    let full = base.join(&relative);
+    std::fs::create_dir_all(full.parent().expect("seed path has a parent")).expect("create seed directory");
+    std::fs::write(&full, HAND_GROWN_COMPOSER_JSON).expect("write hand-grown seed");
+    cache::record_scaffold_owned_path(base, &full).expect("record alef ownership of the seed");
+    relative
+}
+
+fn generated_seed_placeholder(relative: std::path::PathBuf) -> GeneratedFile {
+    GeneratedFile {
+        path: relative,
+        content: GENERATED_COMPOSER_PLACEHOLDER.to_string(),
+        generated_header: false,
+    }
+}
+
+fn write_seed_with_overwrite(base: &std::path::Path, overwrite: bool) -> (String, usize) {
+    let relative = std::path::PathBuf::from(CREATE_ONCE_SEED_PATH);
+    let report = crate::cli::pipeline::write_scaffold_files_report(
+        &[generated_seed_placeholder(relative.clone())],
+        base,
+        overwrite,
+    )
+    .expect("write report");
+    assert!(
+        report.refused_paths.is_empty(),
+        "the ownership guard must not fire on a recorded path -- a refusal here would make this \
+         test blind to what `overwrite` does: {:?}",
+        report.refused_paths
+    );
+    let on_disk = std::fs::read_to_string(base.join(&relative)).expect("read seed after write");
+    (on_disk, report.changed_count())
+}
+
+/// `--clean` is a cache flag and must not widen the write path.
+///
+/// The regression it guards: `alef all --clean` is the default regeneration task in five
+/// consumer repos, and while `clean` was threaded into `write_scaffold_files_report`'s
+/// `overwrite` every one of those runs was licensed to replace a hand-grown, alef-created
+/// seed with this run's placeholder. Asserted alongside the both-flags-clear baseline so a
+/// fix that simply stopped consulting `overwrite` cannot pass this on its own -- the
+/// clobbering test below is the other half. ~keep
+#[test]
+fn clean_alone_leaves_a_pre_existing_create_once_seed_untouched() {
+    for (clean, clobber) in [(true, false), (false, false)] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        seed_hand_grown_create_once_file(base);
+
+        let (on_disk, changed) = write_seed_with_overwrite(base, create_once_overwrite(clean, clobber));
+
+        assert_eq!(
+            on_disk, HAND_GROWN_COMPOSER_JSON,
+            "--clean must not disable the create-only skip (clean={clean}, clobber={clobber})"
+        );
+        assert_eq!(
+            changed, 0,
+            "a skipped seed is not a change (clean={clean}, clobber={clobber})"
+        );
+    }
+}
+
+/// The other half: the new flag must actually do the thing `--clean` used to do, or the
+/// separation is just a removal and the capability is gone rather than moved. ~keep
+#[test]
+fn clobber_create_once_seeds_replaces_a_pre_existing_create_once_seed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path();
+    seed_hand_grown_create_once_file(base);
+
+    let (on_disk, changed) = write_seed_with_overwrite(base, create_once_overwrite(false, true));
+
+    assert_eq!(
+        on_disk, GENERATED_COMPOSER_PLACEHOLDER,
+        "--clobber-create-once-seeds must overwrite a pre-existing seed alef is recorded as owning"
+    );
+    assert_eq!(changed, 1, "an overwritten seed must be counted as a change");
+}
+
+/// THE migration path, and the only executable statement of it.
+///
+/// `--clean`'s help text tells anyone whose script depended on the old coupling to pass both
+/// flags. That sentence is a promise about behaviour, and the pre-separation behaviour is
+/// exactly `overwrite = clean`, i.e. `true` -- so the two are compared against each other on
+/// identical fixtures rather than one being restated as a literal. If `create_once_overwrite`
+/// ever answers anything but "yes" when both flags are set, the documented migration silently
+/// stops working for every consumer who followed it, and only this test notices. ~keep
+#[test]
+fn clean_and_clobber_together_reproduce_the_pre_separation_clean_behaviour() {
+    let separated_dir = tempfile::tempdir().expect("tempdir");
+    let separated_base = separated_dir.path();
+    seed_hand_grown_create_once_file(separated_base);
+    let separated = write_seed_with_overwrite(separated_base, create_once_overwrite(true, true));
+
+    let legacy_dir = tempfile::tempdir().expect("tempdir");
+    let legacy_base = legacy_dir.path();
+    seed_hand_grown_create_once_file(legacy_base);
+    // What the scaffold and docs stages passed before the separation: the raw `--clean` value. ~keep
+    let legacy = write_seed_with_overwrite(legacy_base, true);
+
+    assert_eq!(
+        separated, legacy,
+        "`--clean --clobber-create-once-seeds` must leave the tree in exactly the state the old \
+         coupled `--clean` left it in -- same bytes, same changed count"
+    );
+    assert_eq!(
+        separated.0, GENERATED_COMPOSER_PLACEHOLDER,
+        "both flags together must reach the overwriting branch, not agree on doing nothing"
+    );
+}
 
 #[test]
 fn all_generates_snippets_before_readmes_consume_them() {
@@ -521,6 +661,7 @@ fn write_e2e_defer_fixture_workspace(root: &std::path::Path, field: &str) {
 fn e2e_defer_all_command() -> Commands {
     Commands::All {
         clean: false,
+        clobber_create_once_seeds: false,
         strict: false,
         skip_frb: false,
     }
@@ -701,6 +842,7 @@ fn write_lang_manifest_fixture_workspace(root: &std::path::Path) {
 fn lang_manifest_all_command() -> Commands {
     Commands::All {
         clean: false,
+        clobber_create_once_seeds: false,
         strict: false,
         skip_frb: false,
     }

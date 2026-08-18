@@ -133,11 +133,28 @@ fn sync_registry_versions_before_all(
     pipeline::sync_registry_package_versions(config_path, &version)
 }
 
+/// The `overwrite` argument `alef all`'s create-once-bearing write stages hand to
+/// [`pipeline::write_scaffold_files_report`].
+///
+/// `clean` is taken and deliberately does not participate. Until this function existed the
+/// scaffold and docs stages passed `clean` straight through, which made one flag mean two
+/// unrelated things: "ignore cached IR" and "disable the create-only branch that leaves a
+/// pre-existing unmarked file alone". Only the second one destroys work — a hand-grown
+/// `composer.json` becomes alef's placeholder — and nothing about wanting a cache-cold rerun
+/// implies wanting that. The parameter stays in the signature so the separation is an
+/// executable fact with a test behind it rather than an absence a later edit can silently
+/// undo by reaching for the `clean` that is already in scope at both call sites. ~keep
+pub(crate) fn create_once_overwrite(clean: bool, clobber_create_once_seeds: bool) -> bool {
+    let _ = clean;
+    clobber_create_once_seeds
+}
+
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {
         Commands::All {
             clean,
+            clobber_create_once_seeds,
             skip_frb,
             strict,
         } => {
@@ -152,6 +169,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", updated) };
             }
             let _ = skip_frb;
+            let overwrite_create_once = create_once_overwrite(clean, clobber_create_once_seeds);
             let (mut workspace, mut resolved) = load_config(config_path)?;
             version_pin::check_alef_toml_version(&workspace)?;
             let registry_versions_changed = {
@@ -397,7 +415,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // `--lang`-filtered caller must not call it. ~keep
                 let previous_scaffold_paths = cache::read_scaffold_manifest(&resolved_cfg.name);
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
-                let scaffold_report = pipeline::write_scaffold_files_report(&scaffold_files, &base_dir, clean)?;
+                // The stage that actually holds create-once seeds: `packages/php/composer.json`,
+                // `crates/*-node/package.json`, `packages/java/pom.xml`, `packages/zig/build.zig`
+                // and every placeholder test file are emitted `generated_header: false`, so
+                // `can_skip` is the only thing between a hand-grown one and this run's
+                // placeholder. See `create_once_overwrite` for why `clean` no longer answers
+                // that question. ~keep
+                let scaffold_report =
+                    pipeline::write_scaffold_files_report(&scaffold_files, &base_dir, overwrite_create_once)?;
                 refusals.absorb_refusals(&scaffold_report);
                 let scaffold_count = scaffold_report.changed_count();
                 let scaffold_output_paths: Vec<PathBuf> =
@@ -721,7 +746,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // hash `doc_files` before propagating `doc_result`, not after. ~keep
                 let (doc_files, doc_result) =
                     crate::docs::generate_docs_stage(&docs_api, resolved_cfg, &doc_languages, None, &base_dir);
-                let doc_report = pipeline::write_scaffold_files_report(&doc_files, &base_dir, clean)?;
+                // Inert today and kept honest on purpose: `docs::generate_docs_stage` forces
+                // `generated_header = true` on every reference page and every extra
+                // (`cli.md`, `mcp.md`, `llms.txt`, `SKILL.md`) it emits, so `can_skip` cannot
+                // fire here whatever this argument says -- threading `clean` in was never
+                // buying the docs stage anything. Passing the same decision as the scaffold
+                // stage rather than a bare `true` means the day a docs page is emitted as a
+                // seed, it is protected by default instead of silently clobbered. ~keep
+                let doc_report = pipeline::write_scaffold_files_report(&doc_files, &base_dir, overwrite_create_once)?;
                 refusals.absorb_refusals(&doc_report);
                 let doc_count = doc_report.changed_count();
                 for file in doc_files.iter().filter(|file| file.carries_alef_marker()) {

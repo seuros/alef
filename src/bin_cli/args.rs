@@ -215,19 +215,34 @@ pub(crate) enum Commands {
     },
     /// Run all: generate + stubs + scaffold + readme + docs + sync + e2e.
     All {
-        /// Ignore cache, and overwrite pre-existing unmarked scaffold and docs files.
+        /// Ignore cache, recomputing every stage from source.
         ///
-        /// Bypasses cached results; it deletes nothing. Snippet validation session scratch under
+        /// Purely a cache flag: it deletes nothing, and it does not widen which pre-existing
+        /// files alef is allowed to write over. Snippet validation session scratch under
         /// `<cwd>/.alef/snippets/sessions/` is not cache and is not this flag's business — stale
         /// sessions there are swept on every run, with or without `--clean`.
         ///
-        /// It is ALSO threaded into `write_scaffold_files_report`'s `overwrite` for the scaffold
-        /// and docs stages, which disables the create-only branch that otherwise leaves an
-        /// already-existing unmarked file alone. Under `--clean` the ownership guard is the only
-        /// remaining protection on a hand-written scaffold file, so read this flag as widening
-        /// the write path, not merely as skipping a cache.
+        /// This flag used to ALSO be threaded into `write_scaffold_files_report`'s `overwrite`
+        /// for the scaffold and docs stages, which disabled the create-only branch that leaves
+        /// an already-existing unmarked file alone — so a routine cache-cold rerun could replace
+        /// a hand-grown seed with alef's placeholder. That behaviour now lives on
+        /// `--clobber-create-once-seeds`; pass both flags together for the old meaning.
         #[arg(long)]
         clean: bool,
+        // Deliberately the same name as `alef adopt --clobber-create-once-seeds`: the two
+        // authorise the same destruction through different doors -- adopt stamps a marker so a
+        // LATER regen replaces the file, this one replaces it on THIS run -- and one concept
+        // wearing two spellings is how `--clean` came to mean two things in the first place.
+        // Named for the damage rather than the mechanism, for the same reason as adopt's: a
+        // `--force` or `--overwrite` spelling reads as routine scope-widening, and reading it
+        // that way is exactly what put `--clean` into five consumer repos' default regeneration
+        // task. ~keep
+        /// DANGEROUS: overwrite pre-existing create-once seeds (composer.json, package.json,
+        /// placeholder test files, ...) with freshly generated content instead of leaving them
+        /// alone. Only files alef can prove it authored are affected; anything the ownership
+        /// guard cannot vouch for is still refused, with or without this flag.
+        #[arg(long)]
+        clobber_create_once_seeds: bool,
         /// Fail the run when a configured formatter's executable is not installed.
         ///
         /// By default a missing formatter is recorded as a deferred step and the run
