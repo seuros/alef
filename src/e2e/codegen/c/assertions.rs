@@ -958,9 +958,79 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
     message
 }
 
+/// What the emitter knows about the *target* function's declared parameters at the point a
+/// call configures no `args` at all -- see [`build_args_string_c`].
+///
+/// An empty `args` list is ambiguous between "this call genuinely takes zero arguments" and
+/// "nobody configured `args` for it yet", and the two need opposite renderings: `()` for one,
+/// a refusal for the other. Mirrors `ResultTypeName`'s shape in `c.rs` for the same reason --
+/// the state that tells the two apart cannot be collapsed into a `bool` without losing the
+/// case that must fail loudly. ~keep
+pub(super) enum TargetParams<'a> {
+    /// The IR resolved a signature for the call's target (a free function, or a method every
+    /// same-named IR method agrees on) -- these are its declared parameters, in order. An
+    /// empty slice means the function is genuinely zero-argument.
+    Known(&'a [crate::core::ir::ParamDef]),
+    /// No IR signature could be resolved for the target (absent IR, unresolvable name, or
+    /// disagreeing same-named methods). Too little information to tell a zero-argument call
+    /// from a missing `args` configuration, so the caller must refuse rather than guess.
+    Unknown,
+}
+
+/// Fixture "{id}" calls `{function_name}` with no configured `args`, but the target's IR
+/// signature declares real parameters -- an authoring gap, not a zero-argument call. ~keep
+fn missing_args_for_known_params_diagnostic(
+    fixture: &Fixture,
+    function_name: &str,
+    params: &[crate::core::ir::ParamDef],
+) -> String {
+    let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+    let call_key = match fixture.call.as_deref() {
+        Some(name) => format!("[crates.e2e.calls.{name}].args"),
+        None => "[crates.e2e.call].args".to_string(),
+    };
+    format!(
+        "e2e c codegen: fixture \"{id}\" calls `{function_name}` with no configured `args`, but the Rust core \
+         signature for `{function_name}` declares {count} parameter(s): {joined_names}. With no `args` \
+         configured, alef used to splice the fixture's whole `input` JSON as a single C string literal \
+         regardless of what the target actually takes, which does not compile against anything but a lone \
+         string parameter. Fix: add an `args` entry under `{call_key}` for each parameter, mapping it to the \
+         fixture input field that supplies it.",
+        id = fixture.id,
+        count = params.len(),
+        joined_names = names.join(", "),
+    )
+}
+
+/// Fixture "{id}" calls `{function_name}` with no configured `args`, and alef cannot resolve
+/// the target's IR signature at all -- refuse rather than guess whether that is a genuine
+/// zero-argument call or a missing `args` configuration. ~keep
+fn missing_args_unresolvable_signature_diagnostic(fixture: &Fixture, function_name: &str) -> String {
+    let call_key = match fixture.call.as_deref() {
+        Some(name) => format!("[crates.e2e.calls.{name}].args"),
+        None => "[crates.e2e.call].args".to_string(),
+    };
+    format!(
+        "e2e c codegen: fixture \"{id}\" calls `{function_name}` with no configured `args`, and alef could not \
+         resolve `{function_name}` against the Rust core IR, so it cannot tell a genuine zero-argument call from \
+         a missing `args` configuration -- guessing risks splicing the fixture's whole `input` JSON as one C \
+         literal against a target that takes real, typed parameters. Fix: configure `args` under `{call_key}`, \
+         one entry per parameter `{function_name}` actually takes. If it genuinely takes none, check that this \
+         call's `function` name (and any per-language override) matches a real core function or method name -- \
+         an unresolvable name is why alef cannot confirm that on its own.",
+        id = fixture.id,
+    )
+}
+
 /// Build the C argument string for the function call.
 /// When `has_options_handle` is true, json_object args are replaced with
 /// the `options_handle` pointer (which was constructed via `from_json`).
+///
+/// `target_params` decides what an empty `args` renders as: a genuinely zero-argument target
+/// (`TargetParams::Known(&[])`) emits `""` (an empty call), anything else refuses rather than
+/// fabricate an argument list the target's real parameters (or the emitter's ignorance of
+/// them) cannot justify. See [`TargetParams`].
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build_args_string_c(
     input: &serde_json::Value,
     args: &[crate::e2e::config::ArgMapping],
@@ -968,9 +1038,25 @@ pub(super) fn build_args_string_c(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     fixture: &Fixture,
-) -> String {
+    function_name: &str,
+    target_params: TargetParams<'_>,
+) -> anyhow::Result<String> {
     if args.is_empty() {
-        return json_to_c(input);
+        return match target_params {
+            TargetParams::Known([]) => Ok(String::new()),
+            TargetParams::Known(params) => {
+                anyhow::bail!(
+                    "{}",
+                    missing_args_for_known_params_diagnostic(fixture, function_name, params)
+                )
+            }
+            TargetParams::Unknown => {
+                anyhow::bail!(
+                    "{}",
+                    missing_args_unresolvable_signature_diagnostic(fixture, function_name)
+                )
+            }
+        };
     }
 
     let mut parts: Vec<String> = Vec::new();
@@ -1043,7 +1129,7 @@ pub(super) fn build_args_string_c(
         }
     }
 
-    parts.join(", ")
+    Ok(parts.join(", "))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1654,7 +1740,7 @@ fn build_c_method_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+    use crate::core::ir::{FieldDef, ParamDef, TypeDef, TypeRef};
 
     /// The neutral `FieldConfigSources` most tests want: neither `result_fields` nor
     /// `fields` has a per-call override in effect, so every diagnostic falls back to
@@ -2735,7 +2821,16 @@ mod tests {
         };
         let args = vec![test_backend_arg("SampleBackend")];
 
-        build_args_string_c(&fixture.input, &args, &HashMap::new(), &config, &[], &fixture);
+        let _ = build_args_string_c(
+            &fixture.input,
+            &args,
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "register_sample_backend",
+            TargetParams::Unknown,
+        );
     }
 
     /// An unregistered trait (no matching `[[crates.trait_bridges]]` entry) has no
@@ -2754,6 +2849,168 @@ mod tests {
         };
         let args = vec![test_backend_arg("SampleBackend")];
 
-        build_args_string_c(&fixture.input, &args, &HashMap::new(), &config, &[], &fixture);
+        let _ = build_args_string_c(
+            &fixture.input,
+            &args,
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "register_sample_backend",
+            TargetParams::Unknown,
+        );
+    }
+
+    /// Regression for the bug that shipped a `char[37]` literal against a
+    /// `TS_PACKAlefHandle` (an `int32_t`) parameter: with no `args` configured, alef
+    /// used to splice the fixture's whole `input` JSON as a single C string literal
+    /// regardless of the target's real parameters, which cannot compile against
+    /// anything the target actually takes. A genuinely zero-argument target
+    /// (`TargetParams::Known(&[])`) is the one case that must keep emitting an empty
+    /// argument list rather than refuse. ~keep
+    #[test]
+    fn should_emit_empty_parens_when_args_unconfigured_and_target_takes_no_parameters() {
+        let fixture = Fixture {
+            id: "list_ocr_backends".into(),
+            input: serde_json::json!({"cache_dir": "/tmp/sample_cache"}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+
+        let result = build_args_string_c(
+            &fixture.input,
+            &[],
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "list_ocr_backends",
+            TargetParams::Known(&[]),
+        )
+        .expect("a genuinely zero-argument target must not fail generation");
+
+        assert_eq!(
+            result, "",
+            "a zero-argument call must emit `()`, not a fabricated literal"
+        );
+    }
+
+    /// The actual defect this guards: `ts_pack_configure` takes one typed parameter
+    /// (`config`, an opaque handle), but the fixture configured no `args`. Splicing the
+    /// whole fixture `input` JSON as one C string literal produced
+    /// `ts_pack_configure("{\"cache_dir\":...}")` against `int32_t
+    /// ts_pack_configure(TS_PACKAlefHandle config)` -- an incompatible
+    /// pointer-to-integer conversion that does not compile. The emitter must refuse
+    /// with a diagnostic instead of guessing an argument it cannot construct. ~keep
+    #[test]
+    fn should_refuse_when_args_unconfigured_and_target_takes_a_typed_parameter() {
+        let fixture = Fixture {
+            id: "pack_configure_defaults".into(),
+            input: serde_json::json!({"cache_dir": "/tmp/sample_cache"}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let params = [ParamDef {
+            name: "config".into(),
+            ..ParamDef::default()
+        }];
+
+        let error = build_args_string_c(
+            &fixture.input,
+            &[],
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "ts_pack_configure",
+            TargetParams::Known(&params),
+        )
+        .expect_err("a known non-empty parameter list must not be papered over with a JSON literal")
+        .to_string();
+
+        assert!(
+            !error.contains("cache_dir"),
+            "must not leak the fixture JSON into a diagnostic that replaces splicing it: {error}"
+        );
+        assert!(error.contains("ts_pack_configure"), "must name the call: {error}");
+        assert!(error.contains("config"), "must name the unfilled parameter: {error}");
+        assert!(error.contains("args"), "must point at the `args` config knob: {error}");
+    }
+
+    /// When the IR signature cannot be resolved at all, the emitter has no basis to
+    /// tell a genuine zero-argument call from an authoring gap -- refuse rather than
+    /// guess, per the same principle `ResultTypeName::require` applies to result types.
+    #[test]
+    fn should_refuse_when_args_unconfigured_and_target_signature_is_unresolvable() {
+        let fixture = Fixture {
+            id: "mystery_call".into(),
+            input: serde_json::json!({"cache_dir": "/tmp/sample_cache"}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+
+        let error = build_args_string_c(
+            &fixture.input,
+            &[],
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "mystery_fn",
+            TargetParams::Unknown,
+        )
+        .expect_err("an unresolvable signature must not fall back to guessing")
+        .to_string();
+
+        assert!(error.contains("mystery_fn"), "must name the call: {error}");
+        assert!(error.contains("args"), "must point at the `args` config knob: {error}");
+    }
+
+    /// The load-bearing control: a call WITH properly configured `args` must keep
+    /// emitting them, unchanged, real typed literal and all. Without this test, a fix
+    /// that makes the empty-`args` path refuse (or always emit `()`) everywhere would
+    /// pass the two tests above and look correct while quietly breaking every snippet
+    /// that already configures `args` correctly -- the two failure modes above only
+    /// ever trigger on `args.is_empty()`, so nothing else in this suite would catch a
+    /// regression that clobbers the non-empty path too. ~keep
+    #[test]
+    fn should_still_emit_configured_args_unchanged_when_args_are_present() {
+        let fixture = Fixture {
+            id: "chat_basic".into(),
+            input: serde_json::json!({"text": "hello"}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let args = vec![crate::e2e::config::ArgMapping {
+            name: "text".into(),
+            field: "text".into(),
+            arg_type: "string".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+
+        // `TargetParams::Unknown` on purpose: a non-empty `args` list must render the
+        // same way regardless of whether the IR signature resolved, since the
+        // ambiguity this type exists to settle only arises when `args` is empty.
+        let result = build_args_string_c(
+            &fixture.input,
+            &args,
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "chat",
+            TargetParams::Unknown,
+        )
+        .expect("configured args must still render");
+
+        assert_eq!(
+            result, "\"hello\"",
+            "a configured string arg must still emit its real typed literal"
+        );
     }
 }

@@ -9,6 +9,7 @@ use heck::ToSnakeCase;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
+use super::assertions::TargetParams;
 use super::docs_input::render_c_docs_json;
 use super::{
     FieldConfigSources, LeafFieldCheck, build_args_string_c, c_optional_sentinel, emit_nested_accessor,
@@ -162,6 +163,21 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     {
         return super::trait_bridge_snippet::render(fixture, header, prefix, config, type_defs);
     }
+    // What the core IR says about `call`'s target parameters, if anything -- shared by
+    // both the void-call fallback below and `render_test_function_impl`'s legacy-call
+    // path, since both eventually ask `build_args_string_c` to render an `args` list
+    // that might be empty. `CallIr::signature` matches the same `core_lookup_name` key
+    // `resolve_call_info` uses to resolve `info.result_type_name`, so this asks the
+    // identical question the result-type resolution already asks of the IR -- just for
+    // parameters instead of a return type. This is only possible here because
+    // `render_snippet_body` has a `CallIr` in scope; the main e2e test-file emitter in
+    // `c.rs` calls the `render_test_function` back-compat shim directly and has no such
+    // IR to resolve, so it always renders `TargetParams::Unknown`. ~keep
+    let target_params = call
+        .core_lookup_name("c")
+        .as_deref()
+        .and_then(|name| ir.signature(name))
+        .map_or(TargetParams::Unknown, |signature| TargetParams::Known(signature.params));
     if info.returns_void {
         // The shared, language-agnostic `[crates.e2e.calls.*]` args config has no
         // concept of the C-only trailing `out_error` out-param that trait-bridge
@@ -179,7 +195,9 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
                 config,
                 type_defs,
                 fixture,
-            )]
+                &info.function_name,
+                target_params,
+            )?]
         };
         arg_parts.extend(info.extra_args.iter().cloned());
         let args = arg_parts.join(", ");
@@ -220,7 +238,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     // default. ~keep
     let config_sources = FieldConfigSources::resolve(e2e_config, call);
     let mut function = String::new();
-    render_test_function(
+    render_test_function_impl(
         &mut function,
         &call_fixture,
         prefix,
@@ -244,6 +262,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         type_defs,
         true,
         &config_sources,
+        target_params,
     )?;
     let body = assemble_snippet_body(&function, result_var, expects_error, &fixture.id)?;
     Ok(crate::e2e::template_env::render(
@@ -252,6 +271,15 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     ))
 }
 
+/// Back-compat entry point for callers that cannot supply a [`TargetParams`] -- namely the
+/// main e2e test-file emitter in `c.rs`, which calls this directly (not through
+/// [`render_snippet_body`]) and has no `CallIr` in scope at that call site to resolve one.
+/// Always renders the legacy (non-client) call's empty-`args` case as
+/// [`TargetParams::Unknown`], which is honest: this entry point genuinely has no signature
+/// to consult, so refusing an authoring gap rather than guessing is correct here even though
+/// it forecloses the `TargetParams::Known(&[])` fast path for a real zero-argument target.
+/// [`render_snippet_body`] calls [`render_test_function_impl`] directly instead, since it
+/// does have a `CallIr` to resolve a real signature from. ~keep
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_function(
     out: &mut String,
@@ -263,7 +291,7 @@ pub(super) fn render_test_function(
     field_resolver: &FieldResolver,
     fields_c_types: &HashMap<String, String>,
     fields_enum: &HashSet<String>,
-    result_type_name: &str,
+    result_type_name: &super::ResultTypeName,
     options_type_name: &str,
     client_factory: Option<&str>,
     raw_c_result_type: Option<&str>,
@@ -277,6 +305,71 @@ pub(super) fn render_test_function(
     type_defs: &[crate::core::ir::TypeDef],
     documentation_snippet: bool,
     config_sources: &FieldConfigSources,
+) -> anyhow::Result<()> {
+    render_test_function_impl(
+        out,
+        fixture,
+        prefix,
+        function_name,
+        result_var,
+        args,
+        field_resolver,
+        fields_c_types,
+        fields_enum,
+        result_type_name,
+        options_type_name,
+        client_factory,
+        raw_c_result_type,
+        c_free_fn,
+        c_engine_factory,
+        result_is_option,
+        result_is_bytes,
+        streaming,
+        extra_args,
+        config,
+        type_defs,
+        documentation_snippet,
+        config_sources,
+        TargetParams::Unknown,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_test_function_impl(
+    out: &mut String,
+    fixture: &Fixture,
+    prefix: &str,
+    function_name: &str,
+    result_var: &str,
+    args: &[crate::e2e::config::ArgMapping],
+    field_resolver: &FieldResolver,
+    fields_c_types: &HashMap<String, String>,
+    fields_enum: &HashSet<String>,
+    // `result_type_name` is the *outcome* of resolution, not a name: the branches below that
+    // never spell a result type into a symbol (streaming adapters, the `raw_c_result_type`
+    // scalar path) must keep rendering for a call the IR cannot name, while every branch that
+    // does spell one asks through `ResultTypeName::require` and fails there rather than
+    // inventing it. ~keep
+    result_type_name: &super::ResultTypeName,
+    options_type_name: &str,
+    client_factory: Option<&str>,
+    raw_c_result_type: Option<&str>,
+    c_free_fn: Option<&str>,
+    c_engine_factory: Option<&str>,
+    result_is_option: bool,
+    result_is_bytes: bool,
+    streaming: Option<bool>,
+    extra_args: &[String],
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    documentation_snippet: bool,
+    config_sources: &FieldConfigSources,
+    // What the core IR says about the target's parameters, for the legacy (non-client) call
+    // path below -- see `TargetParams` and `build_args_string_c`'s doc comment. Every other
+    // branch in this function (`c_engine_factory`, streaming, bytes, `client_factory`) builds
+    // its own argument list without going through `build_args_string_c` at all, so this is
+    // inert on those paths. ~keep
+    target_params: TargetParams<'_>,
 ) -> anyhow::Result<()> {
     let fn_name = sanitize_ident(&fixture.id);
     let description = &fixture.description;
@@ -352,7 +445,7 @@ pub(super) fn render_test_function(
             field_resolver,
             fields_c_types,
             fields_enum,
-            result_type_name,
+            result_type_name.require()?,
             config_type,
             expects_error,
             raw_c_result_type,
@@ -415,7 +508,7 @@ pub(super) fn render_test_function(
             result_var,
             args,
             options_type_name,
-            result_type_name,
+            result_type_name.require()?,
             factory,
             &client_owner_type,
             expects_error,
@@ -436,6 +529,10 @@ pub(super) fn render_test_function(
             );
             return Ok(());
         };
+        // This branch spells the result type into the request-type derivation, every field
+        // accessor, and the trailing `_free`; resolve it once, up front, so an unnameable
+        // result stops the branch before any of the three is written. ~keep
+        let result_type_name = result_type_name.require()?;
         let mut request_handle_vars: Vec<(String, String)> = Vec::new(); // (arg_name, var_name)
         // Inline argument expressions appended after request handles in the
         // method call (e.g. literal C strings for `string` args, `NULL` for
@@ -984,6 +1081,14 @@ pub(super) fn render_test_function(
     // Legacy (non-client) path: call the function directly.
     // Used for libraries that expose standalone FFI functions.
 
+    // Everything from here on treats the result as an opaque handle of a *named* type: the
+    // capsule lookup keys on it, the field accessors prefix with it, and the cleanup call is
+    // `{prefix}_{result_snake}_free`. This is the path that emitted `{prefix}_list_ocr_backends_free`
+    // for a family whose header declares no `_free` at all, so the name has to be real or the
+    // generation has to fail — the earlier `raw_c_result_type` and streaming branches already
+    // returned, and neither of them names a result type. ~keep
+    let result_type_name = result_type_name.require()?;
+
     // Use the function name directly — the override already includes the prefix
     // (e.g. "htm_convert"), so we must NOT prepend it again.
     let prefixed_fn = function_name.to_string();
@@ -1046,7 +1151,16 @@ pub(super) fn render_test_function(
         }
     }
 
-    let args_str = build_args_string_c(&fixture.input, args, &typed_arg_handles, config, type_defs, fixture);
+    let args_str = build_args_string_c(
+        &fixture.input,
+        args,
+        &typed_arg_handles,
+        config,
+        type_defs,
+        fixture,
+        function_name,
+        target_params,
+    )?;
 
     // Host-capsule passthrough: a free function whose result type is a configured
     // capsule (e.g. `get_language` → `const TSLanguage *`) returns a borrowed,
