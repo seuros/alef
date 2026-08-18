@@ -225,4 +225,3 @@ pub(super) fn cleanup_legacy_scratch_directories(working_directory: &Path, timeo
     }
     Ok(())
 }
-

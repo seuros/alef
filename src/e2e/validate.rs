@@ -1332,7 +1332,11 @@ mod field_classification_tests {
 
         let errors = errors_only(&diagnostics);
         assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
-        assert!(errors[0].message.contains("subscripts it"), "got: {}", errors[0].message);
+        assert!(
+            errors[0].message.contains("subscripts it"),
+            "got: {}",
+            errors[0].message
+        );
         assert!(errors[0].message.contains("String"), "got: {}", errors[0].message);
     }
 

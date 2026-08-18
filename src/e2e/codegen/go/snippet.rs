@@ -373,7 +373,9 @@ fn bound_options_argument(
         .rev()
         .find(|arg| arg.arg_type == "json_object")
         .map(|arg| arg.name.clone())?;
-    let binds_it = setup_lines.iter().any(|line| line.starts_with(&format!("{candidate} := ")));
+    let binds_it = setup_lines
+        .iter()
+        .any(|line| line.starts_with(&format!("{candidate} := ")));
     let passes_it = args.ends_with(&format!(", &{candidate}")) || args.ends_with(&format!(", {candidate}"));
     // The binding is only reusable when it really is an options object; a `json_object` argument of
     // some other DTO type carries no `Visitor` field to set. ~keep

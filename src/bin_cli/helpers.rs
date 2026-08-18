@@ -858,7 +858,10 @@ pub(crate) fn collect_managed_surface(
     });
     let readme_stage: Stage<'_> = Box::new(|| {
         let readme_languages = crate::readme::expand_configured_readme_languages(config, languages);
-        Ok((crate::cli::pipeline::readme(api, config, &readme_languages)?, Vec::new()))
+        Ok((
+            crate::cli::pipeline::readme(api, config, &readme_languages)?,
+            Vec::new(),
+        ))
     });
     // Neither `alef adopt` nor `alef verify` asks whether a snippet compiles, type-checks, or
     // runs -- they ask what file surface alef's configuration owns, and that compile step
@@ -923,7 +926,6 @@ fn stage_failure_for(
         .collect();
     (files, failures)
 }
-
 
 /// Multi-crate variant of [`verify_walk`].
 ///

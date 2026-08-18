@@ -1504,7 +1504,10 @@ mod discard_rebinding_tests {
     #[test]
     fn a_deferred_discard_is_not_a_rebindable_call_statement() {
         assert_eq!(discarded_call_statement("    defer _ = gpa.deinit();"), None);
-        assert_eq!(discarded_call_statement("    errdefer _ = allocator.free(buffer);"), None);
+        assert_eq!(
+            discarded_call_statement("    errdefer _ = allocator.free(buffer);"),
+            None
+        );
     }
 
     #[test]

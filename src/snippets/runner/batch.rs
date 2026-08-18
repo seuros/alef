@@ -275,9 +275,21 @@ mod tests {
     #[test]
     fn a_batch_budget_grows_with_the_number_of_snippets_it_covers() {
         assert_eq!(batch_timeout_secs(120, 1), 120, "a single snippet gets one budget");
-        assert_eq!(batch_timeout_secs(120, 8), 120, "a batch under the divisor still gets one");
-        assert_eq!(batch_timeout_secs(120, 9), 240, "one snippet past the divisor buys the next grant");
-        assert_eq!(batch_timeout_secs(120, 283), 4320, "a full language's batch gets 36 grants");
+        assert_eq!(
+            batch_timeout_secs(120, 8),
+            120,
+            "a batch under the divisor still gets one"
+        );
+        assert_eq!(
+            batch_timeout_secs(120, 9),
+            240,
+            "one snippet past the divisor buys the next grant"
+        );
+        assert_eq!(
+            batch_timeout_secs(120, 283),
+            4320,
+            "a full language's batch gets 36 grants"
+        );
     }
 
     /// An empty group cannot be charged zero: a zero budget is an immediate timeout, and the

@@ -117,7 +117,6 @@ fn hash_working_tree_file(relative: &Path, path: &Path) -> Result<blake3::Hash> 
     Ok(hasher.finalize())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,5 +199,4 @@ mod tests {
             session_fingerprint(&changed).expect("changed fingerprint")
         );
     }
-
 }

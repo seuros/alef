@@ -744,7 +744,10 @@ mod tests {
         );
 
         assert!(statements.contains("System.Console.WriteLine(2);"), "{statements}");
-        assert!(declarations.is_empty(), "nothing here is a trailing declaration: {declarations}");
+        assert!(
+            declarations.is_empty(),
+            "nothing here is a trailing declaration: {declarations}"
+        );
     }
 
     #[test]
