@@ -121,6 +121,24 @@ fn dispatch_groups(
         .collect()
 }
 
+/// How much of a per-snippet budget a batch is expected to save.
+///
+/// A batch of N still compiles N snippets' worth of code, so its floor is one snippet's budget; what
+/// it removes is N-1 toolchain startups, not the work. Charging it a flat `timeout_secs` -- the
+/// per-invocation budget `validate_one` uses -- was correct only while a "batch" meant rust's handful
+/// of snippets; with every language batching, one `dotnet build` or `tsc` now covers several hundred,
+/// and the group would be killed as a toolchain timeout long before the compiler was finished. The
+/// divisor keeps the grant well under N x the per-snippet budget, because avoiding N startups is
+/// precisely why a batch is faster than the serial path it replaces. ~keep
+const BATCH_TIMEOUT_SNIPPETS_PER_BUDGET: u64 = 8;
+
+/// The wall-clock budget for one batched invocation covering `snippet_count` snippets.
+fn batch_timeout_secs(per_snippet_secs: u64, snippet_count: usize) -> u64 {
+    let count = u64::try_from(snippet_count).unwrap_or(u64::MAX);
+    let grants = count.div_ceil(BATCH_TIMEOUT_SNIPPETS_PER_BUDGET).max(1);
+    per_snippet_secs.saturating_mul(grants)
+}
+
 fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize]) -> Vec<(usize, ValidationResult)> {
     let (language, session_target, level) = key;
     let validator = context.registry.get(*language).expect("batch group validator");
@@ -129,10 +147,11 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         .iter()
         .map(|index| &context.snippets[*index])
         .collect::<Vec<_>>();
+    let timeout_secs = batch_timeout_secs(context.config.timeout_secs, batch_snippets.len());
     tracing::info!(
         language = %language,
         snippet_count = batch_snippets.len(),
-        timeout_secs = context.config.timeout_secs,
+        timeout_secs,
         "Starting batched snippet validation"
     );
     let started = Instant::now();
@@ -143,6 +162,7 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         session_target.as_deref(),
         *level,
         &batch_snippets,
+        timeout_secs,
     );
     // `supports_batching` only screens out languages that never batch; a validator that
     // does support it (rust) can still decline a specific group — e.g. `Run` snippets, which
@@ -186,9 +206,9 @@ fn run_batch(
     session_target: Option<&str>,
     level: ValidationLevel,
     batch_snippets: &[&Snippet],
+    timeout_secs: u64,
 ) -> Option<Result<BatchValidation>> {
-    let validation =
-        || validator.validate_batch_in_session(batch_snippets, level, context.config.timeout_secs, session);
+    let validation = || validator.validate_batch_in_session(batch_snippets, level, timeout_secs, session);
     match session_target.and_then(|value| context.session_locks.get(value)) {
         Some(lock) => lock.lock().ok().and_then(|_guard| validation()),
         None => validation(),
@@ -247,6 +267,40 @@ fn finalize_group(
 
 #[cfg(test)]
 mod tests {
+    use super::batch_timeout_secs;
+
+    /// A batch of several hundred snippets is one invocation of one compiler covering all of them.
+    /// Charging it the per-snippet budget killed it as a toolchain timeout long before the compiler
+    /// could finish, which is a failure mode batching itself introduced. ~keep
+    #[test]
+    fn a_batch_budget_grows_with_the_number_of_snippets_it_covers() {
+        assert_eq!(batch_timeout_secs(120, 1), 120, "a single snippet gets one budget");
+        assert_eq!(batch_timeout_secs(120, 8), 120, "a batch under the divisor still gets one");
+        assert_eq!(batch_timeout_secs(120, 9), 240, "one snippet past the divisor buys the next grant");
+        assert_eq!(batch_timeout_secs(120, 283), 4320, "a full language's batch gets 36 grants");
+    }
+
+    /// An empty group cannot be charged zero: a zero budget is an immediate timeout, and the
+    /// grouping step can hand this function a group it later declines.
+    #[test]
+    fn an_empty_batch_still_gets_one_whole_budget() {
+        assert_eq!(batch_timeout_secs(120, 0), 120);
+    }
+
+    /// The grant must stay well under N x the per-snippet budget: a batch's whole point is that it
+    /// pays one toolchain startup instead of N, so granting it the serial path's full budget would
+    /// let a genuinely hung compiler run for hours before the timeout fired. ~keep
+    #[test]
+    fn a_batch_budget_stays_far_below_the_serial_path_it_replaces() {
+        let serial = 120 * 283;
+        let granted = batch_timeout_secs(120, 283);
+        assert!(
+            granted <= serial / 4,
+            "a 283-snippet batch was granted {granted}s against the {serial}s the serial path would spend; \
+             the divisor is what keeps a hung compiler from running for hours before the timeout fires"
+        );
+    }
+
     use crate::snippets::runner::{RunnerConfig, run_validation};
     use crate::snippets::types::{
         Language, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel, ValidationResult,

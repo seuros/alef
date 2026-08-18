@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Zig packages no longer search an FFI include directory guessed from the crate name.** `scaffold_zig`
+  started deriving the `-Dffi_include_path` default from `[crates.output] ffi`, but `packages/zig/build.zig`
+  is a create-once seed, so every repo scaffolded before that kept searching `crates/<crate-name>-ffi/include`
+  forever. Where that is not the real FFI crate directory the binding's `@cInclude` never resolves and
+  `zig build` — along with every generated Zig documentation snippet — fails with `C import failed` /
+  `'<header>.h' not found`. A migration now repairs the default in place, and only when it still matches
+  the crate-name-derived shape, so a consumer who repointed the option keeps their value.
+- **Generated `build.zig` resolves its FFI library and include defaults against its own build root.** Both
+  are attached with `.{ .cwd_relative = ... }`, which zig resolves against the invoking process's working
+  directory, so the raw relative defaults only found anything when zig ran from inside `packages/zig`:
+  `zig build --build-file packages/zig/build.zig` from the repo root failed to open `../../target/release`,
+  and consuming the package as a `.path` dependency — which is exactly how the Zig snippet validator builds
+  it — failed to find the header. The Zig snippet validator reads the rebased binding back correctly, and
+  now resolves manifest-declared include paths against the manifest's own directory rather than the
+  session's working directory.
+
 - **`alef adopt` no longer lets one unusable target cancel every remaining one.** `run` bails whenever a
   target resolves to nothing adoptable — no match, or (far more common on a repo-wide sweep) only
   create-once seeds — and that error propagated straight out of the per-target loop. A single `config.m4`
@@ -25,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A batched invocation's timeout scales with the number of snippets it covers.** `timeout_secs` is a
+  per-invocation budget, and while only Rust batched a "batch" was a handful of snippets. Now that one
+  `tsc` or `dotnet build` covers a language's several hundred, a flat grant would kill the group as a
+  toolchain timeout long before the compiler finished — a failure mode batching itself introduced. The
+  grant stays far below the serial path's total, since paying one startup instead of N is the whole point.
 - **Snippet batch groups and session preparation now run concurrently.** Batch groups holding different
   session locks were dispatched from a plain sequential loop, so the whole pass cost the sum of every
   language rather than the slowest one; group results are now merged back at their snippet positions
