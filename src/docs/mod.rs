@@ -621,11 +621,15 @@ fn enforce_snippet_summary(
     summary: &crate::snippets::types::RunSummary,
 ) -> anyhow::Result<()> {
     if summary.unavailable > 0 && strict {
+        let toolchain_missing = summary.unavailable - summary.unresolved_dependency;
         anyhow::bail!(
-            "strict snippet validation failed for crate `{}`: {} validation(s) unavailable{}",
+            "strict snippet validation failed for crate `{}`: {} unavailable ({} unresolved dependency, {} \
+             toolchain missing){}",
             crate_name,
             summary.unavailable,
-            attribute_results(summary, crate::snippets::types::SnippetStatus::Unavailable)
+            summary.unresolved_dependency,
+            toolchain_missing,
+            attribute_unavailable(summary)
         );
     }
     if summary.capability_capped > 0 {
@@ -656,9 +660,17 @@ fn enforce_snippet_summary(
         );
     }
     if summary.unavailable > 0 {
+        let toolchain_missing = summary.unavailable - summary.unresolved_dependency;
         tracing::warn!(
-            "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable",
-            summary.unavailable
+            unavailable = summary.unavailable,
+            unresolved_dependency = summary.unresolved_dependency,
+            toolchain_missing,
+            "docs.snippets skipped {} snippet validation(s) because required toolchains were unavailable ({} \
+             unresolved dependency, {} toolchain missing){}",
+            summary.unavailable,
+            summary.unresolved_dependency,
+            toolchain_missing,
+            attribute_unavailable(summary)
         );
     }
     if summary.has_failures() {
@@ -727,6 +739,50 @@ fn attribute_declared_capped(summary: &crate::snippets::types::RunSummary) -> St
     attribute(summary, |result| {
         result.downgrade_reason == Some(crate::snippets::types::DowngradeReason::Declared)
     })
+}
+
+/// Per-language counts for `Unavailable` results, split by cause. Deliberately not
+/// `attribute_results`: the remediation for `unresolved_dependency` is "run `alef build`" and for
+/// a plain toolchain gap is "install the toolchain", and both apply to the whole language batch,
+/// not to one snippet — three sample ids and a `+N more` told a consumer nothing a count didn't
+/// already, since the fix is the same for every snippet in the batch. This also sidesteps two bugs
+/// `attribute_results` had for this status: its `[reasons]` bracket reads `downgrade_reason`,
+/// which is `None` for every `Unavailable` result by construction (see the `debug_assert!` in
+/// `runner::finalize_result`), so the bracket was always empty; and its `(requested -> effective)`
+/// arrow implied a level downgrade that never happened here — `Unavailable` results carry no
+/// downgrade at all. ~keep
+fn attribute_unavailable(summary: &crate::snippets::types::RunSummary) -> String {
+    #[derive(Default)]
+    struct LanguageCounts {
+        unresolved_dependency: usize,
+        toolchain_missing: usize,
+    }
+
+    let mut by_language: BTreeMap<String, LanguageCounts> = BTreeMap::new();
+    for result in summary
+        .results
+        .iter()
+        .filter(|result| result.status == crate::snippets::types::SnippetStatus::Unavailable)
+    {
+        let entry = by_language.entry(result.snippet.language.to_string()).or_default();
+        if result.unresolved_dependency {
+            entry.unresolved_dependency += 1;
+        } else {
+            entry.toolchain_missing += 1;
+        }
+    }
+    if by_language.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    for (language, counts) in by_language {
+        out.push_str(&format!(
+            "\n  {language}: {} unresolved dependency, {} toolchain missing",
+            counts.unresolved_dependency, counts.toolchain_missing
+        ));
+    }
+    out
 }
 
 fn attribute(

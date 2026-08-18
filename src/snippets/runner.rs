@@ -828,6 +828,7 @@ fn finalize_result(
     let mut result = result(snippet, status, config.level, effective_level, message, duration_ms);
     result.capability_capped = classification.capability_capped;
     result.downgrade_reason = classification.downgrade_reason;
+    result.unresolved_dependency = unresolved_dependency;
     if let Some(cache) = config.cache_dir.clone().map(ValidationCache::new)
         && let Err(error) = cache.store(
             snippet,
@@ -2024,5 +2025,70 @@ mod tests {
         assert_eq!(failure_preview(Some("  \n\n ")), "<no validator output>");
         assert_eq!(failure_preview(None), "<no validator output>");
         assert_eq!(failure_preview(Some("first\n\nsecond")), "first | second");
+    }
+
+    struct DependencyFailingValidator;
+
+    impl SnippetValidator for DependencyFailingValidator {
+        fn language(&self) -> crate::snippets::types::Language {
+            crate::snippets::types::Language::TypeScript
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn validate(
+            &self,
+            _snippet: &Snippet,
+            _level: ValidationLevel,
+            _timeout_secs: u64,
+        ) -> Result<(SnippetStatus, Option<String>)> {
+            unreachable!("this test drives finalize_result directly, not through validate")
+        }
+
+        fn max_level(&self) -> ValidationLevel {
+            ValidationLevel::Run
+        }
+
+        fn is_dependency_error(&self, error_output: &str) -> bool {
+            error_output.contains("Cannot find module")
+        }
+    }
+
+    /// The bug this guards: `finalize_result` computes `unresolved_dependency` as a local, uses it
+    /// to reclassify `status` and build `message`, then only ever copies `capability_capped` and
+    /// `downgrade_reason` onto the `ValidationResult` it returns — never `unresolved_dependency`
+    /// itself, so the field stayed `false` on every result the real producer ever built. The
+    /// pre-existing guard in `types.rs` (`unresolved_dependency_is_a_reconcilable_subset_of_
+    /// unavailable`) hand-builds a `ValidationResult` and passes the flag in as a parameter, so it
+    /// only ever exercises `RunSummary::from_results` — never `finalize_result` — and stayed green
+    /// through the whole regression. This test drives the real producer instead: a `Fail` outcome
+    /// whose message the validator's own `is_dependency_error` recognizes, at a level above
+    /// `Syntax`, must come back `Unavailable` with `unresolved_dependency` set on the
+    /// `ValidationResult` `finalize_result` actually returns. ~keep
+    #[test]
+    fn finalize_result_sets_unresolved_dependency_on_the_returned_result() {
+        let snippet = failing_snippet(crate::snippets::types::Language::TypeScript);
+        let validator = DependencyFailingValidator;
+        let config = RunnerConfig {
+            level: ValidationLevel::Compile,
+            cache_dir: None,
+            ..RunnerConfig::default()
+        };
+        let outcome = ValidationOutcome {
+            status: SnippetStatus::Fail,
+            message: Some("error TS2307: Cannot find module 'widgets'".to_string()),
+            duration_ms: 5,
+        };
+
+        let result = finalize_result(&snippet, &validator, &config, None, ValidationLevel::Compile, outcome);
+
+        assert_eq!(result.status, SnippetStatus::Unavailable, "got: {result:?}");
+        assert!(
+            result.unresolved_dependency,
+            "finalize_result must set unresolved_dependency on the ValidationResult it returns, not just use it \
+             locally to reclassify status and message"
+        );
     }
 }

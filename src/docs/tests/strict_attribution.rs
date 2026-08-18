@@ -1,4 +1,4 @@
-use crate::docs::{attribute_capability_capped, attribute_declared_capped, attribute_results};
+use crate::docs::{attribute_capability_capped, attribute_declared_capped, attribute_results, attribute_unavailable};
 use crate::snippets::types::{
     DowngradeReason, Language, RunSummary, Snippet, SnippetMetadata, SnippetStatus, SourceOrigin, ValidationLevel,
     ValidationResult,
@@ -30,6 +30,17 @@ fn declared_capped(id: &str, language: Language) -> ValidationResult {
         downgrade_reason: Some(DowngradeReason::Declared),
         ..result(id, language, SnippetStatus::Pass)
     }
+}
+
+fn unresolved_dependency(id: &str, language: Language) -> ValidationResult {
+    ValidationResult {
+        unresolved_dependency: true,
+        ..result(id, language, SnippetStatus::Unavailable)
+    }
+}
+
+fn toolchain_missing(id: &str, language: Language) -> ValidationResult {
+    result(id, language, SnippetStatus::Unavailable)
 }
 
 fn result(id: &str, language: Language, status: SnippetStatus) -> ValidationResult {
@@ -223,4 +234,51 @@ fn attribution_declared_capped_does_not_absorb_capability_capped_results() {
     let detail = attribute_declared_capped(&summary);
 
     assert_eq!(detail, "", "got: {detail}");
+}
+
+/// `Unavailable` results get counts per language and cause, not sample ids: the remediation
+/// ("run `alef build`" vs. "install the toolchain") applies to the whole language batch, so a
+/// sample id told a consumer nothing a count didn't already.
+#[test]
+fn attribution_unavailable_counts_by_language_and_cause() {
+    let summary = RunSummary::from_results(vec![
+        unresolved_dependency("fixture_ts_import", Language::TypeScript),
+        unresolved_dependency("fixture_ts_import_2", Language::TypeScript),
+        toolchain_missing("fixture_zig_missing", Language::Zig),
+    ]);
+
+    let detail = attribute_unavailable(&summary);
+
+    assert!(
+        detail.contains("typescript: 2 unresolved dependency, 0 toolchain missing"),
+        "got: {detail}"
+    );
+    assert!(
+        detail.contains("zig: 0 unresolved dependency, 1 toolchain missing"),
+        "got: {detail}"
+    );
+}
+
+/// Regression for the bug this whole fix targets: `attribute_results` read `downgrade_reason`
+/// for its `[reasons]` bracket, which `finalize_result` never populates for `Unavailable` (see
+/// the `debug_assert!` guarding `classify_result`), and rendered a `(requested -> effective)`
+/// arrow that implied a level downgrade `Unavailable` results never have. `attribute_unavailable`
+/// must not carry either artifact forward. ~keep
+#[test]
+fn attribution_unavailable_has_no_empty_reason_bracket_or_misleading_arrow() {
+    let summary = RunSummary::from_results(vec![unresolved_dependency("fixture_ts_import", Language::TypeScript)]);
+
+    let detail = attribute_unavailable(&summary);
+
+    assert!(!detail.contains('['), "no dangling reason bracket, got: {detail}");
+    assert!(!detail.contains("->"), "no level-transition arrow, got: {detail}");
+    assert!(!detail.contains("fixture_ts_import"), "no sample ids, got: {detail}");
+}
+
+/// No matching results means no trailing detail, matching `attribute_results`'s empty behavior.
+#[test]
+fn attribution_unavailable_is_empty_when_nothing_matches() {
+    let summary = RunSummary::from_results(vec![result("fixture_passed", Language::C, SnippetStatus::Pass)]);
+
+    assert_eq!(attribute_unavailable(&summary), "");
 }
