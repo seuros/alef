@@ -958,14 +958,20 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
     message
 }
 
-/// What the emitter knows about the *target* function's declared parameters at the point a
-/// call configures no `args` at all -- see [`build_args_string_c`].
+/// What the emitter knows about the *target* function's declared parameters -- see
+/// [`build_args_string_c`].
 ///
 /// An empty `args` list is ambiguous between "this call genuinely takes zero arguments" and
 /// "nobody configured `args` for it yet", and the two need opposite renderings: `()` for one,
 /// a refusal for the other. Mirrors `ResultTypeName`'s shape in `c.rs` for the same reason --
 /// the state that tells the two apart cannot be collapsed into a `bool` without losing the
 /// case that must fail loudly. ~keep
+///
+/// `Known` is also the only state that can answer the *other* question a rendered argument
+/// raises: whether the value's lowering matches the type of the parameter it lands in. An
+/// argument list of the right length is not an argument list of the right types, and only a
+/// resolved signature can tell those apart -- see [`ensure_arg_matches_param_type`]. ~keep
+#[derive(Clone, Copy)]
 pub(super) enum TargetParams<'a> {
     /// The IR resolved a signature for the call's target (a free function, or a method every
     /// same-named IR method agrees on) -- these are its declared parameters, in order. An
@@ -988,6 +994,17 @@ pub(super) enum TargetParams<'a> {
     Unresolvable,
 }
 
+/// The `alef.toml` key whose `args` list governs this fixture's call, named so every
+/// diagnostic below points the operator at the table they actually have to edit -- the
+/// per-call `[crates.e2e.calls.<name>]` one when the fixture selects a named call, the
+/// default `[crates.e2e.call]` otherwise. ~keep
+fn args_config_key(fixture: &Fixture) -> String {
+    match fixture.call.as_deref() {
+        Some(name) => format!("[crates.e2e.calls.{name}].args"),
+        None => "[crates.e2e.call].args".to_string(),
+    }
+}
+
 /// Fixture "{id}" calls `{function_name}` with no configured `args`, but the target's IR
 /// signature declares real parameters -- an authoring gap, not a zero-argument call. ~keep
 fn missing_args_for_known_params_diagnostic(
@@ -996,10 +1013,7 @@ fn missing_args_for_known_params_diagnostic(
     params: &[crate::core::ir::ParamDef],
 ) -> String {
     let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-    let call_key = match fixture.call.as_deref() {
-        Some(name) => format!("[crates.e2e.calls.{name}].args"),
-        None => "[crates.e2e.call].args".to_string(),
-    };
+    let call_key = args_config_key(fixture);
     format!(
         "e2e c codegen: fixture \"{id}\" calls `{function_name}` with no configured `args`, but the Rust core \
          signature for `{function_name}` declares {count} parameter(s): {joined_names}. With no `args` \
@@ -1017,10 +1031,7 @@ fn missing_args_for_known_params_diagnostic(
 /// the target's IR signature at all -- refuse rather than guess whether that is a genuine
 /// zero-argument call or a missing `args` configuration. ~keep
 fn missing_args_unresolvable_signature_diagnostic(fixture: &Fixture, function_name: &str) -> String {
-    let call_key = match fixture.call.as_deref() {
-        Some(name) => format!("[crates.e2e.calls.{name}].args"),
-        None => "[crates.e2e.call].args".to_string(),
-    };
+    let call_key = args_config_key(fixture);
     format!(
         "e2e c codegen: fixture \"{id}\" calls `{function_name}` with no configured `args`, and alef could not \
          resolve `{function_name}` against the Rust core IR, so it cannot tell a genuine zero-argument call from \
@@ -1033,6 +1044,130 @@ fn missing_args_unresolvable_signature_diagnostic(fixture: &Fixture, function_na
     )
 }
 
+/// The IR type name a C parameter carries as an opaque `AlefHandle` rather than as a literal.
+///
+/// Mirrors `backends::ffi::type_map::c_param_type_with_paths_and_enums`, the mapper that
+/// actually spells the exported header: a bare `Named` and an `Optional<Named>` cross the C ABI
+/// as `AlefHandle`, and nothing else does. `Vec<Named>` and `Map<_, Named>` cross as a JSON
+/// `*const c_char`, so this deliberately does NOT unwrap through them the way `c.rs`'s
+/// `named_type` does for the `element_type` backfill -- unwrapping there would reject arguments
+/// whose JSON string literal is exactly what the parameter wants. ~keep
+fn handle_param_type_name(ty: &crate::core::ir::TypeRef) -> Option<&str> {
+    match ty {
+        crate::core::ir::TypeRef::Named(name) => Some(name),
+        crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
+            crate::core::ir::TypeRef::Named(name) => Some(name),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// How much of the offending literal [`handle_param_type_mismatch_diagnostic`] quotes back.
+///
+/// The value is named so the operator can find the `args` entry that produced it, but a
+/// fixture `input` can be arbitrarily large and the diagnostic is not a place to reprint it. ~keep
+const MAX_DIAGNOSTIC_VALUE_CHARS: usize = 80;
+
+/// Fixture "{id}" maps an `args` entry onto a parameter the C ABI exports as an opaque
+/// handle, but the fixture value lowers to a plain C literal. ~keep
+fn handle_param_type_mismatch_diagnostic(
+    fixture: &Fixture,
+    function_name: &str,
+    arg: &crate::e2e::config::ArgMapping,
+    param: &crate::core::ir::ParamDef,
+    param_type: &crate::core::ir::TypeDef,
+    rendered: &str,
+) -> String {
+    let call_key = args_config_key(fixture);
+    let quoted: String = rendered.chars().take(MAX_DIAGNOSTIC_VALUE_CHARS).collect();
+    let elided = if quoted.len() < rendered.len() { "..." } else { "" };
+    let type_name = &param_type.name;
+    let mut message = format!(
+        "e2e c codegen: fixture \"{id}\" maps `args` entry \"{arg_name}\" (type = \"{arg_type}\", field = \
+         \"{field}\") onto parameter `{param_name}` of `{function_name}`, which the Rust core declares as \
+         `{type_name}` and the C ABI exports as `AlefHandle` -- an unsigned integer handle, not a pointer or \
+         a string. The fixture value lowers to the C literal {quoted}{elided}, and passing a literal where a \
+         handle is expected does not compile (`incompatible pointer to integer conversion`). A handle only \
+         exists once something constructs it, and alef will not fabricate one.",
+        id = fixture.id,
+        arg_name = arg.name,
+        arg_type = arg.arg_type,
+        field = arg.field,
+        param_name = param.name,
+    );
+    if arg.arg_type == "json_object" {
+        let _ = write!(
+            message,
+            " This entry already declares `type = \"json_object\"`, so the gap is on alef's side: this call \
+             path rendered the arguments without constructing any typed handle first (the `returns_void` \
+             snippet path in `c/test_function.rs` passes an empty handle map, unlike the free-function path, \
+             which emits the `from_json` construction ahead of the call). Until that path constructs handles, \
+             this fixture needs an extension-owned documentation recipe for C, or a documented \
+             `coverage_exceptions` entry."
+        );
+    } else if param_type.has_serde {
+        let _ = write!(
+            message,
+            " Fix: set `type = \"json_object\"` and `element_type = \"{type_name}\"` on that entry under \
+             {call_key}, so alef constructs the handle with the generated `from_json` helper and passes that \
+             instead of the literal."
+        );
+    } else {
+        let _ = write!(
+            message,
+            " `{type_name}` derives no serde, so the FFI crate exports no `from_json` constructor for it and \
+             `type = \"json_object\"` would name a symbol that does not exist. This fixture needs an \
+             extension-owned documentation recipe for C, or a documented `coverage_exceptions` entry."
+        );
+    }
+    message
+}
+
+/// Refuse an argument whose lowering contradicts the type of the parameter it lands in.
+///
+/// The sibling refusal above covers the ABSENCE of `args` -- "no args configured, do not
+/// fabricate an argument list". This covers the opposite case, which nothing checked: `args`
+/// are present, so the arity is satisfied and no refusal fires, but the value is rendered by
+/// `json_to_c` with no reference whatsoever to what the parameter is declared to be. A fixture
+/// `input` object lowered that way becomes a C string literal, and against a parameter the FFI
+/// exports as `AlefHandle` that is an int-conversion error, not a working call.
+///
+/// The check is deliberately narrow, because a false refusal deletes published documentation:
+/// it fires only when the IR both names the parameter's type and carries a `TypeDef` for it.
+/// An IR enum is an `EnumDef`, never a `TypeDef`, and enum-typed `Named` parameters cross as
+/// `i32` rather than as a handle -- so a name that matches no `TypeDef` cannot be proven to be
+/// a handle and is left alone. Parameter matching follows `resolve_call_info`'s `element_type`
+/// backfill in `c.rs` exactly (by name, else positionally); the two must agree about which
+/// parameter an `args` entry fills or they would be reasoning about different parameters. ~keep
+fn ensure_arg_matches_param_type(
+    fixture: &Fixture,
+    function_name: &str,
+    arg: &crate::e2e::config::ArgMapping,
+    index: usize,
+    params: &[crate::core::ir::ParamDef],
+    type_defs: &[crate::core::ir::TypeDef],
+    rendered: &str,
+) -> anyhow::Result<()> {
+    let Some(param) = params
+        .iter()
+        .find(|param| param.name == arg.name)
+        .or_else(|| params.get(index))
+    else {
+        return Ok(());
+    };
+    let Some(type_name) = handle_param_type_name(&param.ty) else {
+        return Ok(());
+    };
+    let Some(param_type) = type_defs.iter().find(|type_def| type_def.name == type_name) else {
+        return Ok(());
+    };
+    anyhow::bail!(
+        "{}",
+        handle_param_type_mismatch_diagnostic(fixture, function_name, arg, param, param_type, rendered)
+    )
+}
+
 /// Build the C argument string for the function call.
 /// When `has_options_handle` is true, json_object args are replaced with
 /// the `options_handle` pointer (which was constructed via `from_json`).
@@ -1041,6 +1176,10 @@ fn missing_args_unresolvable_signature_diagnostic(fixture: &Fixture, function_na
 /// (`TargetParams::Known(&[])`) emits `""` (an empty call), anything else refuses rather than
 /// fabricate an argument list the target's real parameters (or the emitter's ignorance of
 /// them) cannot justify. See [`TargetParams`].
+///
+/// It also decides whether a *present* argument may be rendered at all: a satisfied argument
+/// count is not a satisfied argument type, so every value that would be lowered by `json_to_c`
+/// is checked against the parameter it fills -- see [`ensure_arg_matches_param_type`].
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_args_string_c(
     input: &serde_json::Value,
@@ -1071,9 +1210,17 @@ pub(super) fn build_args_string_c(
         };
     }
 
+    // The parameters a rendered argument can be checked against, if any. `IrAbsent` and
+    // `Unresolvable` learned nothing about the target, so they license no type claim -- the
+    // same asymmetry the empty-`args` match above encodes. ~keep
+    let known_params = match target_params {
+        TargetParams::Known(params) => Some(params),
+        TargetParams::IrAbsent | TargetParams::Unresolvable => None,
+    };
+
     let mut parts: Vec<String> = Vec::new();
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         // Handle test_backend args: emit the stub and use it.
         if arg.arg_type == "test_backend" {
             // A `test_backend` arg fills a C trait-bridge vtable-pointer parameter.
@@ -1135,7 +1282,22 @@ pub(super) fn build_args_string_c(
                 if let Some(handle) = typed_arg_handles.get(&arg.name) {
                     parts.push(handle.clone())
                 } else {
-                    parts.push(json_to_c(v))
+                    let rendered = json_to_c(v);
+                    // `json_to_c` answers only to the shape of the JSON value; nothing above
+                    // has consulted the parameter this expression lands in. This is the one
+                    // point where both facts are in hand. ~keep
+                    if let Some(params) = known_params {
+                        ensure_arg_matches_param_type(
+                            fixture,
+                            function_name,
+                            arg,
+                            index,
+                            params,
+                            type_defs,
+                            &rendered,
+                        )?;
+                    }
+                    parts.push(rendered)
                 }
             }
         }
@@ -3043,9 +3205,11 @@ mod tests {
             trait_name: None,
         }];
 
-        // `TargetParams::Unresolvable` on purpose: a non-empty `args` list must render the
-        // same way regardless of whether the IR signature resolved, since the
-        // ambiguity this type exists to settle only arises when `args` is empty.
+        // `TargetParams::Unresolvable` on purpose: an unresolved signature licenses no claim
+        // about any parameter's type, so a configured `args` list must render exactly as it
+        // always did. (A resolved signature does license one -- see
+        // `should_refuse_a_string_literal_configured_against_a_handle_parameter` and its
+        // correctly-typed control below.)
         let result = build_args_string_c(
             &fixture.input,
             &args,
@@ -3062,5 +3226,154 @@ mod tests {
             result, "\"hello\"",
             "a configured string arg must still emit its real typed literal"
         );
+    }
+
+    fn string_arg(name: &str, field: &str) -> crate::e2e::config::ArgMapping {
+        crate::e2e::config::ArgMapping {
+            name: name.into(),
+            field: field.into(),
+            arg_type: "string".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    /// The other half of the same defect. The refusals above all key on `args.is_empty()` --
+    /// "no args configured, do not fabricate an argument list". This is the opposite case:
+    /// `args` are present, so the arity is satisfied and nothing refuses, but the entry's type
+    /// contradicts the parameter's. `json_to_c` stringifies the JSON object and the emitter
+    /// splices a `char[]` literal into a parameter the C ABI exports as `AlefHandle` -- the
+    /// same `-Wint-conversion` failure, reached without ever passing through the empty-`args`
+    /// guard. ~keep
+    #[test]
+    fn should_refuse_a_string_literal_configured_against_a_handle_parameter() {
+        let fixture = Fixture {
+            id: "configure_cache_dir".into(),
+            input: serde_json::json!({"config": {"cache_dir": "/tmp/sample_cache"}}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let args = vec![string_arg("config", "config")];
+        let params = [ParamDef {
+            name: "config".into(),
+            ty: TypeRef::Named("SampleConfig".into()),
+            ..ParamDef::default()
+        }];
+        let type_defs = [TypeDef {
+            name: "SampleConfig".into(),
+            has_serde: true,
+            ..TypeDef::default()
+        }];
+
+        let error = build_args_string_c(
+            &fixture.input,
+            &args,
+            &HashMap::new(),
+            &config,
+            &type_defs,
+            &fixture,
+            "sample_configure",
+            TargetParams::Known(&params),
+        )
+        .expect_err("a JSON object must not be lowered into a handle parameter")
+        .to_string();
+
+        assert!(error.contains("sample_configure"), "must name the call: {error}");
+        assert!(error.contains("`config`"), "must name the parameter: {error}");
+        assert!(
+            error.contains("AlefHandle"),
+            "must name the parameter's C type: {error}"
+        );
+        assert!(
+            error.contains("cache_dir"),
+            "must quote the offending value so the operator can find the entry: {error}"
+        );
+        assert!(
+            error.contains("json_object"),
+            "must name the configuration that constructs the handle: {error}"
+        );
+    }
+
+    /// The false-refusal boundary, and the reason this check cannot simply reject every JSON
+    /// object. A `Vec<Named>` parameter does NOT cross the C ABI as a handle -- `type_map`'s
+    /// `c_param_type` maps it to `*const c_char`, a JSON string -- so the stringified literal
+    /// is exactly the right lowering there. Refusing it would delete correct, compiling
+    /// documentation, which is why `handle_param_type_name` deliberately does not unwrap
+    /// through `Vec` the way `c.rs`'s `named_type` does. ~keep
+    #[test]
+    fn should_not_refuse_a_json_literal_against_a_vec_parameter() {
+        let fixture = Fixture {
+            id: "rank_documents".into(),
+            input: serde_json::json!({"documents": ["alpha", "beta"]}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let args = vec![string_arg("documents", "documents")];
+        let params = [ParamDef {
+            name: "documents".into(),
+            ty: TypeRef::Vec(Box::new(TypeRef::Named("Document".into()))),
+            ..ParamDef::default()
+        }];
+        let type_defs = [TypeDef {
+            name: "Document".into(),
+            has_serde: true,
+            ..TypeDef::default()
+        }];
+
+        let rendered = build_args_string_c(
+            &fixture.input,
+            &args,
+            &HashMap::new(),
+            &config,
+            &type_defs,
+            &fixture,
+            "sample_rank",
+            TargetParams::Known(&params),
+        )
+        .expect("a JSON-string parameter must keep rendering its literal");
+
+        assert_eq!(
+            rendered,
+            json_to_c(&fixture.input["documents"]),
+            "a `Vec<T>` parameter crosses as a JSON `const char *`, so the literal is correct"
+        );
+    }
+
+    /// A parameter type the IR names but carries no `TypeDef` for cannot be proven to be a
+    /// handle: an IR enum is an `EnumDef`, never a `TypeDef`, and enum-typed `Named` parameters
+    /// cross as `i32`. Refusing on the name alone would reject every enum argument on evidence
+    /// the emitter does not have, so an unmatched name leaves the rendering untouched. ~keep
+    #[test]
+    fn should_not_refuse_a_named_parameter_the_ir_carries_no_type_def_for() {
+        let fixture = Fixture {
+            id: "set_level".into(),
+            input: serde_json::json!({"level": "debug"}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let args = vec![string_arg("level", "level")];
+        let params = [ParamDef {
+            name: "level".into(),
+            ty: TypeRef::Named("LogLevel".into()),
+            ..ParamDef::default()
+        }];
+
+        let rendered = build_args_string_c(
+            &fixture.input,
+            &args,
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "sample_set_level",
+            TargetParams::Known(&params),
+        )
+        .expect("a name with no `TypeDef` behind it licenses no claim about the C type");
+
+        assert_eq!(rendered, "\"debug\"", "the rendering must be left exactly as it was");
     }
 }

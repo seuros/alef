@@ -733,3 +733,237 @@ fn client_snippet_without_owner_metadata_is_rejected() {
         "{error:#}"
     );
 }
+
+fn required_arg(name: &str, field: &str, arg_type: &str) -> crate::e2e::config::ArgMapping {
+    crate::e2e::config::ArgMapping {
+        name: name.into(),
+        field: field.into(),
+        arg_type: arg_type.into(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    }
+}
+
+fn handle_param_config_type() -> crate::core::ir::TypeDef {
+    crate::core::ir::TypeDef {
+        name: "SampleConfig".into(),
+        rust_path: "samplelib::SampleConfig".into(),
+        has_serde: true,
+        ..crate::core::ir::TypeDef::default()
+    }
+}
+
+/// The release-blocking defect: a configured argument whose declared `type` contradicts the
+/// target parameter's declared type was rendered by value shape alone.
+///
+/// `configure` takes one parameter the C ABI exports as `AlefHandle` (an unsigned integer),
+/// and the fixture maps a JSON *object* onto it through an `args` entry left at the default
+/// `type = "string"`. Because `args` is non-empty the arity is satisfied, so the empty-`args`
+/// refusal never fires; nothing else ever compared the entry's type against the parameter's,
+/// so `json_to_c` stringified the object and the emitter published
+/// `sample_configure("{\"cache_dir\":...}")` -- `clang -fsyntax-only` rejects it with
+/// `incompatible pointer to integer conversion`. A visible coverage gap beats a snippet that
+/// cannot compile, so the emitter must refuse. ~keep
+#[test]
+fn string_literal_configured_against_a_handle_parameter_is_refused_not_emitted() {
+    let fixture = Fixture {
+        id: "configure_cache_dir".into(),
+        description: "Configure the cache directory".into(),
+        input: serde_json::json!({"config": {"cache_dir": "/tmp/sample_cache"}}),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "configure".into();
+    e2e.call.returns_void = true;
+    e2e.call.args = vec![required_arg("config", "input.config", "string")];
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            function: Some("sample_configure".into()),
+            ..Default::default()
+        },
+    );
+    let functions = [FunctionDef {
+        name: "configure".into(),
+        params: vec![ParamDef {
+            name: "config".into(),
+            ty: TypeRef::Named("SampleConfig".into()),
+            ..ParamDef::default()
+        }],
+        return_type: TypeRef::Unit,
+        ..FunctionDef::default()
+    }];
+    let type_defs = [handle_param_config_type()];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let error = match render_c_snippet(&fixture, &e2e, &config, &type_defs, &functions) {
+        Ok(rendered) => panic!(
+            "a JSON object must never be lowered into a handle parameter, but the emitter published:\n{rendered}"
+        ),
+        Err(error) => format!("{error:#}"),
+    };
+
+    assert!(error.contains("sample_configure"), "must name the call: {error}");
+    assert!(
+        error.contains("`config`"),
+        "must name the parameter it refused to fill: {error}"
+    );
+    assert!(
+        error.contains("AlefHandle"),
+        "must name the C type the parameter actually has: {error}"
+    );
+    assert!(
+        error.contains("SampleConfig"),
+        "must name the declared Rust type behind that handle: {error}"
+    );
+    assert!(
+        error.contains("cache_dir"),
+        "must quote the offending value so the operator can find the `args` entry: {error}"
+    );
+    assert!(
+        error.contains("json_object"),
+        "must name the configuration change that constructs the handle: {error}"
+    );
+}
+
+/// The control that stops the fix from passing by refusing everything: the same call shape,
+/// the same `type = "string"` entry, but a parameter the core really declares as a `String`.
+/// The literal is the correct lowering there, so the snippet must still emit byte-for-byte
+/// what it always emitted -- and must still compile. A refusal keyed on the value's JSON
+/// shape rather than on the parameter's type would fail here. ~keep
+#[test]
+fn correctly_typed_string_argument_still_emits_against_a_string_parameter() {
+    let fixture = Fixture {
+        id: "configure_cache_dir".into(),
+        description: "Configure the cache directory".into(),
+        input: serde_json::json!({"config": "/tmp/sample_cache"}),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "configure".into();
+    e2e.call.returns_void = true;
+    e2e.call.args = vec![required_arg("config", "input.config", "string")];
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            function: Some("sample_configure".into()),
+            ..Default::default()
+        },
+    );
+    let functions = [FunctionDef {
+        name: "configure".into(),
+        params: vec![ParamDef {
+            name: "config".into(),
+            ty: TypeRef::String,
+            ..ParamDef::default()
+        }],
+        return_type: TypeRef::Unit,
+        ..FunctionDef::default()
+    }];
+    let type_defs = [handle_param_config_type()];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rendered =
+        render_c_snippet(&fixture, &e2e, &config, &type_defs, &functions).expect("string-parameter snippet renders");
+
+    assert!(
+        rendered.contains("sample_configure(\"/tmp/sample_cache\");"),
+        "a correctly typed string argument must still emit its literal:\n{rendered}"
+    );
+    compile_snippet(
+        &rendered,
+        "sample_ffi.h",
+        concat!(
+            "#include <stdint.h>\n",
+            "typedef uint64_t SAMPLEAlefHandle;\n",
+            "int32_t sample_configure(const char *config);\n",
+        ),
+    );
+}
+
+/// The second control, at the exact parameter type the test above refuses: the refusal is
+/// keyed on the *lowering*, not on the parameter being a handle. Declaring the entry
+/// `type = "json_object"` makes the free-function path construct the handle with `from_json`
+/// first, so a real handle expression -- never a literal -- reaches the parameter, and the
+/// emitted translation unit compiles against the exported header. ~keep
+#[test]
+fn json_object_argument_still_constructs_a_handle_for_the_same_parameter() {
+    let fixture = Fixture {
+        id: "process_with_config".into(),
+        description: "Process with a configuration".into(),
+        input: serde_json::json!({"config": {"cache_dir": "/tmp/sample_cache"}}),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "process".into();
+    e2e.call.args = vec![json_arg("config", "input.config", "SampleConfig")];
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            ..Default::default()
+        },
+    );
+    let functions = [FunctionDef {
+        name: "process".into(),
+        params: vec![ParamDef {
+            name: "config".into(),
+            ty: TypeRef::Named("SampleConfig".into()),
+            ..ParamDef::default()
+        }],
+        return_type: TypeRef::Named("SampleReceipt".into()),
+        ..FunctionDef::default()
+    }];
+    let type_defs = [
+        handle_param_config_type(),
+        crate::core::ir::TypeDef {
+            name: "SampleReceipt".into(),
+            rust_path: "samplelib::SampleReceipt".into(),
+            ..crate::core::ir::TypeDef::default()
+        },
+    ];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rendered =
+        render_c_snippet(&fixture, &e2e, &config, &type_defs, &functions).expect("json_object snippet renders");
+
+    assert!(
+        rendered.contains("sample_sample_config_from_json"),
+        "the handle must be constructed before the call:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("sample_process(config_handle)"),
+        "the constructed handle must be what reaches the parameter:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("sample_process(\""),
+        "no string literal may reach a handle-typed parameter:\n{rendered}"
+    );
+    compile_snippet(
+        &rendered,
+        "sample_ffi.h",
+        concat!(
+            "#include <stdint.h>\n",
+            "typedef uint64_t SAMPLEAlefHandle;\n",
+            "SAMPLEAlefHandle sample_sample_config_from_json(const char *json);\n",
+            "void sample_sample_config_free(SAMPLEAlefHandle value);\n",
+            "SAMPLEAlefHandle sample_process(SAMPLEAlefHandle config);\n",
+            "void sample_sample_receipt_free(SAMPLEAlefHandle result);\n",
+        ),
+    );
+}
