@@ -59,10 +59,16 @@ pub(super) fn render_assertion_dart(
     // BEFORE the array-traversal and standard accessor paths since both emit code that
     // references the field — an unknown field path produces an `isn't defined` error.
     if !result_is_simple && let Some(f) = assertion.field.as_deref() {
-        // Use the head segment (before any `[].`) for validation since `is_valid_for_result`
-        // only checks the first path component.
-        let head = f.split("[].").next().unwrap_or(f);
-        if !head.is_empty() && !field_resolver.is_valid_for_result(head) {
+        // Pass the full, unsplit fixture path straight to `is_valid_for_result` — it
+        // resolves aliases and extracts the first path segment itself. Alias keys are
+        // the *whole* fixture path (e.g. `"hreflang[].lang"` -> `"metadata.hreflangs[].lang"`),
+        // not just the head before `[].`, so pre-splitting off a head and validating that
+        // (as this code used to) hands the resolver a substring no alias entry matches: an
+        // aliased head then never resolves, and the assertion is wrongly skipped even though
+        // the renamed field exists on the result type. Every other backend's assertions.rs
+        // calls `is_valid_for_result(f)` on the raw full path for exactly this reason — do
+        // the same here rather than re-deriving a head. ~keep
+        if !f.is_empty() && !field_resolver.is_valid_for_result(f) {
             let _ = writeln!(
                 out,
                 "    // skipped: {}",
@@ -794,5 +800,53 @@ mod wildcard_tests {
             out, "    // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
             "got: {out}"
         );
+    }
+
+    fn resolver_with_alias(alias_from: &str, alias_to: &str, result_field: &str) -> FieldResolver {
+        let aliases: HashMap<String, String> = [(alias_from.to_string(), alias_to.to_string())].into_iter().collect();
+        let result_fields: HashSet<String> = [result_field.to_string()].into_iter().collect();
+        FieldResolver::new(
+            &aliases,
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    /// Regression for the validation-before-resolution bug: `hreflang[].lang` is aliased to
+    /// `metadata.hreflangs[].lang`, which renames the ARRAY HEAD segment (`hreflang` ->
+    /// `metadata.hreflangs`), not just the sub-field. Validating the raw, unresolved head
+    /// (`"hreflang"`) against `is_valid_for_result` — as the pre-fix code did — checks a name
+    /// absent from `result_fields` and wrongly skips the assertion even though the renamed
+    /// field exists. ~keep
+    #[test]
+    fn alias_renaming_the_array_head_segment_still_resolves() {
+        let out = render_contains(
+            &resolver_with_alias("hreflang[].lang", "metadata.hreflangs[].lang", "metadata"),
+            "hreflang[].lang",
+            "en",
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+        assert!(
+            out.contains("result.metadata.hreflangs.any((e) => e.lang"),
+            "got: {out}"
+        );
+    }
+
+    /// Control for the test above: a sub-field-only rename (the array head itself,
+    /// `assets`, is untouched) must keep resolving too. This is the shape the pre-fix
+    /// code's own comment cited as its example, so it passed whether or not the head-rename
+    /// case above was fixed — pairing it here guards against a fix that only special-cases
+    /// the head. ~keep
+    #[test]
+    fn alias_renaming_only_the_sub_field_still_resolves() {
+        let out = render_contains(
+            &resolver_with_alias("assets[].category", "assets[].asset_category", "assets"),
+            "assets[].category",
+            "books",
+        );
+        assert!(!out.contains("skipped"), "got: {out}");
+        assert!(out.contains("result.assets.any((e) => e.assetCategory"), "got: {out}");
     }
 }
