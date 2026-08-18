@@ -50,25 +50,30 @@ pub fn default_e2e_languages(scaffolded: &[Language]) -> Vec<String> {
     names
 }
 
-/// ~keep The complete set of names `default_e2e_languages` can ever produce, across
-/// every possible `Language` variant — not just the ones scaffolded in the
-/// current run.
+/// The complete set of e2e generator target names alef knows about: every
+/// [`codegen::E2eCodegen`] registered in [`codegen::all_generators`], not just the
+/// subset reachable from the top-level `[languages]` scaffold list.
 ///
-/// Derived by running [`Language::ALL`] through the same mapping
-/// `default_e2e_languages` uses, so the two can never drift apart. This is
-/// deliberately NOT `core::config::extras::is_known_language`: that function
-/// matches on `Language`'s `Display` output and so accepts `"ffi"`, but
-/// `default_e2e_languages` maps `Language::Ffi` to the `"c"` generator —
-/// `"ffi"` never appears as an actual e2e target name and must stay rejected.
+/// ~keep This must read the generator registry directly rather than running
+/// [`Language::ALL`] through [`default_e2e_languages`] (an earlier version of this
+/// function did exactly that). That derivation is blind to generators with no
+/// corresponding `Language` variant -- `brew`, `homebrew`, `php_ext` are legitimate,
+/// opt-in-only e2e targets (see `default_e2e_languages`'s doc) that a fixture author
+/// can still validly hold a `skip.languages` entry for, and it let `"jni"` through as
+/// a "known" target even though no e2e generator is registered under that name, so a
+/// skip declared against it could never match anything. Sourcing this list from
+/// [`codegen::all_generators`] instead means it can never diverge from the generators
+/// that actually run, and it is the same source `snippets::known_language_names`
+/// validates `docs.coverage_exceptions` keys against, so the two "is this a real
+/// backend" checks in the e2e pipeline can't drift apart from each other either.
 pub fn known_e2e_target_names() -> Vec<String> {
-    let mut names = default_e2e_languages(&Language::ALL);
-    let mut deduped: Vec<String> = Vec::with_capacity(names.len());
-    for name in names.drain(..) {
-        if !deduped.contains(&name) {
-            deduped.push(name);
-        }
-    }
-    deduped
+    let mut names: Vec<String> = codegen::all_generators()
+        .iter()
+        .map(|generator| generator.language_name().to_string())
+        .collect();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Generate e2e test projects from fixtures.

@@ -684,6 +684,40 @@ fn replace_docs_mock_urls(value: &mut serde_json::Value) {
     }
 }
 
+/// `(canonical, aliases)` pairs for the e2e backends that have more than one accepted
+/// spelling in fixture-facing config: the single C generator (`"c"`) is also written as
+/// `"c_ffi"` or `"ffi"`, and the single Rust generator (`"rust"`) is also written as
+/// `"core"` or `"rust_core"`. ~keep
+///
+/// This is the only place these alias groups are enumerated. Every comparison against a
+/// backend-language string -- [`SkipDirective::should_skip`], [`AssertionSkip::should_skip`],
+/// a `docs.coverage_exceptions` lookup, `crate::e2e::snippets::generator_name`, and
+/// `crate::e2e::snippets::parse_language` -- resolves through [`canonical_language`] instead
+/// of carrying its own copy of this table, so a second alias list can never drift from this
+/// one.
+const LANGUAGE_ALIASES: &[(&str, &[&str])] = &[("c", &["c_ffi", "ffi"]), ("rust", &["core", "rust_core"])];
+
+/// Canonicalise a backend-language identifier to the single spelling every part of alef's
+/// e2e pipeline compares against.
+///
+/// Unrecognised identifiers (including every backend with only one spelling, e.g. `"wasm"`,
+/// `"kotlin_android"`, `"php_ext"`) pass through unchanged.
+pub fn canonical_language(language: &str) -> &str {
+    for (canonical, aliases) in LANGUAGE_ALIASES {
+        if language == *canonical || aliases.contains(&language) {
+            return canonical;
+        }
+    }
+    language
+}
+
+/// The alias groups behind [`canonical_language`], exposed so callers building a
+/// user-facing message (e.g. an "unknown language" validation error) can name every
+/// accepted spelling instead of only the canonical one.
+pub fn language_alias_groups() -> &'static [(&'static str, &'static [&'static str])] {
+    LANGUAGE_ALIASES
+}
+
 /// Skip directive for conditionally excluding fixtures.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkipDirective {
@@ -698,7 +732,11 @@ pub struct SkipDirective {
 impl SkipDirective {
     /// Check if this fixture should be skipped for a given language.
     pub fn should_skip(&self, language: &str) -> bool {
-        self.languages.is_empty() || self.languages.iter().any(|l| l == language)
+        self.languages.is_empty()
+            || self
+                .languages
+                .iter()
+                .any(|l| canonical_language(l) == canonical_language(language))
     }
 }
 
@@ -771,7 +809,11 @@ impl AssertionSkip {
         match self {
             Self::All(all) => *all,
             Self::Scoped(directive) => {
-                directive.languages.is_empty() || directive.languages.iter().any(|l| l == language)
+                directive.languages.is_empty()
+                    || directive
+                        .languages
+                        .iter()
+                        .any(|l| canonical_language(l) == canonical_language(language))
             }
         }
     }
@@ -1012,8 +1054,12 @@ fn normalize_fixture_value(mut value: serde_json::Value) -> serde_json::Value {
 /// [`crate::e2e::known_e2e_target_names`] — a real target the consumer simply
 /// hasn't scaffolded, where matching nothing is correct and harmless.
 ///
-/// `"ffi"` stays rejected even though `Language::Ffi` exists: it maps to the
-/// `"c"` generator, so `"ffi"` itself never matches anything.
+/// Both comparisons resolve through [`canonical_language`], so `"ffi"` and `"c_ffi"` are
+/// accepted here exactly when `"c"` is (they name the same generator), and `"core"` /
+/// `"rust_core"` are accepted exactly when `"rust"` is. Without that canonicalisation a
+/// consumer whose `[e2e].languages` spells the FFI backend one way and whose
+/// `skip.languages` spells it another would pass this check yet never actually skip --
+/// this validator's whole purpose is to prevent exactly that silent divergence.
 ///
 /// Returns an error naming the offending fixture, its source path, the bad
 /// id, and the valid set as soon as the first unknown id is found.
@@ -1024,8 +1070,11 @@ pub fn validate_skip_languages(fixtures: &[Fixture], valid_languages: &[String])
             continue;
         };
         for language in &skip.languages {
-            let is_configured = valid_languages.iter().any(|valid| valid == language);
-            let is_known_target = known_targets.iter().any(|known| known == language);
+            let canonical = canonical_language(language);
+            let is_configured = valid_languages
+                .iter()
+                .any(|valid| canonical_language(valid) == canonical);
+            let is_known_target = known_targets.iter().any(|known| canonical_language(known) == canonical);
             if !is_configured && !is_known_target {
                 let mut valid_ids = valid_languages.to_vec();
                 for known in &known_targets {
@@ -1470,35 +1519,150 @@ mod tests {
     }
 
     #[test]
-    fn validate_skip_languages_rejects_ffi_display_name_but_accepts_c() {
-        let ffi_json = r#"{
-            "id": "ffi_display_skip",
-            "description": "Uses Language::Ffi's Display output, not its e2e target name",
+    fn validate_skip_languages_accepts_ffi_and_c_ffi_as_aliases_of_c() {
+        let valid = vec!["python".to_string(), "rust".to_string()];
+        for alias in ["ffi", "c_ffi", "c"] {
+            let json = serde_json::json!({
+                "id": format!("{alias}_alias_skip"),
+                "description": "Uses one of the accepted spellings for the FFI backend",
+                "input": {},
+                "assertions": [],
+                "skip": {"languages": [alias], "reason": "not applicable"}
+            });
+            let fixture: Fixture = serde_json::from_value(json).unwrap();
+            assert!(
+                validate_skip_languages(&[fixture], &valid).is_ok(),
+                "`{alias}` names the same generator as `c` and must be accepted"
+            );
+        }
+    }
+
+    /// `known_e2e_target_names` now enumerates [`crate::e2e::codegen::all_generators`]
+    /// directly instead of running `Language::ALL` through `default_e2e_languages`, so an
+    /// opt-in-only generator with no corresponding `Language` variant (`brew`, `homebrew`,
+    /// `php_ext`) is a valid "held back" skip target even when it isn't configured for this
+    /// run.
+    #[test]
+    fn validate_skip_languages_accepts_opt_in_only_generator_not_in_language_enum() {
+        let json = r#"{
+            "id": "brew_held_back_skip",
+            "description": "Skips an opt-in-only e2e target with no `Language` variant",
             "input": {},
             "assertions": [],
-            "skip": {"languages": ["ffi"], "reason": "wrong id"}
+            "skip": {"languages": ["brew"], "reason": "not applicable to this crate"}
         }"#;
-        let ffi_fixture: Fixture = serde_json::from_str(ffi_json).unwrap();
+        let fixture: Fixture = serde_json::from_str(json).unwrap();
         let valid = vec!["python".to_string(), "rust".to_string()];
-        let err =
-            validate_skip_languages(&[ffi_fixture], &valid).expect_err("'ffi' is not an e2e target and must fail");
+        assert!(
+            validate_skip_languages(&[fixture], &valid).is_ok(),
+            "`brew` is a real, registered e2e generator and must validate even though \
+             `crate::core::config::Language` has no variant for it"
+        );
+    }
+
+    /// Converse of the above: `"jni"` is a `Language` variant but no e2e generator is
+    /// registered under that name, so a skip declared against it can never match anything at
+    /// runtime and must be rejected rather than accepted as "held back".
+    #[test]
+    fn validate_skip_languages_rejects_language_variant_with_no_e2e_generator() {
+        let json = r#"{
+            "id": "jni_skip",
+            "description": "Skips a Language variant that has no e2e generator",
+            "input": {},
+            "assertions": [],
+            "skip": {"languages": ["jni"], "reason": "wrong id"}
+        }"#;
+        let fixture: Fixture = serde_json::from_str(json).unwrap();
+        let valid = vec!["python".to_string(), "rust".to_string()];
+        let err = validate_skip_languages(&[fixture], &valid)
+            .expect_err("'jni' has no registered e2e generator and can never match a running backend");
         assert!(
             err.to_string().contains("not a known e2e target"),
-            "'ffi' must be rejected because default_e2e_languages maps Language::Ffi to \"c\": {err}"
+            "'jni' must be rejected: {err}"
         );
+    }
 
-        let c_json = r#"{
-            "id": "c_target_skip",
-            "description": "Uses the real e2e target name for the FFI binding",
-            "input": {},
-            "assertions": [],
-            "skip": {"languages": ["c"], "reason": "not applicable"}
-        }"#;
-        let c_fixture: Fixture = serde_json::from_str(c_json).unwrap();
+    #[test]
+    fn canonical_language_resolves_c_and_rust_aliases() {
+        assert_eq!(canonical_language("c"), "c");
+        assert_eq!(canonical_language("c_ffi"), "c");
+        assert_eq!(canonical_language("ffi"), "c");
+        assert_eq!(canonical_language("rust"), "rust");
+        assert_eq!(canonical_language("core"), "rust");
+        assert_eq!(canonical_language("rust_core"), "rust");
+    }
+
+    #[test]
+    fn canonical_language_passes_through_unaliased_backends() {
+        for language in ["wasm", "node", "kotlin_android", "php_ext", "python", "swift"] {
+            assert_eq!(canonical_language(language), language);
+        }
+    }
+
+    #[test]
+    fn skip_directive_should_skip_matches_c_ffi_alias_running_as_ffi() {
+        let skip = SkipDirective {
+            languages: vec!["c".to_string()],
+            reason: Some("not applicable".to_string()),
+        };
         assert!(
-            validate_skip_languages(&[c_fixture], &valid).is_ok(),
-            "'c' is the real e2e target name that Language::Ffi maps to and must be accepted"
+            skip.should_skip("ffi"),
+            "`skip.languages = [\"c\"]` must suppress a backend running as `ffi`"
         );
+        assert!(
+            skip.should_skip("c_ffi"),
+            "`skip.languages = [\"c\"]` must suppress a backend running as `c_ffi`"
+        );
+        assert!(skip.should_skip("c"));
+        assert!(!skip.should_skip("python"));
+    }
+
+    #[test]
+    fn assertion_skip_scoped_matches_c_ffi_alias_running_as_ffi() {
+        let skip = AssertionSkip::Scoped(AssertionSkipDirective {
+            languages: vec!["c".to_string()],
+            kind: AssertionSkipKind::LanguageLimitation,
+            reason: Some("field unreachable from C".to_string()),
+        });
+        assert!(skip.should_skip("ffi"));
+        assert!(skip.should_skip("c_ffi"));
+        assert!(!skip.should_skip("python"));
+    }
+
+    /// Control: proves `should_skip` genuinely shares the alias authority with
+    /// `validate_skip_languages` rather than each carrying its own copy.
+    ///
+    /// If a future edit re-introduced a second, independent alias list inside
+    /// `SkipDirective::should_skip` (the exact regression this fix removes), that
+    /// second list would have to be kept in sync with [`LANGUAGE_ALIASES`] by hand. This
+    /// test would fail the moment the two disagreed: it walks every alias in the shared
+    /// table and asserts that declaring a skip under the canonical name suppresses every
+    /// alias spelling, and vice versa -- a property that only holds when both call sites
+    /// resolve through the same function.
+    #[test]
+    fn should_skip_and_canonical_language_agree_for_every_known_alias() {
+        for (canonical, aliases) in LANGUAGE_ALIASES {
+            for alias in *aliases {
+                let skip_by_canonical = SkipDirective {
+                    languages: vec![(*canonical).to_string()],
+                    reason: None,
+                };
+                assert!(
+                    skip_by_canonical.should_skip(alias),
+                    "declaring skip on canonical `{canonical}` must suppress alias `{alias}`"
+                );
+
+                let skip_by_alias = SkipDirective {
+                    languages: vec![(*alias).to_string()],
+                    reason: None,
+                };
+                assert!(
+                    skip_by_alias.should_skip(canonical),
+                    "declaring skip on alias `{alias}` must suppress canonical `{canonical}`"
+                );
+                assert_eq!(canonical_language(alias), *canonical);
+            }
+        }
     }
 
     #[test]

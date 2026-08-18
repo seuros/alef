@@ -303,7 +303,7 @@ fn generate_snippet_report_with_extensions(
                 SnippetInclusion::Include => None,
             };
             if let Some(reason) = exclusion_reason {
-                if let Some(exception) = docs.coverage_exceptions.get(*language) {
+                if let Some(exception) = coverage_exception(docs, language) {
                     coverage.documented_exceptions.push(DocumentedSnippetException {
                         key,
                         reason: exception.reason.clone(),
@@ -339,7 +339,7 @@ fn generate_snippet_report_with_extensions(
                         });
                         continue;
                     }
-                    if let Some(exception) = docs.coverage_exceptions.get(*language) {
+                    if let Some(exception) = coverage_exception(docs, language) {
                         coverage.documented_exceptions.push(DocumentedSnippetException {
                             key,
                             reason: exception.reason.clone(),
@@ -403,15 +403,76 @@ fn generate_snippet_report_with_extensions(
     })
 }
 
+/// Find a fixture's coverage exception for `language`.
+///
+/// Both the exception's declared key and `language` resolve through
+/// [`crate::e2e::fixture::canonical_language`], so an exception declared under one accepted
+/// spelling of a backend (e.g. `docs.coverage_exceptions = { c = ... }`) still applies when
+/// that backend is configured under an alias spelling (e.g. running as `ffi`). Without this,
+/// `"c"` and `"ffi"` silently stopped matching each other and the exception never fired. ~keep
+fn coverage_exception<'a>(
+    docs: &'a FixtureDocs,
+    language: &str,
+) -> Option<&'a crate::e2e::fixture::SnippetCoverageException> {
+    let canonical = crate::e2e::fixture::canonical_language(language);
+    docs.coverage_exceptions
+        .iter()
+        .find(|(key, _)| crate::e2e::fixture::canonical_language(key) == canonical)
+        .map(|(_, exception)| exception)
+}
+
+/// The canonical e2e language name every registered code generator declares, used to
+/// validate `docs.coverage_exceptions` keys against real backends rather than arbitrary
+/// strings.
+///
+/// Delegates to [`crate::e2e::known_e2e_target_names`] -- the same enumeration
+/// `validate_skip_languages` (`src/e2e/fixture.rs`) checks `skip.languages` ids against --
+/// rather than re-deriving the generator list here. Two independently computed "is this a
+/// real backend" enumerations is the same defect shape as two alias lists: nothing forces
+/// them to agree, and only one needs to fall behind for a validator to start passing
+/// nonsense through. ~keep
+fn known_language_names() -> BTreeSet<String> {
+    crate::e2e::known_e2e_target_names().into_iter().collect()
+}
+
+/// Render `known` as a human-readable list, expanding any alias groups (e.g. `"c"` also
+/// accepts `"c_ffi"` and `"ffi"`) so a validation error can name every accepted spelling.
+fn describe_known_languages(known: &BTreeSet<String>) -> String {
+    known
+        .iter()
+        .map(|canonical| {
+            let aliases = crate::e2e::fixture::language_alias_groups()
+                .iter()
+                .find(|(name, _)| *name == canonical.as_str())
+                .map(|(_, aliases)| *aliases)
+                .unwrap_or_default();
+            if aliases.is_empty() {
+                canonical.clone()
+            } else {
+                format!("{canonical} (also accepted: {})", aliases.join(", "))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn validate_coverage_exceptions(fixture: &Fixture) -> Result<()> {
     let Some(docs) = &fixture.docs else {
         return Ok(());
     };
+    let known = known_language_names();
     for (language, exception) in &docs.coverage_exceptions {
         if language.trim().is_empty() || exception.reason.trim().is_empty() {
             bail!(
                 "fixture `{}` has invalid coverage exception for language `{language}`: language and reason must be non-empty",
                 fixture.id
+            );
+        }
+        if !known.contains(crate::e2e::fixture::canonical_language(language)) {
+            bail!(
+                "fixture `{}` has a coverage exception for unknown language `{language}`; accepted language spellings: {}",
+                fixture.id,
+                describe_known_languages(&known)
             );
         }
         validate_documentation_reference(&exception.documentation).map_err(|error| {
@@ -489,7 +550,7 @@ fn render_snippet_body(
             // above already returned their body, and `recipe_policy::extension_owned_recipe_kind`
             // already bailed for fixtures that require one but lack it.
             let skipped_for_language = fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(language));
-            (!skipped_for_language && matches!(language, "c" | "c_ffi" | "ffi"))
+            (!skipped_for_language && crate::e2e::fixture::canonical_language(language) == "c")
                 .then(|| crate::e2e::codegen::recipe::trait_bridge_function_identity(context.crate_config, fixture))
                 .flatten()
         })
@@ -620,12 +681,13 @@ fn snippet_generators(languages: &[String]) -> Result<Vec<(&str, Box<dyn E2eCode
         .collect()
 }
 
+/// Resolve a configured e2e language to the generator name registered in [`all_generators`].
+///
+/// Delegates entirely to [`crate::e2e::fixture::canonical_language`] -- the single alias
+/// table for backends with more than one accepted spelling -- rather than carrying its own
+/// copy of the `"c"`/`"c_ffi"`/`"ffi"` and `"rust"`/`"core"`/`"rust_core"` groups.
 fn generator_name(language: &str) -> &str {
-    match language {
-        "core" | "rust_core" => "rust",
-        "c_ffi" | "ffi" => "c",
-        other => other,
-    }
+    crate::e2e::fixture::canonical_language(language)
 }
 
 /// The CLI invocation that produces fixture snippets, embedded verbatim in every
@@ -873,8 +935,11 @@ fn validate_docs_paths(fixture: &Fixture, languages: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// Aliases resolve through [`crate::e2e::fixture::canonical_language`] before matching here,
+/// so `"c_ffi"`/`"ffi"` and `"core"`/`"rust_core"` are not spelled out a second time in this
+/// match arm list.
 fn parse_language(value: &str) -> Option<DocumentationLanguage> {
-    let language = match value {
+    let language = match crate::e2e::fixture::canonical_language(value) {
         "python" => Language::Python,
         "node" => Language::Node,
         "wasm" => Language::Wasm,
@@ -885,14 +950,14 @@ fn parse_language(value: &str) -> Option<DocumentationLanguage> {
         "java" => Language::Java,
         "csharp" => Language::Csharp,
         "r" => Language::R,
-        "rust" | "rust_core" | "core" => Language::Rust,
+        "rust" => Language::Rust,
         "kotlin" => Language::Kotlin,
         "kotlin_android" => Language::KotlinAndroid,
         "swift" => Language::Swift,
         "dart" => Language::Dart,
         "gleam" => Language::Gleam,
         "zig" => Language::Zig,
-        "c" | "ffi" | "c_ffi" => Language::C,
+        "c" => Language::C,
         "brew" | "homebrew" => return Some(DocumentationLanguage::Shell),
         _ => return None,
     };
@@ -1095,6 +1160,95 @@ mod tests {
             message.contains("cannot retire a guard rejection"),
             "the failure must explain why the exception did not apply: {message}"
         );
+    }
+
+    /// A `coverage_exceptions` entry declared under `"c"` must still apply when the fixture
+    /// is generated for the backend running as `"ffi"` -- the same generator under an alias
+    /// spelling. Before the shared canonicalisation authority, `coverage_exceptions.get(*language)`
+    /// compared the raw strings and this exception silently never fired.
+    #[test]
+    fn coverage_exception_declared_as_c_applies_to_ffi_backend() {
+        let mut fixture = documented_fixture();
+        fixture.requirements = vec!["feature:unavailable_in_c".into()];
+        fixture
+            .docs
+            .as_mut()
+            .expect("documented fixture has docs")
+            .coverage_exceptions
+            .insert(
+                "c".into(),
+                crate::e2e::fixture::SnippetCoverageException {
+                    reason: "the C binding cannot express this recipe".into(),
+                    documentation: "docs/limitations.md".into(),
+                },
+            );
+        let body = "int main(void) { return 0; }";
+
+        let report = snippet_report_for(fixture, &["ffi"], body)
+            .expect("a documented exception must retire the gap instead of failing the run");
+
+        assert!(
+            report.coverage.missing.is_empty(),
+            "the `c` exception must apply while the backend runs as `ffi`: {:?}",
+            report.coverage.missing
+        );
+        assert_eq!(report.coverage.documented_exceptions.len(), 1);
+        assert_eq!(
+            report.coverage.documented_exceptions[0].reason,
+            "the C binding cannot express this recipe"
+        );
+    }
+
+    #[test]
+    fn validate_coverage_exceptions_rejects_unknown_language() {
+        let mut fixture = documented_fixture();
+        fixture
+            .docs
+            .as_mut()
+            .expect("documented fixture has docs")
+            .coverage_exceptions
+            .insert(
+                "csharpp".into(),
+                crate::e2e::fixture::SnippetCoverageException {
+                    reason: "typo'd language key".into(),
+                    documentation: "docs/limitations.md".into(),
+                },
+            );
+
+        let error = validate_coverage_exceptions(&fixture).expect_err("an unknown language key must hard-fail");
+        let message = error.to_string();
+        assert!(message.contains("csharpp"), "error must name the bad key: {message}");
+        assert!(
+            message.contains("c (also accepted: c_ffi, ffi)"),
+            "error must name the C backend's accepted spellings: {message}"
+        );
+        assert!(
+            message.contains("rust (also accepted: core, rust_core)"),
+            "error must name the Rust backend's accepted spellings: {message}"
+        );
+    }
+
+    #[test]
+    fn validate_coverage_exceptions_accepts_alias_spellings() {
+        for alias in ["c", "c_ffi", "ffi", "rust", "core", "rust_core"] {
+            let mut fixture = documented_fixture();
+            fixture
+                .docs
+                .as_mut()
+                .expect("documented fixture has docs")
+                .coverage_exceptions
+                .insert(
+                    alias.to_string(),
+                    crate::e2e::fixture::SnippetCoverageException {
+                        reason: "documented limitation".into(),
+                        documentation: "docs/limitations.md".into(),
+                    },
+                );
+            assert!(
+                validate_coverage_exceptions(&fixture).is_ok(),
+                "`{alias}` is an accepted spelling and must pass validation"
+            );
+        }
     }
 
     /// Positive control: the guard is armed on the same path, so a clean body must still ~keep
