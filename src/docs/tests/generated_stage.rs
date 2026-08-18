@@ -679,3 +679,77 @@ sources = ["src/lib.rs"]
             .collect::<Vec<_>>()
     );
 }
+
+/// THE STRUCTURAL PROOF for `bin_cli::helpers::collect_managed_surface`'s ownership-only docs
+/// call (`generate_docs_stage_without_snippet_compile_validation`): it must never reach
+/// `validate_snippets`'s compile/type-check/run block at all, not merely run it against an
+/// empty corpus or run it faster.
+///
+/// A wall-clock assertion would be worthless here -- it would pass by accident on a machine
+/// with every referenced toolchain missing, which is the exact false-green class this guards
+/// against (see `alef adopt`'s 90-minute regression on one `Cargo.toml`, entirely spent
+/// spawning `zig`/`go`/`javac`/`dotnet`/... subprocesses whose result nothing downstream ever
+/// read). So this fixture deliberately uses JSON: `JsonValidator::validate` never spawns a
+/// process, it parses in-process with `serde_json`, identically on every machine regardless of
+/// installed toolchains. The snippet's JSON is syntactically invalid, so `run_validation`
+/// reports it `Fail` and `enforce_snippet_summary` bails *unconditionally* on any failure --
+/// strict mode is not even required for the assertion to hold.
+///
+/// `generate_docs_stage` (validation on) proves the fixture genuinely reaches the validator by
+/// failing on it. `generate_docs_stage_without_snippet_compile_validation` (validation off)
+/// must then succeed on the byte-identical fixture -- the only variable between the two calls
+/// is whether the compile-validation block executed, so success there can only mean it was
+/// skipped, never that it ran and passed. ~keep
+#[test]
+fn generate_docs_stage_without_snippet_compile_validation_never_runs_the_validator() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/snippets/json")).unwrap();
+    fs::write(
+        root.join("docs/snippets/json/example.md"),
+        "```json\n{ this is not valid json\n```\n",
+    )
+    .unwrap();
+
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.snippets]
+dirs = ["docs/snippets"]
+validation_level = "syntax"
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+"#,
+    );
+    let api = make_minimal_api("1.0.0");
+
+    let (validated_files, validated_result) = generate_docs_stage(&api, &config, &[Language::Python], None, root);
+    let err = validated_result.expect_err(
+        "the invalid JSON snippet must fail validation when the compile-validation block actually \
+         runs -- if this passes, the fixture is not exercising the validator at all and proves \
+         nothing below",
+    );
+    assert!(
+        err.to_string().contains("snippet validation failed"),
+        "expected a snippet-validation failure naming the invalid JSON, got: {err:#}"
+    );
+
+    let (skipped_files, skipped_result) =
+        generate_docs_stage_without_snippet_compile_validation(&api, &config, &[Language::Python], None, root);
+    skipped_result.expect(
+        "the ownership-only variant must never invoke the same invalid-JSON snippet's validator -- \
+         its failure above proves this fixture reaches the validator when it runs, so success here \
+         can only mean the compile-validation block was skipped entirely",
+    );
+
+    assert_eq!(
+        emitted_paths(&validated_files),
+        emitted_paths(&skipped_files),
+        "skipping snippet compile validation must not change which files the docs stage owns"
+    );
+}

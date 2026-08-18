@@ -857,8 +857,21 @@ pub(crate) fn collect_managed_surface(
         crate::cli::pipeline::readme(api, config, &readme_languages)?,
     );
 
+    // Neither `alef adopt` nor `alef verify` asks whether a snippet compiles, type-checks, or
+    // runs -- they ask what file surface alef's configuration owns, and that compile step
+    // produces no files (see `generate_docs_stage_without_snippet_compile_validation`'s doc).
+    // Running it here was the entire cost of the 90-minute `alef adopt` on a single `Cargo.toml`:
+    // thousands of per-backend toolchain subprocess invocations to answer an ownership question
+    // that never looked at their result, since a docs-stage `Err` is already downgraded to the
+    // debug log below regardless of which sub-step produced it. ~keep
     let doc_languages = resolve_doc_languages(config, None)?;
-    let (doc_files, doc_result) = crate::docs::generate_docs_stage(api, config, &doc_languages, None, base_dir);
+    let (doc_files, doc_result) = crate::docs::generate_docs_stage_without_snippet_compile_validation(
+        api,
+        config,
+        &doc_languages,
+        None,
+        base_dir,
+    );
     if let Err(error) = doc_result {
         tracing::debug!("docs stage reported {error:#}; using the pages it rendered before the failure");
     }

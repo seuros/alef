@@ -126,6 +126,44 @@ pub fn generate_docs_stage(
     output_override: Option<&str>,
     workspace_root: &Path,
 ) -> (Vec<GeneratedFile>, anyhow::Result<()>) {
+    generate_docs_stage_impl(api, config, languages, output_override, workspace_root, true)
+}
+
+/// Same as [`generate_docs_stage`], except it never spawns a compiler, interpreter, or
+/// type-checker for a snippet.
+///
+/// The only caller is `bin_cli::helpers::collect_managed_surface`, which feeds both `alef
+/// adopt`'s candidate set and `alef verify`'s frozen-file report. Neither asks whether a
+/// snippet compiles, runs, or type-checks -- they ask "what file surface does alef's
+/// configuration own", and `validate_snippets`'s compile/type-check/run step (behind
+/// `docs.snippets.validation_level`) produces zero [`GeneratedFile`]s; it only decides
+/// whether `generate_docs_stage_extras` returns `Ok` or `Err`, and `collect_managed_surface`
+/// already downgrades that `Err` to a debug log and keeps every page regardless (see this
+/// module's other doc comments) -- so the compile step's outcome was already discarded
+/// there, at the cost of spawning one subprocess per snippet per configured backend. On a
+/// real repo that is thousands of `zig`/`go`/`javac`/`dotnet`/... invocations to answer an
+/// ownership question about a single file, which is what made `alef adopt` on one `Cargo.toml`
+/// take 90 minutes instead of seconds. Snippet discovery, the reference audit, and gap
+/// detection are unaffected: they are pure in-memory/filesystem checks with nothing to spawn,
+/// so they still run and their failures are still tolerated exactly as before. ~keep
+pub fn generate_docs_stage_without_snippet_compile_validation(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    languages: &[Language],
+    output_override: Option<&str>,
+    workspace_root: &Path,
+) -> (Vec<GeneratedFile>, anyhow::Result<()>) {
+    generate_docs_stage_impl(api, config, languages, output_override, workspace_root, false)
+}
+
+fn generate_docs_stage_impl(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    languages: &[Language],
+    output_override: Option<&str>,
+    workspace_root: &Path,
+    run_snippet_compile_validation: bool,
+) -> (Vec<GeneratedFile>, anyhow::Result<()>) {
     let reference_output = output_override
         .map(PathBuf::from)
         .unwrap_or_else(|| reference_output_dir(config));
@@ -140,7 +178,15 @@ pub fn generate_docs_stage(
         file.generated_header = true;
     }
 
-    let result = generate_docs_stage_extras(api, config, languages, workspace_root, &reference_output, &mut files);
+    let result = generate_docs_stage_extras(
+        api,
+        config,
+        languages,
+        workspace_root,
+        &reference_output,
+        &mut files,
+        run_snippet_compile_validation,
+    );
 
     for file in &mut files {
         file.content = doc_cleaning::wrap_bare_urls(&file.content);
@@ -206,6 +252,7 @@ fn generate_docs_stage_extras(
     workspace_root: &Path,
     reference_output: &Path,
     files: &mut Vec<GeneratedFile>,
+    run_snippet_compile_validation: bool,
 ) -> anyhow::Result<()> {
     let mut context = build_base_context(api, config, languages, files.as_slice());
     let Some(docs_cfg) = &config.docs else {
@@ -280,6 +327,7 @@ fn generate_docs_stage_extras(
             stage.config,
             &stage.absolute_dirs,
             &stage.snippets,
+            run_snippet_compile_validation,
         )?;
     }
 
@@ -439,6 +487,7 @@ fn validate_snippets(
     snippet_cfg: &crate::core::config::DocsSnippetsConfig,
     absolute_snippet_dirs: &[PathBuf],
     snippets: &[crate::snippets::types::Snippet],
+    run_snippet_compile_validation: bool,
 ) -> anyhow::Result<()> {
     let docs_dirs = if snippet_cfg.docs_dirs.is_empty() {
         Vec::new()
@@ -537,7 +586,12 @@ fn validate_snippets(
         }
     }
 
-    if let Some(level) = &snippet_cfg.validation_level {
+    // Gated separately from discovery, audit, and gap detection above: this block is the
+    // one that spawns a toolchain subprocess per snippet per configured backend, and it is
+    // the only reason to ever skip it. See
+    // `generate_docs_stage_without_snippet_compile_validation`'s doc for why a caller would
+    // need `run_snippet_compile_validation = false`. ~keep
+    if run_snippet_compile_validation && let Some(level) = &snippet_cfg.validation_level {
         let level = level
             .parse::<crate::snippets::types::ValidationLevel>()
             .map_err(|err| anyhow::anyhow!("invalid docs.snippets.validation_level: {err}"))?;
