@@ -1,0 +1,9 @@
+	var wire map[string]json.RawMessage
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, err
+	}
+	if len(wire) != 1 {
+		return nil, fmt.Errorf("expected exactly one key for externally tagged {{ go_enum_name }}, got %d", len(wire))
+	}
+	for key, raw := range wire {
+		switch key {

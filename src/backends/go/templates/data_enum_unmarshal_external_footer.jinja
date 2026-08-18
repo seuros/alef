@@ -1,0 +1,6 @@
+		default:
+			return nil, fmt.Errorf("unknown {{ go_enum_name }} type: %q", key)
+		}
+	}
+	return nil, fmt.Errorf("empty {{ go_enum_name }} payload")
+}

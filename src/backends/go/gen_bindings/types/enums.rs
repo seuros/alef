@@ -944,6 +944,11 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
     let mut out = String::with_capacity(2048);
     let go_enum_name = go_type_name(&enum_def.name);
     let variant_names: Vec<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
+    // serde's default for a data-carrying enum with neither `#[serde(tag = ..)]` nor
+    // `#[serde(untagged)]` is EXTERNAL tagging: `{"Variant": <inner>}`. That is a distinct wire
+    // shape from both internal tagging (tag folded into the payload object) and untagged (no
+    // wrapper at all) -- it must not be conflated with either. ~keep
+    let is_externally_tagged = enum_def.serde_tag.is_none() && !enum_def.serde_untagged;
 
     emit_type_doc(
         &mut out,
@@ -1100,10 +1105,19 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
                     },
                 ));
             }
-            out.push_str(&crate::backends::go::template_env::render(
-                "data_enum_marshal_json_values_header.jinja",
-                minijinja::Value::default(),
-            ));
+            if is_externally_tagged {
+                out.push_str(&crate::backends::go::template_env::render(
+                    "data_enum_marshal_json_external_values_header.jinja",
+                    minijinja::context! {
+                        wire_value => &wire_value,
+                    },
+                ));
+            } else {
+                out.push_str(&crate::backends::go::template_env::render(
+                    "data_enum_marshal_json_values_header.jinja",
+                    minijinja::Value::default(),
+                ));
+            }
             if let Some(tag_name) = &enum_def.serde_tag {
                 out.push_str(&crate::backends::go::template_env::render(
                     "data_enum_marshal_aux_value.jinja",
@@ -1126,10 +1140,17 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
                     },
                 ));
             }
-            out.push_str(&crate::backends::go::template_env::render(
-                "data_enum_marshal_json_footer.jinja",
-                minijinja::Value::default(),
-            ));
+            if is_externally_tagged {
+                out.push_str(&crate::backends::go::template_env::render(
+                    "data_enum_marshal_json_external_footer.jinja",
+                    minijinja::Value::default(),
+                ));
+            } else {
+                out.push_str(&crate::backends::go::template_env::render(
+                    "data_enum_marshal_json_footer.jinja",
+                    minijinja::Value::default(),
+                ));
+            }
         }
     }
 
@@ -1170,16 +1191,15 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
                 go_enum_name => &go_enum_name,
             },
         ));
-    } else {
-        let tag_field = enum_def.serde_tag.as_ref().map(|tn| to_go_name(tn));
-        let discriminator_field = tag_field.as_deref().unwrap_or("Type");
+    } else if let Some(tag_name) = &enum_def.serde_tag {
+        let discriminator_field = to_go_name(tag_name);
 
         out.push_str(&crate::backends::go::template_env::render(
             "data_enum_unmarshal_wire_header.jinja",
             minijinja::context! {
-                tag_field => tag_field.as_deref(),
-                tag_name => enum_def.serde_tag.as_deref(),
-                discriminator_field => discriminator_field,
+                tag_field => Some(discriminator_field.as_str()),
+                tag_name => Some(tag_name.as_str()),
+                discriminator_field => &discriminator_field,
             },
         ));
         for variant in &enum_def.variants {
@@ -1201,7 +1221,37 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
             "data_enum_unmarshal_unknown_type.jinja",
             minijinja::context! {
                 go_enum_name => &go_enum_name,
-                discriminator_field => discriminator_field,
+                discriminator_field => &discriminator_field,
+            },
+        ));
+    } else {
+        // External tagging (serde's default): the JSON is `{"Variant": <inner>}`, so the
+        // discriminator is the object's sole key, not a field inside the payload. ~keep
+        out.push_str(&crate::backends::go::template_env::render(
+            "data_enum_unmarshal_external_header.jinja",
+            minijinja::context! {
+                go_enum_name => &go_enum_name,
+            },
+        ));
+        for variant in &enum_def.variants {
+            let wire_value = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            let variant_struct_name = format!("{go_enum_name}{}", to_go_name(&variant.name));
+            out.push_str(&crate::backends::go::template_env::render(
+                "data_enum_unmarshal_external_variant.jinja",
+                minijinja::context! {
+                    wire_value => &wire_value,
+                    variant_struct_name => &variant_struct_name,
+                },
+            ));
+        }
+        out.push_str(&crate::backends::go::template_env::render(
+            "data_enum_unmarshal_external_footer.jinja",
+            minijinja::context! {
+                go_enum_name => &go_enum_name,
             },
         ));
     }

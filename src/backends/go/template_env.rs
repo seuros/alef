@@ -491,6 +491,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/data_enum_marshal_json_footer.jinja"),
     ),
     (
+        "data_enum_marshal_json_external_values_header.jinja",
+        include_str!("templates/data_enum_marshal_json_external_values_header.jinja"),
+    ),
+    (
+        "data_enum_marshal_json_external_footer.jinja",
+        include_str!("templates/data_enum_marshal_json_external_footer.jinja"),
+    ),
+    (
         "data_enum_unmarshal_header.jinja",
         include_str!("templates/data_enum_unmarshal_header.jinja"),
     ),
@@ -517,6 +525,18 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "data_enum_unmarshal_unknown_type.jinja",
         include_str!("templates/data_enum_unmarshal_unknown_type.jinja"),
+    ),
+    (
+        "data_enum_unmarshal_external_header.jinja",
+        include_str!("templates/data_enum_unmarshal_external_header.jinja"),
+    ),
+    (
+        "data_enum_unmarshal_external_variant.jinja",
+        include_str!("templates/data_enum_unmarshal_external_variant.jinja"),
+    ),
+    (
+        "data_enum_unmarshal_external_footer.jinja",
+        include_str!("templates/data_enum_unmarshal_external_footer.jinja"),
     ),
     (
         "tagged_union_tag_field.jinja",
