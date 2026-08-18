@@ -374,6 +374,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         let _ = writeln!(out, "\t\tt.Errorf(\"expected an error, but call succeeded\")");
         let _ = writeln!(out, "\t}}");
         emit_declared_error_value_assertion(out, crate::e2e::codegen::declared_error_value(fixture));
+        crate::e2e::codegen::error_path_assertions::emit(out, fixture, "\t// ", "go");
         emit_trait_bridge_cleanup(out, fixture, base_function_name, import_alias);
         let _ = writeln!(out, "}}");
         return;

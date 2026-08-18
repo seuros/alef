@@ -51,6 +51,8 @@ pub(super) fn render_test_method(
     adapters: &[AdapterConfig],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) {
     // Delegate HTTP fixtures to the HTTP-specific renderer.
     if let Some(http) = &fixture.http {
@@ -90,7 +92,9 @@ pub(super) fn render_test_method(
         .unwrap_or_else(|| call_config.function.to_lower_camel_case());
     let function_name = effective_function_name.as_str();
     let result_var = call_config.effective_result_var();
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params(lang);
     let args: &[crate::e2e::config::ArgMapping] = recipe.args;
 
     let method_name = fixture.id.to_upper_camel_case();
@@ -278,6 +282,8 @@ pub(super) fn render_test_method(
             owner_handle_is_receiver: streaming_owner_handle.is_some(),
             config,
             type_defs,
+            enums,
+            target_params,
             teardown_block: &mut teardown_block,
         },
     );
@@ -455,6 +461,11 @@ pub(super) fn render_test_method(
     };
 
     let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
+    // ~keep The `expects_error` branch of `java/test_method.jinja` renders the assertThrows and
+    // nothing else, so every other assertion on an error fixture — most often an `equals` against
+    // `error.status_code` — used to leave no trace at all in the generated test.
+    let unrenderable_error_assertions =
+        crate::e2e::codegen::error_path_assertions::render(fixture, "        // ", "java");
 
     let rendered = crate::e2e::template_env::render(
         "java/test_method.jinja",
@@ -466,6 +477,7 @@ pub(super) fn render_test_method(
             throws_clause => throws_clause,
             expects_error => expects_error,
             declared_error_check => declared_error_check,
+            unrenderable_error_assertions => unrenderable_error_assertions.trim_end(),
             call_expr => call_expr,
             result_var => result_var,
             returns_void => call_config.returns_void,
@@ -603,11 +615,95 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            &[],
+            &[],
         );
 
         assert!(
             out.contains("field 'nonexistent_field' not available on result type"),
             "got:\n{out}"
         );
+    }
+
+    fn render_java_error_method(extra: Vec<Assertion>) -> String {
+        let mut fixture = make_fixture("rate_limited", "content");
+        fixture.assertions = vec![Assertion {
+            assertion_type: "error".to_string(),
+            ..Default::default()
+        }];
+        fixture.assertions.extend(extra);
+        let e2e_config = E2eConfig {
+            call: CallConfig {
+                function: "process".to_string(),
+                module: "MyLib".to_string(),
+                result_var: "result".to_string(),
+                returns_result: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let mut out = String::new();
+        let _ = crate::e2e::codegen::take_skip_records();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "SampleClass",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &[],
+            &config,
+            &type_defs,
+        );
+        out
+    }
+
+    /// Java's `expects_error` branch renders `assertThrows(..)` and returns, so every other
+    /// assertion on the fixture used to leave no trace in the generated test at all.
+    #[test]
+    fn java_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let out = render_java_error_method(vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("error.status_code".to_string()),
+            ..Default::default()
+        }]);
+
+        // Positive first: the error block really rendered.
+        assert!(
+            out.contains("assertThrows(Exception.class, () -> {"),
+            "the error block must render:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this \
+                 backend"
+            ),
+            "got:\n{out}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "java");
+        assert_eq!(records[0].field, "equals");
+    }
+
+    /// Negative control: a lone `error` assertion must leave the generated method marker-free.
+    #[test]
+    fn java_a_lone_error_assertion_renders_no_marker() {
+        let out = render_java_error_method(Vec::new());
+
+        assert!(
+            out.contains("assertThrows(Exception.class, () -> {"),
+            "the error block must render:\n{out}"
+        );
+        assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
     }
 }

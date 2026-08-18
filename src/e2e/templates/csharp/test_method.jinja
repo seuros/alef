@@ -17,6 +17,7 @@
    - has_usable_assertion: bool - whether there's a result to assert on
    - result_var: result variable name
    - assertions_body: string containing all rendered assertions
+   - unrenderable_error_assertions: skip markers for error-path assertions this backend cannot render
 #}
 {%- if is_skipped %}
     [Fact(Skip = "{{ skip_reason }}")]
@@ -66,6 +67,9 @@
 {% if declared_error_check %}
 {{ declared_error_check }}
 {% endif %}
+{% endif %}
+{% if unrenderable_error_assertions %}
+{{ unrenderable_error_assertions }}
 {% endif %}
     }
 {%- else %}

@@ -562,3 +562,86 @@ mod env_setup_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod error_path_marker_tests {
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::HashMap;
+
+    fn render(extra: Vec<Assertion>) -> String {
+        let mut assertions = vec![Assertion {
+            assertion_type: "error".to_string(),
+            ..Default::default()
+        }];
+        assertions.extend(extra);
+        let fixture = Fixture {
+            id: "rate_limited".to_string(),
+            description: "Rejects the request".to_string(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "parse".to_string();
+        e2e_config.call.result_var = "result".to_string();
+        let enum_fields: HashMap<String, String> = HashMap::new();
+        let _ = crate::e2e::codegen::take_skip_records();
+        super::super::spec_file::render_spec_file(
+            "error",
+            &[&fixture],
+            "Sample",
+            None,
+            "sample",
+            None,
+            &enum_fields,
+            false,
+            &e2e_config,
+            false,
+            false,
+            &[],
+            &ResolvedCrateConfig::default(),
+            &[],
+        )
+    }
+
+    /// Ruby's error path renders one `raise_error` matcher and returns, so every other assertion
+    /// on the fixture used to leave no trace in the generated spec at all.
+    #[test]
+    fn ruby_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let out = render(vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("error.status_code".to_string()),
+            ..Default::default()
+        }]);
+
+        // Positive first: the error block really rendered.
+        assert!(
+            out.contains("raise_error(RuntimeError)"),
+            "the error block must render:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "# skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+            ),
+            "got:\n{out}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "ruby");
+        assert_eq!(records[0].field, "equals");
+    }
+
+    /// Negative control: a lone `error` assertion must leave the generated spec marker-free.
+    #[test]
+    fn ruby_a_lone_error_assertion_renders_no_marker() {
+        let out = render(Vec::new());
+
+        assert!(
+            out.contains("raise_error(RuntimeError)"),
+            "the error block must render:\n{out}"
+        );
+        assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+    }
+}

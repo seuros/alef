@@ -1353,3 +1353,48 @@ fn node_expects_error_snippet_gains_no_release_scope() {
         "node has no client release surface to call:\n{body}"
     );
 }
+
+/// TypeScript's `expects_error` branch renders the `rejects` matcher and returns, so every other
+/// assertion on the fixture used to leave no trace in the generated test at all.
+#[test]
+fn typescript_equals_on_an_error_field_is_named_instead_of_dropped() {
+    let mut fixture = error_fixture("rate_limited", Some(serde_json::json!("BadRequest")));
+    fixture.assertions.push(crate::e2e::fixture::Assertion {
+        assertion_type: "equals".to_string(),
+        field: Some("error.status_code".to_string()),
+        ..Default::default()
+    });
+
+    let _ = crate::e2e::codegen::take_skip_records();
+    let output = render_error_fixture(&fixture);
+
+    // Positive first: the error block really rendered.
+    assert!(
+        output.contains("}).rejects.toSatisfy("),
+        "the error block must render: {output}"
+    );
+    assert!(
+        output.contains(
+            "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+        ),
+        "{output}"
+    );
+
+    let records = crate::e2e::codegen::take_skip_records();
+    assert_eq!(records.len(), 1, "got: {records:?}");
+    assert_eq!(records[0].language, "node");
+    assert_eq!(records[0].field, "equals");
+}
+
+/// Negative control: a lone `error` assertion must leave the generated file marker-free.
+#[test]
+fn typescript_a_lone_error_assertion_renders_no_marker() {
+    let fixture = error_fixture("thing_fails", None);
+    let output = render_error_fixture(&fixture);
+
+    assert!(
+        output.contains("}).rejects.toThrow();"),
+        "the error block must render: {output}"
+    );
+    assert!(!output.contains("has no accessor for error field"), "{output}");
+}

@@ -78,26 +78,12 @@ pub(super) fn emit_error_assertion(
 /// (a message-or-class-name match inside the `pytest.raises` block) used to be silently dropped: a
 /// second `"error"` assertion, an `equals` against an `error.<field>` path, or any other assertion
 /// type on an error-path fixture rendered nothing at all — not even a skip comment — because this
-/// function returns before the fixture's other assertions are ever visited. `rust/assertions.rs`
-/// is the only backend that resolves `error.<field>` paths (via `accessor_for_error`); every other
-/// backend, python included, has no such accessor. Naming that gap here, rather than implementing
-/// it, is the fix in scope: it gives `ALEF_E2E_STRICT_ASSERTIONS`
-/// (`assertion_type_skip::AssertionTypeSkip::EqualsOnErrorFieldNotSupported`) a line to see instead
-/// of a generated test that silently asserts nothing about the rest of the fixture. ~keep
+/// function returns before the fixture's other assertions are ever visited. The wording, the
+/// ledger recording and the reason no non-`rust` backend can resolve `error.<field>` now all live
+/// in [`crate::e2e::codegen::error_path_assertions`], shared with every other backend's error
+/// block; this stays as the python-shaped entry point (comment token `#`, four-space indent). ~keep
 fn render_unrenderable_error_path_assertions(out: &mut String, fixture: &Fixture) {
-    let mut consumed_the_primary_error_check = false;
-    for assertion in &fixture.assertions {
-        if !consumed_the_primary_error_check && assertion.assertion_type == "error" {
-            consumed_the_primary_error_check = true;
-            continue;
-        }
-        let field = assertion.field.as_deref().unwrap_or("<none>");
-        let _ = writeln!(
-            out,
-            "    # skipped: assertion type '{}' has no accessor for error field {field} in this backend",
-            assertion.assertion_type
-        );
-    }
+    crate::e2e::codegen::error_path_assertions::emit(out, fixture, "    # ", "python");
 }
 
 #[cfg(test)]

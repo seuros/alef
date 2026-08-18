@@ -1,4 +1,6 @@
 use crate::core::config::ResolvedCrateConfig;
+use crate::core::ir::{EnumDef, TypeRef};
+use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::escape::escape_java;
 use heck::ToUpperCamelCase;
 
@@ -17,6 +19,14 @@ pub(super) struct JavaArgsContext<'a> {
     pub(super) owner_handle_is_receiver: bool,
     pub(super) config: &'a ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
+    /// The IR enum registry, needed to tell an enum-typed parameter from a struct-typed one:
+    /// enums are not in `type_defs`, so without this a `Named` parameter that happens to be an
+    /// enum looks like an unknown type and falls back to a quoted literal. ~keep
+    pub(super) enums: &'a [EnumDef],
+    /// What the core IR declares about the target's parameters -- see
+    /// [`ir_typed_java_expression`]. [`TargetParams::IrAbsent`] keeps the pre-IR lowering, so a
+    /// call site that has no IR to supply is unaffected. ~keep
+    pub(super) target_params: TargetParams<'a>,
     pub(super) teardown_block: &'a mut String,
 }
 
@@ -33,6 +43,8 @@ pub(super) fn build_args_and_setup(
         owner_handle_is_receiver,
         config,
         type_defs,
+        enums,
+        target_params,
         teardown_block,
     } = context;
     let fixture_id = &fixture.id;
@@ -43,7 +55,7 @@ pub(super) fn build_args_and_setup(
     let mut setup_lines: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         if arg.arg_type == "mock_url" {
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             let value = input.get(field).unwrap_or(&serde_json::Value::Null);
@@ -349,6 +361,12 @@ pub(super) fn build_args_and_setup(
                         parts.push(arg.name.clone());
                         continue;
                     }
+                    if let Some(typed) =
+                        ir_typed_java_expression(arg, index, v, target_params, type_defs, enums, config)
+                    {
+                        parts.push(typed);
+                        continue;
+                    }
                     parts.push(json_to_java(v));
                     continue;
                 }
@@ -368,12 +386,68 @@ pub(super) fn build_args_and_setup(
                     parts.push(format!("java.nio.file.Path.of({val})"));
                     continue;
                 }
+                if let Some(typed) = ir_typed_java_expression(arg, index, v, target_params, type_defs, enums, config) {
+                    parts.push(typed);
+                    continue;
+                }
                 parts.push(json_to_java(v));
             }
         }
     }
 
     (setup_lines, parts.join(", "))
+}
+
+/// The Java expression for an argument whose *declared* parameter type the core IR resolved,
+/// or `None` to keep the existing `arg_type`-only lowering.
+///
+/// This is the Java answer to the shared question [`TargetParams`] poses, not a shared verdict.
+/// `ArgMapping::arg_type` defaults to `"string"`, so before the seam a fixture value bound for a
+/// DTO- or enum-typed parameter reached [`json_to_java`], which renders an object as a *quoted
+/// JSON string literal* and a string as a *quoted string literal* -- `javac` rejects both
+/// against a `CompletionRequest` or a `Model` parameter. Jackson can build either from the same
+/// JSON, and the Java binding already ships both entry points, so the fix is to use them:
+/// `JsonUtil.fromJson` for a DTO, the generated enum's `@JsonCreator fromValue` for an enum
+/// (which matches the wire value case-insensitively, unlike guessing the constant's spelling
+/// from the value's camel case as the builder path does). Both are emitted fully qualified so
+/// no import has to be predicted at the point the test file's import block is computed. ~keep
+///
+/// Deliberately narrow. Only a bare `TypeRef::Named` qualifies: an `Optional<T>` or `List<T>`
+/// parameter wants a wrapper this expression does not build, and unwrapping to `T` there would
+/// swap one compile error for another. Only a *value shape that matches* qualifies: an object
+/// for a DTO, a string for an enum. Everything else -- an unknown name, an `IrAbsent` or
+/// `Unresolvable` target -- keeps today's rendering exactly. ~keep
+fn ir_typed_java_expression(
+    arg: &crate::e2e::config::ArgMapping,
+    index: usize,
+    value: &serde_json::Value,
+    target_params: TargetParams<'_>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[EnumDef],
+    config: &ResolvedCrateConfig,
+) -> Option<String> {
+    let TypeRef::Named(declared) = &target_params.param_for(&arg.name, index)?.ty else {
+        return None;
+    };
+    let package = config.java_package();
+    let qualifier = if package.is_empty() {
+        String::new()
+    } else {
+        format!("{package}.")
+    };
+    if enums.iter().any(|enum_def| &enum_def.name == declared)
+        && let Some(text) = value.as_str()
+    {
+        return Some(format!("{qualifier}{declared}.fromValue(\"{}\")", escape_java(text)));
+    }
+    if type_defs.iter().any(|type_def| &type_def.name == declared) && value.is_object() {
+        let json = serde_json::to_string(value).unwrap_or_default();
+        return Some(format!(
+            "{qualifier}JsonUtil.fromJson(\"{}\", {qualifier}{declared}.class)",
+            escape_java(&json)
+        ));
+    }
+    None
 }
 
 fn resolve_handle_config_type(

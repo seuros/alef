@@ -6,7 +6,8 @@
 use crate::core::config::e2e::{ArgMapping, CallConfig, CallOverride};
 use crate::core::config::extras::{AdapterConfig, AdapterPattern};
 use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
-use crate::core::ir::{MethodDef, TypeDef, TypeRef};
+use crate::core::ir::{FunctionDef, MethodDef, TypeDef, TypeRef};
+use crate::e2e::codegen::call_ir::{CallIr, TargetParams};
 use crate::e2e::fixture::Fixture;
 use std::collections::{HashMap, HashSet};
 
@@ -103,6 +104,15 @@ pub struct ResolvedE2eCallRecipe<'a> {
     pub extra_args: &'a [String],
     call_config: &'a CallConfig,
     type_defs: &'a [TypeDef],
+    /// `ApiSurface::functions`, supplied only by backends that have opted into type-aware
+    /// argument lowering via [`ResolvedE2eCallRecipe::with_functions`].
+    ///
+    /// `None` is not `&[]`: an unconverted backend must resolve to
+    /// [`TargetParams::IrAbsent`] and keep its pre-IR lowering exactly, whereas `&[]` with a
+    /// populated `type_defs` would resolve to [`TargetParams::Unresolvable`] for every call
+    /// that is not an IR method and change what those backends emit. Opting in is therefore
+    /// per-backend and explicit. ~keep
+    functions: Option<&'a [FunctionDef]>,
 }
 
 impl<'a> ResolvedE2eCallRecipe<'a> {
@@ -121,7 +131,39 @@ impl<'a> ResolvedE2eCallRecipe<'a> {
             extra_args: base.extra_args,
             call_config,
             type_defs,
+            functions: None,
         }
+    }
+
+    /// Opt this recipe into type-aware argument lowering by supplying the IR free-function
+    /// registry, so [`Self::target_params`] can resolve a real signature.
+    ///
+    /// Backends that have not been converted simply do not call this and keep answering
+    /// [`TargetParams::IrAbsent`], which is what they behaved as before the seam existed. ~keep
+    #[must_use]
+    pub(crate) fn with_functions(mut self, functions: &'a [FunctionDef]) -> Self {
+        self.functions = Some(functions);
+        self
+    }
+
+    /// What the core IR declares about this call's target parameters for `language`.
+    ///
+    /// See [`crate::e2e::codegen::call_ir::TargetParams`] for what each state licenses. The
+    /// answer is deliberately an *input* to the backend's own lowering, not a verdict: what
+    /// expression a declared type wants is a per-language question, and a shared answer would
+    /// reject argument spellings that compile today in some languages and not others. ~keep
+    pub(crate) fn target_params(&self, language: &str) -> TargetParams<'a> {
+        let Some(functions) = self.functions else {
+            return TargetParams::IrAbsent;
+        };
+        TargetParams::resolve(
+            self.call_config,
+            language,
+            CallIr {
+                functions,
+                type_defs: self.type_defs,
+            },
+        )
     }
 
     pub fn compatible_options_type(&self, compatible_languages: &[&str]) -> Option<&'a str> {
@@ -810,6 +852,70 @@ mod tests {
                 TraitBridgeRegistryOperation::Register,
                 "register_sample_backend".to_string()
             ))
+        );
+    }
+
+    /// An unconverted backend never calls `with_functions`, so the seam must answer
+    /// `IrAbsent` -- the state that licenses no type claim and preserves its existing
+    /// lowering exactly. Without this the whole opt-in design is unverified. ~keep
+    #[test]
+    fn target_params_defaults_to_ir_absent_without_opting_in() {
+        let fixture = fixture();
+        let call_config = CallConfig {
+            function: "complete".to_string(),
+            args: vec![json_arg("request", None)],
+            ..CallConfig::default()
+        };
+        let recipe = ResolvedE2eCallRecipe::resolve("java", &fixture, &call_config, &[]);
+        assert!(matches!(
+            recipe.target_params("java"),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent
+        ));
+        assert_eq!(recipe.target_params("java").declared_type_name("request", 0), None);
+    }
+
+    /// A populated `type_defs` with no `functions` opt-in must still be `IrAbsent`, not
+    /// `Unresolvable` -- `&[]` and "not supplied" are different answers, and conflating them
+    /// would change what every unconverted backend emits. ~keep
+    #[test]
+    fn type_defs_alone_do_not_opt_a_backend_in() {
+        let fixture = fixture();
+        let call_config = CallConfig {
+            function: "complete".to_string(),
+            ..CallConfig::default()
+        };
+        let type_defs = [TypeDef {
+            name: "Client".to_string(),
+            ..TypeDef::default()
+        }];
+        let recipe = ResolvedE2eCallRecipe::resolve("java", &fixture, &call_config, &type_defs);
+        assert!(matches!(
+            recipe.target_params("java"),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent
+        ));
+    }
+
+    #[test]
+    fn with_functions_resolves_the_declared_parameter_type() {
+        let fixture = fixture();
+        let call_config = CallConfig {
+            function: "complete".to_string(),
+            ..CallConfig::default()
+        };
+        let functions = [crate::core::ir::FunctionDef {
+            name: "complete".to_string(),
+            params: vec![ParamDef {
+                name: "request".to_string(),
+                ty: TypeRef::Named("CompletionRequest".to_string()),
+                ..ParamDef::default()
+            }],
+            return_type: TypeRef::Named("CompletionResponse".to_string()),
+            ..crate::core::ir::FunctionDef::default()
+        }];
+        let recipe = ResolvedE2eCallRecipe::resolve("java", &fixture, &call_config, &[]).with_functions(&functions);
+        assert_eq!(
+            recipe.target_params("java").declared_type_name("request", 0),
+            Some("CompletionRequest")
         );
     }
 }

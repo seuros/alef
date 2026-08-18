@@ -18,6 +18,8 @@ pub(super) fn render_test_file(
     args: &[crate::e2e::config::ArgMapping],
     element_constructors: &[crate::core::config::GleamElementConstructor],
     json_object_wrapper: Option<&str>,
+    ir: crate::e2e::codegen::call_ir::CallIr<'_>,
+    enums: &[crate::core::ir::EnumDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -223,7 +225,15 @@ pub(super) fn render_test_file(
                 args,
                 element_constructors,
                 json_object_wrapper,
+                ir,
+                enums,
             );
+            // ~keep Gleam's error path asserts the call returned `Error(..)` and returns, so
+            // every other assertion on an error fixture — most often an `equals` against
+            // `error.status_code` — leaves no trace in the generated module. The marker sits
+            // after the emitted test function rather than inside it: the body is built in
+            // `test_case.rs`, which another change owns.
+            crate::e2e::codegen::error_path_assertions::emit(&mut out, fixture, "// ", "gleam");
         }
         let _ = writeln!(out);
     }

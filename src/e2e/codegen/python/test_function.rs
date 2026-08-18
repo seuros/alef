@@ -266,7 +266,8 @@ pub(super) fn render_test_function(
             &call_expr,
             is_streaming_error_call,
         );
-        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&error_assertion_block, "python", &fixture.id);
+        // ~keep The ledger recording now lives inside `error_path_assertions::render`, which every
+        // backend's error block shares. Gating here as well would double-count every python marker.
 
         let ctx = minijinja::context! {
             skip_decorator => skip_decorator,

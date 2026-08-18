@@ -382,6 +382,7 @@ pub(super) fn render_test_method(
             let _ = writeln!(out, "            {call_expr}");
             let _ = writeln!(out, "            client.close()");
             let _ = writeln!(out, "        }}");
+            crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", "kotlin");
             // Trailing `Unit` so the runBlocking { ... } lambda's final
             // expression is Unit (not the Exception returned by assertFailsWith).
             // The enclosing `fun ... = runBlocking { ... }` then infers Unit
@@ -446,6 +447,7 @@ pub(super) fn render_test_method(
         }
         let _ = writeln!(out, "            {call_receiver}.{function_name}({args_str})");
         let _ = writeln!(out, "        }}");
+        crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", "kotlin");
         // Trailing Unit — see comment in the client-factory branch above.
         let _ = writeln!(out, "        Unit");
         let _ = writeln!(out, "    }}");
@@ -997,5 +999,89 @@ mod tests {
             binding_count, 1,
             "expected exactly one `val request =` binding, got {binding_count}:\n{out}"
         );
+    }
+
+    fn render_error_method(extra: Vec<crate::e2e::fixture::Assertion>) -> String {
+        let mut assertions = vec![crate::e2e::fixture::Assertion {
+            assertion_type: "error".to_string(),
+            ..Default::default()
+        }];
+        assertions.extend(extra);
+        let fixture = Fixture {
+            id: "rate_limited".to_string(),
+            description: "reject the request".to_string(),
+            input: serde_json::json!({}),
+            assertions,
+            ..Fixture::default()
+        };
+        let e2e_config = E2eConfig {
+            call: CallConfig {
+                function: "process".to_string(),
+                result_var: "result".to_string(),
+                ..CallConfig::default()
+            },
+            ..E2eConfig::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let mut out = String::new();
+        let _ = crate::e2e::codegen::take_skip_records();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "Facade",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &config,
+            &[],
+        )
+        .expect("render_test_method succeeds");
+        out
+    }
+
+    /// Kotlin's error path emits `assertFailsWith<Exception> { .. }` and returns, so every other
+    /// assertion on the fixture used to leave no trace in the generated test at all.
+    #[test]
+    fn kotlin_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let out = render_error_method(vec![crate::e2e::fixture::Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("error.status_code".to_string()),
+            ..Default::default()
+        }]);
+
+        // Positive first: the error block really rendered.
+        assert!(
+            out.contains("assertFailsWith<Exception> {"),
+            "the error block must render: {out}"
+        );
+        assert!(
+            out.contains(
+                "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this \
+                 backend"
+            ),
+            "{out}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "kotlin");
+        assert_eq!(records[0].field, "equals");
+    }
+
+    /// Negative control: a lone `error` assertion must leave the generated method marker-free.
+    #[test]
+    fn kotlin_a_lone_error_assertion_renders_no_marker() {
+        let out = render_error_method(Vec::new());
+
+        assert!(
+            out.contains("assertFailsWith<Exception> {"),
+            "the error block must render: {out}"
+        );
+        assert!(!out.contains("has no accessor for error field"), "{out}");
     }
 }

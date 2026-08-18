@@ -46,6 +46,8 @@ pub(super) fn render_test_case(
     _args: &[crate::e2e::config::ArgMapping],
     element_constructors: &[crate::core::config::GleamElementConstructor],
     json_object_wrapper: Option<&str>,
+    ir: crate::e2e::codegen::call_ir::CallIr<'_>,
+    enums: &[crate::core::ir::EnumDef],
 ) {
     let call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -122,19 +124,22 @@ pub(super) fn render_test_case(
         options_type,
         options_via,
         fixture.preserve_input_urls,
+        crate::e2e::codegen::call_ir::TargetParams::resolve(call_config, lang, ir),
+        ir.type_defs,
+        enums,
     );
 
     let _ = writeln!(out, "// {description}");
     let _ = writeln!(out, "pub fn {test_name}_test() {{");
 
-    let Some((setup_lines, args_str)) = build_result else {
-        let _ = writeln!(
-            out,
-            "  // skipped: json_object arg requires typed record construction not yet supported in Gleam e2e"
-        );
-        let _ = writeln!(out, "  Nil");
-        let _ = writeln!(out, "}}");
-        return;
+    let (setup_lines, args_str) = match build_result {
+        Ok(built) => built,
+        Err(reason) => {
+            let _ = writeln!(out, "  // skipped: {reason}");
+            let _ = writeln!(out, "  Nil");
+            let _ = writeln!(out, "}}");
+            return;
+        }
     };
 
     for line in &setup_lines {

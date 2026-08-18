@@ -19,6 +19,7 @@
        drain with `for await` so the lazy NAPI stream surfaces the error
    - skip_reason: optional string reason for skipping the test
    - bridge_cleanup: optional string for async trait bridge dispose() calls
+   - unrenderable_error_assertions: skip markers for error-path assertions this backend cannot render
 #}
 {%- if skip_reason %}
 	it.skip("{{ test_name }}: {{ description }}", () => {
@@ -57,6 +58,9 @@
 			});
 {% else %}
 		}).rejects.toThrow();
+{% endif %}
+{% if unrenderable_error_assertions %}
+{{ unrenderable_error_assertions }}
 {% endif %}
 	}, {{ timeout_ms }});
 {%- else %}

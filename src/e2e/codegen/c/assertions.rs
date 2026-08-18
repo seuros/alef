@@ -958,41 +958,11 @@ fn unknown_leaf_field_diagnostic(context: UnknownLeafField<'_>) -> String {
     message
 }
 
-/// What the emitter knows about the *target* function's declared parameters -- see
-/// [`build_args_string_c`].
+/// The three-state view of the target's declared parameters this file renders against.
 ///
-/// An empty `args` list is ambiguous between "this call genuinely takes zero arguments" and
-/// "nobody configured `args` for it yet", and the two need opposite renderings: `()` for one,
-/// a refusal for the other. Mirrors `ResultTypeName`'s shape in `c.rs` for the same reason --
-/// the state that tells the two apart cannot be collapsed into a `bool` without losing the
-/// case that must fail loudly. ~keep
-///
-/// `Known` is also the only state that can answer the *other* question a rendered argument
-/// raises: whether the value's lowering matches the type of the parameter it lands in. An
-/// argument list of the right length is not an argument list of the right types, and only a
-/// resolved signature can tell those apart -- see [`ensure_arg_matches_param_type`]. ~keep
-#[derive(Clone, Copy)]
-pub(super) enum TargetParams<'a> {
-    /// The IR resolved a signature for the call's target (a free function, or a method every
-    /// same-named IR method agrees on) -- these are its declared parameters, in order. An
-    /// empty slice means the function is genuinely zero-argument.
-    Known(&'a [crate::core::ir::ParamDef]),
-    /// There is no core IR in scope at all, so nothing was consulted and nothing can be
-    /// concluded. This is a legitimate, common state -- the main e2e test-file emitter has no
-    /// `CallIr`, and several snippet entry points render without one -- so it keeps the
-    /// pre-existing behaviour rather than refusing.
-    ///
-    /// Refusing here instead would fail every call on every IR-less path, which is a far larger
-    /// blast radius than the defect being fixed, and it would contradict the sibling
-    /// result-type resolution: `unresolved_result_type_name` treats an absent IR as
-    /// `Unverified` for exactly this reason. The two halves of one fix must agree on what an
-    /// absent IR licenses. ~keep
-    IrAbsent,
-    /// The IR was there to consult and the target still did not resolve -- an unresolvable name
-    /// or disagreeing same-named methods. That is an authoring gap, and it is the case that
-    /// produced a whole fixture `input` JSON spliced against a typed parameter, so it refuses.
-    Unresolvable,
-}
+/// Defined in [`crate::e2e::codegen::call_ir`] because every backend needs the same three
+/// states; the C-specific part is what this file *does* with them, not the states. ~keep
+pub(super) use crate::e2e::codegen::call_ir::TargetParams;
 
 /// The `alef.toml` key whose `args` list governs this fixture's call, named so every
 /// diagnostic below points the operator at the table they actually have to edit -- the
@@ -1149,11 +1119,7 @@ fn ensure_arg_matches_param_type(
     type_defs: &[crate::core::ir::TypeDef],
     rendered: &str,
 ) -> anyhow::Result<()> {
-    let Some(param) = params
-        .iter()
-        .find(|param| param.name == arg.name)
-        .or_else(|| params.get(index))
-    else {
+    let Some(param) = TargetParams::Known(params).param_for(&arg.name, index) else {
         return Ok(());
     };
     let Some(type_name) = handle_param_type_name(&param.ty) else {
@@ -1213,10 +1179,7 @@ pub(super) fn build_args_string_c(
     // The parameters a rendered argument can be checked against, if any. `IrAbsent` and
     // `Unresolvable` learned nothing about the target, so they license no type claim -- the
     // same asymmetry the empty-`args` match above encodes. ~keep
-    let known_params = match target_params {
-        TargetParams::Known(params) => Some(params),
-        TargetParams::IrAbsent | TargetParams::Unresolvable => None,
-    };
+    let known_params = target_params.known();
 
     let mut parts: Vec<String> = Vec::new();
 

@@ -483,3 +483,95 @@ fn dart_trait_stub_wrapper_compiles() {
         String::from_utf8_lossy(&output.stderr),
     );
 }
+
+/// Dart's error path renders `expectLater(..., throwsA(..))` and returns, so every other
+/// assertion on the fixture used to leave no trace in the generated test at all.
+#[test]
+fn dart_equals_on_an_error_field_is_named_instead_of_dropped() {
+    use crate::e2e::fixture::Assertion;
+
+    let mut fixture = make_fixture("rate_limited");
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        value: Some(serde_json::json!("ThingNotFound")),
+        ..Default::default()
+    });
+    fixture.assertions.push(Assertion {
+        assertion_type: "equals".into(),
+        field: Some("error.status_code".into()),
+        ..Default::default()
+    });
+
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let dart_first_class_map = crate::e2e::field_access::DartFirstClassMap::default();
+
+    let _ = crate::e2e::codegen::take_skip_records();
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &dart_first_class_map,
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+
+    // Positive first: the error block really rendered.
+    assert!(
+        output.contains("throwsA(predicate("),
+        "the error block must render: {output}"
+    );
+    assert!(
+        output.contains(
+            "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+        ),
+        "{output}"
+    );
+
+    let records = crate::e2e::codegen::take_skip_records();
+    assert_eq!(records.len(), 1, "got: {records:?}");
+    assert_eq!(records[0].language, "dart");
+    assert_eq!(records[0].field, "equals");
+}
+
+/// Negative control: a lone `error` assertion must leave the generated file marker-free.
+#[test]
+fn dart_a_lone_error_assertion_renders_no_marker() {
+    use crate::e2e::fixture::Assertion;
+
+    let mut fixture = make_fixture("invalid_thing");
+    fixture.assertions.push(Assertion {
+        assertion_type: "error".into(),
+        ..Default::default()
+    });
+
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "parseThing".into();
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let dart_first_class_map = crate::e2e::field_access::DartFirstClassMap::default();
+
+    let output = super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &dart_first_class_map,
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+
+    assert!(output.contains("throwsA("), "the error block must render: {output}");
+    assert!(!output.contains("has no accessor for error field"), "{output}");
+}

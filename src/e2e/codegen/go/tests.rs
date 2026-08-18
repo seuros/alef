@@ -1446,3 +1446,113 @@ fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emi
         },
     );
 }
+
+/// Go's `expects_error` branch renders the failure check plus (since the declared-value work) a
+/// message-or-type-name comparison, then returns — every other assertion on the fixture used to
+/// leave no trace at all in the generated test.
+#[test]
+fn go_equals_on_an_error_field_is_named_instead_of_dropped() {
+    let mut fixture = make_fixture("rate_limited");
+    fixture.assertions = vec![
+        Assertion {
+            assertion_type: "error".to_string(),
+            value: Some(serde_json::Value::String("BadRequest".to_string())),
+            ..Default::default()
+        },
+        Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("error.status_code".to_string()),
+            ..Default::default()
+        },
+    ];
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "parse".to_string(),
+            module: "example.com/sample".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+
+    let mut out = String::new();
+    let _ = crate::e2e::codegen::take_skip_records();
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+
+    // Positive first: the error block really did render, so the absence check below is not
+    // vacuously satisfied by a backend that emitted nothing.
+    assert!(
+        out.contains("t.Errorf(\"expected an error, but call succeeded\")"),
+        "the error block must render: {out}"
+    );
+    assert!(
+        out.contains(
+            "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+        ),
+        "{out}"
+    );
+
+    let records = crate::e2e::codegen::take_skip_records();
+    assert_eq!(records.len(), 1, "got: {records:?}");
+    assert_eq!(records[0].language, "go");
+    assert_eq!(records[0].field, "equals");
+}
+
+/// Negative control: an error fixture with nothing beyond its one `error` assertion must render
+/// no marker at all, so the gate stays informative.
+#[test]
+fn go_a_lone_error_assertion_renders_no_marker() {
+    let mut fixture = make_fixture("rejects");
+    fixture.assertions = vec![Assertion {
+        assertion_type: "error".to_string(),
+        ..Default::default()
+    }];
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "parse".to_string(),
+            module: "example.com/sample".to_string(),
+            returns_result: true,
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+
+    let mut out = String::new();
+    render_test_function(
+        &mut out,
+        &fixture,
+        GoTestFunctionContext {
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+        },
+    );
+
+    assert!(
+        out.contains("t.Errorf(\"expected an error, but call succeeded\")"),
+        "the error block must render: {out}"
+    );
+    assert!(!out.contains("has no accessor for error field"), "{out}");
+}

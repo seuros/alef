@@ -484,80 +484,12 @@ struct ResolvedCallInfo {
     extra_args: Vec<String>,
 }
 
-/// The two core-IR registries a C call resolves its result and argument types from.
+/// The core-IR seam this backend resolves calls through, shared with every other e2e backend.
 ///
-/// They travel together because a call name can only be answered by consulting both:
-/// `functions` is `ApiSurface::functions`, which holds **free `pub fn`s only**, and every
-/// inherent or trait method — a client's `chat`, say — is a [`crate::core::ir::MethodDef`]
-/// hanging off a [`crate::core::ir::TypeDef`] in `type_defs`. Passing one without the other
-/// answers `None` for half the calls in a typical suite, and every `None` here lands on
-/// [`unresolved_result_type_name`], which fails generation rather than inventing a name. ~keep
-#[derive(Clone, Copy, Default)]
-pub(super) struct CallIr<'a> {
-    pub functions: &'a [crate::core::ir::FunctionDef],
-    pub type_defs: &'a [crate::core::ir::TypeDef],
-}
-
-impl<'a> CallIr<'a> {
-    /// True when neither registry was supplied, i.e. this generator has no IR to consult at
-    /// all. Distinct from "the IR was present and the call was not in it", which is a
-    /// per-call authoring problem rather than a structural one.
-    fn is_absent(self) -> bool {
-        self.functions.is_empty() && self.type_defs.is_empty()
-    }
-
-    /// The declared signature for a Rust-side call name: the free function of that name if
-    /// there is one, otherwise the method of that name declared on an IR type.
-    ///
-    /// Free functions win because they are unambiguous — a crate has at most one `pub fn` of
-    /// a given path. Methods are not: several types can declare `new`, and a type carrying
-    /// both an inherent and a trait-sourced `chat` lists both. Rather than pick one, this
-    /// answers only when every same-named method agrees on the signature, so the result is
-    /// the one the IR actually determines. Disagreement yields `None` and the caller's
-    /// fallback runs, which is exactly the behaviour before methods were consulted at all. ~keep
-    fn signature(self, name: &str) -> Option<IrSignature<'a>> {
-        if let Some(function) = self.functions.iter().find(|function| function.name == name) {
-            return Some(IrSignature {
-                params: &function.params,
-                return_type: &function.return_type,
-            });
-        }
-        let mut methods = self
-            .type_defs
-            .iter()
-            .flat_map(|type_def| type_def.methods.iter())
-            .filter(|method| method.name == name);
-        let first = methods.next()?;
-        if !methods.all(|other| same_signature(first, other)) {
-            return None;
-        }
-        Some(IrSignature {
-            params: &first.params,
-            return_type: &first.return_type,
-        })
-    }
-}
-
-/// The parts of a declared signature C codegen reads, shared by the free-function and
-/// method arms of [`CallIr::signature`].
-struct IrSignature<'a> {
-    params: &'a [crate::core::ir::ParamDef],
-    return_type: &'a crate::core::ir::TypeRef,
-}
-
-/// Whether two same-named methods declare the same thing, for the purposes of the three
-/// questions C codegen asks a signature: what it returns, and what its parameters are named
-/// and typed. `ParamDef` has no `PartialEq`, and the fields beyond name and type (defaults,
-/// `is_ref`, newtype wrappers) do not change any answer here.
-fn same_signature(left: &crate::core::ir::MethodDef, right: &crate::core::ir::MethodDef) -> bool {
-    left.return_type == right.return_type
-        && left.params.len() == right.params.len()
-        && left
-            .params
-            .iter()
-            .zip(right.params.iter())
-            .all(|(left, right)| left.name == right.name && left.ty == right.ty)
-}
+/// These lived here until each backend needed them; the definitions and their rationale are now
+/// in [`super::call_ir`]. Re-exported rather than re-imported at every use site so the `c`
+/// submodules keep naming them `super::CallIr` / `super::named_type`. ~keep
+pub(super) use super::call_ir::{CallIr, named_type};
 
 fn resolve_call_info(
     call: &CallConfig,
@@ -638,14 +570,6 @@ fn resolve_call_info(
         result_is_bytes,
         streaming: call.streaming_enabled(),
         extra_args,
-    }
-}
-
-fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
-    match type_ref {
-        crate::core::ir::TypeRef::Named(name) => Some(name),
-        crate::core::ir::TypeRef::Optional(inner) | crate::core::ir::TypeRef::Vec(inner) => named_type(inner),
-        _ => None,
     }
 }
 
@@ -2132,6 +2056,126 @@ mod snippet_tests {
                 "raw_type={raw_type}: expected last_error_code fallback assert in:\n{out}"
             );
         }
+    }
+
+    /// Builds an error fixture with `raw_c_result_type = "char*"` plus the extra assertions the
+    /// error path has to account for.
+    fn render_c_error_fixture(extra: Vec<crate::e2e::fixture::Assertion>, declared: Option<&str>) -> String {
+        let mut fixture = Fixture {
+            id: "rate_limited".into(),
+            description: "Rejects the request".into(),
+            ..Fixture::default()
+        };
+        fixture.assertions.push(crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            value: declared.map(|v| serde_json::Value::String(v.to_string())),
+            ..Default::default()
+        });
+        fixture.assertions.extend(extra);
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let field_resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        let _ = crate::e2e::codegen::take_skip_records();
+        render_test_function(
+            &mut out,
+            &fixture,
+            "sample",
+            "sample_parse_input",
+            "result",
+            &[],
+            &field_resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            &ResultTypeName::Resolved("Result".into()),
+            "",
+            None,
+            Some("char*"),
+            None,
+            None,
+            false,
+            false,
+            None,
+            &[],
+            &config,
+            &[],
+            false,
+            &FieldConfigSources {
+                result_fields: EffectiveConfigSource::Global,
+                fields: EffectiveConfigSource::Global,
+            },
+        )
+        .expect("test fixture renders");
+        out
+    }
+
+    /// The defect: a declared `error` value was discarded outright, so `assert(result == NULL)`
+    /// was the whole test — it could not tell the expected failure from any other. The C ABI's
+    /// `last_error_context()` is the only textual evidence available, and it must be compared.
+    #[test]
+    fn a_declared_error_value_is_compared_against_the_ffi_error_message() {
+        let out = render_c_error_fixture(Vec::new(), Some("rate limit"));
+
+        assert!(
+            out.contains("assert(result == NULL && \"expected call to fail\");"),
+            "the failure check must still render: {out}"
+        );
+        assert!(
+            out.contains("const char* _err_message = sample_last_error_context();"),
+            "the FFI message must be bound: {out}"
+        );
+        assert!(
+            out.contains("assert(strstr(_err_message, \"rate limit\") != NULL && \"error message mismatch\");"),
+            "the declared value must be compared: {out}"
+        );
+    }
+
+    /// Negative control: with no declared value the emitter must not invent a message check.
+    #[test]
+    fn an_error_assertion_without_a_value_emits_no_message_check() {
+        let out = render_c_error_fixture(Vec::new(), None);
+
+        assert!(
+            out.contains("assert(result == NULL && \"expected call to fail\");"),
+            "the failure check must still render: {out}"
+        );
+        assert!(!out.contains("last_error_context"), "{out}");
+    }
+
+    #[test]
+    fn an_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let out = render_c_error_fixture(
+            vec![crate::e2e::fixture::Assertion {
+                assertion_type: "equals".into(),
+                field: Some("error.status_code".into()),
+                ..Default::default()
+            }],
+            Some("rate limit"),
+        );
+
+        assert!(
+            out.contains("assert(result == NULL && \"expected call to fail\");"),
+            "the error block must render before we assert anything about the second assertion: {out}"
+        );
+        assert!(
+            out.contains(
+                "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+            ),
+            "{out}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "c");
+        assert_eq!(records[0].field, "equals");
     }
 
     #[test]

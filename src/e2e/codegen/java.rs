@@ -54,7 +54,7 @@ impl E2eCodegen for JavaCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -307,6 +307,8 @@ impl E2eCodegen for JavaCodegen {
                 &config.adapters,
                 config,
                 type_defs,
+                enums,
+                functions,
                 uses_harness,
             );
             files.push(GeneratedFile {
@@ -328,6 +330,20 @@ impl E2eCodegen for JavaCodegen {
         _enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         Ok(snippet::render_snippet_body(fixture, e2e_config, config, type_defs))
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        Ok(snippet::render_snippet_body_with_ir(
+            fixture, e2e_config, config, type_defs, enums, functions,
+        ))
     }
 
     fn language_name(&self) -> &'static str {

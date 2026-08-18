@@ -402,6 +402,7 @@ pub(super) fn render_test_method(
             let _ = writeln!(out, "            XCTFail(\"expected to throw\")");
             render_error_catch_block(out, declared_error);
         }
+        crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", "swift");
         let _ = writeln!(out, "    }}");
         return;
     }

@@ -41,6 +41,8 @@ pub(super) fn render_test_file(
     adapters: &[crate::core::config::extras::AdapterConfig],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
     uses_harness: bool,
 ) -> String {
     let header = hash::header(CommentStyle::DoubleSlash);
@@ -281,6 +283,8 @@ pub(super) fn render_test_file(
             adapters,
             config,
             type_defs,
+            enums,
+            functions,
         );
         if i + 1 < fixtures.len() {
             fixtures_body.push('\n');

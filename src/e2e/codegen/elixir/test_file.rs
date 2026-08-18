@@ -210,6 +210,12 @@ pub(super) fn render_test_file(
                 config,
                 type_defs,
             );
+            // ~keep Elixir's error path asserts `{:error, _}` and returns, so every other
+            // assertion on an error fixture — most often an `equals` against `error.status_code`
+            // — leaves no trace in the generated file. The marker sits after the emitted `test`
+            // block, at `defmodule` body level, rather than inside it: the body is built in
+            // `test_case.rs`, which another change owns.
+            crate::e2e::codegen::error_path_assertions::emit(&mut out, fixture, "  # ", "elixir");
         }
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
@@ -218,4 +224,90 @@ pub(super) fn render_test_file(
 
     let _ = writeln!(out, "end");
     out
+}
+
+#[cfg(test)]
+mod error_path_marker_tests {
+    use super::render_test_file;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::{HashMap, HashSet};
+
+    fn render(extra: Vec<Assertion>) -> String {
+        let mut assertions = vec![Assertion {
+            assertion_type: "error".into(),
+            ..Assertion::default()
+        }];
+        assertions.extend(extra);
+        let fixture = Fixture {
+            id: "rate_limited".into(),
+            description: "Rejects the request".into(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "parse".into();
+        let enum_fields: HashMap<String, String> = HashMap::new();
+        let handle_atom_list_fields: HashSet<String> = HashSet::new();
+        let _ = crate::e2e::codegen::take_skip_records();
+        render_test_file(
+            "error",
+            &[&fixture],
+            &e2e_config,
+            "Sample",
+            "parse",
+            "result",
+            &[],
+            None,
+            None,
+            &enum_fields,
+            None,
+            &handle_atom_list_fields,
+            &[],
+            &[],
+            &ResolvedCrateConfig::default(),
+            &[],
+        )
+    }
+
+    /// Elixir's error path asserts `{:error, _}` and returns, so every other assertion on the
+    /// fixture used to leave no trace in the generated file at all.
+    #[test]
+    fn elixir_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let out = render(vec![Assertion {
+            assertion_type: "equals".into(),
+            field: Some("error.status_code".into()),
+            ..Assertion::default()
+        }]);
+
+        // Positive first: the error block really rendered.
+        assert!(
+            out.contains("assert {:error, _} ="),
+            "the error block must render:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "# skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+            ),
+            "got:\n{out}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "elixir");
+        assert_eq!(records[0].field, "equals");
+    }
+
+    /// Negative control: a lone `error` assertion must leave the generated file marker-free.
+    #[test]
+    fn elixir_a_lone_error_assertion_renders_no_marker() {
+        let out = render(Vec::new());
+
+        assert!(
+            out.contains("assert {:error, _} ="),
+            "the error block must render:\n{out}"
+        );
+        assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+    }
 }

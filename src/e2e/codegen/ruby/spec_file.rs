@@ -208,7 +208,19 @@ pub(super) fn render_spec_file(
                         type_defs,
                     )
                 };
-                examples.push(example);
+                // ~keep Ruby's error path renders one `expect { .. }.to raise_error(..)` and
+                // returns, so every other assertion on an error fixture — most often an `equals`
+                // against `error.status_code` — leaves no trace in the generated spec. The marker
+                // is appended after the emitted `it ... end` block, at `describe` body level,
+                // rather than inside it: the block is built in `examples.rs`, which another
+                // change owns.
+                let markers = crate::e2e::codegen::error_path_assertions::render(fixture, "  # ", "ruby");
+                let separator = if markers.is_empty() || example.ends_with('\n') {
+                    ""
+                } else {
+                    "\n"
+                };
+                examples.push(format!("{example}{separator}{markers}"));
             }
         }
     }

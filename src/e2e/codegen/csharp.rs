@@ -893,6 +893,11 @@ fn render_test_method(
     );
 
     let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
+    // ~keep The `expects_error` branch of `csharp/test_method.jinja` renders the throws-assertion
+    // and nothing else, so every other assertion on an error fixture — most often an `equals`
+    // against `error.status_code` — used to leave no trace at all in the generated test.
+    let unrenderable_error_assertions =
+        crate::e2e::codegen::error_path_assertions::render(fixture, "        // ", "csharp");
 
     let ctx = minijinja::context! {
         is_skipped => false,
@@ -906,6 +911,7 @@ fn render_test_method(
         call_expr => call_expr,
         exception_class => exception_class,
         declared_error_check => declared_error_check,
+        unrenderable_error_assertions => unrenderable_error_assertions.trim_end(),
         client_factory_setup => client_factory_setup,
         has_usable_assertion => !expects_error && !returns_void,
         result_var => result_var,

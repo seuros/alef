@@ -19,6 +19,42 @@ use super::{
     validate_c_snippet_metadata,
 };
 
+/// Emit the C error-path epilogue every `expects_error` return site shares: the declared `error`
+/// value comparison, then a marker for each assertion this path does not render.
+///
+/// ~keep The C ABI carries a failure as `set_last_error(alef_ffi_error_code(&e), &e.to_string())`,
+/// so `{prefix}_last_error_context()` is the failure's Display text and is the only textual
+/// evidence C has. Before this, a fixture's declared `error` value was discarded outright and the
+/// whole assertion collapsed into `assert(handle == 0)` — a check that cannot tell the expected
+/// failure from any other. Note the one half C still cannot express: the message-or-type-name
+/// disjunction `crate::e2e::codegen::declared_error_value` documents has no type-name side here,
+/// because the C ABI exposes the variant only as a numeric taxonomy code
+/// (`{prefix}_last_error_code()`), never as a string. A fixture whose value names an error variant
+/// rather than message text will now fail on C instead of passing vacuously.
+pub(super) fn emit_c_error_epilogue(out: &mut String, prefix: &str, fixture: &Fixture, documentation_snippet: bool) {
+    // ~keep A documentation snippet is published prose, not a test: a `// skipped:` comment reads
+    // as a defect in the example and a message assert turns a runnable snippet into one that can
+    // abort. Snippet output therefore stays byte-identical to before this change.
+    if documentation_snippet {
+        return;
+    }
+    if let Some(declared) = crate::e2e::codegen::declared_error_value(fixture) {
+        let expected = escape_c(declared);
+        let _ = writeln!(out, "    {{");
+        let _ = writeln!(out, "        const char* _err_message = {prefix}_last_error_context();");
+        let _ = writeln!(
+            out,
+            "        assert(_err_message != NULL && \"expected an error message\");"
+        );
+        let _ = writeln!(
+            out,
+            "        assert(strstr(_err_message, \"{expected}\") != NULL && \"error message mismatch\");"
+        );
+        let _ = writeln!(out, "    }}");
+    }
+    crate::e2e::codegen::error_path_assertions::emit(out, fixture, "    // ", "c");
+}
+
 /// Snippet-local definition of the `ALEF_TEST_SKIP` guard macro.
 ///
 /// The generated e2e runner declares this macro in its `test_runner.h`, but a
@@ -189,15 +225,8 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     // genuinely zero-length, which is `Known(&[])` -- not an authoring gap. ~keep
     let target_params = if crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture).is_some() {
         TargetParams::Known(&[])
-    } else if ir.is_absent() {
-        TargetParams::IrAbsent
     } else {
-        call.core_lookup_name("c")
-            .as_deref()
-            .and_then(|name| ir.signature(name))
-            .map_or(TargetParams::Unresolvable, |signature| {
-                TargetParams::Known(signature.params)
-            })
+        TargetParams::resolve(call, "c", ir)
     };
     if info.returns_void {
         // The shared, language-agnostic `[crates.e2e.calls.*]` args config has no
@@ -519,6 +548,7 @@ pub(super) fn render_test_function_impl(
         let _ = writeln!(out, "    int32_t {result_var} = {function_name}({args_str});");
         if expects_error {
             let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to fail\");");
+            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
         } else {
             let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to succeed\");");
         }
@@ -790,12 +820,17 @@ pub(super) fn render_test_function_impl(
                 out,
                 "    {prefix_upper}AlefHandle {result_var} = {call_fn}(client{method_args});"
             );
+            // ~keep The failure assert and the epilogue both run BEFORE the frees:
+            // `{prefix}_last_error_context()` borrows thread-local storage that the very next FFI
+            // call clears (`catch_ffi_panic` starts with `clear_last_error()`), so any `_free` in
+            // between would leave the epilogue reading a wiped — and freed — buffer.
+            let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
+            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
             for (_, var_name) in &request_handle_vars {
                 let req_snake = var_name.strip_suffix("_handle").unwrap_or(var_name);
                 let _ = writeln!(out, "    {prefix}_{req_snake}_free({var_name});");
             }
             let _ = writeln!(out, "    {prefix}_default_client_free(client);");
-            let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
             let _ = writeln!(out, "}}");
             return Ok(());
         }
@@ -1013,6 +1048,7 @@ pub(super) fn render_test_function_impl(
                     );
                 }
             }
+            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
             let _ = writeln!(out, "}}");
             return Ok(());
         }
@@ -1291,10 +1327,14 @@ pub(super) fn render_test_function_impl(
             out,
             "    const {c_return_type} *{result_var} = {prefixed_fn}({args_str});"
         );
-        render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         if expects_error {
+            // ~keep Cleanup moves after the epilogue: see `emit_c_error_epilogue` — the borrowed
+            // `last_error_context()` buffer does not survive the next FFI call.
             let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
+            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+            render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         } else {
+            render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
             let _ = writeln!(out, "    assert({result_var} != NULL && \"expected call to succeed\");");
         }
         let _ = writeln!(out, "}}");
@@ -1315,8 +1355,11 @@ pub(super) fn render_test_function_impl(
             out,
             "    {prefix_upper}AlefHandle {result_var} = {prefixed_fn}({args_str});"
         );
-        render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
+        // ~keep Cleanup moves after the epilogue: see `emit_c_error_epilogue` — the borrowed
+        // `last_error_context()` buffer does not survive the next FFI call.
         let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
+        emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+        render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         let _ = writeln!(out, "}}");
         return Ok(());
     }

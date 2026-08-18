@@ -7,11 +7,27 @@ use crate::e2e::fixture::{Fixture, FixtureEnv};
 
 use super::args::{JavaArgsContext, build_args_and_setup};
 
+/// Render a Java documentation snippet without any core IR to consult.
+///
+/// Kept as the four-argument entry point every existing caller and test already uses: with no
+/// `functions` the seam resolves to `TargetParams::IrAbsent`, which is exactly the state this
+/// path was always in, so its output is unchanged by the seam. ~keep
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
+) -> String {
+    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, &[], &[])
+}
+
+pub(super) fn render_snippet_body_with_ir(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> String {
     let mut call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -21,7 +37,9 @@ pub(super) fn render_snippet_body(
         &fixture.input,
     );
     call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, fixture);
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("java", fixture, call, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("java", fixture, call, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params("java");
     let overrides = recipe.override_config;
     let class_name = overrides
         .and_then(|value| value.class.clone())
@@ -45,6 +63,8 @@ pub(super) fn render_snippet_body(
             owner_handle_is_receiver: false,
             config,
             type_defs,
+            enums,
+            target_params,
             teardown_block: &mut teardown,
         },
     );

@@ -1,4 +1,6 @@
 use crate::core::config::GleamElementConstructor;
+use crate::core::ir::{EnumDef, TypeDef};
+use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::escape::escape_gleam;
 use heck::ToSnakeCase;
 
@@ -7,11 +9,12 @@ use super::values::json_to_gleam;
 
 /// Build setup lines and the argument list for the function call.
 ///
-/// Returns `None` when the test must be skipped entirely — this happens when a
-/// `json_object` arg has no element-constructor recipe and no `json_object_wrapper`
-/// configured, meaning the generated call would pass a raw JSON string where the
-/// Gleam binding expects a typed record. Callers should emit a `// skipped` comment
-/// and `Nil` body rather than broken code.
+/// Returns `Err(reason)` when the test must be skipped entirely, and the caller emits that
+/// reason as a `// skipped` comment with a `Nil` body rather than broken code. Two things
+/// produce it: a `json_object` arg with no element-constructor recipe, no
+/// `json_object_wrapper` and no `from_json` route (the generated call would pass a raw JSON
+/// string where the Gleam binding expects a typed record), and a *declared-type* mismatch --
+/// see [`unrepresentable_named_param`].
 ///
 /// Gleam is statically typed, so each arg type must produce a correctly-typed expression:
 /// - `file_path` -> quoted string literal
@@ -35,14 +38,27 @@ pub(super) fn build_args_and_setup(
     options_type: Option<&str>,
     options_via: &str,
     preserve_input_urls: bool,
-) -> Option<(Vec<String>, String)> {
+    target_params: TargetParams<'_>,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+) -> Result<(Vec<String>, String), String> {
     if args.is_empty() && extra_args.is_empty() {
-        return Some((Vec::new(), String::new()));
+        return Ok((Vec::new(), String::new()));
     }
 
     // Pre-check: if any json_object arg has no recipe, wrapper, or from_json override,
     // the call cannot be expressed in Gleam. Signal the caller to skip.
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
+        let arg_field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
+        let arg_value = input.get(arg_field);
+        if let Some(declared) = unrepresentable_named_param(arg, index, arg_value, target_params, type_defs, enums) {
+            return Err(format!(
+                "arg `{}` fills a parameter the core IR declares as `{declared}`, but its `arg_type` \
+                 `{}` lowers to a bare literal; Gleam is statically typed and has no way to build a \
+                 `{declared}` from one here",
+                arg.name, arg.arg_type,
+            ));
+        }
         if arg.arg_type == "json_object" {
             let element_type = arg.element_type.as_deref().unwrap_or("");
             let has_recipe =
@@ -56,7 +72,12 @@ pub(super) fn build_args_and_setup(
             let val = input.get(field);
             let is_null_optional = arg.optional && matches!(val, None | Some(serde_json::Value::Null));
             if !has_recipe && !has_wrapper && !has_from_json && !is_null_optional {
-                return None;
+                return Err(format!(
+                    "json_object arg `{}` has no element-constructor recipe, no `json_object_wrapper` \
+                     and no `from_json` route, so the call would pass a raw JSON string where the \
+                     Gleam binding expects a typed record",
+                    arg.name,
+                ));
             }
         }
     }
@@ -282,5 +303,48 @@ pub(super) fn build_args_and_setup(
         parts.push(extra.clone());
     }
 
-    Some((setup_lines, parts.join(", ")))
+    Ok((setup_lines, parts.join(", ")))
+}
+
+/// The IR type name of a declared parameter this arg cannot be lowered into, or `None` when
+/// the arg is renderable.
+///
+/// Gleam is the one backend with *nothing* to consult before this seam existed: its arg builder
+/// took no `type_defs`, no `enums` and no `functions`, so a `"string"` arg (the `arg_type`
+/// default) filling a record- or enum-typed parameter emitted a quoted literal that the Gleam
+/// compiler rejects outright.
+///
+/// The answer here is Gleam's own, not a shared verdict: refuse, reusing the skip channel this
+/// module already had for unrepresentable `json_object` args. Emitting a constructor instead
+/// would mean reproducing `backends::gleam::…::variant_constructor_name`, whose spelling depends
+/// on a cross-enum collision set this module does not have -- a guess that compiles only by
+/// luck. A skip is always valid Gleam and is visible in the generated file. ~keep
+///
+/// Only IR-*known* names refuse. A named type absent from both registries may be a newtype the
+/// binding flattens to a plain string, and refusing on it would skip tests that compile today.
+/// Arg kinds that build their own typed expression are exempt for the same reason. ~keep
+fn unrepresentable_named_param(
+    arg: &crate::e2e::config::ArgMapping,
+    index: usize,
+    value: Option<&serde_json::Value>,
+    target_params: TargetParams<'_>,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+) -> Option<String> {
+    if matches!(
+        arg.arg_type.as_str(),
+        "json_object" | "handle" | "bytes" | "file_path" | "mock_url" | "mock_url_list" | "test_backend"
+    ) {
+        return None;
+    }
+    // An optional parameter the fixture leaves unset renders as `option.None` (or is omitted),
+    // which is well-typed against `Option<Record>` no matter what the record is -- the value is
+    // never lowered, so there is nothing to refuse. ~keep
+    if arg.optional && matches!(value, None | Some(serde_json::Value::Null)) {
+        return None;
+    }
+    let declared = target_params.declared_type_name(&arg.name, index)?;
+    let known_to_ir =
+        type_defs.iter().any(|ty| ty.name == declared) || enums.iter().any(|enum_def| enum_def.name == declared);
+    known_to_ir.then(|| declared.to_string())
 }

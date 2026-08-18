@@ -394,11 +394,19 @@ pub(super) fn render_test_method(
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "php", &fixture.id, &fixture.assertions);
 
     let error_test_body = if expects_error {
-        render_error_test_body(
+        let mut body = render_error_test_body(
             &setup_lines,
             &call_expr,
             crate::e2e::codegen::declared_error_value(fixture),
-        )
+        );
+        // ~keep `render_error_test_body` ends without a trailing newline on the `None` arm, so the
+        // markers have to open their own line rather than being appended to the last statement.
+        let markers = crate::e2e::codegen::error_path_assertions::render(fixture, "        // ", "php");
+        if !markers.is_empty() {
+            body.push('\n');
+            body.push_str(markers.trim_end());
+        }
+        body
     } else {
         String::new()
     };
@@ -666,5 +674,93 @@ mod visitor_options_type_tests {
             &config,
             &mut trait_bridge_imports,
         );
+    }
+
+    fn render_php_error_method(extra: Vec<crate::e2e::fixture::Assertion>, declared: Option<&str>) -> String {
+        let mut assertions = vec![crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            value: declared.map(|v| serde_json::Value::String(v.to_string())),
+            ..Default::default()
+        }];
+        assertions.extend(extra);
+        let fixture = Fixture {
+            id: "rate_limited".into(),
+            description: "Rejects the request".into(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "parse".into();
+        e2e_config.call.result_var = "result".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let mut out = String::new();
+        let mut trait_bridge_imports: Vec<String> = Vec::new();
+        let _ = crate::e2e::codegen::take_skip_records();
+        render_test_method(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "php",
+            "Sample",
+            "SampleClient",
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            None,
+            "",
+            &[],
+            "",
+            &config,
+            &mut trait_bridge_imports,
+        );
+        out
+    }
+
+    /// PHP's error path renders one `expectException` / try-catch and returns, so every other
+    /// assertion on the fixture used to leave no trace in the generated test at all.
+    #[test]
+    fn php_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let out = render_php_error_method(
+            vec![crate::e2e::fixture::Assertion {
+                assertion_type: "equals".into(),
+                field: Some("error.status_code".into()),
+                ..Default::default()
+            }],
+            Some("BadRequest"),
+        );
+
+        // Positive first: the error block really rendered.
+        assert!(
+            out.contains("catch (\\Exception $e)"),
+            "the error block must render: {out}"
+        );
+        assert!(
+            out.contains(
+                "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this \
+                 backend"
+            ),
+            "{out}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "php");
+        assert_eq!(records[0].field, "equals");
+    }
+
+    /// Negative control: a lone `error` assertion must leave the generated method marker-free.
+    #[test]
+    fn php_a_lone_error_assertion_renders_no_marker() {
+        let out = render_php_error_method(Vec::new(), None);
+
+        assert!(
+            out.contains("$this->expectException(\\Exception::class);"),
+            "the error block must render: {out}"
+        );
+        assert!(!out.contains("has no accessor for error field"), "{out}");
     }
 }

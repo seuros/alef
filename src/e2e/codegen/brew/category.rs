@@ -172,6 +172,7 @@ fn render_test_function(
         let cmd = cmd_parts.join(" ");
         let body = render_error_test_body(&cmd, crate::e2e::codegen::declared_error_value(fixture));
         let _ = writeln!(out, "{body}");
+        crate::e2e::codegen::error_path_assertions::emit(out, fixture, "  # ", "brew");
         let _ = writeln!(out, "}}");
         return;
     }

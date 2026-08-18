@@ -544,12 +544,17 @@ pub(super) fn render_bytes_test_function(
     );
 
     if expects_error {
+        // ~keep The failure assert and the error epilogue both run BEFORE every `_free`:
+        // `{prefix}_last_error_context()` borrows thread-local storage that the next FFI call
+        // clears (`catch_ffi_panic` opens with `clear_last_error()`), so a free in between would
+        // leave the epilogue comparing against a wiped buffer.
+        let _ = writeln!(out, "    assert(status != 0 && \"expected call to fail\");");
+        super::test_function::emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
         for (_, var_name) in &request_handle_vars {
             let req_snake = var_name.strip_suffix("_handle").unwrap_or(var_name);
             let _ = writeln!(out, "    {prefix}_{req_snake}_free({var_name});");
         }
         let _ = writeln!(out, "    {prefix}_default_client_free(client);");
-        let _ = writeln!(out, "    assert(status != 0 && \"expected call to fail\");");
         // free_bytes accepts a NULL ptr (no-op), so it is safe regardless of
         // whether the failed call wrote out_ptr.
         let _ = writeln!(out, "    {prefix}_free_bytes(out_ptr, out_len, out_cap);");

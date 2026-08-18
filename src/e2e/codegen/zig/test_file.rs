@@ -5,6 +5,39 @@ use super::visitor::{emit_visitor_test_body, resolve_zig_visitor_call_symbols};
 use super::*;
 use crate::core::hash::{self, CommentStyle};
 
+/// Close the error arm of the `if (call) |_| {..} else |_| {..}` shape and, when the fixture
+/// declares an `error` value, actually compare it.
+///
+/// ~keep Zig sits on the same C ABI as the `c` backend, which reports a failure as
+/// `set_last_error(alef_ffi_error_code(&e), &e.to_string())` — a Display message plus a numeric
+/// taxonomy code. The generated binding exposes the message as `_last_error()` and dispatches the
+/// code to a declared error-set member, so `@errorName` yields the variant name. Together they
+/// reproduce the message-or-type-name disjunction `crate::e2e::codegen::declared_error_value`
+/// documents. Before this, the declared value was discarded and every valued `error` assertion was
+/// weakened to a bare "the call failed" check that could not tell one failure from another.
+fn emit_declared_error_value_assertion(out: &mut String, declared: Option<&str>, module_name: &str, for_docs: bool) {
+    // ~keep A documentation snippet is a `main`, not a `test`: `testing` is never bound in
+    // `zig/snippet_body.jinja`, so `try testing.expect(..)` would not compile there, and the
+    // snippet emitter rewrites the literal `else |_| {}` arm into a printing one. Snippet output
+    // therefore stays byte-identical to before this change.
+    let Some(declared) = declared.filter(|_| !for_docs) else {
+        let _ = writeln!(out, "    }} else |_| {{}}");
+        return;
+    };
+    let expected = escape_zig(declared);
+    let _ = writeln!(out, "    }} else |_err| {{");
+    let _ = writeln!(out, "        const _err_name = @errorName(_err);");
+    let _ = writeln!(
+        out,
+        "        const _err_message: []const u8 = {module_name}._last_error() orelse \"\";"
+    );
+    let _ = writeln!(
+        out,
+        "        try testing.expect(std.mem.indexOf(u8, _err_message, \"{expected}\") != null or std.mem.indexOf(u8, _err_name, \"{expected}\") != null);"
+    );
+    let _ = writeln!(out, "    }}");
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_file(
     category: &str,
@@ -389,12 +422,18 @@ fn render_test_fn(
         //
         // The success arm discards its capture (`|_|`) rather than binding `result`,
         // since a fixture asserting `error` has nothing meaningful to check once the
-        // call has already failed the test by succeeding. A specific expected error
-        // (once threaded through from the fixture) can replace the generic `else |_|`
-        // arm with `testing.expectError(error.Foo, ...)` without touching this shape.
+        // call has already failed the test by succeeding.
         let _ = writeln!(out, "    if ({call_prefix}.{function_name}({args_str})) |_| {{");
         let _ = writeln!(out, "        return error.TestUnexpectedResult;");
-        let _ = writeln!(out, "    }} else |_| {{}}");
+        emit_declared_error_value_assertion(
+            out,
+            crate::e2e::codegen::declared_error_value(fixture),
+            module_name,
+            for_docs,
+        );
+        if !for_docs {
+            crate::e2e::codegen::error_path_assertions::emit(out, fixture, "    // ", "zig");
+        }
     } else if fixture.assertions.is_empty() {
         // No assertions: emit a call to verify compilation.
         if result_is_json_struct {
@@ -1322,5 +1361,107 @@ mod expects_error_fails_on_unexpected_success_tests {
             !rendered.contains(" catch {"),
             "must not fall through a swallowing catch:\n{rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod error_value_and_error_field_tests {
+    use super::*;
+
+    fn assertion(assertion_type: &str, field: Option<&str>, value: Option<&str>) -> crate::e2e::fixture::Assertion {
+        crate::e2e::fixture::Assertion {
+            assertion_type: assertion_type.into(),
+            field: field.map(str::to_string),
+            value: value.map(|v| serde_json::Value::String(v.to_string())),
+            ..Default::default()
+        }
+    }
+
+    fn render(assertions: Vec<crate::e2e::fixture::Assertion>) -> String {
+        let fixture = Fixture {
+            id: "invalid_input".into(),
+            description: "Rejects invalid input".into(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "parse".into();
+        let _ = crate::e2e::codegen::take_skip_records();
+        render_test_file(
+            "error",
+            &[&fixture],
+            &e2e,
+            "parse",
+            "result",
+            &[],
+            "sample",
+            "sample",
+            &ResolvedCrateConfig::default(),
+            &[],
+        )
+    }
+
+    /// The defect: a declared `error` value was discarded, leaving `} else |_| {}` — a check that
+    /// passes for ANY failure. The message and the error-set member name must both be compared.
+    #[test]
+    fn a_declared_error_value_is_compared_against_message_and_error_name() {
+        let rendered = render(vec![assertion("error", None, Some("BadRequest"))]);
+
+        assert!(
+            rendered.contains("if (sample.parse()) |_| {"),
+            "the error block itself must still render: {rendered}"
+        );
+        assert!(
+            rendered.contains("const _err_message: []const u8 = sample._last_error() orelse \"\";"),
+            "the FFI message must be bound: {rendered}"
+        );
+        assert!(
+            rendered.contains("std.mem.indexOf(u8, _err_message, \"BadRequest\") != null"),
+            "the declared value must be compared to the message: {rendered}"
+        );
+        assert!(
+            rendered.contains("std.mem.indexOf(u8, _err_name, \"BadRequest\") != null"),
+            "the declared value must also be compared to @errorName: {rendered}"
+        );
+        assert!(
+            !rendered.contains("} else |_| {}"),
+            "the value-discarding arm must be gone: {rendered}"
+        );
+    }
+
+    /// Negative control for the arm above: with no declared value the output is byte-identical to
+    /// the pre-existing shape, so the change cannot have rewritten every error fixture.
+    #[test]
+    fn an_error_assertion_without_a_value_keeps_the_bare_arm() {
+        let rendered = render(vec![assertion("error", None, None)]);
+
+        assert!(rendered.contains("if (sample.parse()) |_| {"), "{rendered}");
+        assert!(rendered.contains("} else |_| {}"), "{rendered}");
+        assert!(!rendered.contains("_last_error()"), "{rendered}");
+    }
+
+    #[test]
+    fn an_equals_on_an_error_field_is_named_instead_of_dropped() {
+        let rendered = render(vec![
+            assertion("error", None, Some("BadRequest")),
+            assertion("equals", Some("error.status_code"), None),
+        ]);
+
+        // Positive first: the fixture really did produce an error block.
+        assert!(
+            rendered.contains("return error.TestUnexpectedResult;"),
+            "the error block must render before we assert anything about the second assertion: {rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+            ),
+            "{rendered}"
+        );
+
+        let records = crate::e2e::codegen::take_skip_records();
+        assert_eq!(records.len(), 1, "got: {records:?}");
+        assert_eq!(records[0].language, "zig");
+        assert_eq!(records[0].field, "equals");
     }
 }

@@ -12,6 +12,7 @@
    - result_var: result variable name
    - returns_void: bool — whether the call returns void (Rust `()` / `Result<(),E>`)
    - assertions_body: string containing all rendered assertions
+   - unrenderable_error_assertions: skip markers for error-path assertions this backend cannot render
 #}
 
     @Test
@@ -39,6 +40,9 @@
         });
 {% if declared_error_check %}
 {{ declared_error_check }}
+{% endif %}
+{% if unrenderable_error_assertions %}
+{{ unrenderable_error_assertions }}
 {% endif %}
 {% else %}
 {% if builder_expressions %}

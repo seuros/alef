@@ -110,6 +110,8 @@ fn handle_config_deserialization_uses_resolved_options_type() {
             owner_handle_is_receiver: false,
             config: &ResolvedCrateConfig::default(),
             type_defs: &[],
+            enums: &[],
+            target_params: crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
             teardown_block: &mut teardown,
         },
     );
@@ -228,6 +230,8 @@ fn test_java_env_entries_empty_produces_no_init_env() {
         &[],
         &ResolvedCrateConfig::default(),
         &[],
+        &[],
+        &[],
         false,
     );
 
@@ -272,6 +276,8 @@ fn test_java_env_entries_renders_sorted_system_properties() {
         true,
         &[],
         &ResolvedCrateConfig::default(),
+        &[],
+        &[],
         &[],
         false,
     );
@@ -351,4 +357,170 @@ fn java_fixture_middleware_is_null_without_cors() {
     // Middleware present but no cors -> still Null (harness's middleware.cors is a missing node).
     let mw = Some(crate::e2e::fixture::HttpMiddleware::default());
     assert_eq!(super::build_middleware_value(&mw), serde_json::Value::Null);
+}
+
+/// One `ArgMapping`, `arg_type` left at its `"string"` default, used by every test below so the
+/// only variable is what the IR declares about the parameter it fills. ~keep
+fn default_typed_arg(name: &str) -> ArgMapping {
+    ArgMapping {
+        name: name.to_string(),
+        field: format!("input.{name}"),
+        arg_type: "string".to_string(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    }
+}
+
+fn args_for(
+    args: &[ArgMapping],
+    fixture: &Fixture,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    target_params: crate::e2e::codegen::call_ir::TargetParams<'_>,
+) -> String {
+    let mut teardown = String::new();
+    let config = ResolvedCrateConfig::default();
+    let (_setup, args_str) = build_args_and_setup(
+        &fixture.input,
+        args,
+        JavaArgsContext {
+            class_name: "Sample",
+            options_type: None,
+            fixture,
+            adapter_request_type: None,
+            owner_handle_is_receiver: false,
+            config: &config,
+            type_defs,
+            enums,
+            target_params,
+            teardown_block: &mut teardown,
+        },
+    );
+    args_str
+}
+
+/// The defect: a fixture object bound for a DTO-typed parameter used to become a *quoted JSON
+/// string literal*, which `javac` rejects. With the declared type resolved it deserializes. ~keep
+#[test]
+fn an_object_value_for_an_ir_struct_parameter_deserializes_instead_of_stringifying() {
+    use crate::core::ir::{ParamDef, TypeDef, TypeRef};
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": { "prompt": "hi" } }));
+    let params = [ParamDef {
+        name: "request".to_string(),
+        ty: TypeRef::Named("CompletionRequest".to_string()),
+        ..ParamDef::default()
+    }];
+    let type_defs = [TypeDef {
+        name: "CompletionRequest".to_string(),
+        ..TypeDef::default()
+    }];
+    let rendered = args_for(
+        &args,
+        &fixture,
+        &type_defs,
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    let package = ResolvedCrateConfig::default().java_package();
+    assert_eq!(
+        rendered,
+        format!("{package}.JsonUtil.fromJson(\"{{\\\"prompt\\\":\\\"hi\\\"}}\", {package}.CompletionRequest.class)")
+    );
+}
+
+/// An enum-typed parameter takes the generated enum's `@JsonCreator fromValue`, not a bare
+/// string and not a guessed constant name. ~keep
+#[test]
+fn a_string_value_for_an_ir_enum_parameter_uses_from_value() {
+    use crate::core::ir::{EnumDef, ParamDef, TypeRef};
+    let args = vec![default_typed_arg("mode")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "mode": "fast_path" }));
+    let params = [ParamDef {
+        name: "mode".to_string(),
+        ty: TypeRef::Named("Mode".to_string()),
+        ..ParamDef::default()
+    }];
+    let enums = [EnumDef {
+        name: "Mode".to_string(),
+        ..EnumDef::default()
+    }];
+    let rendered = args_for(
+        &args,
+        &fixture,
+        &[],
+        &enums,
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    let package = ResolvedCrateConfig::default().java_package();
+    assert_eq!(rendered, format!("{package}.Mode.fromValue(\"fast_path\")"));
+}
+
+/// The other half of the three-state trade. Identical arg and fixture value, `IrAbsent` instead
+/// of `Known`: the pre-seam lowering must survive verbatim, or every IR-less caller (the
+/// snippet path, and every test that renders without an IR) regresses silently. ~keep
+#[test]
+fn the_same_object_value_still_stringifies_when_the_ir_is_absent() {
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": { "prompt": "hi" } }));
+    let rendered = args_for(
+        &args,
+        &fixture,
+        &[],
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+    );
+    assert_eq!(rendered, "\"{\\\"prompt\\\":\\\"hi\\\"}\"");
+}
+
+/// A declared type absent from both IR registries is not a licence to invent a deserializer:
+/// it may be a newtype the Java binding flattens to a `String`. ~keep
+#[test]
+fn a_declared_type_unknown_to_the_ir_keeps_the_existing_lowering() {
+    use crate::core::ir::{ParamDef, TypeRef};
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": "hi" }));
+    let params = [ParamDef {
+        name: "request".to_string(),
+        ty: TypeRef::Named("PromptText".to_string()),
+        ..ParamDef::default()
+    }];
+    let rendered = args_for(
+        &args,
+        &fixture,
+        &[],
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(rendered, "\"hi\"");
+}
+
+/// An `Optional<T>`/`Vec<T>` parameter wants a wrapper this expression does not build, so the
+/// seam must decline rather than unwrap to `T` and trade one compile error for another. ~keep
+#[test]
+fn a_wrapped_named_parameter_is_left_to_the_existing_lowering() {
+    use crate::core::ir::{ParamDef, TypeDef, TypeRef};
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": { "prompt": "hi" } }));
+    let params = [ParamDef {
+        name: "request".to_string(),
+        ty: TypeRef::Optional(Box::new(TypeRef::Named("CompletionRequest".to_string()))),
+        ..ParamDef::default()
+    }];
+    let type_defs = [TypeDef {
+        name: "CompletionRequest".to_string(),
+        ..TypeDef::default()
+    }];
+    let rendered = args_for(
+        &args,
+        &fixture,
+        &type_defs,
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(rendered, "\"{\\\"prompt\\\":\\\"hi\\\"}\"");
 }

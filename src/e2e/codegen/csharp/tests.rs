@@ -707,3 +707,92 @@ fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emi
         &[],
     );
 }
+
+fn render_csharp_error_method(extra: Vec<Assertion>) -> String {
+    let mut assertions = vec![Assertion {
+        assertion_type: "error".into(),
+        ..Assertion::default()
+    }];
+    assertions.extend(extra);
+    let fixture = Fixture {
+        id: "rate_limited".into(),
+        description: "Rejects the request".into(),
+        assertions,
+        ..Fixture::default()
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "get_widget".into();
+    e2e_config.call.result_var = "result".into();
+
+    let field_resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    let mut visitor_class_decls: Vec<String> = Vec::new();
+    let _ = crate::e2e::codegen::take_skip_records();
+    super::render_test_method(
+        &mut out,
+        &mut visitor_class_decls,
+        &fixture,
+        "Widget",
+        "GetWidget",
+        "WidgetException",
+        "result",
+        &[],
+        &field_resolver,
+        false,
+        false,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+    out
+}
+
+/// C#'s `expects_error` branch renders `Assert.ThrowsAny<..>` and returns, so every other
+/// assertion on the fixture used to leave no trace in the generated test at all.
+#[test]
+fn csharp_equals_on_an_error_field_is_named_instead_of_dropped() {
+    let out = render_csharp_error_method(vec![Assertion {
+        assertion_type: "equals".into(),
+        field: Some("error.status_code".into()),
+        ..Assertion::default()
+    }]);
+
+    // Positive first: the error block really rendered.
+    assert!(out.contains("ThrowsAny"), "the error block must render, got:\n{out}");
+    assert!(
+        out.contains(
+            "// skipped: assertion type 'equals' has no accessor for error field error.status_code in this backend"
+        ),
+        "got:\n{out}"
+    );
+
+    let records = crate::e2e::codegen::take_skip_records();
+    assert_eq!(records.len(), 1, "got: {records:?}");
+    assert_eq!(records[0].language, "csharp");
+    assert_eq!(records[0].field, "equals");
+}
+
+/// Negative control: a lone `error` assertion must leave the generated method marker-free.
+#[test]
+fn csharp_a_lone_error_assertion_renders_no_marker() {
+    let out = render_csharp_error_method(Vec::new());
+
+    assert!(out.contains("ThrowsAny"), "the error block must render, got:\n{out}");
+    assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+}

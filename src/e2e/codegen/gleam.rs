@@ -40,10 +40,11 @@ impl E2eCodegen for GleamE2eCodegen {
         groups: &[FixtureGroup],
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
-        _type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
+        let ir = crate::e2e::codegen::call_ir::CallIr { functions, type_defs };
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
 
@@ -164,6 +165,8 @@ impl E2eCodegen for GleamE2eCodegen {
                 &e2e_config.call.args,
                 element_constructors,
                 json_object_wrapper,
+                ir,
+                enums,
             );
             files.push(GeneratedFile {
                 path: output_base.join("test").join(filename),

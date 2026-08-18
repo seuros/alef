@@ -346,6 +346,12 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         String::new()
     };
 
+    // ~keep The `expects_error` branch of `typescript/test_function.jinja` renders the
+    // `rejects` assertion and nothing else, so every other assertion on an error fixture — most
+    // often an `equals` against `error.status_code` — used to leave no trace at all in the
+    // generated test.
+    let unrenderable_error_assertions = crate::e2e::codegen::error_path_assertions::render(fixture, "\t\t// ", lang);
+
     let ctx = minijinja::context! {
         test_name => test_name,
         description => description,
@@ -359,6 +365,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         collect_snippet => collect_snippet,
         assertions_body => assertions_body,
         expects_error => expects_error,
+        unrenderable_error_assertions => unrenderable_error_assertions.trim_end(),
         error_value_regex => error_value_regex,
         is_streaming_error_call => is_streaming_error_call,
         lang => lang,
