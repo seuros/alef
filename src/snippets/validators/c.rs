@@ -2,11 +2,21 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
 pub struct CValidator;
+
+const NO_C_COMPILER: &str = "no C compiler on PATH";
+const BATCH_FILE_PREFIX: &str = "snippet_batch_";
+const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "the C compiler failed without a snippet-specific diagnostic";
+
+/// The substring that separates a diagnostic the compiler rejects the translation unit over from
+/// one it merely reports. Every snippet is compiled with the same flags the per-snippet path uses,
+/// so a warning that leaves that path passing must leave the batch passing too — attributing a
+/// line to a snippet is not the same as failing it. `fatal error:` ends with this marker as well. ~keep
+const ERROR_DIAGNOSTIC_MARKER: &str = "error:";
 
 fn compiler() -> Option<String> {
     for candidate in ["cc", "clang", "gcc"] {
@@ -15,6 +25,99 @@ fn compiler() -> Option<String> {
         }
     }
     None
+}
+
+impl CValidator {
+    /// One compiler start for the whole batch instead of one per snippet. `-fsyntax-only` accepts
+    /// many sources and type-checks each as its own translation unit, so the `main` every snippet
+    /// declares never collides — nothing is linked, which is exactly why the levels that do link
+    /// decline in `validate_batch_in_session`. ~keep
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let Some(cc) = compiler() else {
+            return Ok(vec![
+                (SnippetStatus::Unavailable, Some(NO_C_COMPILER.into()));
+                snippets.len()
+            ]);
+        };
+        let dir = match session {
+            Some(session) => session.scratch_dir()?,
+            None => ScratchDir::isolated()?,
+        };
+        let mut file_names = Vec::with_capacity(snippets.len());
+        let mut paths = Vec::with_capacity(snippets.len());
+        for (index, snippet) in snippets.iter().enumerate() {
+            let file_name = format!("{BATCH_FILE_PREFIX}{index}.c");
+            let path = dir.path().join(&file_name);
+            std::fs::write(&path, snippet.code.as_bytes())?;
+            file_names.push(file_name);
+            paths.push(path);
+        }
+        let mut command = std::process::Command::new(cc);
+        command.arg("-fsyntax-only");
+        if level == ValidationLevel::TypeCheck {
+            command.args(["-Wall", "-Werror"]);
+        }
+        if let Some(session) = session {
+            apply_session_includes(&mut command, session);
+        }
+        command.args(&paths);
+        if let Some(session) = session {
+            session.apply(&mut command);
+        }
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::batch_results(&file_names, success, &output))
+    }
+
+    /// Attributes compiler output back to the snippet that owns it. Every diagnostic opens with
+    /// its own source path (`snippet_batch_2.c:4:9: error: …`), and the caret/source lines that
+    /// follow carry no path at all, so a pathless line stays with the file last named. ~keep
+    fn batch_results(file_names: &[String], success: bool, output: &str) -> BatchValidation {
+        let mut diagnostics = vec![Vec::new(); file_names.len()];
+        let mut rejected = vec![false; file_names.len()];
+        let mut unmatched = Vec::new();
+        let mut current = None;
+        for line in output.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match Self::file_owner(file_names, line).or(current) {
+                Some(index) => {
+                    current = Some(index);
+                    diagnostics[index].push(line.to_string());
+                    rejected[index] |= line.contains(ERROR_DIAGNOSTIC_MARKER);
+                }
+                None => unmatched.push(line.to_string()),
+            }
+        }
+        let attributed = rejected.iter().any(|value| *value);
+        let fallback = (!success && !attributed).then(|| {
+            if unmatched.is_empty() {
+                BATCH_FAILED_WITHOUT_DIAGNOSTIC.to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        rejected
+            .into_iter()
+            .zip(diagnostics)
+            .map(|(rejected, messages)| match (rejected, &fallback) {
+                (true, _) => (SnippetStatus::Fail, Some(messages.join("\n"))),
+                (false, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (false, None) => (SnippetStatus::Pass, None),
+            })
+            .collect()
+    }
+
+    fn file_owner(file_names: &[String], line: &str) -> Option<usize> {
+        file_names
+            .iter()
+            .position(|file_name| line.contains(file_name.as_str()))
+    }
 }
 
 impl SnippetValidator for CValidator {
@@ -33,7 +136,7 @@ impl SnippetValidator for CValidator {
         timeout_secs: u64,
     ) -> Result<(SnippetStatus, Option<String>)> {
         let Some(cc) = compiler() else {
-            return Ok((SnippetStatus::Unavailable, Some("no C compiler on PATH".into())));
+            return Ok((SnippetStatus::Unavailable, Some(NO_C_COMPILER.into())));
         };
 
         let mut source = NamedTempFile::with_suffix(".c")?;
@@ -97,7 +200,7 @@ impl SnippetValidator for CValidator {
             return self.validate(snippet, level, timeout_secs);
         };
         let Some(cc) = compiler() else {
-            return Ok((SnippetStatus::Unavailable, Some("no C compiler on PATH".into())));
+            return Ok((SnippetStatus::Unavailable, Some(NO_C_COMPILER.into())));
         };
         let scratch_dir = session.scratch_dir()?;
         let mut source = tempfile::Builder::new().suffix(".c").tempfile_in(scratch_dir.path())?;
@@ -105,13 +208,7 @@ impl SnippetValidator for CValidator {
         source.flush()?;
         let output = scratch_dir.path().join(".alef-snippet-output");
         let mut command = std::process::Command::new(cc);
-        let include_directory = session
-            .manifest
-            .as_deref()
-            .and_then(std::path::Path::parent)
-            .unwrap_or(&session.working_directory);
-        command.arg("-I").arg(include_directory);
-        apply_include_paths(&mut command, &session.include_paths);
+        apply_session_includes(&mut command, session);
         if level == ValidationLevel::Syntax {
             command.arg("-fsyntax-only");
         }
@@ -144,6 +241,24 @@ impl SnippetValidator for CValidator {
         })
     }
 
+    /// Batching covers only the levels that reach for `-fsyntax-only`. `Compile` and `Run` each
+    /// produce their own artifact from their own `main`, so one invocation cannot serve N of them;
+    /// they fall back to one process per snippet. ~keep
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        matches!(level, ValidationLevel::Syntax | ValidationLevel::TypeCheck)
+            .then(|| Self::validate_batch_with_context(snippets, level, timeout_secs, session))
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
+    }
+
     fn is_dependency_error(&self, output: &str) -> bool {
         output.contains("file not found")
             || output.contains("No such file or directory")
@@ -157,6 +272,16 @@ fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std
     for include_path in include_paths {
         command.arg("-I").arg(include_path);
     }
+}
+
+fn apply_session_includes(command: &mut std::process::Command, session: &ValidationSession) {
+    let include_directory = session
+        .manifest
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .unwrap_or(&session.working_directory);
+    command.arg("-I").arg(include_directory);
+    apply_include_paths(command, &session.include_paths);
 }
 
 #[cfg(test)]
@@ -182,6 +307,146 @@ mod tests {
                 block_index: 0,
             },
         }
+    }
+
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    #[test]
+    fn batch_declines_the_levels_that_link_an_executable() {
+        let only = snippet("int main(void) { return 0; }\n");
+
+        for level in [ValidationLevel::Compile, ValidationLevel::Run] {
+            let declined = CValidator.validate_batch_in_session(&[&only], level, 10, None);
+            assert!(
+                declined.is_none(),
+                "{level:?} must fall back to one process per snippet"
+            );
+        }
+    }
+
+    #[test]
+    fn batch_returns_one_result_per_snippet_in_input_order() {
+        if compiler().is_none() {
+            return;
+        }
+        let first = snippet("int first(void) { return 1; }\n");
+        let second = snippet("int second(void) { return 2; }\n");
+        let third = snippet("int third(void) { return 3; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&first, &second, &third],
+            ValidationLevel::Syntax,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_fails_only_the_broken_snippet_and_passes_its_neighbours() {
+        if compiler().is_none() {
+            return;
+        }
+        let first = snippet("int first(void) { return 1; }\n");
+        let broken = snippet("int second(void) { @@@ }\n");
+        let third = snippet("int third(void) { return 3; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&first, &broken, &third],
+            ValidationLevel::Syntax,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("error:")),
+            "{:?}",
+            results[1].1
+        );
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    /// The isolation the `-fsyntax-only` level buys: every snippet declares its own `main`, which
+    /// would be a duplicate-symbol link failure the moment the batch linked them together — and a
+    /// failure the per-snippet path never produces. ~keep
+    #[test]
+    fn batch_passes_two_snippets_that_each_declare_main() {
+        if compiler().is_none() {
+            return;
+        }
+        let first = snippet("int main(void) { return 0; }\n");
+        let second = snippet("int main(void) { return 1; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&first, &second],
+            ValidationLevel::Syntax,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// Attributing a compiler line to a snippet is not the same as failing it: `-fsyntax-only`
+    /// without `-Werror` reports warnings and still exits 0, exactly as the per-snippet path does,
+    /// so a warned-about snippet must keep passing. ~keep
+    #[test]
+    fn batch_does_not_fail_a_snippet_the_compiler_only_warns_about() {
+        if compiler().is_none() {
+            return;
+        }
+        let first = snippet("int first(void) { return 1; }\n");
+        let warned = snippet("#warning batch fixture warning\nint second(void) { return 2; }\n");
+
+        let results = CValidator::validate_batch_with_context(
+            &[&first, &warned],
+            ValidationLevel::Syntax,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// A compiler that fails without naming any snippet must not let the batch pass: every snippet
+    /// carries the real output instead. ~keep
+    #[test]
+    fn batch_results_fail_every_snippet_when_no_diagnostic_names_one() {
+        let file_names = vec!["snippet_batch_0.c".to_string(), "snippet_batch_1.c".to_string()];
+
+        let results = CValidator::batch_results(&file_names, false, "cc: error: unrecognized command-line option\n");
+
+        assert_eq!(
+            results,
+            vec![
+                (
+                    SnippetStatus::Fail,
+                    Some("cc: error: unrecognized command-line option".to_string())
+                ),
+                (
+                    SnippetStatus::Fail,
+                    Some("cc: error: unrecognized command-line option".to_string())
+                ),
+            ]
+        );
     }
 
     #[test]

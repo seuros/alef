@@ -2,9 +2,131 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
 
 pub struct ElixirValidator;
+
+const BATCH_FILE_PREFIX: &str = "snippet_batch_";
+const BATCH_CHECKER_NAME: &str = "alef_batch_check.exs";
+const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "the Elixir batch checker failed without a per-snippet diagnostic";
+const BATCH_LINE_PREFIX: &str = "ALEF|";
+const BATCH_LINE_FIELD_COUNT: usize = 3;
+const BATCH_LINE_SEPARATOR: char = '|';
+const BATCH_OK: &str = "ok";
+
+/// The checker prints one line per file and the parse errors it reports are multi-line, so the
+/// message travels with its newlines escaped and is restored on the Rust side. ~keep
+const ESCAPED_NEWLINE: &str = "\\n";
+
+/// One BEAM start for the whole batch instead of one per snippet — the VM boot, not the parse, is
+/// what a per-snippet Elixir run spends its time on. The checker parses every file it is handed
+/// and prints a line for each, so one snippet's parse error neither aborts the run nor leaks into
+/// another snippet's result; it always exits 0, which is why a missing line, not the exit status,
+/// is what marks a snippet unjudged. ~keep
+const BATCH_CHECKER_SOURCE: &str = r#"System.argv()
+|> Enum.each(fn path ->
+  {status, message} =
+    case File.read(path) do
+      {:ok, content} ->
+        case Code.string_to_quoted(content, file: path) do
+          {:ok, _} -> {"ok", ""}
+          {:error, reason} -> {"err", inspect(reason)}
+        end
+
+      {:error, reason} ->
+        {"err", "read error: " <> inspect(reason)}
+    end
+
+  IO.puts("ALEF|" <> path <> "|" <> status <> "|" <> String.replace(message, "\n", "\\n"))
+end)
+"#;
+
+impl ElixirValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let dir = match session {
+            Some(session) => session.scratch_dir()?,
+            None => ScratchDir::isolated()?,
+        };
+        let mut file_names = Vec::with_capacity(snippets.len());
+        let mut paths = Vec::with_capacity(snippets.len());
+        for (index, snippet) in snippets.iter().enumerate() {
+            let file_name = format!("{BATCH_FILE_PREFIX}{index}.exs");
+            let path = dir.path().join(&file_name);
+            std::fs::write(&path, &snippet.code)?;
+            file_names.push(file_name);
+            paths.push(path);
+        }
+        let checker_path = dir.path().join(BATCH_CHECKER_NAME);
+        std::fs::write(&checker_path, BATCH_CHECKER_SOURCE)?;
+        let mut command = std::process::Command::new("elixir");
+        command.arg(&checker_path).args(&paths);
+        if let Some(session) = session {
+            session.apply(&mut command);
+        }
+        let (_, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::checker_results(&file_names, &output))
+    }
+
+    /// Maps the checker's lines back to the snippet that owns each file. A snippet the checker
+    /// never reported on fails carrying the real output rather than passing by default. ~keep
+    fn checker_results(file_names: &[String], output: &str) -> BatchValidation {
+        let mut reported = vec![None; file_names.len()];
+        let mut unmatched = Vec::new();
+        for line in output.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match Self::parse_line(file_names, line) {
+                Some((index, value)) => reported[index] = Some(value),
+                None => unmatched.push(line.to_string()),
+            }
+        }
+        let resolved = reported.iter().all(Option::is_some);
+        let fallback = (!resolved).then(|| {
+            if unmatched.is_empty() {
+                BATCH_FAILED_WITHOUT_DIAGNOSTIC.to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        reported
+            .into_iter()
+            .map(|value| match (value, &fallback) {
+                (Some(value), _) => value,
+                (None, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (None, None) => (SnippetStatus::Pass, None),
+            })
+            .collect()
+    }
+
+    fn parse_line(file_names: &[String], line: &str) -> Option<(usize, (SnippetStatus, Option<String>))> {
+        let fields: Vec<&str> = line
+            .strip_prefix(BATCH_LINE_PREFIX)?
+            .splitn(BATCH_LINE_FIELD_COUNT, BATCH_LINE_SEPARATOR)
+            .collect();
+        let [path, status, message] = fields[..] else {
+            return None;
+        };
+        let index = Self::owner(file_names, path)?;
+        let value = if status == BATCH_OK {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(message.replace(ESCAPED_NEWLINE, "\n")))
+        };
+        Some((index, value))
+    }
+
+    fn owner(file_names: &[String], path: &str) -> Option<usize> {
+        let name = std::path::Path::new(path).file_name()?;
+        file_names
+            .iter()
+            .position(|file_name| std::ffi::OsStr::new(file_name.as_str()) == name)
+    }
+}
 
 impl SnippetValidator for ElixirValidator {
     fn language(&self) -> Language {
@@ -97,6 +219,23 @@ end"#,
         matches!(requested, ValidationLevel::Compile | ValidationLevel::TypeCheck)
     }
 
+    /// `Run` is declined: each snippet must execute in its own process so its output, exit status
+    /// and side effects belong to it alone. Every other level runs the same `Code.string_to_quoted`
+    /// parse, which is exactly what the batch checker performs per file. ~keep
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        (level != ValidationLevel::Run).then(|| Self::validate_batch_with_context(snippets, timeout_secs, session))
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
+    }
+
     fn validate_in_session(
         &self,
         snippet: &Snippet,
@@ -156,6 +295,124 @@ mod tests {
                 block_index: 0,
             },
         }
+    }
+
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    fn elixir_snippet(code: &str) -> Snippet {
+        let mut value = undefined_symbol_snippet();
+        value.code = code.into();
+        value
+    }
+
+    #[test]
+    fn batch_declines_run_so_each_snippet_executes_on_its_own() {
+        let only = elixir_snippet("IO.puts(\"one\")\n");
+
+        let declined = ElixirValidator.validate_batch_in_session(&[&only], ValidationLevel::Run, 10, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn batch_returns_one_result_per_snippet_in_input_order() {
+        if !ElixirValidator.is_available() {
+            return;
+        }
+        let first = elixir_snippet("IO.puts(\"one\")\n");
+        let second = elixir_snippet("IO.puts(\"two\")\n");
+        let third = elixir_snippet("IO.puts(\"three\")\n");
+
+        let results =
+            ElixirValidator::validate_batch_with_context(&[&first, &second, &third], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_fails_only_the_broken_snippet_and_passes_its_neighbours() {
+        if !ElixirValidator.is_available() {
+            return;
+        }
+        let first = elixir_snippet("IO.puts(\"one\")\n");
+        let broken = elixir_snippet("defmodule Broken do\n  def value( do\nend\n");
+        let third = elixir_snippet("IO.puts(\"three\")\n");
+
+        let results =
+            ElixirValidator::validate_batch_with_context(&[&first, &broken, &third], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("missing terminator")),
+            "{:?}",
+            results[1].1
+        );
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    /// The checker parses each file into an AST and defines nothing, so two snippets declaring the
+    /// same module name — a redefinition the moment anything compiled them together — are judged
+    /// independently. ~keep
+    #[test]
+    fn batch_passes_two_snippets_declaring_the_same_module() {
+        if !ElixirValidator.is_available() {
+            return;
+        }
+        let first = elixir_snippet("defmodule Same do\n  def value, do: 1\nend\n");
+        let second = elixir_snippet("defmodule Same do\n  def value, do: 2\nend\n");
+
+        let results =
+            ElixirValidator::validate_batch_with_context(&[&first, &second], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// A checker that never reported on a snippet must not let it pass by default: the snippet
+    /// fails carrying whatever the toolchain actually said. ~keep
+    #[test]
+    fn checker_results_fail_every_unreported_snippet_with_the_real_output() {
+        let file_names = vec!["snippet_batch_0.exs".to_string(), "snippet_batch_1.exs".to_string()];
+
+        let results = ElixirValidator::checker_results(&file_names, "** (RuntimeError) elixir is not installed\n");
+
+        assert_eq!(
+            results,
+            vec![
+                (
+                    SnippetStatus::Fail,
+                    Some("** (RuntimeError) elixir is not installed".to_string())
+                ),
+                (
+                    SnippetStatus::Fail,
+                    Some("** (RuntimeError) elixir is not installed".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn checker_results_restore_the_newlines_a_reported_message_carried() {
+        let file_names = vec!["snippet_batch_0.exs".to_string()];
+
+        let results =
+            ElixirValidator::checker_results(&file_names, "ALEF|/tmp/s/snippet_batch_0.exs|err|first\\nsecond\n");
+
+        assert_eq!(results, vec![(SnippetStatus::Fail, Some("first\nsecond".to_string()))]);
     }
 
     #[test]

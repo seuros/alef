@@ -1,9 +1,153 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_script};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command, run_script};
 
 pub struct RubyValidator;
+
+const BATCH_FILE_PREFIX: &str = "snippet_batch_";
+const BATCH_CHECKER_NAME: &str = "alef_batch_check.rb";
+const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "the Ruby batch checker failed without a per-snippet diagnostic";
+
+/// One interpreter start for the whole batch instead of one per snippet. `ruby -c` cannot be
+/// pointed at several files — it syntax-checks the first and hands the rest to the script as
+/// `ARGV`, reporting a single `Syntax OK` that says nothing about them — so the check is driven
+/// from a script that parses every file it is handed and prints one JSON line each. It always
+/// exits 0, which is why a missing line, not the exit status, is what marks a snippet unjudged.
+/// `RubyVM::AbstractSyntaxTree` is the same parser `ruby -c` runs; `Ripper` stands in on the
+/// implementations that do not expose it, at the cost of the parser's own message. ~keep
+const BATCH_CHECKER_SOURCE: &str = r##"require 'json'
+require 'ripper'
+ARGV.each do |path|
+  begin
+    source = File.read(path)
+    if defined?(RubyVM::AbstractSyntaxTree)
+      RubyVM::AbstractSyntaxTree.parse(source)
+    elsif Ripper.sexp(source).nil?
+      raise SyntaxError, 'syntax error'
+    end
+    puts JSON.generate({ 'path' => path, 'ok' => true, 'error' => '' })
+  rescue SyntaxError, StandardError => error
+    puts JSON.generate({ 'path' => path, 'ok' => false, 'error' => "#{error.class}: #{error.message}" })
+  end
+end
+"##;
+
+impl RubyValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let checked: Vec<usize> = snippets
+            .iter()
+            .enumerate()
+            .filter(|(_, snippet)| !is_api_signature(snippet.code.trim()))
+            .map(|(index, _)| index)
+            .collect();
+        if checked.is_empty() {
+            return Ok(vec![(SnippetStatus::Pass, None); snippets.len()]);
+        }
+        let dir = match session {
+            Some(session) => ScratchDir::for_session(session)?,
+            None => ScratchDir::isolated()?,
+        };
+        let mut file_names = Vec::with_capacity(checked.len());
+        let mut paths = Vec::with_capacity(checked.len());
+        for index in &checked {
+            let file_name = format!("{BATCH_FILE_PREFIX}{index}.rb");
+            let path = dir.path().join(&file_name);
+            std::fs::write(&path, &snippets[*index].code)?;
+            file_names.push(file_name);
+            paths.push(path);
+        }
+        let checker_path = dir.path().join(BATCH_CHECKER_NAME);
+        std::fs::write(&checker_path, BATCH_CHECKER_SOURCE)?;
+        let mut command = std::process::Command::new("ruby");
+        command.arg(&checker_path).args(&paths);
+        if let Some(session) = session {
+            session.apply(&mut command);
+            command.env("RUBYLIB", &session.working_directory);
+        }
+        let (_, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::place(
+            snippets.len(),
+            &checked,
+            Self::checker_results(&file_names, &output),
+        ))
+    }
+
+    /// Restores input order across the snippets the checker never saw: an API-signature snippet
+    /// passes without a parse exactly as it does on the per-snippet path, and holding its slot
+    /// here is what keeps result *i* the verdict on snippet *i*. ~keep
+    fn place(total: usize, checked: &[usize], results: BatchValidation) -> BatchValidation {
+        let mut placed = vec![(SnippetStatus::Pass, None); total];
+        for (position, index) in checked.iter().enumerate() {
+            if let Some(value) = results.get(position) {
+                placed[*index] = value.clone();
+            }
+        }
+        placed
+    }
+
+    /// Maps the checker's JSON lines back to the snippet that owns each file. A snippet the
+    /// checker never reported on fails carrying the real output rather than passing by default. ~keep
+    fn checker_results(file_names: &[String], output: &str) -> BatchValidation {
+        let mut reported = vec![None; file_names.len()];
+        let mut unmatched = Vec::new();
+        for line in output.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match Self::parse_line(file_names, line) {
+                Some((index, value)) => reported[index] = Some(value),
+                None => unmatched.push(line.to_string()),
+            }
+        }
+        let resolved = reported.iter().all(Option::is_some);
+        let fallback = (!resolved).then(|| {
+            if unmatched.is_empty() {
+                BATCH_FAILED_WITHOUT_DIAGNOSTIC.to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        reported
+            .into_iter()
+            .map(|value| match (value, &fallback) {
+                (Some(value), _) => value,
+                (None, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (None, None) => (SnippetStatus::Pass, None),
+            })
+            .collect()
+    }
+
+    fn parse_line(file_names: &[String], line: &str) -> Option<(usize, (SnippetStatus, Option<String>))> {
+        let entry = serde_json::from_str::<serde_json::Value>(line).ok()?;
+        let path = entry.get("path").and_then(serde_json::Value::as_str)?;
+        let index = Self::owner(file_names, path)?;
+        let failed = entry.get("ok").and_then(serde_json::Value::as_bool) != Some(true);
+        let message = entry
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let value = if failed {
+            (SnippetStatus::Fail, Some(message))
+        } else {
+            (SnippetStatus::Pass, None)
+        };
+        Some((index, value))
+    }
+
+    fn owner(file_names: &[String], path: &str) -> Option<usize> {
+        let name = std::path::Path::new(path).file_name()?;
+        file_names
+            .iter()
+            .position(|file_name| std::ffi::OsStr::new(file_name.as_str()) == name)
+    }
+}
 
 impl SnippetValidator for RubyValidator {
     fn language(&self) -> Language {
@@ -38,6 +182,23 @@ impl SnippetValidator for RubyValidator {
             return Ok((SnippetStatus::Pass, None));
         }
         run_script(snippet, level, timeout_secs, session, ".rb", "ruby", &["-c"])
+    }
+
+    /// `Run` is declined: each snippet must execute in its own process so its output, exit status
+    /// and side effects belong to it alone. Every other level runs the same syntax check `ruby -c`
+    /// performs, which is what the batch checker applies per file. ~keep
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        (level != ValidationLevel::Run).then(|| Self::validate_batch_with_context(snippets, timeout_secs, session))
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
     }
 
     fn max_level(&self) -> ValidationLevel {
@@ -98,6 +259,127 @@ mod tests {
                 block_index: 0,
             },
         }
+    }
+
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    fn ruby_snippet(code: &str) -> Snippet {
+        let mut value = undefined_symbol_snippet();
+        value.code = code.into();
+        value
+    }
+
+    #[test]
+    fn batch_declines_run_so_each_snippet_executes_on_its_own() {
+        let only = ruby_snippet("puts \"one\"\n");
+
+        let declined = RubyValidator.validate_batch_in_session(&[&only], ValidationLevel::Run, 10, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn batch_returns_one_result_per_snippet_in_input_order() {
+        if !RubyValidator.is_available() {
+            return;
+        }
+        let first = ruby_snippet("puts \"one\"\n");
+        let second = ruby_snippet("puts \"two\"\n");
+        let third = ruby_snippet("puts \"three\"\n");
+
+        let results =
+            RubyValidator::validate_batch_with_context(&[&first, &second, &third], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_fails_only_the_broken_snippet_and_passes_its_neighbours() {
+        if !RubyValidator.is_available() {
+            return;
+        }
+        let first = ruby_snippet("puts \"one\"\n");
+        let broken = ruby_snippet("def broken(\n");
+        let third = ruby_snippet("puts \"three\"\n");
+
+        let results =
+            RubyValidator::validate_batch_with_context(&[&first, &broken, &third], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("SyntaxError")),
+            "{:?}",
+            results[1].1
+        );
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    /// The checker parses each file and evaluates none of it, so two snippets reopening the same
+    /// class — which one interpreter evaluating both would merge into a single definition — are
+    /// judged independently. ~keep
+    #[test]
+    fn batch_passes_two_snippets_defining_the_same_class() {
+        if !RubyValidator.is_available() {
+            return;
+        }
+        let first = ruby_snippet("class Same\n  def value\n    1\n  end\nend\n");
+        let second = ruby_snippet("class Same\n  def value\n    2\n  end\nend\n");
+
+        let results = RubyValidator::validate_batch_with_context(&[&first, &second], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+            .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// An API-signature snippet passes without reaching the interpreter on the per-snippet path,
+    /// so the batch must hold its slot rather than shift every later snippet's verdict up by one. ~keep
+    #[test]
+    fn batch_keeps_input_order_when_a_snippet_never_reaches_the_interpreter() {
+        if !RubyValidator.is_available() {
+            return;
+        }
+        let signature = ruby_snippet("value(name) -> String\n");
+        let broken = ruby_snippet("def broken(\n");
+        assert!(is_api_signature(signature.code.trim()));
+
+        let results =
+            RubyValidator::validate_batch_with_context(&[&signature, &broken], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], (SnippetStatus::Pass, None));
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+    }
+
+    /// A checker that never reported on a snippet must not let it pass by default: the snippet
+    /// fails carrying whatever the toolchain actually said. ~keep
+    #[test]
+    fn checker_results_fail_every_unreported_snippet_with_the_real_output() {
+        let file_names = vec!["snippet_batch_0.rb".to_string(), "snippet_batch_1.rb".to_string()];
+
+        let results = RubyValidator::checker_results(&file_names, "ruby: no such file or directory\n");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Fail, Some("ruby: no such file or directory".to_string())),
+                (SnippetStatus::Fail, Some("ruby: no such file or directory".to_string())),
+            ]
+        );
     }
 
     #[test]

@@ -140,6 +140,51 @@ fn swift_module_directories_in(binary_directory: &std::path::Path) -> Result<Vec
 mod tests {
     use super::*;
 
+    /// Swift is deliberately not batched. `swiftc` compiles one module per invocation, and a
+    /// module accepts top-level code in exactly one file: handing it several snippets at once
+    /// fails every one of them with `expressions are not allowed at the top level` before any
+    /// snippet's own code is judged, which the per-snippet path never does. There is no way to
+    /// scope a snippet's top-level statements into a namespace of its own, so the batch hook stays
+    /// declined and the runner keeps using one process per snippet. ~keep
+    #[test]
+    fn batching_is_declined_because_one_module_cannot_hold_two_top_level_snippets() {
+        let first = swift_snippet("print(\"one\")\n");
+        let second = swift_snippet("print(\"two\")\n");
+
+        assert!(!SwiftValidator.supports_batching());
+        for level in [
+            ValidationLevel::Syntax,
+            ValidationLevel::Compile,
+            ValidationLevel::TypeCheck,
+            ValidationLevel::Run,
+        ] {
+            let declined = SwiftValidator.validate_batch_in_session(&[&first, &second], level, 10, None);
+            assert!(
+                declined.is_none(),
+                "{level:?} must fall back to one process per snippet"
+            );
+        }
+    }
+
+    fn swift_snippet(code: &str) -> crate::snippets::types::Snippet {
+        crate::snippets::types::Snippet {
+            id: None,
+            path: std::path::PathBuf::from("snippet.swift"),
+            language: Language::Swift,
+            title: None,
+            code: code.into(),
+            start_line: 1,
+            block_index: 0,
+            annotation: None,
+            metadata: crate::snippets::types::SnippetMetadata::default(),
+            source_origin: crate::snippets::types::SourceOrigin {
+                path: std::path::PathBuf::from("snippet.swift"),
+                line: 1,
+                block_index: 0,
+            },
+        }
+    }
+
     #[test]
     fn missing_swiftpm_bin_directory_is_not_an_io_error() {
         let directory = tempfile::tempdir().expect("temp directory");

@@ -1,13 +1,126 @@
 use crate::snippets::error::Result;
+use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
 pub struct RValidator;
 
+const BATCH_FILE_PREFIX: &str = "snippet_batch_";
+const BATCH_CHECKER_NAME: &str = "alef_batch_check.R";
+const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "the R batch checker failed without a per-snippet diagnostic";
+const BATCH_LINE_PREFIX: &str = "ALEF|";
+const BATCH_LINE_FIELD_COUNT: usize = 3;
+const BATCH_LINE_SEPARATOR: char = '|';
+const BATCH_OK: &str = "ok";
+
+/// The checker prints one line per file and R's parse errors span several lines, so the message
+/// travels with its newlines escaped and is restored on the Rust side. ~keep
+const ESCAPED_NEWLINE: &str = "\\n";
+
+/// One R start for the whole batch instead of one per snippet — starting the interpreter, not
+/// parsing, is what a per-snippet `Rscript` run spends its time on. The checker runs the same
+/// `parse(file = ...)` the serial path uses over every file it is handed and prints a line for
+/// each, so one snippet's parse error neither aborts the run nor leaks into another snippet's
+/// result; it always exits 0, which is why a missing line, not the exit status, is what marks a
+/// snippet unjudged. ~keep
+const BATCH_CHECKER_SOURCE: &str = r#"for (path in commandArgs(trailingOnly = TRUE)) {
+  message <- tryCatch({ parse(file = path); "" }, error = function(error) conditionMessage(error))
+  status <- if (nzchar(message)) "err" else "ok"
+  escaped <- paste(strsplit(message, "\n", fixed = TRUE)[[1]], collapse = "\\n")
+  cat("ALEF|", path, "|", status, "|", escaped, "\n", sep = "")
+}
+"#;
+
 impl RValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let dir = match session {
+            Some(session) => ScratchDir::for_session(session)?,
+            None => ScratchDir::isolated()?,
+        };
+        let mut file_names = Vec::with_capacity(snippets.len());
+        let mut paths = Vec::with_capacity(snippets.len());
+        for (index, snippet) in snippets.iter().enumerate() {
+            let file_name = format!("{BATCH_FILE_PREFIX}{index}.R");
+            let path = dir.path().join(&file_name);
+            std::fs::write(&path, &snippet.code)?;
+            file_names.push(file_name);
+            paths.push(path);
+        }
+        let checker_path = dir.path().join(BATCH_CHECKER_NAME);
+        std::fs::write(&checker_path, BATCH_CHECKER_SOURCE)?;
+        let mut command = std::process::Command::new("Rscript");
+        command.arg(&checker_path).args(&paths);
+        if let Some(session) = session {
+            session.apply(&mut command);
+            command.env("R_LIBS_USER", &session.working_directory);
+        }
+        let (_, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::checker_results(&file_names, &output))
+    }
+
+    /// Maps the checker's lines back to the snippet that owns each file. A snippet the checker
+    /// never reported on fails carrying the real output rather than passing by default. ~keep
+    fn checker_results(file_names: &[String], output: &str) -> BatchValidation {
+        let mut reported = vec![None; file_names.len()];
+        let mut unmatched = Vec::new();
+        for line in output.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match Self::parse_line(file_names, line) {
+                Some((index, value)) => reported[index] = Some(value),
+                None => unmatched.push(line.to_string()),
+            }
+        }
+        let resolved = reported.iter().all(Option::is_some);
+        let fallback = (!resolved).then(|| {
+            if unmatched.is_empty() {
+                BATCH_FAILED_WITHOUT_DIAGNOSTIC.to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        reported
+            .into_iter()
+            .map(|value| match (value, &fallback) {
+                (Some(value), _) => value,
+                (None, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (None, None) => (SnippetStatus::Pass, None),
+            })
+            .collect()
+    }
+
+    fn parse_line(file_names: &[String], line: &str) -> Option<(usize, (SnippetStatus, Option<String>))> {
+        let fields: Vec<&str> = line
+            .strip_prefix(BATCH_LINE_PREFIX)?
+            .splitn(BATCH_LINE_FIELD_COUNT, BATCH_LINE_SEPARATOR)
+            .collect();
+        let [path, status, message] = fields[..] else {
+            return None;
+        };
+        let index = Self::owner(file_names, path)?;
+        let value = if status == BATCH_OK {
+            (SnippetStatus::Pass, None)
+        } else {
+            (SnippetStatus::Fail, Some(message.replace(ESCAPED_NEWLINE, "\n")))
+        };
+        Some((index, value))
+    }
+
+    fn owner(file_names: &[String], path: &str) -> Option<usize> {
+        let name = std::path::Path::new(path).file_name()?;
+        file_names
+            .iter()
+            .position(|file_name| std::ffi::OsStr::new(file_name.as_str()) == name)
+    }
+
     fn validate_with_context(
         snippet: &Snippet,
         level: ValidationLevel,
@@ -68,6 +181,23 @@ impl SnippetValidator for RValidator {
         Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
+    /// `Run` is declined: each snippet must execute in its own process so its output, exit status
+    /// and side effects belong to it alone. Every other level runs the same `parse(file = ...)`
+    /// call, which is what the batch checker applies per file. ~keep
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        (level != ValidationLevel::Run).then(|| Self::validate_batch_with_context(snippets, timeout_secs, session))
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
+    }
+
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::Run
     }
@@ -126,6 +256,116 @@ mod tests {
                 block_index: 0,
             },
         }
+    }
+
+    const TOOLCHAIN_TEST_TIMEOUT_SECS: u64 = 120;
+
+    fn r_snippet(code: &str) -> Snippet {
+        let mut value = undefined_function_snippet();
+        value.code = code.into();
+        value
+    }
+
+    #[test]
+    fn batch_declines_run_so_each_snippet_executes_on_its_own() {
+        let only = r_snippet("value <- 1\n");
+
+        let declined = RValidator.validate_batch_in_session(&[&only], ValidationLevel::Run, 10, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn batch_returns_one_result_per_snippet_in_input_order() {
+        if !RValidator.is_available() {
+            return;
+        }
+        let first = r_snippet("value <- 1\n");
+        let second = r_snippet("value <- 2\n");
+        let third = r_snippet("value <- 3\n");
+
+        let results =
+            RValidator::validate_batch_with_context(&[&first, &second, &third], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None),
+                (SnippetStatus::Pass, None)
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_fails_only_the_broken_snippet_and_passes_its_neighbours() {
+        if !RValidator.is_available() {
+            return;
+        }
+        let first = r_snippet("value <- 1\n");
+        let broken = r_snippet("value <- (\n");
+        let third = r_snippet("value <- 3\n");
+
+        let results =
+            RValidator::validate_batch_with_context(&[&first, &broken, &third], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None), "{:?}", results[0]);
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("unexpected end of input")),
+            "{:?}",
+            results[1].1
+        );
+        assert_eq!(results[2], (SnippetStatus::Pass, None), "{:?}", results[2]);
+    }
+
+    /// The checker parses each file and evaluates none of it, so two snippets binding the same
+    /// name in the interpreter's global environment — which one process sharing a scope would let
+    /// the second silently overwrite — are judged independently. ~keep
+    #[test]
+    fn batch_passes_two_snippets_binding_the_same_global_name() {
+        if !RValidator.is_available() {
+            return;
+        }
+        let first = r_snippet("shared <- function(x) x + 1\n");
+        let second = r_snippet("shared <- function(x) x + 2\n");
+
+        let results = RValidator::validate_batch_with_context(&[&first, &second], TOOLCHAIN_TEST_TIMEOUT_SECS, None)
+            .expect("batch validation runs");
+
+        assert_eq!(results, vec![(SnippetStatus::Pass, None), (SnippetStatus::Pass, None)]);
+    }
+
+    /// A checker that never reported on a snippet must not let it pass by default: the snippet
+    /// fails carrying whatever the toolchain actually said. ~keep
+    #[test]
+    fn checker_results_fail_every_unreported_snippet_with_the_real_output() {
+        let file_names = vec!["snippet_batch_0.R".to_string(), "snippet_batch_1.R".to_string()];
+
+        let results = RValidator::checker_results(&file_names, "Fatal error: cannot open file\n");
+
+        assert_eq!(
+            results,
+            vec![
+                (SnippetStatus::Fail, Some("Fatal error: cannot open file".to_string())),
+                (SnippetStatus::Fail, Some("Fatal error: cannot open file".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn checker_results_restore_the_newlines_a_reported_message_carried() {
+        let file_names = vec!["snippet_batch_0.R".to_string()];
+
+        let results = RValidator::checker_results(&file_names, "ALEF|/tmp/s/snippet_batch_0.R|err|first\\nsecond\n");
+
+        assert_eq!(results, vec![(SnippetStatus::Fail, Some("first\nsecond".to_string()))]);
     }
 
     #[test]

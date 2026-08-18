@@ -67,6 +67,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The docs snippet pass reads the cache it writes.** It built its `RunnerConfig` from a default with
   `changed_only: false` while setting `cache_dir`, so every run wrote an entry per snippet and read none
   back — a guaranteed 100% miss.
+- **C, Dart, Elixir, PHP, R, Ruby and Zig snippets validate in one invocation per language**, closing
+  the batching sweep: `cc -fsyntax-only` and `dart analyze` take every file at once, and Elixir, PHP,
+  R and Ruby each run one interpreter over a checker script that reports per file. Two toolchain
+  findings drove the shape: `ruby -c a.rb b.rb` checks only the FIRST file and hands the rest to the
+  script as `ARGV`, so a broken second file passed silently; and `zig ast-check` refuses a second
+  path outright, so the Zig batch goes through `zig fmt --ast-check`. Levels that link an executable
+  decline and fall back, since each `main` needs its own artifact.
+- **Swift deliberately does NOT batch.** `swiftc` compiles one module per invocation and a module
+  permits top-level code in exactly one file, so `swiftc -parse a.swift b.swift` fails the other
+  snippets with "expressions are not allowed at the top level" before judging their own code. There is
+  no way to scope a snippet's top-level statements into its own namespace, so batching would fail
+  snippets for a reason the per-snippet path never had.
 - **Java, Kotlin and C# snippets validate in one compiler invocation per language instead of one per
   snippet.** Java and Kotlin collapse a JVM startup per snippet into one; C# collapses a `dotnet build`
   per snippet into one. Measured on 20 snippets: `javac` 5.44s to 0.23s, `kotlinc` ~76s to 4.86s,

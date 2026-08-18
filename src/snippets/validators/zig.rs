@@ -2,9 +2,11 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
 
 pub struct ZigValidator;
+
+mod batch;
 
 impl SnippetValidator for ZigValidator {
     fn language(&self) -> Language {
@@ -105,6 +107,24 @@ impl SnippetValidator for ZigValidator {
         } else {
             (SnippetStatus::Fail, Some(output))
         })
+    }
+
+    /// Only the AST level batches. `Compile` builds one executable from one root file — and zig
+    /// analyses a declaration only where it is referenced, so aggregating N snippets behind
+    /// `@import` would leave most of their code unanalysed and passing on that basis — so it falls
+    /// back to one process per snippet. ~keep
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        (level == ValidationLevel::Syntax).then(|| batch::validate_batch_with_context(snippets, timeout_secs, session))
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
     }
 
     fn is_dependency_error(&self, output: &str) -> bool {
