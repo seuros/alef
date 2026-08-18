@@ -1047,10 +1047,6 @@ fn returns_void_call_constructs_a_handle_for_a_json_object_arg_onto_a_handle_par
 /// unconditionally for every `json_object` arg -- this test pins that as a control so a future
 /// change to this path cannot silently regress it back to a literal. ~keep
 #[test]
-#[ignore = "alef #243: doc-mode assert stripping orphans the `int32_t status` binding, so the \
-            emitted snippet fails -Werror -Wunused-variable. The handle-construction assertions \
-            below already pass; only the compile step fails, and it fails on a REAL defect in \
-            published output. Un-ignore with the #243 fix -- do not weaken the assertions. ~keep"]
 fn bytes_result_client_method_still_constructs_a_handle_for_a_json_object_arg() {
     let fixture = Fixture {
         id: "transcribe_bytes".into(),

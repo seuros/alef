@@ -562,7 +562,17 @@ pub(super) fn render_bytes_test_function(
         return;
     }
 
-    let _ = writeln!(out, "    assert(status == 0 && \"expected call to succeed\");");
+    // ~keep alef #243: `test_function::assemble_snippet_body` strips every `assert(` line on
+    // this success path when publishing a documentation snippet, which orphaned `status` (its
+    // only consumer) and failed the published example's `-Werror -Wunused-variable` build.
+    // Emit the same `if (<failure>) { return EXIT_FAILURE; }` idiom that path already publishes
+    // for the `expects_error` case instead of a plain `assert`, so the snippet compiles and
+    // still teaches readers to check the status code rather than dropping it silently.
+    if documentation_snippet {
+        let _ = writeln!(out, "    if (status != 0) {{ return EXIT_FAILURE; }}");
+    } else {
+        let _ = writeln!(out, "    assert(status == 0 && \"expected call to succeed\");");
+    }
 
     // Render assertions. For byte-buffer methods, the only meaningful per-field
     // assertions are presence/length checks on the buffer itself. Field names
