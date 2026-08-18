@@ -172,12 +172,26 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     // parameters instead of a return type. This is only possible here because
     // `render_snippet_body` has a `CallIr` in scope; the main e2e test-file emitter in
     // `c.rs` calls the `render_test_function` back-compat shim directly and has no such
-    // IR to resolve, so it always renders `TargetParams::Unknown`. ~keep
-    let target_params = call
-        .core_lookup_name("c")
-        .as_deref()
-        .and_then(|name| ir.signature(name))
-        .map_or(TargetParams::Unknown, |signature| TargetParams::Known(signature.params));
+    // IR to resolve, so it always renders `TargetParams::IrAbsent`. ~keep
+    // A trait-bridge registry call (`register_fn` / `unregister_fn` / `clear_fn`) is a generated
+    // FFI export, never a core IR function, so it is permanently unresolvable against the IR and
+    // would refuse forever on the argument axis exactly as it did on the result-type axis. Its
+    // shared `[crates.e2e.calls.*].args` list is legitimately empty: the only parameter its C
+    // export takes beyond the configured ones is the trailing `out_error`, which `extra_args`
+    // appends because the language-agnostic config cannot express it. So the shared arg list is
+    // genuinely zero-length, which is `Known(&[])` -- not an authoring gap. ~keep
+    let target_params = if crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture).is_some() {
+        TargetParams::Known(&[])
+    } else if ir.is_absent() {
+        TargetParams::IrAbsent
+    } else {
+        call.core_lookup_name("c")
+            .as_deref()
+            .and_then(|name| ir.signature(name))
+            .map_or(TargetParams::Unresolvable, |signature| {
+                TargetParams::Known(signature.params)
+            })
+    };
     if info.returns_void {
         // The shared, language-agnostic `[crates.e2e.calls.*]` args config has no
         // concept of the C-only trailing `out_error` out-param that trait-bridge
@@ -274,10 +288,11 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
 /// Back-compat entry point for callers that cannot supply a [`TargetParams`] -- namely the
 /// main e2e test-file emitter in `c.rs`, which calls this directly (not through
 /// [`render_snippet_body`]) and has no `CallIr` in scope at that call site to resolve one.
-/// Always renders the legacy (non-client) call's empty-`args` case as
-/// [`TargetParams::Unknown`], which is honest: this entry point genuinely has no signature
-/// to consult, so refusing an authoring gap rather than guessing is correct here even though
-/// it forecloses the `TargetParams::Known(&[])` fast path for a real zero-argument target.
+/// Renders the legacy (non-client) call's empty-`args` case as [`TargetParams::IrAbsent`],
+/// which is what this entry point genuinely is: no IR was consulted, so nothing was learned,
+/// and it keeps the pre-existing behaviour rather than refusing every call on a path that
+/// never had a signature to check. Refusing here would have failed generation for every
+/// IR-less caller -- a far wider blast radius than the defect being fixed.
 /// [`render_snippet_body`] calls [`render_test_function_impl`] directly instead, since it
 /// does have a `CallIr` to resolve a real signature from. ~keep
 #[allow(clippy::too_many_arguments)]
@@ -330,7 +345,7 @@ pub(super) fn render_test_function(
         type_defs,
         documentation_snippet,
         config_sources,
-        TargetParams::Unknown,
+        TargetParams::IrAbsent,
     )
 }
 
@@ -1151,7 +1166,7 @@ pub(super) fn render_test_function_impl(
         }
     }
 
-    let args_str = build_args_string_c(
+    let configured_args = build_args_string_c(
         &fixture.input,
         args,
         &typed_arg_handles,
@@ -1161,6 +1176,21 @@ pub(super) fn render_test_function_impl(
         function_name,
         target_params,
     )?;
+    // `extra_args` carries C-only trailing parameters the shared, language-agnostic
+    // `[crates.e2e.calls.*]` args config cannot express; for a trait-bridge `unregister`/`clear`
+    // export that is the mandatory `out_error` out-param (`clear_fn.jinja`, `unregister_fn.jinja`).
+    // The void-call path in `render_snippet_body` already joins it in, but this free-function path
+    // never did, and the omission was masked: a fixture with no `input` fell through to
+    // `json_to_c(Value::Null)`, which renders the literal `NULL` and happened to land in exactly
+    // the out_error slot. The emitted call therefore looked correct while nothing was appending
+    // out_error at all -- a coincidence that only surfaced once `TargetParams::Known(&[])` began
+    // rendering a genuinely empty argument list for these calls. ~keep
+    let extra = extra_args.join(", ");
+    let args_str = match (configured_args.is_empty(), extra.is_empty()) {
+        (_, true) => configured_args,
+        (true, false) => extra,
+        (false, false) => format!("{configured_args}, {extra}"),
+    };
 
     // Host-capsule passthrough: a free function whose result type is a configured
     // capsule (e.g. `get_language` → `const TSLanguage *`) returns a borrowed,

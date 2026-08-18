@@ -2215,6 +2215,55 @@ mod tests {
         );
     }
 
+    /// The `NULL` a trait-bridge `clear`/`unregister` snippet emits must be the `out_error`
+    /// out-param appended from `extra_args` (`c.rs`, `clear_fn.jinja`), NOT a by-product of
+    /// rendering an absent fixture `input`. Those two sources were indistinguishable for as long
+    /// as the only fixture covering this path used `Fixture::default()`, whose `input` is
+    /// `Value::Null` -- and `json_to_c(Value::Null)` renders the literal `NULL`, landing in
+    /// exactly the out_error slot by coincidence. This fixture carries a NON-null `input`, so the
+    /// argument list can only read `(NULL)` if out_error is genuinely being appended: the
+    /// coincidence would emit the serialized input instead. ~keep
+    #[test]
+    fn trait_bridge_out_error_arg_comes_from_extra_args_not_from_a_null_fixture_input() {
+        let mut fixture = documented_fixture();
+        fixture.call = Some("clear_ocr_backends".into());
+        fixture.input = serde_json::json!({"unused": "payload"});
+        let e2e = E2eConfig::default();
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let crate_config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "OcrBackend".into(),
+                clear_fn: Some("clear_ocr_backends".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
+            .expect("a trait-bridge fixture with a non-null input still generates a C snippet");
+
+        let content = &report.snippets[0].file.content;
+        assert!(
+            content.contains("sample_clear_ocr_backend(NULL);"),
+            "out_error must be appended from extra_args regardless of the fixture input, got:\n{content}"
+        );
+        assert!(
+            !content.contains("unused"),
+            "the fixture input must not be spliced into the argument list, got:\n{content}"
+        );
+    }
+
     #[test]
     fn shared_validation_identities_keep_distinct_target_output_paths() {
         let fixture = documented_fixture();

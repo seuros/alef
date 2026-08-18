@@ -971,10 +971,21 @@ pub(super) enum TargetParams<'a> {
     /// same-named IR method agrees on) -- these are its declared parameters, in order. An
     /// empty slice means the function is genuinely zero-argument.
     Known(&'a [crate::core::ir::ParamDef]),
-    /// No IR signature could be resolved for the target (absent IR, unresolvable name, or
-    /// disagreeing same-named methods). Too little information to tell a zero-argument call
-    /// from a missing `args` configuration, so the caller must refuse rather than guess.
-    Unknown,
+    /// There is no core IR in scope at all, so nothing was consulted and nothing can be
+    /// concluded. This is a legitimate, common state -- the main e2e test-file emitter has no
+    /// `CallIr`, and several snippet entry points render without one -- so it keeps the
+    /// pre-existing behaviour rather than refusing.
+    ///
+    /// Refusing here instead would fail every call on every IR-less path, which is a far larger
+    /// blast radius than the defect being fixed, and it would contradict the sibling
+    /// result-type resolution: `unresolved_result_type_name` treats an absent IR as
+    /// `Unverified` for exactly this reason. The two halves of one fix must agree on what an
+    /// absent IR licenses. ~keep
+    IrAbsent,
+    /// The IR was there to consult and the target still did not resolve -- an unresolvable name
+    /// or disagreeing same-named methods. That is an authoring gap, and it is the case that
+    /// produced a whole fixture `input` JSON spliced against a typed parameter, so it refuses.
+    Unresolvable,
 }
 
 /// Fixture "{id}" calls `{function_name}` with no configured `args`, but the target's IR
@@ -1050,7 +1061,8 @@ pub(super) fn build_args_string_c(
                     missing_args_for_known_params_diagnostic(fixture, function_name, params)
                 )
             }
-            TargetParams::Unknown => {
+            TargetParams::IrAbsent => Ok(json_to_c(input)),
+            TargetParams::Unresolvable => {
                 anyhow::bail!(
                     "{}",
                     missing_args_unresolvable_signature_diagnostic(fixture, function_name)
@@ -2829,7 +2841,7 @@ mod tests {
             &[],
             &fixture,
             "register_sample_backend",
-            TargetParams::Unknown,
+            TargetParams::IrAbsent,
         );
     }
 
@@ -2857,7 +2869,7 @@ mod tests {
             &[],
             &fixture,
             "register_sample_backend",
-            TargetParams::Unknown,
+            TargetParams::IrAbsent,
         );
     }
 
@@ -2957,13 +2969,51 @@ mod tests {
             &[],
             &fixture,
             "mystery_fn",
-            TargetParams::Unknown,
+            TargetParams::Unresolvable,
         )
         .expect_err("an unresolvable signature must not fall back to guessing")
         .to_string();
 
         assert!(error.contains("mystery_fn"), "must name the call: {error}");
         assert!(error.contains("args"), "must point at the `args` config knob: {error}");
+    }
+
+    /// The boundary between the two refusing cases and the one that must not refuse.
+    ///
+    /// `IrAbsent` means no IR was consulted at all -- the main e2e test-file emitter has no
+    /// `CallIr`, and several snippet entry points render without one. Nothing was learned, so
+    /// nothing can be concluded, and this keeps the pre-existing behaviour instead of failing.
+    /// Collapsing it back into `Unresolvable` would fail generation for every IR-less caller,
+    /// which is a far wider blast radius than the defect this guards, and it would put this
+    /// half of the fix in direct contradiction with `unresolved_result_type_name`, which
+    /// classifies an absent IR as `Unverified` for exactly the same reason. Both halves must
+    /// agree on what an absent IR licenses, or one of them is wrong. ~keep
+    #[test]
+    fn should_keep_prior_behaviour_when_there_is_no_ir_to_consult() {
+        let fixture = Fixture {
+            id: "no_ir".into(),
+            input: serde_json::json!({"cache_dir": "/tmp/sample_cache"}),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+
+        let rendered = build_args_string_c(
+            &fixture.input,
+            &[],
+            &HashMap::new(),
+            &config,
+            &[],
+            &fixture,
+            "sample_fn",
+            TargetParams::IrAbsent,
+        )
+        .expect("an absent IR must not fail generation on a path that never had a signature");
+
+        assert_eq!(
+            rendered,
+            json_to_c(&fixture.input),
+            "with no IR consulted the emitter must render exactly what it rendered before"
+        );
     }
 
     /// The load-bearing control: a call WITH properly configured `args` must keep
@@ -2993,7 +3043,7 @@ mod tests {
             trait_name: None,
         }];
 
-        // `TargetParams::Unknown` on purpose: a non-empty `args` list must render the
+        // `TargetParams::Unresolvable` on purpose: a non-empty `args` list must render the
         // same way regardless of whether the IR signature resolved, since the
         // ambiguity this type exists to settle only arises when `args` is empty.
         let result = build_args_string_c(
@@ -3004,7 +3054,7 @@ mod tests {
             &[],
             &fixture,
             "chat",
-            TargetParams::Unknown,
+            TargetParams::Unresolvable,
         )
         .expect("configured args must still render");
 
