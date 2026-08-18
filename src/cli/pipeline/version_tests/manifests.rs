@@ -160,7 +160,7 @@ fn sync_docs_version_badges_updates_api_files_only() {
     )
     .expect("write configuration.md");
 
-    let updated = sync_docs_version_badges(dir, "0.15.6-rc.3");
+    let updated = sync_docs_version_badges(dir, "0.15.6-rc.3", &crate::cli::git::IgnoreFilter::for_root(dir));
     assert_eq!(
         updated.len(),
         2,
@@ -188,8 +188,9 @@ fn sync_docs_version_badges_is_idempotent() {
         "## Go API Reference <span class=\"version-badge\">v1.0.0</span>\n",
     )
     .expect("write api-go.md");
-    let _ = sync_docs_version_badges(dir, "1.0.0");
-    let second = sync_docs_version_badges(dir, "1.0.0");
+    let writable = crate::cli::git::IgnoreFilter::for_root(dir);
+    let _ = sync_docs_version_badges(dir, "1.0.0", &writable);
+    let second = sync_docs_version_badges(dir, "1.0.0", &writable);
     assert!(second.is_empty(), "second call with same version must be a no-op");
 }
 

@@ -857,7 +857,11 @@ pub(super) fn sync_cargo_lock_path_versions(content: &str, new_version: &str) ->
 /// The match is anchored to the literal `version-badge` span class and the `v`
 /// prefix the docs template emits, so unrelated `v…` text in prose is untouched.
 /// Returns the list of files whose badge was rewritten.
-pub(super) fn sync_docs_version_badges(docs_reference_dir: &std::path::Path, new_version: &str) -> Vec<String> {
+pub(super) fn sync_docs_version_badges(
+    docs_reference_dir: &std::path::Path,
+    new_version: &str,
+    writable: &crate::cli::git::IgnoreFilter,
+) -> Vec<String> {
     static BADGE_RE: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new(r#"(<span class="version-badge">v)[^<]*(</span>)"#).expect("valid regex"));
     let mut updated = Vec::new();
@@ -865,7 +869,7 @@ pub(super) fn sync_docs_version_badges(docs_reference_dir: &std::path::Path, new
     let Some(pattern_str) = pattern.to_str() else {
         return updated;
     };
-    for entry in glob::glob(pattern_str).into_iter().flatten().flatten() {
+    for entry in writable.glob(pattern_str) {
         let Ok(content) = std::fs::read_to_string(&entry) else {
             continue;
         };

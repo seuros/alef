@@ -78,6 +78,7 @@ fn push_unreadable(checks: &mut Vec<VersionCheck>, label: String, reason: &str) 
         label,
         found: None,
         matches: false,
+        blocked_on_publish: None,
     });
 }
 
@@ -92,6 +93,36 @@ pub struct VersionCheck {
     pub found: Option<String>,
     /// Whether this manifest matches the canonical version.
     pub matches: bool,
+    /// `name@version` that must be published before this mismatch can be resolved, when the
+    /// manifest cannot be refreshed in-tree at all.
+    ///
+    /// ~keep Only ever set on a failing check, and it does not soften the verdict: the row is
+    /// still a mismatch and still fails `--exit-code`. It exists because the two kinds of
+    /// mismatch call for opposite actions — plain drift is "run the sync and commit it", a
+    /// blocked row is "publish the release, then refresh" — and an output that cannot tell them
+    /// apart makes the whole report read as noise.
+    pub blocked_on_publish: Option<String>,
+}
+
+/// Per-check status tag used in the report body.
+fn status_label(check: &VersionCheck) -> &'static str {
+    match (check.matches, check.found.is_some(), check.blocked_on_publish.is_some()) {
+        (true, _, _) => "ok",
+        (false, false, _) => "UNREADABLE",
+        (false, true, true) => "UNPUBLISHED",
+        (false, true, false) => "MISMATCH",
+    }
+}
+
+/// One line of the trailing failure summary.
+fn failure_line(check: &VersionCheck) -> String {
+    match &check.blocked_on_publish {
+        Some(pending) => format!(
+            "  BLOCKED  {} (found: {:?}) - unresolvable until {pending} is published",
+            check.label, check.found
+        ),
+        None => format!("  FAIL  {} (found: {:?})", check.label, check.found),
+    }
 }
 
 /// Run version consistency check across all configured language manifests.
@@ -114,6 +145,7 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
                     "found": c.found,
                     "expected": canonical,
                     "ok": c.matches,
+                    "blocked_on_publish": c.blocked_on_publish,
                 })
             })
             .collect();
@@ -129,24 +161,29 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
         crate::bin_cli::output::line(format!("Canonical version: {canonical}"));
         crate::bin_cli::output::line("-".repeat(40));
         for check in &checks {
-            let status = match (check.matches, check.found.is_some()) {
-                (true, _) => "ok",
-                (false, true) => "MISMATCH",
-                (false, false) => "UNREADABLE",
-            };
+            let status = status_label(check);
             let found = check.found.as_deref().unwrap_or("<unreadable>");
             crate::bin_cli::output::line(format!("  [{status}] {} = {found}", check.label));
         }
         crate::bin_cli::output::line("-".repeat(40));
         let mismatches: Vec<_> = checks.iter().filter(|c| !c.matches).collect();
+        let blocked = mismatches.iter().filter(|c| c.blocked_on_publish.is_some()).count();
         if checks.is_empty() {
             crate::bin_cli::output::line("No manifests examined - nothing was verified.");
         } else if mismatches.is_empty() {
             crate::bin_cli::output::line(format!("All {} manifests consistent: {canonical}", checks.len()));
         } else {
-            crate::bin_cli::output::line(format!("{} mismatch(es) found:", mismatches.len()));
+            let summary = if blocked == 0 {
+                format!("{} mismatch(es) found:", mismatches.len())
+            } else {
+                format!(
+                    "{} mismatch(es) found, {blocked} of them unresolvable until the pending release is published:",
+                    mismatches.len()
+                )
+            };
+            crate::bin_cli::output::line(summary);
             for m in &mismatches {
-                crate::bin_cli::output::line(format!("  FAIL  {} (found: {:?})", m.label, m.found));
+                crate::bin_cli::output::line(failure_line(m));
             }
         }
     }
@@ -334,6 +371,7 @@ fn push_check_with_transform(
                 label: rel_path.to_string(),
                 found: Some(found_value),
                 matches,
+                blocked_on_publish: None,
             });
         }
         ReadOutcome::NoVersionField => {}
@@ -382,6 +420,7 @@ fn push_normalized_check(
                 label: rel_path.to_string(),
                 found: Some(found_value),
                 matches,
+                blocked_on_publish: None,
             });
         }
         ReadOutcome::NoVersionField => {}
@@ -422,6 +461,7 @@ fn push_glob_checks_with_transform(
                     label,
                     found: Some(found_value),
                     matches,
+                    blocked_on_publish: None,
                 });
             }
             ReadOutcome::NoVersionField => {}
@@ -876,5 +916,47 @@ python = "{python_output}"
             py.label
         );
         assert!(py.matches, "source-template pyproject should match: {py:?}");
+    }
+    fn check(label: &str, found: Option<&str>, matches: bool, blocked_on_publish: Option<&str>) -> VersionCheck {
+        VersionCheck {
+            label: label.to_string(),
+            found: found.map(str::to_string),
+            matches,
+            blocked_on_publish: blocked_on_publish.map(str::to_string),
+        }
+    }
+
+    /// The three failure modes have to be distinguishable in the report body, because they call
+    /// for three different actions: fix the manifest, fix the file that cannot be read, or ship
+    /// the release the lockfile is waiting on.
+    #[test]
+    fn status_label_separates_drift_from_a_publish_blocker() {
+        assert_eq!(status_label(&check("a", Some("1.0.0"), true, None)), "ok");
+        assert_eq!(status_label(&check("a", Some("0.9.0"), false, None)), "MISMATCH");
+        assert_eq!(
+            status_label(&check("a", Some("0.9.0"), false, Some("sample@1.0.0"))),
+            "UNPUBLISHED"
+        );
+        assert_eq!(status_label(&check("a", None, false, None)), "UNREADABLE");
+    }
+
+    #[test]
+    fn failure_line_names_the_release_a_blocked_row_is_waiting_on() {
+        let blocked = failure_line(&check(
+            "test_apps/rust/Cargo.lock#app",
+            Some("1.14.3"),
+            false,
+            Some("sample@1.15.1"),
+        ));
+        assert!(
+            blocked.contains("unresolvable until sample@1.15.1 is published"),
+            "a blocked row must say what it waits on: {blocked}"
+        );
+        let drift = failure_line(&check("packages/python/pyproject.toml", Some("1.14.3"), false, None));
+        assert!(
+            !drift.contains("unresolvable"),
+            "plain drift must not claim to be blocked: {drift}"
+        );
+        assert!(drift.contains("FAIL"), "plain drift keeps the FAIL prefix: {drift}");
     }
 }

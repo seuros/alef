@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use tracing::debug;
 
+use crate::cli::git::IgnoreFilter;
 use crate::core::config::ResolvedCrateConfig;
 
 use super::version_core::{patch_cargo_crates_io_version, patch_workspace_dep_versions, write_version_to_cargo_toml};
@@ -29,10 +30,11 @@ pub(super) fn sync_rust_test_app_version(
 pub(super) fn sync_workspace_cargo_toml_versions(
     crate_name: &str,
     version: &str,
+    writable: &IgnoreFilter,
     updated: &mut Vec<String>,
     any_cargo_toml_modified: &mut bool,
 ) {
-    let Some((cargo_toml_paths, workspace_member_names)) = collect_workspace_cargo_toml_paths() else {
+    let Some((cargo_toml_paths, workspace_member_names)) = collect_workspace_cargo_toml_paths(writable) else {
         return;
     };
 
@@ -93,7 +95,7 @@ pub(super) fn sync_workspace_cargo_toml_versions(
     }
 }
 
-fn collect_workspace_cargo_toml_paths() -> Option<(Vec<String>, HashSet<String>)> {
+fn collect_workspace_cargo_toml_paths(writable: &IgnoreFilter) -> Option<(Vec<String>, HashSet<String>)> {
     let root_content = std::fs::read_to_string("Cargo.toml").ok()?;
     let root_toml = root_content.parse::<toml::Table>().ok()?;
     let empty_vec = vec![];
@@ -114,16 +116,14 @@ fn collect_workspace_cargo_toml_paths() -> Option<(Vec<String>, HashSet<String>)
 
     let mut cargo_toml_paths: Vec<String> = vec![];
     for pattern_val in members.iter().chain(excludes.iter()) {
-        if let Some(pattern) = pattern_val.as_str()
-            && let Ok(paths) = glob::glob(&format!("{pattern}/Cargo.toml"))
-        {
-            for entry in paths.flatten() {
+        if let Some(pattern) = pattern_val.as_str() {
+            for entry in writable.glob(&format!("{pattern}/Cargo.toml")) {
                 cargo_toml_paths.push(entry.to_string_lossy().to_string());
             }
         }
     }
 
-    for entry in glob::glob("packages/*/rust/Cargo.toml").into_iter().flatten().flatten() {
+    for entry in writable.glob("packages/*/rust/Cargo.toml") {
         let path_str = entry.to_string_lossy().to_string();
         if !cargo_toml_paths.contains(&path_str) {
             cargo_toml_paths.push(path_str);

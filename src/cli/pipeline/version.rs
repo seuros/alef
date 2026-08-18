@@ -56,6 +56,24 @@ fn catch_all_rewrite_is_permitted(path: &std::path::Path, content: &str) -> bool
     false
 }
 
+/// Report, once per consumer-supplied pattern, that its expansion reached files git ignores.
+///
+/// `sync.extra_paths` and `sync.text_replacements` are the only rewrite surfaces whose pattern
+/// alef does not author, so a refusal here means the consumer's pattern is wider than they meant
+/// — worth a warning, unlike alef's own globs whose refusals are routine and logged at `debug`.
+/// Counted per pattern rather than per path because a `**` that reaches a staging tree reaches
+/// every file in it at once, and a line per file would bury the one fact that matters. ~keep
+fn warn_refused_matches(surface: &str, pattern: &str, refused: usize) {
+    if refused == 0 {
+        return;
+    }
+    warn!(
+        "version-sync: {surface} pattern '{pattern}' matched {refused} git-ignored file(s), which were \
+         not rewritten — they are build staging or another disposable copy, so an edit there would be \
+         invisible to review and lost on the next clean. Narrow the pattern if this is a surprise"
+    );
+}
+
 /// Sync version from Cargo.toml to all package manifest files.
 ///
 /// When `no_regen` is `false` (the default for direct CLI invocations), this
@@ -88,6 +106,22 @@ pub fn sync_versions(
     let last_path = std::path::Path::new(".alef").join("last_synced_version");
     info!("Syncing version {version}");
 
+    // Every rewrite below that finds its target by expanding a glob goes through this filter.
+    // The name-based skip lists this replaces could never be complete — `tmp`, `stage` and
+    // `build` are per-tool names, and a gem-packaging stage under `packages/ruby/tmp/` was the
+    // third such directory to be discovered the hard way — whereas "git ignores it" is the
+    // property that actually describes the damage: a version bump written into build staging is
+    // an edit no review sees and the next clean destroys, while leaving it genuinely ambiguous
+    // whether the tracked original was bumped too. ~keep
+    let writable = crate::cli::git::IgnoreFilter::for_current_dir();
+    if writable.is_degraded() {
+        warn!(
+            "version-sync cannot read git's ignore rules here (not a git work tree, or `git` is \
+             unavailable) — glob-discovered rewrites fall back to an unfiltered disk walk and may \
+             write into build-staging copies"
+        );
+    }
+
     let mut updated = vec![];
     let mut any_node_pkg_modified = false;
     let mut any_cargo_toml_modified = false;
@@ -95,11 +129,17 @@ pub fn sync_versions(
     let mut any_mix_exs_modified = false;
     let mut text_replacement_paths: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
 
-    sync_workspace_cargo_toml_versions(&config.name, &version, &mut updated, &mut any_cargo_toml_modified);
+    sync_workspace_cargo_toml_versions(
+        &config.name,
+        &version,
+        &writable,
+        &mut updated,
+        &mut any_cargo_toml_modified,
+    );
     sync_rust_test_app_version(config, &version, &mut updated, &mut any_cargo_toml_modified);
 
     let python_version = to_pep440(&version);
-    sync_python_versions(config, &version, &python_version, &mut updated)?;
+    sync_python_versions(config, &version, &python_version, &writable, &mut updated)?;
 
     let node_pkg_dir = config.package_dir(Language::Node);
     let node_paths: Vec<String> = vec![format!("{node_pkg_dir}/package.json")];
@@ -121,6 +161,7 @@ pub fn sync_versions(
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "gemspec")
+                && writable.allows(&path)
                 && let Ok(content) = std::fs::read_to_string(&path)
                 && let Some(new_content) =
                     replace_version_pattern(&content, r#"spec\.version\s*=\s*['"][^'"]*['"]"#, &ruby_version)
@@ -136,7 +177,7 @@ pub fn sync_versions(
         "packages/ruby/ext/*/src/*/version.rb",
         "packages/ruby/ext/*/native/src/*/version.rb",
     ] {
-        for entry in glob::glob(pattern).into_iter().flatten().flatten() {
+        for entry in writable.glob(pattern) {
             if let Ok(content) = std::fs::read_to_string(&entry)
                 && let Some(new_content) =
                     replace_version_pattern(&content, r#"VERSION\s*=\s*['"][^'"]*['"]"#, &ruby_version)
@@ -158,11 +199,7 @@ pub fn sync_versions(
 
     {
         let core_member: std::collections::HashSet<String> = std::iter::once(config.name.clone()).collect();
-        for entry in glob::glob("packages/ruby/ext/*/native/Cargo.toml")
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
+        for entry in writable.glob("packages/ruby/ext/*/native/Cargo.toml") {
             let path_str = entry.to_string_lossy().to_string();
             match patch_workspace_dep_versions(&path_str, &version, &core_member) {
                 Ok(true) => {
@@ -200,7 +237,7 @@ pub fn sync_versions(
     {
         let elixir_pkg = config.package_dir(Language::Elixir);
         let nif_lock_glob = format!("{elixir_pkg}/native/*/Cargo.lock");
-        for entry in glob::glob(&nif_lock_glob).into_iter().flatten().flatten() {
+        for entry in writable.glob(&nif_lock_glob) {
             if let Ok(content) = std::fs::read_to_string(&entry)
                 && let Some(new_content) = sync_cargo_lock_path_versions(&content, &version)
             {
@@ -217,11 +254,7 @@ pub fn sync_versions(
         updated.push("packages/java/pom.xml".to_string());
     }
 
-    for entry in glob::glob("packages/csharp/**/*.csproj")
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
+    for entry in writable.glob("packages/csharp/**/*.csproj") {
         if let Ok(content) = std::fs::read_to_string(&entry)
             && let Some(rewritten) = sync_csharp_project_versions(&content, &version)
         {
@@ -251,7 +284,7 @@ pub fn sync_versions(
         }
     }
 
-    for wasm_pkg in glob::glob("crates/*-wasm/package.json").into_iter().flatten().flatten() {
+    for wasm_pkg in writable.glob("crates/*-wasm/package.json") {
         if let Ok(content) = std::fs::read_to_string(&wasm_pkg) {
             if package_json_is_private(&content) {
                 continue;
@@ -263,7 +296,7 @@ pub fn sync_versions(
         }
     }
 
-    for node_pkg in glob::glob("crates/*-node/package.json").into_iter().flatten().flatten() {
+    for node_pkg in writable.glob("crates/*-node/package.json") {
         if let Ok(content) = std::fs::read_to_string(&node_pkg) {
             if package_json_is_private(&content) {
                 continue;
@@ -289,11 +322,7 @@ pub fn sync_versions(
         }
     }
 
-    for platform_pkg in glob::glob("crates/*-node/npm/*/package.json")
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
+    for platform_pkg in writable.glob("crates/*-node/npm/*/package.json") {
         if let Ok(content) = std::fs::read_to_string(&platform_pkg) {
             if package_json_is_private(&content) {
                 continue;
@@ -361,11 +390,7 @@ pub fn sync_versions(
         updated.push("packages/go/ffi_loader.go".to_string());
     }
 
-    for entry in glob::glob("packages/go/cmd/setup/main.go")
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
+    for entry in writable.glob("packages/go/cmd/setup/main.go") {
         if let Ok(content) = std::fs::read_to_string(&entry)
             && let Some(new_content) = replace_version_pattern(&content, r#"moduleVersion\s*=\s*"[^"]*""#, &version)
         {
@@ -391,10 +416,10 @@ pub fn sync_versions(
         }
     }
 
-    sync_swift_package_versions(config, &version, &mut updated)?;
+    sync_swift_package_versions(config, &version, &writable, &mut updated)?;
 
     for sh_pattern in &["e2e/c/download_ffi.sh", "test_apps/c/download_ffi.sh"] {
-        for sh_script in glob::glob(sh_pattern).into_iter().flatten().flatten() {
+        for sh_script in writable.glob(sh_pattern) {
             if let Ok(content) = std::fs::read_to_string(&sh_script)
                 && let Some(new_content) = replace_version_pattern(&content, r#"VERSION="[^"]*""#, &version)
             {
@@ -422,7 +447,7 @@ pub fn sync_versions(
         updated.push("e2e/ruby/Gemfile.lock".to_string());
     }
 
-    for entry in glob::glob("e2e/go/go.mod").into_iter().flatten().flatten() {
+    for entry in writable.glob("e2e/go/go.mod") {
         if let Ok(content) = std::fs::read_to_string(&entry) {
             static GO_MOD_REQUIRE_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
                 regex::Regex::new(r"(?m)^\s+([\w./\-]+/packages/go)\s+v[\w.\-]+").expect("valid regex")
@@ -480,9 +505,14 @@ pub fn sync_versions(
         for pattern in &sync_config.extra_paths {
             match glob::glob(pattern) {
                 Ok(paths) => {
+                    let mut refused = 0usize;
                     for entry in paths {
                         match entry {
                             Ok(path) => {
+                                if !writable.allows(&path) {
+                                    refused += 1;
+                                    continue;
+                                }
                                 if let Ok(content) = std::fs::read_to_string(&path) {
                                     let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                                     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -570,6 +600,7 @@ pub fn sync_versions(
                             }
                         }
                     }
+                    warn_refused_matches("sync.extra_paths", pattern, refused);
                 }
                 Err(e) => {
                     debug!("Invalid glob pattern '{pattern}': {e}");
@@ -580,9 +611,14 @@ pub fn sync_versions(
         for replacement in &sync_config.text_replacements {
             match glob::glob(&replacement.path) {
                 Ok(paths) => {
+                    let mut refused = 0usize;
                     for entry in paths {
                         match entry {
                             Ok(path) => {
+                                if !writable.allows(&path) {
+                                    refused += 1;
+                                    continue;
+                                }
                                 text_replacement_paths.insert(path.clone());
                                 if let Ok(content) = std::fs::read_to_string(&path)
                                     && catch_all_rewrite_is_permitted(&path, &content)
@@ -619,6 +655,7 @@ pub fn sync_versions(
                             }
                         }
                     }
+                    warn_refused_matches("sync.text_replacements", &replacement.path, refused);
                 }
                 Err(e) => {
                     debug!("Invalid glob pattern '{}': {e}", replacement.path);
@@ -631,7 +668,7 @@ pub fn sync_versions(
     // hardcode: a consumer that publishes its reference pages elsewhere (one such tree renders
     // them into `docs-site/src/content/docs/reference`) got its READMEs bumped and its
     // API-reference badges left pinned to the previous release. ~keep
-    for badge_file in sync_docs_version_badges(&crate::docs::reference_output_dir(config), &version) {
+    for badge_file in sync_docs_version_badges(&crate::docs::reference_output_dir(config), &version, &writable) {
         updated.push(badge_file);
     }
 

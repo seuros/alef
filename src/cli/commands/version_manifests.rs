@@ -3,11 +3,35 @@ use crate::core::config::{ResolvedCrateConfig, extras::Language};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+/// Paths this discovery is allowed to consider, or `None` when git could not answer.
+///
+/// ~keep A disk walk cannot tell a consumer's committed manifest from a build tool's staged
+/// copy of it (gem packaging mirrors `packages/ruby/ext/**` into `packages/ruby/tmp/`, and
+/// the copy is gitignored), and both defects this gate reported against a consumer came from
+/// that: the staged `Cargo.lock` raised mismatch rows of its own, and the staged `Cargo.toml`
+/// — keyed by package name like every other — overwrote the live crate's entry in
+/// `cargo_manifest_versions`, so the *tracked* lockfile was then compared against the stale
+/// staged version and failed while literally reading the canonical version. Directory-name
+/// blocklists cannot close this: `tmp`, `dist`, `build`, `stage` and friends are per-tool
+/// names, whereas "not committed" is the property that actually distinguishes them.
+/// `None` (no repository, or no `git` binary) falls back to the unfiltered walk: this command
+/// only reports, so degrading to the previous behaviour beats examining nothing.
+type TrackedPaths<'a> = Option<&'a HashSet<PathBuf>>;
+
 pub(super) fn collect(config: &ResolvedCrateConfig, workspace_root: &Path, canonical: &str) -> Vec<VersionCheck> {
+    let tracked = crate::cli::git::tracked_paths_under(workspace_root);
+    if tracked.is_none() {
+        tracing::warn!(
+            workspace_root = %workspace_root.display(),
+            "cannot determine which files are git-tracked (not a git work tree, or `git` is unavailable) - \
+             version discovery falls back to a plain disk walk and may report build-staging copies"
+        );
+    }
+    let tracked = tracked.as_ref();
     let mut checks = Vec::new();
-    collect_csproj_checks(config, workspace_root, canonical, &mut checks);
+    collect_csproj_checks(config, workspace_root, canonical, tracked, &mut checks);
     collect_single_manifest_checks(config, workspace_root, canonical, &mut checks);
-    collect_cargo_lock_checks(workspace_root, canonical, &mut checks);
+    collect_cargo_lock_checks(workspace_root, canonical, tracked, &mut checks);
     checks.sort_by(|left, right| left.label.cmp(&right.label));
     checks
 }
@@ -16,11 +40,12 @@ fn collect_csproj_checks(
     config: &ResolvedCrateConfig,
     workspace_root: &Path,
     canonical: &str,
+    tracked: TrackedPaths<'_>,
     checks: &mut Vec<VersionCheck>,
 ) {
     let directory = config.package_dir(Language::Csharp);
     let assembly_version = crate::core::version::to_dotnet_assembly_version(canonical);
-    for path in glob_under(workspace_root, &directory, "**/*.csproj") {
+    for path in glob_under(workspace_root, &directory, "**/*.csproj", tracked) {
         let Some(content) = std::fs::read_to_string(&path).ok() else {
             continue;
         };
@@ -36,7 +61,7 @@ fn collect_csproj_checks(
                 "AssemblyVersion" | "FileVersion" => assembly_version.as_str(),
                 _ => canonical,
             };
-            push_check(checks, workspace_root, &path, Some(field), found, expected);
+            push_check(checks, workspace_root, &path, Some(field), found, expected, None);
         }
     }
 }
@@ -51,21 +76,26 @@ fn collect_single_manifest_checks(
         .join(config.package_dir(Language::Dart))
         .join("pubspec.yaml");
     if let Some(found) = read_prefixed_value(&dart, "version:") {
-        push_check(checks, workspace_root, &dart, None, found, canonical);
+        push_check(checks, workspace_root, &dart, None, found, canonical, None);
     }
 
     let zig = workspace_root
         .join(config.package_dir(Language::Zig))
         .join("build.zig.zon");
     if let Some(found) = read_zig_version(&zig) {
-        push_check(checks, workspace_root, &zig, None, found, canonical);
+        push_check(checks, workspace_root, &zig, None, found, canonical, None);
     }
 }
 
-fn collect_cargo_lock_checks(workspace_root: &Path, canonical: &str, checks: &mut Vec<VersionCheck>) {
+fn collect_cargo_lock_checks(
+    workspace_root: &Path,
+    canonical: &str,
+    tracked: TrackedPaths<'_>,
+    checks: &mut Vec<VersionCheck>,
+) {
     let submodules = registered_submodule_paths(workspace_root);
-    let manifests = cargo_manifest_versions(workspace_root, canonical, &submodules);
-    for lock_path in glob_under(workspace_root, "", "**/Cargo.lock") {
+    let manifests = cargo_manifest_versions(workspace_root, canonical, &submodules, tracked);
+    for lock_path in glob_under(workspace_root, "", "**/Cargo.lock", tracked) {
         if ignored_path(workspace_root, &lock_path, &submodules) {
             continue;
         }
@@ -78,7 +108,8 @@ fn collect_cargo_lock_checks(workspace_root: &Path, canonical: &str, checks: &mu
         else {
             continue;
         };
-        for package in packages {
+        let blocked = unpublished_dependency(&lock_path, &packages, &manifests);
+        for package in &packages {
             if package.get("source").is_some() {
                 continue;
             }
@@ -98,18 +129,118 @@ fn collect_cargo_lock_checks(workspace_root: &Path, canonical: &str, checks: &mu
                 Some(name),
                 found.to_string(),
                 expected,
+                blocked.as_deref(),
             );
         }
     }
+}
+
+/// The `name@version` this lockfile is waiting on, when its own drift cannot be resolved in-tree.
+///
+/// ~keep A stale lockfile is normally a chore: run cargo and commit the result. It is *not* when
+/// the lockfile's own manifest depends on a crate this workspace builds, takes it from the
+/// registry rather than by path, and asks for exactly the canonical version — the release being
+/// prepared. Cargo cannot resolve that requirement until the release is published, so the
+/// lockfile is pinned to the last published version and every drift row it produces is
+/// unresolvable until publish rather than something a developer forgot. The two are
+/// indistinguishable in the output otherwise, which is what made a genuinely-blocked row read as
+/// noise. Only a registry-sourced entry at a *different* version counts: once the release lands,
+/// the entry matches and this returns `None` on its own.
+fn unpublished_dependency(
+    lock_path: &Path,
+    packages: &[toml::Value],
+    manifests: &HashMap<String, String>,
+) -> Option<String> {
+    let content = std::fs::read_to_string(lock_path.with_file_name("Cargo.toml")).ok()?;
+    let manifest = toml::from_str::<toml::Value>(&content).ok()?;
+    for (name, required) in registry_dependencies_on_local_crates(&manifest, manifests) {
+        let Some(resolved) = packages
+            .iter()
+            .find(|package| package.get("name").and_then(toml::Value::as_str) == Some(name.as_str()))
+        else {
+            continue;
+        };
+        if resolved.get("source").is_none() {
+            continue;
+        }
+        let resolved_version = resolved
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default();
+        if resolved_version != required {
+            return Some(format!("{name}@{required}"));
+        }
+    }
+    None
+}
+
+/// Dependencies of `manifest` that name a crate built in this workspace, come from the registry
+/// (no `path`), and pin exactly the version that workspace currently declares for it.
+fn registry_dependencies_on_local_crates(
+    manifest: &toml::Value,
+    manifests: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut requirements = Vec::new();
+    for table in dependency_tables(manifest) {
+        for (key, value) in table {
+            let name = value
+                .get("package")
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key.as_str())
+                .to_string();
+            let Some(local_version) = manifests.get(&name) else {
+                continue;
+            };
+            if value.get("path").is_some() {
+                continue;
+            }
+            let requirement = match value {
+                toml::Value::String(requirement) => Some(requirement.as_str()),
+                other => other.get("version").and_then(toml::Value::as_str),
+            };
+            let Some(requirement) = requirement else {
+                continue;
+            };
+            if exact_requirement(requirement) == local_version.as_str() {
+                requirements.push((name, local_version.clone()));
+            }
+        }
+    }
+    requirements
+}
+
+/// Strip the comparator off a single-version requirement so `=1.2.3`, `^1.2.3` and `1.2.3` all
+/// compare equal to the version they pin. Anything more elaborate (ranges, wildcards) simply
+/// fails the equality test it feeds and is treated as not pinning the pending release.
+fn exact_requirement(requirement: &str) -> &str {
+    requirement.trim().trim_start_matches(['=', '^', '~']).trim()
+}
+
+fn dependency_tables(manifest: &toml::Value) -> Vec<&toml::Table> {
+    const KINDS: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
+    let mut sources = vec![manifest];
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        sources.extend(targets.values());
+    }
+    let mut tables = Vec::new();
+    for source in sources {
+        for kind in KINDS {
+            if let Some(table) = source.get(kind).and_then(toml::Value::as_table) {
+                tables.push(table);
+            }
+        }
+    }
+    tables
 }
 
 fn cargo_manifest_versions(
     workspace_root: &Path,
     canonical: &str,
     submodules: &HashSet<PathBuf>,
+    tracked: TrackedPaths<'_>,
 ) -> HashMap<String, String> {
     let mut versions = HashMap::new();
-    for path in glob_under(workspace_root, "", "**/Cargo.toml") {
+    for path in glob_under(workspace_root, "", "**/Cargo.toml", tracked) {
         if ignored_path(workspace_root, &path, submodules) {
             continue;
         }
@@ -134,7 +265,7 @@ fn cargo_manifest_versions(
     versions
 }
 
-fn glob_under(workspace_root: &Path, directory: &str, suffix: &str) -> Vec<PathBuf> {
+fn glob_under(workspace_root: &Path, directory: &str, suffix: &str, tracked: TrackedPaths<'_>) -> Vec<PathBuf> {
     let root = glob::Pattern::escape(&workspace_root.to_string_lossy());
     let directory = directory.trim_matches(['/', '\\']);
     let pattern = if directory.is_empty() {
@@ -142,7 +273,12 @@ fn glob_under(workspace_root: &Path, directory: &str, suffix: &str) -> Vec<PathB
     } else {
         format!("{root}/{directory}/{suffix}")
     };
-    glob::glob(&pattern).into_iter().flatten().flatten().collect()
+    glob::glob(&pattern)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|path| tracked.is_none_or(|tracked| tracked.contains(path)))
+        .collect()
 }
 
 // ~keep `vendor` (Cargo/Go-style vendoring) and `deps` (Mix's fetched-dependency
@@ -248,6 +384,7 @@ fn push_check(
     field: Option<&str>,
     found: String,
     expected: &str,
+    blocked_on_publish: Option<&str>,
 ) {
     let mut label = path
         .strip_prefix(workspace_root)
@@ -258,10 +395,12 @@ fn push_check(
         label.push('#');
         label.push_str(field);
     }
+    let matches = found == expected;
     checks.push(VersionCheck {
         label,
-        matches: found == expected,
+        matches,
         found: Some(found),
+        blocked_on_publish: blocked_on_publish.filter(|_| !matches).map(str::to_string),
     });
 }
 
@@ -601,6 +740,10 @@ mod tests {
             "genuinely stale lockfile entry must still be reported as a mismatch: {sample:?}"
         );
         assert_eq!(sample.found.as_deref(), Some("3.4.0"));
+        assert_eq!(
+            sample.blocked_on_publish, None,
+            "drift with no pending-release dependency is a chore, not a publish blocker: {sample:?}"
+        );
     }
 
     /// Write a `.git` marker of the shape a linked worktree or submodule checkout
@@ -687,5 +830,195 @@ mod tests {
             "genuine drift inside a registered submodule must still be reported: {subcrate:?}"
         );
         assert_eq!(subcrate.found.as_deref(), Some("3.4.0"));
+    }
+
+    fn init_git_repo(root: &Path) {
+        let status = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(root)
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init must succeed for tracked-discovery tests");
+    }
+
+    fn git_add(root: &Path, relative: &str) {
+        let status = std::process::Command::new("git")
+            .args(["add", "--", relative])
+            .current_dir(root)
+            .status()
+            .expect("git add");
+        assert!(
+            status.success(),
+            "git add must succeed for tracked-discovery tests: {relative}"
+        );
+    }
+
+    /// A workspace at `1.15.1` whose ruby native crate is committed at the canonical version and
+    /// whose gem-build staging tree holds a gitignored copy of the very same two manifests, frozen
+    /// at the previous release. This is the exact shape a consumer reported: `packages/ruby/tmp/`
+    /// is `tracked=no, ignored=yes`, and glob order puts it *after* the tracked original, so the
+    /// stale copy is the last writer into the name-keyed manifest map.
+    fn workspace_with_gem_staging_copies() -> TempDir {
+        let temp = workspace("1.15.1");
+        init_git_repo(temp.path());
+        std::fs::write(temp.path().join(".gitignore"), "packages/ruby/tmp/\n").expect("gitignore");
+
+        let native = temp.path().join("packages/ruby/ext/sample_rb/native");
+        std::fs::create_dir_all(&native).expect("native directory");
+        std::fs::write(
+            native.join("Cargo.toml"),
+            "[package]\nname = \"sample-rb\"\nversion = \"1.15.1\"\n",
+        )
+        .expect("native manifest");
+        std::fs::write(
+            native.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample-rb\"\nversion = \"1.15.1\"\n",
+        )
+        .expect("native lock");
+
+        let staged = temp.path().join("packages/ruby/tmp/ruby/stage/ext/sample_rb/native");
+        std::fs::create_dir_all(&staged).expect("stage directory");
+        std::fs::write(
+            staged.join("Cargo.toml"),
+            "[package]\nname = \"sample-rb\"\nversion = \"1.15.0\"\n",
+        )
+        .expect("staged manifest");
+        std::fs::write(
+            staged.join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"sample-rb\"\nversion = \"1.15.0\"\n",
+        )
+        .expect("staged lock");
+
+        for relative in [
+            ".gitignore",
+            "Cargo.toml",
+            "crates/sample/Cargo.toml",
+            "crates/helper/Cargo.toml",
+            "packages/ruby/ext/sample_rb/native/Cargo.toml",
+            "packages/ruby/ext/sample_rb/native/Cargo.lock",
+        ] {
+            git_add(temp.path(), relative);
+        }
+        temp
+    }
+
+    /// Defect 1: build staging is not part of the repository's version surface. Every row it
+    /// produced described a stale copy of a file whose tracked original is correct.
+    #[test]
+    fn gitignored_gem_staging_tree_is_not_scanned() {
+        let temp = workspace_with_gem_staging_copies();
+
+        let checks = collect(&config(temp.path()), temp.path(), "1.15.1");
+
+        assert!(
+            checks.iter().all(|check| !check.label.contains("/tmp/")),
+            "untracked build staging must not be discovered at all: {checks:?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.label == "packages/ruby/ext/sample_rb/native/Cargo.lock#sample-rb"),
+            "the tracked original must still be checked: {checks:?}"
+        );
+    }
+
+    /// Defect 2: the staged `Cargo.toml` declares the same package name as the tracked one, and
+    /// `cargo_manifest_versions` keys its map by name alone, so the ignored copy decided the
+    /// *expected* value for the tracked lockfile — which then failed while literally reading the
+    /// canonical version, in a run where every other canonical row printed `ok`.
+    #[test]
+    fn manifest_reading_the_canonical_version_is_never_reported_as_a_mismatch() {
+        let temp = workspace_with_gem_staging_copies();
+
+        let checks = collect(&config(temp.path()), temp.path(), "1.15.1");
+
+        let tracked = checks
+            .iter()
+            .find(|check| check.label == "packages/ruby/ext/sample_rb/native/Cargo.lock#sample-rb")
+            .expect("tracked native lock check present");
+        assert!(
+            tracked.matches,
+            "a manifest whose version equals the workspace version must pass: {tracked:?}"
+        );
+        assert!(
+            checks
+                .iter()
+                .all(|check| check.found.as_deref() != Some("1.15.1") || check.matches),
+            "no row that reads the canonical version may be a mismatch: {checks:?}"
+        );
+    }
+
+    /// The enhancement: an e2e app that depends on the *published* crate at the version being
+    /// released cannot have its lockfile refreshed until that release exists on the registry —
+    /// `cargo` cannot resolve `sample = "3.4.5"` while the index tops out at `3.4.4`. The row is
+    /// still a mismatch, but it is a publish blocker rather than a chore somebody forgot, and the
+    /// output has to be able to say which.
+    #[test]
+    fn drift_blocked_on_an_unpublished_release_is_labelled_as_such() {
+        let temp = workspace("3.4.5");
+        let app = temp.path().join("test_apps/rust");
+        std::fs::create_dir_all(&app).expect("app directory");
+        std::fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"sample-e2e-rust\"\nversion = \"3.4.5\"\n\n\
+             [dependencies]\nsample_alias = { package = \"sample\", version = \"3.4.5\" }\n",
+        )
+        .expect("app manifest");
+        std::fs::write(
+            app.join("Cargo.lock"),
+            "version = 4\n\n\
+             [[package]]\nname = \"sample\"\nversion = \"3.4.4\"\n\
+             source = \"registry+https://example.invalid/index\"\n\n\
+             [[package]]\nname = \"sample-e2e-rust\"\nversion = \"3.4.0\"\n",
+        )
+        .expect("app lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+
+        let app_check = checks
+            .iter()
+            .find(|check| check.label == "test_apps/rust/Cargo.lock#sample-e2e-rust")
+            .expect("app lock check present");
+        assert!(!app_check.matches, "the row is still a mismatch: {app_check:?}");
+        assert_eq!(
+            app_check.blocked_on_publish.as_deref(),
+            Some("sample@3.4.5"),
+            "the row must name the release it waits on: {app_check:?}"
+        );
+    }
+
+    /// The inverse guard, so the label cannot degrade into "every mismatch is somebody else's
+    /// problem": the same drift, with the dependency resolved from a local path instead of the
+    /// registry, is refreshable today and must stay plain drift.
+    #[test]
+    fn drift_resolvable_from_a_path_dependency_is_not_labelled_unresolvable() {
+        let temp = workspace("3.4.5");
+        let app = temp.path().join("test_apps/rust");
+        std::fs::create_dir_all(&app).expect("app directory");
+        std::fs::write(
+            app.join("Cargo.toml"),
+            "[package]\nname = \"sample-e2e-rust\"\nversion = \"3.4.5\"\n\n\
+             [dependencies]\nsample = { version = \"3.4.5\", path = \"../../crates/sample\" }\n",
+        )
+        .expect("app manifest");
+        std::fs::write(
+            app.join("Cargo.lock"),
+            "version = 4\n\n\
+             [[package]]\nname = \"sample\"\nversion = \"3.4.5\"\n\n\
+             [[package]]\nname = \"sample-e2e-rust\"\nversion = \"3.4.0\"\n",
+        )
+        .expect("app lock");
+
+        let checks = collect(&config(temp.path()), temp.path(), "3.4.5");
+
+        let app_check = checks
+            .iter()
+            .find(|check| check.label == "test_apps/rust/Cargo.lock#sample-e2e-rust")
+            .expect("app lock check present");
+        assert!(!app_check.matches, "the row is still a mismatch: {app_check:?}");
+        assert_eq!(
+            app_check.blocked_on_publish, None,
+            "a lockfile cargo can refresh right now is plain drift: {app_check:?}"
+        );
     }
 }

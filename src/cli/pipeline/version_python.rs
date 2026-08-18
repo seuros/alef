@@ -1,3 +1,4 @@
+use crate::cli::git::IgnoreFilter;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use anyhow::Context as _;
 
@@ -7,10 +8,11 @@ pub(super) fn sync_python_versions(
     config: &ResolvedCrateConfig,
     version: &str,
     python_version: &str,
+    writable: &IgnoreFilter,
     updated: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     sync_python_pyproject_versions(config, python_version, updated)?;
-    sync_python_init_versions(version, updated)
+    sync_python_init_versions(version, writable, updated)
 }
 
 fn sync_python_pyproject_versions(
@@ -50,12 +52,11 @@ fn sync_python_pyproject_versions(
     Ok(())
 }
 
-fn sync_python_init_versions(version: &str, updated: &mut Vec<String>) -> anyhow::Result<()> {
-    for py_init in glob::glob("packages/python/**/__init__.py")
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
+/// A setuptools/hatch build mirrors the whole package into `packages/python/build/lib/`, which
+/// this `**` pattern matches as readily as the source tree. Both copies carry the same
+/// `__version__` line, so the write went to both and only one of them was ever reviewed. ~keep
+fn sync_python_init_versions(version: &str, writable: &IgnoreFilter, updated: &mut Vec<String>) -> anyhow::Result<()> {
+    for py_init in writable.glob("packages/python/**/__init__.py") {
         if let Ok(content) = std::fs::read_to_string(&py_init)
             && let Some(new_content) = replace_version_pattern(&content, r#"__version__\s*=\s*"[^"]*""#, version)
         {

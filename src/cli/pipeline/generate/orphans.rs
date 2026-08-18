@@ -284,13 +284,14 @@ pub fn sweep_manifest_orphans(
             );
             continue;
         };
-        // `collect_alef_headered_paths` only guarantees the marker (it also serves
-        // `finalize_hashes_sweeping`'s re-stamp pass, which must find a file before it has been
-        // hash-stamped at all) and has no gitignore/tracked-ness awareness of its own -- both
-        // narrowed back down here: `path_is_alef_owned` restores the stricter marker-plus-hash bar
-        // the rest of this function reclaims by, so a file this very run wrote moments ago but has
-        // not yet reached `finalize_hashes` is never mistaken for an orphan, and `tracked` refuses
-        // anything the walker's own blindness would otherwise let through. ~keep
+        // `collect_alef_headered_paths` refuses git-ignored paths but only guarantees the marker,
+        // and it deliberately still returns untracked files -- it also serves
+        // `finalize_hashes_sweeping`'s re-stamp pass, which must reach a file before the consumer
+        // has committed it. Both gaps are closed here, because deletion answers to a stricter bar
+        // than rewriting: `path_is_alef_owned` restores the marker-plus-hash requirement the rest
+        // of this function reclaims by, so a file this very run wrote moments ago but has not yet
+        // reached `finalize_hashes` is never mistaken for an orphan, and `tracked` narrows
+        // not-ignored to actually-committed, so nothing uncommitted can be deleted. ~keep
         let candidates: Vec<_> = collect_alef_headered_paths(root)
             .into_iter()
             .filter(|path| !keep.contains(path) && tracked.contains(path) && path_is_alef_owned(path))
@@ -396,8 +397,8 @@ fn reclaim_lockfile_siblings(manifest_path: &Path, keep: &std::collections::Hash
     Ok(removed)
 }
 
-/// Collect every alef-headered file under `root` (recursively), skipping
-/// dependency / build directories.
+/// Collect every alef-headered file under `root` (recursively), skipping anything git ignores
+/// and, on top of that, the dependency / build directories named below.
 ///
 /// Used by the `all` pipeline to gather existing registry-mode e2e files
 /// (`test_apps/`) so their `alef:hash:` lines can be re-stamped after the
@@ -410,6 +411,16 @@ fn reclaim_lockfile_siblings(manifest_path: &Path, keep: &std::collections::Hash
 /// found so they can be re-stamped. Matching on `extract_hash(..).is_some()`
 /// instead would make an already-unstamped file permanently invisible to this
 /// scan, which is the bug this function exists to fix.
+///
+/// The directory-name list below is a fast path, not the gate. It cannot be completed —
+/// `tmp`, `stage` and `build` are per-tool names, and each of `vendor/`, `deps/` and finally a
+/// gem-packaging `tmp/` stage was added only after a staged copy had already been collected —
+/// and a name that *is* on it can still be legitimate output (a `vendor/` tree committed for
+/// offline builds). Git's ignore rules answer the question the names only approximate, so they
+/// decide and the names merely save a walk. Ignored-ness rather than tracked-ness, because the
+/// re-stamp route this feeds must still reach a file `alef generate` wrote moments ago and the
+/// consumer has not committed yet; the stricter tracked-ness bar stays where it belongs, on
+/// [`sweep_manifest_orphans`]'s deletion route. ~keep
 pub fn collect_alef_headered_paths(root: &std::path::Path) -> std::collections::HashSet<std::path::PathBuf> {
     fn is_alef_owned(path: &std::path::Path) -> bool {
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -422,6 +433,7 @@ pub fn collect_alef_headered_paths(root: &std::path::Path) -> std::collections::
     if !root.exists() {
         return paths;
     }
+    let visible = crate::cli::git::IgnoreFilter::for_root(root);
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
@@ -446,11 +458,12 @@ pub fn collect_alef_headered_paths(root: &std::path::Path) -> std::collections::
                         | "build"
                         | "dist"
                         | "Pods"
-                ) {
+                ) || !visible.allows(&path)
+                {
                     continue;
                 }
                 stack.push(path);
-            } else if ft.is_file() && is_alef_owned(&path) {
+            } else if ft.is_file() && visible.allows(&path) && is_alef_owned(&path) {
                 paths.insert(path);
             }
         }
@@ -494,9 +507,7 @@ fn report_disk_scan_candidates(root: &Path, candidates: &[PathBuf]) {
     }
 }
 
-/// Git-tracked files under `root`, or `None` when tracked-ness cannot be determined (`root` is
-/// not inside a git work tree, or the `git` binary is unavailable). Returned paths are absolute,
-/// matching every other path this module compares.
+/// Git-tracked files under `root`, or `None` when tracked-ness cannot be determined.
 ///
 /// Required before [`sweep_manifest_orphans`]'s disk-scan route deletes anything: a build tool can
 /// stage a copy of a real generated file at a mirrored path under the same owned root (a gem
@@ -505,27 +516,7 @@ fn report_disk_scan_candidates(root: &Path, candidates: &[PathBuf]) {
 /// apart. Alef's own output is committed by the consumer; a disposable staged copy is not (and is
 /// usually gitignored), so tracked-ness is the signal that closes the gap the marker leaves open. ~keep
 fn git_tracked_paths_under(root: &Path) -> Option<std::collections::HashSet<PathBuf>> {
-    // `-- .` scopes the listing to `root` itself: `git ls-files` with no pathspec lists every
-    // tracked file in the whole repository (just displayed relative to `-C`'s directory), which
-    // would make this needlessly scan a consumer's entire monorepo on every call. ~keep
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-z", "--", "."])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let mut tracked = std::collections::HashSet::new();
-    for entry in output.stdout.split(|&byte| byte == 0) {
-        if entry.is_empty() {
-            continue;
-        }
-        let relative = std::str::from_utf8(entry).ok()?;
-        tracked.insert(root.join(relative));
-    }
-    Some(tracked)
+    crate::cli::git::tracked_paths_under(root)
 }
 
 fn content_is_alef_owned(content: &str) -> bool {
@@ -535,6 +526,7 @@ fn content_is_alef_owned(content: &str) -> bool {
 #[cfg(test)]
 mod sweep_roots_tests {
     use super::*;
+    use crate::test_support::{git_add, git_init, write_file};
 
     fn config() -> ResolvedCrateConfig {
         ResolvedCrateConfig {
@@ -835,26 +827,6 @@ mod sweep_roots_tests {
         assert!(!collected.contains(&legacy_scaffold));
     }
 
-    fn init_git_repo(dir: &Path) {
-        let status = std::process::Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(dir)
-            .status()
-            .expect("git init");
-        assert!(status.success(), "git init must succeed for disk-scan tests");
-    }
-
-    fn git_add(dir: &Path, relative: &Path) {
-        let status = std::process::Command::new("git")
-            .arg("add")
-            .arg("--")
-            .arg(relative)
-            .current_dir(dir)
-            .status()
-            .expect("git add");
-        assert!(status.success(), "git add must succeed for disk-scan tests");
-    }
-
     /// The core case this whole route exists for: a file dropped from every manifest still on
     /// disk (simulated here by a `previous_paths`/`keep` that never mention it at all) is
     /// unreachable by the `previous_paths` route no matter how correct today's bookkeeping is --
@@ -869,7 +841,7 @@ mod sweep_roots_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let package_dir = dir.path().join("packages/kotlin_android");
         std::fs::create_dir_all(&package_dir).expect("package dir");
-        init_git_repo(&package_dir);
+        git_init(&package_dir);
 
         let kept = package_dir.join("Bridge.kt");
         let orphan = package_dir.join("Language.kt");
@@ -877,8 +849,8 @@ mod sweep_roots_tests {
         let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
         std::fs::write(&kept, &hashed).expect("kept file");
         std::fs::write(&orphan, &hashed).expect("orphan file");
-        git_add(&package_dir, Path::new("Bridge.kt"));
-        git_add(&package_dir, Path::new("Language.kt"));
+        git_add(&package_dir, &["Bridge.kt"]);
+        git_add(&package_dir, &["Language.kt"]);
 
         let previous = vec![kept.clone()];
         let keep = std::collections::HashSet::from([kept.clone()]);
@@ -905,7 +877,7 @@ mod sweep_roots_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let package_dir = dir.path().join("packages/kotlin_android");
         std::fs::create_dir_all(&package_dir).expect("package dir");
-        init_git_repo(&package_dir);
+        git_init(&package_dir);
 
         let kept = package_dir.join("Bridge.kt");
         let handwritten = package_dir.join("Extensions.kt");
@@ -913,8 +885,8 @@ mod sweep_roots_tests {
         let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
         std::fs::write(&kept, &hashed).expect("kept file");
         std::fs::write(&handwritten, "fun extra() {}\n").expect("handwritten file");
-        git_add(&package_dir, Path::new("Bridge.kt"));
-        git_add(&package_dir, Path::new("Extensions.kt"));
+        git_add(&package_dir, &["Bridge.kt"]);
+        git_add(&package_dir, &["Extensions.kt"]);
 
         let previous = vec![kept.clone()];
         let keep = std::collections::HashSet::from([kept.clone()]);
@@ -939,13 +911,13 @@ mod sweep_roots_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let package_dir = dir.path().join("packages/kotlin_android");
         std::fs::create_dir_all(&package_dir).expect("package dir");
-        init_git_repo(&package_dir);
+        git_init(&package_dir);
 
         let kept = package_dir.join("Bridge.kt");
         let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
         let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
         std::fs::write(&kept, &hashed).expect("kept file");
-        git_add(&package_dir, Path::new("Bridge.kt"));
+        git_add(&package_dir, &["Bridge.kt"]);
 
         let previous = vec![kept.clone()];
         let keep = std::collections::HashSet::from([kept.clone()]);
@@ -973,13 +945,13 @@ mod sweep_roots_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let package_dir = dir.path().join("packages/elixir");
         std::fs::create_dir_all(&package_dir).expect("package dir");
-        init_git_repo(&package_dir);
+        git_init(&package_dir);
 
         let orphan = package_dir.join("dropped.ex");
         let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
         let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
         std::fs::write(&orphan, &hashed).expect("orphan file");
-        git_add(&package_dir, Path::new("dropped.ex"));
+        git_add(&package_dir, &["dropped.ex"]);
 
         // The manifest baseline records only an unrelated Rust source path, never anything under
         // `package_dir` -- the exact signature measured for several real backends. ~keep
@@ -1011,13 +983,13 @@ mod sweep_roots_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let package_dir = dir.path().join("packages/ruby");
         std::fs::create_dir_all(&package_dir).expect("package dir");
-        init_git_repo(&package_dir);
+        git_init(&package_dir);
 
         let kept = package_dir.join("client.rb");
         let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
         let hashed = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
         std::fs::write(&kept, &hashed).expect("kept file");
-        git_add(&package_dir, Path::new("client.rb"));
+        git_add(&package_dir, &["client.rb"]);
 
         let staged_dir = package_dir.join("tmp/ruby/stage/lib");
         std::fs::create_dir_all(&staged_dir).expect("staged dir");
@@ -1041,5 +1013,48 @@ mod sweep_roots_tests {
         );
         assert!(staged_copy.exists());
         assert!(kept.exists());
+    }
+
+    /// The collection route must refuse a git-ignored staging copy, and must keep returning the
+    /// tracked original and an untracked-but-not-ignored file.
+    ///
+    /// All three assertions are load-bearing together. Refusing the staged copy alone is
+    /// satisfiable by a walker that returns nothing, and the untracked case is what forces the
+    /// gate to be *ignored-ness* rather than tracked-ness: this set feeds
+    /// `finalize_hashes_sweeping`, which must still re-stamp a file `alef generate` wrote moments
+    /// ago and the consumer has not committed yet. ~keep
+    #[test]
+    fn collect_alef_headered_paths_refuses_git_ignored_copies_and_keeps_uncommitted_output() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package_dir = dir.path().join("packages/ruby");
+        std::fs::create_dir_all(&package_dir).expect("package dir");
+        git_init(&package_dir);
+
+        let header = crate::core::hash::header(crate::core::hash::CommentStyle::Hash);
+        let marked = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+
+        write_file(&package_dir, ".gitignore", "tmp/\n");
+        let tracked = write_file(&package_dir, "lib/client.rb", &marked);
+        git_add(&package_dir, &[".gitignore", "lib/client.rb"]);
+        let uncommitted = write_file(&package_dir, "lib/fresh.rb", &marked);
+        let staged_copy = write_file(&package_dir, "tmp/ruby/stage/lib/client.rb", &marked);
+
+        let collected = collect_alef_headered_paths(&package_dir);
+
+        assert!(
+            !collected.contains(&staged_copy),
+            "a gitignored gem-staging copy carries the same marker verbatim and must not be \
+             collected: {collected:?}"
+        );
+        assert!(
+            collected.contains(&tracked),
+            "the tracked original must still be collected, or this test passes by collecting \
+             nothing: {collected:?}"
+        );
+        assert!(
+            collected.contains(&uncommitted),
+            "generated output the consumer has not committed yet must still be collected, so the \
+             re-stamp pass can reach it: {collected:?}"
+        );
     }
 }

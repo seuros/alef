@@ -10,6 +10,7 @@ use tracing::{debug, info, warn};
 pub(super) fn sync_swift_package_versions(
     config: &ResolvedCrateConfig,
     version: &str,
+    writable: &crate::cli::git::IgnoreFilter,
     updated: &mut Vec<String>,
 ) -> anyhow::Result<()> {
     let Some(repo_url) = config.try_github_repo().ok() else {
@@ -17,7 +18,7 @@ pub(super) fn sync_swift_package_versions(
     };
 
     for swift_pkg_pattern in &["test_apps/*/Package.swift", "e2e/*/Package.swift"] {
-        for swift_pkg in glob::glob(swift_pkg_pattern).into_iter().flatten().flatten() {
+        for swift_pkg in writable.glob(swift_pkg_pattern) {
             if let Ok(content) = std::fs::read_to_string(&swift_pkg)
                 && let Some(new_content) =
                     super::version_text::sync_swift_first_party_from(&content, &repo_url, version)

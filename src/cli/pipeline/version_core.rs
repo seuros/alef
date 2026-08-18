@@ -317,6 +317,10 @@ pub fn verify_versions(config: &ResolvedCrateConfig) -> anyhow::Result<Vec<Strin
     let expected_pep440 = to_pep440(&expected);
     let expected_rubygems = to_rubygems_prerelease(&expected);
     let mut mismatches = Vec::new();
+    // Read-only, but the same discovery defect: a gem-staging copy under `packages/ruby/tmp/`
+    // carries the version the *last* packaged release pinned, so an unfiltered walk reports a
+    // mismatch against a file no release ever consults. ~keep
+    let examined = crate::cli::git::IgnoreFilter::for_current_dir();
 
     fn extract_version(path: &str, pattern: &str) -> Option<String> {
         use std::collections::HashMap;
@@ -372,6 +376,7 @@ pub fn verify_versions(config: &ResolvedCrateConfig) -> anyhow::Result<Vec<Strin
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "gemspec")
+                && examined.allows(&path)
                 && let Some(found) = extract_version(
                     &path.to_string_lossy(),
                     r"spec\.version\s*=\s*['\x22]([^'\x22]*)['\x22]",
@@ -391,16 +396,14 @@ pub fn verify_versions(config: &ResolvedCrateConfig) -> anyhow::Result<Vec<Strin
         "packages/ruby/ext/*/src/*/version.rb",
         "packages/ruby/ext/*/native/src/*/version.rb",
     ] {
-        if let Ok(entries) = glob::glob(pattern) {
-            for entry in entries.flatten() {
-                if let Some(found) = extract_version(&entry.to_string_lossy(), r#"VERSION\s*=\s*["']([^"']*)["']"#)
-                    && found != expected_rubygems
-                {
-                    mismatches.push(format!(
-                        "{}: found {found}, expected {expected_rubygems}",
-                        entry.display()
-                    ));
-                }
+        for entry in examined.glob(pattern) {
+            if let Some(found) = extract_version(&entry.to_string_lossy(), r#"VERSION\s*=\s*["']([^"']*)["']"#)
+                && found != expected_rubygems
+            {
+                mismatches.push(format!(
+                    "{}: found {found}, expected {expected_rubygems}",
+                    entry.display()
+                ));
             }
         }
     }

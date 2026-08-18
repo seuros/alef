@@ -197,3 +197,39 @@ pub(crate) mod cargo_sort_order {
         }
     }
 }
+/// files it tracks or ignores.
+///
+/// A real repository rather than a stub, because the behaviour under test is precisely what
+/// `git ls-files` reports: a fake would encode this test's assumption about git's answer instead
+/// of measuring it, and the defects these fixtures cover were all cases where the assumed answer
+/// and the real one differed. ~keep
+pub(crate) fn git_init(root: &Path) {
+    let status = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(root)
+        .status()
+        .expect("git init");
+    assert!(status.success(), "git init must succeed for a tracked-ness fixture");
+}
+
+/// Stage `relative` (paths relative to `root`) into `root`'s index, making them tracked.
+pub(crate) fn git_add(root: &Path, relative: &[&str]) {
+    let status = std::process::Command::new("git")
+        .arg("add")
+        .arg("--")
+        .args(relative)
+        .current_dir(root)
+        .status()
+        .expect("git add");
+    assert!(status.success(), "git add must succeed for a tracked-ness fixture");
+}
+
+/// Write `content` to `root/relative`, creating parent directories as needed.
+pub(crate) fn write_file(root: &Path, relative: &str, content: &str) -> PathBuf {
+    let path = root.join(relative);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create parent directory");
+    }
+    std::fs::write(&path, content).expect("write fixture file");
+    path
+}

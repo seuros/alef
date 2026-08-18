@@ -4,6 +4,7 @@ pub mod breaking_changes;
 pub mod cache;
 pub mod commands;
 pub mod dispatch;
+pub mod git;
 pub mod pipeline;
 pub mod registry;
 pub mod version_pin;

@@ -13,6 +13,8 @@ mod basic;
 mod catch_all_ownership;
 #[path = "version_tests/e2e_manifests.rs"]
 mod e2e_manifests;
+#[path = "version_tests/git_ignored_discovery.rs"]
+mod git_ignored_discovery;
 #[path = "version_tests/manifests.rs"]
 mod manifests;
 #[path = "version_tests/readme_regen.rs"]
