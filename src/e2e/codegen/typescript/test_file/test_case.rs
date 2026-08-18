@@ -297,6 +297,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // `expects_error` is excluded because `test_function.jinja`'s error branch never references
     // `assertions_body` — the `rejects` assertion IS the expectation there.
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, lang, &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, lang, &fixture.id);
     let verdict = if expects_error {
         None
     } else {

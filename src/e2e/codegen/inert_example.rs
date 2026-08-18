@@ -316,4 +316,59 @@ mod tests {
         assert!(summary.starts_with("2 generated example(s)"), "got: {summary}");
         assert!(inert_summary(&[]).is_none());
     }
+
+    /// Regression for the funnel-pairing fix: a body that skipped an unsupported *assertion type*
+    /// (not a field) must be classified `AwaitedOrLimited`, not `RenderedNothing`. Before both
+    /// funnels were wired at every production call site, the type funnel never ran here, the
+    /// ledger stayed empty for this fixture, and `inert_verdict` fell through to the
+    /// `RenderedNothing` branch — indistinguishable from a body that dropped its assertions with
+    /// no record at all, even though the marker was right there in the text. ~keep
+    #[test]
+    fn a_body_with_only_an_assertion_type_skip_marker_is_awaited_or_limited_not_rendered_nothing() {
+        let _ = crate::e2e::codegen::take_skip_records();
+        let _ = take_inert_examples();
+        let body = "    // skipped: assertion type 'equals' has no accessor for error field \
+                     error.status_code in this backend\n";
+        let declared = [assertion("error.status_code")];
+
+        // Mirrors a production call site: both funnels scan the same rendered body.
+        crate::e2e::codegen::fail_on_unavailable_field_markers(body, "go", "type_skip_fixture", &declared);
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(body, "go", "type_skip_fixture");
+
+        let refusal =
+            inert_verdict(body, "go", "type_skip_fixture", &declared).expect("an all-markers body must be refused");
+        assert_eq!(
+            refusal.cause,
+            InertCause::AwaitedOrLimited,
+            "the assertion-type marker must be on the ledger, not silently dropped"
+        );
+        assert_eq!(
+            refusal.markers, 1,
+            "the field funnel must not also count the type-skip wording"
+        );
+
+        let _ = crate::e2e::codegen::take_skip_records();
+        let _ = take_inert_examples();
+    }
+
+    /// The failure mode this guards against: with only the field funnel called, the same body's
+    /// marker never reaches the ledger and the verdict is the wrong, less-actionable one. ~keep
+    #[test]
+    fn without_the_type_funnel_the_same_body_is_misclassified_as_rendered_nothing() {
+        let _ = crate::e2e::codegen::take_skip_records();
+        let _ = take_inert_examples();
+        let body = "    // skipped: assertion type 'equals' has no accessor for error field \
+                     error.status_code in this backend\n";
+        let declared = [assertion("error.status_code")];
+
+        crate::e2e::codegen::fail_on_unavailable_field_markers(body, "go", "unpaired_fixture", &declared);
+
+        let refusal =
+            inert_verdict(body, "go", "unpaired_fixture", &declared).expect("an all-markers body must be refused");
+        assert_eq!(refusal.cause, InertCause::RenderedNothing);
+        assert_eq!(refusal.markers, 0);
+
+        let _ = crate::e2e::codegen::take_skip_records();
+        let _ = take_inert_examples();
+    }
 }

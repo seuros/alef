@@ -729,6 +729,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         &fixture.id,
         &fixture.assertions,
     );
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "go", &fixture.id);
 
     emit_trait_bridge_cleanup(out, fixture, base_function_name, import_alias);
     let _ = writeln!(out, "}}");

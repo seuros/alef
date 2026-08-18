@@ -235,6 +235,7 @@ pub(super) fn render_test_case(
             &pkg_module,
         );
     }
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "gleam", &fixture.id);
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &out[assertions_start..],
         "gleam",

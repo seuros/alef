@@ -563,6 +563,7 @@ fn render_test_fn(
                     &fixture.id,
                     &fixture.assertions,
                 );
+                crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "zig", &fixture.id);
                 out.push_str(&assertions_body);
             } else {
                 // JSON struct path: parse result JSON and access fields dynamically.
@@ -614,6 +615,11 @@ fn render_test_fn(
                         &fixture.id,
                         &fixture.assertions,
                     );
+                    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(
+                        &assertions_body,
+                        "zig",
+                        &fixture.id,
+                    );
                     out.push_str(&assertions_body);
                 } else {
                     let _ = writeln!(out, "    std.debug.print(\"{{s}}\\n\", .{{_result_json}});");
@@ -643,6 +649,7 @@ fn render_test_fn(
                 &fixture.id,
                 &fixture.assertions,
             );
+            crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "zig", &fixture.id);
             out.push_str(&assertions_body);
         } else if call_returns_error_union {
             let _ = writeln!(out, "    _ = try {call_prefix}.{function_name}({args_str});");

@@ -256,6 +256,7 @@ so completion is not observable here\n",
     }
 
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "ruby", &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "ruby", &fixture.id);
 
     // ~keep A streaming example has no honest fallback subject of its own. `chunks` is assigned
     // the literal `[]` before the drive, so `expect(chunks).not_to be_nil` could never fail, and
@@ -572,6 +573,7 @@ pub(super) fn render_example(
             enum_fields,
         );
     }
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_rendered, "ruby", &fixture.id);
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &assertions_rendered,
         "ruby",

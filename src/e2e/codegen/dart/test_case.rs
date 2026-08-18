@@ -1159,6 +1159,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             &fixture.id,
             &fixture.assertions,
         );
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "dart", &fixture.id);
     }
 
     let _ = writeln!(out, "  }});");

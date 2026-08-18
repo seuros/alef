@@ -422,6 +422,7 @@ pub(super) fn render_streaming_test_method(
         &fixture.id,
         &fixture.assertions,
     );
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&body[assertions_start..], "csharp", &fixture.id);
 
     // ~keep A streaming example has no honest fallback subject of its own: `chunks` is bound to a
     // fresh `new List<T>()` immediately above, so any check on it could never fail. The one

@@ -18,6 +18,8 @@
 //! both can coexist behind the per-language [`E2eCodegen::generate`] entry.
 
 pub mod assertion_recipes;
+#[cfg(test)]
+mod assertion_type_funnel_pairing;
 pub(crate) mod assertion_type_skip;
 pub mod assertion_types;
 pub mod brew;

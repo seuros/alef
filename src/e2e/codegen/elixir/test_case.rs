@@ -587,6 +587,7 @@ pub(super) fn render_test_case(
         &fixture.id,
         &fixture.assertions,
     );
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "elixir", &fixture.id);
     out.push_str(&assertions_body);
 
     if needs_api_key_skip {

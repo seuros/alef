@@ -409,6 +409,7 @@ pub(super) fn render_test_method(
         ensure_assertion_line_ending(&mut assertions_body);
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "java", &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "java", &fixture.id);
     // ~keep `expects_error` is excluded because `test_method.jinja` does not splice
     // `assertions_body` into that branch at all — the assertThrows IS the expectation, and the
     // dropped assertions beside it are already surfaced by `error_path_assertions::render` below.

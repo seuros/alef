@@ -419,6 +419,7 @@ pub(super) fn render_test_method(
     // leaves assertions_body with no executable statement. Fall back to a
     // real assertion instead of a vacuous test body.
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "php", &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "php", &fixture.id);
 
     // ~keep The verdict is taken BEFORE the fallback, not after: the fallback's whole job is to
     // put an executable line into an otherwise comment-only body, so reading the verdict after it

@@ -111,6 +111,7 @@ pub(super) fn emit_result_and_assertions(
             &fixture.id,
             &fixture.assertions,
         );
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&streaming_assertions, "python", &fixture.id);
         out.push_str(&streaming_assertions);
     } else {
         // For non-streaming: render assertions to a temporary buffer first,
@@ -141,6 +142,7 @@ pub(super) fn emit_result_and_assertions(
             &fixture.id,
             &fixture.assertions,
         );
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&temp_assertions, "python", &fixture.id);
 
         // Check if result_var appears in actual code (not in comments).
         // Only count lines that start with "assert" or contain actual code tokens.

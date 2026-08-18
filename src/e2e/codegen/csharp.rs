@@ -912,6 +912,7 @@ fn render_test_method(
         &fixture.id,
         &fixture.assertions,
     );
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "csharp", &fixture.id);
 
     // ~keep `expects_error` and `returns_void` are excluded because neither splices
     // `assertions_body` into the emitted method: the throws-assertion is the expectation for the

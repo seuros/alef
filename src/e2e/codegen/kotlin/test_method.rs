@@ -466,6 +466,11 @@ pub(super) fn render_test_method(
             &fixture.id,
             &fixture.assertions,
         );
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(
+            &out[assertions_start..],
+            "kotlin",
+            &fixture.id,
+        );
         refuse_inert_example(out, assertions_start, fixture);
         let _ = writeln!(out, "        client.close()");
         let _ = writeln!(out, "    }}");
@@ -522,6 +527,7 @@ pub(super) fn render_test_method(
             kotlin_android_style,
         );
     }
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "kotlin", &fixture.id);
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &out[assertions_start..],
         "kotlin",

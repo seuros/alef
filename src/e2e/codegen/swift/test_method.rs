@@ -536,6 +536,7 @@ pub(super) fn render_test_method(
         body_buffer.push_str(&assertion_out);
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(&body_buffer, "swift", &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&body_buffer, "swift", &fixture.id);
     // ~keep Read here, but applied only after the call-emission decision below, so the
     // `let result =` vs `_ =` choice is still made from the assertions that actually rendered.
     // Swift has no formatter that objects to a body which runs a real stream and then ends on a

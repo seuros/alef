@@ -209,6 +209,7 @@ fn render_test_function(
         &fixture.id,
         &fixture.assertions,
     );
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "brew", &fixture.id);
 
     let _ = writeln!(out, "}}");
 }

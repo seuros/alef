@@ -1203,6 +1203,7 @@ fn render_test_file(
             &fixture.id,
             &fixture.assertions,
         );
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[fixture_start..], "c", &fixture.id);
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }

@@ -678,5 +678,6 @@ fn finalize_test_body(out: &mut String, fixture: &Fixture, e2e_config: &E2eConfi
         render_mock_server_setup(out, fixture, e2e_config, var_name);
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(body, "rust", &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(body, "rust", &fixture.id);
     out.push_str(body);
 }
