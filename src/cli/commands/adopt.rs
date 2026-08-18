@@ -13,8 +13,10 @@
 //!
 //! This command is the door out, and it is deliberately narrow:
 //!
-//! - **Explicit and human-invoked.** One path or glob per invocation. It is not wired
-//!   into `alef all`, `alef generate`, or any other command, and must not be.
+//! - **Explicit and human-invoked.** One or more paths or globs per invocation, each
+//!   resolved and reported independently (see `bin_cli::aux_commands`'s `Commands::Adopt`,
+//!   which loops this module's single-target [`run`] once per requested target). It is
+//!   not wired into `alef all`, `alef generate`, or any other command, and must not be.
 //! - **Dry-run by default.** A bare `alef adopt <path>` prints the full diff and
 //!   changes nothing; `--write` applies.
 //! - **The full diff, never truncated, for every file whose content actually differs.**
@@ -268,7 +270,12 @@ pub fn managed_outputs(files: &[crate::core::backend::GeneratedFile], base_dir: 
 /// directory separators here, which is deliberate for a command a human types with a
 /// specific tree in front of them — the safety of this command is the printed diff and
 /// the `--write` gate, not the narrowness of the pattern.
-fn matches_target(target: &str, relative: &Path) -> bool {
+///
+/// `pub(crate)` so `bin_cli::helpers::collect_managed_surface` can ask the same
+/// question adopt's own candidate selection asks -- "could this stage's output ever
+/// satisfy one of these targets" -- from the identical predicate, rather than a second,
+/// hand-maintained notion of what counts as a match. ~keep
+pub(crate) fn matches_target(target: &str, relative: &Path) -> bool {
     let spelled = relative.to_string_lossy().replace('\\', "/");
     let target = target.trim_start_matches("./");
     if spelled == target {

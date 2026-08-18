@@ -630,6 +630,16 @@ fn frozen_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir:
 pub(crate) struct MissingAndFrozenFiles {
     pub(crate) missing: Vec<String>,
     pub(crate) frozen: Vec<FrozenFile>,
+    /// [`StageFailure`]s [`collect_managed_surface`] tolerated while still building the
+    /// rest of the surface, rendered as `[<stage>] <message>`. `alef verify` is
+    /// read-only, so it has no target to decide "does this affect me" the way `alef
+    /// adopt` does -- every tolerated failure is real debt and belongs in the report,
+    /// never silently absorbed into a clean-looking zero. The `missing`/`frozen` lists
+    /// above are still accurate despite these: the failing stage's own files are
+    /// absorbed into the surface regardless of its error (see
+    /// [`collect_managed_surface`]'s doc), so this is additional signal, not a
+    /// disclaimer that the rest of the report cannot be trusted. ~keep
+    pub(crate) stage_failures: Vec<String>,
 }
 
 /// Find both generated files that generation would now produce for `config`
@@ -669,15 +679,21 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     config_path: &std::path::Path,
     base_dir: &std::path::Path,
 ) -> anyhow::Result<MissingAndFrozenFiles> {
-    let surface = collect_managed_surface(languages, api, config, config_path, base_dir)?;
+    let (surface, stage_failures) = collect_managed_surface(languages, api, config, config_path, base_dir)?;
     let mut result = MissingAndFrozenFiles {
         missing: missing_managed_paths(&surface, base_dir),
         frozen: frozen_managed_paths(&surface, base_dir),
+        stage_failures: stage_failures
+            .into_iter()
+            .map(|failure| format!("[{}] {}", failure.stage, failure.message))
+            .collect(),
     };
     result.missing.sort();
     result.missing.dedup();
     result.frozen.sort_by(|a, b| a.path.cmp(&b.path));
     result.frozen.dedup_by(|a, b| a.path == b.path);
+    result.stage_failures.sort();
+    result.stage_failures.dedup();
     Ok(result)
 }
 
@@ -694,6 +710,37 @@ fn absorb_stage(
 ) {
     for file in files {
         surface.insert(file.path.clone(), file);
+    }
+}
+
+/// One [`collect_managed_surface`] stage that rendered files and also reported a
+/// failure alongside them.
+///
+/// Only the two e2e stages can produce one of these today: they are the only stages
+/// whose `Result` already separates "files it rendered" from "whether it is happy with
+/// them" (see `generate_e2e`'s doc) — every other stage's failure has no partial output
+/// to report and stays a hard `collect_managed_surface` error via `?`. `paths` is what
+/// that stage's own invocation actually rendered, kept so a caller with a specific
+/// target (`alef adopt`) can decide whether this failure is even about a path it asked
+/// for, via [`Self::affects_any`]. `alef verify` has no target and reports every one of
+/// these unconditionally instead. ~keep
+pub(crate) struct StageFailure {
+    pub(crate) stage: &'static str,
+    pub(crate) message: String,
+    pub(crate) paths: Vec<std::path::PathBuf>,
+}
+
+impl StageFailure {
+    /// Whether any of `targets` could have come from this stage — derived from
+    /// [`crate::cli::commands::adopt::matches_target`], the identical predicate `alef
+    /// adopt`'s own candidate selection trusts, rather than a second, hand-maintained
+    /// notion of what counts as a match. ~keep
+    pub(crate) fn affects_any(&self, targets: &[String]) -> bool {
+        self.paths.iter().any(|path| {
+            targets
+                .iter()
+                .any(|target| crate::cli::commands::adopt::matches_target(target, path))
+        })
     }
 }
 
@@ -722,14 +769,28 @@ fn absorb_stage(
 /// sub-step (snippet validation, CLI/MCP extraction), and neither of this function's
 /// consumers should lose the whole managed set — or refuse to unfreeze a binding
 /// file — because a docs sub-step is unhappy. ~keep
+///
+/// Returns the surface alongside every [`StageFailure`] this call tolerated rather than
+/// aborting on. Both consumers used to see a stage failure as `Err` for the *whole*
+/// function -- including `alef verify`, a read-only report, which would abort before
+/// its own frozen-file walk ever ran, and `alef adopt`, which would refuse a path with
+/// no relationship whatsoever to the failing stage. Neither reads a `Result::Err` here
+/// as license to skip reporting the failure: `alef verify` prints every
+/// [`StageFailure`] as its own section (see [`find_missing_and_frozen_generated_files`]);
+/// `alef adopt` bails with it when [`StageFailure::affects_any`] says the operator's own
+/// target could have come from that stage, and otherwise logs it at DEBUG and proceeds.
+/// A caller that dropped the returned `Vec<StageFailure>` on the floor would silently
+/// reintroduce the exact bug this return shape exists to prevent -- a report that looks
+/// clean because the thing that would have said otherwise never ran. ~keep
 pub(crate) fn collect_managed_surface(
     languages: &[crate::core::config::Language],
     api: &crate::core::ir::ApiSurface,
     config: &crate::core::config::ResolvedCrateConfig,
     config_path: &std::path::Path,
     base_dir: &std::path::Path,
-) -> anyhow::Result<Vec<crate::core::backend::GeneratedFile>> {
+) -> anyhow::Result<(Vec<crate::core::backend::GeneratedFile>, Vec<StageFailure>)> {
     let mut surface = std::collections::BTreeMap::new();
+    let mut stage_failures = Vec::new();
 
     for (_, files) in crate::cli::pipeline::generate(api, config, languages, false, config_path, false)? {
         absorb_stage(&mut surface, files);
@@ -756,32 +817,38 @@ pub(crate) fn collect_managed_surface(
     }
 
     // Both e2e modes, because they emit to different roots (`e2e.output` versus
-    // `e2e.registry.output`) and a file can be frozen under either. An error here is
-    // propagated rather than downgraded: `alef all` calls the same function unguarded,
-    // so a configuration that fails here is one no regeneration could have succeeded
-    // under, and silently returning a short surface would put `alef adopt` back to
-    // "no alef-managed output matches" for exactly the paths that need it. `generate_e2e`
-    // now returns its per-backend generator failure alongside the files it did produce
-    // rather than folding it into this `Result`, so it is absorbed and then re-raised here
-    // explicitly instead of via `?` -- the files that did generate are still worth adding
-    // to the surface, but the failure itself must reach the caller exactly as before. ~keep
+    // `e2e.registry.output`) and a file can be frozen under either. `generate_e2e`
+    // returns its per-backend generator failure alongside the files it did produce
+    // rather than folding it into this `Result`, so a failure here no longer aborts
+    // `collect_managed_surface` (as it used to, with `alef verify`'s frozen-file walk
+    // and every later stage as collateral): it is absorbed into `stage_failures`
+    // instead, and every caller of this function is required to look at that list --
+    // see this function's own doc for why neither consumer may drop it silently. ~keep
     if let Some(e2e_config) = &config.e2e {
         let (files, generator_error) =
             crate::e2e::generate_e2e(config, e2e_config, None, &api.types, &api.enums, &api.functions)
                 .context("failed to render the e2e stage of alef's managed output")?;
-        absorb_stage(&mut surface, files);
         if let Some(error) = generator_error {
-            return Err(error.context("failed to render the e2e stage of alef's managed output"));
+            stage_failures.push(StageFailure {
+                stage: "e2e",
+                message: format!("{error:#}"),
+                paths: files.iter().map(|file| file.path.clone()).collect(),
+            });
         }
+        absorb_stage(&mut surface, files);
         let mut registry_config = e2e_config.clone();
         registry_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
         let (files, generator_error) =
             crate::e2e::generate_e2e(config, &registry_config, None, &api.types, &api.enums, &api.functions)
                 .context("failed to render the registry-mode test-app stage of alef's managed output")?;
-        absorb_stage(&mut surface, files);
         if let Some(error) = generator_error {
-            return Err(error.context("failed to render the registry-mode test-app stage of alef's managed output"));
+            stage_failures.push(StageFailure {
+                stage: "test-apps (registry mode)",
+                message: format!("{error:#}"),
+                paths: files.iter().map(|file| file.path.clone()).collect(),
+            });
         }
+        absorb_stage(&mut surface, files);
     }
 
     let readme_languages = crate::readme::expand_configured_readme_languages(config, languages);
@@ -797,7 +864,7 @@ pub(crate) fn collect_managed_surface(
     }
     absorb_stage(&mut surface, doc_files);
 
-    Ok(surface.into_values().collect())
+    Ok((surface.into_values().collect(), stage_failures))
 }
 
 /// Multi-crate variant of [`verify_walk`].
@@ -1575,5 +1642,58 @@ e2e = "cargo test"
         write_stamped(dir.path(), "binding.zig", "some-other-marker", "2");
 
         assert!(find_stamp_disagreement(dir.path(), "handle-abi").is_none());
+    }
+
+    fn stage_failure(paths: &[&str]) -> StageFailure {
+        StageFailure {
+            stage: "e2e",
+            message: "56 e2e assertion(s) reference a field the availability oracle cannot resolve".to_owned(),
+            paths: paths.iter().map(std::path::PathBuf::from).collect(),
+        }
+    }
+
+    /// THE REGRESSION. `alef adopt packages/dart/rust/Cargo.toml` deadlocked because a
+    /// pending e2e strict-assertion failure aborted `collect_managed_surface` before the
+    /// ownership-only `Cargo.toml` target was ever considered, even though that target
+    /// has no relationship to e2e. `affects_any` is the predicate that now lets `Commands::Adopt`
+    /// tell the two cases apart: this asserts the tolerant half -- an e2e failure whose
+    /// rendered paths are all snippet/test-app output must not be judged to affect an
+    /// unrelated `Cargo.toml` target, whatever glob shape the operator typed. ~keep
+    #[test]
+    fn a_stage_failure_confined_to_e2e_paths_does_not_affect_an_unrelated_ownership_target() {
+        let failure = stage_failure(&["e2e/python/test_smoke.py", "e2e/go/smoke_test.go"]);
+
+        assert!(!failure.affects_any(&["packages/dart/rust/Cargo.toml".to_owned()]));
+        assert!(!failure.affects_any(&["packages/**/*.gemspec".to_owned()]));
+    }
+
+    /// The control for the test above: when a requested target genuinely falls under the
+    /// failing stage's own output, `affects_any` must say so, literal path or glob alike,
+    /// so `alef adopt` still refuses to answer for a target it cannot render correctly
+    /// rather than silently tolerating every e2e failure regardless of relevance.
+    #[test]
+    fn a_stage_failure_that_rendered_the_requested_target_does_affect_it() {
+        let failure = stage_failure(&["e2e/python/test_smoke.py", "e2e/go/smoke_test.go"]);
+
+        assert!(failure.affects_any(&["e2e/python/test_smoke.py".to_owned()]));
+        assert!(failure.affects_any(&["e2e/python/*.py".to_owned()]));
+        // Mixed: one target unrelated, one that matches -- still affects, because a
+        // multi-target `alef adopt` run answers for every target it was given. ~keep
+        assert!(failure.affects_any(&[
+            "packages/dart/rust/Cargo.toml".to_owned(),
+            "e2e/go/smoke_test.go".to_owned(),
+        ]));
+    }
+
+    /// `alef verify` passes no targets at all -- every tolerated failure is unconditional
+    /// debt for a read-only report, never excused by "no target asked for it". An empty
+    /// `targets` slice must therefore never affect anything, which is the same fact
+    /// `Commands::Adopt` relies on for a target list that turned out to filter down to
+    /// nothing upstream.
+    #[test]
+    fn a_stage_failure_never_affects_an_empty_target_list() {
+        let failure = stage_failure(&["e2e/python/test_smoke.py"]);
+
+        assert!(!failure.affects_any(&[]));
     }
 }

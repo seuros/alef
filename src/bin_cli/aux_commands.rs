@@ -81,7 +81,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             Ok(None)
         }
         Commands::Adopt {
-            target,
+            targets,
             write,
             converged_only,
             clobber_create_once_seeds,
@@ -94,99 +94,121 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // would write, so the full managed surface -- every stage `alef all` writes,
             // not a hand-maintained subset of it -- is what feeds it. Shared verbatim
             // with `alef verify`'s frozen-file report so the report and the remedy for
-            // the same fact cannot disagree; see `collect_managed_surface`. ~keep
+            // the same fact cannot disagree; see `collect_managed_surface`. A stage
+            // failure it tolerated is only ours to ignore when none of the requested
+            // `targets` could have come from that stage -- otherwise this run cannot
+            // answer the ownership question the operator actually asked, and must say
+            // so rather than adopt against possibly-stale bytes. ~keep
             let mut managed = Vec::new();
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                let surface = collect_managed_surface(&languages, &api, resolved_cfg, config_path, &base_dir)?;
+                let (surface, stage_failures) =
+                    collect_managed_surface(&languages, &api, resolved_cfg, config_path, &base_dir)?;
+                for failure in &stage_failures {
+                    if failure.affects_any(&targets) {
+                        anyhow::bail!(
+                            "[{}] {} -- this affects one of the requested targets, so `alef adopt` \
+                             cannot answer for it",
+                            failure.stage,
+                            failure.message
+                        );
+                    }
+                    tracing::debug!(
+                        stage = failure.stage,
+                        "tolerating stage failure: no requested target comes from this stage: {}",
+                        failure.message
+                    );
+                }
                 managed.extend(commands::adopt::managed_outputs(&surface, &base_dir));
             }
 
-            let options = commands::adopt::AdoptOptions {
-                target,
-                base_dir,
-                write,
-                converged_only,
-                clobber_create_once_seeds,
-            };
-            let report = commands::adopt::run(&options, &managed)?;
+            for target in &targets {
+                let options = commands::adopt::AdoptOptions {
+                    target: target.clone(),
+                    base_dir: base_dir.clone(),
+                    write,
+                    converged_only,
+                    clobber_create_once_seeds,
+                };
+                let report = commands::adopt::run(&options, &managed)?;
 
-            if !report.skipped_create_once.is_empty() {
-                // Every path, never a count, and on stdout with the drifted diffs rather
-                // than through `tracing`: this list is the command's result for these
-                // paths, and `-q` must not be able to hide the one output that says work
-                // is about to be destroyed. The consequence is spelled out because
-                // "skipped" alone reads as "nothing happened", when the fact the operator
-                // needs is what adopting them *would* have cost. ~keep
-                crate::bin_cli::output::blank();
-                crate::bin_cli::output::line(
-                    "NOT ADOPTED -- create-once seeds. alef emits each of these only when the file is \
-                     absent, so it is a placeholder that the copy on disk has almost certainly grown \
-                     past. Adopting one consents to alef REPLACING its contents with that placeholder \
-                     on the next generate:",
-                );
-                for path in &report.skipped_create_once {
-                    crate::bin_cli::output::line(format_args!("  {}", path.display()));
-                }
-                crate::bin_cli::output::line(
-                    "Read each one and confirm it holds nothing you wrote, then re-run with \
-                     --clobber-create-once-seeds to adopt them anyway.",
-                );
-                crate::bin_cli::output::blank();
-            }
-
-            for diff in &report.diffs {
-                crate::bin_cli::output::fragment(&diff.body);
-                crate::bin_cli::output::blank();
-            }
-            if !report.converged.is_empty() {
-                // Summarised, never diffed. See `cli::commands::adopt`'s header: a
-                // converged file's diff is the file itself echoed back, and printing
-                // 12,000 of them buries the drifted diffs printed just above -- the
-                // only ones with content to read. ~keep
-                crate::bin_cli::output::line(format_args!(
-                    "{} file(s) already match generated output byte-for-byte apart from the marker; \
-                     adopting them changes no content.",
-                    report.converged.len()
-                ));
-            }
-            for path in &report.already_owned {
-                tracing::info!("already alef-owned, nothing to adopt: {}", path.display());
-            }
-            if report.preview {
-                if !report.diffs.is_empty() && !report.converged.is_empty() {
-                    crate::bin_cli::output::line(format_args!(
-                        "Re-run with --converged-only --write to adopt the {} converged file(s) alone, \
-                         then review the {} drifted diff(s) above before adopting those.",
-                        report.converged.len(),
-                        report.diffs.len()
-                    ));
-                }
-                crate::bin_cli::output::line(
-                    "Nothing was written. Re-run with --write to stamp these files so alef can regenerate them.",
-                );
-            } else {
-                tracing::info!("Adopted {} file(s)", report.adopted.len());
-                if !report.skipped_drifted.is_empty() {
-                    crate::bin_cli::output::line(format_args!(
-                        "Left {} drifted file(s) untouched (--converged-only). Their diffs are above; \
-                         adopt them with an explicit target once you have read each one.",
-                        report.skipped_drifted.len()
-                    ));
-                }
-                if !report.recorded_unstampable.is_empty() {
-                    // These adoptions changed no bytes in the files themselves — the whole
-                    // consent lives in `.alef-ownership.toml`. Leave it uncommitted and the
-                    // human read the diff for nothing: every other checkout, CI included,
-                    // still refuses these paths. Naming the file is the difference between
-                    // an adoption and an adoption that took effect. ~keep
-                    tracing::info!(
-                        "{} of these carry no marker syntax; their ownership is recorded in \
-                         .alef-ownership.toml. Commit that file or the adoption applies only to \
-                         this working copy.",
-                        report.recorded_unstampable.len()
+                if !report.skipped_create_once.is_empty() {
+                    // Every path, never a count, and on stdout with the drifted diffs rather
+                    // than through `tracing`: this list is the command's result for these
+                    // paths, and `-q` must not be able to hide the one output that says work
+                    // is about to be destroyed. The consequence is spelled out because
+                    // "skipped" alone reads as "nothing happened", when the fact the operator
+                    // needs is what adopting them *would* have cost. ~keep
+                    crate::bin_cli::output::blank();
+                    crate::bin_cli::output::line(
+                        "NOT ADOPTED -- create-once seeds. alef emits each of these only when the file is \
+                         absent, so it is a placeholder that the copy on disk has almost certainly grown \
+                         past. Adopting one consents to alef REPLACING its contents with that placeholder \
+                         on the next generate:",
                     );
+                    for path in &report.skipped_create_once {
+                        crate::bin_cli::output::line(format_args!("  {}", path.display()));
+                    }
+                    crate::bin_cli::output::line(
+                        "Read each one and confirm it holds nothing you wrote, then re-run with \
+                         --clobber-create-once-seeds to adopt them anyway.",
+                    );
+                    crate::bin_cli::output::blank();
+                }
+
+                for diff in &report.diffs {
+                    crate::bin_cli::output::fragment(&diff.body);
+                    crate::bin_cli::output::blank();
+                }
+                if !report.converged.is_empty() {
+                    // Summarised, never diffed. See `cli::commands::adopt`'s header: a
+                    // converged file's diff is the file itself echoed back, and printing
+                    // 12,000 of them buries the drifted diffs printed just above -- the
+                    // only ones with content to read. ~keep
+                    crate::bin_cli::output::line(format_args!(
+                        "{} file(s) already match generated output byte-for-byte apart from the marker; \
+                         adopting them changes no content.",
+                        report.converged.len()
+                    ));
+                }
+                for path in &report.already_owned {
+                    tracing::info!("already alef-owned, nothing to adopt: {}", path.display());
+                }
+                if report.preview {
+                    if !report.diffs.is_empty() && !report.converged.is_empty() {
+                        crate::bin_cli::output::line(format_args!(
+                            "Re-run with --converged-only --write to adopt the {} converged file(s) alone, \
+                             then review the {} drifted diff(s) above before adopting those.",
+                            report.converged.len(),
+                            report.diffs.len()
+                        ));
+                    }
+                    crate::bin_cli::output::line(
+                        "Nothing was written. Re-run with --write to stamp these files so alef can regenerate them.",
+                    );
+                } else {
+                    tracing::info!("Adopted {} file(s)", report.adopted.len());
+                    if !report.skipped_drifted.is_empty() {
+                        crate::bin_cli::output::line(format_args!(
+                            "Left {} drifted file(s) untouched (--converged-only). Their diffs are above; \
+                             adopt them with an explicit target once you have read each one.",
+                            report.skipped_drifted.len()
+                        ));
+                    }
+                    if !report.recorded_unstampable.is_empty() {
+                        // These adoptions changed no bytes in the files themselves — the whole
+                        // consent lives in `.alef-ownership.toml`. Leave it uncommitted and the
+                        // human read the diff for nothing: every other checkout, CI included,
+                        // still refuses these paths. Naming the file is the difference between
+                        // an adoption and an adoption that took effect. ~keep
+                        tracing::info!(
+                            "{} of these carry no marker syntax; their ownership is recorded in \
+                             .alef-ownership.toml. Commit that file or the adoption applies only to \
+                             this working copy.",
+                            report.recorded_unstampable.len()
+                        );
+                    }
                 }
             }
             Ok(None)
@@ -210,13 +232,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 .unwrap_or_else(|| crates_to_process[0]);
             let e2e_config = resolved_cfg.e2e.as_ref().context("no [e2e] section in alef.toml")?;
             match action {
-                E2eAction::Generate { lang, registry, strict } => {
+                E2eAction::Generate {
+                    lang,
+                    registry,
+                    strict,
+                    no_strict_assertions,
+                } => {
                     if registry {
                         tracing::warn!(
                             "`alef e2e generate --registry` is deprecated. \
                              Use `alef test-apps generate` instead. \
                              `alef e2e generate` is local-mode only."
                         );
+                    }
+                    if no_strict_assertions {
+                        // SAFETY: single-threaded CLI dispatch; no concurrent env access here.
+                        unsafe { std::env::set_var(crate::e2e::codegen::STRICT_ASSERTIONS_ENV, "0") };
                     }
                     let config_toml = std::fs::read_to_string(config_path)?;
                     let base_dir = std::env::current_dir()?;

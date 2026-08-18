@@ -868,6 +868,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // `FrozenFile`). ~keep
             let mut missing_generated_files: Vec<String> = Vec::new();
             let mut frozen_generated_files: Vec<FrozenFile> = Vec::new();
+            // Debt `collect_managed_surface` tolerated while still building the rest of
+            // the surface (currently only the e2e stages' deferred strict-assertion
+            // failure). `alef verify` is read-only and has no target to excuse a stage
+            // failure the way `alef adopt` can, so every one of these is collected and
+            // reported below rather than silently absorbed into a clean-looking zero --
+            // see `collect_managed_surface`'s doc for why dropping this list is exactly
+            // the bug this return shape exists to prevent. ~keep
+            let mut stage_failures: Vec<String> = Vec::new();
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
@@ -875,6 +883,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
                 missing_generated_files.extend(found.missing);
                 frozen_generated_files.extend(found.frozen);
+                stage_failures.extend(
+                    found
+                        .stage_failures
+                        .into_iter()
+                        .map(|failure| format!("[{}] {failure}", resolved_cfg.name)),
+                );
 
                 let Some(e2e_config) = &resolved_cfg.e2e else {
                     continue;
@@ -894,6 +908,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             missing_generated_files.dedup();
             frozen_generated_files.sort_by(|a, b| a.path.cmp(&b.path));
             frozen_generated_files.dedup_by(|a, b| a.path == b.path);
+            stage_failures.sort();
+            stage_failures.dedup();
+            let has_stage_failures = !stage_failures.is_empty();
             let has_missing_files = !missing_generated_files.is_empty();
             let has_frozen_files = !frozen_generated_files.is_empty();
 
@@ -958,6 +975,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 && !has_version_issues
                 && snippet_coverage_issues.is_empty()
                 && untracked_records.is_empty()
+                && !has_stage_failures
             {
                 crate::bin_cli::output::line("All bindings and versions are up to date.");
             } else {
@@ -1005,9 +1023,28 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                // Not folded into missing/frozen: this is debt `collect_managed_surface`
+                // hit while building the surface those two lists come from, not a
+                // conclusion drawn *from* the surface. Naming it separately is what makes
+                // a report that hit this debt distinguishable from one that genuinely
+                // found nothing wrong -- a missing section here would look identical to
+                // a clean run. ~keep
+                if has_stage_failures {
+                    crate::bin_cli::output::line(
+                        "Generation debt detected while collecting the managed surface (missing/frozen \
+                         files above are still accurate; this is additional, separate debt):",
+                    );
+                    for failure in &stage_failures {
+                        crate::bin_cli::output::line(format_args!("  {failure}"));
+                    }
+                }
             }
             super::verify_outcome::ensure_success(
-                !stale.is_empty() || has_missing_files || has_frozen_files || has_abi_disagreement,
+                !stale.is_empty()
+                    || has_missing_files
+                    || has_frozen_files
+                    || has_abi_disagreement
+                    || has_stage_failures,
                 has_version_issues,
                 snippet_coverage_issues.len(),
                 report_only,

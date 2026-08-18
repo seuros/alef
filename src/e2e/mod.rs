@@ -731,6 +731,49 @@ mod tests {
         assert!(!directory.path().join("schema.json").exists());
     }
 
+    /// The real-world trigger behind the `adopt`/`verify` deadlock this crate's release
+    /// blocker fixed: a fixture asserting on a field the availability oracle rejects, with
+    /// no `skip` declared, must still fail strict mode by default -- proving the condition
+    /// `bin_cli::helpers::collect_managed_surface`'s `StageFailure` handling exists to
+    /// tolerate is genuinely reachable through the real generation pipeline, not only
+    /// through `codegen::strict_assertion_failure`'s own synthetic-string unit tests. ~keep
+    #[test]
+    fn an_unresolvable_field_with_no_skip_fails_strict_mode_through_the_real_pipeline() {
+        let directory = tempfile::tempdir().expect("temporary fixture directory");
+        std::fs::write(
+            directory.path().join("smoke.json"),
+            r#"{
+                "id": "smoke",
+                "description": "smoke test",
+                "assertions": [
+                    { "type": "not_empty", "field": "bogus_field_xyz" }
+                ]
+            }"#,
+        )
+        .expect("write fixture");
+
+        let e2e_config = E2eConfig {
+            fixtures: directory.path().display().to_string(),
+            languages: vec!["python".to_string()],
+            result_fields: std::collections::HashSet::from(["id".to_string()]),
+            call: crate::core::config::e2e::CallConfig {
+                function: "complete".to_string(),
+                module: "gatelib".to_string(),
+                ..crate::core::config::e2e::CallConfig::default()
+            },
+            ..E2eConfig::default()
+        };
+
+        let (_files, deferred_error) = generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, None, &[], &[], &[])
+            .expect("the files that did render must still be returned alongside a deferred failure");
+
+        let error = deferred_error.expect("an unresolvable field with no `skip` must fail strict mode by default");
+        assert!(
+            format!("{error:#}").contains("e2e assertion(s) reference a field the availability oracle cannot resolve"),
+            "got: {error:#}"
+        );
+    }
+
     struct FailingGenerator;
 
     impl codegen::E2eCodegen for FailingGenerator {

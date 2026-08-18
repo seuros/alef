@@ -289,9 +289,10 @@ pub(crate) enum Commands {
     /// Prints the full diff between the file on disk and what alef would generate,
     /// and changes nothing unless --write is given.
     Adopt {
-        /// Repo-relative path or glob to adopt, e.g. `crates/foo-ffi/Cargo.toml`.
-        #[arg(value_name = "PATH_OR_GLOB")]
-        target: String,
+        /// One or more repo-relative paths or globs to adopt, e.g.
+        /// `crates/foo-ffi/Cargo.toml` or `crates/foo-ffi/Cargo.toml packages/**/*.gemspec`.
+        #[arg(value_name = "PATH_OR_GLOB", required = true)]
+        targets: Vec<String>,
         /// Stamp the marker. Without this, adopt only prints the diff.
         #[arg(long)]
         write: bool,
@@ -508,6 +509,12 @@ pub(crate) enum E2eAction {
         /// fails regardless.
         #[arg(long)]
         strict: bool,
+        /// Downgrade an unresolvable e2e assertion field to a warning instead of failing
+        /// generation. Equivalent to `ALEF_E2E_STRICT_ASSERTIONS=0`; see
+        /// `e2e::codegen::STRICT_ASSERTIONS_ENV`. For an emergency regeneration only --
+        /// the debt is still counted in the end-of-run summary either way.
+        #[arg(long)]
+        no_strict_assertions: bool,
     },
     /// Compare handwritten snippets with fixture-generated equivalents.
     SnippetsMigrate {
