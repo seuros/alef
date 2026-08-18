@@ -84,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at every non-`Run` level. `Run` still validates per snippet by design — each one's stdout, exit status
   and side effects belong to it alone. Batch diagnostics are attributed back per file, and a compiler
   failure that no file owns fails every snippet in the batch with the real output rather than passing them.
+- **Java snippets call a class in the imported package by its simple name.** The snippet emits
+  `import <package>.*;` and then spelled the package again at the call site, rendering
+  `io.example.pkg.Facade.convert(...)` under an import that made `Facade` alone sufficient. Only the
+  exact configured package is stripped; a nested or foreign class stays qualified, since no import
+  covers it.
 - **Python snippets omit a trailing `None` for an absent optional argument.** `convert(html, None)` now
   renders as `convert(html)`, matching the binding's own `options=None` signature. A placeholder in the
   MIDDLE of the argument list is still emitted — these calls are positional, so dropping one there would

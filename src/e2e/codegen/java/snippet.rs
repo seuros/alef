@@ -96,20 +96,33 @@ pub(super) fn render_snippet_body_with_ir(
     let package_name = overrides
         .and_then(|value| value.module.clone())
         .unwrap_or_else(|| config.java_package());
+    // The snippet already emits `import <package>.*;`, so spelling the package again at the call
+    // site renders `io.example.pkg.Facade.convert(...)` under an import that made `Facade` alone
+    // sufficient. Consumers configure `[e2e.call.overrides.java] class` fully qualified because
+    // that is how the binding names it; the docs example is where that stops being useful. Only
+    // the exact configured package is stripped — a class from anywhere else stays qualified,
+    // because no import covers it. ~keep
+    let simple_class_name = class_name
+        .strip_prefix(&format!("{package_name}."))
+        .filter(|rest| !rest.contains('.'))
+        .unwrap_or(&class_name)
+        .to_string();
     let needs_mapper = setup_lines.iter().any(|line| line.contains("MAPPER"));
     let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "java");
     let expects_error = fixture
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let exception_class = format!("{class_name}Exception");
+    // Same import, same reason as `simple_class_name`: this name is derived by suffixing the facade
+    // class, so it is in the configured package by construction and the wildcard import covers it. ~keep
+    let exception_class = format!("{simple_class_name}Exception");
     let api_key_var = FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
 
     crate::e2e::template_env::render(
         "java/snippet_body.jinja",
         minijinja::context! {
             package_name => package_name,
-            class_name => class_name,
+            class_name => simple_class_name,
             setup_lines => setup_lines,
             client_factory => client_factory,
             client_args => client_args,
@@ -648,6 +661,62 @@ mod tests {
             leading_spaces(deserialize_line),
             8,
             "expected the `public static void main` body's 8-space indent:\n{body}"
+        );
+    }
+
+    /// The positive counterpart to the test above: when the configured class DOES live in the
+    /// package the snippet wildcard-imports, spelling the package again renders
+    /// `io.example.pkg.Facade.convert(...)` under an `import io.example.pkg.*;` that made `Facade`
+    /// alone sufficient. Only the exact configured package is stripped, and only when what remains
+    /// is a bare class name — a nested or foreign class stays qualified, since no import covers it.
+    /// ~keep
+    #[test]
+    fn a_class_inside_the_imported_package_is_called_by_its_simple_name() {
+        let fixture = Fixture {
+            id: "configured_call".into(),
+            description: "Configured call".into(),
+            input: serde_json::json!({"source": "example"}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "source".into(),
+                field: "source".into(),
+                arg_type: "string".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        let package = ResolvedCrateConfig::default().java_package();
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                class: Some(format!("{package}.SampleService")),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(body.contains(&format!("import {package}.*;")), "{body}");
+        assert!(body.contains("SampleService.process(\"example\")"), "{body}");
+        assert!(
+            !body.contains(&format!("{package}.SampleService.process")),
+            "the wildcard import already covers the class: {body}"
         );
     }
 
