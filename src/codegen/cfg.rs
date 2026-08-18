@@ -64,6 +64,18 @@ pub fn collect_cfg_feature_names(cfg_str: &str, out: &mut BTreeSet<String>) {
 /// gated service's constructor or configurator gate into its own binding crate needs `X` declared
 /// here for the same reason a gated method does. ~keep
 ///
+/// `errors[].methods[].cfg` is deliberately NOT walked, unlike in
+/// `backends::ffi::gen_bindings::helpers::cbindgen_feature_defines`: no backend re-emits an error
+/// method's gate. Every error-introspection wrapper (`codegen::error_gen::gen_ffi_error_methods`
+/// and its per-language siblings) is emitted ungated, and `ApiSurface::with_cfg_filtered_deep`
+/// drops the method instead when the feature is off, so no crate needs the feature declared. Teach
+/// one of those emitters to re-emit `MethodDef::rust_cfg_attribute` and this walk must grow the
+/// position with it. ~keep
+///
+/// The position-by-position coverage of this walk and of `cbindgen_feature_defines` — including
+/// the `is_host` asymmetry, which is intentional and must not be collapsed — is pinned by
+/// `backends::ffi::gen_bindings::tests::feature_defines`. ~keep
+///
 /// The set is sorted (via `BTreeSet`) so the resulting Cargo.toml is stable
 /// across regenerations.
 pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {

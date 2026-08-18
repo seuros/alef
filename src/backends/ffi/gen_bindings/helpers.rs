@@ -477,7 +477,18 @@ pub(super) fn gen_cbindgen_toml(
     )
 }
 
-fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &str) -> Vec<(String, String)> {
+/// The `[defines]` table cbindgen uses to turn a source `#[cfg(feature = "x")]` into a header
+/// `#if defined(...)` guard.
+///
+/// This is the second of two independent walks over the same IR that decide which features exist;
+/// the other is `codegen::cfg::collect_cfg_features`, which feeds every binding crate's
+/// `[features]` table and, through `backends::go::cgo_features`, the cgo preamble's `-D` list.
+/// The two are deliberately not unified: this walk has no `is_host` rust_path filter, because a
+/// type merged from a foreign `[[crates.source_crates]]` crate still needs its header declaration
+/// guarded even though forwarding its feature to the core dependency would break cargo
+/// resolution. Their per-position coverage is pinned by `super::tests::feature_defines`; edit one
+/// walk and that test tells you whether the other has to move too. ~keep
+pub(super) fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &str) -> Vec<(String, String)> {
     // Method gates count as much as item gates: `gen_method_wrapper` emits `#[cfg(...)]` on the
     // exported wrapper, and a feature missing from `[defines]` makes cbindgen emit that
     // declaration *unguarded* rather than dropping or guarding it — see the note below. ~keep
@@ -486,6 +497,12 @@ fn cbindgen_feature_defines(api: &crate::core::ir::ApiSurface, prefix_upper: &st
         .iter()
         .flat_map(|item| item.methods.iter())
         .chain(api.enums.iter().flat_map(|item| item.methods.iter()))
+        // The error arm is the one position this walk reads and `collect_cfg_features` does not,
+        // and it is currently inert on both sides: `codegen::error_gen::gen_ffi_error_methods`
+        // emits the introspection wrappers with no `#[cfg]`, so cbindgen never guards them and
+        // this entry never matches. It is kept, not deleted, because the gate belongs on those
+        // wrappers — the day one of them re-emits `MethodDef::rust_cfg_attribute`, the header
+        // needs the define and the binding crates need the feature declared. ~keep
         .chain(api.errors.iter().flat_map(|item| item.methods.iter()))
         .filter_map(|method| method.cfg.as_deref());
     let mut cfgs = api
