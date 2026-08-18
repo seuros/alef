@@ -346,6 +346,243 @@ fn validate_recursive(
     Ok(())
 }
 
+/// The `alef.toml` file every field-classification diagnostic points at. These entries live in
+/// config, not in a fixture, so the `file` slot names the config rather than a fixture path. ~keep
+const CONFIG_FILE_LABEL: &str = "alef.toml";
+
+/// Which field-classification table an entry came from, and what it claims about the field.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FieldClassification {
+    /// `fields_optional` — the accessor renderers unwrap this path's leaf as an `Option`.
+    Optional,
+    /// `fields_array` — the accessor renderers index this path's leaf at `[0]`.
+    Array,
+}
+
+impl FieldClassification {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Optional => "fields_optional",
+            Self::Array => "fields_array",
+        }
+    }
+
+    /// What the emitted accessor does when the entry is honoured, quoted back to the operator so
+    /// the diagnostic explains the compile error the entry would otherwise have caused. ~keep
+    fn emitted_effect(self) -> &'static str {
+        match self {
+            Self::Optional => "an Option unwrap (`.as_ref().unwrap()` / `?.` / `!!` / `.?`)",
+            Self::Array => "an element index (`[0]`)",
+        }
+    }
+
+    /// True when the IR's own shape for a field agrees with what this table claims about it.
+    fn agrees_with(self, field: &crate::core::ir::FieldDef) -> bool {
+        use crate::core::ir::TypeRef;
+        match self {
+            // `FieldDef::ty` has already had one `Option<..>` layer peeled off into
+            // `FieldDef::optional` (see `extract::extractor::helpers::fields::extract_field`), so
+            // both spellings have to be accepted -- hand-built `TypeDef`s keep the wrapper. ~keep
+            Self::Optional => field.optional || matches!(field.ty, TypeRef::Optional(_)),
+            Self::Array => is_indexable(&field.ty),
+        }
+    }
+}
+
+/// True for the IR shapes an `[0]` index is legal against.
+///
+/// `Json` and `Map` are in deliberately: a `serde_json::Value` field can carry an array, and
+/// `FieldResolver::inject_array_indexing` upgrades a numeric map key on a registered array field
+/// to an index. Neither is a mis-declaration the operator could act on. ~keep
+fn is_indexable(ty: &crate::core::ir::TypeRef) -> bool {
+    use crate::core::ir::TypeRef;
+    match ty {
+        TypeRef::Vec(_) | TypeRef::Bytes | TypeRef::Json | TypeRef::Map(_, _) => true,
+        TypeRef::Optional(inner) => is_indexable(inner),
+        _ => false,
+    }
+}
+
+/// What the core IR knows about the leaf field name a classification entry names.
+///
+/// Mirrors `e2e::codegen::c::assertions::TargetParams` and `e2e::codegen::c::ResultTypeName`:
+/// "the IR was never consulted" and "the IR was consulted and had nothing" are different facts,
+/// and collapsing them into a bare `Option` is what would let an unverifiable entry be reported
+/// as a wrong one. The halves of one rule must agree on what an absent IR licenses. ~keep
+enum IrFieldShape<'a> {
+    /// The IR declares at least one field with this name — these are every occurrence of it,
+    /// across every type. Enough to rule on the entry.
+    Known(Vec<&'a crate::core::ir::FieldDef>),
+    /// No IR was supplied at all, so nothing was consulted and nothing can be concluded. A
+    /// legitimate, common state (unit tests and several snippet entry points generate from empty
+    /// IR slices), so it produces no diagnostic rather than refusing. Refusing here would fail
+    /// every IR-less caller — a far larger blast radius than the defect being fixed. ~keep
+    IrAbsent,
+    /// The IR was there to consult and no type declares a field of this name. That is not proof
+    /// the entry is wrong: virtual namespace prefixes, streaming pseudo-fields and synthetic
+    /// assertion paths all legitimately name things the IR has never heard of, exactly as
+    /// `FieldResolver::is_valid_for_result` documents. Unverifiable, so it warns rather than
+    /// failing. ~keep
+    Unresolvable,
+}
+
+/// Every occurrence of `leaf` across the IR's type definitions, or why there is none.
+fn ir_field_shape<'a>(leaf: &str, type_defs: &'a [crate::core::ir::TypeDef]) -> IrFieldShape<'a> {
+    if type_defs.is_empty() {
+        return IrFieldShape::IrAbsent;
+    }
+    let occurrences: Vec<_> = type_defs
+        .iter()
+        .flat_map(|type_def| type_def.fields.iter())
+        .filter(|field| field.name == leaf)
+        .collect();
+    if occurrences.is_empty() {
+        IrFieldShape::Unresolvable
+    } else {
+        IrFieldShape::Known(occurrences)
+    }
+}
+
+/// The field name a classification entry's accessor lands on: the last dot-separated segment,
+/// with any `[0]` / `[]` / `["key"]` suffix removed.
+///
+/// The renderers check the FULL prefix path at every segment against `fields_optional` /
+/// `fields_array` (see `field_access::optional_renderers::push_key_field_name`), so an entry
+/// `metadata.article.tags` is a claim about `tags` — not about `metadata` or `article`. ~keep
+fn classification_leaf(entry: &str) -> &str {
+    let last = entry.rsplit('.').next().unwrap_or(entry);
+    last.split('[').next().unwrap_or(last).trim()
+}
+
+/// The Rust spelling of an IR field's type, for quoting back in a diagnostic.
+fn describe_field_type(field: &crate::core::ir::FieldDef) -> String {
+    let inner = describe_type_ref(&field.ty);
+    if field.optional {
+        format!("Option<{inner}>")
+    } else {
+        inner
+    }
+}
+
+fn describe_type_ref(ty: &crate::core::ir::TypeRef) -> String {
+    use crate::core::ir::TypeRef;
+    match ty {
+        TypeRef::Primitive(primitive) => format!("{primitive:?}").to_lowercase(),
+        TypeRef::String => "String".to_string(),
+        TypeRef::Char => "char".to_string(),
+        TypeRef::Bytes => "Vec<u8>".to_string(),
+        TypeRef::Optional(inner) => format!("Option<{}>", describe_type_ref(inner)),
+        TypeRef::Vec(inner) => format!("Vec<{}>", describe_type_ref(inner)),
+        TypeRef::Map(key, value) => format!("HashMap<{}, {}>", describe_type_ref(key), describe_type_ref(value)),
+        TypeRef::Named(name) => name.clone(),
+        TypeRef::Path => "PathBuf".to_string(),
+        TypeRef::Unit => "()".to_string(),
+        TypeRef::Json => "serde_json::Value".to_string(),
+        TypeRef::Duration => "Duration".to_string(),
+    }
+}
+
+/// Check every `fields_optional` / `fields_array` entry in `e2e_config` against the core IR.
+///
+/// A wrong entry used to reach the operator as a compiler diagnostic pointed at GENERATED code:
+/// `metadata.article.tags` declared optional against a plain `Vec<String>` emits
+/// `.as_ref().unwrap().len()` and fails with "type annotations needed", naming a file the
+/// operator never wrote and no config line at all. This turns that into one line naming the
+/// table, the entry, and the type the IR actually declares.
+///
+/// The check is on the entry's LEAF field name, and an occurrence of that name that agrees with
+/// the entry anywhere in the IR clears it — the same predicate
+/// [`FieldResolver::ir_field_sets`] already uses for reachability, for the same reason: a bare
+/// field name cannot be pinned to one result type from here, so agrees-on-any-type has to win or
+/// a name shared by two structs would produce a false failure. That trade makes this check
+/// under-report (an entry wrong on the type it is actually used against still passes when a
+/// same-named field elsewhere agrees) and never over-report. ~keep
+///
+/// [`FieldResolver::ir_field_sets`]: crate::e2e::field_access::FieldResolver::ir_field_sets
+pub fn validate_field_classifications(
+    e2e_config: &E2eConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Vec<ValidationError> {
+    let mut errors = Vec::new();
+    let mut tables: Vec<(&std::collections::HashSet<String>, FieldClassification, String)> = vec![
+        (
+            &e2e_config.fields_optional,
+            FieldClassification::Optional,
+            "[e2e]".into(),
+        ),
+        (&e2e_config.fields_array, FieldClassification::Array, "[e2e]".into()),
+        (
+            &e2e_config.call.fields_optional,
+            FieldClassification::Optional,
+            "[e2e.call]".into(),
+        ),
+        (
+            &e2e_config.call.fields_array,
+            FieldClassification::Array,
+            "[e2e.call]".into(),
+        ),
+    ];
+    for (name, call) in &e2e_config.calls {
+        let key = format!("[e2e.calls.{name}]");
+        tables.push((&call.fields_optional, FieldClassification::Optional, key.clone()));
+        tables.push((&call.fields_array, FieldClassification::Array, key));
+    }
+    for (entries, classification, config_key) in tables {
+        check_classification_table(entries, classification, &config_key, type_defs, &mut errors);
+    }
+    errors
+}
+
+fn check_classification_table(
+    entries: &std::collections::HashSet<String>,
+    classification: FieldClassification,
+    config_key: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+    errors: &mut Vec<ValidationError>,
+) {
+    let table = classification.table();
+    // Sorted so the diagnostics one run emits are stable across `HashSet` iteration order. ~keep
+    let mut sorted: Vec<&String> = entries.iter().collect();
+    sorted.sort_unstable();
+    for entry in sorted {
+        let leaf = classification_leaf(entry);
+        if leaf.is_empty() {
+            continue;
+        }
+        match ir_field_shape(leaf, type_defs) {
+            IrFieldShape::IrAbsent => {}
+            IrFieldShape::Unresolvable => errors.push(ValidationError {
+                file: CONFIG_FILE_LABEL.to_string(),
+                message: format!(
+                    "{config_key}.{table} entry `{entry}` is unverified: no type in the core IR declares a \
+                     field named `{leaf}`, so alef cannot confirm the classification (expected for virtual \
+                     namespace prefixes and synthetic/streaming paths, a typo otherwise)"
+                ),
+                severity: Severity::Warning,
+            }),
+            IrFieldShape::Known(occurrences) => {
+                if occurrences.iter().any(|field| classification.agrees_with(field)) {
+                    continue;
+                }
+                let mut declared: Vec<String> = occurrences.iter().map(|field| describe_field_type(field)).collect();
+                declared.sort_unstable();
+                declared.dedup();
+                errors.push(ValidationError {
+                    file: CONFIG_FILE_LABEL.to_string(),
+                    message: format!(
+                        "{config_key}.{table} entry `{entry}` contradicts the core IR: `{leaf}` is declared as \
+                         {} there, and honouring this entry emits {} against it — remove the entry or fix the \
+                         path",
+                        declared.join(" / "),
+                        classification.emitted_effect()
+                    ),
+                    severity: Severity::Error,
+                });
+            }
+        }
+    }
+}
+
 fn validate_json_value(
     relative: &str,
     value: &serde_json::Value,
@@ -910,6 +1147,191 @@ mod tests {
             !errors.iter().any(|e| e.message.contains("skipped for all languages")),
             "excluded-category fixture should not trigger skip-all warning; got: {:?}",
             errors
+        );
+    }
+}
+
+#[cfg(test)]
+mod field_classification_tests {
+    use super::{Severity, validate_field_classifications};
+    use crate::core::config::e2e::{CallConfig, E2eConfig};
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+    use std::collections::HashSet;
+
+    fn field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            optional,
+            ..FieldDef::default()
+        }
+    }
+
+    /// One IR type carrying the shapes the assertions below rule on: a plain `Vec<String>`, a
+    /// genuine `Option<String>`, and a plain `String`.
+    fn article_ir() -> Vec<TypeDef> {
+        vec![TypeDef {
+            name: "ArticleMetadata".to_string(),
+            fields: vec![
+                field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false),
+                field("subtitle", TypeRef::String, true),
+                field("title", TypeRef::String, false),
+            ],
+            ..TypeDef::default()
+        }]
+    }
+
+    fn config_with(optional: &[&str], array: &[&str]) -> E2eConfig {
+        E2eConfig {
+            fields_optional: optional.iter().map(|f| (*f).to_string()).collect(),
+            fields_array: array.iter().map(|f| (*f).to_string()).collect(),
+            ..E2eConfig::default()
+        }
+    }
+
+    fn errors_only(diagnostics: &[super::ValidationError]) -> Vec<&super::ValidationError> {
+        diagnostics
+            .iter()
+            .filter(|diag| diag.severity == Severity::Error)
+            .collect()
+    }
+
+    /// The defect this check exists for: `metadata.article.tags` declared optional against a
+    /// plain `Vec<String>` used to surface only as "type annotations needed" pointed at
+    /// generated code, with nothing naming the config line.
+    #[test]
+    fn optional_entry_naming_a_non_optional_ir_field_is_an_error_that_names_key_and_type() {
+        let diagnostics = validate_field_classifications(&config_with(&["metadata.article.tags"], &[]), &article_ir());
+
+        let errors = errors_only(&diagnostics);
+        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
+        let message = &errors[0].message;
+        assert!(message.contains("[e2e].fields_optional"), "names the table: {message}");
+        assert!(
+            message.contains("`metadata.article.tags`"),
+            "names the entry: {message}"
+        );
+        assert!(message.contains("Vec<String>"), "names the real IR type: {message}");
+        assert_eq!(errors[0].file, "alef.toml");
+    }
+
+    /// The check must not fire on a correct declaration — the field really is `Option<String>`.
+    #[test]
+    fn optional_entry_naming_a_genuinely_optional_ir_field_produces_no_error() {
+        let diagnostics = validate_field_classifications(&config_with(&["metadata.subtitle"], &[]), &article_ir());
+
+        assert!(
+            errors_only(&diagnostics).is_empty(),
+            "a correct fields_optional entry must not be rejected: {diagnostics:?}"
+        );
+    }
+
+    /// `fields_array` gets the same treatment: declaring a plain `String` indexable emits `[0]`
+    /// against a scalar.
+    #[test]
+    fn array_entry_naming_a_non_collection_ir_field_is_an_error() {
+        let diagnostics = validate_field_classifications(&config_with(&[], &["title"]), &article_ir());
+
+        let errors = errors_only(&diagnostics);
+        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
+        assert!(errors[0].message.contains("fields_array"), "got: {}", errors[0].message);
+        assert!(errors[0].message.contains("String"), "got: {}", errors[0].message);
+    }
+
+    #[test]
+    fn array_entry_naming_a_vec_ir_field_produces_no_error() {
+        let diagnostics = validate_field_classifications(&config_with(&[], &["tags"]), &article_ir());
+
+        assert!(
+            errors_only(&diagnostics).is_empty(),
+            "a correct fields_array entry must not be rejected: {diagnostics:?}"
+        );
+    }
+
+    /// The `IrAbsent` arm. Every IR-less caller (unit tests, snippet entry points that generate
+    /// from empty IR slices) must keep working — nothing was consulted, so nothing is claimed.
+    #[test]
+    fn an_absent_ir_produces_no_diagnostic_at_all() {
+        let diagnostics = validate_field_classifications(&config_with(&["tags"], &["title"]), &[]);
+
+        assert!(
+            diagnostics.is_empty(),
+            "an absent IR licenses no claim in either direction: {diagnostics:?}"
+        );
+    }
+
+    /// The `Unresolvable` arm. A name the IR has never heard of is unverified, not wrong —
+    /// virtual namespace prefixes and synthetic/streaming paths legitimately look like this — so
+    /// it warns and generation still proceeds.
+    #[test]
+    fn an_ir_unknown_leaf_warns_rather_than_failing_generation() {
+        let diagnostics =
+            validate_field_classifications(&config_with(&["interaction.chunk_count"], &[]), &article_ir());
+
+        assert!(
+            errors_only(&diagnostics).is_empty(),
+            "an unverifiable entry must not fail generation: {diagnostics:?}"
+        );
+        assert_eq!(diagnostics.len(), 1, "expected one warning, got: {diagnostics:?}");
+        assert_eq!(diagnostics[0].severity, Severity::Warning);
+        assert!(
+            diagnostics[0].message.contains("unverified") && diagnostics[0].message.contains("`chunk_count`"),
+            "the warning must name the leaf it could not resolve: {}",
+            diagnostics[0].message
+        );
+    }
+
+    /// Index and wildcard suffixes are part of the entry spelling, not part of the field name.
+    #[test]
+    fn indexed_and_wildcard_entry_spellings_resolve_to_the_same_leaf_field() {
+        let indexed = validate_field_classifications(&config_with(&["article[0].tags"], &[]), &article_ir());
+        let wildcard = validate_field_classifications(&config_with(&["article[].tags"], &[]), &article_ir());
+
+        assert_eq!(errors_only(&indexed).len(), 1, "got: {indexed:?}");
+        assert_eq!(errors_only(&wildcard).len(), 1, "got: {wildcard:?}");
+    }
+
+    /// Per-call override tables are checked too, and the diagnostic names the call's own table
+    /// rather than the global one — the operator has to be pointed at the line they must edit.
+    #[test]
+    fn per_call_override_tables_are_checked_and_named_in_the_diagnostic() {
+        let mut config = E2eConfig::default();
+        config.calls.insert(
+            "summarize".to_string(),
+            CallConfig {
+                fields_optional: HashSet::from(["tags".to_string()]),
+                ..CallConfig::default()
+            },
+        );
+
+        let diagnostics = validate_field_classifications(&config, &article_ir());
+
+        let errors = errors_only(&diagnostics);
+        assert_eq!(errors.len(), 1, "got: {diagnostics:?}");
+        assert!(
+            errors[0].message.contains("[e2e.calls.summarize].fields_optional"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    /// The documented under-report trade: a field name that agrees with the entry on ANY IR type
+    /// clears it, because a bare leaf name cannot be pinned to one result type from here. This
+    /// pins the trade so a later "tighten it up" change has to confront it deliberately.
+    #[test]
+    fn a_same_named_field_that_agrees_on_another_type_clears_the_entry() {
+        let mut ir = article_ir();
+        ir.push(TypeDef {
+            name: "DraftMetadata".to_string(),
+            fields: vec![field("tags", TypeRef::Vec(Box::new(TypeRef::String)), true)],
+            ..TypeDef::default()
+        });
+
+        let diagnostics = validate_field_classifications(&config_with(&["tags"], &[]), &ir);
+
+        assert!(
+            errors_only(&diagnostics).is_empty(),
+            "agrees-on-any-type must win, or a shared field name produces a false failure: {diagnostics:?}"
         );
     }
 }

@@ -365,8 +365,18 @@ pub(super) fn render_assertion(
                     }
                 }
                 "not_empty" => {
+                    // Unwrapping an optional PREFIX says nothing about the leaf: `summary` and
+                    // `summary.text` can both be in `fields_optional`, and then `opt_inner__.text`
+                    // is still an `Option(String)`. Piping that into `string.is_empty` is a Gleam
+                    // type error, so consult the leaf's own optionality first -- the same order,
+                    // and the same `option.is_some` spelling, the non-prefixed `not_empty` arm
+                    // below already uses. Three `not_empty` arms in this file read
+                    // `fields_optional`; they must agree on what it licenses. ~keep
+                    let leaf_is_optional = field_resolver.is_optional(field_resolver.resolve(f));
                     let is_arr = field_resolver.is_array(f) || field_resolver.is_array(field_resolver.resolve(f));
-                    if is_arr {
+                    if leaf_is_optional {
+                        let _ = writeln!(out, "      {inner_expr} |> option.is_some |> should.equal(True)");
+                    } else if is_arr {
                         let _ = writeln!(out, "      {inner_expr} |> list.is_empty |> should.equal(False)");
                     } else {
                         let _ = writeln!(out, "      {inner_expr} |> string.is_empty |> should.equal(False)");
@@ -673,5 +683,82 @@ mod strict_field_availability_marker_tests {
             "sample_pkg",
         );
         assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
+    }
+}
+
+#[cfg(test)]
+mod optional_prefix_not_empty_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render(optional: &[&str]) -> String {
+        let optional_fields: HashSet<String> = optional.iter().map(|f| (*f).to_string()).collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &optional_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some("summary.text".to_string()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "r",
+            &resolver,
+            &HashSet::new(),
+            false,
+            "sample_pkg",
+        );
+        out
+    }
+
+    /// `fields_optional` naming BOTH the prefix and the leaf must reach the leaf: the
+    /// `option.Some(opt_inner__)` case unwraps `summary`, and `opt_inner__.text` is still an
+    /// `Option(String)`. Piping that into `string.is_empty` does not compile.
+    #[test]
+    fn optional_leaf_under_an_optional_prefix_is_checked_with_option_is_some() {
+        let out = render(&["summary", "summary.text"]);
+
+        assert!(
+            out.contains("case r.summary {") && out.contains("option.Some(opt_inner__) -> {"),
+            "the optional-prefix block must be the path under test: {out}"
+        );
+        assert!(
+            out.contains("opt_inner__.text |> option.is_some |> should.equal(True)"),
+            "an optional leaf must be checked with option.is_some, matching the non-prefixed arm: {out}"
+        );
+        assert!(
+            !out.contains("string.is_empty"),
+            "string.is_empty against an Option(String) is a Gleam type error: {out}"
+        );
+    }
+
+    /// Negative control for the same block: when only the PREFIX is optional the leaf really is
+    /// a concrete `String` after the unwrap, and the pre-existing `string.is_empty` form is the
+    /// correct emission. The fix must not turn every prefixed leaf into an `option.is_some`.
+    #[test]
+    fn concrete_leaf_under_an_optional_prefix_keeps_the_string_is_empty_check() {
+        let out = render(&["summary"]);
+
+        assert!(
+            out.contains("option.Some(opt_inner__) -> {"),
+            "the optional-prefix block must still be the path under test: {out}"
+        );
+        assert!(
+            out.contains("opt_inner__.text |> string.is_empty |> should.equal(False)"),
+            "a concrete leaf keeps the string emptiness check: {out}"
+        );
+        assert!(
+            !out.contains("option.is_some"),
+            "a concrete leaf must not be checked for presence: {out}"
+        );
     }
 }

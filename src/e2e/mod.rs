@@ -183,6 +183,31 @@ fn generate_e2e_with_extensions(
         );
     }
 
+    // Field-classification validation runs BEFORE any generator, because the failure it replaces
+    // is a compiler diagnostic pointed at generated code: a `fields_optional` entry naming a
+    // field the IR declares non-optional emits an Option unwrap against a concrete value, and the
+    // operator sees "type annotations needed" in a file they never wrote, with nothing naming the
+    // config line that caused it. Refusing here costs one regeneration; letting it through costs
+    // a debugging session in the wrong tree. ~keep
+    let classification_diagnostics = validate::validate_field_classifications(e2e_config, type_defs);
+    for diag in &classification_diagnostics {
+        warn!("{}: {}", diag.file, diag.message);
+    }
+    let classification_errors: Vec<_> = classification_diagnostics
+        .iter()
+        .filter(|diag| diag.severity == Severity::Error)
+        .collect();
+    if !classification_errors.is_empty() {
+        bail!(
+            "e2e field-classification validation failed: {}",
+            classification_errors
+                .iter()
+                .map(|diag| format!("{}: {}", diag.file, diag.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+
     let all_groups = group_fixtures(&fixtures);
 
     // Drop categories that are explicitly excluded from cross-language e2e
