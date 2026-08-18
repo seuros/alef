@@ -712,7 +712,7 @@ exclude_types = ["Loader"]
         let content = emit_lib_rs(&api, &config);
 
         assert!(
-            content.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            content.contains("v.into_raw() as jlong"),
             "capsule return must mirror the C FFI raw-pointer transfer: {content}"
         );
         assert!(
@@ -777,11 +777,11 @@ c_return_type = "TSLanguage"
         let content = emit_lib_rs(&api, &capsule_fixture_config());
 
         assert!(
-            content.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            content.contains("v.into_raw() as jlong"),
             "direct method capsule must return its raw grammar pointer: {content}"
         );
         assert!(
-            content.contains("Some(inner) => inner.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            content.contains("Some(inner) => inner.into_raw() as jlong"),
             "optional method capsule must map Some to the raw grammar pointer: {content}"
         );
         assert!(
@@ -804,23 +804,95 @@ c_return_type = "TSLanguage"
         let mut cow = capsule_method("cow_language", TypeRef::Named("Language".into()), false);
         cow.returns_ref = true;
         cow.returns_cow = true;
+        let mut optional_cow = capsule_method(
+            "optional_cow_language",
+            TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
+            false,
+        );
+        optional_cow.returns_ref = true;
+        optional_cow.returns_cow = true;
         let content = emit_lib_rs(
-            &api_with_client_methods(vec![borrowed, optional_borrowed, cow]),
+            &api_with_client_methods(vec![borrowed, optional_borrowed, cow, optional_cow]),
             &capsule_fixture_config(),
         );
 
         assert!(
-            content.contains("v.clone().into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            content.contains("v.clone().into_raw() as jlong"),
             "borrowed capsule must be cloned before ownership transfer: {content}"
         );
         assert!(
-            content.contains("Some(inner) => inner.clone().into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            content.contains("Some(inner) => inner.clone().into_raw() as jlong"),
             "optional borrowed capsule must clone Some before ownership transfer: {content}"
         );
         assert!(
-            content.contains("v.into_owned().into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"),
+            content.contains("v.into_owned().into_raw() as jlong"),
             "Cow capsule must become owned before ownership transfer: {content}"
         );
+        assert!(
+            content.contains("Some(inner) => inner.into_owned().into_raw() as jlong"),
+            "optional Cow capsule must own Some before ownership transfer: {content}"
+        );
+        syn::parse_file(&content).expect("generated JNI crate parses");
+    }
+
+    /// `into_raw()` already yields `*const {into_raw_type}`, so an intermediate `as *const T`
+    /// is a same-type cast that fails a consumer's `clippy::unnecessary_cast` under `-D warnings`.
+    /// The `as jlong` stays: any pointer casts to an integer, so it remains correct for a capsule
+    /// whose `into_raw()` returns some other pointer type. ~keep
+    #[test]
+    fn capsule_returns_transfer_the_pointer_without_a_redundant_cast() {
+        let plain = capsule_method("plain_language", TypeRef::Named("Language".into()), true);
+        let optional_plain = capsule_method(
+            "optional_plain_language",
+            TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
+            false,
+        );
+        let mut borrowed = capsule_method("borrowed_language", TypeRef::Named("Language".into()), true);
+        borrowed.returns_ref = true;
+        let mut optional_borrowed = capsule_method(
+            "optional_borrowed_language",
+            TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
+            false,
+        );
+        optional_borrowed.returns_ref = true;
+        let mut cow = capsule_method("cow_language", TypeRef::Named("Language".into()), false);
+        cow.returns_ref = true;
+        cow.returns_cow = true;
+        let mut optional_cow = capsule_method(
+            "optional_cow_language",
+            TypeRef::Optional(Box::new(TypeRef::Named("Language".into()))),
+            false,
+        );
+        optional_cow.returns_ref = true;
+        optional_cow.returns_cow = true;
+
+        let content = emit_lib_rs(
+            &api_with_client_methods(vec![
+                plain,
+                optional_plain,
+                borrowed,
+                optional_borrowed,
+                cow,
+                optional_cow,
+            ]),
+            &capsule_fixture_config(),
+        );
+
+        let transfers: Vec<&str> = content
+            .lines()
+            .filter(|line| line.contains(".into_raw()") && line.contains("as jlong"))
+            .collect();
+        assert_eq!(
+            transfers.len(),
+            6,
+            "every capsule variant must emit exactly one raw-pointer transfer: {content}"
+        );
+        for transfer in transfers {
+            assert!(
+                !transfer.contains("as *const"),
+                "capsule transfer must not cast the pointer to its own type before `as jlong`: {transfer}"
+            );
+        }
         syn::parse_file(&content).expect("generated JNI crate parses");
     }
 

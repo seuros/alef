@@ -269,8 +269,8 @@ fn should_generate_direct_and_optional_host_capsule_free_functions() {
             .content
             .contains("external fun nativeOptionalLanguageSample(): Long")
     );
-    assert!(jni.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"));
-    assert!(jni.contains("Some(inner) => inner.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"));
+    assert!(jni.contains("v.into_raw() as jlong"));
+    assert!(jni.contains("Some(inner) => inner.into_raw() as jlong"));
     assert!(!jni.contains("nativeFreeLanguage"));
 }
 
@@ -392,7 +392,7 @@ fn assert_ffi_only_jni_shape(jni: &str) {
     assert!(jni.contains("Some(inner) => Box::into_raw(Box::new(inner)) as jlong"));
     assert!(jni.contains("None => 0"));
     assert!(jni.contains("nativeFreeLanguage"));
-    assert!(!jni.contains("v.into_raw() as *const tree_sitter::ffi::TSLanguage as jlong"));
+    assert!(!jni.contains("v.into_raw() as jlong"));
 }
 
 #[test]

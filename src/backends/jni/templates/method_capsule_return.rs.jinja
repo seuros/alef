@@ -1,8 +1,8 @@
 {% if optional %}
 {{ indent }}match v {
 {{ indent }}    None => 0i64,
-{{ indent }}    Some(inner) => {{ inner_value }}.into_raw() as *const {{ into_raw_type }} as jlong,
+{{ indent }}    Some(inner) => {{ inner_value }}.into_raw() as jlong,
 {{ indent }}}
 {% else %}
-{{ indent }}{{ direct_value }}.into_raw() as *const {{ into_raw_type }} as jlong
+{{ indent }}{{ direct_value }}.into_raw() as jlong
 {% endif %}
