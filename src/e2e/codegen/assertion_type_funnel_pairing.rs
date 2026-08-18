@@ -92,12 +92,6 @@ fn calls_funnel(line: &str, funnel: &str) -> bool {
     line.contains(&format!("{funnel}("))
 }
 
-#[derive(Debug)]
-struct CallSite {
-    path: String,
-    line: usize,
-}
-
 #[test]
 fn every_production_field_skip_call_site_also_calls_the_assertion_type_funnel() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -112,7 +106,7 @@ fn every_production_field_skip_call_site_also_calls_the_assertion_type_funnel() 
     );
 
     let mut field_site_count = 0usize;
-    let mut unpaired: Vec<CallSite> = Vec::new();
+    let mut unpaired: Vec<String> = Vec::new();
 
     for path in &files {
         let relative = path
@@ -137,10 +131,7 @@ fn every_production_field_skip_call_site_also_calls_the_assertion_type_funnel() 
                 .iter()
                 .any(|candidate| calls_funnel(candidate, TYPE_FUNNEL));
             if !paired {
-                unpaired.push(CallSite {
-                    path: relative.clone(),
-                    line: index + 1,
-                });
+                unpaired.push(format!("  {relative}:{}", index + 1));
             }
         }
     }
@@ -160,7 +151,8 @@ fn every_production_field_skip_call_site_also_calls_the_assertion_type_funnel() 
         "the following production call(s) of `{FIELD_FUNNEL}` have no nearby call to \
          `{TYPE_FUNNEL}` on the same rendered body, so any assertion-type skip marker this backend \
          renders is never recorded and `inert_verdict` will misclassify the example as \
-         `RenderedNothing`:\n{unpaired:#?}"
+         `RenderedNothing`:\n{}",
+        unpaired.join("\n")
     );
 }
 

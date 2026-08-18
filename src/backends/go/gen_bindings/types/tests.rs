@@ -1640,137 +1640,153 @@ fn go_enum_variant_spellings_match_the_emitted_declarations() {
         emitted.contains(&format!("func {constructor}(")),
         "the adjacent-tagged constructor spelling must be the emitted one:\n{emitted}"
     );
+}
 
-    /// Regression (#242): with neither `#[serde(tag = ..)]` nor `#[serde(untagged)]`, serde's
-    /// default for a data-carrying enum is EXTERNAL tagging: `{"Variant": <inner>}`. This is the
-    /// same wire shape the kotlin, pyo3, and magnus backends already emit for the equivalent
-    /// case; Go was the sole outlier, both on marshal (wrote fields flat, no discriminator at
-    /// all) and unmarshal (looked for a `Type` field that marshal never wrote).
-    ///
-    /// The oracle below is a real `#[derive(Serialize)]` enum fed through `serde_json`, not a
-    /// hand-typed JSON literal the emitter's own logic could happen to match by construction.
-    /// `serde_json`'s `Map` is a `BTreeMap` here (the `preserve_order` feature is off), so its
-    /// keys always come back sorted -- `password` before `username` -- never in declaration
-    /// order; the assertions below key off that sorted order rather than re-deriving it.
-    #[test]
-    fn gen_data_enum_type_externally_tagged_round_trip_matches_serde_wire_shape() {
-        #[derive(serde::Serialize)]
-        #[serde(rename_all = "snake_case")]
-        enum AuthConfigOracle {
-            Basic { username: String, password: String },
-            Bearer { token: String },
-        }
-
-        let oracle = serde_json::to_value(AuthConfigOracle::Basic {
-            username: "u".to_string(),
-            password: "p".to_string(),
-        })
-        .expect("serde_json serialization must succeed");
-        let oracle_obj = oracle
-            .as_object()
-            .expect("external tagging wraps the payload in an object");
-        assert_eq!(
-            oracle_obj.len(),
-            1,
-            "external tagging has exactly one top-level key: {oracle}"
-        );
-        let (basic_key, basic_payload) = oracle_obj.iter().next().expect("external tag has one entry");
-        assert_eq!(
-            basic_key, "basic",
-            "serde's rename_all=snake_case wire name for `Basic`"
-        );
-        let basic_payload_obj = basic_payload.as_object().expect("payload is an object");
-        assert_eq!(
-            basic_payload_obj.keys().collect::<Vec<_>>(),
-            vec!["password", "username"],
-            "BTreeMap-sorted, not declaration order: {oracle}"
-        );
-
-        let enum_def = EnumDef {
-            name: "AuthConfig".to_string(),
-            rust_path: String::new(),
-            original_rust_path: String::new(),
-            methods: vec![],
-            doc: String::new(),
-            cfg: None,
-            is_copy: false,
-            has_serde: true,
-            has_default: false,
-            serde_content: None,
-            serde_tag: None,
-            serde_untagged: false,
-            serde_rename_all: Some("snake_case".to_string()),
-            variants: vec![
-                EnumVariant {
-                    name: "Basic".to_string(),
-                    doc: String::new(),
-                    fields: vec![
-                        simple_field("username", TypeRef::String),
-                        simple_field("password", TypeRef::String),
-                    ],
-                    is_default: false,
-                    serde_rename: None,
-                    binding_excluded: false,
-                    binding_exclusion_reason: None,
-                    is_tuple: false,
-                    originally_had_data_fields: false,
-                    cfg: None,
-                    version: Default::default(),
-                },
-                EnumVariant {
-                    name: "Bearer".to_string(),
-                    doc: String::new(),
-                    fields: vec![simple_field("token", TypeRef::String)],
-                    is_default: false,
-                    serde_rename: None,
-                    binding_excluded: false,
-                    binding_exclusion_reason: None,
-                    is_tuple: false,
-                    originally_had_data_fields: false,
-                    cfg: None,
-                    version: Default::default(),
-                },
-            ],
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            excluded_variants: vec![],
-            version: Default::default(),
-        };
-
-        let out = gen_data_enum_type(&enum_def);
-
-        // Marshal half: the payload is wrapped behind the same tag key the oracle produced,
-        // not folded into the payload as a field and not left untagged.
-        assert!(
-            out.contains(&format!(
-                "return json.Marshal(map[string]aux{{\n\t\t\"{basic_key}\": {{"
-            )),
-            "MarshalJSON must wrap the payload under the external tag key {basic_key:?}:\n{out}"
-        );
-        assert!(
-            !out.contains("Type string `json:\"type\"`") && !out.contains("Type string `json:\"Type\"`"),
-            "external tagging must not fold a discriminator field into the payload:\n{out}"
-        );
-        assert!(
-            !out.contains("wire.Type"),
-            "must not reference an undeclared `wire.Type` (the old, broken internal-tag default \
-         that never compiled):\n{out}"
-        );
-
-        // Unmarshal half: reads the tag as the object's sole key, then decodes the matching
-        // variant's payload from its value -- the mirror image of the marshal half above,
-        // closing the round trip through the same wire shape.
-        assert!(
-            out.contains("var wire map[string]json.RawMessage"),
-            "UnmarshalAuthConfig must read the wire object as key -> payload:\n{out}"
-        );
-        assert!(
-            out.contains(&format!("case \"{basic_key}\":")),
-            "Unmarshal must switch on the same external tag key Marshal writes:\n{out}"
-        );
-        assert!(
-            out.contains("case \"bearer\":"),
-            "expected the Bearer variant's wire case:\n{out}"
-        );
+/// Regression (#242): with neither `#[serde(tag = ..)]` nor `#[serde(untagged)]`, serde's
+/// default for a data-carrying enum is EXTERNAL tagging: `{"Variant": <inner>}`. This is the
+/// same wire shape the kotlin, pyo3, and magnus backends already emit for the equivalent
+/// case; Go was the sole outlier, both on marshal (wrote fields flat, no discriminator at
+/// all) and unmarshal (looked for a `Type` field that marshal never wrote).
+///
+/// The oracle below is a real `#[derive(Serialize)]` enum fed through `serde_json`, not a
+/// hand-typed JSON literal the emitter's own logic could happen to match by construction.
+/// `serde_json`'s `Map` is a `BTreeMap` here (the `preserve_order` feature is off), so its
+/// keys always come back sorted -- `password` before `username` -- never in declaration
+/// order; the assertions below key off that sorted order rather than re-deriving it.
+#[test]
+fn gen_data_enum_type_externally_tagged_round_trip_matches_serde_wire_shape() {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "snake_case")]
+    enum AuthConfigOracle {
+        Basic { username: String, password: String },
+        Bearer { token: String },
     }
+
+    let oracle = serde_json::to_value(AuthConfigOracle::Basic {
+        username: "u".to_string(),
+        password: "p".to_string(),
+    })
+    .expect("serde_json serialization must succeed");
+    let oracle_obj = oracle
+        .as_object()
+        .expect("external tagging wraps the payload in an object");
+    assert_eq!(
+        oracle_obj.len(),
+        1,
+        "external tagging has exactly one top-level key: {oracle}"
+    );
+    let (basic_key, basic_payload) = oracle_obj.iter().next().expect("external tag has one entry");
+    assert_eq!(
+        basic_key, "basic",
+        "serde's rename_all=snake_case wire name for `Basic`"
+    );
+    let basic_payload_obj = basic_payload.as_object().expect("payload is an object");
+    assert_eq!(
+        basic_payload_obj.keys().collect::<Vec<_>>(),
+        vec!["password", "username"],
+        "BTreeMap-sorted, not declaration order: {oracle}"
+    );
+
+    let enum_def = EnumDef {
+        name: "AuthConfig".to_string(),
+        rust_path: String::new(),
+        original_rust_path: String::new(),
+        methods: vec![],
+        doc: String::new(),
+        cfg: None,
+        is_copy: false,
+        has_serde: true,
+        has_default: false,
+        serde_content: None,
+        serde_tag: None,
+        serde_untagged: false,
+        serde_rename_all: Some("snake_case".to_string()),
+        variants: vec![
+            EnumVariant {
+                name: "Basic".to_string(),
+                doc: String::new(),
+                fields: vec![
+                    simple_field("username", TypeRef::String),
+                    simple_field("password", TypeRef::String),
+                ],
+                is_default: false,
+                serde_rename: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_tuple: false,
+                originally_had_data_fields: false,
+                cfg: None,
+                version: Default::default(),
+            },
+            EnumVariant {
+                name: "Bearer".to_string(),
+                doc: String::new(),
+                fields: vec![simple_field("token", TypeRef::String)],
+                is_default: false,
+                serde_rename: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_tuple: false,
+                originally_had_data_fields: false,
+                cfg: None,
+                version: Default::default(),
+            },
+        ],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        excluded_variants: vec![],
+        version: Default::default(),
+    };
+
+    let out = gen_data_enum_type(&enum_def);
+
+    // Marshal half: the payload is wrapped behind the same tag key the oracle produced,
+    // not folded into the payload as a field and not left untagged.
+    assert!(
+        out.contains(&format!(
+            "return json.Marshal(map[string]aux{{\n\t\t\"{basic_key}\": {{"
+        )),
+        "MarshalJSON must wrap the payload under the external tag key {basic_key:?}:\n{out}"
+    );
+    assert!(
+        !out.contains("Type string `json:\"type\"`") && !out.contains("Type string `json:\"Type\"`"),
+        "external tagging must not fold a discriminator field into the payload:\n{out}"
+    );
+    assert!(
+        !out.contains("wire.Type"),
+        "must not reference an undeclared `wire.Type` (the old, broken internal-tag default \
+         that never compiled):\n{out}"
+    );
+
+    // Unmarshal half: reads the tag as the object's sole key, then decodes the matching
+    // variant's payload from its value -- the mirror image of the marshal half above,
+    // closing the round trip through the same wire shape.
+    assert!(
+        out.contains("var wire map[string]json.RawMessage"),
+        "UnmarshalAuthConfig must read the wire object as key -> payload:\n{out}"
+    );
+    assert!(
+        out.contains(&format!("case \"{basic_key}\":")),
+        "Unmarshal must switch on the same external tag key Marshal writes:\n{out}"
+    );
+    // ~keep The second variant goes through the same oracle rather than being spelled by hand:
+    // a literal "bearer" here would keep passing if serde's rename_all ever stopped applying to
+    // this variant, which is exactly the disagreement this test exists to detect.
+    let bearer_oracle =
+        serde_json::to_value(AuthConfigOracle::Bearer { token: "t".to_string() }).expect("serialization must succeed");
+    let bearer_key = bearer_oracle
+        .as_object()
+        .expect("external tagging wraps the payload in an object")
+        .keys()
+        .next()
+        .expect("external tag has one entry")
+        .clone();
+    assert_ne!(
+        &bearer_key, basic_key,
+        "the two variants must produce distinct wire keys, or the switch below proves nothing"
+    );
+    assert!(
+        out.contains(&format!("case \"{bearer_key}\":")),
+        "expected the second variant's oracle-derived wire case `{bearer_key}`:\n{out}"
+    );
 }
