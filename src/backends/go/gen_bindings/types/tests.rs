@@ -1213,10 +1213,10 @@ fn go_enum_representation_agrees_with_the_declaration_gen_enum_type_emits() {
             ],
         ),
         EnumDef {
-            // A tuple-tagged union is only emitted for a serde-TAGGED enum: the marshaler
-            // unwraps `serde_tag` with `.expect`. Leaving it unset made this fixture reach a
-            // shape the emitter cannot render, which is a real latent panic (tracked
-            // separately) rather than the declaration drift this test exists to catch. ~keep
+            // A tuple-tagged union is emitted only for a serde-TAGGED (or untagged) enum,
+            // because its marshalers are built around the tag. `go_enum_representation` now
+            // checks the tag at the branch point instead of leaving the emitter to discover its
+            // absence, which is what turned the tagless case below into a panic. ~keep
             serde_tag: Some("kind".to_string()),
             ..enum_def(
                 "SampleChoice",
@@ -1226,6 +1226,14 @@ fn go_enum_representation_agrees_with_the_declaration_gen_enum_type_emits() {
                 )],
             )
         },
+        // The same field shape with NEITHER serde attribute: externally tagged, serde's default. ~keep
+        enum_def(
+            "SampleExternal",
+            vec![variant(
+                "Explicit",
+                vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
+            )],
+        ),
         enum_def(
             "SampleDocument",
             vec![variant("Url", vec![simple_field("url", TypeRef::String)])],
@@ -1261,5 +1269,256 @@ fn go_enum_representation_agrees_with_the_declaration_gen_enum_type_emits() {
         convertible,
         ["json.RawMessage", "string"].into_iter().collect(),
         "only `string` and `json.RawMessage` underlying types accept a Go string conversion"
+    );
+}
+
+/// A Rust enum carrying neither `#[serde(tag = "...")]` nor `#[serde(untagged)]` is externally
+/// tagged — serde's DEFAULT — and serialises as the single-key object `{"Variant": payload}`.
+/// The classifier used to select `TupleTaggedStruct` from field shape alone while the emitter
+/// additionally required a tag, so this ordinary shape aborted the whole generator run through
+/// `.expect("emit_tagged_union_marshalers called for untagged enum")`, naming nothing.
+///
+/// A Go struct of `omitempty` variant pointers keyed by each variant's serde wire name IS that
+/// object, so assert the emitted keys, not merely that nothing panicked. ~keep
+#[test]
+fn externally_tagged_named_tuple_enum_emits_a_single_key_struct_instead_of_panicking() {
+    let enum_def = EnumDef {
+        name: "SampleChoice".to_string(),
+        rust_path: "samplelib::SampleChoice".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Alpha".to_string(),
+                fields: vec![simple_field("_0", TypeRef::Named("SampleAlphaPayload".to_string()))],
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Beta".to_string(),
+                fields: vec![simple_field("_0", TypeRef::Named("SampleBetaPayload".to_string()))],
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    };
+
+    assert_eq!(
+        super::enums::go_enum_representation(&enum_def),
+        GoEnumRepresentation::ExternallyTaggedStruct,
+        "a tagless, non-untagged data enum is externally tagged and must not be routed to the \
+         tag-consuming tuple-union generator"
+    );
+
+    let out = gen_enum_type(&enum_def, &[]);
+
+    assert!(
+        out.contains("type SampleChoice struct {"),
+        "the fixture must actually produce an enum declaration before any claim about its \
+         content means anything; got:\n{out}"
+    );
+    assert!(
+        out.contains("Alpha *SampleAlphaPayload `json:\"Alpha,omitempty\"`"),
+        "the variant key must be the serde wire name serde itself writes; got:\n{out}"
+    );
+    assert!(
+        out.contains("Beta *SampleBetaPayload `json:\"Beta,omitempty\"`"),
+        "every variant needs its own pointer field or that variant cannot round-trip; got:\n{out}"
+    );
+    assert!(
+        !out.contains("MarshalJSON"),
+        "encoding/json already writes exactly the one non-nil key, so a custom marshaler could \
+         only diverge from external tagging; got:\n{out}"
+    );
+    assert!(
+        !out.contains("format_type") && !out.contains("string `json:"),
+        "an externally tagged enum has no discriminator field on the wire; got:\n{out}"
+    );
+}
+
+/// The wire key is `wire_variant_value`, not the snake-cased container-field name the
+/// internally tagged generator uses — for external tagging the key IS the wire form, so
+/// `#[serde(rename_all)]` has to reach it. ~keep
+#[test]
+fn externally_tagged_enum_applies_serde_rename_all_to_the_variant_key() {
+    let enum_def = EnumDef {
+        name: "SampleChoice".to_string(),
+        rust_path: "samplelib::SampleChoice".to_string(),
+        serde_rename_all: Some("snake_case".to_string()),
+        variants: vec![EnumVariant {
+            name: "AlphaOne".to_string(),
+            fields: vec![simple_field("_0", TypeRef::Named("SampleAlphaPayload".to_string()))],
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    };
+
+    let out = gen_enum_type(&enum_def, &[]);
+
+    assert!(
+        out.contains("type SampleChoice struct {"),
+        "expected an emitted struct declaration; got:\n{out}"
+    );
+    assert!(
+        out.contains("AlphaOne *SampleAlphaPayload `json:\"alpha_one,omitempty\"`"),
+        "expected the rename_all-applied wire key; got:\n{out}"
+    );
+}
+
+/// Serde writes a bare `"Variant"` string for a unit variant and a JSON array for a multi-field
+/// tuple variant, and neither fits a field of a single-key struct. Those enums get the raw
+/// passthrough, which round-trips every shape verbatim, rather than a struct that would silently
+/// drop the variant.
+///
+/// `is_passthrough_raw_message_enum` must agree, because `gen_bindings::binding_file` partitions
+/// enums with it and would otherwise reference a `json.RawMessage` type as if it were a string
+/// enum. ~keep
+#[test]
+fn externally_tagged_enum_with_an_unrepresentable_variant_falls_back_to_raw_passthrough() {
+    for (label, extra_variant) in [
+        (
+            "unit variant",
+            EnumVariant {
+                name: "None".to_string(),
+                fields: vec![],
+                ..EnumVariant::default()
+            },
+        ),
+        (
+            "multi-field tuple variant",
+            EnumVariant {
+                name: "Pair".to_string(),
+                fields: vec![
+                    simple_field("_0", TypeRef::Named("SampleAlphaPayload".to_string())),
+                    simple_field("_1", TypeRef::String),
+                ],
+                ..EnumVariant::default()
+            },
+        ),
+    ] {
+        let enum_def = EnumDef {
+            name: "SampleChoice".to_string(),
+            rust_path: "samplelib::SampleChoice".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Alpha".to_string(),
+                    fields: vec![simple_field("_0", TypeRef::Named("SampleAlphaPayload".to_string()))],
+                    ..EnumVariant::default()
+                },
+                extra_variant,
+            ],
+            ..EnumDef::default()
+        };
+
+        assert_eq!(
+            super::enums::go_enum_representation(&enum_def),
+            GoEnumRepresentation::RawMessage,
+            "a {label} has no single-key struct field, so the typed union is not lossless"
+        );
+        assert!(
+            super::enums::is_passthrough_raw_message_enum(&enum_def),
+            "the partition predicate must report the same answer the emitter acted on ({label})"
+        );
+
+        let out = gen_enum_type(&enum_def, &[]);
+        assert!(
+            out.contains("type SampleChoice json.RawMessage"),
+            "expected a raw passthrough declaration for a {label}; got:\n{out}"
+        );
+        assert!(
+            out.contains("func (e SampleChoice) MarshalJSON()")
+                && out.contains("func (e *SampleChoice) UnmarshalJSON("),
+            "the passthrough only round-trips with both marshalers present ({label}); got:\n{out}"
+        );
+    }
+}
+
+/// `#[serde(tag)]` and `#[serde(untagged)]` still reach the tuple-union generator: narrowing the
+/// classifier must not have moved the shapes that already worked. ~keep
+#[test]
+fn tagged_and_untagged_named_tuple_enums_still_select_the_tuple_union_generator() {
+    fn choice(mutate: impl FnOnce(&mut EnumDef)) -> EnumDef {
+        let mut enum_def = EnumDef {
+            name: "SampleChoice".to_string(),
+            rust_path: "samplelib::SampleChoice".to_string(),
+            variants: vec![EnumVariant {
+                name: "Alpha".to_string(),
+                fields: vec![simple_field("_0", TypeRef::Named("SampleAlphaPayload".to_string()))],
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        };
+        mutate(&mut enum_def);
+        enum_def
+    }
+
+    let tagged = choice(|e| e.serde_tag = Some("kind".to_string()));
+    assert_eq!(
+        super::enums::go_enum_representation(&tagged),
+        GoEnumRepresentation::TupleTaggedStruct
+    );
+    let out = gen_enum_type(&tagged, &[]);
+    assert!(
+        out.contains("type SampleChoice struct {"),
+        "expected an emitted struct declaration; got:\n{out}"
+    );
+    assert!(
+        out.contains("Kind string `json:\"kind\"`") && out.contains("switch t.Kind {"),
+        "the internally tagged form keeps its discriminator field and tag-driven marshalers; \
+         got:\n{out}"
+    );
+
+    let untagged = choice(|e| e.serde_untagged = true);
+    assert_eq!(
+        super::enums::go_enum_representation(&untagged),
+        GoEnumRepresentation::TupleTaggedStruct
+    );
+    let out = gen_enum_type(&untagged, &[]);
+    assert!(
+        out.contains("type SampleChoice struct {"),
+        "expected an emitted struct declaration; got:\n{out}"
+    );
+    assert!(
+        !out.contains("string `json:"),
+        "an untagged union carries no discriminator field; got:\n{out}"
+    );
+}
+
+/// `is_passthrough_raw_message_enum` partitions enums for `gen_bindings::binding_file`, so it has
+/// to report what the emitter actually did. It used to restate the classifier's later conditions
+/// while skipping the adjacent-tagged check that runs first, and answered "passthrough" for an
+/// enum `gen_enum_type` emits as a struct — the type was then declared one way and referenced
+/// another. Assert the struct emission first, then the partition that must follow from it. ~keep
+#[test]
+fn adjacent_tagged_enum_with_collection_payloads_is_not_reported_as_a_raw_passthrough() {
+    let enum_def = EnumDef {
+        name: "SampleAdjacent".to_string(),
+        rust_path: "samplelib::SampleAdjacent".to_string(),
+        serde_tag: Some("kind".to_string()),
+        serde_content: Some("value".to_string()),
+        variants: vec![
+            EnumVariant {
+                name: "Many".to_string(),
+                fields: vec![simple_field("_0", TypeRef::Vec(Box::new(TypeRef::String)))],
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "One".to_string(),
+                fields: vec![simple_field("_0", TypeRef::String)],
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    };
+
+    let out = gen_enum_type(&enum_def, &[]);
+    assert!(
+        out.contains("type SampleAdjacent struct"),
+        "expected the adjacent-tagged struct emission; got:\n{out}"
+    );
+    assert_eq!(
+        super::enums::go_enum_representation(&enum_def),
+        GoEnumRepresentation::AdjacentTaggedStruct
+    );
+    assert!(
+        !super::enums::is_passthrough_raw_message_enum(&enum_def),
+        "a type emitted as a struct must not be partitioned as a json.RawMessage passthrough"
     );
 }

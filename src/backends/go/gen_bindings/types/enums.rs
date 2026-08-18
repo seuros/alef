@@ -26,6 +26,8 @@ pub(crate) enum GoEnumRepresentation {
     AdjacentTaggedStruct,
     /// `type X struct { .. }` — [`gen_tuple_tagged_union_type`].
     TupleTaggedStruct,
+    /// `type X struct { .. }` — [`gen_externally_tagged_union_type`].
+    ExternallyTaggedStruct,
     /// `type X interface { .. }` — [`gen_data_enum_type`].
     DataInterface,
 }
@@ -36,7 +38,7 @@ impl GoEnumRepresentation {
         match self {
             Self::UnitString | Self::NewtypeTupleString => "string",
             Self::RawMessage => "json.RawMessage",
-            Self::AdjacentTaggedStruct | Self::TupleTaggedStruct => "struct",
+            Self::AdjacentTaggedStruct | Self::TupleTaggedStruct | Self::ExternallyTaggedStruct => "struct",
             Self::DataInterface => "interface",
         }
     }
@@ -84,14 +86,47 @@ pub(crate) fn go_enum_representation(enum_def: &EnumDef) -> GoEnumRepresentation
     });
 
     if any_tuple_field_is_named_struct {
-        return GoEnumRepresentation::TupleTaggedStruct;
+        // Field shape alone does not pick `TupleTaggedStruct`: `gen_tuple_tagged_union_type`
+        // renders a discriminator field out of `serde_tag` and its marshalers unwrap that tag,
+        // so classifying on shape while the emitter also demands a tag put one decision behind
+        // two conditions and aborted the run on the shape serde reaches by DEFAULT — an enum
+        // carrying neither attribute is externally tagged, which is a different wire form
+        // (`{"Variant": payload}`) and therefore a different generator. ~keep
+        if enum_def.serde_tag.is_some() || enum_def.serde_untagged {
+            return GoEnumRepresentation::TupleTaggedStruct;
+        }
+        if is_externally_tagged_named_union(enum_def) {
+            return GoEnumRepresentation::ExternallyTaggedStruct;
+        }
+        // Externally tagged, but with a variant no single-key struct can carry (a unit variant
+        // serialises as the bare string `"Variant"`; a multi-field tuple variant serialises as
+        // an array). Raw bytes round-trip every one of those forms; a struct would drop them.
+        // [`gen_enum_type`] reports this narrowing, so the classifier stays free of side effects
+        // for the many callers that only ask it a question. ~keep
+        return GoEnumRepresentation::RawMessage;
     }
 
-    if is_passthrough_raw_message_enum(enum_def) {
+    if is_heterogeneous_shape_union(enum_def) {
         return GoEnumRepresentation::RawMessage;
     }
 
     GoEnumRepresentation::NewtypeTupleString
+}
+
+/// Whether every variant of an externally tagged enum is a single-field tuple wrapping a named
+/// type — the only shape [`gen_externally_tagged_union_type`] renders losslessly.
+///
+/// serde's external tagging writes `{"Variant": payload}`, and a Go struct of `omitempty`
+/// pointers keyed by the variant wire names is exactly that object. A unit variant (bare
+/// `"Variant"` string) or a multi-field tuple variant (JSON array) has no place in that struct,
+/// so those enums must not be classified here. ~keep
+fn is_externally_tagged_named_union(enum_def: &EnumDef) -> bool {
+    !enum_def.variants.is_empty()
+        && enum_def.variants.iter().all(|variant| {
+            variant.fields.len() == 1
+                && is_tuple_field(&variant.fields[0])
+                && matches!(&variant.fields[0].ty, TypeRef::Named(_))
+        })
 }
 
 /// Emit the Go declaration for the variant [`go_enum_representation`] selected.
@@ -102,9 +137,21 @@ pub(in crate::backends::go::gen_bindings) fn gen_enum_type(enum_def: &EnumDef, t
     match go_enum_representation(enum_def) {
         GoEnumRepresentation::UnitString => gen_unit_enum_type(enum_def),
         GoEnumRepresentation::NewtypeTupleString => gen_newtype_tuple_enum_type(enum_def),
-        GoEnumRepresentation::RawMessage => gen_passthrough_raw_message_enum(enum_def, text_types),
+        GoEnumRepresentation::RawMessage => {
+            if !is_heterogeneous_shape_union(enum_def) {
+                tracing::warn!(
+                    enum_name = %enum_def.name,
+                    go_type = %go_type_name(&enum_def.name),
+                    "externally tagged enum has a variant no Go struct field can carry (a unit \
+                     variant or a multi-field tuple variant); emitting a json.RawMessage \
+                     passthrough, so the variants are not individually typed in Go"
+                );
+            }
+            gen_passthrough_raw_message_enum(enum_def, text_types)
+        }
         GoEnumRepresentation::AdjacentTaggedStruct => gen_adjacent_tagged_enum_type(enum_def),
         GoEnumRepresentation::TupleTaggedStruct => gen_tuple_tagged_union_type(enum_def),
+        GoEnumRepresentation::ExternallyTaggedStruct => gen_externally_tagged_union_type(enum_def),
         GoEnumRepresentation::DataInterface => gen_data_enum_type(enum_def),
     }
 }
@@ -183,9 +230,18 @@ fn gen_adjacent_tagged_enum_type(enum_def: &EnumDef) -> String {
     )
 }
 
-/// Returns true if this enum should be emitted as a `json.RawMessage` passthrough
-/// type — used for untagged enums with mixed scalar/collection variants.
+/// Returns true if this enum is emitted as a `json.RawMessage` passthrough type.
+///
+/// Delegates to [`go_enum_representation`] rather than restating its conditions: callers
+/// outside this module partition enums with this predicate and must see the same answer the
+/// emitter acted on, or a type is declared one way and referenced another. ~keep
 pub(in crate::backends::go::gen_bindings) fn is_passthrough_raw_message_enum(enum_def: &EnumDef) -> bool {
+    go_enum_representation(enum_def) == GoEnumRepresentation::RawMessage
+}
+
+/// Whether an all-tuple enum with no named-struct payload mixes scalar and collection variants,
+/// so no single Go type can describe the wire value.
+fn is_heterogeneous_shape_union(enum_def: &EnumDef) -> bool {
     let is_data_enum = enum_def.variants.iter().any(|v| !v.fields.is_empty());
     if !is_data_enum {
         return false;
@@ -417,21 +473,89 @@ fn gen_tuple_tagged_union_type(enum_def: &EnumDef) -> String {
 
     out.push_str("}\n\n");
 
-    if is_untagged {
-        emit_untagged_union_marshalers(&mut out, &go_enum_name, enum_def);
+    // Resolve the tag once, here, and hand it to the emitter. The emitter used to re-check it
+    // with `.expect`, so "which marshalers" was decided on `serde_untagged` alone while the
+    // tagged arm additionally required a tag — an enum with neither attribute took this else and
+    // aborted the whole run with no mention of the offending type. `go_enum_representation` now
+    // routes that enum elsewhere, and passing the tag down keeps the two in step. ~keep
+    if let Some(tag_name) = enum_def.serde_tag.as_deref().filter(|_| !is_untagged) {
+        emit_tagged_union_marshalers(&mut out, &go_enum_name, enum_def, tag_name);
     } else {
-        emit_tagged_union_marshalers(&mut out, &go_enum_name, enum_def);
+        emit_untagged_union_marshalers(&mut out, &go_enum_name, enum_def);
     }
 
     out
 }
 
+/// Generate a Go struct for an externally tagged enum — serde's DEFAULT representation, used
+/// whenever neither `#[serde(tag = "...")]` nor `#[serde(untagged)]` is present.
+///
+/// The wire form is a single-key object, `{"Pdf": {..}}`, so a struct of `omitempty` variant
+/// pointers keyed by each variant's serde wire name *is* that representation: `encoding/json`
+/// writes exactly the one non-nil key and reads back exactly the key that was present. No
+/// custom marshalers are emitted because a hand-written pair could only reproduce what the
+/// default already does, and the key must be `wire_variant_value` — the variant name serde
+/// itself writes — not a snake-cased field name, which is what the internally tagged generator
+/// uses for its (wire-invisible) container fields. ~keep
+///
+/// [`is_externally_tagged_named_union`] is the precondition: every variant is a one-field tuple
+/// wrapping a named type.
+fn gen_externally_tagged_union_type(enum_def: &EnumDef) -> String {
+    let mut out = String::with_capacity(1024);
+    let go_enum_name = go_type_name(&enum_def.name);
+    let variant_names: Vec<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
+
+    emit_type_doc(
+        &mut out,
+        &go_enum_name,
+        &enum_def.doc,
+        "is an externally tagged union type: exactly one variant pointer is set, and the JSON \
+         form is a single-key object keyed by that variant's name.",
+    );
+    out.push_str(&crate::backends::go::template_env::render(
+        "tagged_union_struct_header.jinja",
+        context! {
+            go_enum_name => &go_enum_name,
+            variants_list => variant_names.join(", "),
+        },
+    ));
+
+    for variant in &enum_def.variants {
+        let Some(field) = variant.fields.first() else {
+            continue;
+        };
+        let TypeRef::Named(struct_type_name) = &field.ty else {
+            continue;
+        };
+        let doc_lines: Vec<&str> = if variant.doc.is_empty() {
+            vec![]
+        } else {
+            variant.doc.lines().map(|line| line.trim()).collect()
+        };
+        out.push_str(&crate::backends::go::template_env::render(
+            "tagged_union_variant_field.jinja",
+            context! {
+                doc_lines => doc_lines,
+                field_name => to_go_name(&variant.name),
+                struct_type => go_type_name(struct_type_name),
+                json_field_name => crate::codegen::naming::wire_variant_value(
+                    &variant.name,
+                    variant.serde_rename.as_deref(),
+                    enum_def.serde_rename_all.as_deref(),
+                ),
+            },
+        ));
+    }
+
+    out.push_str("}\n");
+    out
+}
+
 /// Emit MarshalJSON / UnmarshalJSON for `#[serde(tag = "...")]` enums.
-fn emit_tagged_union_marshalers(out: &mut String, go_enum_name: &str, enum_def: &EnumDef) {
-    let tag_name = enum_def
-        .serde_tag
-        .as_deref()
-        .expect("emit_tagged_union_marshalers called for untagged enum");
+///
+/// `tag_name` is supplied by the caller that already proved it exists, so this function has no
+/// second opinion on whether the enum is tagged. ~keep
+fn emit_tagged_union_marshalers(out: &mut String, go_enum_name: &str, enum_def: &EnumDef, tag_name: &str) {
     let tag_field_name = to_go_name(tag_name);
 
     out.push_str(&crate::backends::go::template_env::render(
