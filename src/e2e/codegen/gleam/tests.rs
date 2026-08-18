@@ -488,6 +488,11 @@ fn render_gleam_error_file(extra: Vec<Assertion>) -> String {
         &[],
         &[],
         None,
+        // This fixture exercises the error path, not argument lowering, so it deliberately
+        // supplies no IR: `CallIr::default()` is the IrAbsent state, under which the arg
+        // builder must behave exactly as it did before the seam existed. ~keep
+        crate::e2e::codegen::call_ir::CallIr::default(),
+        &[],
     )
 }
 

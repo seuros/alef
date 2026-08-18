@@ -662,6 +662,10 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            // Error-path fixture: no enums and no IR functions, i.e. the IrAbsent state the
+            // typed-argument seam must leave untouched. ~keep
+            &[],
+            &[],
         );
         out
     }
