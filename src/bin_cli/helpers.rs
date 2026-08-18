@@ -789,33 +789,45 @@ pub(crate) fn collect_managed_surface(
     config_path: &std::path::Path,
     base_dir: &std::path::Path,
 ) -> anyhow::Result<(Vec<crate::core::backend::GeneratedFile>, Vec<StageFailure>)> {
-    let mut surface = std::collections::BTreeMap::new();
-    let mut stage_failures = Vec::new();
+    // Every stage below reads the same `&api`/`&config` and returns owned files, so rendering
+    // them is embarrassingly parallel -- and rendering is where the time goes: the two e2e
+    // stages alone emit several thousand files each on a full consumer tree, which is most of
+    // what made a single-path `alef adopt` cost half a minute.
+    //
+    // ABSORPTION is not parallel-safe, and the distinction is the whole point of this shape:
+    // `absorb_stage` is last-wins on a path collision, so the sequence stages are folded into
+    // `surface` is what decides which stage owns a contested path. Render concurrently, fold in
+    // the original order -- `rayon`'s indexed `collect` preserves it. ~keep
+    type StageOutcome = anyhow::Result<(Vec<crate::core::backend::GeneratedFile>, Vec<StageFailure>)>;
+    type Stage<'a> = Box<dyn Fn() -> StageOutcome + Send + Sync + 'a>;
 
-    for (_, files) in crate::cli::pipeline::generate(api, config, languages, false, config_path, false)? {
-        absorb_stage(&mut surface, files);
-    }
     // `generate_service_api` already no-ops when `api.services` is empty, so it is
     // safe to call unconditionally. `generate_public_api` has no such internal
     // guard — mirror `Commands::Generate`'s `config.generate.public_api` gate so
     // this stays a faithful picture of what `alef generate` would produce, not a
     // superset of it. ~keep
-    for (_, files) in crate::cli::pipeline::generate_service_api(api, config, languages)? {
-        absorb_stage(&mut surface, files);
-    }
-    absorb_stage(
-        &mut surface,
-        crate::cli::pipeline::scaffold(api, config, languages, config_path)?,
-    );
-    for (_, files) in crate::cli::pipeline::generate_stubs(api, config, languages)? {
-        absorb_stage(&mut surface, files);
-    }
-    if config.generate.public_api {
-        for (_, files) in crate::cli::pipeline::generate_public_api(api, config, languages, config_path)? {
-            absorb_stage(&mut surface, files);
+    let bindings_stage: Stage<'_> = Box::new(|| {
+        let mut files = Vec::new();
+        for (_, produced) in crate::cli::pipeline::generate(api, config, languages, false, config_path, false)? {
+            files.extend(produced);
         }
-    }
-
+        for (_, produced) in crate::cli::pipeline::generate_service_api(api, config, languages)? {
+            files.extend(produced);
+        }
+        Ok((files, Vec::new()))
+    });
+    let scaffold_stage: Stage<'_> = Box::new(|| {
+        let mut files = crate::cli::pipeline::scaffold(api, config, languages, config_path)?;
+        for (_, produced) in crate::cli::pipeline::generate_stubs(api, config, languages)? {
+            files.extend(produced);
+        }
+        if config.generate.public_api {
+            for (_, produced) in crate::cli::pipeline::generate_public_api(api, config, languages, config_path)? {
+                files.extend(produced);
+            }
+        }
+        Ok((files, Vec::new()))
+    });
     // Both e2e modes, because they emit to different roots (`e2e.output` versus
     // `e2e.registry.output`) and a file can be frozen under either. `generate_e2e`
     // returns its per-backend generator failure alongside the files it did produce
@@ -824,39 +836,30 @@ pub(crate) fn collect_managed_surface(
     // and every later stage as collateral): it is absorbed into `stage_failures`
     // instead, and every caller of this function is required to look at that list --
     // see this function's own doc for why neither consumer may drop it silently. ~keep
-    if let Some(e2e_config) = &config.e2e {
+    let e2e_local_stage: Stage<'_> = Box::new(|| {
+        let Some(e2e_config) = &config.e2e else {
+            return Ok((Vec::new(), Vec::new()));
+        };
         let (files, generator_error) =
             crate::e2e::generate_e2e(config, e2e_config, None, &api.types, &api.enums, &api.functions)
                 .context("failed to render the e2e stage of alef's managed output")?;
-        if let Some(error) = generator_error {
-            stage_failures.push(StageFailure {
-                stage: "e2e",
-                message: format!("{error:#}"),
-                paths: files.iter().map(|file| file.path.clone()).collect(),
-            });
-        }
-        absorb_stage(&mut surface, files);
+        Ok(stage_failure_for("e2e", generator_error, files))
+    });
+    let e2e_registry_stage: Stage<'_> = Box::new(|| {
+        let Some(e2e_config) = &config.e2e else {
+            return Ok((Vec::new(), Vec::new()));
+        };
         let mut registry_config = e2e_config.clone();
         registry_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
         let (files, generator_error) =
             crate::e2e::generate_e2e(config, &registry_config, None, &api.types, &api.enums, &api.functions)
                 .context("failed to render the registry-mode test-app stage of alef's managed output")?;
-        if let Some(error) = generator_error {
-            stage_failures.push(StageFailure {
-                stage: "test-apps (registry mode)",
-                message: format!("{error:#}"),
-                paths: files.iter().map(|file| file.path.clone()).collect(),
-            });
-        }
-        absorb_stage(&mut surface, files);
-    }
-
-    let readme_languages = crate::readme::expand_configured_readme_languages(config, languages);
-    absorb_stage(
-        &mut surface,
-        crate::cli::pipeline::readme(api, config, &readme_languages)?,
-    );
-
+        Ok(stage_failure_for("test-apps (registry mode)", generator_error, files))
+    });
+    let readme_stage: Stage<'_> = Box::new(|| {
+        let readme_languages = crate::readme::expand_configured_readme_languages(config, languages);
+        Ok((crate::cli::pipeline::readme(api, config, &readme_languages)?, Vec::new()))
+    });
     // Neither `alef adopt` nor `alef verify` asks whether a snippet compiles, type-checks, or
     // runs -- they ask what file surface alef's configuration owns, and that compile step
     // produces no files (see `generate_docs_stage_without_snippet_compile_validation`'s doc).
@@ -864,21 +867,63 @@ pub(crate) fn collect_managed_surface(
     // thousands of per-backend toolchain subprocess invocations to answer an ownership question
     // that never looked at their result, since a docs-stage `Err` is already downgraded to the
     // debug log below regardless of which sub-step produced it. ~keep
-    let doc_languages = resolve_doc_languages(config, None)?;
-    let (doc_files, doc_result) = crate::docs::generate_docs_stage_without_snippet_compile_validation(
-        api,
-        config,
-        &doc_languages,
-        None,
-        base_dir,
-    );
-    if let Err(error) = doc_result {
-        tracing::debug!("docs stage reported {error:#}; using the pages it rendered before the failure");
+    let docs_stage: Stage<'_> = Box::new(|| {
+        let doc_languages = resolve_doc_languages(config, None)?;
+        let (doc_files, doc_result) = crate::docs::generate_docs_stage_without_snippet_compile_validation(
+            api,
+            config,
+            &doc_languages,
+            None,
+            base_dir,
+        );
+        if let Err(error) = doc_result {
+            tracing::debug!("docs stage reported {error:#}; using the pages it rendered before the failure");
+        }
+        Ok((doc_files, Vec::new()))
+    });
+
+    let stages = [
+        bindings_stage,
+        scaffold_stage,
+        e2e_local_stage,
+        e2e_registry_stage,
+        readme_stage,
+        docs_stage,
+    ];
+    let outcomes: Vec<StageOutcome> = {
+        use rayon::prelude::*;
+        stages.par_iter().map(|stage| stage()).collect()
+    };
+
+    let mut surface = std::collections::BTreeMap::new();
+    let mut stage_failures = Vec::new();
+    for outcome in outcomes {
+        let (files, failures) = outcome?;
+        stage_failures.extend(failures);
+        absorb_stage(&mut surface, files);
     }
-    absorb_stage(&mut surface, doc_files);
 
     Ok((surface.into_values().collect(), stage_failures))
 }
+
+/// Pair a stage's rendered files with the [`StageFailure`] its generator reported alongside them,
+/// if any. Split out only so the two e2e stage closures state the pairing once instead of twice.
+fn stage_failure_for(
+    stage: &'static str,
+    generator_error: Option<anyhow::Error>,
+    files: Vec<crate::core::backend::GeneratedFile>,
+) -> (Vec<crate::core::backend::GeneratedFile>, Vec<StageFailure>) {
+    let failures = generator_error
+        .map(|error| StageFailure {
+            stage,
+            message: format!("{error:#}"),
+            paths: files.iter().map(|file| file.path.clone()).collect(),
+        })
+        .into_iter()
+        .collect();
+    (files, failures)
+}
+
 
 /// Multi-crate variant of [`verify_walk`].
 ///

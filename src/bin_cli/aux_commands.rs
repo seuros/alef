@@ -123,6 +123,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 managed.extend(commands::adopt::managed_outputs(&surface, &base_dir));
             }
 
+            // One target's refusal must not silently cancel the other fifty-three. `run` bails
+            // whenever a target resolves to nothing adoptable -- no match, or (far more commonly on
+            // a repo-wide sweep) only create-once seeds -- and propagating that straight out of the
+            // loop meant a single `config.m4` early in a sorted list of 54 refused paths ended the
+            // command before one file was stamped, with an exit code that named only that path. Each
+            // target is now reported independently and the run fails at the end iff any did. ~keep
+            let mut target_failures: Vec<(String, anyhow::Error)> = Vec::new();
             for target in &targets {
                 let options = commands::adopt::AdoptOptions {
                     target: target.clone(),
@@ -131,7 +138,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     converged_only,
                     clobber_create_once_seeds,
                 };
-                let report = commands::adopt::run(&options, &managed)?;
+                let report = match commands::adopt::run(&options, &managed) {
+                    Ok(report) => report,
+                    Err(error) => {
+                        target_failures.push((target.clone(), error));
+                        continue;
+                    }
+                };
 
                 if !report.skipped_create_once.is_empty() {
                     // Every path, never a count, and on stdout with the drifted diffs rather
@@ -210,6 +223,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         );
                     }
                 }
+            }
+            if !target_failures.is_empty() {
+                for (target, error) in &target_failures {
+                    tracing::error!("{target}: {error:#}");
+                }
+                anyhow::bail!(
+                    "{} of {} adopt target(s) could not be adopted; each is reported above",
+                    target_failures.len(),
+                    targets.len()
+                );
             }
             Ok(None)
         }

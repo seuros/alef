@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef adopt` no longer lets one unusable target cancel every remaining one.** `run` bails whenever a
+  target resolves to nothing adoptable — no match, or (far more common on a repo-wide sweep) only
+  create-once seeds — and that error propagated straight out of the per-target loop. A single `config.m4`
+  early in a sorted list of 54 refused paths therefore ended the command before one file was stamped,
+  reporting only that path. Each target is now reported independently and the run fails at the end iff
+  any did.
+
+### Changed
+
+- **`alef adopt` and `alef verify` render the managed surface in parallel.** Every stage reads the same
+  IR and config and returns owned files, so rendering them concurrently is safe; absorption stays strictly
+  sequential because `absorb_stage` is last-wins on a path collision and the fold order is what decides
+  which stage owns a contested path. The two e2e stages alone emit several thousand files each on a full
+  consumer tree, which was most of what made a single-path `alef adopt` cost half a minute.
+
 - **An uppercase `.R` script now receives the generated header.** `.R` is the conventional extension for an R
   script and alef emits `install.R`, `run_tests.R` and every `packages/r/R/*.R` with `generated_header: true`, but
   the emit predicate matched a lowercase `"r"` only — so every one of them was written unstamped and then frozen
