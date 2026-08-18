@@ -759,12 +759,27 @@ fn finalize_result(
         message,
         duration_ms,
     } = outcome;
+    // A validator's toolchain can run to completion and still report a `Fail` whose message is a
+    // missing import/package/symbol rather than a defect in the snippet — the shape every
+    // `is_dependency_error` implementation recognizes. Below `Compile` (i.e. `Syntax`), that is
+    // expected: syntax checking was never supposed to resolve anything, so it stays a `Pass`. At
+    // `Compile`/`TypeCheck`/`Run`, it means this run's environment could not back the validation
+    // it just attempted — most commonly because `alef build` never produced the artifact the
+    // snippet links or imports against (see `bin_cli::all_commands::warn_if_snippet_validation_needs_build`).
+    // Reported as `Unavailable` with `unresolved_dependency` set, not `Fail`: a `Fail` here would
+    // be indistinguishable from a genuine emitter bug, which is exactly the defect this
+    // reclassification exists to close. ~keep
+    let mut unresolved_dependency = false;
     if status == SnippetStatus::Fail
-        && effective_level == ValidationLevel::Syntax
         && let Some(error_output) = &message
         && validator.is_dependency_error(error_output)
     {
-        status = SnippetStatus::Pass;
+        if effective_level == ValidationLevel::Syntax {
+            status = SnippetStatus::Pass;
+        } else {
+            status = SnippetStatus::Unavailable;
+            unresolved_dependency = true;
+        }
     }
 
     let classification = classify_result(snippet, validator, config, effective_level, status);
@@ -785,6 +800,13 @@ fn finalize_result(
         Some(format!(
             "requested {}, validated at {} ({} validator caps at {})",
             config.level, effective_level, snippet.language, effective_level
+        ))
+    } else if unresolved_dependency {
+        Some(format!(
+            "could not validate at {effective_level}: {} toolchain ran but reported a missing dependency or build \
+             artifact -- run `alef build` first if this crate validates snippets against built artifacts: {}",
+            snippet.language,
+            message.as_deref().unwrap_or("<no validator output>")
         ))
     } else {
         message
@@ -869,6 +891,7 @@ fn result(
         duration_ms,
         capability_capped: false,
         downgrade_reason: None,
+        unresolved_dependency: false,
     }
 }
 

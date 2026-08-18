@@ -58,6 +58,7 @@ fn result(id: &str, language: Language, status: SnippetStatus) -> ValidationResu
         duration_ms: 0,
         capability_capped: false,
         downgrade_reason: None,
+        unresolved_dependency: false,
     }
 }
 

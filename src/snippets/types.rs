@@ -350,6 +350,16 @@ pub struct ValidationResult {
     /// — see the `debug_assert!` there. ~keep
     #[serde(default)]
     pub downgrade_reason: Option<DowngradeReason>,
+    /// True when this `Unavailable` result started as a validator `Fail` at `Compile`,
+    /// `TypeCheck`, or `Run` whose message the validator's own `is_dependency_error` recognized
+    /// as a missing import/package/symbol rather than a defect in the snippet. That shape is
+    /// what a toolchain reports when the environment never built the artifact the snippet links
+    /// or imports against — before this field existed, indistinguishable from a genuinely broken
+    /// snippet, because both landed in `Fail`. `false` for every other result, including an
+    /// ordinary toolchain-missing `Unavailable`, so it names one specific cause rather than
+    /// standing in for the whole status. Set only by `runner::finalize_result`. ~keep
+    #[serde(default)]
+    pub unresolved_dependency: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -375,6 +385,13 @@ pub struct RunSummary {
     /// `alef e2e generate` emits, which stamps `level: typecheck` unconditionally. ~keep
     #[serde(default)]
     pub declared_capped: usize,
+    /// Subset of `unavailable`: results reclassified from `Fail` to `Unavailable` because their
+    /// message was dependency-shaped at a level above `Syntax` — see
+    /// `ValidationResult::unresolved_dependency`. Never counted in `failed`, `errors`, or any
+    /// other bucket; always `<= unavailable`. Reported separately from a plain toolchain-missing
+    /// `Unavailable` because the remediation differs: install a toolchain vs. run `alef build`. ~keep
+    #[serde(default)]
+    pub unresolved_dependency: usize,
     pub results: Vec<ValidationResult>,
 }
 
@@ -392,6 +409,7 @@ impl RunSummary {
             unavailable: 0,
             capability_capped: 0,
             declared_capped: 0,
+            unresolved_dependency: 0,
             results,
         };
 
@@ -401,6 +419,9 @@ impl RunSummary {
             }
             if result.downgrade_reason == Some(DowngradeReason::Declared) {
                 summary.declared_capped += 1;
+            }
+            if result.unresolved_dependency {
+                summary.unresolved_dependency += 1;
             }
             match result.status {
                 SnippetStatus::Pass => summary.passed += 1,
@@ -423,7 +444,70 @@ impl RunSummary {
 
 #[cfg(test)]
 mod tests {
-    use super::{SideEffectClass, SnippetAnnotationKind, ValidationLevel};
+    use super::{
+        Language, RunSummary, SideEffectClass, Snippet, SnippetAnnotationKind, SnippetMetadata, SnippetStatus,
+        SourceOrigin, ValidationLevel, ValidationResult,
+    };
+
+    fn result(status: SnippetStatus, unresolved_dependency: bool) -> ValidationResult {
+        ValidationResult {
+            snippet: Snippet {
+                id: None,
+                path: "example.md".into(),
+                language: Language::Go,
+                title: None,
+                code: "package main".into(),
+                start_line: 1,
+                block_index: 0,
+                annotation: None,
+                metadata: SnippetMetadata::default(),
+                source_origin: SourceOrigin {
+                    path: "example.md".into(),
+                    line: 1,
+                    block_index: 0,
+                },
+            },
+            status,
+            level: ValidationLevel::Compile,
+            requested_level: ValidationLevel::Compile,
+            effective_level: ValidationLevel::Compile,
+            message: None,
+            duration_ms: 0,
+            capability_capped: false,
+            downgrade_reason: None,
+            unresolved_dependency,
+        }
+    }
+
+    /// The reconciliation the fix promises: `unresolved_dependency` is always a subset of
+    /// `unavailable`, never overlaps `failed`/`errors`, and every top-level bucket still sums to
+    /// `total` — so a reader never has to trust the count, only add it up. ~keep
+    #[test]
+    fn unresolved_dependency_is_a_reconcilable_subset_of_unavailable() {
+        let summary = RunSummary::from_results(vec![
+            result(SnippetStatus::Unavailable, true),
+            result(SnippetStatus::Unavailable, false),
+            result(SnippetStatus::Fail, false),
+            result(SnippetStatus::Pass, false),
+        ]);
+
+        assert_eq!(summary.total, 4);
+        assert_eq!(summary.unavailable, 2);
+        assert_eq!(summary.unresolved_dependency, 1);
+        assert!(summary.unresolved_dependency <= summary.unavailable);
+        assert_eq!(summary.failed, 1);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(
+            summary.total,
+            summary.passed
+                + summary.downgraded
+                + summary.failed
+                + summary.skipped
+                + summary.errors
+                + summary.unavailable
+        );
+        assert!(summary.has_failures());
+    }
 
     #[test]
     fn validation_level_parses_typecheck_aliases() {
