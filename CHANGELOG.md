@@ -25,6 +25,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Snippet batch groups and session preparation now run concurrently.** Batch groups holding different
+  session locks were dispatched from a plain sequential loop, so the whole pass cost the sum of every
+  language rather than the slowest one; group results are now merged back at their snippet positions
+  after concurrent dispatch. Session preparation was likewise serial — sixteen languages meant sixteen
+  `pnpm build` / `mvn package` / `cargo build --release` hooks back to back before a single snippet was
+  validated. Preparation now parallelizes across distinct working directories only, because two sessions
+  sharing one must not run their `before` hooks at the same time, and the scratch purge still runs
+  strictly between the resolve and activate phases (it needs the complete set of live fingerprints).
+- **The Rust snippet batch reuses a persistent, fingerprint-keyed `CARGO_TARGET_DIR`.** It allocated a
+  fresh scratch directory per run with no target directory set, so `cargo check` recompiled the path
+  dependency and its entire transitive tree from cold on every single run.
+- **`session_fingerprint` no longer hashes build output.** Its exclusion list covered six directories and
+  missed `dist`, `bin`, `obj`, `_build`, `vendor`, `Pods`, `.gradle`, `.next`, `.dart_tool`, `.zig-cache`
+  and `__pycache__`, so a repo with built artifacts hashed hundreds of megabytes per session per run.
+  Hashing is now parallel over a path-sorted file list, which keeps the digest stable across runs — a
+  fingerprint that varies invalidates the whole cache silently.
+- **Subprocess waiting backs off from 1ms instead of polling on a fixed 50ms sleep**, removing ~25ms of
+  pure sleep per subprocess. Timeout semantics are unchanged: the final sleep is clamped to the remaining
+  budget.
+- **The docs snippet pass reads the cache it writes.** It built its `RunnerConfig` from a default with
+  `changed_only: false` while setting `cache_dir`, so every run wrote an entry per snippet and read none
+  back — a guaranteed 100% miss.
 - **Java, Kotlin and C# snippets validate in one compiler invocation per language instead of one per
   snippet.** Java and Kotlin collapse a JVM startup per snippet into one; C# collapses a `dotnet build`
   per snippet into one. Measured on 20 snippets: `javac` 5.44s to 0.23s, `kotlinc` ~76s to 4.86s,

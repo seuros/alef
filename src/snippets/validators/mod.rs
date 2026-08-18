@@ -362,21 +362,41 @@ trait WaitTimeout {
     fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
 }
 
+/// The first gap between `try_wait` polls. A fixed 50ms interval charged every subprocess about
+/// 25ms of pure sleep on average — invisible for one `cargo check`, tens of seconds across a run
+/// with thousands of snippets, because most snippet toolchain invocations finish in single-digit
+/// milliseconds. ~keep
+const INITIAL_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
+
+/// The ceiling the backoff grows to, so a genuinely long compile still costs at most one wakeup
+/// per 50ms rather than a thousand. ~keep
+const MAX_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Doubles a poll interval up to [`MAX_WAIT_POLL_INTERVAL`].
+fn next_poll_interval(current: std::time::Duration) -> std::time::Duration {
+    current
+        .checked_mul(2)
+        .unwrap_or(MAX_WAIT_POLL_INTERVAL)
+        .min(MAX_WAIT_POLL_INTERVAL)
+}
+
 impl WaitTimeout for std::process::Child {
     fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
         let start = std::time::Instant::now();
-        let poll_interval = std::time::Duration::from_millis(50);
+        let mut poll_interval = INITIAL_WAIT_POLL_INTERVAL;
 
         loop {
             if let Some(status) = self.try_wait()? {
                 return Ok(Some(status));
             }
 
-            if start.elapsed() >= timeout {
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
                 return Ok(None);
             }
 
-            std::thread::sleep(poll_interval);
+            std::thread::sleep(poll_interval.min(timeout - elapsed));
+            poll_interval = next_poll_interval(poll_interval);
         }
     }
 }
@@ -389,6 +409,58 @@ mod tests {
     fn sanitized_environment_preserves_go_dependency_cache_paths() {
         assert!(super::SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOMODCACHE"));
         assert!(super::SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOPATH"));
+    }
+
+    /// The backoff has to start far below the old fixed 50ms floor and still stop growing, so a
+    /// short command returns almost immediately while a long compile is not polled a thousand
+    /// times a second. ~keep
+    #[test]
+    fn the_wait_backoff_starts_at_one_millisecond_and_caps_at_fifty() {
+        assert_eq!(super::INITIAL_WAIT_POLL_INTERVAL, Duration::from_millis(1));
+
+        let intervals = std::iter::successors(Some(super::INITIAL_WAIT_POLL_INTERVAL), |current| {
+            Some(super::next_poll_interval(*current))
+        })
+        .take(8)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            intervals,
+            vec![
+                Duration::from_millis(1),
+                Duration::from_millis(2),
+                Duration::from_millis(4),
+                Duration::from_millis(8),
+                Duration::from_millis(16),
+                Duration::from_millis(32),
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            ]
+        );
+    }
+
+    /// Every subprocess used to pay one full 50ms sleep before its first successful `try_wait`,
+    /// which is the whole cost this backoff removes — with thousands of snippets it dominated the
+    /// wall clock of commands that themselves take single-digit milliseconds. ~keep
+    const TRIVIAL_COMMAND_RUNS: u32 = 20;
+
+    #[test]
+    fn short_commands_do_not_pay_the_old_fixed_poll_interval() {
+        let started = Instant::now();
+        for _ in 0..TRIVIAL_COMMAND_RUNS {
+            let mut command = std::process::Command::new("sh");
+            command.args(["-c", "exit 0"]);
+            let (success, _) = super::run_command(&mut command, 5).expect("trivial command");
+            assert!(success);
+        }
+
+        let elapsed = started.elapsed();
+        let old_floor = Duration::from_millis(50) * TRIVIAL_COMMAND_RUNS;
+        assert!(
+            elapsed < old_floor / 2,
+            "{TRIVIAL_COMMAND_RUNS} trivial commands took {elapsed:?}, at least half the {old_floor:?} the fixed \
+             50ms poll interval alone used to cost"
+        );
     }
 
     #[test]

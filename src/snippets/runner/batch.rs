@@ -5,7 +5,7 @@ use super::{
 use crate::snippets::error::Result;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Snippet, SnippetStatus, ValidationLevel, ValidationResult};
-use crate::snippets::validators::{SnippetValidator, ValidatorRegistry};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, ValidatorRegistry};
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -102,7 +102,10 @@ fn group_batchable_snippets(
 ///
 /// Each group returns its own `(index, result)` pairs rather than writing into a shared `Vec`, so
 /// the position-indexed merge stays a single-threaded step the parallelism cannot race. ~keep
-fn dispatch_groups(context: &BatchContext<'_>, groups: BTreeMap<BatchKey, Vec<usize>>) -> Vec<(usize, ValidationResult)> {
+fn dispatch_groups(
+    context: &BatchContext<'_>,
+    groups: BTreeMap<BatchKey, Vec<usize>>,
+) -> Vec<(usize, ValidationResult)> {
     // A rayon worker does not inherit the calling thread's current span (see `run_validation`'s
     // note on `pool.install`), so every group's Starting/Finished pair would lose its span context
     // the moment the groups stopped running on the caller's thread. ~keep
@@ -122,7 +125,10 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
     let (language, session_target, level) = key;
     let validator = context.registry.get(*language).expect("batch group validator");
     let session = session_target.as_deref().and_then(|value| context.sessions.get(value));
-    let batch_snippets = indices.iter().map(|index| &context.snippets[*index]).collect::<Vec<_>>();
+    let batch_snippets = indices
+        .iter()
+        .map(|index| &context.snippets[*index])
+        .collect::<Vec<_>>();
     tracing::info!(
         language = %language,
         snippet_count = batch_snippets.len(),
@@ -130,7 +136,14 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         "Starting batched snippet validation"
     );
     let started = Instant::now();
-    let batch = run_batch(context, validator, session, session_target.as_deref(), *level, &batch_snippets);
+    let batch = run_batch(
+        context,
+        validator,
+        session,
+        session_target.as_deref(),
+        *level,
+        &batch_snippets,
+    );
     // `supports_batching` only screens out languages that never batch; a validator that
     // does support it (rust) can still decline a specific group — e.g. `Run` snippets, which
     // must execute one at a time — and return `None` here. Every `Starting` above must reach
@@ -152,7 +165,16 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         duration_ms,
         "Finished batched snippet validation"
     );
-    finalize_group(context, validator, session, *level, &batch_snippets, values, indices, duration_ms)
+    finalize_group(
+        context,
+        validator,
+        session,
+        *level,
+        &batch_snippets,
+        values,
+        indices,
+        duration_ms,
+    )
 }
 
 /// Invokes the group's validator, holding the session's lock for the whole invocation when the
@@ -164,8 +186,9 @@ fn run_batch(
     session_target: Option<&str>,
     level: ValidationLevel,
     batch_snippets: &[&Snippet],
-) -> Option<Result<Vec<(SnippetStatus, Option<String>)>>> {
-    let validation = || validator.validate_batch_in_session(batch_snippets, level, context.config.timeout_secs, session);
+) -> Option<Result<BatchValidation>> {
+    let validation =
+        || validator.validate_batch_in_session(batch_snippets, level, context.config.timeout_secs, session);
     match session_target.and_then(|value| context.session_locks.get(value)) {
         Some(lock) => lock.lock().ok().and_then(|_guard| validation()),
         None => validation(),
@@ -174,28 +197,31 @@ fn run_batch(
 
 /// Normalizes a batch validator's return into exactly one status per snippet, so a validator that
 /// miscounts or fails outright still resolves every snippet the group claimed.
-fn batch_statuses(
-    batch: Result<Vec<(SnippetStatus, Option<String>)>>,
-    expected: usize,
-) -> Vec<(SnippetStatus, Option<String>)> {
+fn batch_statuses(batch: Result<BatchValidation>, expected: usize) -> BatchValidation {
     match batch {
         Ok(values) if values.len() == expected => values,
         Ok(values) => {
-            let message = format!("batch validator returned {} results for {expected} snippets", values.len());
+            let message = format!(
+                "batch validator returned {} results for {expected} snippets",
+                values.len()
+            );
             vec![(SnippetStatus::Error, Some(message)); expected]
         }
         Err(error) => vec![(SnippetStatus::Error, Some(error.to_string())); expected],
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "one call site; splitting it further would only move the arguments")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site; splitting it further would only move the arguments"
+)]
 fn finalize_group(
     context: &BatchContext<'_>,
     validator: &dyn SnippetValidator,
     session: Option<&ValidationSession>,
     level: ValidationLevel,
     batch_snippets: &[&Snippet],
-    values: Vec<(SnippetStatus, Option<String>)>,
+    values: BatchValidation,
     indices: &[usize],
     duration_ms: u64,
 ) -> Vec<(usize, ValidationResult)> {

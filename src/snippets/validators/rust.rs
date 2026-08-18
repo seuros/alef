@@ -35,15 +35,25 @@ impl RustValidator {
             std::fs::write(bin_dir.join(filename), Self::wrap_if_fragment(&snippet.code))?;
         }
 
+        let mut command = Self::batch_check_command(dir.path(), session);
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::batch_results(&filenames, success, &output))
+    }
+
+    /// The `cargo check` invocation a batch runs, extracted so the environment it inherits is
+    /// directly assertable. `CARGO_TARGET_DIR` is the load-bearing part: the check project itself
+    /// lives in a scratch directory that is deleted after every run, so without a target directory
+    /// that outlives it, every run recompiled the session's path dependency and its whole
+    /// transitive tree from cold. [`ValidationSession::apply_environment`] supplies it. ~keep
+    fn batch_check_command(scratch: &Path, session: Option<&ValidationSession>) -> std::process::Command {
         let mut command = std::process::Command::new("cargo");
         command
             .args(["check", "--bins", "--keep-going", "--message-format=json"])
-            .current_dir(dir.path());
+            .current_dir(scratch);
         if let Some(session) = session {
             session.apply_environment(&mut command);
         }
-        let (success, output) = run_command(&mut command, timeout_secs)?;
-        Ok(Self::batch_results(&filenames, success, &output))
+        command
     }
 
     fn batch_results(filenames: &[String], success: bool, output: &str) -> Vec<(SnippetStatus, Option<String>)> {
@@ -603,6 +613,63 @@ mod tests {
         );
 
         assert!(RustValidator::additional_dependencies(&session).is_err());
+    }
+
+    /// The defect: the batch check project is written into a scratch directory that is removed
+    /// after the run, so with no target directory outliving it, `cargo check` rebuilt the session's
+    /// path dependency and every transitive dependency from cold on every single run. The target
+    /// directory must therefore sit outside the scratch tree and be keyed by the session
+    /// fingerprint, so two sessions cannot compile into each other's artifacts. ~keep
+    #[test]
+    fn the_batch_check_reuses_a_persistent_target_directory_outside_the_scratch_tree() {
+        let project = tempfile::tempdir().expect("project directory");
+        let scratch = tempfile::tempdir().expect("scratch directory");
+        let session = ValidationSession {
+            language: Language::Rust,
+            working_directory: project.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "neutral-project".into(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+
+        let command = RustValidator::batch_check_command(scratch.path(), Some(&session));
+
+        let target_dir = command
+            .get_envs()
+            .find_map(|(name, value)| (name == "CARGO_TARGET_DIR").then_some(value))
+            .expect("the batch check must set CARGO_TARGET_DIR")
+            .expect("CARGO_TARGET_DIR must have a value");
+        assert_eq!(std::path::Path::new(target_dir), session.cargo_target_directory());
+        assert!(
+            !std::path::Path::new(target_dir).starts_with(scratch.path()),
+            "a target directory inside the scratch tree is deleted with it: {}",
+            std::path::Path::new(target_dir).display()
+        );
+    }
+
+    /// Two sessions must never share compiled artifacts: they can link different path
+    /// dependencies, different features and different dependency versions into a package with the
+    /// same name. ~keep
+    #[test]
+    fn two_sessions_do_not_share_a_cargo_target_directory() {
+        let project = tempfile::tempdir().expect("project directory");
+        let first = ValidationSession {
+            language: Language::Rust,
+            working_directory: project.path().to_path_buf(),
+            manifest: None,
+            fingerprint: "fingerprint-one".into(),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let mut second = first.clone();
+        second.fingerprint = "fingerprint-two".into();
+
+        assert_ne!(first.cargo_target_directory(), second.cargo_target_directory());
     }
 
     #[test]
