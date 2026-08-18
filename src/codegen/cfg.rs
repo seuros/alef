@@ -49,11 +49,20 @@ pub fn collect_cfg_feature_names(cfg_str: &str, out: &mut BTreeSet<String>) {
 }
 
 /// Walk the full [`ApiSurface`] and return the set of feature names referenced
-/// by any cfg attribute on a type, field, method, enum variant, or top-level function.
+/// by any cfg attribute on a type, field, method, enum variant, service, or
+/// top-level function.
 ///
 /// Methods count: a Rust-emitting backend re-emits a gated method's `#[cfg(feature = "X")]`
 /// verbatim into its binding crate, so `X` must exist in that crate's `[features]` table or
 /// the build fails with `unexpected cfg condition value: X`. ~keep
+///
+/// Services count for the same reason: `ServiceDef` carries its own `cfg`, and its
+/// `constructor`/`configurators` are `MethodDef`s that carry theirs — see
+/// `ApiSurface::with_cfg_filtered_deep`, which drops a cfg-gated service the same way it drops a
+/// cfg-gated type/enum/function/method, and `backends::ffi::gen_bindings::helpers::cbindgen_feature_defines`,
+/// which reads `ServiceDef::cfg` for the FFI header's `#if` guards. A backend that re-emits a
+/// gated service's constructor or configurator gate into its own binding crate needs `X` declared
+/// here for the same reason a gated method does. ~keep
 ///
 /// The set is sorted (via `BTreeSet`) so the resulting Cargo.toml is stable
 /// across regenerations.
@@ -115,6 +124,22 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
     for func in &api.functions {
         if let Some(cfg) = &func.cfg {
             collect_cfg_feature_names(cfg, &mut out);
+        }
+    }
+    for service in &api.services {
+        if !is_host(&service.rust_path) {
+            continue;
+        }
+        if let Some(cfg) = &service.cfg {
+            collect_cfg_feature_names(cfg, &mut out);
+        }
+        if let Some(cfg) = &service.constructor.cfg {
+            collect_cfg_feature_names(cfg, &mut out);
+        }
+        for configurator in &service.configurators {
+            if let Some(cfg) = &configurator.cfg {
+                collect_cfg_feature_names(cfg, &mut out);
+            }
         }
     }
     out
@@ -482,6 +507,78 @@ mod tests {
 
         let want: BTreeSet<String> = ["mime", "sniff", "streaming"].into_iter().map(String::from).collect();
         assert_eq!(collect_cfg_features(&api), want);
+    }
+
+    /// A Rust-emitting backend that re-emits a gated service's constructor or configurator gate
+    /// (mirroring how it already re-emits a gated method's) needs `X` declared in the manifest for
+    /// the same `unexpected cfg condition value` reason `collect_cfg_features_includes_method_gates`
+    /// covers for methods. `ServiceDef` and its `constructor`/`configurators` `MethodDef`s were
+    /// previously not walked at all, unlike `backends::ffi::gen_bindings::helpers::cbindgen_feature_defines`,
+    /// which already reads `ServiceDef::cfg` for the FFI header's `#if` guards — this test pins the
+    /// shared helper to the same coverage. ~keep
+    #[test]
+    fn collect_cfg_features_includes_service_and_configurator_gates() {
+        use crate::core::ir::{MethodDef, ServiceDef};
+
+        let api = ApiSurface {
+            crate_name: "mylib".to_string(),
+            services: vec![ServiceDef {
+                name: "ClientConfig".to_string(),
+                rust_path: "mylib::client::ClientConfig".to_string(),
+                constructor: MethodDef {
+                    name: "new".to_string(),
+                    ..Default::default()
+                },
+                configurators: vec![
+                    MethodDef {
+                        name: "with_timeout".to_string(),
+                        ..Default::default()
+                    },
+                    MethodDef {
+                        name: "with_tower_layer".to_string(),
+                        cfg: Some(r#"feature = "tower""#.to_string()),
+                        ..Default::default()
+                    },
+                ],
+                registrations: vec![],
+                entrypoints: vec![],
+                doc: String::new(),
+                cfg: None,
+            }],
+            ..Default::default()
+        };
+
+        let want: BTreeSet<String> = ["tower".to_string()].into_iter().collect();
+        assert_eq!(collect_cfg_features(&api), want);
+    }
+
+    /// A service merged from a foreign `[[crates.source_crates]]` crate must not forward its cfg
+    /// to the host crate's `[features]` table, for the same reason a merged type/enum doesn't
+    /// (see `collect_cfg_features_excludes_external_source_crate_cfgs`) — forwarding would
+    /// reference a feature the host crate does not define.
+    #[test]
+    fn collect_cfg_features_excludes_external_source_crate_service_cfgs() {
+        use crate::core::ir::{MethodDef, ServiceDef};
+
+        let api = ApiSurface {
+            crate_name: "hostlib".to_string(),
+            services: vec![ServiceDef {
+                name: "OtherService".to_string(),
+                rust_path: "otherlib::OtherService".to_string(),
+                constructor: MethodDef::default(),
+                configurators: vec![],
+                registrations: vec![],
+                entrypoints: vec![],
+                doc: String::new(),
+                cfg: Some(r#"feature = "foreign-only""#.to_string()),
+            }],
+            ..Default::default()
+        };
+
+        assert!(
+            collect_cfg_features(&api).is_empty(),
+            "a foreign-owned service's cfg must not forward to the host crate"
+        );
     }
 
     #[test]

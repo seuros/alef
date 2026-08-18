@@ -584,6 +584,88 @@ mod feature_cfg_tests {
         toml::from_str::<toml::Value>(&file.content).expect("generated Cargo.toml must be valid TOML");
     }
 
+    /// End-to-end regression for the two derivation sites that previously disagreed: the dart
+    /// crate's `lib.rs` (via `bridge_fn::emit_bridge_fn`, which renders `f.cfg` verbatim as
+    /// `#[cfg(...)]`) and its `Cargo.toml` `[features]` table (via `cargo::emit_cargo_toml`, which
+    /// declares whatever `shared_cfg::collect_cfg_features` returns). Runs the real
+    /// `gen_rust_crate::emit` entry point — not hand-built strings — on a surface with a plain
+    /// cfg-gated function (`native-http`, already covered before this fix) alongside a service
+    /// whose configurator is cfg-gated (`tower`, previously dropped because `collect_cfg_features`
+    /// never walked `ApiSurface::services`). ~keep
+    #[test]
+    fn emit_agrees_on_cfg_features_between_lib_rs_and_cargo_toml_including_services() {
+        use crate::core::config::ResolvedCrateConfig;
+        use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, ServiceDef};
+
+        let api = ApiSurface {
+            functions: vec![FunctionDef {
+                name: "native_ping".to_string(),
+                rust_path: "sample_lib::native_ping".to_string(),
+                cfg: Some(r#"feature = "native-http""#.to_string()),
+                ..Default::default()
+            }],
+            services: vec![ServiceDef {
+                name: "ClientConfig".to_string(),
+                rust_path: "sample_lib::client::ClientConfig".to_string(),
+                constructor: MethodDef {
+                    name: "new".to_string(),
+                    ..Default::default()
+                },
+                configurators: vec![MethodDef {
+                    name: "with_tower_layer".to_string(),
+                    cfg: Some(r#"feature = "tower""#.to_string()),
+                    ..Default::default()
+                }],
+                registrations: vec![],
+                entrypoints: vec![],
+                doc: String::new(),
+                cfg: None,
+            }],
+            ..Default::default()
+        };
+        let config = ResolvedCrateConfig {
+            name: "sample-lib".to_string(),
+            ..Default::default()
+        };
+
+        let files = crate::backends::dart::gen_rust_crate::emit(&api, &config).expect("dart backend generates files");
+        let lib_rs = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("src/lib.rs"))
+            .expect("lib.rs is generated");
+        let cargo_toml = files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml is generated");
+
+        // Control (deliverable: a negative assertion is worthless unless the fixture actually
+        // emitted a cfg gate) — prove `native_ping` really is gated in the generated source before
+        // trusting any conclusion drawn from the manifest.
+        assert!(
+            lib_rs.content.contains("#[cfg(feature = \"native-http\")]") && lib_rs.content.contains("fn native_ping"),
+            "control: the fixture must actually emit a cfg-gated function in lib.rs, got:\n{}",
+            lib_rs.content
+        );
+
+        let parsed: toml::Value = toml::from_str(&cargo_toml.content).expect("generated Cargo.toml must be valid TOML");
+        let declared: Vec<&str> = parsed["features"]
+            .as_table()
+            .expect("[features] is a table")
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        assert!(
+            declared.contains(&"native-http"),
+            "control: the function-level gate must already forward, got: {declared:?}"
+        );
+        assert!(
+            declared.contains(&"tower"),
+            "the service configurator's cfg gate must also forward to [features], or cargo rejects \
+             any `#[cfg(feature = \"tower\")]` a backend re-emits for it as unexpected_cfg; got: {declared:?}"
+        );
+    }
+
     /// The dart scaffold already emits its own `unexpected_cfgs` check-cfg
     /// allowlist for `cfg(frb_expand)` into `[lints.rust]`. A configured
     /// `[crates.cargo_lints]` table must compose with that single table -- not
