@@ -1,4 +1,4 @@
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::collections::{HashMap, HashSet};
@@ -879,6 +879,18 @@ fn render_wildcard_assertion(
     let array_part = &field[..dot];
     let elem_part = &field[dot + 3..];
 
+    // The split above consumes the FIRST `[].` only, so a doubly-nested path leaves a second
+    // wildcard in `elem_part`. The `not_empty` arm builds its element accessor inline instead of
+    // going through `swift_traversal_contains_assert`, so without this guard `accessor` lowers that
+    // surviving wildcard to index 0 and the `contains(where:)` closure ranges over `pages` while
+    // reading `links[0]`. Guarding here rather than per-arm also gives the refused path the wording
+    // the strict field-availability gate counts, which the generic `unsupported traversal
+    // assertion` fallback deliberately is not. ~keep
+    if let Some(line) = nested_wildcard_skip_line("        ", "//", field, elem_part) {
+        let _ = writeln!(out, "{line}");
+        return;
+    }
+
     match assertion.assertion_type.as_str() {
         "contains" => {
             if let Some(expected) = &assertion.value {
@@ -990,4 +1002,52 @@ fn emit_wildcard_contains(
         field_resolver,
     );
     let _ = writeln!(out, "{line}");
+}
+
+#[cfg(test)]
+mod nested_wildcard_tests {
+    use super::render_wildcard_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn array_resolver(field: &str) -> FieldResolver {
+        let names: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(&HashMap::new(), &HashSet::new(), &names, &names, &HashSet::new())
+    }
+
+    fn render_not_empty(field: &str, resolver: &FieldResolver) -> String {
+        let assertion = Assertion {
+            assertion_type: "not_empty".to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        };
+        let dot = field.find("[].").expect("test field must carry a wildcard");
+        let mut out = String::new();
+        render_wildcard_assertion(&mut out, &assertion, field, dot, "result", resolver, &HashSet::new());
+        out
+    }
+
+    /// The control, and the one that matters: a single wildcard must still quantify over every
+    /// element, so the refusal below cannot have been implemented by disabling wildcards. ~keep
+    #[test]
+    fn single_wildcard_not_empty_still_quantifies_over_every_element() {
+        let out = render_not_empty("links[].url", &array_resolver("links"));
+        assert!(out.contains(".contains(where: {"), "got: {out}");
+        assert!(!out.contains("skipped:"), "got: {out}");
+        assert!(!out.contains("[0]"), "got: {out}");
+    }
+
+    /// `not_empty` was the arm the shared `swift_traversal_contains_assert` guard never covered:
+    /// it builds its element accessor inline, so `pages[].links[].url` emitted a closure over
+    /// `pages` whose body read `links[0]` — a whole-array claim inspecting one inner element.
+    /// Pre-guard this test fails on the emitted `XCTAssertTrue(...contains(where:...))` line. ~keep
+    #[test]
+    fn nested_wildcard_not_empty_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_not_empty("pages[].links[].url", &array_resolver("pages"));
+        assert_eq!(
+            out, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
+    }
 }
