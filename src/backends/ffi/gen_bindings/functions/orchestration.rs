@@ -140,6 +140,23 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
     let will_be_unimplemented =
         (method.sanitized && !method_sanitized_recoverable(method)) || return_needs_non_serde_named_method;
 
+    // `AssertUnwindSafe(|| { Type::method() })` trips `clippy::redundant_closure` when the
+    // closure body reduces to nothing but that bare zero-arg call: a static method with no
+    // parameters, no result conversion, and nothing else emitted into the closure body. Pass
+    // the callee path directly instead of opening a closure; `method_wrapper_header.jinja`
+    // switches on `inline_callee` and the call-emission block below is skipped entirely when
+    // this holds, since the header already embeds the call. ~keep
+    let can_inline_trivially = method.is_static
+        && method.params.is_empty()
+        && !will_be_unimplemented
+        && !is_bytes_result
+        && !has_error
+        && !returns_ref
+        && !method.returns_cow
+        && method.return_newtype_wrapper.is_none()
+        && (is_passthrough_return(&method.return_type) || is_void_return(&method.return_type));
+    let inline_callee = can_inline_trivially.then(|| format!("{qualified}::{method_name}"));
+
     let mut params = Vec::new();
     if !method.is_static {
         let receiver_ty = match method.receiver.as_ref().unwrap_or(&ReceiverKind::Ref) {
@@ -200,6 +217,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             // language backend that binds this symbol drops the method under the same predicate
             // via `ApiSurface::with_cfg_filtered_deep`, so the two sides agree. ~keep
             source_cfg => method.cfg_within(typ.cfg.as_deref()).unwrap_or_default(),
+            inline_callee => inline_callee.clone(),
         },
     );
 
@@ -219,6 +237,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             &return_type,
             &method.return_type,
             has_error || is_bytes_result,
+            false,
         ));
         return out;
     }
@@ -238,11 +257,17 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         format!("return {};", null_return_value(&method.return_type))
     };
 
+    // Each entry is an `Option<HandleRequest>` array element, not a `.push()` statement: a
+    // `Vec::with_capacity(n)` immediately followed by unconditional `.push()` calls trips
+    // `clippy::vec_init_then_push`, and this consumer's `perf = deny` makes that a hard
+    // compile error, not a lint. `[...].into_iter().flatten().collect()` builds the same
+    // `Vec<HandleRequest>` from a mix of unconditional (`Some(..)`) and optional
+    // (`if .. { Some(..) } else { None }`) entries without ever calling `.push()`. ~keep
     let mut handle_requests = Vec::new();
     let is_owned_receiver = method.receiver.as_ref() == Some(&ReceiverKind::Owned);
     if !method.is_static && !is_owned_receiver {
         handle_requests.push(format!(
-            "    __alef_requests.push(HandleRequest {{ handle: this, expected_type: std::any::TypeId::of::<{handle_qualified}>() }});"
+            "        Some(HandleRequest {{ handle: this, expected_type: std::any::TypeId::of::<{handle_qualified}>() }})"
         ));
     }
     for parameter in &method.params {
@@ -253,22 +278,25 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
             continue;
         }
         let request = format!(
-            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{}>() }});",
+            "HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{}>() }}",
             parameter.name,
             named_type_path(type_name, core_import, path_map)
         );
         if parameter.optional {
-            handle_requests.push(format!("    if {} != 0 {{ {request} }}", parameter.name));
+            handle_requests.push(format!(
+                "        if {} != 0 {{ Some({request}) }} else {{ None }}",
+                parameter.name
+            ));
         } else {
-            handle_requests.push(format!("    {request}"));
+            handle_requests.push(format!("        Some({request})"));
         }
     }
     if !handle_requests.is_empty() || method.receiver.as_ref() == Some(&ReceiverKind::Owned) {
         out.push_str(&crate::backends::ffi::template_env::render(
             "handle_acquisition.rs.jinja",
             context! {
-                requests => handle_requests.join("\n"),
-                request_count => handle_requests.len(),
+                has_requests => !handle_requests.is_empty(),
+                requests => handle_requests.join(",\n"),
                 fail_ret => fail_ret.clone(),
                 owned_handle => is_owned_receiver.then_some("this"),
             },
@@ -479,41 +507,46 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         && !method.returns_cow
         && method.return_newtype_wrapper.is_none();
 
-    if method.is_async {
-        let call = if method.is_static {
-            format!("get_ffi_runtime().block_on(async {{ {qualified}::{method_name}({call_args}).await }})")
-        } else {
-            format!("get_ffi_runtime().block_on(async {{ obj.{method_name}({call_args}).await }})")
-        };
-        if can_inline {
+    // Skipped when `can_inline_trivially`: the header already embeds the call directly in
+    // `AssertUnwindSafe(inline_callee)` (see the comment on `can_inline_trivially` above), so
+    // emitting `static_method_call.jinja`'s call expression here too would duplicate it.
+    if !can_inline_trivially {
+        if method.is_async {
+            let call = if method.is_static {
+                format!("get_ffi_runtime().block_on(async {{ {qualified}::{method_name}({call_args}).await }})")
+            } else {
+                format!("get_ffi_runtime().block_on(async {{ obj.{method_name}({call_args}).await }})")
+            };
+            if can_inline {
+                out.push_str(&crate::backends::ffi::template_env::render(
+                    "call_inline.jinja",
+                    context! { call => call },
+                ));
+            } else {
+                out.push_str(&crate::backends::ffi::template_env::render(
+                    "call_with_result.jinja",
+                    context! { call => call },
+                ));
+            }
+        } else if method.is_static {
+            if can_inline {
+                out.push_str(&crate::backends::ffi::template_env::render("static_method_call.jinja", context! { qualified => qualified.clone(), method_name => method_name.clone(), call_args => call_args.clone() }));
+            } else {
+                out.push_str(&crate::backends::ffi::template_env::render("static_method_call_result.jinja", context! { qualified => qualified.clone(), method_name => method_name.clone(), call_args => call_args.clone() }));
+            }
+        } else if method_name == "drop" {
+            out.push_str("    std::mem::drop(obj);\n");
+        } else if can_inline {
             out.push_str(&crate::backends::ffi::template_env::render(
-                "call_inline.jinja",
-                context! { call => call },
+                "instance_method_call.jinja",
+                context! { method_name => method_name.clone(), call_args => call_args.clone() },
             ));
         } else {
             out.push_str(&crate::backends::ffi::template_env::render(
-                "call_with_result.jinja",
-                context! { call => call },
+                "instance_method_call_result.jinja",
+                context! { method_name => method_name.clone(), call_args => call_args.clone() },
             ));
         }
-    } else if method.is_static {
-        if can_inline {
-            out.push_str(&crate::backends::ffi::template_env::render("static_method_call.jinja", context! { qualified => qualified.clone(), method_name => method_name.clone(), call_args => call_args.clone() }));
-        } else {
-            out.push_str(&crate::backends::ffi::template_env::render("static_method_call_result.jinja", context! { qualified => qualified.clone(), method_name => method_name.clone(), call_args => call_args.clone() }));
-        }
-    } else if method_name == "drop" {
-        out.push_str("    std::mem::drop(obj);\n");
-    } else if can_inline {
-        out.push_str(&crate::backends::ffi::template_env::render(
-            "instance_method_call.jinja",
-            context! { method_name => method_name.clone(), call_args => call_args.clone() },
-        ));
-    } else {
-        out.push_str(&crate::backends::ffi::template_env::render(
-            "instance_method_call_result.jinja",
-            context! { method_name => method_name.clone(), call_args => call_args.clone() },
-        ));
     }
 
     if is_bytes_result {
@@ -613,6 +646,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_wrapper(
         &return_type,
         &method.return_type,
         has_error || is_bytes_result,
+        can_inline_trivially,
     ));
     out
 }
@@ -621,6 +655,7 @@ pub(super) fn gen_function_wrapper_footer(
     return_type: &Option<String>,
     rust_return_type: &TypeRef,
     has_status_return: bool,
+    trivial_call: bool,
 ) -> String {
     // ~keep Every byte-buffer out-param return — `Bytes` and `Optional<Bytes>` alike —
     // declares an `i32` status in C, so its panic fallback must be `-1`, not the
@@ -634,9 +669,12 @@ pub(super) fn gen_function_wrapper_footer(
                 |ffi_return_type| ffi_null_return_value(rust_return_type, Some(ffi_return_type)).to_string(),
             )
         };
+    // `trivial_call` mirrors `can_inline_trivially` in the callers above: when the header
+    // already closed `AssertUnwindSafe(inline_callee))` and opened the `match` arms itself,
+    // the footer must not re-close a closure body that was never opened. ~keep
     crate::backends::ffi::template_env::render(
         "function_wrapper_footer.jinja",
-        context! { panic_return => panic_return },
+        context! { panic_return => panic_return, trivial_call => trivial_call },
     )
 }
 
@@ -691,6 +729,22 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
     let return_needs_non_serde_named = return_type_needs_non_serde_named(&func.return_type, serde_names);
     let will_be_unimplemented = (func.sanitized && !sanitized_recoverable(func)) || return_needs_non_serde_named;
 
+    // See the mirrored comment on `can_inline_trivially` in `gen_method_wrapper` above: a
+    // zero-param free function with a trivially inlinable call reduces the closure body to a
+    // bare `core_fn_path()`, tripping `clippy::redundant_closure`. `returns_c_char` is excluded
+    // because `free_function_header.jinja` injects a `set_last_return_len(...)` statement into
+    // the closure body for that case, so the body would no longer be just the call. ~keep
+    let can_inline_trivially = func.params.is_empty()
+        && !will_be_unimplemented
+        && !is_bytes_result
+        && !has_error
+        && !func.returns_ref
+        && !func.returns_cow
+        && func.return_newtype_wrapper.is_none()
+        && !returns_c_char(&func.return_type)
+        && (is_passthrough_return(&func.return_type) || is_void_return(&func.return_type));
+    let inline_callee = can_inline_trivially.then(|| core_fn_path.clone());
+
     let mut params = Vec::new();
     for p in &func.params {
         let param_name = if will_be_unimplemented {
@@ -741,6 +795,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             return_type => return_type,
             source_cfg => func.cfg.as_deref().unwrap_or(""),
             return_len_key => returns_c_char(&func.return_type).then_some(ffi_name.as_str()),
+            inline_callee => inline_callee.clone(),
         },
     );
 
@@ -760,6 +815,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             &return_type,
             &func.return_type,
             has_error || is_bytes_result,
+            false,
         ));
         return out;
     }
@@ -778,6 +834,9 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
     } else {
         format!("return {};", null_return_value(&func.return_type))
     };
+    // See the mirrored method-wrapper block above: entries are `Option<HandleRequest>` array
+    // elements consumed via `.into_iter().flatten().collect()`, not `.push()` statements, so
+    // this never trips `clippy::vec_init_then_push`. ~keep
     let mut handle_requests = Vec::new();
     for parameter in &func.params {
         let Some(type_name) = named_handle_type(&parameter.ty) else {
@@ -787,22 +846,25 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
             continue;
         }
         let request = format!(
-            "__alef_requests.push(HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{}>() }});",
+            "HandleRequest {{ handle: {}, expected_type: std::any::TypeId::of::<{}>() }}",
             parameter.name,
             named_type_path(type_name, core_import, path_map)
         );
         if parameter.optional {
-            handle_requests.push(format!("    if {} != 0 {{ {request} }}", parameter.name));
+            handle_requests.push(format!(
+                "        if {} != 0 {{ Some({request}) }} else {{ None }}",
+                parameter.name
+            ));
         } else {
-            handle_requests.push(format!("    {request}"));
+            handle_requests.push(format!("        Some({request})"));
         }
     }
     if !handle_requests.is_empty() {
         out.push_str(&crate::backends::ffi::template_env::render(
             "handle_acquisition.rs.jinja",
             context! {
-                requests => handle_requests.join("\n"),
-                request_count => handle_requests.len(),
+                has_requests => !handle_requests.is_empty(),
+                requests => handle_requests.join(",\n"),
                 fail_ret => fail_ret,
                 owned_handle => Option::<&str>::None,
             },
@@ -970,29 +1032,33 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         && !func.returns_cow
         && func.return_newtype_wrapper.is_none();
 
-    if func.is_async {
-        let call = format!("get_ffi_runtime().block_on(async {{ {core_fn_path}({call_args}).await }})");
-        if can_inline_fn {
+    // Skipped when `can_inline_trivially`: the header already embeds the call directly in
+    // `AssertUnwindSafe(inline_callee)` (see the comment on `can_inline_trivially` above).
+    if !can_inline_trivially {
+        if func.is_async {
+            let call = format!("get_ffi_runtime().block_on(async {{ {core_fn_path}({call_args}).await }})");
+            if can_inline_fn {
+                out.push_str(&crate::backends::ffi::template_env::render(
+                    "call_inline.jinja",
+                    context! { call => call },
+                ));
+            } else {
+                out.push_str(&crate::backends::ffi::template_env::render(
+                    "call_with_result.jinja",
+                    context! { call => call },
+                ));
+            }
+        } else if can_inline_fn {
             out.push_str(&crate::backends::ffi::template_env::render(
                 "call_inline.jinja",
-                context! { call => call },
+                context! { call => format!("{core_fn_path}({call_args})") },
             ));
         } else {
             out.push_str(&crate::backends::ffi::template_env::render(
                 "call_with_result.jinja",
-                context! { call => call },
+                context! { call => format!("{core_fn_path}({call_args})") },
             ));
         }
-    } else if can_inline_fn {
-        out.push_str(&crate::backends::ffi::template_env::render(
-            "call_inline.jinja",
-            context! { call => format!("{core_fn_path}({call_args})") },
-        ));
-    } else {
-        out.push_str(&crate::backends::ffi::template_env::render(
-            "call_with_result.jinja",
-            context! { call => format!("{core_fn_path}({call_args})") },
-        ));
     }
 
     if is_bytes_result {
@@ -1085,6 +1151,7 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
         &return_type,
         &func.return_type,
         has_error || is_bytes_result,
+        can_inline_trivially,
     ));
     out
 }

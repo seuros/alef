@@ -1,5 +1,7 @@
 
+{% if not trivial_call %}
     })) {
+{% endif %}
         Ok(value) => value,
         Err(_) => {
             // A panic can unwind past code that already reported a more specific error via

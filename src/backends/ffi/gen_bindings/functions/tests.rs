@@ -123,8 +123,12 @@ fn enum_param_local_name_uses_param_name_not_type_name() {
 
 #[test]
 fn panic_footer_uses_existing_failure_sentinel() {
-    let pointer_footer =
-        gen_function_wrapper_footer(&Some("*mut std::ffi::c_char".to_string()), &TypeRef::String, false);
+    let pointer_footer = gen_function_wrapper_footer(
+        &Some("*mut std::ffi::c_char".to_string()),
+        &TypeRef::String,
+        false,
+        false,
+    );
     assert!(pointer_footer.contains("AssertUnwindSafe(set_panic_error)"));
     assert!(pointer_footer.contains("std::ptr::null_mut()"));
 
@@ -132,12 +136,29 @@ fn panic_footer_uses_existing_failure_sentinel() {
         &Some("*const sample_runtime::RawValue".to_string()),
         &TypeRef::Named("Value".to_string()),
         false,
+        false,
     );
     assert!(const_pointer_footer.contains("std::ptr::null()"));
     assert!(!const_pointer_footer.contains("std::ptr::null_mut()"));
 
-    let status_footer = gen_function_wrapper_footer(&Some("i32".to_string()), &TypeRef::Unit, true);
+    let status_footer = gen_function_wrapper_footer(&Some("i32".to_string()), &TypeRef::Unit, true, false);
     assert!(status_footer.contains("-1"));
+}
+
+/// `trivial_call` skips the footer's leading `})) {` — the header already closed
+/// `AssertUnwindSafe(inline_callee))` and opened the `match` arms itself when the closure was
+/// replaced by a bare callee path (see `can_inline_trivially` in `orchestration.rs`).
+#[test]
+fn panic_footer_skips_closure_close_for_trivial_call() {
+    let footer = gen_function_wrapper_footer(&None, &TypeRef::Unit, false, true);
+    assert!(
+        !footer.contains("})) {"),
+        "trivial_call footer must not re-close a closure the header never opened:\n{footer}"
+    );
+    assert!(
+        footer.trim_start().starts_with("Ok(value) => value,"),
+        "trivial_call footer must start directly at the match arms:\n{footer}"
+    );
 }
 
 #[test]

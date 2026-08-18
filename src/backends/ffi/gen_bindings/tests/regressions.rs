@@ -1623,8 +1623,12 @@ prefix = "sample"
     let files = FfiBackend.generate_bindings(&api, &config).unwrap();
     let lib = files.iter().find(|file| file.path.ends_with("lib.rs")).unwrap();
 
+    // A zero-param, void, infallible free function is exactly the shape that gets inlined into
+    // `AssertUnwindSafe(<path>)` rather than wrapped in a closure, so the callee appears as a bare
+    // path with no `()`. What this test guards is that the call is still reached at all and that no
+    // `result` is bound for it -- both hold in the inlined form. ~keep
     assert!(
-        lib.content.contains("sample_lib::clear()"),
+        lib.content.contains("std::panic::AssertUnwindSafe(sample_lib::clear))"),
         "expected the call itself to still be emitted, got:\n{}",
         lib.content
     );

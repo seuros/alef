@@ -1,5 +1,13 @@
-    let mut __alef_requests: Vec<HandleRequest> = Vec::with_capacity({{ request_count }});
+{% if has_requests -%}
+    let mut __alef_requests: Vec<HandleRequest> = [
 {{ requests }}
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+{% else -%}
+    let mut __alef_requests: Vec<HandleRequest> = Vec::new();
+{% endif -%}
 {% if owned_handle %}
     if __alef_requests.iter().any(|request| request.handle == {{ owned_handle }}) {
         set_handle_error(&HandleError::AliasedHandle);

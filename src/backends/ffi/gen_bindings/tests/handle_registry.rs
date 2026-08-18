@@ -229,6 +229,34 @@ fn generated_calls_acquire_all_handles_before_use_or_owned_take() {
         .expect("free-function conversion");
     assert!(acquisition < conversion, "{free_function}");
 
+    // A non-optional param request (`left`) and an optional one (`context`) must both build
+    // into `__alef_requests` without `Vec::with_capacity(n)` immediately followed by `.push()`
+    // calls -- that shape trips `clippy::vec_init_then_push`, a hard compile error under a
+    // consumer's `perf = deny`. Confirm the acquisition block actually appears (above) before
+    // trusting the absence checks below -- an absence assertion is worthless against a fixture
+    // that emitted nothing.
+    assert!(
+        free_function.contains("Some(HandleRequest { handle: left,"),
+        "{free_function}"
+    );
+    assert!(
+        free_function.contains("if context != 0 { Some(HandleRequest { handle: context,")
+            && free_function.contains("}) } else { None }"),
+        "{free_function}"
+    );
+    assert!(
+        free_function.contains(".into_iter()") && free_function.contains(".flatten()"),
+        "{free_function}"
+    );
+    assert!(
+        !free_function.contains("__alef_requests.push("),
+        "must not build __alef_requests via .push():\n{free_function}"
+    );
+    assert!(
+        !source.contains("Vec<HandleRequest> = Vec::with_capacity("),
+        "must not pre-size __alef_requests for a push sequence:\n{source}"
+    );
+
     let owned_method = source
         .split("fn my_lib_resource_merge")
         .nth(1)
@@ -239,6 +267,17 @@ fn generated_calls_acquire_all_handles_before_use_or_owned_take() {
         .find("take_handle::<my_lib::Resource>")
         .expect("owned take");
     assert!(alias_check < owned_take, "{owned_method}");
+    // An owned receiver is acquired separately via `take_handle` (checked above via
+    // `owned_take`), not added to `__alef_requests` itself -- only the borrowed `other`
+    // parameter becomes a request entry, checked for aliasing against `this` afterwards.
+    assert!(
+        owned_method.contains("Some(HandleRequest { handle: other,"),
+        "{owned_method}"
+    );
+    assert!(
+        !owned_method.contains("__alef_requests.push("),
+        "must not build __alef_requests via .push():\n{owned_method}"
+    );
 }
 
 #[test]
@@ -386,15 +425,15 @@ fn owned_receiver_alias_check_has_concrete_request_type() {
     let source = crate::backends::ffi::template_env::render(
         "handle_acquisition.rs.jinja",
         minijinja::context! {
+            has_requests => false,
             requests => "",
-            request_count => 0,
             fail_ret => "return 0;",
             owned_handle => "this",
         },
     );
 
     assert!(
-        source.contains("let mut __alef_requests: Vec<HandleRequest> = Vec::with_capacity(0)"),
+        source.contains("let mut __alef_requests: Vec<HandleRequest> = Vec::new()"),
         "{source}"
     );
 }

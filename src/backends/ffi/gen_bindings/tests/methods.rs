@@ -606,3 +606,145 @@ fn streaming_method_wrapper_emits_no_gate_when_neither_side_is_gated() {
         "an ungated streaming method must emit no gate, got:\n{wrapper}"
     );
 }
+
+/// `AssertUnwindSafe(|| { Type::method() })` reduces to a closure whose entire body is a bare
+/// zero-arg call when the method is static, takes no parameters, and needs no null check,
+/// handle acquisition, or result conversion -- exactly the shape `clippy::redundant_closure`
+/// flags. The fix passes the callee path directly to `AssertUnwindSafe` instead of opening a
+/// closure around it.
+#[test]
+fn static_zero_arg_method_call_avoids_redundant_closure() {
+    let typ = TypeDef {
+        name: "Registry".to_string(),
+        rust_path: "my_lib::Registry".to_string(),
+        is_opaque: true,
+        methods: vec![MethodDef {
+            name: "reset".to_string(),
+            is_static: true,
+            receiver: None,
+            return_type: TypeRef::Unit,
+            ..MethodDef::default()
+        }],
+        ..TypeDef::default()
+    };
+    let api = ApiSurface {
+        crate_name: "sample".to_string(),
+        types: vec![typ],
+        ..ApiSurface::default()
+    };
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    // Prove the fixture actually reached the wrapper before trusting the absence check below --
+    // an absence assertion against a fixture that emitted nothing would be vacuous.
+    assert!(
+        lib.content.contains("fn my_lib_registry_reset("),
+        "fixture must actually emit the wrapper, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("AssertUnwindSafe(my_lib::Registry::reset)"),
+        "expected the bare callee path passed directly to AssertUnwindSafe, got:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content
+            .contains("AssertUnwindSafe(|| {\n my_lib::Registry::reset()"),
+        "must not open a closure whose entire body is the bare zero-arg call \
+         (clippy::redundant_closure):\n{}",
+        lib.content
+    );
+    syn::parse_file(&lib.content).expect("generated FFI lib.rs must parse as Rust");
+}
+
+/// Control for the fix above: a static method that still needs a parameter conversion (i.e. is
+/// NOT trivially inlinable) must keep opening a closure -- the fix must narrowly target the
+/// zero-arg case, not stop emitting closures altogether.
+#[test]
+fn static_method_with_param_keeps_the_closure() {
+    let typ = TypeDef {
+        name: "Registry".to_string(),
+        rust_path: "my_lib::Registry".to_string(),
+        is_opaque: true,
+        methods: vec![MethodDef {
+            name: "reset_named".to_string(),
+            is_static: true,
+            receiver: None,
+            return_type: TypeRef::Unit,
+            params: vec![ParamDef {
+                name: "flag".to_string(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                ..ParamDef::default()
+            }],
+            ..MethodDef::default()
+        }],
+        ..TypeDef::default()
+    };
+    let api = ApiSurface {
+        crate_name: "sample".to_string(),
+        types: vec![typ],
+        ..ApiSurface::default()
+    };
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("fn my_lib_registry_reset_named("),
+        "{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("AssertUnwindSafe(|| {"),
+        "a method with a parameter must still open a closure, got:\n{}",
+        lib.content
+    );
+}
+
+/// Mirror of the static-method fix for free functions: a zero-arg free function that needs no
+/// result conversion reduces `AssertUnwindSafe(|| { core_fn_path() })` to a bare-call closure
+/// body too, via the `call_inline.jinja` path in `gen_free_function` rather than
+/// `static_method_call.jinja`. Uses a return type that is NOT `Bool` and NOT `returns_c_char`,
+/// since a `c_char`-returning free function gets a `set_last_return_len(...)` statement injected
+/// into the closure body, which would make this callee NOT trivially inlinable.
+#[test]
+fn free_zero_arg_function_call_avoids_redundant_closure() {
+    let api = ApiSurface {
+        crate_name: "sample".to_string(),
+        functions: vec![FunctionDef {
+            name: "poll_status".to_string(),
+            rust_path: "my_lib::poll_status".to_string(),
+            return_type: TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    let config = sample_config();
+    let backend = FfiBackend;
+
+    let files = backend.generate_bindings(&api, &config).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("fn my_lib_poll_status("),
+        "fixture must actually emit the wrapper, got:\n{}",
+        lib.content
+    );
+    assert!(
+        lib.content.contains("AssertUnwindSafe(my_lib::poll_status)"),
+        "expected the bare callee path passed directly to AssertUnwindSafe, got:\n{}",
+        lib.content
+    );
+    assert!(
+        !lib.content.contains("AssertUnwindSafe(|| {\n my_lib::poll_status()"),
+        "must not open a closure whose entire body is the bare zero-arg call \
+         (clippy::redundant_closure):\n{}",
+        lib.content
+    );
+    syn::parse_file(&lib.content).expect("generated FFI lib.rs must parse as Rust");
+}
