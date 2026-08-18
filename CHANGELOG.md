@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef snippets check --lang` accepts the session names a user actually has.** The filter resolved
+  its values as fence tags only, so every session target whose name differs from its fence tag —
+  `kotlin_android`, `node`, `wasm`, `c_ffi` — was rejected as unrecognised. Those names are the only
+  ones a consumer has for those sessions, because they are the keys of the `[workspace.docs.snippets.sessions]`
+  table they were just reading, and the rejection meant the one language they most needed to narrow to
+  could not be selected at all. Session targets and their `-`/`_` spellings now resolve alongside fence
+  tags, aliases of one language collapse to a single entry, and the error names the values it could not
+  resolve instead of listing the ones it could.
+
 - **Zig packages no longer search an FFI include directory guessed from the crate name.** `scaffold_zig`
   started deriving the `-Dffi_include_path` default from `[crates.output] ffi`, but `packages/zig/build.zig`
   is a create-once seed, so every repo scaffolded before that kept searching `crates/<crate-name>-ffi/include`

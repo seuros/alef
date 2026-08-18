@@ -105,20 +105,58 @@ pub fn run(action: SnippetsAction) -> ExitCode {
     }
 }
 
-fn parse_language_filter(languages: Option<&[String]>) -> Option<Vec<Language>> {
+/// A resolved `--lang` selection, keeping rejects so the caller can name them.
+struct LanguageFilter {
+    recognised: Vec<Language>,
+    unrecognised: Vec<String>,
+}
+
+/// Resolve `--lang` values to snippet languages.
+///
+/// Accepts session target names (`kotlin_android`, `node`, `wasm`) as well as fence tags, because
+/// the name a user reaches for is the one they just read in their `alef.toml`, and those two
+/// vocabularies do not coincide. ~keep
+fn parse_language_filter(languages: Option<&[String]>) -> Option<LanguageFilter> {
     let languages = languages?;
-    Some(
-        languages
-            .iter()
-            .map(|language| Language::from_fence_tag(language))
-            .filter(|language| *language != Language::Unknown)
-            .collect(),
-    )
+    let mut recognised: Vec<Language> = Vec::new();
+    let mut unrecognised: Vec<String> = Vec::new();
+    for requested in languages {
+        match Language::from_session_target(requested) {
+            Language::Unknown => unrecognised.push(requested.clone()),
+            language => {
+                if !recognised.contains(&language) {
+                    recognised.push(language);
+                }
+            }
+        }
+    }
+    Some(LanguageFilter {
+        recognised,
+        unrecognised,
+    })
+}
+
+/// Report `--lang` values that named nothing, so a typo cannot silently widen or empty the run.
+fn reject_unrecognised_languages(filter: Option<&LanguageFilter>) -> Result<(), ExitCode> {
+    let Some(filter) = filter else { return Ok(()) };
+    if filter.unrecognised.is_empty() {
+        return Ok(());
+    }
+    tracing::error!(
+        "unrecognised --lang value(s): {:?}. Use a snippet fence tag (`go`, `kotlin`, ...) or a \
+         session target name from alef.toml (`kotlin_android`, `node`, ...)",
+        filter.unrecognised
+    );
+    Err(ExitCode::FAILURE)
 }
 
 fn run_list(snippets: &[PathBuf], languages: Option<&Vec<String>>) -> ExitCode {
     let filter = parse_language_filter(languages.map(Vec::as_slice));
-    match discovery::discover_snippets(snippets, filter.as_deref()) {
+    if let Err(code) = reject_unrecognised_languages(filter.as_ref()) {
+        return code;
+    }
+    let selected = filter.as_ref().map(|filter| filter.recognised.as_slice());
+    match discovery::discover_snippets(snippets, selected) {
         Ok(found) => {
             output::print_snippet_list(&found);
             crate::bin_cli::output::blank();
@@ -180,25 +218,19 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         .parse::<ValidationLevel>()
         .unwrap_or(ValidationLevel::Syntax);
     let strict = force_strict || config.strict;
-    // An unrecognised `--lang` must not silently widen the run back to everything.
-    // `parse_language_filter` drops `Language::Unknown`, so a typo'd tag would otherwise leave an
-    // empty-but-`Some` filter that discovery treats as "match nothing", and the run would exit on
-    // "returned no snippets" naming the directories rather than the tag. ~keep
+    // An unrecognised `--lang` must not silently widen the run back to everything: an
+    // empty-but-`Some` filter reads to discovery as "match nothing", and the run would then exit
+    // on "returned no snippets" naming the directories rather than the bad tag. ~keep
     let language_filter = parse_language_filter(languages);
-    if let (Some(requested), Some(parsed)) = (languages, language_filter.as_deref())
-        && parsed.len() != requested.len()
-    {
-        let recognised: Vec<String> = parsed.iter().map(ToString::to_string).collect();
-        tracing::error!(
-            "unrecognised --lang value(s) in {requested:?}; recognised: {recognised:?}.              Use a snippet fence tag (`go`, `typescript`, `kotlin`, ...)"
-        );
-        return ExitCode::FAILURE;
+    if let Err(code) = reject_unrecognised_languages(language_filter.as_ref()) {
+        return code;
     }
-    let found = match discovery::discover_snippets(&directories, language_filter.as_deref()) {
+    let selected = language_filter.as_ref().map(|filter| filter.recognised.as_slice());
+    let found = match discovery::discover_snippets(&directories, selected) {
         Ok(found) if !found.is_empty() => found,
         Ok(_) => {
             match &language_filter {
-                Some(filter) => tracing::error!("no snippets matched --lang {filter:?}"),
+                Some(filter) => tracing::error!("no snippets matched --lang {:?}", filter.recognised),
                 None => tracing::error!("snippet discovery returned no snippets"),
             }
             return ExitCode::FAILURE;
@@ -723,35 +755,59 @@ fn run_gaps(
 mod tests {
     use super::*;
 
-    /// `--lang` narrows a run to one backend's snippets. `parse_language_filter` silently drops
-    /// `Language::Unknown`, so the caller cannot tell a recognised tag from a typo by looking at
-    /// the filter alone -- the count comparison `run_check` makes is the whole check, and this
-    /// pins both sides of it. ~keep
+    /// `--lang` narrows a run to one backend's snippets, so an unrecognised value has to be
+    /// reported rather than dropped: dropping it leaves an empty-but-`Some` filter, which reads to
+    /// discovery as "match nothing" and fails the run naming the directories, not the typo. ~keep
     #[test]
     fn a_language_filter_keeps_every_recognised_fence_tag() {
         let requested = ["go".to_string(), "typescript".to_string(), "zig".to_string()];
         let parsed = parse_language_filter(Some(&requested)).expect("a filter was requested");
 
-        assert_eq!(parsed, vec![Language::Go, Language::TypeScript, Language::Zig]);
-        assert_eq!(parsed.len(), requested.len(), "no recognised tag may be dropped");
+        assert_eq!(
+            parsed.recognised,
+            vec![Language::Go, Language::TypeScript, Language::Zig]
+        );
+        assert!(parsed.unrecognised.is_empty(), "no recognised tag may be rejected");
+    }
+
+    /// The names in an `alef.toml` session table are session targets, not fence tags, and the two
+    /// vocabularies differ. `--lang kotlin_android` has to reach the Kotlin snippets, or the only
+    /// name a user has for that session selects nothing. ~keep
+    #[test]
+    fn a_language_filter_accepts_session_target_names_as_well_as_fence_tags() {
+        let requested = [
+            "kotlin_android".to_string(),
+            "kotlin-android".to_string(),
+            "node".to_string(),
+            "wasm".to_string(),
+        ];
+        let parsed = parse_language_filter(Some(&requested)).expect("a filter was requested");
+
+        assert!(parsed.unrecognised.is_empty(), "session target names must resolve");
+        assert_eq!(
+            parsed.recognised,
+            vec![Language::Kotlin, Language::TypeScript],
+            "aliases collapse to one entry each rather than repeating a language"
+        );
     }
 
     #[test]
-    fn a_language_filter_drops_an_unrecognised_tag_so_the_caller_can_detect_it() {
+    fn a_language_filter_reports_an_unrecognised_tag_instead_of_dropping_it() {
         let requested = ["go".to_string(), "nosuchlang".to_string()];
         let parsed = parse_language_filter(Some(&requested)).expect("a filter was requested");
 
-        assert_eq!(parsed, vec![Language::Go]);
-        assert_ne!(
-            parsed.len(),
-            requested.len(),
-            "the length gap is what `run_check` turns into an error naming the bad tag"
+        assert_eq!(parsed.recognised, vec![Language::Go]);
+        assert_eq!(parsed.unrecognised, vec!["nosuchlang".to_string()]);
+        assert!(
+            reject_unrecognised_languages(Some(&parsed)).is_err(),
+            "an unrecognised tag must fail the run, not narrow it silently"
         );
     }
 
     #[test]
     fn no_language_argument_means_no_filter_at_all() {
         assert!(parse_language_filter(None).is_none());
+        assert!(reject_unrecognised_languages(None).is_ok());
     }
 
     #[test]
