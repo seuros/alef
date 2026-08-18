@@ -166,6 +166,20 @@ pub(super) fn render_assertion(
         return;
     }
 
+    // A `foo[].bar` fixture path names EVERY element of `foo`, not element 0. The shared
+    // accessor has no wildcard concept: `parse_path` lowers `foo[]` to
+    // `PathSegment::ArrayField { index: 0 }`, so any arm reaching the generic accessor emits
+    // `result.foo()[0].bar()` — an assertion about one element wearing the fixture's "some
+    // element" wording. Route every wildcard path here first so an assertion type this
+    // backend cannot traverse leaves a visible skip instead of a silent index-0 assertion,
+    // matching the pre-dispatch every other backend already performs. ~keep
+    if let Some(field) = assertion.field.as_deref()
+        && let Some(dot) = field.find("[].")
+    {
+        render_wildcard_assertion(out, assertion, field, dot, result_var, field_resolver, enum_fields);
+        return;
+    }
+
     // Determine if this field is an enum type.
     let field_is_enum = assertion
         .field
@@ -227,20 +241,14 @@ pub(super) fn render_assertion(
         )
     };
     let (vec_setup, field_expr, is_map_subscript) = materialise_vec_temporaries(&field_expr_raw, &local_suffix);
-    // The `contains` / `not_contains` traversal branch builds its own
-    // accessor from `field_resolver.accessor(array_part, ...)`, ignoring
-    // `field_expr`. Emitting the vec_setup there would produce dead
-    // `let _vec_… = …` lines, so skip it for those traversal cases.
-    let field_uses_traversal = assertion.field.as_deref().is_some_and(|f| f.contains("[]."));
-    let traversal_skips_field_expr = field_uses_traversal
-        && matches!(
-            assertion.assertion_type.as_str(),
-            "contains" | "not_contains" | "not_empty" | "is_empty"
-        );
-    if !traversal_skips_field_expr {
-        for line in &vec_setup {
-            let _ = writeln!(out, "        {line}");
-        }
+    // Wildcard paths never reach here — they return via `render_wildcard_assertion` above —
+    // so `field_expr` is always the expression the arms below assert on and its setup lines
+    // are never dead. The previous suppression list named `is_empty`, which had no traversal
+    // branch to suppress for: it dropped the `let _vec_… = …` binding while still emitting an
+    // expression referencing that local, so `is_empty` on a wildcard path emitted Swift
+    // naming an undeclared variable. ~keep
+    for line in &vec_setup {
+        let _ = writeln!(out, "        {line}");
     }
 
     // In Swift, optional chaining with `?.` makes the result optional even if the
@@ -384,119 +392,29 @@ pub(super) fn render_assertion(
                         );
                     }
                 } else {
-                    // []. traversal: field like "links[].url" → contains(where:) closure.
-                    let traversal_handled = if let Some(f) = assertion.field.as_deref() {
-                        if let Some(dot) = f.find("[].") {
-                            let array_part = &f[..dot];
-                            let elem_part = &f[dot + 3..];
-                            let line = swift_traversal_contains_assert(
-                                array_part,
-                                elem_part,
-                                f,
-                                &swift_val,
-                                result_var,
-                                false,
-                                &format!("expected to contain: \\({swift_val})"),
-                                enum_fields,
-                                field_resolver,
-                            );
+                    // For array fields (RustVec<RustString>), check membership via map+contains.
+                    let field_is_array = assertion
+                        .field
+                        .as_deref()
+                        .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
+                    if field_is_array {
+                        // First try the "stringy aggregator" path: when the array element
+                        // is an opaque DTO with several text-bearing accessors (e.g.
+                        // ImportInfo with source/items/alias, or StructureItem with
+                        // kind/name/signature/...), emit a `contains(where: { ... })`
+                        // closure that walks every accessor and does substring matching,
+                        // mirroring python's `_alef_e2e_item_texts`. This avoids the
+                        // brittle "primary accessor" guess (e.g. ImportInfo → source
+                        // misses imports whose name lives in `items`).
+                        let aggregator = swift_stringy_aggregator_contains_assert(
+                            assertion.field.as_deref(),
+                            result_var,
+                            field_resolver,
+                            &swift_val,
+                        );
+                        if let Some(line) = aggregator {
                             let _ = writeln!(out, "{line}");
-                            true
                         } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                    if !traversal_handled {
-                        // For array fields (RustVec<RustString>), check membership via map+contains.
-                        let field_is_array = assertion
-                            .field
-                            .as_deref()
-                            .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
-                        if field_is_array {
-                            // First try the "stringy aggregator" path: when the array element
-                            // is an opaque DTO with several text-bearing accessors (e.g.
-                            // ImportInfo with source/items/alias, or StructureItem with
-                            // kind/name/signature/...), emit a `contains(where: { ... })`
-                            // closure that walks every accessor and does substring matching,
-                            // mirroring python's `_alef_e2e_item_texts`. This avoids the
-                            // brittle "primary accessor" guess (e.g. ImportInfo → source
-                            // misses imports whose name lives in `items`).
-                            let aggregator = swift_stringy_aggregator_contains_assert(
-                                assertion.field.as_deref(),
-                                result_var,
-                                field_resolver,
-                                &swift_val,
-                            );
-                            if let Some(line) = aggregator {
-                                let _ = writeln!(out, "{line}");
-                            } else {
-                                let (contains_expr, is_optional) = swift_array_contains_expr(
-                                    assertion.field.as_deref(),
-                                    result_var,
-                                    field_resolver,
-                                    result_field_accessor,
-                                    Some(&field_expr),
-                                );
-                                let wrapped = if is_optional {
-                                    format!("({contains_expr} ?? [])")
-                                } else {
-                                    contains_expr
-                                };
-                                let _ = writeln!(
-                                    out,
-                                    "        XCTAssertTrue({wrapped}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
-                                );
-                            }
-                        } else if field_is_enum {
-                            // Enum fields: use `toString().toString()` (via string_expr) to get the
-                            // serde variant name as a Swift String, then check substring containment.
-                            // Swift's `String.contains("")` returns false; guard with `.isEmpty` so
-                            // fixtures that assert containment of an empty string still pass.
-                            let _ = writeln!(
-                                out,
-                                "        XCTAssertTrue({swift_val}.isEmpty || {string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
-                            );
-                        } else {
-                            // Same `isEmpty` guard as the enum branch — every string trivially
-                            // "contains" the empty string, but Swift's `String.contains` does not.
-                            let _ = writeln!(
-                                out,
-                                "        XCTAssertTrue({swift_val}.isEmpty || {string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-        "contains_all" => {
-            if let Some(values) = &assertion.values {
-                // []. traversal: field like "links[].link_type" → contains(where:) per value.
-                if let Some(f) = assertion.field.as_deref() {
-                    if let Some(dot) = f.find("[].") {
-                        let array_part = &f[..dot];
-                        let elem_part = &f[dot + 3..];
-                        for val in values {
-                            let swift_val = json_to_swift(val);
-                            let line = swift_traversal_contains_assert(
-                                array_part,
-                                elem_part,
-                                f,
-                                &swift_val,
-                                result_var,
-                                false,
-                                &format!("expected to contain: \\({swift_val})"),
-                                enum_fields,
-                                field_resolver,
-                            );
-                            let _ = writeln!(out, "{line}");
-                        }
-                        // handled — skip remaining branches
-                    } else {
-                        // For array fields (RustVec<RustString>), check membership via map+contains.
-                        let field_is_array = field_resolver.is_array(field_resolver.resolve(f));
-                        if field_is_array {
                             let (contains_expr, is_optional) = swift_array_contains_expr(
                                 assertion.field.as_deref(),
                                 result_var,
@@ -509,31 +427,73 @@ pub(super) fn render_assertion(
                             } else {
                                 contains_expr
                             };
-                            for val in values {
-                                let swift_val = json_to_swift(val);
-                                let _ = writeln!(
-                                    out,
-                                    "        XCTAssertTrue({wrapped}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
-                                );
-                            }
-                        } else if field_is_enum {
-                            // Enum fields: use `toString().toString()` (via string_expr) to get the
-                            // serde variant name as a Swift String, then check substring containment.
-                            for val in values {
-                                let swift_val = json_to_swift(val);
-                                let _ = writeln!(
-                                    out,
-                                    "        XCTAssertTrue({string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
-                                );
-                            }
+                            let _ = writeln!(
+                                out,
+                                "        XCTAssertTrue({wrapped}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
+                            );
+                        }
+                    } else if field_is_enum {
+                        // Enum fields: use `toString().toString()` (via string_expr) to get the
+                        // serde variant name as a Swift String, then check substring containment.
+                        // Swift's `String.contains("")` returns false; guard with `.isEmpty` so
+                        // fixtures that assert containment of an empty string still pass.
+                        let _ = writeln!(
+                            out,
+                            "        XCTAssertTrue({swift_val}.isEmpty || {string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
+                        );
+                    } else {
+                        // Same `isEmpty` guard as the enum branch — every string trivially
+                        // "contains" the empty string, but Swift's `String.contains` does not.
+                        let _ = writeln!(
+                            out,
+                            "        XCTAssertTrue({swift_val}.isEmpty || {string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
+                        );
+                    }
+                }
+            }
+        }
+        "contains_all" => {
+            if let Some(values) = &assertion.values {
+                if let Some(f) = assertion.field.as_deref() {
+                    // For array fields (RustVec<RustString>), check membership via map+contains.
+                    let field_is_array = field_resolver.is_array(field_resolver.resolve(f));
+                    if field_is_array {
+                        let (contains_expr, is_optional) = swift_array_contains_expr(
+                            assertion.field.as_deref(),
+                            result_var,
+                            field_resolver,
+                            result_field_accessor,
+                            Some(&field_expr),
+                        );
+                        let wrapped = if is_optional {
+                            format!("({contains_expr} ?? [])")
                         } else {
-                            for val in values {
-                                let swift_val = json_to_swift(val);
-                                let _ = writeln!(
-                                    out,
-                                    "        XCTAssertTrue({string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
-                                );
-                            }
+                            contains_expr
+                        };
+                        for val in values {
+                            let swift_val = json_to_swift(val);
+                            let _ = writeln!(
+                                out,
+                                "        XCTAssertTrue({wrapped}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
+                            );
+                        }
+                    } else if field_is_enum {
+                        // Enum fields: use `toString().toString()` (via string_expr) to get the
+                        // serde variant name as a Swift String, then check substring containment.
+                        for val in values {
+                            let swift_val = json_to_swift(val);
+                            let _ = writeln!(
+                                out,
+                                "        XCTAssertTrue({string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
+                            );
+                        }
+                    } else {
+                        for val in values {
+                            let swift_val = json_to_swift(val);
+                            let _ = writeln!(
+                                out,
+                                "        XCTAssertTrue({string_expr}.contains({swift_val}), \"expected to contain: \\({swift_val})\")"
+                            );
                         }
                     }
                 } else {
@@ -551,36 +511,10 @@ pub(super) fn render_assertion(
         "not_contains" => {
             for expected in assertion.expected_values() {
                 let swift_val = json_to_swift(expected);
-                // []. traversal: "links[].url" → XCTAssertFalse(array.contains(where:))
-                let traversal_handled = if let Some(f) = assertion.field.as_deref() {
-                    if let Some(dot) = f.find("[].") {
-                        let array_part = &f[..dot];
-                        let elem_part = &f[dot + 3..];
-                        let line = swift_traversal_contains_assert(
-                            array_part,
-                            elem_part,
-                            f,
-                            &swift_val,
-                            result_var,
-                            true,
-                            &format!("expected NOT to contain: \\({swift_val})"),
-                            enum_fields,
-                            field_resolver,
-                        );
-                        let _ = writeln!(out, "{line}");
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                if !traversal_handled {
-                    let _ = writeln!(
-                        out,
-                        "        XCTAssertFalse({string_expr}.contains({swift_val}), \"expected NOT to contain: \\({swift_val})\")"
-                    );
-                }
+                let _ = writeln!(
+                    out,
+                    "        XCTAssertFalse({string_expr}.contains({swift_val}), \"expected NOT to contain: \\({swift_val})\")"
+                );
             }
         }
         "not_empty" => {
@@ -589,99 +523,63 @@ pub(super) fn render_assertion(
             // For result_is_simple (e.g. Data, String), use .isEmpty directly on
             // the result — avoids calling .toString() on non-RustString types.
             // For string fields, convert to Swift String and check .isEmpty.
-            // []. traversal: "links[].url" → contains(where: { !elem.isEmpty })
-            let traversal_not_empty_handled = if let Some(f) = assertion.field.as_deref() {
-                if let Some(dot) = f.find("[].") {
-                    let array_part = &f[..dot];
-                    let elem_part = &f[dot + 3..];
-                    let array_accessor = field_resolver.accessor(array_part, "swift", result_var);
-                    let resolved_full = field_resolver.resolve(f);
-                    let resolved_elem_part = resolved_full
-                        .find("[].")
-                        .map(|d| &resolved_full[d + 3..])
-                        .unwrap_or(elem_part);
-                    let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
-                    let elem_is_enum = enum_fields.contains(f) || enum_fields.contains(resolved_full);
-                    let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
-                        || field_resolver.is_optional(field_resolver.resolve(resolved_elem_part));
-                    let elem_str = if elem_is_enum {
-                        format!("{elem_accessor}.to_string().toString()")
-                    } else if elem_is_optional {
-                        format!("({elem_accessor}?.toString() ?? \"\")")
+            if bare_result_is_option {
+                let _ = writeln!(
+                    out,
+                    "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
+                );
+            } else if field_is_array && field_is_optional {
+                out.push_str(&crate::e2e::template_env::render(
+                    "swift/not_empty_assertion.swift.jinja",
+                    minijinja::context! { predicate => format!("{field_expr}?.isEmpty == false") },
+                ));
+            } else if field_is_optional {
+                out.push_str(&crate::e2e::template_env::render(
+                    "swift/not_empty_assertion.swift.jinja",
+                    minijinja::context! { predicate => format!("{field_expr} != nil") },
+                ));
+            } else if field_is_array {
+                out.push_str(&crate::e2e::template_env::render(
+                    "swift/not_empty_assertion.swift.jinja",
+                    minijinja::context! { predicate => format!("!{field_expr}.isEmpty") },
+                ));
+            } else if result_is_simple {
+                // result_is_simple: result is a primitive (Data, String, etc.) — use .isEmpty directly.
+                let _ = writeln!(
+                    out,
+                    "        XCTAssertFalse({result_var}.isEmpty, \"expected non-empty value\")"
+                );
+            } else {
+                // First-class Swift struct fields are properties typed as native Swift
+                // `String` / `[T]` / `Data` etc — all of which expose `.count` (and
+                // `String`/`Array` also expose `.isEmpty`). Use `.count > 0` so the same
+                // path works whether the field is a String or an Array.
+                //
+                // When the accessor contains a `?.` optional chain, `.count` returns an
+                // Optional which Swift cannot compare directly to `0`; coalesce via `?? 0`
+                // so the assertion typechecks.
+                //
+                // For opaque method-call accessors (`result.id()`), the returned type is
+                // `RustString`, which lacks `.count`. Convert to Swift `String` first via
+                // `.toString()`. Array fields short-circuit above via `field_is_array`, so
+                // method-call accessors landing here are guaranteed to be the scalar /
+                // string flavour; vec accessors return `RustVec` (whose `.count` is fine).
+                if let Some(count_target) = swift_count_target(&field_expr, field_resolver, assertion.field.as_deref())
+                {
+                    let len_expr = if accessor_is_optional {
+                        format!("({count_target}.count ?? 0)")
                     } else {
-                        format!("{elem_accessor}.toString()")
+                        format!("{count_target}.count")
                     };
                     let _ = writeln!(
                         out,
-                        "        XCTAssertTrue({array_accessor}.contains(where: {{ !{elem_str}.isEmpty }}), \"expected non-empty value\")"
-                    );
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
-            if !traversal_not_empty_handled {
-                if bare_result_is_option {
-                    let _ = writeln!(
-                        out,
-                        "        XCTAssertFalse({string_expr}.isEmpty, \"expected non-empty value\")"
-                    );
-                } else if field_is_array && field_is_optional {
-                    out.push_str(&crate::e2e::template_env::render(
-                        "swift/not_empty_assertion.swift.jinja",
-                        minijinja::context! { predicate => format!("{field_expr}?.isEmpty == false") },
-                    ));
-                } else if field_is_optional {
-                    out.push_str(&crate::e2e::template_env::render(
-                        "swift/not_empty_assertion.swift.jinja",
-                        minijinja::context! { predicate => format!("{field_expr} != nil") },
-                    ));
-                } else if field_is_array {
-                    out.push_str(&crate::e2e::template_env::render(
-                        "swift/not_empty_assertion.swift.jinja",
-                        minijinja::context! { predicate => format!("!{field_expr}.isEmpty") },
-                    ));
-                } else if result_is_simple {
-                    // result_is_simple: result is a primitive (Data, String, etc.) — use .isEmpty directly.
-                    let _ = writeln!(
-                        out,
-                        "        XCTAssertFalse({result_var}.isEmpty, \"expected non-empty value\")"
+                        "        XCTAssertGreaterThan({len_expr}, 0, \"expected non-empty value\")"
                     );
                 } else {
-                    // First-class Swift struct fields are properties typed as native Swift
-                    // `String` / `[T]` / `Data` etc — all of which expose `.count` (and
-                    // `String`/`Array` also expose `.isEmpty`). Use `.count > 0` so the same
-                    // path works whether the field is a String or an Array.
-                    //
-                    // When the accessor contains a `?.` optional chain, `.count` returns an
-                    // Optional which Swift cannot compare directly to `0`; coalesce via `?? 0`
-                    // so the assertion typechecks.
-                    //
-                    // For opaque method-call accessors (`result.id()`), the returned type is
-                    // `RustString`, which lacks `.count`. Convert to Swift `String` first via
-                    // `.toString()`. Array fields short-circuit above via `field_is_array`, so
-                    // method-call accessors landing here are guaranteed to be the scalar /
-                    // string flavour; vec accessors return `RustVec` (whose `.count` is fine).
-                    if let Some(count_target) =
-                        swift_count_target(&field_expr, field_resolver, assertion.field.as_deref())
-                    {
-                        let len_expr = if accessor_is_optional {
-                            format!("({count_target}.count ?? 0)")
-                        } else {
-                            format!("{count_target}.count")
-                        };
-                        let _ = writeln!(
-                            out,
-                            "        XCTAssertGreaterThan({len_expr}, 0, \"expected non-empty value\")"
-                        );
-                    } else {
-                        let _ = writeln!(
-                            out,
-                            "        // skipped: field is a scalar String without meaningful .count"
-                        );
-                    }
+                    let _ = writeln!(
+                        out,
+                        "        // skipped: field is a scalar String without meaningful .count"
+                    );
                 }
             }
         }
@@ -950,4 +848,146 @@ pub(super) fn render_assertion(
             panic!("Swift e2e generator: unsupported assertion type: {other}");
         }
     }
+}
+
+/// Render an assertion whose field path traverses an array with `[].` (e.g. `links[].url`).
+///
+/// `dot` is the byte offset of the `[].` separator in `field`, so `field[..dot]` is the array
+/// path and `field[dot + 3..]` the per-element sub-path.
+///
+/// The wildcard means "some element of the array satisfies this", which Swift expresses as
+/// `array.contains(where: { ... })`. Only the assertion types with a predicate form get that
+/// treatment; every other type is refused with a visible skip.
+///
+/// Refusing is deliberate. The alternative — falling through to the generic accessor — is not
+/// "no traversal", it is a *different assertion*: the shared resolver lowers `foo[]` to
+/// `PathSegment::ArrayField { index: 0 }`, so the emitted Swift reads `result.foo()[0].bar()`
+/// and passes whenever element zero happens to match, while claiming to cover the whole array.
+/// That is a false green, which is strictly worse than a gap you can see. `zig` refuses the
+/// nested-wildcard case for exactly this reason (`zig/assertions.rs`), and the skip wording
+/// here is the one the other twelve backends already emit, so a wildcard `equals` is a
+/// recorded gap in every language rather than a Swift-only accidental pass. ~keep
+fn render_wildcard_assertion(
+    out: &mut String,
+    assertion: &Assertion,
+    field: &str,
+    dot: usize,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    enum_fields: &HashSet<String>,
+) {
+    let array_part = &field[..dot];
+    let elem_part = &field[dot + 3..];
+
+    match assertion.assertion_type.as_str() {
+        "contains" => {
+            if let Some(expected) = &assertion.value {
+                emit_wildcard_contains(
+                    out,
+                    expected,
+                    false,
+                    array_part,
+                    elem_part,
+                    field,
+                    result_var,
+                    field_resolver,
+                    enum_fields,
+                );
+            }
+        }
+        "contains_all" => {
+            if let Some(values) = &assertion.values {
+                for value in values {
+                    emit_wildcard_contains(
+                        out,
+                        value,
+                        false,
+                        array_part,
+                        elem_part,
+                        field,
+                        result_var,
+                        field_resolver,
+                        enum_fields,
+                    );
+                }
+            }
+        }
+        "not_contains" => {
+            for expected in assertion.expected_values() {
+                emit_wildcard_contains(
+                    out,
+                    expected,
+                    true,
+                    array_part,
+                    elem_part,
+                    field,
+                    result_var,
+                    field_resolver,
+                    enum_fields,
+                );
+            }
+        }
+        "not_empty" => {
+            let array_accessor = field_resolver.accessor(array_part, "swift", result_var);
+            let resolved_full = field_resolver.resolve(field);
+            let resolved_elem_part = resolved_full
+                .find("[].")
+                .map(|d| &resolved_full[d + 3..])
+                .unwrap_or(elem_part);
+            let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
+            let elem_is_enum = enum_fields.contains(field) || enum_fields.contains(resolved_full);
+            let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
+                || field_resolver.is_optional(field_resolver.resolve(resolved_elem_part));
+            let elem_str = if elem_is_enum {
+                format!("{elem_accessor}.to_string().toString()")
+            } else if elem_is_optional {
+                format!("({elem_accessor}?.toString() ?? \"\")")
+            } else {
+                format!("{elem_accessor}.toString()")
+            };
+            let _ = writeln!(
+                out,
+                "        XCTAssertTrue({array_accessor}.contains(where: {{ !{elem_str}.isEmpty }}), \"expected non-empty value\")"
+            );
+        }
+        other => {
+            let _ = writeln!(
+                out,
+                "        // skipped: unsupported traversal assertion '{other}' on '{field}'"
+            );
+        }
+    }
+}
+
+/// Emit one `XCTAssert{True,False}(array.contains(where: { … }), …)` line for a wildcard path.
+#[allow(clippy::too_many_arguments)]
+fn emit_wildcard_contains(
+    out: &mut String,
+    value: &serde_json::Value,
+    negate: bool,
+    array_part: &str,
+    elem_part: &str,
+    field: &str,
+    result_var: &str,
+    field_resolver: &FieldResolver,
+    enum_fields: &HashSet<String>,
+) {
+    let swift_val = json_to_swift(value);
+    let msg = if negate {
+        format!("expected NOT to contain: \\({swift_val})")
+    } else {
+        format!("expected to contain: \\({swift_val})")
+    };
+    let line = swift_traversal_contains_assert(
+        array_part,
+        elem_part,
+        field,
+        &swift_val,
+        result_var,
+        negate,
+        &msg,
+        enum_fields,
+        field_resolver,
+    );
+    let _ = writeln!(out, "{line}");
 }

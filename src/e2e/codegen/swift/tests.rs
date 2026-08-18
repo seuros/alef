@@ -34,6 +34,7 @@ fn swift_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
     )
     .with_ir_fields(reachable, HashSet::new());
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("data".to_string()),
         value: Some(serde_json::Value::String("hello".to_string())),
@@ -80,6 +81,7 @@ fn swift_ir_excluded_field_present_in_result_fields_is_still_skipped() {
     )
     .with_ir_fields(HashSet::new(), excluded);
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("internal_diagnostics".to_string()),
         value: Some(serde_json::Value::String("hello".to_string())),
@@ -123,6 +125,7 @@ fn not_empty_is_type_aware_for_optional_values() {
         }
         let resolver = FieldResolver::new(&HashMap::new(), &optional, &HashSet::new(), &arrays, &HashSet::new());
         let assertion = Assertion {
+            skip: None,
             assertion_type: "not_empty".to_string(),
             field: Some(field.to_string()),
             value: None,
@@ -154,6 +157,7 @@ fn not_empty_is_type_aware_for_optional_values() {
 
 fn not_error_assertion() -> Assertion {
     Assertion {
+        skip: None,
         assertion_type: "not_error".to_string(),
         field: None,
         value: None,
@@ -879,5 +883,201 @@ fn test_file_readiness_probe_requires_actual_http_response() {
     assert!(
         output.contains("Failed to start harness"),
         "must still fatalError when the harness process fails to launch"
+    );
+}
+
+/// Resolver whose only registered array field is `links`, mirroring the rust backend's
+/// wildcard tests so the two suites pin the same fixture shape.
+fn wildcard_resolver() -> FieldResolver {
+    FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::from(["links".to_string()]),
+        &HashSet::new(),
+    )
+}
+
+fn render_field_assertion(
+    resolver: &FieldResolver,
+    assertion_type: &str,
+    field: &str,
+    value: Option<serde_json::Value>,
+) -> String {
+    let assertion = Assertion {
+        skip: None,
+        assertion_type: assertion_type.to_string(),
+        field: Some(field.to_string()),
+        value,
+        values: None,
+        method: None,
+        check: None,
+        args: None,
+        return_type: None,
+    };
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        resolver,
+        false,
+        false,
+        false,
+        false,
+        &HashMap::new(),
+        &HashSet::new(),
+        false,
+        false,
+    );
+    out
+}
+
+/// Canary for the wildcard defect. `equals` had no `[].` branch, so `links[].url` fell through
+/// to the generic accessor — which lowers `links[]` to `links[0]` — and emitted
+/// `XCTAssertEqual(result.links()[0].url().toString(), "…")`. That is a *different* assertion
+/// from the one the fixture wrote: it passes whenever element zero matches while claiming to
+/// cover the array, so the suite was green on a property false for every later element. The
+/// backend cannot traverse `equals`, so the only honest output is a visible skip. Against the
+/// pre-fix generator the emitted text contains `[0]` and every assertion below fails. ~keep
+#[test]
+fn swift_wildcard_equals_leaves_a_visible_skip_instead_of_asserting_element_zero() {
+    let out = render_field_assertion(
+        &wildcard_resolver(),
+        "equals",
+        "links[].url",
+        Some(serde_json::Value::String("https://example.com".to_string())),
+    );
+    assert_eq!(
+        out.trim_end(),
+        "        // skipped: unsupported traversal assertion 'equals' on 'links[].url'",
+        "got: {out}"
+    );
+    assert!(!out.contains("[0]"), "wildcard must not pin element 0, got: {out}");
+    assert!(
+        !out.contains("XCTAssert"),
+        "a refused traversal must emit no assertion at all, got: {out}"
+    );
+}
+
+/// The same silent narrowing reached every other arm without a `[].` branch. Each must now
+/// refuse visibly rather than assert against element zero. ~keep
+#[test]
+fn swift_wildcard_scalar_assertions_all_refuse_visibly() {
+    let resolver = wildcard_resolver();
+    let cases = [
+        ("starts_with", Some(serde_json::json!("http"))),
+        ("ends_with", Some(serde_json::json!(".com"))),
+        ("matches_regex", Some(serde_json::json!("^http"))),
+        ("min_length", Some(serde_json::json!(1))),
+        ("max_length", Some(serde_json::json!(80))),
+        ("greater_than", Some(serde_json::json!(1))),
+        ("less_than", Some(serde_json::json!(9))),
+        ("greater_than_or_equal", Some(serde_json::json!(1))),
+        ("less_than_or_equal", Some(serde_json::json!(9))),
+        ("count_min", Some(serde_json::json!(1))),
+        ("count_equals", Some(serde_json::json!(2))),
+        ("is_true", None),
+        ("is_false", None),
+        ("is_empty", None),
+        ("contains_any", None),
+    ];
+    for (assertion_type, value) in cases {
+        let out = render_field_assertion(&resolver, assertion_type, "links[].url", value);
+        assert_eq!(
+            out.trim_end(),
+            format!("        // skipped: unsupported traversal assertion '{assertion_type}' on 'links[].url'"),
+            "assertion type {assertion_type}: {out}"
+        );
+        assert!(
+            !out.contains("[0]"),
+            "assertion type {assertion_type} must not pin element 0, got: {out}"
+        );
+    }
+}
+
+/// `is_empty` was listed in the old `traversal_skips_field_expr` suppression set but had no
+/// traversal branch to suppress for, so it dropped the `let _vec_… = result.links()` binding
+/// while still emitting an expression that referenced that local — Swift naming an undeclared
+/// variable. The refusal removes the expression, so no dangling local can survive. ~keep
+#[test]
+fn swift_wildcard_is_empty_emits_no_reference_to_a_dropped_vec_local() {
+    let out = render_field_assertion(&wildcard_resolver(), "is_empty", "links[].url", None);
+    assert!(!out.contains("_vec_"), "got: {out}");
+}
+
+/// The four arms that *can* traverse must keep doing so — the pre-dispatch moved their code,
+/// it did not remove it. `contains` quantifies over the array and names no index. ~keep
+#[test]
+fn swift_wildcard_contains_still_quantifies_over_every_element() {
+    let out = render_field_assertion(
+        &wildcard_resolver(),
+        "contains",
+        "links[].url",
+        Some(serde_json::Value::String("example".to_string())),
+    );
+    assert!(
+        out.contains("XCTAssertTrue(result.links().contains(where: { $0.url().toString().contains(\"example\") })"),
+        "got: {out}"
+    );
+    assert!(!out.contains("[0]"), "traversal must be index-free, got: {out}");
+}
+
+#[test]
+fn swift_wildcard_not_contains_still_quantifies_over_every_element() {
+    let out = render_field_assertion(
+        &wildcard_resolver(),
+        "not_contains",
+        "links[].url",
+        Some(serde_json::Value::String("example".to_string())),
+    );
+    assert!(
+        out.contains("XCTAssertFalse(result.links().contains(where:"),
+        "got: {out}"
+    );
+    assert!(!out.contains("[0]"), "traversal must be index-free, got: {out}");
+}
+
+#[test]
+fn swift_wildcard_not_empty_still_quantifies_over_every_element() {
+    let out = render_field_assertion(&wildcard_resolver(), "not_empty", "links[].url", None);
+    assert!(
+        out.contains("XCTAssertTrue(result.links().contains(where: { !$0.url().toString().isEmpty })"),
+        "got: {out}"
+    );
+    assert!(!out.contains("[0]"), "traversal must be index-free, got: {out}");
+}
+
+/// The guard that the pre-dispatch does not over-capture: an explicitly indexed path is not a
+/// wildcard, so it must still emit a real index-0 assertion rather than becoming a skip. This
+/// is what stops the fix from silently deleting working coverage. ~keep
+#[test]
+fn swift_explicit_index_still_asserts_against_that_element() {
+    let out = render_field_assertion(
+        &wildcard_resolver(),
+        "equals",
+        "links[0].url",
+        Some(serde_json::Value::String("https://example.com".to_string())),
+    );
+    assert!(out.contains("XCTAssertEqual("), "got: {out}");
+    assert!(out.contains("[0].url().toString()"), "got: {out}");
+    assert!(
+        !out.contains("skipped"),
+        "an explicit index is not a traversal, got: {out}"
+    );
+}
+
+/// A non-wildcard field must be untouched by the pre-dispatch. ~keep
+#[test]
+fn swift_plain_field_equals_is_unaffected_by_the_wildcard_pre_dispatch() {
+    let out = render_field_assertion(
+        &wildcard_resolver(),
+        "equals",
+        "title",
+        Some(serde_json::Value::String("hello".to_string())),
+    );
+    assert_eq!(
+        out.trim_end(),
+        "        XCTAssertEqual(result.title().toString(), \"hello\")"
     );
 }
