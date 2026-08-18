@@ -389,16 +389,50 @@ impl CsharpValidator {
     /// Splits a snippet body at the first top-level type declaration. C# allows type declarations
     /// only *after* top-level statements, so everything from that point on belongs at namespace
     /// scope rather than inside the wrapper method — a type cannot be declared in a method body.
+    /// Split a snippet body into its top-level statements and the type declarations that follow.
+    ///
+    /// The split point is found by brace depth, not by column. Requiring a declaration to start at
+    /// column zero looked equivalent and is not: alef's own C# snippet generator indents a trailing
+    /// `sealed class` by four spaces, so the declaration was left inside the wrapper method, where
+    /// C# does not allow one -- 54 of one consumer's 283 snippets failed on `CS1513: } expected`.
+    /// Depth is what the guard was actually reaching for, since the case it must not match is a
+    /// `class` nested inside a method body. ~keep
     fn split_type_declarations(body: &str) -> (String, String) {
-        let lines: Vec<&str> = body.lines().collect();
-        match lines.iter().position(|line| Self::is_type_declaration(line)) {
-            Some(index) => (lines[..index].join("\n"), lines[index..].join("\n")),
-            None => (body.to_owned(), String::new()),
+        let mut depth = 0usize;
+        for (index, line) in body.lines().enumerate() {
+            if depth == 0 && Self::is_type_declaration(line) {
+                let lines: Vec<&str> = body.lines().collect();
+                return (lines[..index].join("\n"), lines[index..].join("\n"));
+            }
+            depth = Self::brace_depth_after(line, depth);
         }
+        (body.to_owned(), String::new())
+    }
+
+    /// Brace depth after `line`, ignoring braces inside string and character literals.
+    fn brace_depth_after(line: &str, depth: usize) -> usize {
+        let mut depth = depth;
+        let mut characters = line.chars().peekable();
+        let mut quote: Option<char> = None;
+        while let Some(character) = characters.next() {
+            match (quote, character) {
+                (Some(_), '\\') => {
+                    characters.next();
+                }
+                (Some(open), current) if current == open => quote = None,
+                (Some(_), _) => {}
+                (None, '"' | '\'') => quote = Some(character),
+                (None, '{') => depth += 1,
+                (None, '}') => depth = depth.saturating_sub(1),
+                (None, _) => {}
+            }
+        }
+        depth
     }
 
     fn is_type_declaration(line: &str) -> bool {
-        if line.trim().is_empty() || line.starts_with(char::is_whitespace) {
+        let line = line.trim_start();
+        if line.is_empty() {
             return false;
         }
         if line.starts_with('[') && line.trim_end().ends_with(']') {
@@ -680,6 +714,39 @@ mod tests {
 
     /// A type cannot be declared inside a method body, so trailing type declarations have to stay
     /// at namespace scope while the statements before them move into the wrapper. ~keep
+    /// The defect: `is_type_declaration` rejected any indented line, and alef's own C# snippet
+    /// generator indents a trailing `sealed class` by four spaces. The declaration was therefore
+    /// left inside the wrapper method, where C# does not permit one, and 54 of one consumer's 283
+    /// snippets failed on `CS1513: } expected`. ~keep
+    #[test]
+    fn an_indented_trailing_type_declaration_still_reaches_namespace_scope() {
+        let source = CsharpValidator::batch_source(
+            "System.Console.WriteLine(1);\n    sealed class Helper\n    {\n        public int Value => 1;\n    }\n",
+            "AlefSnippetX",
+        );
+
+        assert!(
+            source.contains("}\n\n    sealed class Helper"),
+            "the class must sit outside the wrapper method: {source}"
+        );
+        assert!(
+            !source.contains("Run(string[] args)\n    {\nSystem.Console.WriteLine(1);\n    sealed class"),
+            "the class must not remain inside the method body: {source}"
+        );
+    }
+
+    /// The control the column guard was actually reaching for: a `class` token inside a method body
+    /// is not a trailing declaration, and splitting there would cut the statements in half.
+    #[test]
+    fn a_type_keyword_nested_inside_a_brace_block_is_not_a_split_point() {
+        let (statements, declarations) = CsharpValidator::split_type_declarations(
+            "if (true)\n{\n    var class_count = 1;\n    record Inner(int X);\n}\nSystem.Console.WriteLine(2);\n",
+        );
+
+        assert!(statements.contains("System.Console.WriteLine(2);"), "{statements}");
+        assert!(declarations.is_empty(), "nothing here is a trailing declaration: {declarations}");
+    }
+
     #[test]
     fn trailing_type_declarations_stay_at_namespace_scope() {
         let source = CsharpValidator::batch_source(

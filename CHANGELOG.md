@@ -106,6 +106,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emit side only; the ownership predicate is deliberately unchanged, because reclassifying `.R` from unmarkable to
   markable would retroactively freeze every already-committed `.R` that proves ownership through the record.
 
+- **A C# snippet's visitor class is emitted at file scope without the e2e test class's nesting
+  indent**, and the batch validator finds the statement/declaration boundary by brace depth rather
+  than by column. Either half alone left the class inside the wrapper method, where C# does not allow
+  one: 54 of one consumer's 283 C# snippets failed on `CS1513: } expected`.
 - **Zig snippets no longer rebind the allocator teardown.** The rewrite that names the discarded call
   result ran per line with no guard, so it also matched the teardown every snippet emits:
   `defer _ = gpa.deinit();` became `defer const result = gpa.deinit();`, which no Zig grammar accepts.

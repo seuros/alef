@@ -177,7 +177,15 @@ pub(super) fn render_snippet_body_with_ir(
             fixture_id => fixture.id,
             api_key_var => api_key_var,
             expects_error => expects_error,
-            visitor_declarations => visitor_declarations,
+            // `build_csharp_visitor` indents its class by four spaces so the e2e test file can nest
+            // it inside the test class. A snippet is top-level statements followed by file-scope
+            // declarations, where that indent is just wrong — and it was load-bearing wrong: the
+            // batch validator's statement/declaration split keyed on column, so an indented class
+            // stayed inside the wrapper method and failed to compile. ~keep
+            visitor_declarations => visitor_declarations
+                .iter()
+                .map(|declaration| dedent_file_scope_declaration(declaration))
+                .collect::<Vec<_>>(),
             presentation => presentation,
         },
     ))
@@ -238,6 +246,27 @@ fn replace_or_append_options(args: &str, options_type: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::dedent_file_scope_declaration;
+
+    /// `build_csharp_visitor` indents its class for nesting inside an e2e test class. A snippet puts
+    /// it at file scope after top-level statements, and the stray indent was not merely cosmetic:
+    /// the batch validator's statement/declaration split keyed on column, so the indented class
+    /// stayed inside the wrapper method and 54 of one consumer's snippets failed to compile. ~keep
+    #[test]
+    fn a_file_scope_declaration_loses_the_nesting_indent() {
+        let nested = "    sealed class ExampleVisitor : IHtmlVisitor\n    {\n        public int Value => 1;\n    }";
+
+        assert_eq!(
+            dedent_file_scope_declaration(nested),
+            "sealed class ExampleVisitor : IHtmlVisitor\n{\n    public int Value => 1;\n}"
+        );
+    }
+
+    #[test]
+    fn a_blank_line_survives_dedenting_unchanged() {
+        assert_eq!(dedent_file_scope_declaration("    class A\n\n    {\n    }"), "class A\n\n{\n}");
+    }
+
     use super::*;
     use crate::e2e::config::{CallConfig, CallOverride};
 
@@ -763,4 +792,15 @@ mod tests {
             "a snippet that constructs no client must not declare one:\n{body}"
         );
     }
+}
+
+/// Strip the uniform four-space indent `build_csharp_visitor` adds for nesting inside an e2e test
+/// class, so the same declaration reads correctly at a snippet's file scope. Lines that do not
+/// carry the indent (blank ones) are passed through unchanged.
+fn dedent_file_scope_declaration(declaration: &str) -> String {
+    declaration
+        .lines()
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
