@@ -35,12 +35,60 @@ fn identity(s: &str) -> String {
     s.to_string()
 }
 
+/// Outcome of reading a version out of a manifest that is already known to exist.
+///
+/// ~keep The three states must stay distinct. The `push_*` helpers check `exists()`
+/// first, so a reader that yields nothing has proven a failure, not an absence —
+/// collapsing "could not read/parse" back into the same `None` as "declares no
+/// version field" is what let `validate versions --exit-code` certify manifests it
+/// never examined. `NoVersionField` stays a skip on purpose: `sync-versions`
+/// (`pipeline::version`) also leaves versionless manifests alone, so the write side
+/// and the gate agree on which manifests are managed.
+#[derive(Debug, PartialEq, Eq)]
+enum ReadOutcome {
+    /// The manifest declares a version.
+    Found(String),
+    /// The manifest parsed but declares no version field — not managed here.
+    NoVersionField,
+    /// The manifest exists but could not be read or parsed; carries the reason.
+    Unreadable(String),
+}
+
+type VersionReader = fn(&Path) -> ReadOutcome;
+
+/// Read `path` to a string and run a line/text scanner over it, mapping an I/O
+/// failure to [`ReadOutcome::Unreadable`] and a scanner miss to
+/// [`ReadOutcome::NoVersionField`].
+fn scan_text(path: &Path, scan: impl FnOnce(&str) -> Option<String>) -> ReadOutcome {
+    match std::fs::read_to_string(path) {
+        Ok(content) => scan(&content).map_or(ReadOutcome::NoVersionField, ReadOutcome::Found),
+        Err(error) => ReadOutcome::Unreadable(format!("read failed: {error}")),
+    }
+}
+
+/// Record a manifest that exists but whose version could not be read, as a
+/// FAILING check so it reaches the `--exit-code` verdict in `release_commands`.
+fn push_unreadable(checks: &mut Vec<VersionCheck>, label: String, reason: &str) {
+    tracing::error!(
+        manifest = %label,
+        reason = %reason,
+        "manifest exists but its version could not be read"
+    );
+    checks.push(VersionCheck {
+        label,
+        found: None,
+        matches: false,
+    });
+}
+
 /// A single manifest version check result.
 #[derive(Debug)]
 pub struct VersionCheck {
     /// Human-readable label (e.g. "packages/python/pyproject.toml").
     pub label: String,
-    /// Version found in this manifest. `None` means the file/field was absent.
+    /// Version found in this manifest. `None` means the manifest exists but could
+    /// not be read or parsed, which is always a failing check — manifests that are
+    /// merely absent or versionless produce no `VersionCheck` at all.
     pub found: Option<String>,
     /// Whether this manifest matches the canonical version.
     pub matches: bool,
@@ -69,9 +117,11 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
                 })
             })
             .collect();
+        // ~keep `all()` is vacuously true on an empty vector, so a run that examined
+        // nothing used to report `"ok": true`. Zero checks is a failure, not a pass.
         let out = json!({
             "canonical": canonical,
-            "ok": checks.iter().all(|c| c.matches),
+            "ok": !checks.is_empty() && checks.iter().all(|c| c.matches),
             "checks": entries,
         });
         crate::bin_cli::output::payload(serde_json::to_string_pretty(&out)?);
@@ -79,13 +129,19 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
         crate::bin_cli::output::line(format!("Canonical version: {canonical}"));
         crate::bin_cli::output::line("-".repeat(40));
         for check in &checks {
-            let status = if check.matches { "ok" } else { "MISMATCH" };
-            let found = check.found.as_deref().unwrap_or("<not found>");
+            let status = match (check.matches, check.found.is_some()) {
+                (true, _) => "ok",
+                (false, true) => "MISMATCH",
+                (false, false) => "UNREADABLE",
+            };
+            let found = check.found.as_deref().unwrap_or("<unreadable>");
             crate::bin_cli::output::line(format!("  [{status}] {} = {found}", check.label));
         }
         crate::bin_cli::output::line("-".repeat(40));
         let mismatches: Vec<_> = checks.iter().filter(|c| !c.matches).collect();
-        if mismatches.is_empty() {
+        if checks.is_empty() {
+            crate::bin_cli::output::line("No manifests examined - nothing was verified.");
+        } else if mismatches.is_empty() {
             crate::bin_cli::output::line(format!("All {} manifests consistent: {canonical}", checks.len()));
         } else {
             crate::bin_cli::output::line(format!("{} mismatch(es) found:", mismatches.len()));
@@ -93,6 +149,18 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
                 crate::bin_cli::output::line(format!("  FAIL  {} (found: {:?})", m.label, m.found));
             }
         }
+    }
+
+    // ~keep An empty check set is the gate examining nothing, which the caller's
+    // `checks.iter().any(|c| !c.matches)` verdict cannot distinguish from success.
+    // Fail here rather than downstream so the run is non-zero even without
+    // `--exit-code`: "nothing to verify" is never a valid release-gate pass.
+    if checks.is_empty() {
+        anyhow::bail!(
+            "version validation examined 0 manifests for crate `{}` (canonical {canonical}) - nothing was verified; \
+             check that the configured package directories exist and are readable",
+            config.name
+        );
     }
 
     Ok(checks)
@@ -149,17 +217,18 @@ fn collect_checks(config: &ResolvedCrateConfig, workspace_root: &Path, canonical
         );
     }
 
+    // ~keep composer.json routinely omits `version` (Packagist derives it from tags).
+    // That used to need a pre-guard here; `push_check_if_exists` now skips
+    // `NoVersionField` itself, and the pre-guard would have re-swallowed an
+    // *unreadable* composer.json, so it is gone.
     let php_dir = config.package_dir(crate::core::config::extras::Language::Php);
-    let php_path = format!("{php_dir}/composer.json");
-    if workspace_root.join(&php_path).exists() && read_package_json_version(&workspace_root.join(&php_path)).is_some() {
-        push_check_if_exists(
-            &mut checks,
-            canonical,
-            &php_path,
-            workspace_root,
-            read_package_json_version,
-        );
-    }
+    push_check_if_exists(
+        &mut checks,
+        canonical,
+        &format!("{php_dir}/composer.json"),
+        workspace_root,
+        read_package_json_version,
+    );
 
     // Elixir: mix.exs uses either `@version "..."` (constant) or `version: "..."` (keyword).
     let elixir_dir = config.package_dir(crate::core::config::extras::Language::Elixir);
@@ -228,15 +297,15 @@ fn collect_checks(config: &ResolvedCrateConfig, workspace_root: &Path, canonical
 }
 
 /// Push a check only when the file actually exists and exposes a version
-/// field. Absent files / absent version fields are silently skipped —
-/// they're treated as "not configured for this repo" rather than
-/// "mismatch with no version".
+/// field. Absent files and absent version fields are skipped — they're
+/// "not configured for this repo". A file that exists but cannot be read or
+/// parsed is NOT skipped: it becomes a failing check.
 fn push_check_if_exists(
     checks: &mut Vec<VersionCheck>,
     canonical: &str,
     rel_path: &str,
     workspace_root: &Path,
-    reader: fn(&Path) -> Option<String>,
+    reader: VersionReader,
 ) {
     push_check_with_transform(checks, canonical, rel_path, workspace_root, reader, identity);
 }
@@ -251,24 +320,25 @@ fn push_check_with_transform(
     canonical: &str,
     rel_path: &str,
     workspace_root: &Path,
-    reader: fn(&Path) -> Option<String>,
+    reader: VersionReader,
     transform: fn(&str) -> String,
 ) {
     let full_path = workspace_root.join(rel_path);
     if !full_path.exists() {
         return;
     }
-    let found = reader(&full_path);
-    let Some(ref found_value) = found else {
-        return;
-    };
-    let expected_in_format = transform(canonical);
-    let matches = found_value == &expected_in_format;
-    checks.push(VersionCheck {
-        label: rel_path.to_string(),
-        found,
-        matches,
-    });
+    match reader(&full_path) {
+        ReadOutcome::Found(found_value) => {
+            let matches = found_value == transform(canonical);
+            checks.push(VersionCheck {
+                label: rel_path.to_string(),
+                found: Some(found_value),
+                matches,
+            });
+        }
+        ReadOutcome::NoVersionField => {}
+        ReadOutcome::Unreadable(reason) => push_unreadable(checks, rel_path.to_string(), &reason),
+    }
 }
 
 /// Join a (possibly trailing-slash) manifest directory with a file name without
@@ -298,22 +368,25 @@ fn push_normalized_check(
     canonical: &str,
     rel_path: &str,
     workspace_root: &Path,
-    reader: fn(&Path) -> Option<String>,
+    reader: VersionReader,
     normalize: fn(&str) -> String,
 ) {
     let full_path = workspace_root.join(rel_path);
     if !full_path.exists() {
         return;
     }
-    let Some(found_value) = reader(&full_path) else {
-        return;
-    };
-    let matches = normalize(&found_value) == normalize(canonical);
-    checks.push(VersionCheck {
-        label: rel_path.to_string(),
-        found: Some(found_value),
-        matches,
-    });
+    match reader(&full_path) {
+        ReadOutcome::Found(found_value) => {
+            let matches = normalize(&found_value) == normalize(canonical);
+            checks.push(VersionCheck {
+                label: rel_path.to_string(),
+                found: Some(found_value),
+                matches,
+            });
+        }
+        ReadOutcome::NoVersionField => {}
+        ReadOutcome::Unreadable(reason) => push_unreadable(checks, rel_path.to_string(), &reason),
+    }
 }
 
 /// Glob variant of [`push_check_with_transform`]. Walks `pattern`
@@ -326,7 +399,7 @@ fn push_glob_checks_with_transform(
     canonical: &str,
     pattern: &str,
     workspace_root: &Path,
-    reader: fn(&Path) -> Option<String>,
+    reader: VersionReader,
     transform: fn(&str) -> String,
 ) {
     let abs_pattern = workspace_root.join(pattern);
@@ -342,95 +415,116 @@ fn push_glob_checks_with_transform(
             .strip_prefix(workspace_root)
             .map(|p| p.display().to_string())
             .unwrap_or_else(|_| entry.display().to_string());
-        let found = reader(&entry);
-        let Some(ref found_value) = found else {
-            continue;
-        };
-        let matches = found_value == &expected;
-        checks.push(VersionCheck { label, found, matches });
-    }
-}
-
-fn read_pyproject_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("version") && trimmed.contains('=') {
-            let val = trimmed.split_once('=')?.1.trim();
-            return Some(val.trim_matches('"').trim_matches('\'').to_string());
+        match reader(&entry) {
+            ReadOutcome::Found(found_value) => {
+                let matches = found_value == expected;
+                checks.push(VersionCheck {
+                    label,
+                    found: Some(found_value),
+                    matches,
+                });
+            }
+            ReadOutcome::NoVersionField => {}
+            ReadOutcome::Unreadable(reason) => push_unreadable(checks, label, &reason),
         }
     }
-    None
 }
 
-fn read_package_json_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
-    val["version"].as_str().map(|s| s.to_string())
-}
-
-fn read_ruby_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        if line.contains("VERSION") && line.contains('=') {
-            let val = line.split_once('=')?.1.trim();
-            return Some(val.trim_matches('"').trim_matches('\'').to_string());
+fn read_pyproject_version(path: &Path) -> ReadOutcome {
+    scan_text(path, |content| {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("version") && trimmed.contains('=') {
+                let val = trimmed.split_once('=')?.1.trim();
+                return Some(val.trim_matches('"').trim_matches('\'').to_string());
+            }
         }
-    }
-    None
+        None
+    })
 }
 
-fn read_mix_exs_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        let trimmed = line.trim();
-        // Module-attribute form: `@version "X.Y.Z"`.
-        if trimmed.starts_with("@version") {
-            let val = trimmed.split_once('"')?.1;
-            let val = val.split('"').next()?;
-            return Some(val.to_string());
-        }
-        if let Some(rest) = trimmed.strip_prefix("version:") {
-            let val = rest.split_once('"')?.1;
-            let val = val.split('"').next()?;
-            return Some(val.to_string());
-        }
-    }
-    None
+fn read_package_json_version(path: &Path) -> ReadOutcome {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) => return ReadOutcome::Unreadable(format!("read failed: {error}")),
+    };
+    // ~keep A JSON syntax error is a failed read, not a missing field: a truncated or
+    // half-written package.json must fail the gate, never pass as "not configured".
+    let val: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(val) => val,
+        Err(error) => return ReadOutcome::Unreadable(format!("invalid JSON: {error}")),
+    };
+    val["version"]
+        .as_str()
+        .map_or(ReadOutcome::NoVersionField, |s| ReadOutcome::Found(s.to_string()))
 }
 
-fn read_go_doc_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        let lower = line.to_lowercase();
-        if lower.contains("version") || lower.contains("targets") {
-            for token in line.split_whitespace().rev() {
-                if token.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && token.contains('.') {
-                    return Some(token.trim_end_matches('.').to_string());
+fn read_ruby_version(path: &Path) -> ReadOutcome {
+    scan_text(path, |content| {
+        for line in content.lines() {
+            if line.contains("VERSION") && line.contains('=') {
+                let val = line.split_once('=')?.1.trim();
+                return Some(val.trim_matches('"').trim_matches('\'').to_string());
+            }
+        }
+        None
+    })
+}
+
+fn read_mix_exs_version(path: &Path) -> ReadOutcome {
+    scan_text(path, |content| {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            // Module-attribute form: `@version "X.Y.Z"`.
+            if trimmed.starts_with("@version") {
+                let val = trimmed.split_once('"')?.1;
+                let val = val.split('"').next()?;
+                return Some(val.to_string());
+            }
+            if let Some(rest) = trimmed.strip_prefix("version:") {
+                let val = rest.split_once('"')?.1;
+                let val = val.split('"').next()?;
+                return Some(val.to_string());
+            }
+        }
+        None
+    })
+}
+
+fn read_go_doc_version(path: &Path) -> ReadOutcome {
+    scan_text(path, |content| {
+        for line in content.lines() {
+            let lower = line.to_lowercase();
+            if lower.contains("version") || lower.contains("targets") {
+                for token in line.split_whitespace().rev() {
+                    if token.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) && token.contains('.') {
+                        return Some(token.trim_end_matches('.').to_string());
+                    }
                 }
             }
         }
-    }
-    None
+        None
+    })
 }
 
-fn read_pom_xml_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let text = content.as_str();
-    let start = text.find("<version>")?;
-    let inner_start = start + "<version>".len();
-    let end = text[inner_start..].find("</version>")?;
-    Some(text[inner_start..inner_start + end].to_string())
+fn read_pom_xml_version(path: &Path) -> ReadOutcome {
+    scan_text(path, |content| {
+        let start = content.find("<version>")?;
+        let inner_start = start + "<version>".len();
+        let end = content[inner_start..].find("</version>")?;
+        Some(content[inner_start..inner_start + end].to_string())
+    })
 }
 
-fn read_description_version(path: &Path) -> Option<String> {
-    let content = std::fs::read_to_string(path).ok()?;
-    for line in content.lines() {
-        if let Some(rest) = line.strip_prefix("Version:") {
-            return Some(rest.trim().to_string());
+fn read_description_version(path: &Path) -> ReadOutcome {
+    scan_text(path, |content| {
+        for line in content.lines() {
+            if let Some(rest) = line.strip_prefix("Version:") {
+                return Some(rest.trim().to_string());
+            }
         }
-    }
-    None
+        None
+    })
 }
 
 /// Read the workspace version from Cargo.toml directly.
@@ -497,12 +591,16 @@ version_from = "{root_str}/Cargo.toml"
         cfg.resolve().unwrap().remove(0)
     }
 
+    fn found(version: &str) -> ReadOutcome {
+        ReadOutcome::Found(version.to_string())
+    }
+
     #[test]
     fn read_pyproject_version_ok() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("pyproject.toml");
         fs::write(&path, "[project]\nversion = \"1.2.3\"\n").unwrap();
-        assert_eq!(read_pyproject_version(&path), Some("1.2.3".to_string()));
+        assert_eq!(read_pyproject_version(&path), found("1.2.3"));
     }
 
     #[test]
@@ -510,7 +608,7 @@ version_from = "{root_str}/Cargo.toml"
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("package.json");
         fs::write(&path, r#"{"name":"foo","version":"2.0.0"}"#).unwrap();
-        assert_eq!(read_package_json_version(&path), Some("2.0.0".to_string()));
+        assert_eq!(read_package_json_version(&path), found("2.0.0"));
     }
 
     #[test]
@@ -518,7 +616,7 @@ version_from = "{root_str}/Cargo.toml"
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("version.rb");
         fs::write(&path, "  VERSION = \"1.0.0-rc.1\"\n").unwrap();
-        assert_eq!(read_ruby_version(&path), Some("1.0.0-rc.1".to_string()));
+        assert_eq!(read_ruby_version(&path), found("1.0.0-rc.1"));
     }
 
     #[test]
@@ -526,7 +624,7 @@ version_from = "{root_str}/Cargo.toml"
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("mix.exs");
         fs::write(&path, "  @version \"3.0.0\"\n").unwrap();
-        assert_eq!(read_mix_exs_version(&path), Some("3.0.0".to_string()));
+        assert_eq!(read_mix_exs_version(&path), found("3.0.0"));
     }
 
     #[test]
@@ -534,7 +632,7 @@ version_from = "{root_str}/Cargo.toml"
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("pom.xml");
         fs::write(&path, "<project><version>1.5.0</version></project>").unwrap();
-        assert_eq!(read_pom_xml_version(&path), Some("1.5.0".to_string()));
+        assert_eq!(read_pom_xml_version(&path), found("1.5.0"));
     }
 
     #[test]
@@ -542,7 +640,93 @@ version_from = "{root_str}/Cargo.toml"
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("DESCRIPTION");
         fs::write(&path, "Package: mylib\nVersion: 0.9.1\nTitle: My Lib\n").unwrap();
-        assert_eq!(read_description_version(&path), Some("0.9.1".to_string()));
+        assert_eq!(read_description_version(&path), found("0.9.1"));
+    }
+
+    #[test]
+    fn read_package_json_version_distinguishes_broken_from_versionless() {
+        let tmp = TempDir::new().unwrap();
+        let broken = tmp.path().join("broken.json");
+        fs::write(&broken, r#"{"name":"foo","version":"#).unwrap();
+        assert!(
+            matches!(read_package_json_version(&broken), ReadOutcome::Unreadable(_)),
+            "truncated JSON must report a failed read, not an absent field"
+        );
+
+        let versionless = tmp.path().join("versionless.json");
+        fs::write(&versionless, r#"{"name":"foo","private":true}"#).unwrap();
+        assert_eq!(
+            read_package_json_version(&versionless),
+            ReadOutcome::NoVersionField,
+            "a well-formed manifest with no version field is unmanaged, not broken"
+        );
+    }
+
+    /// ~keep The load-bearing assertion is the last one: `checks.iter().any(|c| !c.matches)`
+    /// is verbatim the predicate `bin_cli::release_commands` uses to decide
+    /// `process::exit(1)` for `validate versions --exit-code`. Asserting only on the
+    /// printed message would still pass if the exit status never changed — which is
+    /// exactly the defect this test exists to pin.
+    #[test]
+    fn unparseable_manifest_fails_validation_rather_than_being_skipped() {
+        let tmp = make_workspace("1.0.0");
+        fs::write(
+            tmp.path().join("crates/mylib-node/package.json"),
+            "{\"name\":\"mylib\",\"version\":",
+        )
+        .unwrap();
+        let config = minimal_config(tmp.path());
+        let checks = run(&config, tmp.path(), false).unwrap();
+
+        let broken = checks
+            .iter()
+            .find(|c| c.label == "crates/mylib-node/package.json")
+            .expect("an existing but unparseable manifest must still produce a check");
+        assert!(!broken.matches, "unparseable manifest must not count as matching");
+        assert_eq!(broken.found, None, "no version can be reported for a failed read");
+        assert!(
+            checks.iter().any(|c| !c.matches),
+            "the --exit-code verdict predicate must see the failure"
+        );
+    }
+
+    #[test]
+    fn manifest_without_version_field_is_skipped_not_failed() {
+        let tmp = make_workspace("1.0.0");
+        fs::write(
+            tmp.path().join("package.json"),
+            "{\"name\":\"root\",\"private\":true}\n",
+        )
+        .unwrap();
+        let config = minimal_config(tmp.path());
+        let checks = run(&config, tmp.path(), false).unwrap();
+        assert!(
+            checks.iter().all(|c| c.label != "package.json"),
+            "a versionless manifest is unmanaged (sync-versions skips it too), so it must not be checked"
+        );
+        assert!(
+            checks.iter().all(|c| c.matches),
+            "no failing check expected: {:?}",
+            checks.iter().filter(|c| !c.matches).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn zero_checks_is_an_error_not_a_vacuous_pass() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace.package]\nversion = \"1.0.0\"\n\n[workspace]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        let config = minimal_config(root);
+        let error = run(&config, root, false)
+            .expect_err("examining zero manifests must fail; it used to print 'All 0 manifests consistent'");
+        assert!(
+            error.to_string().contains("0 manifests"),
+            "error should name the empty examination: {error}"
+        );
     }
 
     #[test]

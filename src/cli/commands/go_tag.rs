@@ -86,12 +86,16 @@ pub fn run(params: &GoTagParams<'_>) -> Result<Vec<String>> {
 }
 
 fn create_and_push_tag(new_tag: &str, source_ref: &str, remote: &str, workspace_root: &std::path::Path) -> Result<()> {
+    // ~keep A non-zero `git rev-parse <tag>` legitimately means "tag absent", but a
+    // spawn failure means nothing was learned, so it propagates instead of being read
+    // as absence.
     let local_check = std::process::Command::new("git")
         .args(["rev-parse", new_tag])
         .current_dir(workspace_root)
-        .output();
+        .output()
+        .with_context(|| format!("git rev-parse {new_tag}"))?;
 
-    if local_check.is_ok_and(|o| o.status.success()) {
+    if local_check.status.success() {
         tracing::warn!("  Tag {new_tag} already exists locally; skipping.");
         return Ok(());
     }
@@ -99,7 +103,25 @@ fn create_and_push_tag(new_tag: &str, source_ref: &str, remote: &str, workspace_
     let remote_check = std::process::Command::new("git")
         .args(["ls-remote", "--tags", remote])
         .current_dir(workspace_root)
-        .output()?;
+        .output()
+        .with_context(|| format!("git ls-remote --tags {remote}"))?;
+
+    // ~keep `ls-remote` is the only evidence about remote tag state, and a failure
+    // (auth, network, unknown remote) yields empty stdout — indistinguishable from
+    // "tag absent" if only stdout is inspected. Continuing meant a transient failure
+    // created the tag and pushed it with `--force-with-lease`, which for a tag ref has
+    // no remote-tracking ref to lease against and so degrades to a plain force. Abort
+    // rather than retry: a retry cannot fix auth or unknown-remote failures, and
+    // re-running the release step costs far less than a wrong forced tag on a shared
+    // remote.
+    if !remote_check.status.success() {
+        anyhow::bail!(
+            "git ls-remote --tags {remote} failed ({}): cannot determine whether tag {new_tag} already exists, \
+             refusing to create and force-push it.\n{}",
+            remote_check.status,
+            String::from_utf8_lossy(&remote_check.stderr).trim()
+        );
+    }
 
     if String::from_utf8_lossy(&remote_check.stdout)
         .lines()
@@ -237,5 +259,40 @@ sources = ["src/lib.rs"]
         };
         let result = run(&params);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn failed_ls_remote_aborts_before_creating_any_tag() {
+        let tmp = TempDir::new().unwrap();
+        init_git_repo(tmp.path());
+        let config = minimal_config();
+        let params = GoTagParams {
+            version: "4.1.0",
+            remote: "no-such-remote",
+            dry_run: false,
+            output_json: false,
+            config: &config,
+            workspace_root: tmp.path(),
+        };
+
+        let error = run(&params).expect_err("a failed ls-remote must abort, not be read as 'tag absent'");
+        assert!(
+            error.chain().any(|cause| cause.to_string().contains("ls-remote")),
+            "error must name the failed remote read: {error:#}"
+        );
+
+        // ~keep The load-bearing assertion. Asserting only on the message would still
+        // pass if the abort happened *after* `git tag` created the ref; the absence of
+        // the tag is what proves the tag-creation and force-push path was never reached.
+        let listed = Command::new("git")
+            .args(["tag", "--list"])
+            .current_dir(tmp.path())
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert!(
+            !listed.contains("packages/go/"),
+            "no Go module tag may exist after an unreadable remote: {listed}"
+        );
     }
 }
