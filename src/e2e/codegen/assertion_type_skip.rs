@@ -105,6 +105,64 @@ assertion_type_skip_variants! {
         "assertion type ",
         " has no accessor for error field ",
     ),
+    /// ~keep No existing variant fits, so this one is new. The streaming renderers in
+    /// `{dart,go,java,kotlin,php,swift,typescript,zig}/assertions.rs` implement each assertion
+    /// type against a value they first narrow (`value.as_u64()`, `Value::String(..)`); when the
+    /// fixture's value does not survive that narrowing the arm produced an empty string and the
+    /// assertion vanished with no line for any funnel to see.
+    ///
+    /// `GeneratorGap`, not `AuthoringGap`: the narrowing is alef's, not the fixture's — a
+    /// `greater_than` against a float is a legitimate assertion that no streaming renderer
+    /// currently emits — and [`AssertionTypeSkip`] is pinned never to classify a variant as an
+    /// authoring gap (see `no_variant_is_classified_as_an_authoring_gap`). Failing a consumer's
+    /// build on alef's own numeric narrowing would only buy a blanket opt-out.
+    StreamingAssertionValueNotRenderable: GeneratorGap => (
+        "assertion type ",
+        " has no renderable value for streaming field ",
+    ),
+}
+
+/// The `skipped:` line for a streaming assertion whose *type* this backend's streaming renderer
+/// does not implement.
+///
+/// ~keep Single-sources the wording [`AssertionTypeSkip::StreamingAssertionTypeNotSupported`]
+/// recognises, which `csharp/streaming.rs` already emits by hand. Six backends
+/// (`go`/`typescript`/`java`/`kotlin`/`php`/`swift`) instead wrote `// streaming field '<f>':
+/// assertion type '<t>' not rendered` and `zig` a third spelling — neither matched any registered
+/// shape, and neither carried the `skipped:` prefix, so a grep census missed them too.
+///
+/// Indentation and comment syntax stay at the call site, matching
+/// [`super::field_skip::nested_wildcard_skip_line`]. The returned line carries no trailing
+/// newline.
+pub(crate) fn streaming_assertion_type_skip_line(
+    indent: &str,
+    comment_open: &str,
+    field: &str,
+    assertion_type: &str,
+) -> String {
+    format!(
+        "{indent}{comment_open} skipped: assertion type '{assertion_type}' on field '{field}' \
+         not yet supported for streaming"
+    )
+}
+
+/// The `skipped:` line for a streaming assertion whose type IS implemented but whose fixture value
+/// does not fit the shape the renderer narrows to.
+///
+/// ~keep Distinct from [`streaming_assertion_type_skip_line`] on purpose: conflating them would
+/// make a census unable to tell "alef never implemented this assertion type for streaming" from
+/// "alef implemented it for `u64` only and this fixture passed a float", which have different
+/// fixes. The returned line carries no trailing newline.
+pub(crate) fn streaming_assertion_value_skip_line(
+    indent: &str,
+    comment_open: &str,
+    field: &str,
+    assertion_type: &str,
+) -> String {
+    format!(
+        "{indent}{comment_open} skipped: assertion type '{assertion_type}' has no renderable value \
+         for streaming field '{field}'"
+    )
 }
 
 impl AssertionTypeSkip {
@@ -145,8 +203,79 @@ impl AssertionTypeSkip {
 
 #[cfg(test)]
 mod tests {
-    use super::AssertionTypeSkip;
+    use super::{AssertionTypeSkip, streaming_assertion_type_skip_line, streaming_assertion_value_skip_line};
     use crate::e2e::codegen::field_skip::SkipClass;
+
+    /// The load-bearing invariant for both helpers: the line they render is recognised as the
+    /// variant they claim, not merely as "some registered shape" and not merely as text a grep
+    /// would find. A helper that emitted an unregistered wording would still look right in a
+    /// generated file — that is the exact bug these replace. ~keep
+    #[test]
+    fn the_streaming_type_helper_renders_the_registered_variant() {
+        let line = streaming_assertion_type_skip_line("        ", "//", "chunks", "matches_regex");
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&line),
+            Some(("matches_regex", AssertionTypeSkip::StreamingAssertionTypeNotSupported)),
+            "got: {line}"
+        );
+        assert!(line.contains("// skipped: "), "the census prefix must survive: {line}");
+    }
+
+    #[test]
+    fn the_streaming_value_helper_renders_the_registered_variant() {
+        let line = streaming_assertion_value_skip_line("    ", "#", "chunks", "count_min");
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&line),
+            Some(("count_min", AssertionTypeSkip::StreamingAssertionValueNotRenderable)),
+            "got: {line}"
+        );
+        assert!(line.contains("# skipped: "), "the census prefix must survive: {line}");
+    }
+
+    /// The two helpers must stay distinguishable: each line may only match its own variant, or the
+    /// axis collapses back into one undifferentiated bucket. ~keep
+    #[test]
+    fn the_two_streaming_helpers_do_not_match_each_other() {
+        let type_line = streaming_assertion_type_skip_line("    ", "//", "chunks", "matches_regex");
+        let value_line = streaming_assertion_value_skip_line("    ", "//", "chunks", "count_min");
+        assert_ne!(
+            AssertionTypeSkip::extract_classified(&type_line).map(|(_, variant)| variant),
+            AssertionTypeSkip::extract_classified(&value_line).map(|(_, variant)| variant)
+        );
+    }
+
+    /// Neither helper's line may be picked up by the *field* funnel — the two axes stay disjoint,
+    /// and every backend body these are emitted into is already scanned by that funnel. ~keep
+    #[test]
+    fn neither_streaming_helper_is_recognised_by_the_field_funnel() {
+        use crate::e2e::codegen::field_skip::FieldSkip;
+        let type_line = streaming_assertion_type_skip_line("    ", "//", "chunks", "matches_regex");
+        let value_line = streaming_assertion_value_skip_line("    ", "//", "chunks", "count_min");
+        assert_eq!(FieldSkip::extract(&type_line), None, "got: {type_line}");
+        assert_eq!(FieldSkip::extract(&value_line), None, "got: {value_line}");
+    }
+
+    /// Every variant's rendered wording must round-trip, mirroring
+    /// `field_skip::tests::every_variant_round_trips_through_extract`. Two of the shapes end
+    /// mid-quote (`" on field '"`, `" has no renderable value for streaming field "`), so the
+    /// probe supplies the trailing token those need rather than assuming a one-token wording. ~keep
+    #[test]
+    fn every_variant_round_trips_through_extract() {
+        for variant in AssertionTypeSkip::ALL {
+            let shape = variant.shape();
+            let tail = if shape.after.ends_with('\'') {
+                "chunks'"
+            } else {
+                "'chunks'"
+            };
+            let rendered = format!("    // skipped: {}'count_min'{}{tail}", shape.before, shape.after);
+            assert_eq!(
+                AssertionTypeSkip::extract(&rendered),
+                Some("count_min"),
+                "variant {variant:?} rendered `{rendered}` but the gate did not recognise it"
+            );
+        }
+    }
 
     #[test]
     fn no_variant_is_classified_as_an_authoring_gap() {

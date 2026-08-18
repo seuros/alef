@@ -1,4 +1,7 @@
 use super::*;
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 
 /// Variant names of `FormatMetadata` (snake_case, from `#[serde(rename_all = "snake_case")]`).
@@ -334,15 +337,23 @@ pub(super) fn render_json_assertion(
         && is_streaming_virtual_field(f)
     {
         if let Some(expr) = StreamingFieldResolver::accessor(f, "zig", "chunks") {
+            // ~keep The value-narrowing arms below used to fall through to nothing when the
+            // fixture's value did not survive `as_u64()`, so the assertion disappeared with no
+            // line for any funnel to count.
+            let value_skip = || streaming_assertion_value_skip_line("    ", "//", f, &assertion.assertion_type);
             match assertion.assertion_type.as_str() {
                 "count_min" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "    try testing.expect({expr}.len >= {n});");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "count_equals" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "    try testing.expectEqual(@as(usize, {n}), {expr}.len);");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "equals" => {
@@ -352,6 +363,8 @@ pub(super) fn render_json_assertion(
                     } else if let Some(v) = &assertion.value {
                         let zig_val = json_to_zig(v);
                         let _ = writeln!(out, "    try testing.expectEqual({zig_val}, {expr});");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "not_empty" => {
@@ -364,13 +377,25 @@ pub(super) fn render_json_assertion(
                     let _ = writeln!(out, "    try testing.expect(!{expr});");
                 }
                 _ => {
-                    let atype = &assertion.assertion_type;
                     let _ = writeln!(
                         out,
-                        "    // streaming virtual field '{f}' assertion '{atype}' not implemented for zig"
+                        "{}",
+                        streaming_assertion_type_skip_line("    ", "//", f, &assertion.assertion_type)
                     );
                 }
             }
+        } else {
+            // ~keep The accessor returns `None` for reachable inputs — every `stream.has_*_event`
+            // predicate does, since this call supplies no item type, and zig's deep
+            // `tool_calls[N].…` paths return `None` by design (accessors.rs) — and this branch used
+            // to be absent: the assertion vanished with no line for
+            // `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the gap, so
+            // it is counted, never fatal.
+            let _ = writeln!(
+                out,
+                "    // skipped: {}",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+            );
         }
         return;
     }

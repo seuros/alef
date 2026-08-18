@@ -1,3 +1,6 @@
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -5,6 +8,11 @@ use heck::ToLowerCamelCase;
 use std::fmt::Write as FmtWrite;
 
 use super::values::escape_dart;
+
+/// ~keep The token a skip marker names when the assertion carries no field path. Every registered
+/// wording quotes a token, so a marker that quotes nothing matches no shape and stays invisible to
+/// both funnels.
+const BARE_RESULT_TOKEN: &str = "<bare result>";
 
 /// Render `.length` / `?.length ?? 0` against a Dart field accessor.
 ///
@@ -579,9 +587,18 @@ pub(super) fn render_streaming_assertion_dart(out: &mut String, assertion: &Asse
             // stream variable is consumed.
             let _ = writeln!(out, "    expect({result_var}, isNotNull);");
         }
+        // ~keep Both guarded arms below used to emit nothing when the fixture's value was not the
+        // JSON kind the renderer narrows to, so a `count_min` whose value was a string (or a
+        // `stream_content` `equals` against a number) vanished with no line for any funnel to see.
         "count_min" if assertion.field.as_deref() == Some("chunks") => {
             if let Some(serde_json::Value::Number(n)) = &assertion.value {
                 let _ = writeln!(out, "    expect({result_var}.length, greaterThanOrEqualTo({n}));");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("    ", "//", "chunks", &assertion.assertion_type)
+                );
             }
         }
         "equals" if assertion.field.as_deref() == Some("stream_content") => {
@@ -592,10 +609,28 @@ pub(super) fn render_streaming_assertion_dart(out: &mut String, assertion: &Asse
                     "    final _content = {result_var}.map((c) => c.choices.firstOrNull?.delta.content ?? '').join();"
                 );
                 let _ = writeln!(out, "    expect(_content, equals('{escaped}'));");
+            } else {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    streaming_assertion_value_skip_line("    ", "//", "stream_content", &assertion.assertion_type)
+                );
             }
         }
-        other => {
-            let _ = writeln!(out, "    // skipped streaming assertion: '{other}'");
+        // ~keep Was `// skipped streaming assertion: '<type>'`, which matched no registered shape
+        // — the quoted token sat after a colon rather than after any variant's `before` text — so
+        // neither funnel could count it however loudly it read.
+        _ => {
+            let _ = writeln!(
+                out,
+                "{}",
+                streaming_assertion_type_skip_line(
+                    "    ",
+                    "//",
+                    assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN),
+                    &assertion.assertion_type
+                )
+            );
         }
     }
 }

@@ -3,6 +3,9 @@
 use heck::ToLowerCamelCase;
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_kotlin;
 use crate::e2e::field_access::FieldResolver;
@@ -77,14 +80,16 @@ pub(super) fn render_assertion(
                     };
                     format!("        assertEquals({kotlin_val}, {expr}!!)\n")
                 } else {
-                    String::new()
+                    streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                 }
             }
-            _ => String::new(),
+            // ~keep This arm covered every assertion type but `equals` and rendered an empty
+            // string, so a `not_empty`/`greater_than`/... against a streaming `usage.*` path
+            // disappeared with no line for any funnel to count. The renderer really does only
+            // implement `equals` here, which is alef's gap to close, not the fixture's.
+            _ => streaming_assertion_type_skip_line("        ", "//", f, &assertion.assertion_type) + "\n",
         };
-        if !line.is_empty() {
-            out.push_str(&line);
-        }
+        out.push_str(&line);
         return;
     }
 
@@ -111,7 +116,7 @@ pub(super) fn render_assertion(
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertTrue({expr}.size >= {n}, \"expected >= {n} chunks\")\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "count_equals" => {
@@ -120,7 +125,7 @@ pub(super) fn render_assertion(
                             "        assertEquals({n}.toLong(), {expr}.size.toLong(), \"expected exactly {n} elements\")\n"
                         )
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "equals" => {
@@ -130,7 +135,7 @@ pub(super) fn render_assertion(
                     } else if let Some(b) = assertion.value.as_ref().and_then(|v| v.as_bool()) {
                         format!("        assertEquals({b}, {expr})\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "not_empty" => {
@@ -149,7 +154,7 @@ pub(super) fn render_assertion(
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertTrue({expr} > {n}, \"expected > {n}\")\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "contains" => {
@@ -165,17 +170,26 @@ pub(super) fn render_assertion(
                             "        assertTrue({expr}.toString().lowercase().contains(\"{escaped}\".lowercase()), \"expected to contain: {escaped}\")\n"
                         )
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 _ => format!(
-                    "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                    assertion.assertion_type
+                    "{}\n",
+                    streaming_assertion_type_skip_line("        ", "//", f, &assertion.assertion_type)
                 ),
             };
-            if !line.is_empty() {
-                out.push_str(&line);
-            }
+            out.push_str(&line);
+        } else {
+            // ~keep The accessor returns `None` for reachable inputs (a `stream.has_*_event`
+            // predicate never resolves through `accessor`, which supplies no item type), and this
+            // branch used to be absent: the assertion vanished with no line for
+            // `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the gap,
+            // so it is counted, never fatal.
+            let _ = writeln!(
+                out,
+                "        // skipped: {}",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+            );
         }
         return;
     }

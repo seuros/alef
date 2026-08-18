@@ -880,6 +880,24 @@ mod unavailable_field_marker_tests {
         assert_eq!(verdicts_for(swift, "swift", &[]), vec![SkipVerdict::Limitation]);
     }
 
+    /// ~keep The swift-bridge count guard fires only on fields `is_valid_for_result` already
+    /// ACCEPTED, so it must never produce an unacknowledged gap: the backend refusing an
+    /// assertion as an ABI limit and the gate failing the same assertion as a broken field path
+    /// is two mechanisms contradicting each other about one fact, which is the defect this
+    /// verdict pins shut.
+    #[test]
+    fn the_swift_json_bridged_count_wording_is_counted_not_fatal() {
+        let body = format!(
+            "        // skipped: {}\n",
+            super::field_skip::FieldSkip::CountOnJsonBridgedLeafInSwift.message("metadata.headings.length")
+        );
+        assert_eq!(verdicts_for(&body, "swift", &[]), vec![SkipVerdict::Limitation]);
+        assert!(
+            strict_error_for(&body, "swift", "metadata_headings", &[]).is_none(),
+            "a resolvable field refused for an ABI reason must not fail a consumer's build"
+        );
+    }
+
     #[test]
     fn ruby_serialized_enum_accessor_wording_is_counted_not_fatal() {
         let body = "    # skipped: enum variant accessor 'metadata.format.excel' not available on Ruby \
@@ -1012,6 +1030,28 @@ mod assertion_type_marker_tests {
     fn generator_gap_wordings_await_alef_support() {
         let body = "    // skipped: unsupported traversal assertion 'equals' on 'pages[].url'\n";
         assert_eq!(verdicts_for(body, "go"), vec![SkipVerdict::AwaitingGeneratorSupport]);
+    }
+
+    /// ~keep The wording every streaming backend now emits when its renderer cannot express an
+    /// assertion type. It replaces `// streaming field '<f>': assertion type '<t>' not rendered`,
+    /// which matched no registered shape and carried no `skipped:` prefix, so it was invisible to
+    /// this gate *and* to a grep census. Asserting the verdict rather than the text is the point:
+    /// a test that only grepped for the new text would pass on an unregistered wording too.
+    #[test]
+    fn the_streaming_assertion_type_wording_awaits_alef_support() {
+        let line =
+            super::assertion_type_skip::streaming_assertion_type_skip_line("    ", "//", "chunks", "matches_regex");
+        let body = format!("{line}\n");
+        assert_eq!(verdicts_for(&body, "go"), vec![SkipVerdict::AwaitingGeneratorSupport]);
+    }
+
+    /// The value-narrowing sibling: a streaming assertion type alef implements, whose fixture value
+    /// does not survive the renderer's `as_u64()` / string narrowing. Also alef's debt.
+    #[test]
+    fn the_streaming_assertion_value_wording_awaits_alef_support() {
+        let line = super::assertion_type_skip::streaming_assertion_value_skip_line("    ", "//", "chunks", "count_min");
+        let body = format!("{line}\n");
+        assert_eq!(verdicts_for(&body, "dart"), vec![SkipVerdict::AwaitingGeneratorSupport]);
     }
 
     /// LanguageLimitation-classified wordings are counted as a real limitation, not alef's debt.

@@ -1,3 +1,6 @@
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_elixir;
 use crate::e2e::field_access::FieldResolver;
@@ -206,15 +209,23 @@ pub(super) fn render_assertion(
         if let Some(expr) =
             crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::accessor(f, "elixir", result_var)
         {
+            // ~keep Every value-narrowing arm below used to fall through to nothing when the
+            // fixture's value did not survive `as_u64()` / the string pattern, so the assertion
+            // disappeared with no line for any funnel to count.
+            let value_skip = || streaming_assertion_value_skip_line("      ", "#", f, &assertion.assertion_type);
             match assertion.assertion_type.as_str() {
                 "count_min" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "      assert length({expr}) >= {n}");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "count_equals" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "      assert length({expr}) == {n}");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "equals" => {
@@ -223,6 +234,8 @@ pub(super) fn render_assertion(
                         let _ = writeln!(out, "      assert {expr} == \"{escaped}\"");
                     } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "      assert {expr} == {n}");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "not_empty" => {
@@ -240,23 +253,44 @@ pub(super) fn render_assertion(
                 "greater_than" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "      assert {expr} > {n}");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "greater_than_or_equal" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         let _ = writeln!(out, "      assert {expr} >= {n}");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "contains" => {
                     if let Some(serde_json::Value::String(s)) = &assertion.value {
                         let escaped = escape_elixir(s);
                         let _ = writeln!(out, "      assert String.contains?({expr}, \"{escaped}\")");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
-                other => {
-                    panic!("Elixir e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
+                _ => {
+                    let _ = writeln!(
+                        out,
+                        "{}",
+                        streaming_assertion_type_skip_line("      ", "#", f, &assertion.assertion_type)
+                    );
                 }
             }
+        } else {
+            // ~keep The accessor returns `None` for reachable inputs (a `stream.has_*_event`
+            // predicate never resolves through `accessor`, which supplies no item type), and this
+            // branch used to be absent: the assertion vanished with no line for
+            // `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the gap,
+            // so it is counted, never fatal.
+            let _ = writeln!(
+                out,
+                "      # skipped: {}",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+            );
         }
         return;
     }
@@ -690,6 +724,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
 
     use super::render_assertion;
+    use crate::e2e::codegen::assertion_type_skip::{AssertionTypeSkip, streaming_assertion_type_skip_line};
     use crate::e2e::fixture::Assertion;
 
     fn empty_resolver() -> FieldResolver {
@@ -1184,9 +1219,13 @@ mod tests {
         assert_eq!(out, "      assert result != []\n");
     }
 
+    /// This asserted a panic until the streaming type gap was routed through the skip funnel.
+    /// A panic here aborts the whole consumer regen over one unrenderable assertion, which is a
+    /// worse signal than a registered marker: the marker is counted by the census, is attributable
+    /// to a named field and type, and the strict gate can still escalate it to a failure. Loud and
+    /// fatal are not the same property, and only the first one was wanted. ~keep
     #[test]
-    #[should_panic(expected = "unsupported assertion type 'bogus_type' on synthetic field 'chunks'")]
-    fn elixir_streaming_virtual_field_unsupported_type_fails_loudly() {
+    fn elixir_streaming_virtual_field_unsupported_type_is_counted_not_fatal() {
         let resolver = empty_resolver();
         let assertion = Assertion {
             assertion_type: "bogus_type".to_string(),
@@ -1204,6 +1243,17 @@ mod tests {
             &HashMap::new(),
             false,
             true,
+        );
+        assert_eq!(
+            out.trim_end(),
+            streaming_assertion_type_skip_line("      ", "#", "chunks", "bogus_type"),
+            "the gap must be recorded on the registered wording, not dropped: {out}"
+        );
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some(("bogus_type", AssertionTypeSkip::StreamingAssertionTypeNotSupported)),
+            "an emitted marker the type funnel cannot recognise is uncounted, which is the \
+             silent drop wearing a comment: {out}"
         );
     }
 
@@ -1320,6 +1370,91 @@ mod wildcard_tests {
         let out = render(&contains_on("pages[].links[].url"), &array_resolver("pages"));
         assert_eq!(
             out, "      # skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod skip_marker_tests {
+    use super::render_assertion;
+    use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
+    use crate::e2e::codegen::field_skip::FieldSkip;
+    use crate::e2e::codegen::{SkipVerdict, fail_on_unavailable_field_markers, take_skip_records};
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let assertion = Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value,
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            true,
+        );
+        out
+    }
+
+    fn field_verdicts(body: &str) -> Vec<SkipVerdict> {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(body, "elixir", "stream_smoke", &[]);
+        take_skip_records().into_iter().map(|record| record.verdict).collect()
+    }
+
+    /// Non-vacuity control: the same harness on a resolvable streaming field must render a real
+    /// `assert`, or the marker assertions below would be facts about the harness. ~keep
+    #[test]
+    fn the_streaming_harness_renders_a_real_assertion_when_the_accessor_resolves() {
+        let out = render_streaming("count_min", "chunks", Some(serde_json::json!(2)));
+        assert!(out.contains("assert length("), "got: {out}");
+        assert!(
+            field_verdicts(&out).is_empty(),
+            "a live assertion records no skip: {out}"
+        );
+    }
+
+    /// The marker must use elixir's `#` comment opener, not `//`: a `//`-prefixed line is a syntax
+    /// error in an `.exs` file, so getting this wrong trades a silent drop for a broken build. ~keep
+    #[test]
+    fn a_streaming_field_with_no_accessor_emits_a_counted_hash_comment() {
+        let out = render_streaming("is_true", "stream.has_page_event", None);
+        assert!(out.trim_start().starts_with('#'), "elixir comments start with #: {out}");
+        assert_eq!(
+            FieldSkip::extract_classified(out.trim_end()),
+            Some(("stream.has_page_event", FieldSkip::StreamingAssertionOnUnsupportedField)),
+            "got: {out}"
+        );
+        assert_eq!(field_verdicts(&out), vec![SkipVerdict::AwaitingGeneratorSupport]);
+    }
+
+    /// This arm used to `panic!`, aborting the whole run rather than one backend — and a generator
+    /// gap must never fail a consumer's build at all. It is counted instead. ~keep
+    #[test]
+    fn an_unrenderable_streaming_assertion_type_is_counted_rather_than_panicking() {
+        let out = render_streaming("matches_regex", "chunks", None);
+        assert!(out.trim_start().starts_with('#'), "got: {out}");
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some(("matches_regex", AssertionTypeSkip::StreamingAssertionTypeNotSupported)),
             "got: {out}"
         );
     }

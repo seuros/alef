@@ -151,6 +151,22 @@ field_skip_variants! {
         "field ",
         " references a field or type excluded from the Swift binding",
     ),
+    /// ~keep swift-bridge JSON-bridges `Option<Vec<T>>`, `Vec<Vec<_>>` and map getters to a single
+    /// `RustString`, which has no `.count`, so a trailing `.length`/`.count`/`.size` on such a leaf
+    /// cannot be expressed. `swift/assertions.rs` is right to refuse it — but it used to refuse
+    /// with [`FieldSkip::NotAvailableOnResultType`]'s wording, an `AuthoringGap`, and therefore
+    /// FATAL, even though its guard runs only *after* `is_valid_for_result` accepted the path.
+    /// The backend and the strict gate were asserting opposite things about one resolvable field,
+    /// with nothing comparing them: the backend dropped the assertion as an honest ABI limit while
+    /// the gate demanded the consumer fix a field path that was never wrong.
+    ///
+    /// The reason is a property of the swift-bridge ABI, so it is a limitation, and classifying it
+    /// here rather than leaving it to a per-fixture `skip` declaration is what stops the collision
+    /// recurring: the generator already knows the fact, so the generator owns the verdict.
+    CountOnJsonBridgedLeafInSwift: LanguageLimitation => (
+        "field ",
+        " has no countable Swift leaf (swift-bridge JSON-bridges it to RustString)",
+    ),
     /// ~keep Was `NestedArrayWildcardNotSupportedInZig` (" not supported in zig"), emitted by the
     /// one backend that had ever guarded the case. Every other backend now refuses it too, so the
     /// wording is language-neutral and single-sourced through `nested_wildcard_skip_line`. The
@@ -313,6 +329,35 @@ mod tests {
             SkipClass::LanguageLimitation
         );
         assert_eq!(FieldSkip::NotAvailableInCFfi.class(), SkipClass::LanguageLimitation);
+        assert_eq!(
+            FieldSkip::CountOnJsonBridgedLeafInSwift.class(),
+            SkipClass::LanguageLimitation,
+            "this guard fires only on fields the resolver ACCEPTED; classifying it as an authoring \
+             gap makes the backend and the strict gate contradict each other about one field"
+        );
+    }
+
+    /// ~keep `StreamingAssertionOnUnsupportedField`'s `after` is deliberately empty, so a caller
+    /// may append its own reason to the rendered line and still be recognised. That is not an
+    /// accident of the table — it is the only path a streaming sub-kind with its own semantics has
+    /// for carrying that semantics into the emitted file. `stream_complete` is the live example:
+    /// it is a registered streaming-virtual field whose skip reads "this stream's chunks carry no
+    /// terminal finish_reason", a reason no other streaming field produces, and it is emitted with
+    /// exactly this rider by `ruby/examples.rs` and `csharp/streaming.rs`. If a future
+    /// reason-carrying path drops the rider or fixes the wording's tail, `stream_complete` is the
+    /// sub-kind that falls out of the count — so the rider is pinned here.
+    #[test]
+    fn a_trailing_reason_does_not_break_recognition() {
+        let line = format!(
+            "    # skipped: {}; this stream's chunks carry no terminal finish_reason, so \
+             completion is not observable here",
+            FieldSkip::StreamingAssertionOnUnsupportedField.message("stream_complete")
+        );
+        assert_eq!(
+            FieldSkip::extract_classified(&line),
+            Some(("stream_complete", FieldSkip::StreamingAssertionOnUnsupportedField)),
+            "got: {line}"
+        );
     }
 
     /// Every class must actually be populated: a table where one arm went empty would silently

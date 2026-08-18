@@ -1,5 +1,8 @@
 //! Go assertion rendering.
 
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::go_string_literal;
 use crate::e2e::field_access::FieldResolver;
@@ -229,6 +232,10 @@ pub(super) fn render_assertion(
                 streaming_item_type,
             )
         {
+            // ~keep The value-narrowing arms below used to fall through to nothing when the
+            // fixture's value did not survive `as_u64()` / the string pattern, so the assertion
+            // disappeared with no line for any funnel to count.
+            let value_skip = || streaming_assertion_value_skip_line("\t", "//", f, &assertion.assertion_type);
             match assertion.assertion_type.as_str() {
                 "count_min" => {
                     if let Some(val) = &assertion.value
@@ -238,6 +245,8 @@ pub(super) fn render_assertion(
                             out,
                             "\tassert.GreaterOrEqual(t, len({expr}), {n}, \"expected >= {n} chunks\")"
                         );
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "count_equals" => {
@@ -248,6 +257,8 @@ pub(super) fn render_assertion(
                             out,
                             "\tassert.Equal(t, {n}, len({expr}), \"expected exactly {n} chunks\")"
                         );
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "equals" => {
@@ -264,6 +275,8 @@ pub(super) fn render_assertion(
                         && let Some(n) = val.as_u64()
                     {
                         let _ = writeln!(out, "\tassert.Equal(t, {n}, {expr})");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "not_empty" => {
@@ -283,6 +296,8 @@ pub(super) fn render_assertion(
                         && let Some(n) = val.as_u64()
                     {
                         let _ = writeln!(out, "\tassert.Greater(t, {expr}, {n}, \"expected > {n}\")");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "greater_than_or_equal" => {
@@ -290,22 +305,37 @@ pub(super) fn render_assertion(
                         && let Some(n) = val.as_u64()
                     {
                         let _ = writeln!(out, "\tassert.GreaterOrEqual(t, {expr}, {n}, \"expected >= {n}\")");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 "contains" => {
                     if let Some(serde_json::Value::String(s)) = &assertion.value {
                         let escaped = crate::e2e::escape::go_string_literal(s);
                         let _ = writeln!(out, "\tassert.Contains(t, {expr}, {escaped}, \"expected to contain\")");
+                    } else {
+                        let _ = writeln!(out, "{}", value_skip());
                     }
                 }
                 _ => {
                     let _ = writeln!(
                         out,
-                        "\t// streaming field '{f}': assertion type '{}' not rendered",
-                        assertion.assertion_type
+                        "{}",
+                        streaming_assertion_type_skip_line("\t", "//", f, &assertion.assertion_type)
                     );
                 }
             }
+        } else {
+            // ~keep The accessor returns `None` for reachable inputs (a `stream.has_*_event`
+            // predicate with no resolved item type, for one), and this branch used to be absent:
+            // the assertion vanished with no line for `fail_on_unavailable_field_markers` to see,
+            // so a clean strict-gate run was indistinguishable from one that dropped it. alef's
+            // own streaming adapter owns the gap, so it is counted, never fatal.
+            let _ = writeln!(
+                out,
+                "\t// skipped: {}",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+            );
         }
         return;
     }
@@ -1186,6 +1216,119 @@ mod tests {
             None,
         );
         out
+    }
+
+    /// Run the shared field funnel over a rendered body and return its verdicts, so a test can
+    /// assert what the gate DECIDED rather than only what the text says. ~keep
+    fn field_verdicts(body: &str, language: &str) -> Vec<crate::e2e::codegen::SkipVerdict> {
+        let _ = crate::e2e::codegen::take_skip_records();
+        crate::e2e::codegen::fail_on_unavailable_field_markers(body, language, "streaming_smoke", &[]);
+        crate::e2e::codegen::take_skip_records()
+            .into_iter()
+            .map(|record| record.verdict)
+            .collect()
+    }
+
+    fn render_streaming(assertion: &Assertion) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "pkg",
+            &resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            false,
+            false,
+            true,
+            None,
+        );
+        out
+    }
+
+    fn streaming_assertion(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> Assertion {
+        Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value,
+            ..Default::default()
+        }
+    }
+
+    /// Non-vacuity control for the two tests below: the same harness on a field whose streaming
+    /// accessor DOES resolve must produce a real assertion, or "no marker" would prove nothing
+    /// about markers and everything about the harness. ~keep
+    #[test]
+    fn the_streaming_harness_renders_a_real_assertion_when_the_accessor_resolves() {
+        let out = render_streaming(&streaming_assertion("count_min", "chunks", Some(serde_json::json!(2))));
+        assert!(out.contains("assert.GreaterOrEqual(t, len(chunks), 2"), "got: {out}");
+        assert_eq!(
+            FieldSkip::extract(&out),
+            None,
+            "a rendered assertion must carry no skip: {out}"
+        );
+    }
+
+    /// `stream.has_page_event` has no accessor without a resolved item type, and this call site
+    /// passes `None`. The pre-fix renderer emitted NOTHING and returned, so the assertion vanished
+    /// with no line for the gate to see. Asserting the verdict — not just the text — is the point.
+    #[test]
+    fn a_streaming_field_with_no_accessor_emits_a_counted_marker() {
+        let out = render_streaming(&streaming_assertion("is_true", "stream.has_page_event", None));
+        assert!(!out.is_empty(), "the assertion must not vanish");
+        assert_eq!(
+            FieldSkip::extract_classified(out.trim_end()),
+            Some(("stream.has_page_event", FieldSkip::StreamingAssertionOnUnsupportedField)),
+            "got: {out}"
+        );
+        assert_eq!(
+            field_verdicts(&out, "go"),
+            vec![crate::e2e::codegen::SkipVerdict::AwaitingGeneratorSupport],
+            "a missing generator feature must be counted, never fatal: {out}"
+        );
+    }
+
+    /// A value the renderer cannot narrow used to leave the arm silent. It now renders a wording
+    /// the assertion-type funnel recognises.
+    #[test]
+    fn a_streaming_assertion_with_an_unrenderable_value_emits_a_counted_marker() {
+        let out = render_streaming(&streaming_assertion(
+            "count_min",
+            "chunks",
+            Some(serde_json::json!("not a number")),
+        ));
+        assert_eq!(
+            crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some((
+                "count_min",
+                crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip::StreamingAssertionValueNotRenderable
+            )),
+            "got: {out}"
+        );
+    }
+
+    /// An assertion type the streaming renderer does not implement used to render
+    /// `// streaming field '<f>': assertion type '<t>' not rendered`, which matched no registered
+    /// shape at all.
+    #[test]
+    fn an_unrenderable_streaming_assertion_type_emits_a_counted_marker() {
+        let out = render_streaming(&streaming_assertion("matches_regex", "chunks", None));
+        assert_eq!(
+            crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some((
+                "matches_regex",
+                crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip::StreamingAssertionTypeNotSupported
+            )),
+            "got: {out}"
+        );
     }
 
     #[test]

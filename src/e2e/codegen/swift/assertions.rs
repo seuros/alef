@@ -1,3 +1,6 @@
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -9,6 +12,12 @@ use super::accessors::{
     swift_stringy_aggregator_contains_assert, swift_traversal_contains_assert,
 };
 use super::values::{escape_swift, json_to_swift, swift_numeric_literal_cast};
+
+/// ~keep The token a skip marker names when the assertion has no field path at all (a bare-result
+/// assertion). Every registered wording quotes a token, and a marker that quotes nothing matches
+/// no shape — which is how `// skipped: field is a scalar String without meaningful .count` stayed
+/// invisible to both funnels and to a grep census.
+const BARE_RESULT_TOKEN: &str = "<bare result>";
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_assertion(
@@ -53,14 +62,14 @@ pub(super) fn render_assertion(
                         if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                             format!("        XCTAssertGreaterThanOrEqual(chunks.count, {n})\n")
                         } else {
-                            String::new()
+                            streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                         }
                     }
                     "count_equals" => {
                         if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                             format!("        XCTAssertEqual(chunks.count, {n})\n")
                         } else {
-                            String::new()
+                            streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                         }
                     }
                     "equals" => {
@@ -70,7 +79,7 @@ pub(super) fn render_assertion(
                         } else if let Some(b) = assertion.value.as_ref().and_then(|v| v.as_bool()) {
                             format!("        XCTAssertEqual({expr}, {b})\n")
                         } else {
-                            String::new()
+                            streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                         }
                     }
                     "not_empty" => {
@@ -89,7 +98,7 @@ pub(super) fn render_assertion(
                         if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                             format!("        XCTAssertGreaterThan(chunks.count, {n})\n")
                         } else {
-                            String::new()
+                            streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                         }
                     }
                     "contains" => {
@@ -99,17 +108,26 @@ pub(super) fn render_assertion(
                                 "        XCTAssertTrue({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\")\n"
                             )
                         } else {
-                            String::new()
+                            streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                         }
                     }
                     _ => format!(
-                        "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                        assertion.assertion_type
+                        "{}\n",
+                        streaming_assertion_type_skip_line("        ", "//", f, &assertion.assertion_type)
                     ),
                 };
-                if !line.is_empty() {
-                    out.push_str(&line);
-                }
+                out.push_str(&line);
+            } else {
+                // ~keep The accessor returns `None` for reachable inputs — a `stream.has_*_event`
+                // predicate never resolves here, since `accessor` supplies no item type — and this
+                // branch used to be absent, so the assertion vanished with no line for
+                // `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the
+                // gap, so it is counted, never fatal.
+                let _ = writeln!(
+                    out,
+                    "        // skipped: {}",
+                    FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+                );
             }
             return;
         }
@@ -135,6 +153,13 @@ pub(super) fn render_assertion(
     // emits for a trailing `.length`/`.count`/`.size` segment does not compile.
     // The renderer cannot see the leaf's swift-bridge kind, so guard here and
     // skip, matching the go/csharp/java backends (which also skip these).
+    //
+    // ~keep This guard runs only after `is_valid_for_result` above accepted the path, so the field
+    // IS resolvable, and `NotAvailableOnResultType` — an `AuthoringGap`, therefore fatal under the
+    // strict gate — was the wrong wording for it: the backend dropped the assertion as an honest
+    // ABI limit while the gate demanded the consumer repair a field path that was never wrong, two
+    // verdicts about one fact with nothing comparing them. `CountOnJsonBridgedLeafInSwift` states
+    // the real reason and carries the classification that reason implies.
     if let Some(f) = &assertion.field
         && let Some(collection) = ["length", "count", "size"]
             .iter()
@@ -145,7 +170,7 @@ pub(super) fn render_assertion(
         let _ = writeln!(
             out,
             "        // skipped: {}",
-            FieldSkip::NotAvailableOnResultType.message(f)
+            FieldSkip::CountOnJsonBridgedLeafInSwift.message(f)
         );
         return;
     }
@@ -578,7 +603,9 @@ pub(super) fn render_assertion(
                 } else {
                     let _ = writeln!(
                         out,
-                        "        // skipped: field is a scalar String without meaningful .count"
+                        "        // skipped: {}",
+                        FieldSkip::CountOnJsonBridgedLeafInSwift
+                            .message(assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN))
                     );
                 }
             }
@@ -608,7 +635,9 @@ pub(super) fn render_assertion(
                 } else {
                     let _ = writeln!(
                         out,
-                        "        // skipped: field is a scalar String without meaningful .count"
+                        "        // skipped: {}",
+                        FieldSkip::CountOnJsonBridgedLeafInSwift
+                            .message(assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN))
                     );
                 }
             }
@@ -759,12 +788,11 @@ pub(super) fn render_assertion(
                     // swift_array_count_expr returns None when the field is a scalar String
                     // marked (incorrectly) as an array in fields_array. Such fields don't
                     // support .count and would produce invalid code.
-                    if let Some(f) = &assertion.field {
-                        let _ = writeln!(
-                            out,
-                            "        // skipped: field '{f}' is a scalar String without meaningful .count"
-                        );
-                    }
+                    let f = assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN);
+                    let _ = writeln!(
+                        out,
+                        "        // skipped: field '{f}' is a scalar String without meaningful .count"
+                    );
                 }
             }
         }
@@ -783,12 +811,11 @@ pub(super) fn render_assertion(
                     // swift_array_count_expr returns None when the field is a scalar String
                     // marked (incorrectly) as an array in fields_array. Such fields don't
                     // support .count and would produce invalid code.
-                    if let Some(f) = &assertion.field {
-                        let _ = writeln!(
-                            out,
-                            "        // skipped: field '{f}' is a scalar String without meaningful .count"
-                        );
-                    }
+                    let f = assertion.field.as_deref().unwrap_or(BARE_RESULT_TOKEN);
+                    let _ = writeln!(
+                        out,
+                        "        // skipped: field '{f}' is a scalar String without meaningful .count"
+                    );
                 }
             }
         }
@@ -1047,6 +1074,147 @@ mod nested_wildcard_tests {
         let out = render_not_empty("pages[].links[].url", &array_resolver("pages"));
         assert_eq!(
             out, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod skip_marker_tests {
+    use super::render_assertion;
+    use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
+    use crate::e2e::codegen::field_skip::FieldSkip;
+    use crate::e2e::codegen::{SkipVerdict, fail_on_unavailable_field_markers, take_skip_records};
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render(assertion: &Assertion, is_streaming: bool) -> String {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+            &HashSet::new(),
+            is_streaming,
+            false,
+        );
+        out
+    }
+
+    fn assertion_on(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> Assertion {
+        Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value,
+            ..Assertion::default()
+        }
+    }
+
+    /// Run the shared field funnel over a rendered body and return its verdicts, so a test can
+    /// assert what the gate DECIDED rather than only what the text says. ~keep
+    fn field_verdicts(body: &str) -> Vec<SkipVerdict> {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(body, "swift", "swift_smoke", &[]);
+        take_skip_records().into_iter().map(|record| record.verdict).collect()
+    }
+
+    /// Non-vacuity control for every test below: the same harness on an ordinary field must render
+    /// a real `XCTAssert`, or "no marker" / "one marker" would be a fact about the harness rather
+    /// than about markers. ~keep
+    #[test]
+    fn the_harness_renders_a_real_assertion_for_an_ordinary_field() {
+        let out = render(
+            &assertion_on("equals", "title", Some(serde_json::json!("hello"))),
+            false,
+        );
+        assert!(out.contains("XCTAssert"), "got: {out}");
+        assert!(
+            field_verdicts(&out).is_empty(),
+            "a live assertion records no skip: {out}"
+        );
+    }
+
+    /// The collision the consumer hit: `headings.length` RESOLVES (the guard runs only after
+    /// `is_valid_for_result` accepted it) but swift-bridge JSON-bridges the leaf to a `RustString`
+    /// with no `.count`, so the backend honestly refuses it. It used to refuse in
+    /// `NotAvailableOnResultType`'s words — an `AuthoringGap`, and therefore FATAL — so the
+    /// backend called it an ABI limit and the strict gate called it a broken field path, about the
+    /// same field, at the same moment. Asserting the VERDICT is what stops the two disagreeing
+    /// again: reclassifying this variant fails here rather than silently failing consumers. ~keep
+    #[test]
+    fn a_json_bridged_count_is_a_limitation_never_an_unacknowledged_gap() {
+        let out = render(
+            &assertion_on("count_equals", "headings.length", Some(serde_json::json!(3))),
+            false,
+        );
+        assert_eq!(
+            FieldSkip::extract_classified(out.trim_end()),
+            Some(("headings.length", FieldSkip::CountOnJsonBridgedLeafInSwift)),
+            "got: {out}"
+        );
+        assert_eq!(
+            field_verdicts(&out),
+            vec![SkipVerdict::Limitation],
+            "a resolvable field refused for an ABI reason must never be an unacknowledged gap: {out}"
+        );
+    }
+
+    /// `stream.has_page_event` has no accessor without a resolved item type, and swift's call site
+    /// supplies none. The pre-fix renderer emitted NOTHING and returned, so the assertion vanished
+    /// and the emitted test body could end up with no assertion call at all — permanently green.
+    #[test]
+    fn a_streaming_field_with_no_accessor_emits_a_counted_marker() {
+        let out = render(&assertion_on("is_true", "stream.has_page_event", None), true);
+        assert!(!out.is_empty(), "the assertion must not vanish");
+        assert_eq!(
+            FieldSkip::extract_classified(out.trim_end()),
+            Some(("stream.has_page_event", FieldSkip::StreamingAssertionOnUnsupportedField)),
+            "got: {out}"
+        );
+        assert_eq!(
+            field_verdicts(&out),
+            vec![SkipVerdict::AwaitingGeneratorSupport],
+            "alef's own generator debt is counted, never fatal: {out}"
+        );
+    }
+
+    /// A streaming assertion type the renderer does not implement used to emit
+    /// `// streaming field '<f>': assertion type '<t>' not rendered`, which matched no registered
+    /// shape and carried no `skipped:` prefix — invisible to both funnels and to a grep census.
+    #[test]
+    fn an_unrenderable_streaming_assertion_type_emits_a_registered_marker() {
+        let out = render(&assertion_on("matches_regex", "chunks", None), true);
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some(("matches_regex", AssertionTypeSkip::StreamingAssertionTypeNotSupported)),
+            "got: {out}"
+        );
+    }
+
+    /// A value the renderer cannot narrow used to leave the arm silent.
+    #[test]
+    fn an_unrenderable_streaming_value_emits_a_registered_marker() {
+        let out = render(
+            &assertion_on("count_min", "chunks", Some(serde_json::json!("three"))),
+            true,
+        );
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some(("count_min", AssertionTypeSkip::StreamingAssertionValueNotRenderable)),
             "got: {out}"
         );
     }

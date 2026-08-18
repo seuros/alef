@@ -1,3 +1,6 @@
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::nested_wildcard_skip_line;
 use crate::e2e::escape::escape_java;
 use crate::e2e::field_access::FieldResolver;
@@ -300,14 +303,14 @@ pub(super) fn render_assertion(
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertTrue({expr}.size() >= {n}, \"expected >= {n} chunks\");\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "count_equals" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertEquals({n}, {expr}.size());\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "equals" => {
@@ -317,7 +320,7 @@ pub(super) fn render_assertion(
                     } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertEquals({n}, {expr});\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "not_empty" => format!("        assertFalse({expr}.isEmpty(), \"expected non-empty\");\n"),
@@ -328,14 +331,14 @@ pub(super) fn render_assertion(
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertTrue({expr} > {n}, \"expected > {n}\");\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "greater_than_or_equal" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertTrue({expr} >= {n}, \"expected >= {n}\");\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "contains" => {
@@ -345,17 +348,26 @@ pub(super) fn render_assertion(
                             "        assertTrue({expr}.contains(\"{escaped}\"), \"expected to contain: {escaped}\");\n"
                         )
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 _ => format!(
-                    "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                    assertion.assertion_type
+                    "{}\n",
+                    streaming_assertion_type_skip_line("        ", "//", f, &assertion.assertion_type)
                 ),
             };
-            if !line.is_empty() {
-                out.push_str(&line);
-            }
+            out.push_str(&line);
+        } else {
+            // ~keep The accessor returns `None` for reachable inputs (a `stream.has_*_event`
+            // predicate whose item type this call never resolved, for one), and this branch used
+            // to be absent: the assertion vanished with no line for
+            // `fail_on_unavailable_field_markers` to see, so a clean strict-gate run was
+            // indistinguishable from one that dropped it. alef's streaming adapter owns the gap,
+            // so it is counted, never fatal.
+            out.push_str(&format!(
+                "        // skipped: {}\n",
+                crate::e2e::codegen::field_skip::FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+            ));
         }
         return;
     }

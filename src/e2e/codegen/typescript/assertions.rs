@@ -1,5 +1,8 @@
 //! Assertion rendering for TypeScript e2e tests.
 
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -309,18 +312,24 @@ fn render_synthetic_field_assertion(
                             out.push_str(&format!(
                                 "    expect({expr}.length).toBeGreaterThanOrEqual({js_val});\n"
                             ));
+                        } else {
+                            push_streaming_value_skip(out, field, assertion);
                         }
                     }
                     "count_equals" => {
                         if let Some(val) = &assertion.value {
                             let js_val = json_to_js(val);
                             out.push_str(&format!("    expect({expr}.length).toBe({js_val});\n"));
+                        } else {
+                            push_streaming_value_skip(out, field, assertion);
                         }
                     }
                     "equals" => {
                         if let Some(val) = &assertion.value {
                             let js_val = json_to_js(val);
                             out.push_str(&format!("    expect({expr}).toBe({js_val});\n"));
+                        } else {
+                            push_streaming_value_skip(out, field, assertion);
                         }
                     }
                     "not_empty" => {
@@ -346,32 +355,59 @@ fn render_synthetic_field_assertion(
                         if let Some(val) = &assertion.value {
                             let js_val = json_to_js(val);
                             out.push_str(&format!("    expect({expr}).toBeGreaterThan({js_val});\n"));
+                        } else {
+                            push_streaming_value_skip(out, field, assertion);
                         }
                     }
                     "greater_than_or_equal" => {
                         if let Some(val) = &assertion.value {
                             let js_val = json_to_js(val);
                             out.push_str(&format!("    expect({expr}).toBeGreaterThanOrEqual({js_val});\n"));
+                        } else {
+                            push_streaming_value_skip(out, field, assertion);
                         }
                     }
                     "contains" => {
                         if let Some(val) = &assertion.value {
                             let js_val = json_to_js(val);
                             out.push_str(&format!("    expect({expr}).toContain({js_val});\n"));
+                        } else {
+                            push_streaming_value_skip(out, field, assertion);
                         }
                     }
                     _ => {
                         out.push_str(&format!(
-                            "    // streaming field '{field}': assertion type '{}' not rendered\n",
-                            assertion.assertion_type
+                            "{}\n",
+                            streaming_assertion_type_skip_line("    ", "//", field, &assertion.assertion_type)
                         ));
                     }
                 }
+            } else {
+                // ~keep `accessor` returns `None` for reachable inputs — every `stream.has_*_event`
+                // predicate does, since this call supplies no item type, and `wasm` has no
+                // streaming at all — and this branch used to be absent: the arm still reported
+                // "handled" (`true`) while emitting nothing, so the assertion vanished with no line
+                // for `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the
+                // gap, so it is counted, never fatal.
+                out.push_str(&format!(
+                    "    // skipped: {}\n",
+                    FieldSkip::StreamingAssertionOnUnsupportedField.message(field)
+                ));
             }
             true
         }
         _ => false,
     }
+}
+
+/// ~keep Every value-taking streaming arm above narrowed on `assertion.value` and emitted nothing
+/// when it was absent, so the assertion disappeared with no line for any funnel to count. One
+/// helper keeps the six call sites on the single registered wording.
+fn push_streaming_value_skip(out: &mut String, field: &str, assertion: &Assertion) {
+    out.push_str(&format!(
+        "{}\n",
+        streaming_assertion_value_skip_line("    ", "//", field, &assertion.assertion_type)
+    ));
 }
 
 fn emit_bool_assertion(out: &mut String, pred: &str, assertion_type: &str, field: &str) {
@@ -1338,6 +1374,85 @@ mod wildcard_tests {
         );
         assert_eq!(
             out, "    // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod skip_marker_tests {
+    use super::render_synthetic_field_assertion;
+    use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
+    use crate::e2e::codegen::field_skip::FieldSkip;
+    use crate::e2e::codegen::{SkipVerdict, fail_on_unavailable_field_markers, take_skip_records};
+    use crate::e2e::fixture::Assertion;
+
+    fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> (String, bool) {
+        let assertion = Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value,
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        let handled = render_synthetic_field_assertion(&mut out, &assertion, "result", field, true);
+        (out, handled)
+    }
+
+    fn field_verdicts(body: &str) -> Vec<SkipVerdict> {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(body, "node", "stream_smoke", &[]);
+        take_skip_records().into_iter().map(|record| record.verdict).collect()
+    }
+
+    /// Non-vacuity control: the same harness on a resolvable streaming field must render a real
+    /// `expect(...)`, or the marker assertions below would be facts about the harness. ~keep
+    #[test]
+    fn the_streaming_harness_renders_a_real_expectation_when_the_accessor_resolves() {
+        let (out, handled) = render_streaming("count_min", "chunks", Some(serde_json::json!(2)));
+        assert!(handled, "the streaming arm must claim the assertion");
+        assert!(
+            out.contains("expect(chunks.length).toBeGreaterThanOrEqual(2)"),
+            "got: {out}"
+        );
+        assert!(
+            field_verdicts(&out).is_empty(),
+            "a live assertion records no skip: {out}"
+        );
+    }
+
+    /// The arm returned `true` — "handled" — while writing nothing, so the assertion vanished and
+    /// no later branch could rescue it. `wasm` shares this renderer and has no streaming at all,
+    /// so this is the whole-language case, not an edge one. ~keep
+    #[test]
+    fn a_streaming_field_with_no_accessor_emits_a_counted_marker() {
+        let (out, handled) = render_streaming("is_true", "stream.has_page_event", None);
+        assert!(handled, "the streaming arm still claims the assertion");
+        assert!(!out.is_empty(), "the assertion must not vanish");
+        assert_eq!(
+            FieldSkip::extract_classified(out.trim_end()),
+            Some(("stream.has_page_event", FieldSkip::StreamingAssertionOnUnsupportedField)),
+            "got: {out}"
+        );
+        assert_eq!(field_verdicts(&out), vec![SkipVerdict::AwaitingGeneratorSupport]);
+    }
+
+    #[test]
+    fn an_unrenderable_streaming_assertion_type_emits_a_registered_marker() {
+        let (out, _) = render_streaming("matches_regex", "chunks", None);
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some(("matches_regex", AssertionTypeSkip::StreamingAssertionTypeNotSupported)),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn a_streaming_assertion_with_no_value_emits_a_registered_marker() {
+        let (out, _) = render_streaming("count_min", "chunks", None);
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(out.trim_end()),
+            Some(("count_min", AssertionTypeSkip::StreamingAssertionValueNotRenderable)),
             "got: {out}"
         );
     }

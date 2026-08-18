@@ -1,6 +1,9 @@
 //! PHP fixture assertion rendering helpers.
 
-use crate::e2e::codegen::field_skip::nested_wildcard_skip_line;
+use crate::e2e::codegen::assertion_type_skip::{
+    streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
+};
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::fmt::Write as FmtWrite;
@@ -166,14 +169,14 @@ pub(super) fn render_assertion(
                             "        $this->assertGreaterThanOrEqual({n}, count({expr}), 'expected >= {n} chunks');\n"
                         )
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "count_equals" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        $this->assertCount({n}, {expr});\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "equals" => {
@@ -183,7 +186,7 @@ pub(super) fn render_assertion(
                     } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        $this->assertEquals({n}, {expr});\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "not_empty" => format!("        $this->assertNotEmpty({expr});\n"),
@@ -194,14 +197,14 @@ pub(super) fn render_assertion(
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        $this->assertGreaterThan({n}, {expr});\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "greater_than_or_equal" => {
                     if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        $this->assertGreaterThanOrEqual({n}, {expr});\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 "contains" => {
@@ -209,17 +212,26 @@ pub(super) fn render_assertion(
                         let escaped = s.replace('\\', "\\\\").replace('\'', "\\'");
                         format!("        $this->assertStringContainsString('{escaped}', {expr});\n")
                     } else {
-                        String::new()
+                        streaming_assertion_value_skip_line("        ", "//", f, &assertion.assertion_type) + "\n"
                     }
                 }
                 _ => format!(
-                    "        // streaming field '{f}': assertion type '{}' not rendered\n",
-                    assertion.assertion_type
+                    "{}\n",
+                    streaming_assertion_type_skip_line("        ", "//", f, &assertion.assertion_type)
                 ),
             };
-            if !line.is_empty() {
-                out.push_str(&line);
-            }
+            out.push_str(&line);
+        } else {
+            // ~keep `accessor` returns `None` for every `stream.has_*_event` predicate in PHP by
+            // design (the crawl-stream is delivered as eager JSON — see `accessors.rs`), and this
+            // branch used to be absent: the assertion vanished with no line for
+            // `fail_on_unavailable_field_markers` to see. alef's streaming adapter owns the gap,
+            // so it is counted, never fatal.
+            let _ = writeln!(
+                out,
+                "        // skipped: {}",
+                FieldSkip::StreamingAssertionOnUnsupportedField.message(f)
+            );
         }
         return;
     }
