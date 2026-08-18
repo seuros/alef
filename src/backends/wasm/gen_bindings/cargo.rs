@@ -156,7 +156,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     let extra_names: AHashSet<&str> = extra_parsed.iter().map(|(name, _)| name.as_str()).collect();
     deps.retain(|(name, _)| !extra_names.contains(name.as_str()));
     deps.extend(extra_parsed);
-    deps.sort_by(|a, b| crate::scaffold::dependency_sort_key(&a.0).cmp(&crate::scaffold::dependency_sort_key(&b.0)));
+    deps.sort_by_key(|a| crate::scaffold::dependency_sort_key(&a.0));
     let deps_block = deps
         .iter()
         .map(|(name, value)| format!("{name} = {value}"))

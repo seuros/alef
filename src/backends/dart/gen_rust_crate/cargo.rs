@@ -1238,7 +1238,7 @@ mod build_rs_tests {
     /// key, so the ownership assertion below is not passing over an empty surface. ~keep
     #[test]
     fn every_markable_dart_rust_crate_file_carries_a_provenance_marker_on_disk() {
-        use crate::cli::pipeline::{ensure_generated_header, marker_comment_style};
+        use crate::cli::pipeline::generate::{ensure_generated_header, marker_comment_style};
         use crate::core::hash::content_has_alef_marker;
         use crate::core::ir::FunctionDef;
 

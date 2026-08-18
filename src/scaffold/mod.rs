@@ -376,7 +376,7 @@ pub(crate) fn dependency_sort_key(line: &str) -> String {
 /// `[dev-dependencies]` or `[build-dependencies]` body from a list of rendered lines must sort
 /// it through here rather than with `Vec::sort`. ~keep
 pub(crate) fn sort_dependency_lines(lines: &mut [String]) {
-    lines.sort_by(|a, b| dependency_sort_key(a).cmp(&dependency_sort_key(b)));
+    lines.sort_by_key(|a| dependency_sort_key(a));
 }
 
 ///

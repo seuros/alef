@@ -192,8 +192,7 @@ pub fn render_cargo_toml(
             ),
         ));
     }
-    dep_entries
-        .sort_by(|a, b| crate::scaffold::dependency_sort_key(&a.0).cmp(&crate::scaffold::dependency_sort_key(&b.0)));
+    dep_entries.sort_by_key(|a| crate::scaffold::dependency_sort_key(&a.0));
     let dep_block = dep_entries
         .iter()
         .map(|(_, line)| line.as_str())
