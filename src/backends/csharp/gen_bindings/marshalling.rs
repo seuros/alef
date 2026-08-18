@@ -1,6 +1,6 @@
 use crate::codegen::naming::csharp_type_name;
 use crate::core::config::HostCapsuleTypeConfig;
-use crate::core::ir::{PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, PrimitiveType, TypeDef, TypeRef};
 use heck::ToLowerCamelCase;
 use std::collections::{HashMap, HashSet};
 
@@ -18,6 +18,27 @@ pub(super) fn is_handle_type(ty: &TypeRef) -> bool {
         TypeRef::Optional(inner) => matches!(inner.as_ref(), TypeRef::Named(_)),
         _ => false,
     }
+}
+
+/// C# names (already run through [`csharp_type_name`]) of enums that carry at least one
+/// data-carrying variant.
+///
+/// An enum in this set is boxed exactly like a plain data struct: the FFI crate's
+/// `gen_owned_value_to_c` (`backends::ffi::gen_bindings::helpers`) has no enum-ness branch at
+/// all for owned return conversion, so *every* `TypeRef::Named` return — enum or struct —
+/// crosses via `insert_handle` and is declared [`HANDLE_PINVOKE_TYPE`]. A fieldless-only enum
+/// is deliberately excluded here: it mirrors the FFI crate's own
+/// `LibSetupContext::ffi_param_enums` split (`backends::ffi::gen_bindings::lib_setup`) and the
+/// parity fix in commit `420504797` (`ffi_handle_type_names` in `functions.rs`), which keeps
+/// treating fieldless enums as the pre-existing, untouched shape. Only the data-carrying half
+/// needs the `{Type}ToJson`/`{Type}Free` round trip a return-marshalling emitter would otherwise
+/// skip by mistake. ~keep
+pub(super) fn enum_names_with_data_variants(api: &ApiSurface) -> HashSet<String> {
+    api.enums
+        .iter()
+        .filter(|enum_def| enum_def.variants.iter().any(|variant| !variant.fields.is_empty()))
+        .map(|enum_def| csharp_type_name(&enum_def.name))
+        .collect()
 }
 
 /// The P/Invoke return type of a host-native capsule function.

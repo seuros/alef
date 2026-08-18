@@ -810,6 +810,7 @@ fn opaque_method_bytes_result_frees_inside_finally_not_inline() {
         "DemoException",
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
     );
 
     assert!(
@@ -850,6 +851,7 @@ fn opaque_method_async_bytes_result_frees_inside_finally_not_inline() {
         "DemoException",
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
     );
 
     assert!(
@@ -882,6 +884,7 @@ fn opaque_borrowed_instance_method_reads_receiver_through_borrow_handle_not_raw_
         &[],
         "Widget",
         "DemoException",
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     );
@@ -920,6 +923,7 @@ fn opaque_consuming_instance_method_commits_handle_transfer_not_raw_invalidate()
         &[],
         "Widget",
         "DemoException",
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     );
@@ -964,6 +968,7 @@ fn opaque_static_method_has_no_receiver_guard() {
         &[],
         "Widget",
         "DemoException",
+        &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
     );

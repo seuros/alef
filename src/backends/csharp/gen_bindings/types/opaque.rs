@@ -22,6 +22,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
     streaming_methods_meta: &HashMap<String, StreamingMethodMeta>,
     all_opaque_type_names: &HashSet<String>,
     client_constructor: Option<&ClientConstructorConfig>,
+    enum_data_variant_names: &HashSet<String>,
 ) -> String {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
@@ -102,6 +103,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_opaque_handle(
             exception_name,
             enum_names,
             true_opaque_types,
+            enum_data_variant_names,
         ));
     }
 
@@ -185,6 +187,7 @@ pub(super) fn gen_opaque_method(
     exception_name: &str,
     enum_names: &HashSet<String>,
     true_opaque_types: &HashSet<String>,
+    enum_data_variant_names: &HashSet<String>,
 ) -> String {
     use crate::backends::csharp::template_env::render;
 
@@ -438,6 +441,7 @@ pub(super) fn gen_opaque_method(
             enum_names,
             true_opaque_types,
             &HashSet::new(),
+            enum_data_variant_names,
         );
         emit_named_param_teardown_indented(&mut out, &visible_params, "            ", true_opaque_types, enum_names);
         emit_return_statement_indented(&mut out, &method.return_type, "            ");
@@ -534,6 +538,7 @@ pub(super) fn gen_opaque_method(
             enum_names,
             true_opaque_types,
             &HashSet::new(),
+            enum_data_variant_names,
         );
         emit_named_param_teardown(&mut out, &visible_params, true_opaque_types, enum_names);
         emit_return_statement(&mut out, &method.return_type);

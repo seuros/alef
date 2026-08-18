@@ -161,8 +161,6 @@ pub(super) fn gen_native_methods(
     let mut emitted: HashSet<String> = HashSet::new();
     let mut streaming_signatures: HashMap<String, (Vec<String>, String)> = HashMap::new();
 
-    let enum_names: HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
-
     let mut opaque_param_types: HashSet<String> = HashSet::new();
     let mut opaque_return_types: HashSet<String> = HashSet::new();
 
@@ -173,15 +171,21 @@ pub(super) fn gen_native_methods(
             _ => None,
         }
     }
+    // Enum-named returns are NOT excluded at insertion time below (in any of the three sites
+    // that feed `opaque_return_types`): a data-carrying enum boxes as `AlefHandle` exactly like
+    // a struct (`gen_owned_value_to_c` in the FFI crate has no enum-ness branch for owned return
+    // conversion) and needs the same `{Pascal}ToJson`/`{Pascal}Free` P/Invoke declarations. The
+    // `retain(|name| ffi_handle_type_names.contains(name))` below is the single place that keeps
+    // only genuine handle types (structs plus data-carrying enums, per `ffi_handle_type_names`)
+    // and drops fieldless-only enums — blanket-excluding all enums here too made that retain
+    // step a no-op for data-carrying enum returns, which is the CS1503/CS0117 root cause. ~keep
     for func in api.functions.iter().filter(|f| !exclude_functions.contains(&f.name)) {
         for param in &func.params {
             if let TypeRef::Named(name) = &param.ty {
                 opaque_param_types.insert(name.clone());
             }
         }
-        if let Some(name) = inner_named(&func.return_type)
-            && !enum_names.contains(name)
-        {
+        if let Some(name) = inner_named(&func.return_type) {
             opaque_return_types.insert(name.to_string());
         }
     }
@@ -203,16 +207,12 @@ pub(super) fn gen_native_methods(
                     opaque_param_types.insert(name.clone());
                 }
             }
-            if let Some(name) = inner_named(&method.return_type)
-                && !enum_names.contains(name)
-            {
+            if let Some(name) = inner_named(&method.return_type) {
                 opaque_return_types.insert(name.to_string());
             }
             if method.receiver.is_some() {
                 opaque_param_types.insert(typ.name.clone());
-                if !enum_names.contains(&typ.name) {
-                    opaque_return_types.insert(typ.name.clone());
-                }
+                opaque_return_types.insert(typ.name.clone());
             }
         }
     }
@@ -930,6 +930,76 @@ mod tests {
         assert!(names.contains("CrawlEvent"));
     }
 
+    /// Regression for the CS1503/CS0117 root cause: a data-carrying enum returned by a free
+    /// function boxes as `AlefHandle` exactly like a struct return (see
+    /// `enum_names_with_data_variants` in `marshalling.rs`), so it needs the same
+    /// `{Pascal}ToJson`/`{Pascal}Free` P/Invoke declarations a plain data struct gets. Before the
+    /// fix, `gen_native_methods` blanket-excluded every enum name (fieldless or data-carrying)
+    /// from `opaque_return_types` at insertion time, so `ffi_handle_type_names`'s correct
+    /// data-carrying-enum retain step (commit `420504797`) never got a chance to run — these
+    /// declarations were silently never emitted, and the wrapper body (see
+    /// `wrappers::tests::async_and_sync_data_carrying_enum_returns_both_use_to_json_round_trip`)
+    /// called a `NativeMethods` member that does not exist. ~keep
+    #[test]
+    fn data_carrying_enum_return_gets_to_json_and_free_pinvoke_declarations() {
+        use crate::core::ir::{FunctionDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            enums: vec![EnumDef {
+                name: "RefreshOutcome".to_string(),
+                has_serde: true,
+                variants: vec![EnumVariant {
+                    name: "Skipped".to_string(),
+                    fields: vec![FieldDef::default()],
+                    ..EnumVariant::default()
+                }],
+                ..EnumDef::default()
+            }],
+            functions: vec![FunctionDef {
+                name: "refresh_catalog".to_string(),
+                rust_path: "sample::refresh_catalog".to_string(),
+                return_type: TypeRef::Named("RefreshOutcome".to_string()),
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+
+        let native_methods = super::gen_native_methods(
+            &api,
+            "Sample",
+            "sample",
+            "sample",
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+        )
+        .expect("no trait bridges configured, so generation cannot fail");
+
+        assert!(
+            native_methods.contains("internal static extern ulong RefreshCatalog();"),
+            "an enum-returning function must declare the scalar AlefHandle, not IntPtr:\n{native_methods}"
+        );
+        assert!(
+            native_methods.contains("internal static extern IntPtr RefreshOutcomeToJson(ulong ptr);"),
+            "a data-carrying enum return must get a ToJson P/Invoke declaration, matching a \
+             plain data struct return:\n{native_methods}"
+        );
+        assert!(
+            native_methods.contains("internal static extern void RefreshOutcomeFree(ulong ptr);"),
+            "a data-carrying enum return must get a Free P/Invoke declaration, matching a \
+             plain data struct return:\n{native_methods}"
+        );
+    }
+
     #[test]
     fn visitor_callbacks_preserve_registered_options_field_pinvoke() {
         let config: NewAlefConfig = toml::from_str(
@@ -1284,6 +1354,107 @@ registry_getter = "markup_visitor_registry"
         assert!(
             !native_methods.contains("htm_options_set_") && !native_methods.contains("OptionsSetVisitor("),
             "no options setter belongs in a function-param bridge's declarations:\n{native_methods}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod handle_predicate_agreement_tests {
+    use super::ffi_handle_type_names;
+    use crate::backends::csharp::gen_bindings::marshalling::enum_names_with_data_variants;
+    use crate::codegen::naming::csharp_type_name;
+    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef};
+    use std::collections::HashSet;
+
+    /// AGREEMENT GUARD. "Which enums box as an `AlefHandle`" is one fact, and after the CS1503 fix
+    /// it is derived in two places that never meet: `ffi_handle_type_names` here decides which
+    /// names survive into `opaque_return_types` (and therefore which `{Pascal}ToJson`/`{Pascal}Free`
+    /// P/Invoke declarations are *emitted*), while `enum_names_with_data_variants` in
+    /// `marshalling.rs` decides which returns `errors.rs` routes *through* that round trip. Each
+    /// half is well-formed on its own, so a divergence produces no local failure — it produces C#
+    /// that calls a `NativeMethods` member nobody declared (CS0117), which is exactly the
+    /// half-landed state this fix was warned not to leave behind. Comparing them is the only thing
+    /// that can see it. If this fails, change both predicates or neither. ~keep
+    #[test]
+    fn the_two_data_carrying_enum_predicates_select_the_same_enums() {
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            types: vec![
+                TypeDef {
+                    name: "RenderOptions".to_string(),
+                    ..TypeDef::default()
+                },
+                TypeDef {
+                    name: "MarkupVisitor".to_string(),
+                    is_trait: true,
+                    ..TypeDef::default()
+                },
+            ],
+            enums: vec![
+                EnumDef {
+                    name: "NodeKind".to_string(),
+                    variants: vec![EnumVariant {
+                        name: "Text".to_string(),
+                        ..EnumVariant::default()
+                    }],
+                    ..EnumDef::default()
+                },
+                EnumDef {
+                    name: "CrawlEvent".to_string(),
+                    variants: vec![EnumVariant {
+                        name: "Progress".to_string(),
+                        fields: vec![FieldDef::default()],
+                        ..EnumVariant::default()
+                    }],
+                    ..EnumDef::default()
+                },
+                EnumDef {
+                    name: "GraphQlOutcome".to_string(),
+                    variants: vec![
+                        EnumVariant {
+                            name: "Skipped".to_string(),
+                            ..EnumVariant::default()
+                        },
+                        EnumVariant {
+                            name: "Refreshed".to_string(),
+                            fields: vec![FieldDef::default()],
+                            ..EnumVariant::default()
+                        },
+                    ],
+                    ..EnumDef::default()
+                },
+            ],
+            ..ApiSurface::default()
+        };
+
+        let declared = enum_names_with_data_variants(&api);
+        let emitted: HashSet<String> = ffi_handle_type_names(&api)
+            .into_iter()
+            .filter(|name| api.enums.iter().any(|enum_def| enum_def.name == *name))
+            .map(csharp_type_name)
+            .collect();
+
+        assert_eq!(
+            declared, emitted,
+            "marshalling::enum_names_with_data_variants and functions::ffi_handle_type_names \
+             disagree about which enums box as a handle; the C# emitted for the difference will \
+             call an undeclared NativeMethods member"
+        );
+        assert!(
+            declared.contains("CrawlEvent"),
+            "the shared fixture must actually exercise a data-carrying enum, or this test compares \
+             two empty sets and proves nothing: {declared:?}"
+        );
+        assert!(
+            !declared.contains("NodeKind"),
+            "a fieldless-only enum must be in neither set: {declared:?}"
+        );
+        assert!(
+            declared.contains("GraphQLOutcome") && !declared.contains("GraphQlOutcome"),
+            "a mixed enum is data-carrying, and both sets must be keyed by the C# spelling \
+             `errors.rs` actually looks up (`csharp_type_name`, which rewrites the `GraphQL` \
+             initialism) rather than the raw IR name — otherwise the sets agree only because every \
+             fixture name happens to map to itself: {declared:?}"
         );
     }
 }

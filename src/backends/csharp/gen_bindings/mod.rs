@@ -12,9 +12,10 @@ use files::{
 };
 use marshalling::{
     CAPSULE_PINVOKE_RETURN_TYPE, FfiEmitter, HANDLE_PINVOKE_TYPE, bytes_len_arg, emit_named_param_setup,
-    emit_named_param_teardown, emit_named_param_teardown_indented, is_bridge_param, is_capsule_return, native_call_arg,
-    needs_param_teardown, pinvoke_param_type, pinvoke_return_type_with_capsules, returns_bool_via_int,
-    returns_json_object, returns_ptr, returns_string, zero_sentinel, zero_sentinel_for_pinvoke_type,
+    emit_named_param_teardown, emit_named_param_teardown_indented, enum_names_with_data_variants, is_bridge_param,
+    is_capsule_return, native_call_arg, needs_param_teardown, pinvoke_param_type, pinvoke_return_type_with_capsules,
+    returns_bool_via_int, returns_json_object, returns_ptr, returns_string, zero_sentinel,
+    zero_sentinel_for_pinvoke_type,
 };
 
 /// Metadata for a streaming adapter, used to drive emission of an
@@ -33,7 +34,7 @@ pub(super) mod enums;
 pub(super) mod errors;
 mod files;
 pub(super) mod functions;
-mod marshalling;
+pub(super) mod marshalling;
 pub(super) mod methods;
 pub(super) mod service_api;
 pub(crate) mod types;
@@ -485,6 +486,7 @@ impl Backend for CsharpBackend {
         }
 
         let enum_names: HashSet<String> = api.enums.iter().map(|e| csharp_type_name(&e.name)).collect();
+        let enum_data_variant_names = enum_names_with_data_variants(api);
 
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             if typ.is_opaque {
@@ -502,6 +504,7 @@ impl Backend for CsharpBackend {
                         &streaming_methods_meta,
                         &all_opaque_type_names,
                         client_ctor,
+                        &enum_data_variant_names,
                     )),
                     generated_header: true,
                 });

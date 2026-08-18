@@ -79,6 +79,7 @@ pub(super) fn emit_return_marshalling_indented(
     enum_names: &HashSet<String>,
     true_opaque_types: &HashSet<String>,
     handle_returned_types: &HashSet<String>,
+    enum_data_variant_names: &HashSet<String>,
 ) {
     use super::{returns_bool_via_int, returns_json_object, returns_string};
     use crate::backends::csharp::template_env::render;
@@ -105,7 +106,14 @@ pub(super) fn emit_return_marshalling_indented(
                 "return_opaque_ctor.jinja",
                 minijinja::context! { indent, pascal },
             ));
-        } else if !enum_names.contains(&pascal) {
+        } else if !enum_names.contains(&pascal) || enum_data_variant_names.contains(&pascal) {
+            // A data struct, or a data-carrying enum, is boxed by `insert_handle` exactly like
+            // any other `Named` return (`gen_owned_value_to_c` in the FFI crate has no
+            // enum-ness branch for owned conversion) — so `nativeResult` here is the
+            // `AlefHandle` scalar, not a pointer, and must be exchanged for the JSON string via
+            // the `{Pascal}ToJson` companion before it can be freed and deserialised. Passing
+            // `nativeResult` straight to `Marshal.PtrToStringUTF8` (the `else` branch below) is
+            // the CS1503 `ulong`-to-`nint` defect this condition exists to avoid. ~keep
             let to_json_method = format!("{pascal}ToJson");
             let free_method = format!("{pascal}Free");
             let cs_ty = csharp_type(return_type);

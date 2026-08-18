@@ -118,6 +118,7 @@ pub(super) fn gen_wrapper_function(
     enum_names: &HashSet<String>,
     true_opaque_types: &HashSet<String>,
     handle_returned_types: &HashSet<String>,
+    enum_data_variant_names: &HashSet<String>,
     bridge_param_names: &HashSet<String>,
     bridge_type_aliases: &HashSet<String>,
     _has_visitor_callbacks: bool,
@@ -364,6 +365,7 @@ pub(super) fn gen_wrapper_function(
             enum_names,
             true_opaque_types,
             handle_returned_types,
+            enum_data_variant_names,
         );
         emit_return_statement_indented(&mut out, &func.return_type, body_indent);
         out.push_str(lambda_indent);
@@ -465,6 +467,7 @@ pub(super) fn gen_wrapper_function(
             enum_names,
             true_opaque_types,
             handle_returned_types,
+            enum_data_variant_names,
         );
 
         if needs_outer_try {
@@ -507,6 +510,7 @@ pub(super) fn gen_wrapper_method(
     enum_names: &HashSet<String>,
     true_opaque_types: &HashSet<String>,
     handle_returned_types: &HashSet<String>,
+    enum_data_variant_names: &HashSet<String>,
     bridge_param_names: &HashSet<String>,
     bridge_type_aliases: &HashSet<String>,
     types: &[crate::core::ir::TypeDef],
@@ -740,7 +744,8 @@ pub(super) fn gen_wrapper_method(
             "            ",
             enum_names,
             true_opaque_types,
-            &HashSet::new(),
+            handle_returned_types,
+            enum_data_variant_names,
         );
         emit_named_param_teardown_indented(&mut out, &visible_params, "            ", true_opaque_types, enum_names);
         emit_return_statement_indented(&mut out, &method.return_type, "            ");
@@ -810,6 +815,7 @@ pub(super) fn gen_wrapper_method(
             enum_names,
             true_opaque_types,
             handle_returned_types,
+            enum_data_variant_names,
         );
         emit_named_param_teardown(&mut out, &visible_params, true_opaque_types, enum_names);
         emit_return_statement(&mut out, &method.return_type);
@@ -923,6 +929,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
+            &HashSet::new(),
             false,
             &[],
         );
@@ -966,6 +973,7 @@ mod tests {
             func,
             "TestException",
             "sample_ffi",
+            &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
             &HashSet::new(),
@@ -1164,6 +1172,142 @@ mod tests {
             method_ty, "ulong",
             "a capsule return from a method is boxed by alef and crosses as `AlefHandle`; \
              declaring `IntPtr` here would not match the emitted C symbol"
+        );
+    }
+
+    /// `gen_wrapper_function` with caller-supplied `enum_names`/`enum_data_variant_names`,
+    /// standing in for `wrap()` (which always passes empty sets and so can never exercise the
+    /// enum-return branch under test here).
+    fn wrap_enum(
+        func: &FunctionDef,
+        enum_names: &HashSet<String>,
+        enum_data_variant_names: &HashSet<String>,
+    ) -> String {
+        gen_wrapper_function(
+            func,
+            "TestException",
+            "sample_ffi",
+            enum_names,
+            &HashSet::new(),
+            &HashSet::new(),
+            enum_data_variant_names,
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            &[],
+        )
+    }
+
+    /// Regression for the CS1503 root cause: `RefreshOutcome` is a Rust enum with a
+    /// data-carrying variant, so it boxes as `AlefHandle` exactly like a struct return (the FFI
+    /// crate's `gen_owned_value_to_c` has no enum-ness branch for owned conversion — see
+    /// `enum_names_with_data_variants` in `marshalling.rs`). Before the fix, `enum_names`
+    /// membership alone routed *any* enum return to the direct-`nativeResult`
+    /// `Marshal.PtrToStringUTF8` branch, which is only valid for a value that already crosses as
+    /// a raw pointer — but `nativeResult` here is `ulong` (see the paired `pinvoke` assertion),
+    /// so that branch produced the exact `ulong`-to-`nint` CS1503 the bug report measured.
+    ///
+    /// Async and sync are asserted from the *same* enum_names/enum_data_variant_names input,
+    /// proving the fix is keyed on enum-ness of the return type, not on `is_async` (the original,
+    /// corrected hypothesis) — a sync free function with an identical data-carrying-enum return
+    /// was equally broken before this fix, it simply had no example in the corpus that surfaced
+    /// it. ~keep
+    #[test]
+    fn async_and_sync_data_carrying_enum_returns_both_use_to_json_round_trip() {
+        let enum_names: HashSet<String> = ["RefreshOutcome".to_string()].into_iter().collect();
+        let enum_data_variant_names = enum_names.clone();
+
+        let mut async_func = func_returning("refresh_catalog", TypeRef::Named("RefreshOutcome".into()));
+        async_func.is_async = true;
+        let async_body = wrap_enum(&async_func, &enum_names, &enum_data_variant_names);
+
+        let sync_func = func_returning("refresh_catalog", TypeRef::Named("RefreshOutcome".into()));
+        let sync_body = wrap_enum(&sync_func, &enum_names, &enum_data_variant_names);
+
+        for (label, body) in [("async", &async_body), ("sync", &sync_body)] {
+            assert!(
+                body.contains("NativeMethods.RefreshOutcomeToJson(nativeResult)"),
+                "{label} data-carrying enum return must exchange the handle for JSON via the \
+                 ToJson companion, matching a plain data struct return:\n{body}"
+            );
+            assert!(
+                body.contains("NativeMethods.RefreshOutcomeFree(nativeResult)"),
+                "{label} data-carrying enum return must free the handle after extracting JSON:\n{body}"
+            );
+            assert!(
+                !body.contains("Marshal.PtrToStringUTF8(nativeResult)"),
+                "{label} must never pass the `ulong` handle `nativeResult` straight to \
+                 `Marshal.PtrToStringUTF8` (expects `nint`) — that is the CS1503 defect:\n{body}"
+            );
+        }
+    }
+
+    /// Structural companion to the test above: derives the P/Invoke declared return type from
+    /// `gen_pinvoke_for_func`'s emitted text and the argument passed to
+    /// `Marshal.PtrToStringUTF8(...)` from the wrapper body's emitted text — rather than
+    /// hardcoding either spelling — and proves they can never agree for `nativeResult` itself
+    /// (declared `ulong`, so passing it to a `Marshal.PtrToStringUTF8` call that wants `nint`
+    /// cannot type-check), while the argument the body actually uses (`jsonPtr`, sourced from the
+    /// separate `RefreshOutcomeToJson` call) is exactly the pointer-typed value that call needs.
+    /// Survives a future template rename of `jsonPtr` because it greps the emitted text rather
+    /// than asserting the literal identifier is `"jsonPtr"` up front. ~keep
+    #[test]
+    fn ptr_to_string_utf8_argument_never_names_the_ulong_declared_native_result() {
+        let enum_names: HashSet<String> = ["RefreshOutcome".to_string()].into_iter().collect();
+        let enum_data_variant_names = enum_names.clone();
+        let func = func_returning("refresh_catalog", TypeRef::Named("RefreshOutcome".into()));
+
+        let decl = pinvoke(&func, &HashMap::new());
+        let declared_ty =
+            declared_return_type(&decl).expect("the function shape must actually emit a `[DllImport]` to compare");
+        assert_eq!(
+            declared_ty, "ulong",
+            "a data-carrying enum return declares the scalar AlefHandle, same as a struct return"
+        );
+
+        let body = wrap_enum(&func, &enum_names, &enum_data_variant_names);
+        const CALL: &str = "Marshal.PtrToStringUTF8(";
+        let call_start = body.find(CALL).expect("body must call PtrToStringUTF8 to extract JSON");
+        let after_call = &body[call_start + CALL.len()..];
+        let arg = after_call
+            .split(')')
+            .next()
+            .expect("PtrToStringUTF8 call must be closed")
+            .trim();
+
+        assert_ne!(
+            arg, "nativeResult",
+            "PtrToStringUTF8's argument must never be the {declared_ty}-declared `nativeResult` \
+             — that is the CS1503 ulong-to-nint defect:\n{body}"
+        );
+        assert_eq!(
+            arg, "jsonPtr",
+            "PtrToStringUTF8 must be called with the IntPtr-typed JSON pointer obtained from the \
+             ToJson companion, not any other variable:\n{body}"
+        );
+    }
+
+    /// Control: a fieldless-only enum return is left exactly as it was — `enum_data_variant_names`
+    /// does not contain it, so it keeps taking the direct-`nativeResult` branch. This is not
+    /// asserted to be *correct* (see the residual noted in the task report — fieldless-enum
+    /// returns are unverified against the FFI crate's actual ABI) but it proves the fix is scoped
+    /// to data-carrying enums only and does not change behavior for the fieldless case. ~keep
+    #[test]
+    fn fieldless_only_enum_return_keeps_the_pre_fix_direct_pointer_shape() {
+        let enum_names: HashSet<String> = ["Status".to_string()].into_iter().collect();
+        let func = func_returning("get_status", TypeRef::Named("Status".into()));
+
+        let body = wrap_enum(&func, &enum_names, &HashSet::new());
+
+        assert!(
+            body.contains("Marshal.PtrToStringUTF8(nativeResult)"),
+            "a fieldless-only enum return must keep its pre-existing direct-pointer shape \
+             unchanged by this fix:\n{body}"
+        );
+        assert!(
+            !body.contains("StatusToJson"),
+            "a fieldless-only enum return must not gain a ToJson round trip it did not have \
+             before:\n{body}"
         );
     }
 }

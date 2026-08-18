@@ -89,6 +89,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
         .collect();
 
     let handle_returned_types = super::super::errors::compute_handle_returned_types(api);
+    let enum_data_variant_names = super::super::marshalling::enum_names_with_data_variants(api);
 
     for func in api.functions.iter().filter(|f| {
         !exclude_functions.contains(&f.name)
@@ -122,6 +123,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
                 &enum_names,
                 &true_opaque_types,
                 &handle_returned_types,
+                &enum_data_variant_names,
                 bridge_param_names,
                 bridge_type_aliases,
                 has_visitor_callbacks,
@@ -149,6 +151,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_wrapper_class(
                 &enum_names,
                 &true_opaque_types,
                 &handle_returned_types,
+                &enum_data_variant_names,
                 bridge_param_names,
                 bridge_type_aliases,
                 &api.types,
