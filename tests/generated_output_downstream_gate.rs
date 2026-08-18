@@ -20,6 +20,13 @@
 //! The three bugs are fixed elsewhere. This file is the gate for the *class*: emit a
 //! tree for a synthetic consumer and hand it to the same three tools the consumer runs.
 //!
+//! A fourth lane, [`cargo_manifest_byte_lane`], has no consumer-side tool behind it: `cargo
+//! sort --check` verifies dependency and table ORDER, not byte layout, so a `Cargo.toml`
+//! that drifts from what alef emits by nothing but whitespace still passes it, and
+//! `Cargo.toml` is deliberately excluded from poly's format pass (see
+//! `POLY_FORMAT_EXCLUDES`). No downstream tool covers that gap, so this lane closes it
+//! in-house by byte-comparing each manifest against the snapshot alef itself produced.
+//!
 //! # What makes this gate non-vacuous
 //!
 //! A gate over generated output has one dominant failure mode, and it is not "the tool
@@ -56,6 +63,7 @@
 //! needs no tooling, and fails the ordinary suite if the CI job stops invoking these
 //! tests or stops installing what they need. ~keep
 
+use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -423,6 +431,16 @@ enum Sabotage {
     /// Re-indent an emitted TOML array to four spaces, where poly normalises to two.
     /// Stands for the provenance-manifest indent that the consumer could not fix.
     WideTomlArrayIndent,
+    /// Widen the spacing around every `key = value` pair's `=` in an emitted `Cargo.toml`,
+    /// leaving table order and dependency key order untouched. `cargo sort --check` is
+    /// built on `toml_edit::Table::sort_values`, which reorders entries without touching
+    /// an already-correctly-ordered entry's own decor -- so this is invisible to it, and
+    /// `Cargo.toml` is also excluded from poly's format pass (see
+    /// `scaffold::languages::poly::POLY_FORMAT_EXCLUDES`, which hands `Cargo.toml` to
+    /// cargo-sort specifically to avoid the two tools fighting). Stands for the class of
+    /// bug neither downstream tool can see: a manifest that drifted from what alef emits
+    /// by nothing but whitespace. ~keep
+    CargoManifestIndentDrift,
     /// Add a redundant pointer cast to an emitted Rust file, the shape that broke the
     /// consumer's `-D warnings` build.
     RedundantPointerCast,
@@ -444,6 +462,12 @@ struct EmittedTree {
     manifests: Vec<PathBuf>,
     /// Every `.toml` alef emitted, the poly lane's evidence surface.
     toml_files: Vec<PathBuf>,
+    /// Each manifest's exact bytes at the moment alef emitted it, captured before any
+    /// [`Sabotage`] runs. This is the reference [`cargo_manifest_byte_lane`] diffs
+    /// against -- the "committed manifest" half of the comparison, sourced from the same
+    /// `alef` binary run that produced the tree rather than from a hand-described layout.
+    /// ~keep
+    manifest_snapshots: BTreeMap<PathBuf, String>,
     _workspace: tempfile::TempDir,
 }
 
@@ -480,6 +504,7 @@ impl EmittedTree {
 
         // The negative half of "it lints the emitted tree, not alef": no manifest in the
         // examined set may be alef's. The positive half is the sabotage tests. ~keep
+        let mut manifest_snapshots = BTreeMap::new();
         for manifest in &manifests {
             let text = std::fs::read_to_string(manifest).unwrap_or_default();
             assert!(
@@ -487,12 +512,14 @@ impl EmittedTree {
                 "the examined manifest set contains alef's own package: {}",
                 manifest.display()
             );
+            manifest_snapshots.insert(manifest.clone(), text);
         }
 
         Self {
             root,
             manifests,
             toml_files,
+            manifest_snapshots,
             _workspace: workspace,
         }
     }
@@ -578,6 +605,21 @@ fn inject(tree: &EmittedTree, sabotage: Sabotage) {
             let widened = format!("{text}\n[gate_sabotage]\nvalues = [\n    \"a\",\n    \"b\",\n]\n");
             std::fs::write(target, widened).expect("write wide-indent toml");
         }
+        Sabotage::CargoManifestIndentDrift => {
+            let manifest = tree
+                .manifests
+                .first()
+                .expect("manifest set is non-empty by EmittedTree::new");
+            let text = std::fs::read_to_string(manifest).expect("read manifest to sabotage");
+            let drifted = widen_key_value_spacing(&text);
+            assert_ne!(
+                drifted,
+                text,
+                "the whitespace sabotage produced no change -- {} has no `key = value` line to widen",
+                manifest.display()
+            );
+            std::fs::write(manifest, drifted).expect("write indent-drifted manifest");
+        }
         Sabotage::RedundantPointerCast => {
             let target = emitted_rust_source(tree).expect("emitted tree contains a Rust source file");
             let text = std::fs::read_to_string(&target).expect("read rust source to sabotage");
@@ -602,6 +644,36 @@ pub fn gate_sabotage_into_handle(value: Box<GateSabotageHandle>) -> i64 {
     raw as *const GateSabotageHandle as i64
 }
 ";
+
+/// Widen the spacing around every top-level `key = value` pair's `=` from one space to
+/// two, leaving everything else -- including line order and every key and value -- byte
+/// identical. Built by transforming alef's own correct output rather than hand-writing a
+/// "wrong" manifest, so it cannot accidentally diverge from real emitted text in some
+/// other way that would make the sabotage test pass for the wrong reason.
+///
+/// Restricted to lines that split cleanly on `" = "` and are not a table header or blank
+/// line, which keeps this from reaching into a multi-line value's continuation lines --
+/// none exist in an alef-emitted `Cargo.toml` today, but the restriction costs nothing and
+/// removes the risk if one ever does. ~keep
+fn widen_key_value_spacing(manifest: &str) -> String {
+    let mut widened: String = manifest
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('[') || trimmed.starts_with('#') {
+                return line.to_owned();
+            }
+            let indent = &line[..line.len() - trimmed.len()];
+            match trimmed.split_once(" = ") {
+                Some((key, value)) => format!("{indent}{key}  =  {value}"),
+                None => line.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    widened.push('\n');
+    widened
+}
 
 /// Pick a Rust file the *clippy* lane will actually open.
 ///
@@ -661,6 +733,77 @@ fn cargo_sort_lane(tree: &EmittedTree) -> Vec<LaneOutcome> {
         .into_iter()
         .map(|dir| run_tool(CARGO_SORT.program, CARGO_SORT.check_args, dir))
         .collect()
+}
+
+/// Byte-compare every emitted manifest against the snapshot [`EmittedTree::new`] took at
+/// the moment alef emitted it.
+///
+/// This is the gate `cargo sort --check` cannot be: cargo-sort verifies dependency and
+/// table ORDER by re-sorting with `toml_edit`, which reorders entries without rewriting an
+/// already-correctly-ordered entry's own decor, so a manifest that differs from what alef
+/// emitted by nothing but whitespace still parses to the same order and passes `--check`.
+/// `Cargo.toml` is also carved out of poly's format pass on purpose (see
+/// `POLY_FORMAT_EXCLUDES` in `scaffold::languages::poly`), so no downstream tool this gate
+/// runs examines a manifest's byte layout at all. This lane needs no external tool -- the
+/// reference it diffs against comes from the same `alef` binary run that produced the
+/// tree, not from a hand-described expected layout, so it cannot drift out of sync with a
+/// future emitter change the way a golden fixture would. ~keep
+fn cargo_manifest_byte_lane(tree: &EmittedTree) -> Vec<LaneOutcome> {
+    tree.manifests
+        .iter()
+        .map(|manifest| {
+            let command = format!("byte-compare {} against alef's emitted bytes", manifest.display());
+            let current = std::fs::read_to_string(manifest).unwrap_or_default();
+            let original = tree
+                .manifest_snapshots
+                .get(manifest)
+                .unwrap_or_else(|| panic!("no emitted-bytes snapshot recorded for {}", manifest.display()));
+            match first_difference(original, &current) {
+                None => LaneOutcome {
+                    command,
+                    passed: true,
+                    output: String::new(),
+                },
+                Some((line_number, expected, actual)) => LaneOutcome {
+                    command,
+                    passed: false,
+                    output: format!(
+                        "{} differs from alef's emitted bytes at line {line_number}:\n  \
+                         emitted:  {expected:?}\n  on disk:  {actual:?}",
+                        manifest.display()
+                    ),
+                },
+            }
+        })
+        .collect()
+}
+
+/// The 1-based line number and the two lines' text at the first point `expected` and
+/// `actual` diverge, or `None` if they are identical. Compares by line rather than by
+/// whole-string equality so a failure message can name the exact line instead of dumping
+/// the entire manifest twice.
+fn first_difference(expected: &str, actual: &str) -> Option<(usize, String, String)> {
+    let mut expected_lines = expected.lines();
+    let mut actual_lines = actual.lines();
+    let mut line_number = 0usize;
+    loop {
+        line_number += 1;
+        match (expected_lines.next(), actual_lines.next()) {
+            (None, None) => return None,
+            (expected_line, actual_line) if expected_line == actual_line => {}
+            (expected_line, actual_line) => {
+                return Some((
+                    line_number,
+                    expected_line
+                        .unwrap_or("<no line -- file is shorter than emitted>")
+                        .to_owned(),
+                    actual_line
+                        .unwrap_or("<no line -- file is shorter than emitted>")
+                        .to_owned(),
+                ));
+            }
+        }
+    }
 }
 
 /// The emitted manifests belonging to clippy-lane languages, keyed off
@@ -779,6 +922,20 @@ fn emitted_tree_passes_poly_fmt() {
 }
 
 #[test]
+#[ignore = "regenerates a full emitted tree via the alef binary; run via `task gate:generated-output` \
+            or the CI gate job"]
+fn emitted_tree_passes_cargo_manifest_byte_lane() {
+    let tree = emit_tree(Sabotage::None);
+    let outcomes = cargo_manifest_byte_lane(&tree);
+    assert!(
+        !any_failed(&outcomes),
+        "an untouched emitted tree must byte-match its own snapshot, or this lane is not a \
+         faithful byte comparison:\n{}",
+        report(&outcomes)
+    );
+}
+
+#[test]
 #[ignore = "compiles the emitted crates; run via the CI gate job"]
 fn emitted_tree_passes_clippy() {
     resolve_tools(&[&CARGO]);
@@ -834,6 +991,42 @@ fn poly_fmt_lane_catches_a_wide_toml_array_indent() {
         !outcome.passed,
         "a four-space TOML array indent did not fail `poly fmt --check`, so this lane is not \
          examining the emitted TOML"
+    );
+}
+
+/// The test this whole lane exists for: a manifest that differs from what alef emitted by
+/// nothing but indentation must fail the gate -- and, to prove that gap was real and not
+/// already covered, `cargo sort --check` must still pass the exact same sabotaged tree.
+#[test]
+#[ignore = "needs cargo-sort; run via `task gate:generated-output` or the CI gate job"]
+fn cargo_manifest_byte_lane_catches_indentation_only_drift() {
+    resolve_tools(&[&CARGO_SORT]);
+
+    let clean = emit_tree(Sabotage::None);
+    let clean_outcomes = cargo_manifest_byte_lane(&clean);
+    assert!(
+        !any_failed(&clean_outcomes),
+        "the control tree must be byte-identical to its own snapshot, or the sabotage proves \
+         nothing:\n{}",
+        report(&clean_outcomes)
+    );
+
+    let sabotaged = emit_tree(Sabotage::CargoManifestIndentDrift);
+
+    let byte_outcomes = cargo_manifest_byte_lane(&sabotaged);
+    assert!(
+        any_failed(&byte_outcomes),
+        "widening the spacing around every `key = value` pair's `=` did not fail the byte \
+         comparison, so this lane is not examining the emitted manifest's bytes"
+    );
+
+    let sort_outcomes = cargo_sort_lane(&sabotaged);
+    assert!(
+        !any_failed(&sort_outcomes),
+        "`cargo sort --check` rejected an indentation-only change, so it is not the blind spot \
+         this lane exists to cover -- update the doc comments on `Sabotage::CargoManifestIndentDrift` \
+         and `cargo_manifest_byte_lane` if cargo-sort's behaviour has changed:\n{}",
+        report(&sort_outcomes)
     );
 }
 

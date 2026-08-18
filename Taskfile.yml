@@ -54,10 +54,11 @@ tasks:
       - cargo test --test generated_output_downstream_gate -- --ignored --nocapture
 
   gate:generated-output:text:
-    desc: "Generated-output gate, text lanes only (cargo sort + poly fmt; compiles nothing)"
+    desc: "Generated-output gate, text lanes only (cargo sort + poly fmt + cargo manifest bytes; compiles nothing)"
     cmds:
       - cargo test --test generated_output_downstream_gate -- --ignored --nocapture cargo_sort
       - cargo test --test generated_output_downstream_gate -- --ignored --nocapture poly_fmt
+      - cargo test --test generated_output_downstream_gate -- --ignored --nocapture cargo_manifest_byte
 
   bench:
     desc: "Run codegen benchmarks (criterion)"
