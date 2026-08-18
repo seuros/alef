@@ -266,6 +266,7 @@ pub(super) fn render_test_function(
             &call_expr,
             is_streaming_error_call,
         );
+        crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&error_assertion_block, "python", &fixture.id);
 
         let ctx = minijinja::context! {
             skip_decorator => skip_decorator,

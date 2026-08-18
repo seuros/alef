@@ -18,6 +18,7 @@
 //! both can coexist behind the per-language [`E2eCodegen::generate`] entry.
 
 pub mod assertion_recipes;
+pub(crate) mod assertion_type_skip;
 pub mod assertion_types;
 pub mod brew;
 pub mod c;
@@ -322,13 +323,36 @@ pub(crate) enum SkipVerdict {
     Acknowledged(crate::e2e::fixture::AssertionSkipKind),
 }
 
+/// Which axis a [`SkipRecord`] was recognised on.
+///
+/// ~keep [`field_skip::FieldSkip`] answers "does this field exist on the result?";
+/// [`assertion_type_skip::AssertionTypeSkip`] answers "can this backend express this assertion
+/// *shape* at all?". They are recorded onto the same ledger (so [`skip_summary`] reports one
+/// number and [`SkipVerdict`]'s three-way class still applies to both), but kept distinguishable
+/// here rather than merged into one axis — merging would either force every
+/// `AssertionTypeSkip` variant to accept a `FieldSkip`-shaped acknowledgement path it structurally
+/// cannot use (a bad assertion shape is never a fixture's mistake to acknowledge) or blur the
+/// per-assertion-type attribution the type axis exists to provide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkipOrigin {
+    /// Recognised by [`field_skip::FieldSkip`]: a field path the availability oracle rejected.
+    Field,
+    /// Recognised by [`assertion_type_skip::AssertionTypeSkip`]: an assertion type (or, for the
+    /// one wording that never named it, a field) a backend's renderer cannot express.
+    AssertionType,
+}
+
 /// One rendered skip marker, with the fixture and language it came from.
 #[derive(Debug, Clone)]
 pub(crate) struct SkipRecord {
     pub(crate) language: String,
     pub(crate) fixture_id: String,
+    /// The token the marker's wording captured: a field path for [`SkipOrigin::Field`], an
+    /// assertion type (or, for the one wording that never named it, a field) for
+    /// [`SkipOrigin::AssertionType`].
     pub(crate) field: String,
     pub(crate) verdict: SkipVerdict,
+    pub(crate) origin: SkipOrigin,
 }
 
 thread_local! {
@@ -371,9 +395,18 @@ pub(crate) fn skip_summary(records: &[SkipRecord]) -> Option<String> {
         )
     });
     let gaps = count(|v| matches!(v, SkipVerdict::UnacknowledgedGap));
+    // ~keep Appended only when at least one record came from the assertion-type axis, so every
+    // existing summary produced from `fail_on_unavailable_field_markers` alone (the only source
+    // before this axis existed) renders byte-identical to before.
+    let type_skips = records.iter().filter(|r| r.origin == SkipOrigin::AssertionType).count();
+    let type_skip_suffix = if type_skips > 0 {
+        format!(", {type_skips} from an assertion type this backend cannot render rather than an unavailable field")
+    } else {
+        String::new()
+    };
     Some(format!(
         "{} assertion(s) skipped across {} fixture(s): {awaiting} awaiting alef support, \
-         {limitations} language/ABI limitation(s), {gaps} unresolved field path(s)",
+         {limitations} language/ABI limitation(s), {gaps} unresolved field path(s){type_skip_suffix}",
         records.len(),
         fixtures.len(),
     ))
@@ -420,6 +453,39 @@ pub(crate) fn fail_on_unavailable_field_markers(
                 fixture_id: fixture_id.to_string(),
                 field: field.to_string(),
                 verdict,
+                origin: SkipOrigin::Field,
+            });
+        });
+    }
+}
+
+/// Scan every line of a fully-rendered assertions body for an [`assertion_type_skip::AssertionTypeSkip`]
+/// marker and record it on the ledger.
+///
+/// ~keep The field-axis counterpart, [`fail_on_unavailable_field_markers`], cross-references the
+/// fixture's own assertions to decide `Acknowledged` vs. `UnacknowledgedGap` — that acknowledgement
+/// path exists because an unresolved field CAN be a fixable authoring mistake. An assertion-type
+/// skip never is: [`assertion_type_skip::AssertionTypeSkip::class`] never returns
+/// [`field_skip::SkipClass::AuthoringGap`], so there is no gap for a fixture to acknowledge and
+/// this function does not take an `assertions` slice. `SkipClass::AuthoringGap` is still handled
+/// below (mapped defensively to `Limitation`) so the match stays exhaustive if that invariant is
+/// ever violated by a future variant, without panicking mid-generation.
+pub(crate) fn fail_on_unsupported_assertion_type_markers(body: &str, language: &str, fixture_id: &str) {
+    for line in body.lines() {
+        let Some((token, skip)) = assertion_type_skip::AssertionTypeSkip::extract_classified(line) else {
+            continue;
+        };
+        let verdict = match skip.class() {
+            field_skip::SkipClass::GeneratorGap => SkipVerdict::AwaitingGeneratorSupport,
+            field_skip::SkipClass::LanguageLimitation | field_skip::SkipClass::AuthoringGap => SkipVerdict::Limitation,
+        };
+        SKIP_LEDGER.with(|ledger| {
+            ledger.borrow_mut().push(SkipRecord {
+                language: language.to_string(),
+                fixture_id: fixture_id.to_string(),
+                field: token.to_string(),
+                verdict,
+                origin: SkipOrigin::AssertionType,
             });
         });
     }
@@ -888,6 +954,77 @@ mod unavailable_field_marker_tests {
         assert!(
             message.contains(super::STRICT_ASSERTIONS_ENV),
             "must name the escape hatch: {message}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod assertion_type_marker_tests {
+    use super::{SkipOrigin, SkipVerdict, fail_on_unsupported_assertion_type_markers, skip_summary, take_skip_records};
+
+    fn verdicts_for(body: &str, language: &str) -> Vec<SkipVerdict> {
+        let _ = take_skip_records();
+        fail_on_unsupported_assertion_type_markers(body, language, "smoke");
+        take_skip_records().into_iter().map(|r| r.verdict).collect()
+    }
+
+    /// Every record this gate produces must be tagged [`SkipOrigin::AssertionType`], never
+    /// [`SkipOrigin::Field`] — the two axes must stay distinguishable downstream.
+    #[test]
+    fn recorded_markers_are_tagged_with_the_assertion_type_origin() {
+        let _ = take_skip_records();
+        fail_on_unsupported_assertion_type_markers(
+            "\t// skipped: unsupported assertion type on synthetic field 'embeddings'\n",
+            "go",
+            "smoke",
+        );
+        let records = take_skip_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].origin, SkipOrigin::AssertionType);
+    }
+
+    /// GeneratorGap-classified wordings (alef's own debt) never fail a build, mirroring the field
+    /// axis's `AwaitingGeneratorSupport` treatment.
+    #[test]
+    fn generator_gap_wordings_await_alef_support() {
+        let body = "    // skipped: unsupported traversal assertion 'equals' on 'pages[].url'\n";
+        assert_eq!(verdicts_for(body, "go"), vec![SkipVerdict::AwaitingGeneratorSupport]);
+    }
+
+    /// LanguageLimitation-classified wordings are counted as a real limitation, not alef's debt.
+    #[test]
+    fn language_limitation_wordings_are_counted_as_limitations() {
+        let body = "        // skipped: field 'content' is a scalar String without meaningful .count\n";
+        assert_eq!(verdicts_for(body, "swift"), vec![SkipVerdict::Limitation]);
+    }
+
+    /// Regression control: an ordinary field-availability skip must not be picked up by this gate
+    /// — the two funnels (`FieldSkip` / `AssertionTypeSkip`) stay disjoint.
+    #[test]
+    fn field_availability_markers_are_not_recorded_by_this_gate() {
+        let body = "    // skipped: field 'chunks' not available on result type\n";
+        assert!(verdicts_for(body, "python").is_empty());
+    }
+
+    #[test]
+    fn a_body_with_no_marker_records_nothing() {
+        assert!(verdicts_for("    assert result.count == 1\n", "python").is_empty());
+    }
+
+    /// The one-line summary must call out how many of the skips came from the assertion-type axis
+    /// rather than the field axis, or the two are indistinguishable in the number a consumer reads.
+    #[test]
+    fn summary_calls_out_assertion_type_skips_separately() {
+        let _ = take_skip_records();
+        fail_on_unsupported_assertion_type_markers(
+            "    // skipped: unsupported traversal assertion 'equals' on 'pages[].url'\n",
+            "go",
+            "traversal_smoke",
+        );
+        let summary = skip_summary(&take_skip_records()).expect("summary");
+        assert!(
+            summary.contains("1 from an assertion type this backend cannot render"),
+            "got: {summary}"
         );
     }
 }
