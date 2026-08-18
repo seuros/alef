@@ -1,10 +1,12 @@
 
     // Visitor FFI ({{ bridge_name }})
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ fn_visitor_create }}")]
-    internal static extern IntPtr VisitorCreate(IntPtr callbacksPtr);
+    internal static extern {{ handle_type }} VisitorCreate(IntPtr callbacksPtr);
 
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ fn_visitor_free }}")]
-    internal static extern void VisitorFree(IntPtr visitor);
+    internal static extern void VisitorFree({{ handle_type }} visitor);
+{% for setter in setters %}
 
-    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ fn_options_set }}")]
-    internal static extern void {{ options_name }}Set{{ field_name }}(IntPtr options, IntPtr visitor);
+    [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ setter.entry_point }}")]
+    internal static extern void {{ setter.member }}({{ handle_type }} options, {{ handle_type }} visitor);
+{% endfor %}

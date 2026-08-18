@@ -1,4 +1,4 @@
-use super::super::zero_sentinel;
+use super::super::{HANDLE_PINVOKE_TYPE, zero_sentinel, zero_sentinel_for_pinvoke_type};
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::doc_emission;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
@@ -121,12 +121,15 @@ pub(super) fn gen_bridge_field_wrapper_function(
         "bridge_field_register.jinja"
     };
     out.push_str(&render(register_template, minijinja::context! { trait_pascal }));
-    // The two register templates call different natives with different return types:
-    // `VisitorCreate` is declared `IntPtr` (`native_methods_visitor.jinja`) while
-    // `{Trait}BridgeNew` wraps `{prefix}_{bridge}_new`, which returns `AlefHandle`
-    // (`backends::ffi::trait_bridge::gen_bridge_new_free`). One sentinel for both branches is
-    // wrong for one of them, so the guard follows the branch that produced the value. ~keep
-    let bridge_zero = if is_visitor_bridge { "IntPtr.Zero" } else { "0" };
+    // Both register branches hand back an `AlefHandle`, so one sentinel is now correct for both:
+    // `VisitorCreate` is declared `HANDLE_PINVOKE_TYPE` in `native_methods_visitor.jinja`,
+    // mirroring `{prefix}_visitor_create -> AlefHandle`
+    // (`backends::ffi::gen_visitor::binding_emission`), and `{Trait}BridgeNew` wraps
+    // `{prefix}_{bridge}_new`, which returns `AlefHandle` too
+    // (`backends::ffi::trait_bridge::gen_bridge_new_free`). The guard is derived from the same
+    // constant the declaration is emitted from instead of restating a literal, so the check can
+    // never be sourced from a different fact than the signature it guards. ~keep
+    let bridge_zero = zero_sentinel_for_pinvoke_type(HANDLE_PINVOKE_TYPE);
     out.push_str(&format!(
         "                if (bridgeHandle == {bridge_zero}) throw GetLastError();\n"
     ));

@@ -512,50 +512,64 @@ pub(super) fn gen_native_methods(
 
     if has_visitor_callbacks {
         out.push('\n');
-        let visitor_bridge = trait_bridges.iter().find(|b| {
-            b.bind_via == crate::core::config::BridgeBinding::OptionsField
-                && b.is_active_for(&crate::core::config::Language::Csharp.to_string())
-        });
+        // Every options-field bridge gets a setter declaration, not just the first one: the FFI
+        // crate loops over `config.trait_bridges` and emits `{prefix}_options_set_{field}` for
+        // each (`backends::ffi::gen_bindings::lib_rs.rs:558`), and
+        // `bridge_field_inject.jinja` emits a `{Options}Set{Field}` call for each too, so a
+        // `find`-style single pick left every bridge after the first calling an undeclared
+        // member (CS0117). `visitor_create` / `visitor_free` stay singular because the FFI side
+        // is singular there (`lib_rs.rs:588` is a `find_map`). ~keep
+        let visitor_bridges: Vec<_> = trait_bridges
+            .iter()
+            .filter(|b| {
+                b.bind_via == crate::core::config::BridgeBinding::OptionsField
+                    && b.is_active_for(&crate::core::config::Language::Csharp.to_string())
+            })
+            .collect();
 
-        if let Some(bridge) = visitor_bridge {
-            // Both names below are load-bearing ABI, not cosmetics: the emitted declaration is
-            // `[DllImport(EntryPoint = "{prefix}_options_set_{field}")] ... {OptionsType}Set{Field}`,
-            // and the FFI crate emits that setter ONLY for a bridge that resolves both keys
-            // (`backends::ffi::gen_bindings::lib_rs` skips the bridge when either is `None`).
-            // Guessing `options_type` declares a P/Invoke for a symbol the native library never
-            // exports; guessing the field name additionally desyncs the declaration from the call
-            // `bridge_field_inject.jinja` emits off the real IR field, which is a C# compile error.
-            // `options_type` is documented as required under `bind_via = "options_field"`, so
-            // absence is a config defect. `function_param` bridges are filtered out above and are
-            // unaffected; `[crates.<name>.ffi] visitor_callbacks = false` skips this block whole. ~keep
-            let Some(options_type) = bridge.options_type.as_deref() else {
-                anyhow::bail!(
-                    "csharp NativeMethods: trait bridge `{trait_name}` declares `bind_via = \"options_field\"` \
-                     but no `options_type`; the FFI crate emits no `{prefix}_options_set_*` entry point for such \
-                     a bridge and the generated wrapper has no options type to attach the visitor to, so the \
-                     visitor P/Invoke block cannot be generated. Set `options_type` on the \
-                     `[[crates.trait_bridges]]` entry for `{trait_name}`, or set \
-                     `[crates.<name>.ffi] visitor_callbacks = false` to drop visitor support from this backend",
-                    trait_name = bridge.trait_name,
-                );
-            };
-            let Some(options_field) = bridge.resolved_options_field() else {
-                anyhow::bail!(
-                    "csharp NativeMethods: trait bridge `{trait_name}` declares `bind_via = \"options_field\"` \
-                     but neither `options_field` nor `param_name`; the setter entry point is named \
-                     `{prefix}_options_set_<field>` and cannot be derived. Set `options_field` (or `param_name`) \
-                     on the `[[crates.trait_bridges]]` entry for `{trait_name}`, or set \
-                     `[crates.<name>.ffi] visitor_callbacks = false` to drop visitor support from this backend",
-                    trait_name = bridge.trait_name,
-                );
-            };
+        if let Some(first_bridge) = visitor_bridges.first() {
+            let mut options_setters: Vec<(String, String)> = Vec::with_capacity(visitor_bridges.len());
+            for bridge in &visitor_bridges {
+                // Both names below are load-bearing ABI, not cosmetics: the emitted declaration is
+                // `[DllImport(EntryPoint = "{prefix}_options_set_{field}")] ... {OptionsType}Set{Field}`,
+                // and the FFI crate emits that setter ONLY for a bridge that resolves both keys
+                // (`backends::ffi::gen_bindings::lib_rs` skips the bridge when either is `None`).
+                // Guessing `options_type` declares a P/Invoke for a symbol the native library never
+                // exports; guessing the field name additionally desyncs the declaration from the call
+                // `bridge_field_inject.jinja` emits off the real IR field, which is a C# compile error.
+                // `options_type` is documented as required under `bind_via = "options_field"`, so
+                // absence is a config defect. `function_param` bridges are filtered out above and are
+                // unaffected; `[crates.<name>.ffi] visitor_callbacks = false` skips this block whole. ~keep
+                let Some(options_type) = bridge.options_type.as_deref() else {
+                    anyhow::bail!(
+                        "csharp NativeMethods: trait bridge `{trait_name}` declares `bind_via = \"options_field\"` \
+                         but no `options_type`; the FFI crate emits no `{prefix}_options_set_*` entry point for such \
+                         a bridge and the generated wrapper has no options type to attach the visitor to, so the \
+                         visitor P/Invoke block cannot be generated. Set `options_type` on the \
+                         `[[crates.trait_bridges]]` entry for `{trait_name}`, or set \
+                         `[crates.<name>.ffi] visitor_callbacks = false` to drop visitor support from this backend",
+                        trait_name = bridge.trait_name,
+                    );
+                };
+                let Some(options_field) = bridge.resolved_options_field() else {
+                    anyhow::bail!(
+                        "csharp NativeMethods: trait bridge `{trait_name}` declares `bind_via = \"options_field\"` \
+                         but neither `options_field` nor `param_name`; the setter entry point is named \
+                         `{prefix}_options_set_<field>` and cannot be derived. Set `options_field` (or `param_name`) \
+                         on the `[[crates.trait_bridges]]` entry for `{trait_name}`, or set \
+                         `[crates.<name>.ffi] visitor_callbacks = false` to drop visitor support from this backend",
+                        trait_name = bridge.trait_name,
+                    );
+                };
+                options_setters.push((options_type.to_owned(), options_field.to_owned()));
+            }
             out.push_str(&crate::backends::csharp::gen_visitor::gen_native_methods_visitor(
                 namespace,
                 lib_name,
                 prefix,
-                &bridge.trait_name,
-                options_type,
-                options_field,
+                &first_bridge.trait_name,
+                HANDLE_PINVOKE_TYPE,
+                &options_setters,
             ));
         }
     }
@@ -590,6 +604,7 @@ pub(super) fn gen_native_methods(
                     &bridges,
                     &visible_type_names,
                     has_visitor_callbacks,
+                    HANDLE_PINVOKE_TYPE,
                 ),
             );
         }
@@ -790,7 +805,7 @@ pub(super) fn gen_pinvoke_for_method(
 
 #[cfg(test)]
 mod tests {
-    use super::{emit_streaming_pinvoke, emits_registered_trait_bridge, ffi_handle_type_names};
+    use super::{HANDLE_PINVOKE_TYPE, emit_streaming_pinvoke, emits_registered_trait_bridge, ffi_handle_type_names};
     use crate::core::config::NewAlefConfig;
     use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef};
 
@@ -1096,6 +1111,12 @@ registry_getter = "markup_visitor_registry"
     }
 
     fn native_methods_with_visitor_bridge(bridge: crate::core::config::TraitBridgeConfig) -> anyhow::Result<String> {
+        native_methods_with_visitor_bridges(std::slice::from_ref(&bridge))
+    }
+
+    fn native_methods_with_visitor_bridges(
+        bridges: &[crate::core::config::TraitBridgeConfig],
+    ) -> anyhow::Result<String> {
         use std::collections::{HashMap, HashSet};
 
         let api = visitor_api();
@@ -1107,7 +1128,7 @@ registry_getter = "markup_visitor_registry"
             &HashSet::new(),
             &HashSet::new(),
             true,
-            std::slice::from_ref(&bridge),
+            bridges,
             &HashSet::new(),
             &HashMap::new(),
             &HashSet::new(),
@@ -1176,9 +1197,11 @@ registry_getter = "markup_visitor_registry"
         let native_methods = native_methods_with_visitor_bridge(options_field_bridge())
             .expect("a fully configured options-field bridge generates");
 
-        let declaration = "internal static extern void ConversionOptionsSetVisitor(IntPtr options, IntPtr visitor);";
+        let declaration = format!(
+            "internal static extern void ConversionOptionsSetVisitor({HANDLE_PINVOKE_TYPE} options, {HANDLE_PINVOKE_TYPE} visitor);"
+        );
         assert!(
-            native_methods.contains(declaration),
+            native_methods.contains(&declaration),
             "the declaration must carry the configured `options_type`:\n{native_methods}"
         );
         assert!(
@@ -1190,6 +1213,56 @@ registry_getter = "markup_visitor_registry"
         assert!(
             !native_methods.contains("void OptionsSetVisitor("),
             "the fabricated `Options` type name must not reach the emitted declaration:\n{native_methods}"
+        );
+    }
+
+    /// The FFI crate emits `{prefix}_options_set_{field}` once per options-field bridge
+    /// (`ffi::gen_bindings::lib_rs.rs:558`) and `bridge_field_inject.jinja` emits a call per
+    /// bridge, so a single `find` left the second bridge's call undeclared (CS0117). ~keep
+    #[test]
+    fn every_options_field_bridge_gets_its_own_setter_declaration() {
+        let second = crate::core::config::TraitBridgeConfig {
+            trait_name: "OutlineVisitor".to_string(),
+            param_name: Some("outliner".to_string()),
+            options_type: Some("OutlineOptions".to_string()),
+            ..options_field_bridge()
+        };
+        let native_methods = native_methods_with_visitor_bridges(&[options_field_bridge(), second])
+            .expect("two options-field bridges generate");
+
+        for expected in [
+            "ConversionOptionsSetVisitor(",
+            "OutlineOptionsSetOutliner(",
+            r#"EntryPoint = "htm_options_set_visitor""#,
+            r#"EntryPoint = "htm_options_set_outliner""#,
+        ] {
+            assert!(
+                native_methods.contains(expected),
+                "`{expected}` must be declared once per bridge:\n{native_methods}"
+            );
+        }
+        assert_eq!(
+            native_methods.matches("VisitorCreate(").count(),
+            1,
+            "the FFI crate exports exactly one `visitor_create`:\n{native_methods}"
+        );
+    }
+
+    /// Two bridges resolving to the same `{Options}Set{Field}` member must declare it once —
+    /// a second declaration of the same member name is CS0111. ~keep
+    #[test]
+    fn duplicate_options_setters_collapse_to_one_declaration() {
+        let duplicate = crate::core::config::TraitBridgeConfig {
+            trait_name: "OutlineVisitor".to_string(),
+            ..options_field_bridge()
+        };
+        let native_methods = native_methods_with_visitor_bridges(&[options_field_bridge(), duplicate])
+            .expect("two bridges sharing an options field generate");
+
+        assert_eq!(
+            native_methods.matches("void ConversionOptionsSetVisitor(").count(),
+            1,
+            "the shared setter must be declared exactly once:\n{native_methods}"
         );
     }
 

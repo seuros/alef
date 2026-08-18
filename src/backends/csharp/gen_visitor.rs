@@ -266,42 +266,65 @@ pub fn gen_visitor_files(
 /// - `namespace`: C# namespace (unused, kept for compatibility)
 /// - `lib_name`: Native library name (unused, kept for compatibility)
 /// - `prefix`: C FFI function name prefix (e.g., "htm")
-/// - `trait_name`: Name of the visitor trait for bridge function names
-/// - `options_field`: Field name in options to set visitor on (e.g., "visitor")
+/// - `trait_name`: Name of the visitor trait, used only for the emitted section comment
+/// - `handle_pinvoke_type`: the caller's `HANDLE_PINVOKE_TYPE` — the single spelling of
+///   `AlefHandle` this backend declares. Threaded in rather than restated so the visitor
+///   declarations cannot drift from every other handle-carrying `extern`.
+/// - `options_setters`: one `(options_type, options_field)` pair per options-field bridge that
+///   reaches this backend. The FFI crate emits `{prefix}_options_set_{field}` once **per
+///   bridge** (`ffi::gen_bindings::lib_rs.rs:558` loops), while `{prefix}_visitor_create` /
+///   `_free` are emitted once for the whole crate (`lib_rs.rs:588` `find_map`), so the setter
+///   is the only part of this block that repeats.
+///
+/// Every parameter and return position below is `AlefHandle` on the FFI side —
+/// `ffi/gen_visitor/binding_emission.rs:311-313,340` for create/free and
+/// `ffi/templates/options_field_bridge_setter.rs.jinja:14` for the setter — with the sole
+/// exception of `visitor_create`'s `callbacks` argument, which really is a
+/// `*const {Prefix}VisitorCallbacks` and so stays `IntPtr`. ~keep
 pub fn gen_native_methods_visitor(
     namespace: &str,
     lib_name: &str,
     prefix: &str,
     trait_name: &str,
-    options_type: &str,
-    options_field: &str,
+    handle_pinvoke_type: &str,
+    options_setters: &[(String, String)],
 ) -> String {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
-    let fn_options_set = format!("{prefix}_options_set_{options_field}");
     let fn_visitor_create = format!("{prefix}_visitor_create");
     let fn_visitor_free = format!("{prefix}_visitor_free");
     let bridge_name = crate::codegen::naming::csharp_type_name(trait_name) + "Bridge";
-    let options_name = crate::codegen::naming::csharp_type_name(options_type);
-    let field_name = crate::codegen::naming::to_csharp_name(options_field);
+
+    let mut declared_members = std::collections::BTreeSet::new();
+    let setters: Vec<serde_json::Value> = options_setters
+        .iter()
+        .map(|(options_type, options_field)| {
+            let member = format!(
+                "{}Set{}",
+                crate::codegen::naming::csharp_type_name(options_type),
+                crate::codegen::naming::to_csharp_name(options_field)
+            );
+            (member, format!("{prefix}_options_set_{options_field}"))
+        })
+        .filter(|(member, _)| declared_members.insert(member.clone()))
+        .map(|(member, entry_point)| serde_json::json!({ "member": member, "entry_point": entry_point }))
+        .collect();
 
     let mut out = String::from("\n");
     out.push_str(&render(
         "native_methods_visitor.jinja",
         Value::from_serialize(serde_json::json!({
-            "fn_options_set": fn_options_set,
             "fn_visitor_create": fn_visitor_create,
             "fn_visitor_free": fn_visitor_free,
             "bridge_name": bridge_name,
-            "options_name": options_name,
-            "field_name": field_name,
+            "handle_type": handle_pinvoke_type,
+            "setters": setters,
         })),
     ));
 
     let _ = namespace;
     let _ = lib_name;
-    let _ = trait_name;
     out
 }
 
@@ -524,14 +547,68 @@ mod tests {
             "sample_native",
             "sample",
             "MarkupVisitor",
-            "RenderOptions",
-            "renderer",
+            "ulong",
+            &[("RenderOptions".to_owned(), "renderer".to_owned())],
         );
 
         assert!(output.contains("EntryPoint = \"sample_visitor_create\""));
         assert!(output.contains("EntryPoint = \"sample_visitor_free\""));
+        assert!(output.contains("EntryPoint = \"sample_options_set_renderer\""));
         assert!(!output.contains("htm_"));
         assert!(!output.contains("register_markup_visitor"));
+    }
+
+    /// The FFI crate emits one `{prefix}_options_set_{field}` per options-field bridge
+    /// (`ffi::gen_bindings::lib_rs.rs:558`) but only one `visitor_create`/`_free` pair
+    /// (`lib_rs.rs:588`). Assert the emitted block has exactly that cardinality, and that two
+    /// bridges sharing an options field collapse to one member rather than emitting CS0111. ~keep
+    #[test]
+    fn one_setter_per_options_field_bridge_deduped_by_member_name() {
+        let output = gen_native_methods_visitor(
+            "Sample",
+            "sample_native",
+            "sample",
+            "MarkupVisitor",
+            "ulong",
+            &[
+                ("RenderOptions".to_owned(), "renderer".to_owned()),
+                ("ParseOptions".to_owned(), "inspector".to_owned()),
+                ("RenderOptions".to_owned(), "renderer".to_owned()),
+            ],
+        );
+
+        assert_eq!(output.matches("VisitorCreate(").count(), 1, "{output}");
+        assert_eq!(output.matches("VisitorFree(").count(), 1, "{output}");
+        assert_eq!(output.matches("RenderOptionsSetRenderer(").count(), 1, "{output}");
+        assert_eq!(output.matches("ParseOptionsSetInspector(").count(), 1, "{output}");
+    }
+
+    /// Every visitor position is `AlefHandle` on the FFI side, so every one of them must be
+    /// declared with the caller's handle spelling — the only `IntPtr` left is
+    /// `visitor_create`'s `*const {Prefix}VisitorCallbacks` argument. ~keep
+    #[test]
+    fn visitor_declarations_carry_handles_with_the_callers_handle_spelling() {
+        let output = gen_native_methods_visitor(
+            "Sample",
+            "sample_native",
+            "sample",
+            "MarkupVisitor",
+            "ulong",
+            &[("RenderOptions".to_owned(), "renderer".to_owned())],
+        );
+
+        assert!(
+            output.contains("internal static extern ulong VisitorCreate(IntPtr callbacksPtr);"),
+            "{output}"
+        );
+        assert!(
+            output.contains("internal static extern void VisitorFree(ulong visitor);"),
+            "{output}"
+        );
+        assert!(
+            output.contains("internal static extern void RenderOptionsSetRenderer(ulong options, ulong visitor);"),
+            "{output}"
+        );
     }
 
     #[test]

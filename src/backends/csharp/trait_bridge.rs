@@ -11,7 +11,7 @@ use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::{BridgeBinding, TraitBridgeConfig};
 use crate::core::ir::{PrimitiveType, TypeDef, TypeRef};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// Maps a TypeRef to its C# representation, substituting non-visible Named types with string.
 /// This prevents internal types like `PrivatePayload` or `SyncExtractor` from appearing
@@ -76,6 +76,7 @@ pub fn gen_native_methods_trait_bridges(
     bridges: &[(String, &TraitBridgeConfig, &TypeDef)],
     _visible_type_names: &HashSet<&str>,
     has_visitor_callbacks: bool,
+    handle_pinvoke_type: &str,
 ) -> String {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
@@ -84,74 +85,99 @@ pub fn gen_native_methods_trait_bridges(
         return String::new();
     }
 
-    let bridge_data: Vec<_> = bridges
-        .iter()
-        .map(|(trait_name, config, _trait_def)| {
-            let trait_snake = trait_name.to_snake_case();
-            let register_fn = format!("{prefix}_register_{trait_snake}");
-            let has_unregister = config.unregister_fn.is_some();
-            let unregister_fn = format!("{prefix}_unregister_{trait_snake}");
-            let has_clear = config.clear_fn.is_some();
-            let clear_fn = format!("{prefix}_clear_{trait_snake}");
-            // `bridge_field_register.jinja` / `bridge_field_unregister.jinja` call
-            // `{Trait}BridgeNew` / `{Trait}BridgeFree`, and the FFI crate exports the matching
-            // symbols only under `bind_via = "options_field"` (`ffi::gen_bindings::lib_rs`), so
-            // the declarations are gated on the same predicate the emitter uses. The name is
-            // taken from `ffi::trait_bridge::bridge_new_free_symbols` rather than restated, and
-            // `trait_pascal` is spelled with `csharp_type_name` so it matches the call site,
-            // which derives the method name the same way. ~keep
-            let has_new_free = config.bind_via == BridgeBinding::OptionsField;
-            let (new_fn, free_fn) = crate::backends::ffi::trait_bridge::bridge_new_free_symbols(
-                prefix,
-                &prefix.to_pascal_case(),
-                trait_name,
-            );
-            let trait_pascal = csharp_type_name(trait_name);
+    // One `NativeMethods` member name may be reachable from more than one bridge — two bridges
+    // that share an options type and field derive the same `{Options}Set{Field}`, and
+    // `csharp_type_name` can fold two distinct IR trait names onto one `trait_pascal`. Emitting
+    // the member twice is CS0111, so the first bridge to claim a name declares it and later
+    // bridges reuse that declaration. The set is keyed on the emitted C# member name, which is
+    // exactly what the compiler collides on. ~keep
+    let mut claimed_members: BTreeSet<String> = BTreeSet::new();
+    let mut bridge_data: Vec<Value> = Vec::with_capacity(bridges.len());
+    for (trait_name, config, _trait_def) in bridges {
+        let trait_snake = trait_name.to_snake_case();
+        let trait_pascal = csharp_type_name(trait_name);
 
-            // `bridge_field_inject.jinja` calls `{Options}Set{Field}` on every options-field
-            // bridge, but the only other declaration of it lives in `native_methods_visitor.jinja`
-            // behind `[ffi] visitor_callbacks`. The FFI crate emits the setter for every
-            // options-field bridge regardless (`ffi::gen_bindings::lib_rs` calls
-            // `gen_options_set_bridge` outside the visitor branch), so with visitor callbacks off
-            // the call had no declaration at all. Both handles are `AlefHandle` there
-            // (`options_field_bridge_setter.rs.jinja`), hence `ulong`, not `IntPtr`. ~keep
-            let options_setter = (!has_visitor_callbacks)
-                .then(|| config.options_type.as_deref().zip(config.resolved_options_field()))
-                .flatten()
-                .filter(|_| has_new_free);
-            let has_options_setter = options_setter.is_some();
-            let (options_pascal, options_field_pascal, options_set_fn) = options_setter.map_or_else(
-                || (String::new(), String::new(), String::new()),
-                |(options_type, options_field)| {
-                    (
-                        csharp_type_name(options_type),
-                        to_csharp_name(options_field),
-                        format!("{prefix}_options_set_{options_field}"),
-                    )
-                },
-            );
+        // KNOWN DIVERGENCE, deliberately left as-is: this symbol is derived twice. The FFI crate
+        // names the export `{prefix}_{register_fn}` straight from the configured `register_fn`
+        // (`ffi::trait_bridge::registration.rs:91`) and emits nothing at all when that key is
+        // absent (`ffi::trait_bridge::mod.rs:253`), whereas the line below always synthesises
+        // `{prefix}_register_{trait_snake}`. The two agree only for the conventional spelling.
+        // Two consequences neither side currently catches: a bridge with no `register_fn`
+        // declares a `[DllImport]` for a symbol the crate never exports (an
+        // `EntryPointNotFoundException` at call time, not a compile error), and a non-conventional
+        // `register_fn` binds the wrong name. Reconciling it is not local — `register_fn` is also
+        // used as a plain flag by `unregister`/`clear`, whose FFI names really *are* derived from
+        // `trait_snake` and whose configured values are ignored on both sides
+        // (`test_native_methods_register_unregister_use_derived_ffi_symbol_not_alias`), and
+        // removing the declaration means removing `Register` from `trait_registry_class.jinja` and
+        // `trait_bridge_class.jinja`, which call it unconditionally — a public-API change that
+        // needs its own generated-output verification. ~keep
+        let register_fn = format!("{prefix}_register_{trait_snake}");
+        let has_register = claimed_members.insert(format!("Register{trait_pascal}"));
+        let has_unregister =
+            config.unregister_fn.is_some() && claimed_members.insert(format!("Unregister{trait_pascal}"));
+        let unregister_fn = format!("{prefix}_unregister_{trait_snake}");
+        let has_clear = config.clear_fn.is_some() && claimed_members.insert(format!("Clear{trait_pascal}"));
+        let clear_fn = format!("{prefix}_clear_{trait_snake}");
+        // `bridge_field_register.jinja` / `bridge_field_unregister.jinja` call
+        // `{Trait}BridgeNew` / `{Trait}BridgeFree`, and the FFI crate exports the matching
+        // symbols only under `bind_via = "options_field"` (`ffi::gen_bindings::lib_rs`), so
+        // the declarations are gated on the same predicate the emitter uses. The name is
+        // taken from `ffi::trait_bridge::bridge_new_free_symbols` rather than restated, and
+        // `trait_pascal` is spelled with `csharp_type_name` so it matches the call site,
+        // which derives the method name the same way. ~keep
+        let is_options_field = config.bind_via == BridgeBinding::OptionsField;
+        let has_new_free = is_options_field && claimed_members.insert(format!("{trait_pascal}BridgeNew"));
+        let (new_fn, free_fn) =
+            crate::backends::ffi::trait_bridge::bridge_new_free_symbols(prefix, &prefix.to_pascal_case(), trait_name);
 
-            Value::from_serialize(serde_json::json!({
-                "trait_name": trait_name,
-                "trait_pascal": trait_pascal,
-                "register_fn": register_fn,
-                "has_unregister": has_unregister,
-                "unregister_fn": unregister_fn,
-                "has_clear": has_clear,
-                "clear_fn": clear_fn,
-                "has_new_free": has_new_free,
-                "new_fn": new_fn,
-                "free_fn": free_fn,
-                "has_options_setter": has_options_setter,
-                "options_pascal": options_pascal,
-                "options_field_pascal": options_field_pascal,
-                "options_set_fn": options_set_fn,
-            }))
-        })
-        .collect();
+        // `bridge_field_inject.jinja` calls `{Options}Set{Field}` on every options-field
+        // bridge, but the only other declaration of it lives in `native_methods_visitor.jinja`
+        // behind `[ffi] visitor_callbacks`. The FFI crate emits the setter for every
+        // options-field bridge regardless (`ffi::gen_bindings::lib_rs` calls
+        // `gen_options_set_bridge` outside the visitor branch), so with visitor callbacks off
+        // the call had no declaration at all. Both handles are `AlefHandle` there
+        // (`options_field_bridge_setter.rs.jinja`), hence the handle spelling, not `IntPtr`. ~keep
+        let options_setter = (!has_visitor_callbacks)
+            .then(|| config.options_type.as_deref().zip(config.resolved_options_field()))
+            .flatten()
+            .filter(|_| is_options_field)
+            .map(|(options_type, options_field)| {
+                (
+                    csharp_type_name(options_type),
+                    to_csharp_name(options_field),
+                    format!("{prefix}_options_set_{options_field}"),
+                )
+            })
+            .filter(|(options_pascal, options_field_pascal, _)| {
+                claimed_members.insert(format!("{options_pascal}Set{options_field_pascal}"))
+            });
+        let has_options_setter = options_setter.is_some();
+        let (options_pascal, options_field_pascal, options_set_fn) =
+            options_setter.unwrap_or_else(|| (String::new(), String::new(), String::new()));
+
+        bridge_data.push(Value::from_serialize(serde_json::json!({
+            "trait_name": trait_name,
+            "trait_pascal": trait_pascal,
+            "has_register": has_register,
+            "register_fn": register_fn,
+            "has_unregister": has_unregister,
+            "unregister_fn": unregister_fn,
+            "has_clear": has_clear,
+            "clear_fn": clear_fn,
+            "has_new_free": has_new_free,
+            "new_fn": new_fn,
+            "free_fn": free_fn,
+            "has_options_setter": has_options_setter,
+            "options_pascal": options_pascal,
+            "options_field_pascal": options_field_pascal,
+            "options_set_fn": options_set_fn,
+        })));
+    }
 
     let ctx = Value::from_serialize(serde_json::json!({
         "bridges": bridge_data,
+        "handle_type": handle_pinvoke_type,
     }));
 
     render("native_methods_trait_bridges.jinja", ctx)

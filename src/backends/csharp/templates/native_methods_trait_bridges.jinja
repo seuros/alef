@@ -1,30 +1,32 @@
     // Trait Bridge FFI
 {% for bridge in bridges %}
 
+{% if bridge.has_register %}
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.register_fn }}")]
-    internal static extern int Register{{ bridge.trait_name }}([MarshalAs(UnmanagedType.LPUTF8Str)] string name, IntPtr vtable, IntPtr userData, out IntPtr outError);
+    internal static extern int Register{{ bridge.trait_pascal }}([MarshalAs(UnmanagedType.LPUTF8Str)] string name, IntPtr vtable, IntPtr userData, out IntPtr outError);
+{% endif %}
 
 {% if bridge.has_unregister %}
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.unregister_fn }}")]
-    internal static extern int Unregister{{ bridge.trait_name }}([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr outError);
+    internal static extern int Unregister{{ bridge.trait_pascal }}([MarshalAs(UnmanagedType.LPUTF8Str)] string name, out IntPtr outError);
 {% endif %}
 
 {% if bridge.has_clear %}
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.clear_fn }}")]
-    internal static extern int Clear{{ bridge.trait_name }}(out IntPtr outError);
+    internal static extern int Clear{{ bridge.trait_pascal }}(out IntPtr outError);
 {% endif %}
 
 {% if bridge.has_new_free %}
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.new_fn }}")]
-    internal static extern ulong {{ bridge.trait_pascal }}BridgeNew(IntPtr vtable, IntPtr userData);
+    internal static extern {{ handle_type }} {{ bridge.trait_pascal }}BridgeNew(IntPtr vtable, IntPtr userData);
 
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.free_fn }}")]
-    internal static extern void {{ bridge.trait_pascal }}BridgeFree(ulong handle);
+    internal static extern void {{ bridge.trait_pascal }}BridgeFree({{ handle_type }} handle);
 {% endif %}
 
 {% if bridge.has_options_setter %}
     [DllImport(LibName, CallingConvention = CallingConvention.Cdecl, EntryPoint = "{{ bridge.options_set_fn }}")]
-    internal static extern void {{ bridge.options_pascal }}Set{{ bridge.options_field_pascal }}(ulong options, ulong bridge);
+    internal static extern void {{ bridge.options_pascal }}Set{{ bridge.options_field_pascal }}({{ handle_type }} options, {{ handle_type }} bridge);
 {% endif %}
 
 {% endfor %}
