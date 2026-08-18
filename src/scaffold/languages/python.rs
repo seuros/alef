@@ -189,7 +189,7 @@ pub(crate) fn scaffold_python_cargo(
             }
         }
     }
-    dep_entries.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_entries);
     let dep_block = dep_entries.join("\n");
     let _ = extra_deps_section;
 

@@ -106,7 +106,7 @@ pub(crate) fn scaffold_elixir_cargo(
     if !core_dep_line.is_empty() {
         dep_lines.push(core_dep_line);
     }
-    dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_lines);
     let deps_section = dep_lines.join("\n");
 
     let mut machete_ignored: Vec<&str> = Vec::new();

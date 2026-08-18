@@ -111,7 +111,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
             }
         }
     }
-    extra_dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut extra_dep_lines);
 
     let mut machete_ignored: Vec<&str> = vec!["ahash", "serde", "serde_json", "tokio"];
     if has_trait_bridges {
@@ -226,7 +226,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     for line in &extra_dep_lines {
         dep_entries.push(line.clone());
     }
-    dep_entries.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_entries);
     let dep_block = dep_entries.join("\n");
     let repository_line = meta
         .configured_repository

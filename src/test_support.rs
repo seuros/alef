@@ -117,6 +117,70 @@ pub(crate) mod cargo_sort_order {
         (rank_of(first), 0)
     }
 
+    /// The dependency tables cargo-sort sorts the KEYS of: its `MATCHER.heading` list, plus the
+    /// `[workspace.<kind>]` entries of its `MATCHER.heading_key` list, plus the same three names
+    /// nested under `[target.'cfg(...)']`. All three spellings reduce to these names. ~keep
+    const DEPENDENCY_TABLES: &[&str] = &["dependencies", "dev-dependencies", "build-dependencies"];
+
+    /// Assert every dependency table in `manifest` already has its KEYS in the order
+    /// `cargo sort --check` requires, returning how many keys were compared.
+    ///
+    /// cargo-sort sorts a dependency table with `toml_edit`'s `Table::sort_values`, which is
+    /// `IndexMap::sort_keys` over `Key: Ord`, and `Key::cmp` compares `Key::get()` -- the decoded
+    /// text of one key segment. So this checker parses the manifest with `toml_edit` and compares
+    /// the emitted key order against the sorted one, running cargo-sort's own comparison machinery
+    /// rather than re-deriving a rule from the line text. That is what makes it see a dotted entry
+    /// (`tracing.workspace = true`) as the single key `tracing`, which is exactly what alef's
+    /// line-text sorters used to get wrong: raw text puts `tracing-core` first because `-` (0x2D)
+    /// precedes `.` (0x2E), while cargo-sort compares `tracing` against `tracing-core`. ~keep
+    pub(crate) fn assert_dependency_keys_sorted(label: &str, manifest: &str) -> usize {
+        let document = manifest
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap_or_else(|error| panic!("{label}: generated manifest must be valid TOML: {error}\n{manifest}"));
+        let mut compared = 0usize;
+        assert_table_keys_sorted(label, "", document.as_table(), manifest, &mut compared);
+        compared
+    }
+
+    /// Recursive worker for [`assert_dependency_keys_sorted`].
+    ///
+    /// Descends through header tables only. A dotted sub-table (the `workspace` under
+    /// `tracing.workspace = true`) is skipped, mirroring cargo-sort's own requirement that a
+    /// matched nested table have a header position -- and keeping a dependency named
+    /// `dependencies` from being mistaken for a dependency table. ~keep
+    fn assert_table_keys_sorted(
+        label: &str,
+        path: &str,
+        table: &toml_edit::Table,
+        manifest: &str,
+        compared: &mut usize,
+    ) {
+        for (name, item) in table.iter() {
+            let Some(child) = item.as_table() else { continue };
+            if child.is_dotted() {
+                continue;
+            }
+            let child_path = if path.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{path}.{name}")
+            };
+            if DEPENDENCY_TABLES.contains(&name) {
+                let emitted: Vec<&str> = child.iter().map(|(key, _)| key).collect();
+                let mut expected = emitted.clone();
+                expected.sort_unstable();
+                assert_eq!(
+                    emitted, expected,
+                    "{label}: `[{child_path}]` keys are not in cargo-sort order -- it compares the \
+                     bare dependency NAME (a dotted key like `foo.workspace` is the single key \
+                     `foo`), so `cargo sort --check` would reorder this manifest and fail it:\n{manifest}"
+                );
+                *compared += emitted.len();
+            }
+            assert_table_keys_sorted(label, &child_path, child, manifest, compared);
+        }
+    }
+
     /// Assert every table header in `manifest` appears in cargo-sort's canonical order.
     ///
     /// `label` identifies the manifest in the failure message.
@@ -183,6 +247,47 @@ pub(crate) mod cargo_sort_order {
                             [build-dependencies]\ncc = \"1\"\n\n[dev-dependencies]\n\
                             tempfile = \"3\"\n\n[lints.clippy]\ndbg_macro = \"deny\"\n";
             assert_canonical_table_order("demo", manifest);
+        }
+
+        /// Guards the key checker itself against being vacuous: it must REJECT the exact
+        /// emitted order that failed downstream -- a dotted `alpha.workspace` entry placed after
+        /// `alpha-parser`, which is what byte-wise line sorting produces. ~keep
+        #[test]
+        fn should_reject_dotted_key_ordered_by_raw_line_text() {
+            let manifest = "[package]\nname = \"demo\"\n\n[dependencies]\n\
+                            alpha-parser = { version = \"1\", path = \"../core\" }\nalpha.workspace = true\n";
+            let result = std::panic::catch_unwind(|| assert_dependency_keys_sorted("demo", manifest));
+            assert!(
+                result.is_err(),
+                "checker must reject `alpha-parser` emitted before `alpha.workspace`"
+            );
+        }
+
+        #[test]
+        fn should_accept_dotted_key_ordered_by_dependency_name() {
+            let manifest = "[package]\nname = \"demo\"\n\n[dependencies]\n\
+                            alpha.workspace = true\nalpha-parser = { version = \"1\", path = \"../core\" }\n";
+            assert_eq!(
+                assert_dependency_keys_sorted("demo", manifest),
+                2,
+                "both dependency keys must have been compared"
+            );
+        }
+
+        /// The checker must reach dependency tables nested under `[target.'cfg(...)']` and under
+        /// `[workspace]`, not just the top-level `[dependencies]`.
+        #[test]
+        fn should_check_target_and_workspace_dependency_tables() {
+            let manifest = "[workspace]\nmembers = []\n\n[workspace.dependencies]\n\
+                            serde = \"1\"\n\n[target.'cfg(unix)'.dependencies]\nlibc = \"0.2\"\n";
+            assert_eq!(
+                assert_dependency_keys_sorted("demo", manifest),
+                2,
+                "the workspace and target dependency tables must both have been visited"
+            );
+            let broken = "[target.'cfg(unix)'.dependencies]\nlibc-extra = \"1\"\nlibc.workspace = true\n";
+            let result = std::panic::catch_unwind(|| assert_dependency_keys_sorted("demo", broken));
+            assert!(result.is_err(), "checker must reach into target dependency tables");
         }
 
         #[test]

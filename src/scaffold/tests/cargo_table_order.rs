@@ -4,7 +4,7 @@ use crate::test_support::cargo_sort_order::assert_canonical_table_order;
 /// Languages whose scaffold emits a Rust binding-crate `Cargo.toml` carrying a `[lints.*]`
 /// table. Asserted to have actually been exercised below, so the sweep can never report
 /// success while silently checking nothing. ~keep
-const MANIFEST_EMITTING_LANGUAGES: &[Language] = &[
+pub(super) const MANIFEST_EMITTING_LANGUAGES: &[Language] = &[
     Language::Ffi,
     Language::Jni,
     Language::Node,

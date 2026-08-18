@@ -246,7 +246,7 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
             }
         }
     }
-    dep_entries.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_entries);
     let dep_block = dep_entries.join("\n");
     let _ = extra_deps_section;
 

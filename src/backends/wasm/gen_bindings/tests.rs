@@ -1070,6 +1070,10 @@ fn cargo_toml_tables_are_in_cargo_sort_canonical_order() {
     let cargo_toml = gen_cargo_toml(&empty_api(), &config);
 
     crate::test_support::cargo_sort_order::assert_canonical_table_order("wasm Cargo.toml", &cargo_toml);
+    assert!(
+        crate::test_support::cargo_sort_order::assert_dependency_keys_sorted("wasm Cargo.toml", &cargo_toml) > 0,
+        "the wasm manifest must carry dependency keys for the key-order check to examine"
+    );
 
     let lints_at = cargo_toml
         .find("[lints.")

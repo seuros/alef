@@ -67,7 +67,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
             }
         })
         .collect();
-    extra_dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut extra_dep_lines);
     let extra_deps_section = if extra_dep_lines.is_empty() {
         String::new()
     } else {
@@ -156,7 +156,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     let extra_names: AHashSet<&str> = extra_parsed.iter().map(|(name, _)| name.as_str()).collect();
     deps.retain(|(name, _)| !extra_names.contains(name.as_str()));
     deps.extend(extra_parsed);
-    deps.sort_by(|a, b| a.0.cmp(&b.0));
+    deps.sort_by(|a, b| crate::scaffold::dependency_sort_key(&a.0).cmp(&crate::scaffold::dependency_sort_key(&b.0)));
     let deps_block = deps
         .iter()
         .map(|(name, value)| format!("{name} = {value}"))
@@ -179,7 +179,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
             }
         })
         .collect();
-    dev_dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut dev_dep_lines);
     let dev_deps_section = if dev_dep_lines.is_empty() {
         String::new()
     } else {

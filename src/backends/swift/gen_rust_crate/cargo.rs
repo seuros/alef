@@ -219,7 +219,7 @@ pub(crate) fn emit_cargo_toml(
             dep_entries.push(trimmed.to_string());
         }
     }
-    dep_entries.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_entries);
     let dep_block = dep_entries.join("\n");
     let _ = streaming_deps;
     let _ = extra_deps_block;
@@ -983,5 +983,9 @@ acme-ffi = { version = \"1.1.0\", path = \"../../../crates/acme-ffi\", default-f
         );
 
         toml::from_str::<toml::Value>(&content).expect("generated Cargo.toml must be valid TOML");
+        assert!(
+            crate::test_support::cargo_sort_order::assert_dependency_keys_sorted("swift Cargo.toml", &content) > 0,
+            "the swift manifest must carry dependency keys for the key-order check to examine"
+        );
     }
 }

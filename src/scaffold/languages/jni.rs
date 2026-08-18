@@ -148,7 +148,7 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         ));
     }
 
-    dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_lines);
     let deps_section = dep_lines.join("\n");
 
     let target_blocks_section = render_jni_target_blocks(
@@ -545,11 +545,19 @@ namespace = "dev.example.demo_render.android"
     }
 
     /// Regression guard: the JNI `Cargo.toml` `[dependencies]` table must be
-    /// emitted in alphabetical order so the `cargo-sort` prek hook does not
-    /// rewrite the file on every regen. The umbrella dep is named after
-    /// `config.name`, so its placement depends on the consumer crate name.
+    /// emitted in the order `cargo sort --check` requires, so the `cargo-sort`
+    /// prek hook does not rewrite the file on every regen. The umbrella dep is
+    /// named after `config.name`, so its placement depends on the consumer crate
+    /// name.
+    ///
+    /// The check goes through `assert_dependency_keys_sorted`, which re-parses the
+    /// manifest with `toml_edit` and so runs cargo-sort's own comparison. An
+    /// earlier version of this test derived the key itself with
+    /// `line.split('=').next()`, which yields the DOTTED key `tracing.workspace` --
+    /// the same key the emitter was sorting on -- making the assertion a tautology
+    /// that kept passing while consumers failed. ~keep
     #[test]
-    fn scaffold_jni_dependencies_are_alphabetically_sorted() {
+    fn scaffold_jni_dependency_keys_are_in_cargo_sort_order() {
         let config = resolved_one(
             r#"
 [workspace]
@@ -568,30 +576,70 @@ namespace = "dev.example.sample_stream"
         let files = scaffold_jni(&api, &config).unwrap();
         let cargo_toml = &files[0].content;
 
-        let mut keys: Vec<&str> = Vec::new();
-        let mut in_deps = false;
-        for line in cargo_toml.lines() {
-            if line.trim_start().starts_with('[') {
-                in_deps = line.trim() == "[dependencies]";
-                continue;
-            }
-            if in_deps
-                && !line.trim().is_empty()
-                && !line.trim_start().starts_with('#')
-                && let Some(key) = line.split('=').next()
-            {
-                let key = key.trim();
-                if !key.is_empty() {
-                    keys.push(key);
-                }
-            }
-        }
-        let mut sorted = keys.clone();
-        sorted.sort();
-        assert_eq!(
-            keys, sorted,
-            "JNI Cargo.toml [dependencies] must be alphabetically sorted; got:\n{keys:?}\nin:\n{cargo_toml}"
+        assert!(
+            crate::test_support::cargo_sort_order::assert_dependency_keys_sorted("jni Cargo.toml", cargo_toml) > 0,
+            "the JNI manifest must carry dependency keys to compare:\n{cargo_toml}"
         );
+    }
+
+    /// The field failure, end to end. `render_workspace_dep_or` is the only code path in
+    /// alef that puts a DOTTED key into a `[dependencies]` table, so this emitter is where
+    /// the raw-line-text sort first disagreed with cargo-sort: the inherited capsule package
+    /// `alpha-parser` is emitted as `alpha-parser.workspace = true` while the core crate,
+    /// whose name extends it with a `-` suffix, is a plain path dependency. `-` (0x2D) sorts
+    /// before `.` (0x2E), so byte-wise line comparison emits the core crate first, while
+    /// cargo-sort compares `alpha-parser` against `alpha-parser-pack` and wants the shorter
+    /// name first. One dependency crossing that boundary fails
+    /// `cargo sort --check --workspace` for the whole crate. ~keep
+    #[test]
+    fn scaffold_jni_orders_an_inherited_capsule_package_before_its_hyphen_extended_core_crate() {
+        let workspace = tempfile::tempdir().expect("create workspace root");
+        std::fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[workspace]\nmembers = []\n\n[workspace.dependencies]\nalpha-parser = \"1.0\"\n",
+        )
+        .expect("write workspace manifest");
+
+        let mut config = resolved_one(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "alpha-parser-pack"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example.alpha"
+namespace = "dev.example.alpha"
+
+[crates.kotlin_android.capsule_types.Grammar]
+host_type = "org.example.Grammar"
+
+[crates.ffi.capsule_types.Grammar]
+into_raw_type = "alpha_parser::ffi::Grammar"
+c_return_type = "Grammar"
+package = "alpha-parser"
+package_version = "1.0"
+"#,
+        );
+        config.workspace_root = Some(workspace.path().to_path_buf());
+
+        let api = ApiSurface::default();
+        let files = scaffold_jni(&api, &config).unwrap();
+        let cargo_toml = &files[0].content;
+
+        let inherited = cargo_toml.find("alpha-parser.workspace = true").unwrap_or_else(|| {
+            panic!("fixture must inherit the capsule package as a dotted key, or it proves nothing:\n{cargo_toml}")
+        });
+        let core = cargo_toml.find("alpha-parser-pack = ").unwrap_or_else(|| {
+            panic!("fixture must emit the core crate as a plain key, or it proves nothing:\n{cargo_toml}")
+        });
+        assert!(
+            inherited < core,
+            "`alpha-parser.workspace` must precede `alpha-parser-pack`:\n{cargo_toml}"
+        );
+        crate::test_support::cargo_sort_order::assert_dependency_keys_sorted("jni Cargo.toml", cargo_toml);
     }
 
     /// When `[crates.jni] target_dep_overrides` are configured, the core-crate

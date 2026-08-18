@@ -132,7 +132,7 @@ pub(crate) fn scaffold_r_cargo(api: &ApiSurface, config: &ResolvedCrateConfig) -
         dep_lines.push(format!("tracing = \"{}\"", tv::cargo::TRACING));
     }
     dep_lines.extend(render_extra_deps(config, Language::R).lines().map(ToOwned::to_owned));
-    dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut dep_lines);
     let deps_section = dep_lines.join("\n");
 
     // Collect every feature name referenced by a `#[cfg(feature = "X")]` attribute

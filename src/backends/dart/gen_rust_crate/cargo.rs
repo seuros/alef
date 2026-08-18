@@ -176,7 +176,7 @@ pub(crate) fn emit_cargo_toml(
             }
         })
         .collect();
-    workspace_dep_lines.sort();
+    crate::scaffold::sort_dependency_lines(&mut workspace_dep_lines);
     let has_trait_bridge_excluded_carrier = api_has_trait_bridge_excluded_carrier(api, config);
     let needs_serde_json = api_has_json_or_enum_field(api) || has_trait_bridge_excluded_carrier;
     let serde_json_dep = if needs_serde_json { "serde_json = \"1\"\n" } else { "" };
@@ -235,10 +235,7 @@ pub(crate) fn emit_cargo_toml(
         ));
     }
     dep_lines.extend(workspace_dep_lines);
-    dep_lines.sort_by(|a, b| {
-        let key = |line: &str| line.split('=').next().unwrap_or("").trim().to_string();
-        key(a).cmp(&key(b))
-    });
+    crate::scaffold::sort_dependency_lines(&mut dep_lines);
     let extra_deps = if dep_lines.is_empty() {
         String::new()
     } else {

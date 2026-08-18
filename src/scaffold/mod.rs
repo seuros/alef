@@ -332,6 +332,53 @@ pub(crate) fn join_sorted_target_dep_blocks(mut entries: Vec<(String, String)>) 
         .join("\n")
 }
 
+/// The sort key `cargo-sort` assigns to one rendered entry of a dependency table: the
+/// dependency NAME alone, decoded, with any dotted suffix and any surrounding quotes removed.
+///
+/// cargo-sort sorts `[dependencies]`, `[dev-dependencies]`, `[build-dependencies]` and their
+/// `[target.'cfg(...)'.…]` counterparts with `toml_edit`'s `Table::sort_values`, which is
+/// `IndexMap::sort_keys` over `Key: Ord`, and `Key::cmp` compares `Key::get()` -- the DECODED
+/// text of a single key segment. A dotted entry such as `tracing.workspace = true` parses into
+/// one key `tracing` holding a dotted sub-table, so the `.workspace` text is never part of the
+/// comparison; a quoted key such as `"tree-sitter" = "1"` is compared unquoted; and a quoted key
+/// that itself contains a dot is one segment, not two.
+///
+/// Sorting the rendered line text instead disagrees with that whenever one dependency name is a
+/// prefix of another and the shorter one uses the dotted form: `-` is 0x2D and `.` is 0x2E, so
+/// raw text puts `foo-bar = …` before `foo.workspace = true` where cargo-sort puts `foo` first.
+/// That is the disagreement that failed `cargo sort --check --workspace` downstream. ~keep
+pub(crate) fn dependency_sort_key(line: &str) -> String {
+    let mut name = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for character in line.chars() {
+        if escaped {
+            name.push(character);
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some('"') if character == '\\' => escaped = true,
+            Some(open) if character == open => quote = None,
+            Some(_) => name.push(character),
+            None if character == '"' || character == '\'' => quote = Some(character),
+            None if character == '.' || character == '=' => break,
+            None => name.push(character),
+        }
+    }
+    name.trim().to_owned()
+}
+
+/// Order rendered dependency-table lines the way `cargo sort --check` requires.
+///
+/// Stable, and keyed only on [`dependency_sort_key`], exactly matching the stable
+/// `IndexMap::sort_keys` cargo-sort performs. Every emitter that writes a `[dependencies]`,
+/// `[dev-dependencies]` or `[build-dependencies]` body from a list of rendered lines must sort
+/// it through here rather than with `Vec::sort`. ~keep
+pub(crate) fn sort_dependency_lines(lines: &mut [String]) {
+    lines.sort_by(|a, b| dependency_sort_key(a).cmp(&dependency_sort_key(b)));
+}
+
 ///
 /// Merges crate-level `extra_dependencies` with per-language overrides via
 /// `extra_deps_for_language`, then serializes each entry as a TOML line suitable
@@ -381,7 +428,7 @@ pub(crate) fn render_extra_deps(config: &ResolvedCrateConfig, lang: Language) ->
             other => format!("{name} = {other}"),
         })
         .collect();
-    lines.sort();
+    sort_dependency_lines(&mut lines);
     lines.join("\n")
 }
 
