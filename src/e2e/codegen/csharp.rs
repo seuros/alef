@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::E2eCodegen;
+use crate::e2e::codegen::inert_example::{self, InertCause};
 
 pub(super) fn resolve_handle_config_type(
     arg: &crate::e2e::config::ArgMapping,
@@ -66,7 +67,7 @@ impl E2eCodegen for CSharpCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -270,6 +271,7 @@ impl E2eCodegen for CSharpCodegen {
                 config,
                 type_defs,
                 enums,
+                functions,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),
@@ -290,6 +292,18 @@ impl E2eCodegen for CSharpCodegen {
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        snippet::render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, functions)
     }
 
     fn language_name(&self) -> &'static str {
@@ -323,6 +337,7 @@ fn render_test_file(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> String {
     // Collect using imports
     let mut using_imports = String::new();
@@ -369,6 +384,7 @@ fn render_test_file(
             config,
             type_defs,
             enums,
+            functions,
         );
         if i + 1 < fixtures.len() {
             fixtures_body.push('\n');
@@ -425,6 +441,7 @@ fn render_test_method(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) {
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -509,6 +526,7 @@ fn render_test_method(
             config,
             type_defs,
             enums,
+            functions,
             resolve_csharp_streaming_item_type(call_config, adapters, &raw_function_name).as_deref(),
         );
         return;
@@ -529,7 +547,9 @@ fn render_test_method(
     let function_name = effective_function_name.as_str();
     let result_var = call_config.effective_result_var();
     let is_async = effective_is_async;
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call_config, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call_config, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params("csharp");
     let args = recipe.args;
 
     // Per-call overrides: result shape, void returns, extra trailing args.
@@ -620,6 +640,7 @@ fn render_test_method(
         config,
         type_defs,
         enums,
+        target_params,
         visitor_class_decls,
         &mut teardown_lines,
     );
@@ -892,6 +913,42 @@ fn render_test_method(
         &fixture.assertions,
     );
 
+    // ~keep `expects_error` and `returns_void` are excluded because neither splices
+    // `assertions_body` into the emitted method: the throws-assertion is the expectation for the
+    // first, and for the second the call itself throwing is the only check there ever was.
+    // Refusing either would replace a real check with a skip.
+    let verdict = if expects_error || returns_void {
+        None
+    } else {
+        inert_example::inert_verdict(&assertions_body, "csharp", &fixture.id, &fixture.assertions)
+    };
+    // ~keep xUnit has no in-body skip statement, so a refusal takes one of two shapes. An
+    // unresolved field path is the consumer's to repair, so it stays a running `[Fact]` and gets
+    // an assertion that FAILS and names the fixture — `Assert.Null` on a non-null local rather
+    // than `Assert.Fail`, which only exists from xUnit 2.5 and would pin a floor on the generated
+    // project. Everything else is alef's generator debt or an ABI limit no consumer edit clears,
+    // so the method's own attribute becomes `[Fact(Skip = ..)]`, which the runner reports as
+    // skipped and never as a pass. The rendered markers stay in the body either way.
+    let mut refusal_skip_reason = String::new();
+    if let Some(refusal) = &verdict {
+        inert_example::record_refusal(refusal);
+        match refusal.cause {
+            InertCause::UnresolvedFieldPath => {
+                let reason = escape_csharp(&refusal.reason());
+                assertions_body = inert_example::refusal_body(
+                    &assertions_body,
+                    &format!(
+                        "        string unresolvedAssertion = \"{reason}\";\n        \
+                         Assert.Null(unresolvedAssertion);\n"
+                    ),
+                );
+            }
+            InertCause::AwaitedOrLimited | InertCause::RenderedNothing => {
+                refusal_skip_reason = escape_csharp(&refusal.reason());
+            }
+        }
+    }
+
     let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
     // ~keep The `expects_error` branch of `csharp/test_method.jinja` renders the throws-assertion
     // and nothing else, so every other assertion on an error fixture — most often an `equals`
@@ -916,6 +973,7 @@ fn render_test_method(
         has_usable_assertion => !expects_error && !returns_void,
         result_var => result_var,
         assertions_body => assertions_body,
+        refusal_skip_reason => refusal_skip_reason,
         is_streaming => _is_streaming,
         is_trait_bridge => is_trait_bridge_registration,
         teardown_lines => teardown_lines.clone(),

@@ -25,7 +25,7 @@ impl E2eCodegen for DartE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -142,6 +142,7 @@ impl E2eCodegen for DartE2eCodegen {
                 config,
                 type_defs,
                 enums,
+                functions,
             );
             files.push(GeneratedFile {
                 path: test_base.join(filename),
@@ -166,6 +167,18 @@ impl E2eCodegen for DartE2eCodegen {
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        snippet::render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, functions)
     }
 }
 

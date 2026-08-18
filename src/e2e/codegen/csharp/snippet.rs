@@ -8,12 +8,28 @@ use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::{Fixture, FixtureEnv};
 
+/// Render a C# documentation snippet without any core IR to consult.
+///
+/// Kept as the five-argument entry point every existing caller and test already uses: with no
+/// `functions` the seam resolves to `TargetParams::IrAbsent`, which is exactly the state this path
+/// was always in, so its output is unchanged by the seam. ~keep
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+) -> Result<String> {
+    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, &[])
+}
+
+pub(super) fn render_snippet_body_with_ir(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<String> {
     let mut call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -23,7 +39,9 @@ pub(super) fn render_snippet_body(
         &fixture.input,
     );
     call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, fixture);
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params("csharp");
     let overrides = recipe.override_config;
     let class_name = crate::codegen::naming::csharp_wrapper_class_name(&config.name, "");
     let mut function_name = overrides
@@ -59,6 +77,7 @@ pub(super) fn render_snippet_body(
         config,
         type_defs,
         enums,
+        target_params,
         &mut visitor_declarations,
         &mut teardown_lines,
     );

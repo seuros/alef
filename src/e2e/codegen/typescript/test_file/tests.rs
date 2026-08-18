@@ -1180,13 +1180,15 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
     );
 }
 
-/// Regression test for alef task #81: TypeScript had no vacuous-test fallback of
-/// any kind — a fixture whose sole declared assertion resolved to a "skipped"
-/// comment (its field is unavailable on the result type) produced an entirely
-/// comment-only, vacuously-passing test body. It must now get a real fallback
-/// assertion, matching python/php's `apply_vacuous_assertion_fallback`.
+/// Regression test for alef task #81, tightened by #233: a fixture whose sole declared assertion
+/// resolved to a "skipped" comment (its field is unavailable on the result type) produced an
+/// entirely comment-only, vacuously-passing test body. The generic `expect(result).toBeDefined()`
+/// fallback that first closed it is not enough for THIS cause: the fixture named a check a config
+/// or fixture edit would make run, so a fallback that passes in its place is the green test the
+/// refusal exists to stop. It must now emit an expectation that FAILS and names the fixture, with
+/// the marker carried alongside it. ~keep
 #[test]
-fn dropped_field_assertion_still_gets_a_real_fallback_assertion() {
+fn dropped_field_assertion_is_refused_with_an_expectation_that_fails() {
     let mut e2e_config = crate::e2e::config::E2eConfig::default();
     e2e_config.call.function = "process".to_string();
     e2e_config.call.result_var = "result".to_string();
@@ -1233,13 +1235,25 @@ fn dropped_field_assertion_still_gets_a_real_fallback_assertion() {
     );
 
     assert!(
-        output.contains("expect(result).toBeDefined();"),
-        "expected a real fallback assertion on the discarded result, got:\n{output}"
+        output.contains("const unresolvedAssertion = \"alef resolved no assertion for fixture `process_smoke`")
+            && output.contains("expect(unresolvedAssertion).toBeNull();"),
+        "a consumer-fixable gap must be refused with an expectation that fails, got:\n{output}"
     );
     assert!(
-        output.contains("const result ="),
-        "the result must be bound once a real assertion references it, got:\n{output}"
+        output.contains("field 'nonexistent_field' not available on result type"),
+        "the marker must be carried into the refusal, not replaced by silence, got:\n{output}"
     );
+    assert!(
+        !output.contains("expect(result).toBeDefined();"),
+        "a fallback that always passes must not stand in for the refused assertion, got:\n{output}"
+    );
+    assert!(
+        !output.contains("it.skip("),
+        "a consumer-fixable gap must not be parked as skipped, got:\n{output}"
+    );
+    let refusals = crate::e2e::codegen::inert_example::take_inert_examples();
+    assert_eq!(refusals.len(), 1, "the refusal must be recorded once for the summary");
+    assert_eq!(refusals[0].fixture_id, "process_smoke");
 }
 
 /// Positive control for the same fix: a fixture with genuinely zero declared
@@ -1397,4 +1411,185 @@ fn typescript_a_lone_error_assertion_renders_no_marker() {
         "the error block must render: {output}"
     );
     assert!(!output.contains("has no accessor for error field"), "{output}");
+}
+
+/// CONTROL for the refusal wired in #233, asserted before any absence assertion: a field the
+/// availability oracle resolves still renders its real check, nothing is refused, and no skip is
+/// emitted. An over-broad refusal here would silently delete coverage that runs today — the same
+/// defect pointing the other way. ~keep
+#[test]
+fn a_resolvable_field_assertion_is_published_unchanged_and_never_refused() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "process".to_string();
+    e2e_config.call.result_var = "result".to_string();
+    e2e_config.call.result_fields = std::collections::HashSet::from(["content".to_string()]);
+    e2e_config.call.returns_result = true;
+
+    let fixture = Fixture {
+        id: "ts_control".to_string(),
+        description: "test".to_string(),
+        assertions: vec![crate::e2e::fixture::Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("content".to_string()),
+            value: Some(serde_json::json!("hello")),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let output = render_test_file(
+        "typescript",
+        "smoke",
+        &[&fixture],
+        "",
+        "@test/pkg",
+        "process",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    );
+
+    assert!(
+        output.contains("expect(result.content"),
+        "the renderable assertion must still be emitted, got:\n{output}"
+    );
+    assert!(
+        !output.contains("it.skip(") && !output.contains("unresolvedAssertion"),
+        "a live example must not be refused, got:\n{output}"
+    );
+    assert!(
+        crate::e2e::codegen::inert_example::take_inert_examples().is_empty(),
+        "nothing may be recorded for a live example"
+    );
+}
+
+/// A streaming fixture has no honest fallback subject of its own: `chunks` is bound to a freshly
+/// drained array immediately above, so `expect(chunks).toBeDefined()` cannot fail. When every
+/// declared assertion funnels into a marker that alef itself owns, the example must come out as
+/// vitest's own `it.skip` — never as a passing test — and the markers must come with it.
+#[test]
+fn a_streaming_example_whose_every_assertion_skips_is_refused_as_a_skipped_test() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "process".to_string();
+    e2e_config.call.result_var = "result".to_string();
+    e2e_config.call.result_fields = std::collections::HashSet::from(["content".to_string()]);
+    e2e_config.call.returns_result = true;
+    e2e_config.call.streaming = Some(crate::core::config::e2e::StreamingConfig::Enabled(true));
+
+    let fixture = Fixture {
+        id: "ts_stream_all_skipped".to_string(),
+        description: "test".to_string(),
+        assertions: vec![crate::e2e::fixture::Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(serde_json::json!("x")),
+            skip: Some(crate::e2e::fixture::AssertionSkip::All(true)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let output = render_test_file(
+        "typescript",
+        "smoke",
+        &[&fixture],
+        "",
+        "@test/pkg",
+        "process",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    );
+
+    assert!(
+        output.contains("it.skip(\"ts_stream_all_skipped: test\""),
+        "the refusal must be vitest's own skip, got:\n{output}"
+    );
+    assert!(
+        output.contains("// skipped: field 'nonexistent_field' not available on result type"),
+        "the marker must be carried into the refusal, not replaced by silence, got:\n{output}"
+    );
+    assert!(
+        output.contains("// alef rendered no runnable expectation for fixture `ts_stream_all_skipped`"),
+        "the refusal must name why it could not run, got:\n{output}"
+    );
+    assert!(
+        !output.contains("expect(chunks).toBeDefined();"),
+        "a guard that cannot fail must not stand in for the refused assertions, got:\n{output}"
+    );
+    let refusals = crate::e2e::codegen::inert_example::take_inert_examples();
+    assert_eq!(refusals.len(), 1, "the refusal must be recorded once for the summary");
+    assert_eq!(refusals[0].fixture_id, "ts_stream_all_skipped");
+}
+
+/// CONTROL: alef's own acknowledged debt on a NON-streaming call keeps the
+/// `expect(result).toBeDefined()` fallback. That check can genuinely fail — a binding returning
+/// `undefined` trips it — so refusing it would delete the "the call worked" coverage it carries,
+/// and the marker naming what could not run must survive beside it. ~keep
+#[test]
+fn acknowledged_debt_on_a_non_streaming_call_keeps_its_failable_fallback() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "process".to_string();
+    e2e_config.call.result_var = "result".to_string();
+    e2e_config.call.result_fields = std::collections::HashSet::from(["content".to_string()]);
+    e2e_config.call.returns_result = true;
+
+    let fixture = Fixture {
+        id: "ts_generator_debt".to_string(),
+        description: "test".to_string(),
+        assertions: vec![crate::e2e::fixture::Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("nonexistent_field".to_string()),
+            value: Some(serde_json::json!("x")),
+            skip: Some(crate::e2e::fixture::AssertionSkip::All(true)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    let output = render_test_file(
+        "typescript",
+        "smoke",
+        &[&fixture],
+        "",
+        "@test/pkg",
+        "process",
+        &[],
+        None,
+        None,
+        &e2e_config,
+        &[],
+        &[],
+        "",
+        &config,
+    );
+
+    assert!(
+        output.contains("expect(result).toBeDefined();"),
+        "the failable fallback must survive, got:\n{output}"
+    );
+    assert!(
+        output.contains("// skipped: field 'nonexistent_field' not available on result type"),
+        "the marker must survive beside the fallback, got:\n{output}"
+    );
+    assert!(
+        crate::e2e::codegen::inert_example::take_inert_examples().is_empty(),
+        "an example that still asserts something is not a refusal"
+    );
 }

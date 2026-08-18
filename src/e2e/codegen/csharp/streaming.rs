@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use super::{build_args_and_setup, json_to_csharp};
+use crate::e2e::codegen::inert_example::{self, InertCause};
+use crate::e2e::escape::escape_csharp;
 
 pub(super) fn resolve_csharp_streaming_item_type(
     call_config: &crate::e2e::config::CallConfig,
@@ -47,6 +49,7 @@ pub(super) fn render_streaming_test_method(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
     item_type: Option<&str>,
 ) {
     let method_name = fixture.id.to_upper_camel_case();
@@ -79,7 +82,9 @@ pub(super) fn render_streaming_test_method(
         name
     };
     let function_name = effective_function_name.as_str();
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call_config, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("csharp", fixture, call_config, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params("csharp");
     let args = recipe.args;
 
     let top_level_options_type = e2e_config
@@ -118,6 +123,7 @@ pub(super) fn render_streaming_test_method(
         config,
         type_defs,
         enums,
+        target_params,
         &mut _chat_stream_class_decls,
         &mut _chat_stream_teardown_lines,
     );
@@ -216,7 +222,11 @@ pub(super) fn render_streaming_test_method(
     });
 
     let mut body = String::new();
-    let _ = writeln!(body, "    [Fact]");
+    // ~keep The `[Fact]` attribute is decided at the END of this function rather than written
+    // here, because xUnit's only skip is `[Fact(Skip = ..)]` — an attribute — and whether this
+    // method has anything left to assert is not known until every assertion has rendered. Both
+    // emit points below prepend this line.
+    let mut fact_attribute = "    [Fact]".to_string();
     let _ = writeln!(body, "    public async Task Test_{method_name}()");
     let _ = writeln!(body, "    {{");
     let _ = writeln!(body, "        // {description}");
@@ -237,7 +247,7 @@ pub(super) fn render_streaming_test_method(
         let _ = writeln!(body, "            await foreach (var _chunk in {call_expr}) {{ }}");
         body.push_str("        });\n");
         body.push_str("    }\n");
-        for line in body.lines() {
+        for line in std::iter::once(fact_attribute.as_str()).chain(body.lines()) {
             out.push_str("    ");
             out.push_str(line);
             out.push('\n');
@@ -377,6 +387,11 @@ pub(super) fn render_streaming_test_method(
     }
 
     // Emit assertions on local aggregator vars or result_fields.
+    // ~keep The offset is recorded so the marker scan and the inert verdict below read the
+    // assertion region alone. `body` already holds the method signature, the setup lines and the
+    // whole `await foreach` drive, so a verdict taken over all of it would answer "this example
+    // asserts something" for every fixture — the drive is executable text.
+    let assertions_start = body.len();
     let mut had_explicit_complete = false;
     for assertion in &fixture.assertions {
         if assertion.field.as_deref() == Some("stream_complete") {
@@ -401,11 +416,45 @@ pub(super) fn render_streaming_test_method(
         body.push_str("        Assert.True(streamComplete);\n");
     }
 
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&body, "csharp", &fixture.id, &fixture.assertions);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &body[assertions_start..],
+        "csharp",
+        &fixture.id,
+        &fixture.assertions,
+    );
+
+    // ~keep A streaming example has no honest fallback subject of its own: `chunks` is bound to a
+    // fresh `new List<T>()` immediately above, so any check on it could never fail. The one
+    // exception is a fixture that declared `not_error` — "the stream does not throw" IS a real
+    // check and the drive already carries it, so refusing there would delete working coverage.
+    let declares_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+    let verdict = if declares_not_error {
+        None
+    } else {
+        inert_example::inert_verdict(&body[assertions_start..], "csharp", &fixture.id, &fixture.assertions)
+    };
+    if let Some(refusal) = verdict {
+        inert_example::record_refusal(&refusal);
+        let markers = body[assertions_start..].to_string();
+        let reason = escape_csharp(&refusal.reason());
+        let statement = match refusal.cause {
+            InertCause::UnresolvedFieldPath => {
+                format!(
+                    "        string unresolvedAssertion = \"{reason}\";\n        Assert.Null(unresolvedAssertion);\n"
+                )
+            }
+            InertCause::AwaitedOrLimited | InertCause::RenderedNothing => {
+                fact_attribute = format!("    [Fact(Skip = \"{reason}\")]");
+                String::new()
+            }
+        };
+        body.truncate(assertions_start);
+        body.push_str(&inert_example::refusal_body(&markers, &statement));
+    }
 
     body.push_str("    }\n");
 
-    for line in body.lines() {
+    for line in std::iter::once(fact_attribute.as_str()).chain(body.lines()) {
         out.push_str("    ");
         out.push_str(line);
         out.push('\n');

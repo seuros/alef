@@ -17,6 +17,10 @@
    - has_usable_assertion: bool - whether there's a result to assert on
    - result_var: result variable name
    - assertions_body: string containing all rendered assertions
+   - refusal_skip_reason: optional string — when non-empty the fixture declared assertions and
+       none of them rendered a runnable expectation, so the method carries `[Fact(Skip = ..)]`
+       instead of `[Fact]`. The rendered skip markers stay in the body, so the refusal is not a
+       silent skip.
    - unrenderable_error_assertions: skip markers for error-path assertions this backend cannot render
 #}
 {%- if is_skipped %}
@@ -73,7 +77,11 @@
 {% endif %}
     }
 {%- else %}
+{%- if refusal_skip_reason %}
+    [Fact(Skip = "{{ refusal_skip_reason }}")]
+{%- else %}
     [Fact]
+{%- endif %}
     public {{ return_type }} Test_{{ method_name }}()
     {
         // {{ description }}

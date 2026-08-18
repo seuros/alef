@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
 use super::{args, assertions, stubs, types, visitor};
+use crate::e2e::codegen::inert_example::{self, InertCause, InertExample};
 
 /// True when `body` contains at least one line that is not blank and not a
 /// `//`-prefixed comment — i.e. an executable PHPUnit assertion statement.
@@ -31,15 +32,42 @@ fn apply_vacuous_assertion_fallback(
     is_streaming: bool,
     expects_error: bool,
     result_var: &str,
+    streaming_drive_is_the_check: bool,
 ) {
     if expects_error || has_executable_assertion(assertions_body) {
         return;
     }
     if is_streaming {
-        assertions_body.push_str("        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n");
+        // ~keep `$chunks` is bound to a freshly drained array immediately above, so
+        // `is_array($chunks)` cannot fail — it is a vacuous guard, not a check, and it is exactly
+        // what kept a streaming example that asserts nothing looking green. It is kept only where
+        // the drive itself IS the declared check (`not_error`): there the real expectation is that
+        // the call did not throw, and this line only stops PHPUnit filing the test as risky.
+        // Everywhere else the body is left comment-only so the refusal below can see it.
+        if streaming_drive_is_the_check {
+            assertions_body.push_str("        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n");
+        }
     } else {
         let _ = writeln!(assertions_body, "        $this->assertNotNull(${result_var});");
     }
+}
+
+/// The body emitted in place of one whose declared assertions all funnelled into skip markers.
+///
+/// ~keep Which refusal is emitted follows who can fix it, exactly as in `ruby/examples.rs`. An
+/// unresolved field path is the consumer's to repair, so it gets `$this->fail(..)` — a spelling
+/// this backend already emits for an error fixture that did not throw. Everything else is alef's
+/// generator debt or a PHP-extension limit no consumer edit clears, so it gets PHPUnit's own
+/// `markTestSkipped`, which reports the test as skipped and never as a pass.
+fn render_php_refusal(markers: &str, refusal: &InertExample) -> String {
+    let reason = escape_php_single(&refusal.reason());
+    let statement = match refusal.cause {
+        InertCause::UnresolvedFieldPath => format!("        $this->fail('{reason}');\n"),
+        InertCause::AwaitedOrLimited | InertCause::RenderedNothing => {
+            format!("        $this->markTestSkipped('{reason}');\n")
+        }
+    };
+    inert_example::refusal_body(markers, &statement)
 }
 
 /// Render the PHP test-method body for an `error`-asserting fixture.
@@ -390,8 +418,40 @@ pub(super) fn render_test_method(
     // whose resolvable field assertions all rendered as "skipped" comments,
     // leaves assertions_body with no executable statement. Fall back to a
     // real assertion instead of a vacuous test body.
-    apply_vacuous_assertion_fallback(&mut assertions_body, is_streaming, expects_error, result_var);
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "php", &fixture.id, &fixture.assertions);
+
+    // ~keep The verdict is taken BEFORE the fallback, not after: the fallback's whole job is to
+    // put an executable line into an otherwise comment-only body, so reading the verdict after it
+    // would answer `None` every time and the refusal would be dead code. `expects_error` is
+    // excluded because `test_method.jinja` splices `error_test_body` instead of `assertions_body`
+    // for those.
+    let verdict = if expects_error {
+        None
+    } else {
+        inert_example::inert_verdict(&assertions_body, "php", &fixture.id, &fixture.assertions)
+    };
+    let declares_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+    // ~keep A non-streaming example still has an honest, FAILABLE fallback available to it —
+    // `$this->assertNotNull($result)`, which a binding returning null really does fail — so only
+    // the consumer-fixable unresolved path is refused there; refusing the rest would delete the
+    // "the call worked" coverage that fallback carries. A streaming example has no such subject,
+    // so every cause is refused unless the fixture declared `not_error`, where the drive itself is
+    // the check.
+    let refuse = verdict.as_ref().is_some_and(|refusal| {
+        refusal.cause == InertCause::UnresolvedFieldPath || (is_streaming && !declares_not_error)
+    });
+    if let Some(refusal) = verdict.filter(|_| refuse) {
+        inert_example::record_refusal(&refusal);
+        assertions_body = render_php_refusal(&assertions_body, &refusal);
+    } else {
+        apply_vacuous_assertion_fallback(
+            &mut assertions_body,
+            is_streaming,
+            expects_error,
+            result_var,
+            declares_not_error,
+        );
+    }
 
     let error_test_body = if expects_error {
         let mut body = render_error_test_body(
@@ -467,7 +527,7 @@ mod vacuous_assertion_fallback_tests {
     #[test]
     fn not_error_only_body_gets_a_real_assertion_not_a_framework_suppression() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
         assert_eq!(body, "        $this->assertNotNull($result);\n");
         assert!(!body.contains("expectNotToPerformAssertions"));
     }
@@ -475,7 +535,7 @@ mod vacuous_assertion_fallback_tests {
     #[test]
     fn comment_only_body_also_gets_a_real_assertion() {
         let mut body = "        // skipped: field 'chunks' not available on result type\n".to_string();
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
         assert!(
             body.contains("$this->assertNotNull($result);"),
             "a comment-only body must still get a real fallback assertion, got: {body}"
@@ -483,20 +543,37 @@ mod vacuous_assertion_fallback_tests {
         assert!(!body.contains("expectNotToPerformAssertions"));
     }
 
+    /// A `not_error` streaming fixture really does check that the drive did not throw, so the
+    /// line that keeps PHPUnit from filing it as risky is still emitted beside that real check.
     #[test]
-    fn streaming_vacuous_body_asserts_on_drained_chunks_not_result() {
+    fn streaming_not_error_body_keeps_the_line_that_marks_the_test_non_risky() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, true, false, "result");
+        apply_vacuous_assertion_fallback(&mut body, true, false, "result", true);
         assert_eq!(
             body,
             "        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n"
         );
     }
 
+    /// `$chunks` is bound to a freshly drained array immediately above, so `is_array($chunks)`
+    /// cannot fail. Emitting it for a fixture that declared real assertions and had every one of
+    /// them dropped is what published the example as a permanent green; the body must be left
+    /// comment-only so the refusal in `render_test_method` can see it. ~keep
+    #[test]
+    fn streaming_body_without_not_error_gets_no_guard_that_cannot_fail() {
+        let mut body = "        // skipped: field 'x' not available on result type\n".to_string();
+        let original = body.clone();
+        apply_vacuous_assertion_fallback(&mut body, true, false, "result", false);
+        assert_eq!(
+            body, original,
+            "a check that cannot fail must not be injected in place of the dropped assertions"
+        );
+    }
+
     #[test]
     fn error_expecting_fixture_is_left_untouched() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, false, true, "result");
+        apply_vacuous_assertion_fallback(&mut body, false, true, "result", false);
         assert!(
             body.is_empty(),
             "error-expecting fixtures render their own error_test_body, not this fallback"
@@ -507,7 +584,7 @@ mod vacuous_assertion_fallback_tests {
     fn body_with_a_real_assertion_is_left_untouched() {
         let mut body = "        $this->assertEquals(1, $result->count);\n".to_string();
         let original = body.clone();
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
         assert_eq!(
             body, original,
             "a fixture with a real assertion must not get an extra fallback line"
@@ -525,7 +602,7 @@ mod vacuous_assertion_fallback_tests {
         let mut body = "        // skipped: field 'nonexistent_field' not available on result type\n".to_string();
         // Confirm the comment alone doesn't get treated as a real assertion.
         assert!(!has_executable_assertion(&body));
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result");
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
         assert!(
             body.contains("field 'nonexistent_field' not available on result type"),
             "got: {body}"
@@ -762,5 +839,167 @@ mod visitor_options_type_tests {
             "the error block must render: {out}"
         );
         assert!(!out.contains("has no accessor for error field"), "{out}");
+    }
+}
+
+#[cfg(test)]
+mod inert_example_refusal_tests {
+    use super::render_test_method;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::codegen::inert_example::take_inert_examples;
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::{HashMap, HashSet};
+
+    fn assertion(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::json!("x")),
+            ..Default::default()
+        }
+    }
+
+    /// A non-empty `result_fields` set is what arms the availability oracle: with it empty the
+    /// resolver is deliberately permissive and no field is ever rejected. ~keep
+    fn render(fixture_id: &str, assertions: Vec<Assertion>) -> String {
+        let fixture = Fixture {
+            id: fixture_id.to_string(),
+            description: "php refusal fixture".to_string(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "process".into();
+        e2e_config.call.result_var = "result".into();
+        e2e_config.call.result_fields = HashSet::from(["content".to_string()]);
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let mut out = String::new();
+        let mut trait_bridge_imports: Vec<String> = Vec::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "php",
+            "Sample",
+            "SampleClient",
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            None,
+            "",
+            &[],
+            "",
+            &config,
+            &mut trait_bridge_imports,
+        );
+        out
+    }
+
+    /// CONTROL, asserted first: a field the oracle resolves still renders its real check and the
+    /// vacuous fallback is not appended beside it. An over-broad refusal here would silently
+    /// delete coverage that runs today — the same defect pointing the other way. ~keep
+    #[test]
+    fn a_resolvable_assertion_is_published_unchanged() {
+        let _ = take_inert_examples();
+
+        let out = render("php_control", vec![assertion("content")]);
+
+        assert!(
+            out.contains("$this->assertEquals('x',"),
+            "the renderable assertion must still be emitted, got:\n{out}"
+        );
+        assert!(
+            !out.contains("markTestSkipped('alef") && !out.contains("$this->fail('alef"),
+            "a live example must not be refused, got:\n{out}"
+        );
+        assert!(
+            take_inert_examples().is_empty(),
+            "nothing may be recorded for a live example"
+        );
+    }
+
+    /// A field the availability oracle rejects is the consumer's to fix, so the disarmed run that
+    /// still emits it gets an assertion that FAILS and names the fixture — never `markTestSkipped`,
+    /// which would let a fixable authoring gap sit quietly in the skipped column forever.
+    #[test]
+    fn an_unresolved_field_path_is_refused_with_a_failing_check() {
+        let _ = take_inert_examples();
+
+        let out = render(
+            "php_unresolved",
+            vec![assertion("nonexistent_field"), assertion("another_missing_field")],
+        );
+
+        assert!(
+            out.contains("$this->fail('alef resolved no assertion for fixture `php_unresolved`"),
+            "a consumer-fixable gap must be refused with a FAILING check, got:\n{out}"
+        );
+        assert!(
+            out.contains("// skipped:") && out.contains("nonexistent_field") && out.contains("another_missing_field"),
+            "the skip markers must be carried into the refusal, not replaced by silence, got:\n{out}"
+        );
+        assert!(
+            !out.contains("$this->assertNotNull($result);"),
+            "the vacuous fallback must not stand in for the refused assertions, got:\n{out}"
+        );
+        let refusals = take_inert_examples();
+        assert_eq!(refusals.len(), 1, "the refusal must be recorded once for the summary");
+        assert_eq!(refusals[0].fixture_id, "php_unresolved");
+    }
+
+    /// CONTROL: alef's own acknowledged debt keeps the non-streaming `assertNotNull($result)`
+    /// fallback. That check CAN fail — a binding returning null really does trip it — so refusing
+    /// it would delete the "the call worked" coverage it carries. ~keep
+    #[test]
+    fn acknowledged_debt_on_a_non_streaming_call_keeps_its_failable_fallback() {
+        let _ = take_inert_examples();
+
+        let out = render(
+            "php_generator_debt",
+            vec![Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("nonexistent_field".to_string()),
+                value: Some(serde_json::json!("x")),
+                skip: Some(crate::e2e::fixture::AssertionSkip::All(true)),
+                ..Default::default()
+            }],
+        );
+
+        assert!(
+            out.contains("$this->assertNotNull($result);"),
+            "the failable fallback must survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("// skipped:"),
+            "the marker must survive beside the fallback, got:\n{out}"
+        );
+        assert!(
+            take_inert_examples().is_empty(),
+            "an example that still asserts something is not a refusal"
+        );
+    }
+
+    /// CONTROL: a fixture that declares NO assertions is the deliberate "just call it" smoke
+    /// contract and must be published exactly as before. ~keep
+    #[test]
+    fn a_fixture_with_no_declared_assertions_keeps_its_smoke_test_shape() {
+        let _ = take_inert_examples();
+
+        let out = render("php_smoke_only", Vec::new());
+
+        assert!(
+            out.contains("$this->assertNotNull($result);"),
+            "the pre-existing smoke fallback must be untouched, got:\n{out}"
+        );
+        assert!(
+            !out.contains("markTestSkipped('alef") && !out.contains("$this->fail('alef"),
+            "a fixture with no assertions must never be refused, got:\n{out}"
+        );
+        assert!(take_inert_examples().is_empty());
     }
 }

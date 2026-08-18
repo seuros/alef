@@ -1,6 +1,8 @@
 //! Dart ordinary function-call e2e test rendering.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::core::ir::{EnumDef, TypeRef};
+use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::codegen::resolve_field;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
@@ -13,6 +15,54 @@ use super::stubs::emit_test_backend;
 use super::values::{escape_dart, mime_from_extension, type_name_to_create_from_json_dart};
 
 const COMPATIBLE_OPTIONS_TYPE_LANGS: &[&str] = &["csharp", "c", "go", "java", "php", "python", "r"];
+
+/// The Dart expression for an argument whose *declared* parameter type the core IR resolved, or
+/// `None` to keep the existing `arg_type`-only lowering.
+///
+/// This is the Dart answer to the shared question [`TargetParams`] poses, not a shared verdict.
+/// `ArgMapping::arg_type` defaults to `"string"`, so before the seam a fixture string bound for an
+/// enum-typed parameter came out as a *quoted string literal*, which the Dart analyzer rejects
+/// against a generated `enum` parameter -- flutter_rust_bridge mirrors a flat Rust enum as a real
+/// Dart `enum`, and Dart has no implicit `String` -> enum conversion.
+///
+/// The replacement names the variant exactly as the Dart binding emitter does. `backends::dart::
+/// gen_bindings::functions::render_enum_variant_default` spells a flat enum's variant
+/// `{Enum}.{dart_safe_ident(variant.to_lower_camel_case())}` -- the `dart_safe_ident` pass is what
+/// keeps a variant named after a Dart reserved word (`default` -> `default_`) resolvable. The
+/// fixture value is a *serde wire* value, so it is matched against `wire_variant_value` rather than
+/// against the Rust variant name. ~keep
+///
+/// Deliberately narrow, matching the Java/C#/Swift conversions. Only a bare `TypeRef::Named`
+/// qualifies; only a **flat** (all-unit) enum qualifies, because a data-carrying enum becomes a
+/// `sealed class` hierarchy whose variants are constructor calls, not bare references; and a wire
+/// value naming no variant keeps its literal, because a fixture may be feeding a deliberately
+/// invalid value to exercise the binding's own validation. ~keep
+fn ir_typed_dart_expression(
+    arg: &crate::e2e::config::ArgMapping,
+    index: usize,
+    value: &serde_json::Value,
+    target_params: TargetParams<'_>,
+    enums: &[EnumDef],
+) -> Option<String> {
+    let TypeRef::Named(declared) = &target_params.param_for(&arg.name, index)?.ty else {
+        return None;
+    };
+    let text = value.as_str()?;
+    let enum_def = enums
+        .iter()
+        .find(|enum_def| &enum_def.name == declared && enum_def.variants.iter().all(|v| v.fields.is_empty()))?;
+    let variant = enum_def.variants.iter().find(|variant| {
+        crate::codegen::naming::wire_variant_value(
+            &variant.name,
+            variant.serde_rename.as_deref(),
+            enum_def.serde_rename_all.as_deref(),
+        ) == text
+    })?;
+    let variant_name = crate::codegen::naming::dart_value_identifier(&heck::ToLowerCamelCase::to_lower_camel_case(
+        variant.name.as_str(),
+    ));
+    Some(format!("{declared}.{variant_name}"))
+}
 
 /// Build the `throwsA(...)` matcher expression for an `error`-asserting test.
 ///
@@ -54,6 +104,9 @@ pub(super) struct DartTestCaseContext<'a> {
     pub(super) config: &'a ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
+    /// `ApiSurface::functions`, supplied only by callers that have opted into type-aware
+    /// argument lowering. An empty slice keeps the recipe's `IrAbsent` behaviour. ~keep
+    pub(super) functions: &'a [crate::core::ir::FunctionDef],
     pub(super) native_typed_dtos: bool,
     /// ~keep Standalone doc snippets have no mock server behind them, so `_fixtureUrl`
     /// — a helper only the full e2e test-file emitter defines — must never be
@@ -72,6 +125,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         config,
         type_defs,
         enums,
+        functions,
         native_typed_dtos,
         is_snippet,
     } = context;
@@ -90,7 +144,9 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         &fixture.input,
     );
     let call_recipe =
-        crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
+        crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
+            .with_functions(functions);
+    let target_params = call_recipe.target_params(lang);
     // Build per-call field resolver using the effective field sets for this call.
     let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_dart_first_class(
@@ -246,7 +302,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     let mut setup_lines: Vec<String> = Vec::new();
     let mut args = Vec::new();
 
-    for arg_def in call_recipe.args {
+    for (arg_index, arg_def) in call_recipe.args.iter().enumerate() {
         match arg_def.arg_type.as_str() {
             "mock_url" => {
                 let name = arg_def.name.clone();
@@ -488,7 +544,11 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     arg_def.name == "mime_type" && !is_frb_bridge_call && client_factory_for_args.is_none();
                 match arg_value {
                     serde_json::Value::String(s) => {
-                        let literal = format!("'{}'", escape_dart(s));
+                        // The declared parameter type wins when the IR resolved one: a Dart enum
+                        // parameter rejects a string literal outright. Falls back to the literal
+                        // for every other declared type and for an absent IR. ~keep
+                        let literal = ir_typed_dart_expression(arg_def, arg_index, arg_value, target_params, enums)
+                            .unwrap_or_else(|| format!("'{}'", escape_dart(s)));
                         // Direct FRB bridge calls: all parameters are named-required.
                         // Client factory methods: all non-config parameters are named-required.
                         // Facade methods: required positional, optional named.

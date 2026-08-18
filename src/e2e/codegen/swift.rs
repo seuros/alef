@@ -44,7 +44,7 @@ impl E2eCodegen for SwiftE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         // Emit under `<output>/swift_e2e/` so the consumer's SwiftPM identity
@@ -203,6 +203,7 @@ impl E2eCodegen for SwiftE2eCodegen {
                 type_defs,
                 has_http_fixtures,
                 enums,
+                functions,
             );
             files.push(GeneratedFile {
                 path: tests_base
@@ -226,6 +227,18 @@ impl E2eCodegen for SwiftE2eCodegen {
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         snippet::render(fixture, e2e_config, config, type_defs, enums)
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<String> {
+        snippet::render_with_ir(fixture, e2e_config, config, type_defs, enums, functions)
     }
 
     fn language_name(&self) -> &'static str {

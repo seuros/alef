@@ -1,5 +1,9 @@
 use super::*;
 
+use std::fmt::Write as _;
+
+use crate::e2e::codegen::inert_example::{self, InertCause};
+
 /// Escape a string so it matches itself literally when embedded as the body of a
 /// JS/TS regex literal (`/…/`), rather than being interpreted as a regex pattern.
 ///
@@ -287,12 +291,60 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // of any kind for that case — mirror python/php's `apply_vacuous_assertion_fallback`.
     // A fixture with genuinely zero declared assertions is left untouched, matching
     // every other backend's deliberate "just call it" smoke-test contract. ~keep
-    apply_vacuous_assertion_fallback(
-        &mut assertions_body,
-        !fixture.assertions.is_empty(),
-        is_streaming,
-        result_var,
-    );
+    // ~keep The marker scan and the verdict both run BEFORE the fallback, not after: the
+    // fallback's whole job is to put an executable line into an otherwise comment-only body, so a
+    // verdict read after it would answer `None` every time and the refusal would be dead code.
+    // `expects_error` is excluded because `test_function.jinja`'s error branch never references
+    // `assertions_body` — the `rejects` assertion IS the expectation there.
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, lang, &fixture.id, &fixture.assertions);
+    let verdict = if expects_error {
+        None
+    } else {
+        inert_example::inert_verdict(&assertions_body, lang, &fixture.id, &fixture.assertions)
+    };
+    let declares_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+    // ~keep An unresolved field path is the consumer's to fix, so it stays a running `it(..)` and
+    // gets an expectation that FAILS and names the fixture. A non-streaming example still has an
+    // honest, FAILABLE fallback for every other cause — `expect(result).toBeDefined()`, which a
+    // binding returning `undefined` really does trip — so refusing those would delete the "the
+    // call worked" coverage that fallback carries. A streaming example has no such subject
+    // (`chunks` is a freshly bound array), so its remaining causes become vitest's own `it.skip`,
+    // which never reports a pass, unless the fixture declared `not_error` — there the drive itself
+    // is the check and refusing would delete it.
+    let mut refusal_body = String::new();
+    let refuse = verdict.as_ref().is_some_and(|refusal| {
+        refusal.cause == InertCause::UnresolvedFieldPath || (is_streaming && !declares_not_error)
+    });
+    match verdict.filter(|_| refuse) {
+        Some(refusal) => {
+            inert_example::record_refusal(&refusal);
+            match refusal.cause {
+                InertCause::UnresolvedFieldPath => {
+                    let reason = escape_js(&refusal.reason());
+                    assertions_body = inert_example::refusal_body(
+                        &assertions_body,
+                        &format!(
+                            "    const unresolvedAssertion = \"{reason}\";\n    \
+                             expect(unresolvedAssertion).toBeNull();\n"
+                        ),
+                    );
+                }
+                InertCause::AwaitedOrLimited | InertCause::RenderedNothing => {
+                    for line in assertions_body.lines().filter(|line| !line.trim().is_empty()) {
+                        let _ = writeln!(refusal_body, "\t\t{}", line.trim());
+                    }
+                    let _ = writeln!(refusal_body, "\t\t// {}", refusal.reason());
+                }
+            }
+        }
+        None => apply_vacuous_assertion_fallback(
+            &mut assertions_body,
+            !fixture.assertions.is_empty(),
+            is_streaming,
+            result_var,
+            declares_not_error,
+        ),
+    }
 
     // Whether the call's result is worth binding to `const result = ...` rather
     // than discarding with a bare `await callExpr();`. Derived from what
@@ -305,8 +357,6 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     let has_usable_assertion = assertions_body
         .lines()
         .any(|line| !line.trim().is_empty() && !line.trim().starts_with("//"));
-
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, lang, &fixture.id, &fixture.assertions);
 
     // For streaming fixtures: capture the stream in `stream`, then collect into `chunks`.
     // Pass the actual `lang` (was hardcoded to "node") so wasm gets the
@@ -370,6 +420,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         is_streaming_error_call => is_streaming_error_call,
         lang => lang,
         skip_reason => skip_reason,
+        refusal_body => refusal_body.trim_end(),
         timeout_ms => timeout_ms,
         bridge_cleanup => bridge_cleanup,
     };
@@ -390,6 +441,7 @@ fn apply_vacuous_assertion_fallback(
     has_declared_assertions: bool,
     is_streaming: bool,
     result_var: &str,
+    streaming_drive_is_the_check: bool,
 ) {
     let has_real_assertion = assertions_body
         .lines()
@@ -398,7 +450,14 @@ fn apply_vacuous_assertion_fallback(
         return;
     }
     if is_streaming {
-        assertions_body.push_str("    expect(chunks).toBeDefined();\n");
+        // ~keep `chunks` is bound to a freshly drained array immediately above, so
+        // `expect(chunks).toBeDefined()` cannot fail — it is a vacuous guard, not a check, and it
+        // is what kept a streaming example that asserts nothing looking green. It is kept only
+        // where the drive itself IS the declared check (`not_error`). Everywhere else the body is
+        // left comment-only so the refusal in `render_test_case` can see it.
+        if streaming_drive_is_the_check {
+            assertions_body.push_str("    expect(chunks).toBeDefined();\n");
+        }
     } else {
         assertions_body.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
     }

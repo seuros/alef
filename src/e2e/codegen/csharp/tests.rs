@@ -115,6 +115,7 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         &crate::core::config::ResolvedCrateConfig::default(),
         &[],
         &[],
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
         &mut class_decls,
         &mut teardown_lines,
     );
@@ -463,6 +464,7 @@ fn dropped_field_assertion_carries_the_marker_in_the_rendered_test_method() {
         &config,
         &[],
         &[],
+        &[],
     );
 
     assert!(
@@ -705,6 +707,7 @@ fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emi
         &config,
         &[],
         &[],
+        &[],
     );
 }
 
@@ -759,6 +762,7 @@ fn render_csharp_error_method(extra: Vec<Assertion>) -> String {
         &config,
         &[],
         &[],
+        &[],
     );
     out
 }
@@ -795,4 +799,394 @@ fn csharp_a_lone_error_assertion_renders_no_marker() {
 
     assert!(out.contains("ThrowsAny"), "the error block must render, got:\n{out}");
     assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+}
+
+// --- typed-argument lowering (alef #227) -----------------------------------------------------
+
+/// An `args` entry with the default `arg_type` (`"string"`) — the shape that used to send every
+/// value through `json_to_csharp` regardless of what the parameter it fills is declared as. ~keep
+fn default_typed_arg(name: &str) -> ArgMapping {
+    ArgMapping {
+        name: name.to_string(),
+        field: format!("input.{name}"),
+        arg_type: "string".to_string(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    }
+}
+
+fn csharp_args_for(
+    args: &[ArgMapping],
+    fixture: &Fixture,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    target_params: crate::e2e::codegen::call_ir::TargetParams<'_>,
+) -> String {
+    let mut class_decls = Vec::new();
+    let mut teardown_lines = Vec::new();
+    let (_setup, args_str) = super::build_args_and_setup(
+        &fixture.input,
+        args,
+        "Sample",
+        None,
+        None,
+        &HashMap::new(),
+        &HashMap::new(),
+        fixture,
+        None,
+        &ResolvedCrateConfig::default(),
+        type_defs,
+        enums,
+        target_params,
+        &mut class_decls,
+        &mut teardown_lines,
+    );
+    args_str
+}
+
+/// The defect: a fixture object bound for a record-typed parameter used to become a *quoted JSON
+/// string literal*, which `csc` rejects. With the declared type resolved it deserializes. ~keep
+#[test]
+fn an_object_value_for_an_ir_struct_parameter_deserializes_instead_of_stringifying() {
+    use crate::core::ir::{ParamDef, TypeDef, TypeRef};
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": { "prompt": "hi" } }));
+    let params = [ParamDef {
+        name: "request".to_string(),
+        ty: TypeRef::Named("CompletionRequest".to_string()),
+        ..ParamDef::default()
+    }];
+    let type_defs = [TypeDef {
+        name: "CompletionRequest".to_string(),
+        ..TypeDef::default()
+    }];
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &type_defs,
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(
+        rendered,
+        "JsonSerializer.Deserialize<CompletionRequest>(\"{\\\"prompt\\\":\\\"hi\\\"}\", ConfigOptions)!"
+    );
+}
+
+/// An enum-typed parameter takes the member `gen_enum` actually emitted for the wire value, not a
+/// bare string. The variant here is `serde(rename_all = "kebab-case")`, which is precisely the case
+/// a `to_upper_camel_case` of the wire value would get wrong. ~keep
+#[test]
+fn a_string_value_for_an_ir_enum_parameter_names_the_generated_member() {
+    use crate::core::ir::{EnumDef, EnumVariant, ParamDef, TypeRef};
+    let args = vec![default_typed_arg("purpose")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "purpose": "fine-tune" }));
+    let params = [ParamDef {
+        name: "purpose".to_string(),
+        ty: TypeRef::Named("FilePurpose".to_string()),
+        ..ParamDef::default()
+    }];
+    let enums = [EnumDef {
+        name: "FilePurpose".to_string(),
+        serde_rename_all: Some("kebab-case".to_string()),
+        variants: vec![EnumVariant {
+            name: "FineTune".to_string(),
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    }];
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &[],
+        &enums,
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(rendered, "FilePurpose.FineTune");
+}
+
+/// The other half of the three-state trade. Identical arg and fixture value, `IrAbsent` instead of
+/// `Known`: the pre-seam lowering must survive verbatim, or every IR-less caller (the snippet path,
+/// and every test that renders without an IR) regresses silently. ~keep
+#[test]
+fn the_same_object_value_still_stringifies_when_the_ir_is_absent() {
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": { "prompt": "hi" } }));
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &[],
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+    );
+    assert_eq!(rendered, "\"{\\\"prompt\\\":\\\"hi\\\"}\"");
+}
+
+/// The IrAbsent half for the enum arm: the same string value keeps its string literal. ~keep
+#[test]
+fn the_same_string_value_still_renders_as_a_literal_when_the_ir_is_absent() {
+    let args = vec![default_typed_arg("purpose")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "purpose": "fine-tune" }));
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &[],
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+    );
+    assert_eq!(rendered, "\"fine-tune\"");
+}
+
+/// A wire value naming no variant is very often a deliberately invalid value driving the binding's
+/// own validation. Inventing a member for it would not compile and would delete the test's point. ~keep
+#[test]
+fn an_unmatched_enum_wire_value_keeps_its_string_literal() {
+    use crate::core::ir::{EnumDef, EnumVariant, ParamDef, TypeRef};
+    let args = vec![default_typed_arg("purpose")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "purpose": "invalid-purpose" }));
+    let params = [ParamDef {
+        name: "purpose".to_string(),
+        ty: TypeRef::Named("FilePurpose".to_string()),
+        ..ParamDef::default()
+    }];
+    let enums = [EnumDef {
+        name: "FilePurpose".to_string(),
+        serde_rename_all: Some("kebab-case".to_string()),
+        variants: vec![EnumVariant {
+            name: "FineTune".to_string(),
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    }];
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &[],
+        &enums,
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(rendered, "\"invalid-purpose\"");
+}
+
+/// A declared type absent from both IR registries is not a licence to invent a deserializer: it may
+/// be a newtype the C# binding flattens to a `string`. ~keep
+#[test]
+fn a_declared_type_unknown_to_the_ir_keeps_the_existing_lowering() {
+    use crate::core::ir::{ParamDef, TypeRef};
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": "hi" }));
+    let params = [ParamDef {
+        name: "request".to_string(),
+        ty: TypeRef::Named("PromptText".to_string()),
+        ..ParamDef::default()
+    }];
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &[],
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(rendered, "\"hi\"");
+}
+
+/// An `Option<T>`/`Vec<T>` parameter wants a wrapper this expression does not build, so the seam
+/// must decline rather than unwrap to `T` and trade one compile error for another. ~keep
+#[test]
+fn a_wrapped_named_parameter_is_left_to_the_existing_lowering() {
+    use crate::core::ir::{ParamDef, TypeDef, TypeRef};
+    let args = vec![default_typed_arg("request")];
+    let fixture = make_fixture_with_input("typed", serde_json::json!({ "request": { "prompt": "hi" } }));
+    let params = [ParamDef {
+        name: "request".to_string(),
+        ty: TypeRef::Optional(Box::new(TypeRef::Named("CompletionRequest".to_string()))),
+        ..ParamDef::default()
+    }];
+    let type_defs = [TypeDef {
+        name: "CompletionRequest".to_string(),
+        ..TypeDef::default()
+    }];
+    let rendered = csharp_args_for(
+        &args,
+        &fixture,
+        &type_defs,
+        &[],
+        crate::e2e::codegen::call_ir::TargetParams::Known(&params),
+    );
+    assert_eq!(rendered, "\"{\\\"prompt\\\":\\\"hi\\\"}\"");
+/// Build the fixture + config pair the refusal tests share: `result_fields` names only `content`,
+/// which is what arms the availability oracle — with it empty the resolver is deliberately
+/// permissive and no field is ever rejected. ~keep
+fn render_refusal_candidate(fixture_id: &str, assertions: Vec<Assertion>) -> String {
+    let fixture = Fixture {
+        id: fixture_id.into(),
+        description: "Widget smoke".into(),
+        assertions,
+        ..Fixture::default()
+    };
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.call.function = "get_widget".into();
+    e2e_config.call.result_var = "result".into();
+    e2e_config.call.returns_result = true;
+    e2e_config.result_fields = ["content".to_string()].into_iter().collect::<HashSet<_>>();
+
+    let field_resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &["content".to_string()].into_iter().collect::<HashSet<_>>(),
+        &HashSet::new(),
+        &HashSet::new(),
+    );
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let mut out = String::new();
+    let mut visitor_class_decls: Vec<String> = Vec::new();
+    super::render_test_method(
+        &mut out,
+        &mut visitor_class_decls,
+        &fixture,
+        "Widget",
+        "GetWidget",
+        "WidgetException",
+        "result",
+        &[],
+        &field_resolver,
+        false,
+        false,
+        &e2e_config,
+        &HashMap::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        &[],
+        &config,
+        &[],
+        &[],
+    );
+    out
+}
+
+/// CONTROL for the refusal wired in #233, asserted before any absence assertion: a field the
+/// availability oracle resolves still renders its real check, the method keeps a plain `[Fact]`,
+/// and nothing is recorded. An over-broad refusal here would silently delete coverage that runs
+/// today — the same defect pointing the other way. ~keep
+#[test]
+fn a_resolvable_assertion_keeps_a_plain_fact_and_is_never_refused() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+
+    let out = render_refusal_candidate(
+        "csharp_control",
+        vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("content".into()),
+            ..Assertion::default()
+        }],
+    );
+
+    assert!(
+        out.contains("Assert.NotEmpty("),
+        "the renderable assertion must still be emitted, got:\n{out}"
+    );
+    assert!(
+        out.contains("[Fact]") && !out.contains("[Fact(Skip"),
+        "a live example must keep a plain [Fact], got:\n{out}"
+    );
+    assert!(
+        !out.contains("unresolvedAssertion"),
+        "a live example must not be refused, got:\n{out}"
+    );
+    assert!(
+        crate::e2e::codegen::inert_example::take_inert_examples().is_empty(),
+        "nothing may be recorded for a live example"
+    );
+}
+
+/// A field the availability oracle rejects is the consumer's to fix, so the disarmed run that
+/// still emits it gets an assertion that FAILS and names the fixture — never `[Fact(Skip = ..)]`,
+/// which would let a fixable authoring gap sit quietly in the skipped column forever.
+#[test]
+fn an_unresolved_field_path_is_refused_with_an_assertion_that_fails() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+
+    let out = render_refusal_candidate(
+        "csharp_unresolved",
+        vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("definitely_missing_field".into()),
+            ..Assertion::default()
+        }],
+    );
+
+    assert!(
+        out.contains("string unresolvedAssertion = \"alef resolved no assertion for fixture `csharp_unresolved`")
+            && out.contains("Assert.Null(unresolvedAssertion);"),
+        "a consumer-fixable gap must be refused with an assertion that fails, got:\n{out}"
+    );
+    assert!(
+        out.contains("skipped: field 'definitely_missing_field' not available on result type"),
+        "the marker must be carried into the refusal, not replaced by silence, got:\n{out}"
+    );
+    assert!(
+        !out.contains("[Fact(Skip"),
+        "a consumer-fixable gap must not be parked as skipped, got:\n{out}"
+    );
+    let refusals = crate::e2e::codegen::inert_example::take_inert_examples();
+    assert_eq!(refusals.len(), 1, "the refusal must be recorded once for the summary");
+    assert_eq!(refusals[0].fixture_id, "csharp_unresolved");
+}
+
+/// alef's own acknowledged debt is not the consumer's to fix. xUnit has no in-body skip, so the
+/// method's own attribute becomes `[Fact(Skip = ..)]` — the runner reports it as skipped and never
+/// as a pass — and the markers stay in the body so the refusal is not a silent skip.
+#[test]
+fn acknowledged_generator_debt_is_refused_with_a_fact_skip_attribute() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+
+    let out = render_refusal_candidate(
+        "csharp_generator_debt",
+        vec![Assertion {
+            assertion_type: "not_empty".into(),
+            field: Some("definitely_missing_field".into()),
+            skip: Some(crate::e2e::fixture::AssertionSkip::All(true)),
+            ..Assertion::default()
+        }],
+    );
+
+    assert!(
+        out.contains("[Fact(Skip = \"alef rendered no runnable expectation for fixture `csharp_generator_debt`"),
+        "acknowledged debt must be parked as skipped, got:\n{out}"
+    );
+    assert!(
+        out.contains("skipped: field 'definitely_missing_field' not available on result type"),
+        "the marker must survive into the skipped method, got:\n{out}"
+    );
+    assert!(
+        !out.contains("unresolvedAssertion"),
+        "alef's own debt must not fail a consumer's suite, got:\n{out}"
+    );
+    assert_eq!(crate::e2e::codegen::inert_example::take_inert_examples().len(), 1);
+}
+
+/// CONTROL: a fixture that declares NO assertions is the deliberate "just call it" smoke contract
+/// and must be published exactly as before. ~keep
+#[test]
+fn a_fixture_with_no_declared_assertions_keeps_its_smoke_test_shape() {
+    let _ = crate::e2e::codegen::inert_example::take_inert_examples();
+
+    let out = render_refusal_candidate("csharp_smoke_only", Vec::new());
+
+    assert!(
+        out.contains("[Fact]") && !out.contains("[Fact(Skip"),
+        "a fixture with no assertions must never be refused, got:\n{out}"
+    );
+    assert!(
+        crate::e2e::codegen::inert_example::take_inert_examples().is_empty(),
+        "a fixture with no assertions must never be recorded as refused"
+    );
 }

@@ -4,12 +4,28 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 use anyhow::{Context, Result};
 
+/// Render a Dart documentation snippet without any core IR to consult.
+///
+/// Kept as the five-argument entry point every existing caller and test already uses: with no
+/// `functions` the seam resolves to `TargetParams::IrAbsent`, which is exactly the state this path
+/// was always in, so its output is unchanged by the seam. ~keep
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
+) -> Result<String> {
+    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, &[])
+}
+
+pub(super) fn render_snippet_body_with_ir(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<String> {
     if fixture.is_http_test() {
         return render_http_snippet(fixture);
@@ -50,6 +66,7 @@ pub(super) fn render_snippet_body(
             config,
             type_defs,
             enums,
+            functions,
             native_typed_dtos: true,
             is_snippet: true,
         },

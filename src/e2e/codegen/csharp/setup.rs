@@ -1,6 +1,9 @@
 //! C# argument setup rendering for generated e2e tests.
 
+use crate::codegen::naming::{csharp_type_name, to_csharp_name, wire_variant_value};
 use crate::core::config::ResolvedCrateConfig;
+use crate::core::ir::{EnumDef, TypeRef};
+use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::escape::escape_csharp;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::collections::HashMap;
@@ -33,6 +36,7 @@ pub(super) fn build_args_and_setup(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    target_params: TargetParams<'_>,
     class_decls: &mut Vec<String>,
     teardown_lines: &mut Vec<String>,
 ) -> (Vec<String>, String) {
@@ -44,7 +48,7 @@ pub(super) fn build_args_and_setup(
     let mut setup_lines: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
 
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         if arg.arg_type == "bytes" {
             // bytes args must be passed as byte[] in C#.
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
@@ -403,12 +407,90 @@ pub(super) fn build_args_and_setup(
                         continue;
                     }
                 }
+                if let Some(typed) = ir_typed_csharp_expression(arg, index, v, target_params, type_defs, enums) {
+                    parts.push(typed);
+                    continue;
+                }
                 parts.push(json_to_csharp(v));
             }
         }
     }
 
     (setup_lines, parts.join(", "))
+}
+
+/// The C# expression for an argument whose *declared* parameter type the core IR resolved, or
+/// `None` to keep the existing `arg_type`-only lowering.
+///
+/// This is the C# answer to the shared question [`TargetParams`] poses, not a shared verdict.
+/// `ArgMapping::arg_type` defaults to `"string"`, so before the seam a fixture value bound for a
+/// DTO- or enum-typed parameter fell through to [`json_to_csharp`], which renders an object as a
+/// *quoted JSON string literal* and a string as a *quoted string literal*; `csc` rejects both
+/// against a record or `enum` parameter. Both replacements are spellings this file already emits
+/// elsewhere, and both match what `backends::csharp::gen_bindings` writes: a record comes back
+/// through `JsonSerializer.Deserialize<T>(json, ConfigOptions)!` (the snippet template declares its
+/// own `ConfigOptions` whenever `JsonSerializer` appears in the rendered body), and an enum is
+/// named by its member, exactly as the `enum_fields` branch of [`csharp_object_initializer`] does.
+///
+/// The member is resolved through the enum's own IR rather than by case-converting the wire value:
+/// `gen_enum` pairs `[JsonPropertyName(json_name)]` with the member `to_csharp_name(variant.name)`,
+/// where `json_name` is the variant's `serde(rename)` if it has one and `wire_variant_value`
+/// otherwise. Case-converting the wire value happens to agree for `snake_case`, and disagrees for
+/// `kebab-case` and for any explicit rename, so the pairing is read off the emitter instead. ~keep
+///
+/// Deliberately narrow, matching the Java conversion. Only a bare `TypeRef::Named` qualifies -- an
+/// `Option<T>`/`Vec<T>` parameter wants a wrapper this expression does not build. Only a *value
+/// shape that matches* qualifies: an object for a record, a string for an enum. Only a **unit-only**
+/// enum qualifies, because `gen_enum` turns a data-carrying enum into a record hierarchy with no
+/// members to name. And a wire value naming no variant keeps its literal: a fixture may be feeding
+/// a deliberately invalid value to exercise the binding's own validation, and inventing a member for
+/// it would both fail to compile and delete the test's point. ~keep
+fn ir_typed_csharp_expression(
+    arg: &crate::e2e::config::ArgMapping,
+    index: usize,
+    value: &serde_json::Value,
+    target_params: TargetParams<'_>,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[EnumDef],
+) -> Option<String> {
+    let TypeRef::Named(declared) = &target_params.param_for(&arg.name, index)?.ty else {
+        return None;
+    };
+    if let Some(text) = value.as_str()
+        && let Some(enum_def) = enums
+            .iter()
+            .find(|enum_def| &enum_def.name == declared && enum_def.variants.iter().all(|v| v.fields.is_empty()))
+    {
+        let variant = enum_def
+            .variants
+            .iter()
+            .find(|variant| csharp_enum_wire_value(enum_def, variant) == text)?;
+        return Some(format!(
+            "{}.{}",
+            csharp_type_name(declared),
+            to_csharp_name(&variant.name)
+        ));
+    }
+    if value.is_object() && type_defs.iter().any(|type_def| &type_def.name == declared) {
+        let json = serde_json::to_string(value).unwrap_or_default();
+        return Some(format!(
+            "JsonSerializer.Deserialize<{}>(\"{}\", ConfigOptions)!",
+            csharp_type_name(declared),
+            escape_csharp(&json)
+        ));
+    }
+    None
+}
+
+/// The JSON value `backends::csharp::gen_bindings::enums::gen_enum` stamps onto a variant's
+/// `[JsonPropertyName]`. Duplicating its precedence here (explicit `serde(rename)` first, then
+/// `wire_variant_value` under the enum's `rename_all`) is what keeps the e2e member lookup and the
+/// emitted binding from disagreeing about which variant a fixture value names. ~keep
+fn csharp_enum_wire_value(enum_def: &EnumDef, variant: &crate::core::ir::EnumVariant) -> String {
+    variant
+        .serde_rename
+        .clone()
+        .unwrap_or_else(|| wire_variant_value(&variant.name, None, enum_def.serde_rename_all.as_deref()))
 }
 
 /// Check if a type can be default-constructed in C#.

@@ -244,6 +244,7 @@ fn dart_emit_setenv_forces_overwrite_and_checks_return_code() {
         &config,
         &type_defs,
         &enums,
+        &[],
     );
 
     // Verify that the generated setenv call uses overwrite=1 (third argument).
@@ -309,6 +310,7 @@ fn dart_error_assertion_with_declared_value_checks_message_and_type() {
         &config,
         &[],
         &[],
+        &[],
     );
 
     assert!(
@@ -354,6 +356,7 @@ fn dart_error_assertion_without_declared_value_is_byte_identical() {
         &config,
         &[],
         &[],
+        &[],
     );
 
     assert!(output.contains("throwsA(anything)"));
@@ -392,6 +395,7 @@ fn dart_error_assertion_escapes_declared_value_for_dart_string_literal() {
         &dart_first_class_map,
         &[],
         &config,
+        &[],
         &[],
         &[],
     );
@@ -439,6 +443,7 @@ fn dart_test_file_emits_wrapper_for_call_config_trait_argument() {
         &[],
         &config,
         &type_defs,
+        &[],
         &[],
     );
     assert!(output.contains("Future<TestTraitDartImpl> _createTestStubRegisterBackendWrapper()"));
@@ -521,6 +526,7 @@ fn dart_equals_on_an_error_field_is_named_instead_of_dropped() {
         &config,
         &[],
         &[],
+        &[],
     );
 
     // Positive first: the error block really rendered.
@@ -570,8 +576,141 @@ fn dart_a_lone_error_assertion_renders_no_marker() {
         &config,
         &[],
         &[],
+        &[],
     );
 
     assert!(output.contains("throwsA("), "the error block must render: {output}");
     assert!(!output.contains("has no accessor for error field"), "{output}");
+}
+
+// --- typed-argument lowering (alef #227) -----------------------------------------------------
+
+/// Render one fixture through the real dart test-file path with an `args` entry that has the
+/// default `arg_type` (`"string"`) -- the shape that used to emit a quoted literal regardless of
+/// what the parameter it fills is declared as.
+///
+/// `functions` is the only thing that varies between the two states below: an empty slice with an
+/// empty `type_defs` is exactly `TargetParams::IrAbsent`, the state every unconverted caller is in.
+fn render_dart_enum_arg_fixture(
+    functions: &[crate::core::ir::FunctionDef],
+    enums: &[crate::core::ir::EnumDef],
+) -> String {
+    let mut fixture = make_fixture("upload");
+    fixture.input = serde_json::json!({ "purpose": "fine-tune" });
+
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "upload_file".into();
+    e2e_config.call.args = vec![crate::e2e::config::ArgMapping {
+        name: "purpose".to_string(),
+        field: "input.purpose".to_string(),
+        arg_type: "string".to_string(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    }];
+
+    super::test_file::render_test_file(
+        "smoke",
+        &[&fixture],
+        &e2e_config,
+        "dart",
+        "samplecli",
+        "RustLib",
+        "RustLibBridge",
+        &crate::e2e::field_access::DartFirstClassMap::default(),
+        &[],
+        &crate::core::config::ResolvedCrateConfig::default(),
+        &[],
+        enums,
+        functions,
+    )
+}
+
+fn file_purpose_enum() -> crate::core::ir::EnumDef {
+    crate::core::ir::EnumDef {
+        name: "FilePurpose".to_string(),
+        has_serde: true,
+        serde_rename_all: Some("kebab-case".to_string()),
+        variants: vec![crate::core::ir::EnumVariant {
+            name: "FineTune".to_string(),
+            ..crate::core::ir::EnumVariant::default()
+        }],
+        ..crate::core::ir::EnumDef::default()
+    }
+}
+
+fn upload_file_taking(type_name: &str) -> crate::core::ir::FunctionDef {
+    crate::core::ir::FunctionDef {
+        name: "upload_file".to_string(),
+        params: vec![crate::core::ir::ParamDef {
+            name: "purpose".to_string(),
+            ty: TypeRef::Named(type_name.to_string()),
+            ..crate::core::ir::ParamDef::default()
+        }],
+        return_type: TypeRef::Named("UploadedFile".to_string()),
+        ..crate::core::ir::FunctionDef::default()
+    }
+}
+
+/// The defect: a fixture string bound for an enum-typed parameter stayed a *string literal*, which
+/// the Dart analyzer rejects against a generated `enum`. The variant here is
+/// `rename_all = "kebab-case"`, the case a naive camel-casing of the wire value would get wrong. ~keep
+#[test]
+fn a_string_value_for_an_ir_enum_parameter_names_the_generated_dart_variant() {
+    let output = render_dart_enum_arg_fixture(&[upload_file_taking("FilePurpose")], &[file_purpose_enum()]);
+
+    assert!(
+        output.contains("FilePurpose.fineTune"),
+        "expected the generated Dart enum variant, got:\n{output}"
+    );
+    assert!(
+        !output.contains("'fine-tune'"),
+        "the string literal must be replaced, not accompanied, got:\n{output}"
+    );
+}
+
+/// The other half of the three-state trade. Identical fixture, arg and enum; only the core IR is
+/// withheld. The pre-seam lowering must survive verbatim, or every IR-less caller regresses
+/// silently -- which is the whole reason `TargetParams` has three states and not two. ~keep
+#[test]
+fn the_same_string_value_still_renders_as_a_dart_literal_when_the_ir_is_absent() {
+    let output = render_dart_enum_arg_fixture(&[], &[file_purpose_enum()]);
+
+    assert!(
+        output.contains("'fine-tune'"),
+        "the IR-less path must keep today's string literal, got:\n{output}"
+    );
+    assert!(
+        !output.contains("FilePurpose.fineTune"),
+        "an absent IR licenses no type claim, got:\n{output}"
+    );
+}
+
+/// A wire value naming no variant is very often a deliberately invalid value driving the binding's
+/// own validation, so it keeps its literal rather than gaining an invented variant. ~keep
+#[test]
+fn an_unmatched_dart_enum_wire_value_keeps_its_string_literal() {
+    let mut unmatched = file_purpose_enum();
+    unmatched.variants[0].name = "Assistants".to_string();
+    let output = render_dart_enum_arg_fixture(&[upload_file_taking("FilePurpose")], &[unmatched]);
+
+    assert!(
+        output.contains("'fine-tune'"),
+        "an unmatched wire value must keep its literal, got:\n{output}"
+    );
+}
+
+/// A declared type that is not an enum at all is not a licence to invent a variant reference: it
+/// may be a newtype the Dart binding flattens to a `String`. ~keep
+#[test]
+fn a_declared_type_that_is_not_an_ir_enum_keeps_the_existing_dart_lowering() {
+    let output = render_dart_enum_arg_fixture(&[upload_file_taking("PromptText")], &[file_purpose_enum()]);
+
+    assert!(
+        output.contains("'fine-tune'"),
+        "a non-enum declared type must keep today's literal, got:\n{output}"
+    );
 }

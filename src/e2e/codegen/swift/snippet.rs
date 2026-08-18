@@ -5,12 +5,28 @@ use crate::e2e::fixture::Fixture;
 use anyhow::{Result, bail};
 use heck::ToUpperCamelCase;
 
+/// Render a Swift documentation snippet without any core IR to consult.
+///
+/// Kept as the five-argument entry point every existing caller and test already uses: with no
+/// `functions` the seam resolves to `TargetParams::IrAbsent`, which is exactly the state this path
+/// was always in, so its output is unchanged by the seam. ~keep
 pub(super) fn render(
     fixture: &Fixture,
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+) -> Result<String> {
+    render_with_ir(fixture, e2e_config, config, type_defs, enums, &[])
+}
+
+pub(super) fn render_with_ir(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<String> {
     let mut snippet_fixture = fixture.clone();
     // Naming a credential variable is what selects `test_method`'s environment-reading
@@ -72,6 +88,7 @@ pub(super) fn render(
         config,
         type_defs,
         enums,
+        functions,
     );
     let body_line_count = method.lines().count().saturating_sub(3);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
@@ -378,6 +395,7 @@ mod tests {
             &crate::e2e::field_access::SwiftFirstClassMap::default(),
             "Sample",
             &ResolvedCrateConfig::default(),
+            &[],
             &[],
             &[],
         );

@@ -145,6 +145,30 @@ pub(crate) fn record_refusal(refusal: &InertExample) {
     INERT_LEDGER.with(|ledger| ledger.borrow_mut().push(refusal.clone()));
 }
 
+/// Carry the rendered skip markers into a refusal body, then append the caller's own refusal
+/// statement.
+///
+/// ~keep The markers are the only record IN THE GENERATED FILE of what the fixture asked for and
+/// why it could not run, so a refusal that dropped them would restore exactly the silence they
+/// were added to break. Only the trailing statement differs per language — a FAILING assertion for
+/// [`InertCause::UnresolvedFieldPath`], the language's own pending/skip construct otherwise — so
+/// that half stays with the backend and this half is not hand-copied sixteen times.
+pub(crate) fn refusal_body(markers: &str, statement: &str) -> String {
+    let mut out = String::new();
+    for line in markers.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out.push_str(statement);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
 /// The inert verdict for one fixture's rendered assertion body, or `None` when the example still
 /// asserts something.
 ///
@@ -186,7 +210,10 @@ pub(crate) fn inert_verdict(
 
 #[cfg(test)]
 mod tests {
-    use super::{InertCause, has_executable_line, inert_summary, inert_verdict, record_refusal, take_inert_examples};
+    use super::{
+        InertCause, has_executable_line, inert_summary, inert_verdict, record_refusal, refusal_body,
+        take_inert_examples,
+    };
     use crate::e2e::codegen::field_skip::FieldSkip;
     use crate::e2e::fixture::Assertion;
 
@@ -262,6 +289,21 @@ mod tests {
         assert!(has_executable_line("\t\tAssert.Equal(1, x);\n"));
         assert!(!has_executable_line("    // skipped: nothing here\n\n"));
         assert!(!has_executable_line("  /* skipped: nothing here */\n"));
+    }
+
+    /// The markers are the only record IN THE GENERATED FILE of what the fixture asked for, so a
+    /// refusal that dropped them would restore exactly the silence they were added to break. ~keep
+    #[test]
+    fn a_refusal_body_carries_every_marker_line_before_the_statement() {
+        let body = refusal_body(
+            "    // skipped: first\n\n    // skipped: second   \n",
+            "    skip 'nothing left to assert'",
+        );
+
+        assert_eq!(
+            body, "    // skipped: first\n    // skipped: second\n    skip 'nothing left to assert'\n",
+            "blank lines are dropped, trailing space trimmed, and the statement lands last"
+        );
     }
 
     #[test]

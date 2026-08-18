@@ -1,6 +1,7 @@
 use crate::codegen::keywords::swift_ident;
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::inert_example::{self, InertCause, InertExample};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::{FieldResolver, SwiftFirstClassMap};
 use crate::e2e::fixture::Fixture;
@@ -59,6 +60,7 @@ pub(super) fn render_test_method(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) {
     // Resolve per-fixture call config.
     let call_config = e2e_config.resolve_call_for_fixture(
@@ -94,7 +96,9 @@ pub(super) fn render_test_method(
         .and_then(|o| o.client_factory.as_deref())
         .or(global_client_factory);
     let result_var = call_config.effective_result_var();
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params(lang);
     let args = recipe.args;
     // Per-call flags: base call flag OR per-language override OR global flag.
     // Also treat the call as simple when *any* language override marks it as bytes.
@@ -293,6 +297,7 @@ pub(super) fn render_test_method(
         arg_name_map,
         streaming_request_type,
         enums,
+        target_params,
     );
     // Prepend visitor class declarations (before any setup lines that reference the handle).
     if !visitor_setup_lines.is_empty() {
@@ -531,6 +536,11 @@ pub(super) fn render_test_method(
         body_buffer.push_str(&assertion_out);
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(&body_buffer, "swift", &fixture.id, &fixture.assertions);
+    // ~keep Read here, but applied only after the call-emission decision below, so the
+    // `let result =` vs `_ =` choice is still made from the assertions that actually rendered.
+    // Swift has no formatter that objects to a body which runs a real stream and then ends on a
+    // lone `skipped:` comment, so this shape shipped green and would have kept shipping green.
+    let refusal = inert_example::inert_verdict(&body_buffer, "swift", &fixture.id, &fixture.assertions);
 
     // Decide how to emit the call based on return type and whether result is referenced.
     // - void returns: emit bare call
@@ -551,6 +561,15 @@ pub(super) fn render_test_method(
         let _ = writeln!(out, "        let {result_var} = {call_expr}");
     } else {
         let _ = writeln!(out, "        _ = {call_expr}");
+    }
+
+    // ~keep The call above is kept even when the example is refused: it is the one thing here that
+    // can still fail on its own (every generated test method is `throws`, so a throwing call fails
+    // the test), and deleting it would remove coverage that runs today. What is replaced is the
+    // part that made the method report a PASS while checking nothing.
+    if let Some(refusal) = &refusal {
+        inert_example::record_refusal(refusal);
+        body_buffer = render_swift_refusal(&body_buffer, refusal);
     }
 
     // Emit the buffered body (assertions and collect snippet).
@@ -576,6 +595,26 @@ pub(super) fn render_test_method(
     }
 
     let _ = writeln!(out, "    }}");
+}
+
+/// The body emitted in place of one whose declared assertions all funnelled into skip markers.
+///
+/// ~keep Which refusal is emitted follows who can fix it, exactly as in `ruby/examples.rs`. An
+/// unresolved field path is the consumer's to repair, so it gets `XCTFail` — under the default
+/// strict setting the run has already failed, and the deliberately disarmed run must still not go
+/// green. Everything else is alef's generator debt or a swift-bridge limit that no consumer edit
+/// clears; failing their suite for it would only force a blanket opt-out, so it gets `XCTSkipIf`,
+/// which XCTest reports as skipped and never as a pass. Both spellings are already emitted
+/// elsewhere in this file, so neither introduces a construct the generated project cannot build.
+fn render_swift_refusal(markers: &str, refusal: &InertExample) -> String {
+    let reason = escape_swift(&refusal.reason());
+    let statement = match refusal.cause {
+        InertCause::UnresolvedFieldPath => format!("        XCTFail(\"{reason}\")\n"),
+        InertCause::AwaitedOrLimited | InertCause::RenderedNothing => {
+            format!("        try XCTSkipIf(true, \"{reason}\")\n")
+        }
+    };
+    inert_example::refusal_body(markers, &statement)
 }
 
 /// Returns `true` when the assertion `field_path` traverses a field or resolves to a
@@ -644,4 +683,166 @@ fn is_assertion_field_swift_excluded(
         current_type = next;
     }
     false
+}
+
+#[cfg(test)]
+mod inert_example_refusal_tests {
+    use super::render_test_method;
+    use crate::e2e::codegen::inert_example::take_inert_examples;
+    use crate::e2e::config::{CallConfig, E2eConfig};
+    use crate::e2e::field_access::SwiftFirstClassMap;
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn assertion(assertion_type: &str, field: &str) -> Assertion {
+        Assertion {
+            assertion_type: assertion_type.to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::json!("x")),
+            ..Default::default()
+        }
+    }
+
+    /// A non-empty `result_fields` set is what arms the availability oracle: with it empty the
+    /// resolver is deliberately permissive and no field is ever rejected. ~keep
+    fn field_gated_e2e_config() -> E2eConfig {
+        E2eConfig {
+            result_fields: std::collections::HashSet::from(["content".to_string()]),
+            call: CallConfig {
+                function: "process".to_string(),
+                result_var: "result".to_string(),
+                returns_result: true,
+                ..CallConfig::default()
+            },
+            ..E2eConfig::default()
+        }
+    }
+
+    fn render(assertions: Vec<Assertion>, fixture_id: &str) -> String {
+        let fixture = Fixture {
+            id: fixture_id.to_string(),
+            description: "swift refusal fixture".to_string(),
+            assertions,
+            ..Fixture::default()
+        };
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            &field_gated_e2e_config(),
+            "process",
+            "result",
+            &[],
+            false,
+            None,
+            &SwiftFirstClassMap::default(),
+            "SampleModule",
+            &crate::core::config::ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        );
+        out
+    }
+
+    /// CONTROL, asserted first: a field the oracle resolves still renders its real check, and no
+    /// refusal is recorded. An over-broad refusal here would silently delete coverage that runs
+    /// today — the same defect pointing the other way. ~keep
+    #[test]
+    fn a_resolvable_assertion_is_published_unchanged() {
+        let _ = take_inert_examples();
+
+        let out = render(vec![assertion("equals", "content")], "swift_control");
+
+        assert!(
+            out.contains("XCTAssert"),
+            "the renderable assertion must still be emitted, got:\n{out}"
+        );
+        assert!(
+            !out.contains("XCTSkipIf(true, \"alef "),
+            "a live example must not be refused, got:\n{out}"
+        );
+        assert!(
+            take_inert_examples().is_empty(),
+            "nothing may be recorded for a live example"
+        );
+    }
+
+    /// The blocker: every declared assertion funnels into a skip marker, so the method called the
+    /// binding and then checked nothing. Swift has no formatter that objects, so this shipped as a
+    /// permanent green. It must now report as skipped, and carry the markers with it.
+    #[test]
+    fn an_example_whose_every_assertion_skips_is_refused_as_a_skipped_test() {
+        let _ = take_inert_examples();
+
+        let out = render(
+            vec![
+                assertion("equals", "nonexistent_field"),
+                assertion("equals", "another_missing_field"),
+            ],
+            "swift_all_skipped",
+        );
+
+        assert!(
+            out.contains("XCTFail(\"alef resolved no assertion for fixture `swift_all_skipped`"),
+            "an unresolved field path must be refused with a FAILING check, got:\n{out}"
+        );
+        assert!(
+            out.contains("skipped:") && out.contains("nonexistent_field") && out.contains("another_missing_field"),
+            "the markers must be carried into the refusal, got:\n{out}"
+        );
+        assert!(
+            out.contains("SampleModule.process("),
+            "the call itself still fails on throw and must not be deleted, got:\n{out}"
+        );
+        let refusals = take_inert_examples();
+        assert_eq!(refusals.len(), 1, "the refusal must be recorded once for the summary");
+        assert_eq!(refusals[0].fixture_id, "swift_all_skipped");
+    }
+
+    /// alef's own generator debt is not the consumer's to fix, so it gets `XCTSkipIf` rather than
+    /// `XCTFail`: failing a consumer's build for a gap no fixture edit clears is what forces the
+    /// blanket opt-out this whole mechanism exists to avoid.
+    #[test]
+    fn generator_debt_is_refused_as_a_skip_rather_than_a_failure() {
+        let _ = take_inert_examples();
+
+        let out = render(
+            vec![Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("nonexistent_field".to_string()),
+                value: Some(serde_json::json!("x")),
+                skip: Some(crate::e2e::fixture::AssertionSkip::All(true)),
+                ..Default::default()
+            }],
+            "swift_generator_debt",
+        );
+
+        assert!(
+            out.contains("XCTSkipIf(true, \"alef rendered no runnable expectation for fixture `swift_generator_debt`"),
+            "acknowledged debt must be parked as skipped, got:\n{out}"
+        );
+        assert!(
+            !out.contains("XCTFail(\"alef "),
+            "alef's own debt must not fail a consumer's suite, got:\n{out}"
+        );
+        assert_eq!(take_inert_examples().len(), 1);
+    }
+
+    /// CONTROL: a fixture that declares NO assertions is the deliberate "just call it" smoke
+    /// contract and must be published exactly as before. ~keep
+    #[test]
+    fn a_fixture_with_no_declared_assertions_keeps_its_smoke_test_shape() {
+        let _ = take_inert_examples();
+
+        let out = render(Vec::new(), "swift_smoke_only");
+
+        assert!(
+            out.contains("SampleModule.process("),
+            "the call must still be emitted, got:\n{out}"
+        );
+        assert!(
+            !out.contains("XCTSkipIf(true, \"alef ") && !out.contains("XCTFail(\"alef "),
+            "a fixture with no assertions must never be refused, got:\n{out}"
+        );
+        assert!(take_inert_examples().is_empty());
+    }
 }

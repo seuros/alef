@@ -1,4 +1,6 @@
 use crate::core::config::ResolvedCrateConfig;
+use crate::core::ir::{EnumDef, TypeRef};
+use crate::e2e::codegen::call_ir::TargetParams;
 use crate::e2e::fixture::Fixture;
 use heck::ToLowerCamelCase;
 
@@ -37,6 +39,7 @@ pub(super) fn build_args_and_setup(
     arg_name_map: Option<&std::collections::HashMap<String, String>>,
     streaming_request_type: Option<&str>,
     enums: &[crate::core::ir::EnumDef],
+    target_params: TargetParams<'_>,
 ) -> (Vec<String>, String) {
     if args.is_empty() {
         return (Vec::new(), String::new());
@@ -477,6 +480,10 @@ pub(super) fn build_args_and_setup(
                 parts.push((idx, default_val));
             }
             Some(v) => {
+                if let Some(typed) = ir_typed_swift_expression(arg, idx, v, target_params, enums) {
+                    parts.push((idx, typed));
+                    continue;
+                }
                 parts.push((idx, json_to_swift(v)));
             }
         }
@@ -507,6 +514,61 @@ pub(super) fn build_args_and_setup(
         .collect::<Vec<_>>()
         .join(", ");
     (setup_lines, args_str)
+}
+
+/// The Swift expression for an argument whose *declared* parameter type the core IR resolved, or
+/// `None` to keep the existing `arg_type`-only lowering.
+///
+/// This is the Swift answer to the shared question [`TargetParams`] poses, not a shared verdict.
+/// `ArgMapping::arg_type` defaults to `"string"`, so before the seam a fixture string bound for an
+/// enum-typed parameter reached [`json_to_swift`] and came out as a *quoted string literal*, which
+/// `swiftc` rejects against a `public enum` parameter -- Swift has no implicit `String` -> enum
+/// conversion, not even for a `RawRepresentable` one.
+///
+/// The replacement names the case, and both halves are read off
+/// `backends::swift::gen_bindings::enums::emit_enum`: it spells the case
+/// `swift_source_ident(variant.name.to_lower_camel_case())` (so a case colliding with a Swift
+/// keyword keeps its backticks) and gives it the raw value `unit_enum_wire_value`, i.e. the
+/// variant's `serde(rename)` if it has one and the enum's `rename_all` spelling otherwise. Naming
+/// the case rather than emitting `T(rawValue:)!` keeps the failure at compile time, where an
+/// unrecognised value is visible, instead of trapping at test run time. ~keep
+///
+/// Deliberately narrow. Only a bare `TypeRef::Named` qualifies: an `Optional<T>`/`Vec<T>` parameter
+/// wants a wrapper this expression does not build. Only a *unit-only enum with serde* qualifies --
+/// `emit_enum` renders `has_serde: false` as a `typealias` onto the opaque `RustBridge` type and a
+/// data-carrying enum as a `Codable` enum with associated values, and neither takes a bare case
+/// reference built from a string. And a wire value naming no variant keeps its literal: a fixture
+/// may be feeding a deliberately invalid value to exercise the binding's own validation. ~keep
+///
+/// **Not** extended to DTO-typed parameters. The Swift emitter renders a struct either as a
+/// first-class `public struct T: Codable` or as a `typealias T = RustBridge.T` decoded through a
+/// generated `tFromJson` helper, and which one it picks is a fixed point over the *whole*
+/// `ApiSurface` (`gen_bindings::dto::compute_first_class_dto_names`) that this seam is not handed.
+/// Guessing between `JSONDecoder().decode(T.self, ...)` and `try Module.tFromJson(...)` would trade
+/// one compile error for another, so the DTO arm stays on today's lowering. ~keep
+fn ir_typed_swift_expression(
+    arg: &crate::e2e::config::ArgMapping,
+    index: usize,
+    value: &serde_json::Value,
+    target_params: TargetParams<'_>,
+    enums: &[EnumDef],
+) -> Option<String> {
+    let TypeRef::Named(declared) = &target_params.param_for(&arg.name, index)?.ty else {
+        return None;
+    };
+    let text = value.as_str()?;
+    let enum_def = enums.iter().find(|enum_def| {
+        &enum_def.name == declared && enum_def.has_serde && enum_def.variants.iter().all(|v| v.fields.is_empty())
+    })?;
+    let variant = enum_def.variants.iter().find(|variant| {
+        crate::codegen::naming::wire_variant_value(
+            &variant.name,
+            variant.serde_rename.as_deref(),
+            enum_def.serde_rename_all.as_deref(),
+        ) == text
+    })?;
+    let case_name = crate::backends::swift::naming::swift_source_ident(&variant.name.to_lower_camel_case());
+    Some(format!("{declared}.{case_name}"))
 }
 
 fn docs_json_expression(
@@ -580,5 +642,148 @@ mod tests {
         assert!(setup[1].contains("requestFile0.map(String.init)"));
         assert!(expression.contains("replacingOccurrences"), "{expression}");
         assert!(expression.contains("requestFile0Json"), "{expression}");
+    }
+
+    // --- typed-argument lowering (alef #227) --------------------------------------------------
+
+    use super::build_args_and_setup;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::core::ir::{EnumDef, EnumVariant, ParamDef, TypeRef};
+    use crate::e2e::codegen::call_ir::TargetParams;
+    use crate::e2e::config::ArgMapping;
+    use crate::e2e::fixture::Fixture;
+
+    /// An `args` entry with the default `arg_type` (`"string"`) -- the shape that used to send
+    /// every value through `json_to_swift` regardless of the declared parameter type. ~keep
+    fn default_typed_arg(name: &str) -> ArgMapping {
+        ArgMapping {
+            name: name.to_string(),
+            field: format!("input.{name}"),
+            arg_type: "string".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    fn mode_enum() -> EnumDef {
+        EnumDef {
+            name: "FilePurpose".to_string(),
+            has_serde: true,
+            serde_rename_all: Some("kebab-case".to_string()),
+            variants: vec![EnumVariant {
+                name: "FineTune".to_string(),
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        }
+    }
+
+    fn swift_args_for(enums: &[EnumDef], target_params: TargetParams<'_>) -> String {
+        let args = vec![default_typed_arg("purpose")];
+        let fixture = Fixture {
+            id: "typed".to_string(),
+            input: serde_json::json!({ "purpose": "fine-tune" }),
+            ..Fixture::default()
+        };
+        let (_setup, args_str) = build_args_and_setup(
+            &fixture.input,
+            &args,
+            &fixture.id,
+            false,
+            "convert",
+            None,
+            None,
+            None,
+            None,
+            true,
+            "Sample",
+            &[],
+            &ResolvedCrateConfig::default(),
+            &[],
+            &fixture,
+            None,
+            None,
+            enums,
+            target_params,
+        );
+        args_str
+    }
+
+    /// The defect: a fixture string bound for an enum-typed parameter used to stay a *string
+    /// literal*, which `swiftc` rejects against a `public enum FilePurpose: String`. The variant
+    /// here is `rename_all = "kebab-case"`, the case a naive camel-casing of the wire value would
+    /// get wrong. ~keep
+    #[test]
+    fn a_string_value_for_an_ir_enum_parameter_names_the_generated_case() {
+        let params = [ParamDef {
+            name: "purpose".to_string(),
+            ty: TypeRef::Named("FilePurpose".to_string()),
+            ..ParamDef::default()
+        }];
+        assert_eq!(
+            swift_args_for(&[mode_enum()], TargetParams::Known(&params)),
+            "FilePurpose.fineTune"
+        );
+    }
+
+    /// The other half of the three-state trade. Identical arg and fixture value, `IrAbsent`
+    /// instead of `Known`: the pre-seam lowering must survive verbatim, or every IR-less caller
+    /// regresses silently. ~keep
+    #[test]
+    fn the_same_string_value_still_renders_as_a_literal_when_the_ir_is_absent() {
+        assert_eq!(swift_args_for(&[mode_enum()], TargetParams::IrAbsent), "\"fine-tune\"");
+    }
+
+    /// A wire value naming no variant is very often a deliberately invalid value driving the
+    /// binding's own validation, so it keeps its literal rather than gaining an invented case. ~keep
+    #[test]
+    fn an_unmatched_enum_wire_value_keeps_its_string_literal() {
+        let params = [ParamDef {
+            name: "purpose".to_string(),
+            ty: TypeRef::Named("FilePurpose".to_string()),
+            ..ParamDef::default()
+        }];
+        let mut unmatched = mode_enum();
+        unmatched.variants[0].name = "Assistants".to_string();
+        assert_eq!(
+            swift_args_for(&[unmatched], TargetParams::Known(&params)),
+            "\"fine-tune\""
+        );
+    }
+
+    /// `emit_enum` renders a `has_serde: false` enum as a `typealias` onto the opaque bridge type,
+    /// which has no such case to name, so the seam must decline. ~keep
+    #[test]
+    fn a_non_serde_enum_keeps_the_existing_lowering() {
+        let params = [ParamDef {
+            name: "purpose".to_string(),
+            ty: TypeRef::Named("FilePurpose".to_string()),
+            ..ParamDef::default()
+        }];
+        let mut non_serde = mode_enum();
+        non_serde.has_serde = false;
+        assert_eq!(
+            swift_args_for(&[non_serde], TargetParams::Known(&params)),
+            "\"fine-tune\""
+        );
+    }
+
+    /// An `Optional<T>` parameter wants a wrapper this expression does not build, so the seam must
+    /// decline rather than unwrap to `T` and trade one compile error for another. ~keep
+    #[test]
+    fn a_wrapped_named_parameter_is_left_to_the_existing_lowering() {
+        let params = [ParamDef {
+            name: "purpose".to_string(),
+            ty: TypeRef::Optional(Box::new(TypeRef::Named("FilePurpose".to_string()))),
+            ..ParamDef::default()
+        }];
+        assert_eq!(
+            swift_args_for(&[mode_enum()], TargetParams::Known(&params)),
+            "\"fine-tune\""
+        );
     }
 }
