@@ -207,23 +207,6 @@ pub(super) fn render_test_method(
         String::new()
     };
 
-    // Check if this test needs ObjectMapper deserialization for json_object args.
-    // Uses `resolve_field` so that `field = "input"` resolves to the whole fixture
-    // input (and not a nested key called "input"), matching dart/swift behavior.
-    // Also include tests with array element types, which are deserialized inline.
-    let needs_deser = streaming_request.is_some()
-        || args.iter().any(|arg| {
-            let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
-            arg.arg_type == "json_object"
-                && !val.is_null()
-                && crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, val).is_some()
-        })
-        || args.iter().any(|arg| {
-            arg.arg_type == "json_object"
-                && arg.element_type.is_some()
-                && !crate::e2e::codegen::resolve_field(&fixture.input, &arg.field).is_null()
-        });
-
     // Merge per-call kotlin enum_fields (HashMap key = field path, value = enum type name)
     // into the global fields_enum set so that call-specific enum-typed result fields
     // (e.g. `status` on BatchObject) route through `.getValue()` in assertions even
@@ -298,64 +281,11 @@ pub(super) fn render_test_method(
     }
     let _ = writeln!(out, "        // {description}");
 
-    // Collect ObjectMapper deserialization bindings for json_object args.
-    // Object args use the configured `options_type`. Array args carrying
-    // `element_type` are emitted as inline List<T> literals below
-    // (build_args_and_setup), so no deser binding is needed.
-    //
-    // For error tests we want these `val xxx = MAPPER.readValue(...)` lines
-    // INSIDE the assertFailsWith block, so that Jackson validation errors on
-    // the request literal (e.g. an unknown enum like `purpose: "invalid"`)
-    // are caught by the test instead of bubbling up as test failures. So
-    // collect into a Vec and let the caller decide where to emit them.
-    let mut deser_lines: Vec<String> = Vec::new();
-    if needs_deser {
-        for arg in args {
-            if arg.arg_type != "json_object" {
-                continue;
-            }
-            let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
-            if val.is_null() {
-                continue;
-            }
-            // Skip arrays that we materialise inline rather than deserialising via Jackson.
-            if val.is_array() && arg.element_type.is_some() {
-                continue;
-            }
-            let Some(opts_type) = crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, val)
-            else {
-                continue;
-            };
-            let normalized = crate::e2e::codegen::transform_json_keys_for_language(val, "snake_case");
-            let json_str = serde_json::to_string(&normalized).unwrap_or_default();
-            let var_name = &arg.name;
-            if crate::e2e::codegen::value_contains_mock_url_placeholder(&normalized) {
-                let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
-                deser_lines.push(format!(
-                    "val {var_name}MockBaseUrl = System.getProperty(\"mockServer.{fixture_id}\", System.getenv(\"{env_key}\") ?: ((System.getProperty(\"mockServerUrl\", System.getenv(\"MOCK_SERVER_URL\") ?: \"\") ?: \"\") + \"/fixtures/{fixture_id}\"))",
-                    fixture_id = fixture.id,
-                ));
-                deser_lines.push(format!(
-                    "val {var_name}Json = \"{}\".replace(\"{}\", {var_name}MockBaseUrl)",
-                    crate::e2e::escape::escape_kotlin(&json_str),
-                    crate::e2e::escape::escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER)
-                ));
-                deser_lines.push(format!(
-                    "val {var_name} = MAPPER.readValue({var_name}Json, {opts_type}::class.java)"
-                ));
-            } else {
-                deser_lines.push(format!(
-                    "val {var_name} = MAPPER.readValue(\"{}\", {opts_type}::class.java)",
-                    crate::e2e::escape::escape_kotlin(&json_str)
-                ));
-            }
-        }
-    }
-    if !expects_error {
-        for line in &deser_lines {
-            let _ = writeln!(out, "        {line}");
-        }
-    }
+    // ObjectMapper deserialization bindings for json_object args (`val xxx =
+    // MAPPER.readValue(...)`) are owned entirely by `build_args_and_setup`
+    // (see args.rs), which pushes them onto `setup_lines` below. Do not
+    // duplicate that here — see the `setup_lines` doc comment on
+    // `build_args_and_setup` for why it must be the sole emitter.
 
     let call_args: Vec<_> = if streaming_owner_handle.is_some() && streaming_request.is_some() {
         args.iter().filter(|arg| arg.arg_type == "handle").cloned().collect()
@@ -442,9 +372,6 @@ pub(super) fn render_test_method(
                 format!("{call_receiver}.{function_name}({args_str})")
             };
             let _ = writeln!(out, "        assertFailsWith<Exception> {{");
-            for line in &deser_lines {
-                let _ = writeln!(out, "            {line}");
-            }
             for line in &setup_lines {
                 let _ = writeln!(out, "            {line}");
             }
@@ -514,9 +441,6 @@ pub(super) fn render_test_method(
         // Wrap setup + call in assertFailsWith so validation errors thrown
         // during engine creation are also caught (mirrors Java's assertThrows).
         let _ = writeln!(out, "        assertFailsWith<Exception> {{");
-        for line in &deser_lines {
-            let _ = writeln!(out, "            {line}");
-        }
         for line in &setup_lines {
             let _ = writeln!(out, "            {line}");
         }
@@ -930,6 +854,148 @@ mod tests {
         assert!(
             !out.contains("null"),
             "must not have emitted a silent `null` placeholder before failing, got:\n{out}"
+        );
+    }
+
+    fn json_object_arg(name: &str) -> ArgMapping {
+        ArgMapping {
+            name: name.to_string(),
+            field: format!("input.{name}"),
+            arg_type: "json_object".to_string(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    /// Regression test for alef #219: `render_test_method` used to precompute
+    /// its own `val request = MAPPER.readValue(...)` binding (the now-removed
+    /// `deser_lines` mechanism) *in addition to* the identical binding
+    /// `build_args_and_setup` (args.rs) independently pushes onto
+    /// `setup_lines`. Every generated Kotlin test with a `json_object` arg
+    /// redeclared the same `val` twice, which Kotlin rejects as "Conflicting
+    /// declarations" — 100% of the kotlin_android e2e suite failed to
+    /// compile.
+    ///
+    /// This drives the interaction between both write sites at once: calling
+    /// `render_test_method` (test_method.rs) exercises the removed
+    /// `deser_lines` code path, and it internally calls
+    /// `build_args_and_setup` (args.rs), which is the sole remaining
+    /// emitter. A test that called `build_args_and_setup` directly (bypassing
+    /// `render_test_method`) would never have observed the duplicate, since
+    /// args.rs alone only ever emitted the binding once — only the pair
+    /// together produced it twice. ~keep
+    #[test]
+    fn json_object_arg_emits_exactly_one_request_binding() {
+        let call = CallConfig {
+            function: "process".to_string(),
+            result_var: "result".to_string(),
+            args: vec![json_object_arg("request")],
+            ..CallConfig::default()
+        };
+        let fixture = Fixture {
+            id: "process_request".to_string(),
+            description: "process a request".to_string(),
+            input: serde_json::json!({ "request": { "kind": "text", "value": "hello" } }),
+            ..Fixture::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+        let config = ResolvedCrateConfig::default();
+
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "Facade",
+            "",
+            "",
+            &[],
+            Some("Request"),
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &config,
+            &[],
+        )
+        .expect("render_test_method succeeds");
+
+        // Property 1: the fixture must actually produce a request binding at all —
+        // otherwise the `== 1` count below would pass vacuously.
+        assert!(
+            out.contains("val request = MAPPER.readValue("),
+            "expected a request deserialization binding, got:\n{out}"
+        );
+        let binding_count = out.matches("val request =").count();
+        assert_eq!(
+            binding_count, 1,
+            "expected exactly one `val request =` binding, got {binding_count}:\n{out}"
+        );
+    }
+
+    /// Same regression as `json_object_arg_emits_exactly_one_request_binding`, but
+    /// for the `expects_error` path: both write sites used to place their binding
+    /// INSIDE the `assertFailsWith` block (so Jackson validation errors on the
+    /// request literal are caught by the test), and both did so independently —
+    /// the duplicate reproduced there too, on a code path the happy-path test
+    /// above never touches (`expects_error` selects an entirely different emission
+    /// branch in test_method.rs). ~keep
+    #[test]
+    fn json_object_arg_emits_exactly_one_request_binding_in_error_test() {
+        let call = CallConfig {
+            function: "process".to_string(),
+            result_var: "result".to_string(),
+            args: vec![json_object_arg("request")],
+            ..CallConfig::default()
+        };
+        let fixture = Fixture {
+            id: "process_request_error".to_string(),
+            description: "reject an invalid request".to_string(),
+            input: serde_json::json!({ "request": { "kind": "invalid", "value": "hello" } }),
+            assertions: vec![crate::e2e::fixture::Assertion {
+                assertion_type: "error".to_string(),
+                ..Default::default()
+            }],
+            ..Fixture::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+        let config = ResolvedCrateConfig::default();
+
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "Facade",
+            "",
+            "",
+            &[],
+            Some("Request"),
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &config,
+            &[],
+        )
+        .expect("render_test_method succeeds");
+
+        assert!(
+            out.contains("val request = MAPPER.readValue("),
+            "expected a request deserialization binding inside assertFailsWith, got:\n{out}"
+        );
+        let binding_count = out.matches("val request =").count();
+        assert_eq!(
+            binding_count, 1,
+            "expected exactly one `val request =` binding, got {binding_count}:\n{out}"
         );
     }
 }

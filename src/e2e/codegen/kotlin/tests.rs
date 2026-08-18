@@ -217,6 +217,69 @@ fn handle_config_deserialization_uses_resolved_options_type() {
     assert!(!rendered.contains("CrawlConfig"));
 }
 
+/// Regression guard for the alef #219 fix: `build_args_and_setup`'s
+/// `json_object` `Some(opts_type)` branch previously had no mock-URL-placeholder
+/// handling at all — that case was covered solely by test_method.rs's now-removed
+/// `deser_lines` mechanism, which duplicated (and has been deleted as) the binding
+/// this function emits. Making this function the sole emitter without porting the
+/// mock-URL capability over would have silently dropped runtime URL substitution
+/// (tests would call a literal `$mock_url` placeholder instead of the mock
+/// server) — a silent coverage hole, not a compile error. This pins that the
+/// capability now lives here. ~keep
+#[test]
+fn json_object_arg_with_mock_url_placeholder_binds_once_at_runtime() {
+    let args = vec![ArgMapping {
+        name: "request".to_string(),
+        field: "input.request".to_string(),
+        arg_type: "json_object".to_string(),
+        optional: false,
+        owned: false,
+        element_type: None,
+        go_type: None,
+        vec_inner_is_ref: false,
+        trait_name: None,
+    }];
+    let fixture = Fixture {
+        id: "request_fixture".to_string(),
+        description: "test fixture".to_string(),
+        input: serde_json::json!({ "request": { "url": "$mock_url/upload" } }),
+        ..Fixture::default()
+    };
+
+    let (setup, args_str) = build_args_and_setup(
+        &fixture.input,
+        &args,
+        KotlinArgsContext {
+            fixture: &fixture,
+            class_name: "Sample",
+            options_type: Some("UploadRequest"),
+            fixture_id: &fixture.id,
+            kotlin_android_style: false,
+            config: &ResolvedCrateConfig::default(),
+            type_defs: &[],
+            owner_handle_is_receiver: false,
+        },
+    )
+    .expect("args build succeeds");
+
+    let rendered = setup.join("\n");
+    assert_eq!(args_str, "request");
+    // Property 1: a binding must actually be produced before counting it.
+    assert!(
+        rendered.contains("val request = MAPPER.readValue(requestJson, UploadRequest::class.java)"),
+        "expected a runtime-bound readValue call, got:\n{rendered}"
+    );
+    let binding_count = rendered.matches("val request =").count();
+    assert_eq!(
+        binding_count, 1,
+        "expected exactly one `val request =` binding, got {binding_count}:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(".replace(\"\\$mock_url\", requestMockBaseUrl)"),
+        "expected the mock URL placeholder to be swapped in at runtime, got:\n{rendered}"
+    );
+}
+
 /// Resolver for an optional field on a non-array result, e.g. `data` directly
 /// on the result (mirrors `action_results[0].data` after array-index resolution
 /// down to the leaf field on the accessed element).

@@ -354,15 +354,45 @@ pub(super) fn build_args_and_setup(
                     continue;
                 }
                 // For json_object args, deserialize via Jackson or use pre-deserialized variable.
+                //
+                // This is the sole emitter of the `val {arg.name} = MAPPER.readValue(...)`
+                // binding for json_object args: it is shared by both the e2e test emitter
+                // (test_method.rs) and standalone docs snippets (snippet.rs), and must be
+                // fully self-contained for both callers — neither duplicates this logic. ~keep
                 if arg.arg_type == "json_object" {
                     if let Some(opts_type) =
                         crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, v)
                     {
-                        let files = fixture.docs_files_for_arg(&arg.field);
-                        let mut json_value = v.clone();
-                        let file_reads = prepare_docs_file_reads(&mut json_value, &files);
-                        json_value = normalize_typed_json(&json_value, opts_type, type_defs);
-                        append_docs_file_setup(&mut setup_lines, &arg.name, &json_value, opts_type, &file_reads);
+                        if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
+                            // The mock server's base URL is only known at test run time, so
+                            // the placeholder is swapped in via a runtime `.replace(...)`
+                            // rather than baked into the literal at codegen time. Doc-file
+                            // markers are not combined with this path, mirroring the
+                            // config_type-inference branch below. ~keep
+                            let json_value = normalize_typed_json(v, opts_type, type_defs);
+                            let json_str = serde_json::to_string(&json_value).unwrap_or_default();
+                            let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
+                            let base_var = format!("{}MockBaseUrl", arg.name);
+                            let json_var = format!("{}Json", arg.name);
+                            setup_lines.push(format!(
+                                "val {base_var} = System.getProperty(\"mockServer.{fixture_id}\", System.getenv(\"{env_key}\") ?: ((System.getProperty(\"mockServerUrl\", System.getenv(\"MOCK_SERVER_URL\") ?: \"\") ?: \"\") + \"/fixtures/{fixture_id}\"))"
+                            ));
+                            setup_lines.push(format!(
+                                "val {json_var} = \"{}\".replace(\"{}\", {base_var})",
+                                escape_kotlin(&json_str),
+                                escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER)
+                            ));
+                            setup_lines.push(format!(
+                                "val {} = MAPPER.readValue({json_var}, {opts_type}::class.java)",
+                                arg.name
+                            ));
+                        } else {
+                            let files = fixture.docs_files_for_arg(&arg.field);
+                            let mut json_value = v.clone();
+                            let file_reads = prepare_docs_file_reads(&mut json_value, &files);
+                            json_value = normalize_typed_json(&json_value, opts_type, type_defs);
+                            append_docs_file_setup(&mut setup_lines, &arg.name, &json_value, opts_type, &file_reads);
+                        }
                         parts.push(arg.name.clone());
                     } else {
                         // Infer the config type and deserialize
