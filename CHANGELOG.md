@@ -49,6 +49,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **csharp**: report unemitted visitor support files instead of deleting them. `generate_bindings` ran two
+  `fs::remove_file` loops from inside the stage `collect_managed_surface` documents as "a pure in-memory render;
+  nothing here writes to disk". `alef verify`, `alef adopt` — including without `--write`, since the delete fired
+  before `AdoptOptions` was even constructed — and `alef diff` all compose that stage, so three read-only commands
+  unlinked files in the consumer's tree, and for `verify`/`adopt` only on a cache miss. A filename match was the
+  entire test, and the deleted set included a class per configured bridge `context_type`/`result_type`: names taken
+  from the consumer's own config. The disabled branch was weaker still — `config.ffi` is an `Option`, so never
+  having written an `[ffi]` section read identically to having disabled the feature.
+- **c**: refuse to name a result type rather than inventing one. The old fallback derived it from the call name,
+  and that name feeds three things — the accessor prefix, the `_free` cleanup, and the `parent_is_ir_type` flag
+  `ensure_leaf_field_exists` reads. Because an invented name matches no IR type, that check returned `Ok` before
+  examining anything: the fabrication switched off the check that would have caught the fabrication. Resolution now
+  yields `Resolved` / `Unverified` / `Unresolvable` and fails at the point of emission. Trait-bridge registry calls
+  (`register_fn` / `unregister_fn` / `clear_fn`) are classified from their derived C identity, not from their
+  legitimately empty base `function`, which previously derived a degenerate `{prefix}__free`.
+- **c**: stop splicing the fixture's `input` JSON into a typed parameter. With no configured `args` the emitter
+  passed the whole JSON as one C string literal regardless of the target's signature, producing calls like
+  `configure("{…}")` against a function taking an integer handle, and passing an argument to a `(void)` export.
+  A zero-parameter target now emits `()`; a typed parameter `args` does not fill fails with a diagnostic naming the
+  fixture, the call, the parameter and the config knob; an unresolvable signature refuses. Found independently in
+  two repos on the same day — once in emitted output, once in the emitter.
+- **cache**: treat an unreadable output manifest as a miss rather than a hit. `outputs_exist` returned `true` on any
+  read error, so a cache with a missing or corrupt manifest reported a hit and skipped regeneration — and
+  `write_lang_hash` writes the hash and the manifest as two separate writes, so an interrupted run leaves exactly
+  that state. The ownership record now separates absent from unreadable: querying still degrades to "alef owns
+  nothing", which makes the guard refuse and is non-destructive, while rewriting fails loud, because that path
+  replaces the file whole and would otherwise silently un-own every path it could not read.
+- **cache**: key the e2e stage cache by the `--lang` selection. A `--lang`-scoped run's partial output satisfied a
+  later unscoped run, which then skipped the languages it had never generated.
+- **release**: stop the version gate and `go-tag` from deciding on evidence they never read. `validate-versions`
+  checked a manifest's existence and then discarded a failed read, so an unparseable `package.json` was dropped
+  from the set and the gate reported "All N manifests consistent" over a smaller N, exiting 0. Zero checks is now
+  an error rather than a vacuous pass, on both the text and JSON surfaces. `go-tag` ignored `git ls-remote`'s exit
+  status, and a failed remote read yields empty stdout — indistinguishable from "tag absent" — so a transient auth
+  or network failure created the tag and pushed it with `--force-with-lease`, which for a tag ref has no
+  remote-tracking ref to lease against and degrades toward a plain force.
+- **snippets**: release the client in generated Go, C# and WASM examples. Go defers `client.Free()` after the nil
+  guard so it runs while a panic unwinds; C# uses a `using` declaration, which survives a throw; WASM uses
+  `try`/`finally`. WASM releases only the client on purpose — every DTO-taking method already calls
+  `__destroy_into_raw` on its argument and `free()` has no null guard, so releasing the request would have been a
+  null-pointer free in most snippets, strictly worse than the leak it targeted. Java, Kotlin and Dart are staged
+  separately.
+
 - **csharp**: keep every vtable slot the Rust struct declares. C# carried the same unguarded `exclude_types` prune
   that cost Java a slot, and builds a positional `IntPtr` vtable, so a pruned trait method shifted every later
   function pointer and the last read ran past the allocation. Latent, but not for the assumed reason —
@@ -73,6 +116,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assertion is suppressed precisely when a fixture asserts that field.
 
 ## [0.61.0] - 2026-08-17
+
+### Two invariants
+
+Nearly every defect fixed below is one of two failures. They are worth more than the individual fixes, because the
+fixes are local and the failures are not.
+
+- **Absence from output is not evidence of intent to remove.** A value missing from a run's output has at least
+  three causes: it was dropped on purpose, it was out of scope for this run (`--lang java` never computes the other
+  languages), or it was never reached because an earlier step failed. Only the first licenses a removal, a prune or
+  a skip, and no site in this release distinguished them. The worked example is the orphan reclaim gate: all five of
+  its clauses — marker present, git-tracked, owned root, absent from this run's keep set, non-degenerate root
+  manifest — passed for a consumer's 408-line Java public API class and for a class a live test depends on. The
+  backend had run, emitted 56 files, and simply not emitted those two. The gate was introduced and disarmed inside
+  this same release; the manifest-recording fix also in this release is what would have widened it, by making
+  under-recorded manifests stop reading as degenerate. A second live delete path had the identical shape: the
+  snippet prune ran ahead of the completeness gate its whole safety argument rests on, so a snippet that merely
+  failed to render was unlinked as an orphan. The tell is an empty-collection fallback — `unwrap_or_default()`,
+  `unwrap_or(&[])`, `Err(_) => continue` — whose result then drives a destructive or suppressive action. It is not
+  confined to the generator: the cache, the verify pass and the release tooling all read an input they could not
+  read as an input that was empty, and then report success.
+- **One fact derived in two places, never compared.** Two emitters, or an emitter and a validator, or a backend and
+  the docs renderer, each independently compute the same name, arity, nullability, sentinel or macro spelling. Each
+  half is individually well-formed, so no compiler, linter or test observes a contradiction — only the composed
+  output is wrong. This release closes such pairs in the C# capsule sentinel, the Zig declared error set, the Dart
+  snippet call shape, Kotlin identifier escaping, pyo3 keyword fields, the cgo feature macros and `alef all`'s
+  manifest. **The largest instance is still open**: `src/docs/naming.rs` renders Kotlin, Dart, Swift and PHP enum
+  variants `to_pascal_case`, while the backends emit `to_screaming_snake` (Kotlin, `NETWORK_IDLE`),
+  `to_lower_camel_case` (Dart and Swift, `networkIdle`) and `to_uppercase` (PHP, `NETWORKIDLE`). Every variant of
+  every enum in four languages is documented under a spelling the binding does not export, with no configuration
+  needed to trigger it.
+  The fix direction is that the docs renderer must read the emitted binding rather than recompute it.
+- **The remedy, which this codebase already applies well where it applies it at all.** Derive once rather than
+  restate — `codegen::c_consumer::export_type_prefix` is the model. Where duplication is unavoidable, pin it with a
+  test that drives *both* derivations and compares the composed output: `assert_error_set_covers_body` scans the Zig
+  body that was just emitted, and the cgo feature-macro test parses the real generated `cbindgen.toml` rather than a
+  copy of it. Enumerate from a registry rather than a hand-written list, and add a control assertion so the test
+  cannot pass vacuously. A prose comment asserting that two modules agree cannot fail, and several such comments in
+  this tree are false today; an assertion about a fact two modules share must name both sides, or it is a hostage
+  rather than a guard.
+
+### Upgrading
+
+Read this before regenerating. Consumers pin `alef_version = "0.61.0"` in `alef.toml` today and 0.61.0 has never
+been tagged, so those pipelines have been silently falling through to a branch build. Tagging resolves that pin for
+the first time, which means the first resolved run is not a small step from whatever branch build preceded it.
+
+0.60.2 was never tagged either — its `chore(release): 0.60.2` commit landed and the tag never followed, so the last
+release any consumer could resolve is **0.60.1**. Upgrading from 0.60.1 therefore delivers the 0.60.2 section below
+as well as this one; read both.
+
+- **`--clean` no longer implies overwrite.** Until this release `--clean` was threaded into the `overwrite` argument
+  of the scaffold and docs stages, disabling the create-only branch that otherwise leaves an already-existing
+  unmarked file alone — so under `--clean` the ownership guard was the only remaining protection on a hand-written
+  scaffold file. The two concerns are now separate: `--clean` bypasses cached results and nothing else, and
+  overwriting a pre-existing unmarked scaffold or docs file is an explicit opt-in of its own. **Migration**: if your
+  pipeline passes `--clean` only to force a fresh run, nothing changes and you gain back a protection you did not
+  know you had lost. If it depends on `--clean` replacing pre-existing unmarked files, pass
+  `--clobber-create-once-seeds` alongside it, or — better, because it is durable and reviewable — take ownership
+  of those files once with `alef adopt <path>` and drop the flag.
+- **Two large generated diffs land at once, from two unrelated causes. Review both for removals and for files that
+  stopped being emitted; do not skim either as progress.** A large diff that reads as healthy is how the worst
+  defects in this release stayed invisible. (1) The snippet-ownership fix unfreezes a generated snippet surface that
+  nothing has been able to update for some time — on one consumer tree 2,820 of 2,894 writes were being refused — so
+  the diff is the accumulated drift of every refused run, and it is the first diff in which a deletion is possible
+  again. (2) The snippet resource-release fix separately rewrites a large number of published Go, C# and WASM
+  examples, which previously leaked the client they construct. Seeing both at once is expected; they are two things.
+- **Commit `.alef-ownership.toml` and `.alef-toml-merge-provenance.toml` if they are untracked.** `alef verify` now
+  fails on this and prints the exact `git add` to run. See **Changed** for why an untracked record makes a green run
+  on a warm machine certify a state no other checkout has.
+- **The committed C header's content is now a function of the local build's feature set.** A `--no-default-features`
+  build whose header is committed strips feature defines that a default build would have written, and nothing
+  currently catches that. See **Changed**.
 
 ### Added
 
@@ -118,6 +233,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with `name`, `rust_name`, `is_async`, and `documentation` fields. Names honor language exclusions, feature gates,
   ABI prefixes, Go type collisions, Ruby re-export names, and the centralized host-language naming policy.
 
+- **`--version` carries build provenance**: the commit, the build time, and whether the tree was dirty. Three
+  binaries built in one day all self-reported the same semver, and a defect that had already been fixed was
+  investigated for hours against output from a binary that predated the fix. Generated output is evidence about the
+  binary that produced it, not about the source, and until now nothing in that output identified the binary. A dirty
+  build says so and names the commit it cannot be reproduced from; missing git metadata renders an explicit unknown
+  rather than an empty field that would read as a clean build. `clean` is only as precise as the rerun-if-changed
+  set; `dirty` and the sha are exact. **`--version` is now multi-line** — `-V` keeps the single bare semver line, so
+  anything parsing a version out of `alef` should use `-V`.
+- **breaking generated signatures are reported**: emitted public signatures are captured against a previous-run
+  baseline, diffed, and each breaking change attributed to the callers that are not alef-owned. This warns rather
+  than fails, because failing a regeneration on a change the consumer intends would be worse than the present
+  silence; the value is the attribution. Zig only for now — other backends return no signatures, and a change
+  detected for a language with no scan wiring warns rather than passing silently.
+- **extraction warns when `#[serde(default…)]` and `impl Default` disagree for one field**: the effective value then
+  depends on how the caller constructed the type, so a binding generated from one path silently contradicts the
+  core when the other is taken. Alef read both and discarded the first — three writers assigned the same slot in
+  sequence. The diagnostic stays silent unless both sides fold to fully concrete values: an `Unresolved` default
+  means alef could not read a real `fn default()`, which is unknown rather than zero.
+
 ### Changed
 
 - **`alef verify` now fails on a frozen file rather than warning.** This is a semantics change for consumer CI. The
@@ -147,6 +281,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared `{ItemType}Stream` type is renamed to adapter-specific stream types. Zig code naming the old type explicitly
   must be updated. Types with a single streaming adapter
   keep their existing name.
+
+- **write commands warn, and `alef verify` fails, when a required alef record is untracked.** Alef writes
+  `.alef-ownership.toml` and `.alef-toml-merge-provenance.toml`, tells the reader to commit them, and never stages
+  them; both were untracked on two consumer repos. Under `--clean` that record is the only protection left on a
+  hand-written scaffold file, and it is the input the orphan scan reads, so a fresh clone has neither the protection
+  nor a correct picture and a green run on a warm machine certifies a state no other checkout has. **Action: commit
+  `.alef-ownership.toml` and `.alef-toml-merge-provenance.toml` if they are untracked in your repo.** `verify` prints
+  the exact `git add` to run. Not auto-staged: mutating a user's index is a different licence from writing files, and
+  in CI it would accomplish nothing.
+- **the generated `build.rs` stamps a `#define` per `CARGO_FEATURE_*` into the C header.** cbindgen guards a
+  declaration for every `#[cfg(feature)]` export, deriving the guards from the unfiltered API surface, while the Go
+  glue is generated from the cfg-filtered one and the cgo preamble recorded neither — so the guarded declarations
+  were exactly the ones the glue calls, and nothing anywhere defined the macros: 62 of 144 symbols invisible on one
+  consumer, the whole C snippet lane dead on another. The defines are written after cbindgen emits the header, from
+  literally what the cdylib was built with, so there is no second derivation to drift, and they reach Go, C snippets,
+  the e2e Makefile and Zig at once. Guards stay load-bearing for a slim build: a disabled feature gets neither a call
+  site nor a define. **Cost: the committed header's content is now a function of the local build's feature set.** A
+  `--no-default-features` build whose header is committed strips defines that a default build would have written, and
+  nothing currently catches that.
+- **the snippet coverage ledger now proves alef's ownership of a generated snippet.** A snippet population predating
+  marker support could never be updated — the write guard refuses a pre-existing file it cannot prove it authored,
+  and the marker that would prove it is what the refused write was going to add. On two consumer trees that froze the
+  entire generated snippet surface: 2,820 of 2,894 refusals on one. The ledger is a record rather than an inference,
+  it is committed so a fresh clone behaves identically, and alef already unlinks files on its strength, so refusing
+  to overwrite what it will happily delete was incoherent. The snapshot is taken before generation, or this run's own
+  intentions would widen ownership to bare path identity. The first successful regeneration after upgrading produces
+  a large snippet diff; see **Upgrading** for what to check in it.
+- **kotlin**: hard keywords are escaped in every identifier path. Identifiers went through three parallel paths — one
+  escaped nothing, one ran the escape on an already-PascalCased string so no all-lowercase keyword could match, and
+  only the field-name path worked, so `fun object(...)`, `fun is(...)` and `when: String` reached consumers as parse
+  errors. Backticks rather than renames: the DTO emitter writes `@JsonProperty` only when the Rust field carries
+  `serde(rename)`, so renaming would silently move the wire key for every unrenamed field. `get`/`set` stay bare on
+  purpose — they are soft keywords the grammar admits as `simpleIdentifier`.
+- **pyo3**: one Python-visible name per keyword field. Five producers computed five different names for a single
+  field: the getter published the bare keyword, the converter emitted `_rust.T(global=value.global)`, and a keyword
+  field got no wire alias at all, shipping the escaped spelling as the JSON key. The escape now reaches the Python
+  surface only; serde keeps the wire name and prefers the core type's own rename over deriving one from the escaped
+  field. Where the Rust and Python escapes collide the Rust one wins — pyo3 strips `r#` when deriving the Python
+  name, so `r#type` satisfies both while `type_` satisfies neither.
+- **dart**: the trait emitter was the only Dart path calling `to_lower_camel_case` without the keyword escape, so
+  `new` and `get` — the two commonest Rust trait method names — were emitted bare. They are now escaped, which
+  renames them on the generated Dart trait surface.
 
 ### Fixed
 
@@ -1306,6 +1482,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension recipe, including cached coverage manifests, instead of warning and crediting an incomplete corpus.
 - **snippets**: use pyrefly as the sole built-in Python snippet type-checker, matching scaffolded project tooling and
   reporting it explicitly when unavailable.
+
+- **cli**: report disk-scanned orphan candidates instead of deleting them. The reclaim rule infers "orphan" from
+  "absent from this run's output", and three situations produce that absence — the emitter stopped emitting the
+  file, the emitter failed to emit it, or it is a create-once seed alef emits only when absent. No clause separated
+  them; the manifest clause certifies that the backend keeps books, not that this file was deliberately dropped. The
+  marker likewise records when alef last wrote a file, not whether alef owns it, so the rule protected neglected
+  trees and endangered current ones: on a tree where 159 of 160 files carry markers, the public entry point is a
+  candidate. Only a positive assertion from the producer can separate "dropped" from "failed to emit", and no such
+  record exists yet, so the disk-scan route now reports.
+- **e2e**: do not prune orphaned snippets on incomplete coverage. The prune ran before the completeness gate, and
+  that gate only defers its error, so ordering alone would not have helped. A snippet that merely failed to render
+  is absent from `generated_paths` while its language is still expected — indistinguishable from a genuine orphan —
+  so a transient generator failure unlinked published documentation. `orphaned_paths` stakes its whole safety
+  argument on that gate having passed first.
+- **cli**: never prune a `poly.toml` table a scoped run did not emit. The prune step read a path absent from this
+  run's output as an empty array, so a scoped `--lang java` generate stripped the consumer's whole rule selection
+  down to `select = []`, which every linter accepts and then checks nothing. Only a path this run did emit can
+  testify that one of its values is gone.
+- **cli**: record every language manifest `alef all` writes. The service-API, stub and public-API phases wrote files
+  and stamped hashes without folding them into the language manifest, so a backend recorded a single path while 38
+  generated modules sat unrecorded on disk — and absence from the manifest reads as "this backend emits one file".
+  Both manifest writers now log the crate, language and path count, since a pathologically small manifest was
+  previously indistinguishable from a backend that genuinely emits one.
+- **docs**: emit every page before validation can fail the stage. Snippet discovery and validation were fused into
+  one call that ran before the CLI, MCP, `llms.txt` and `SKILL.md` emitters, so any strict bail, gap failure or audit
+  failure returned before those pages were pushed — and downstream, a page missing from that list is read as one
+  alef no longer emits. The stage's documented promise that its file list survives a failure covered only the first
+  pass.
+- **docs**: stop idiom-translating rustdoc intra-doc link targets. `rust_links_to_plain` only degraded links whose
+  text began with a backtick, so a plain-text intra-doc link fell through to `rust_paths_to_dot_notation`, whose
+  blanket `::` → `.` substitution rewrote the link *target* into a relative Markdown link that resolves nowhere: 26
+  MD057 errors across 13 reference pages on one consumer. Both passes were individually reasonable and wrong in
+  composition. Links are now degraded only when the target is identifier-shaped and is not anchored, schemed,
+  slash-bearing or `.md`/`.html`-suffixed, and tests pin both directions.
+- **zig**: declare every error the emitted body can return. `wrapper_return_type` and `method_return_type` each
+  carried their own list of which return shapes need `OutOfMemory`, and neither matched a bare opaque-handle return
+  — while both body emitters unconditionally emit `if (_result == 0) return error.OutOfMemory` for exactly that
+  shape, so four generated functions declared `error{HandleClosed}` and returned `OutOfMemory` and the binding did
+  not compile. The shape is derived once for both callers, and an assertion after emission checks that the declared
+  set admits every `error.X` the body returns.
+- **csharp**: derive the null-check sentinel from the P/Invoke return type. A capsule return was declared
+  `extern ulong` while the FFI crate exports it as a raw `*const T` — Dart and Zig both agree on the pointer — so
+  the wrapper's `== IntPtr.Zero` check was correct and the signature was wrong. The declaration and its sentinel now
+  come from one function that reads the declaration string itself. Affects only types listed in `capsule_types`,
+  which is why the common path looked flawless on a tree that configures none.
+- **dart**: derive a snippet's call shape from the binding's own predicate. The snippet emitter decided whether a
+  config argument was named or positional from a hardcoded list of type-name substrings while the binding decided it
+  from whether a default expression can be synthesized, so for six type families the binding declared named-optional
+  and the snippet called positionally and did not compile.
+- **e2e (kotlin)**: bind a streaming adapter's request before the snippet uses it. The docs-snippet emitter resolved
+  the owner handle but never the declared request parameter, so the emitted snippet either called the receiver with
+  no arguments or passed raw handle-config-contaminated JSON where the typed request belonged. `kotlin_android`
+  delegates here and was affected too.
+- **e2e**: honour `exclude_functions` in the snippet coverage ledger. The expected set was built without consulting
+  per-language exclusions, so it expected fixtures the emitter is configured never to produce, recorded them as
+  generated, reported `missing: []` while those paths were absent from disk, and the tracked-file check then killed
+  the run on a discrepancy the ledger had declined to record. Absent tracked paths are now all reported with a count
+  instead of bailing on the first, and are named as distinct from what `missing` explains.
+- **snippets**: register alef's ownership of the coverage ledger at write time. The ledger is strict JSON so it can
+  never carry a provenance marker, and nothing recorded ownership, so every rewrite was refused, the stale copy
+  survived, and the tracked-file check then failed the run on contents alef had just been prevented from refreshing.
+  `alef adopt` could not repair it either: with no marker it classified as a create-once seed, the category for files
+  a human grows past a placeholder. The write guard and adopt now share one notion of ownership; hand-written files
+  at unregistered paths are still refused.
+- **snippets**: keep validator scratch inside the cache root and sweep it. An earlier pass moved scratch under
+  `.alef/snippets/tmp` but left the sweeper looking in the working directory, so the safety net pointed at the empty
+  set and files survived every run. Cleanup is now an RAII guard, because validators return from four kinds of place
+  and the explicit calls covered some of them; its `Drop` retries, since a killed child can still be exiting and lose
+  the race with `ENOTEMPTY` — which `TempDir` discards silently, making a leak indistinguishable from success.
+- **scaffold**: exclude the e2e snippet output tree from poly discovery. `docs_snippets_excludes` read only
+  `[workspace.docs.snippets] dirs`, so a consumer configuring `[crates.e2e.snippets] output` alone got no protective
+  exclude for the tree alef writes generated snippet Markdown into. The hazard is latent — in every tree surveyed the
+  two keys name the same directory — but the divergent-key case is real.
+- **codegen**: name the owning type by its full path in a `compile_error`. The diagnostic spliced the crate from
+  `rust_path` onto the type from `name`, dropping every intermediate module and rendering `demo::inner::Settings` as
+  `demo::Settings`. A diagnostic that misnames the definition it points at sends the reader to the wrong place.
+- **c**: pair a snippet's failure guard with the declaration it names. The guard was emitted by a positionally-blind
+  pass that replaced any assert line, so a client-construction assertion above the call became a guard on a result
+  variable above its declaration. A single walk now carries declaration state, so the guard cannot precede the
+  declaration it reads and an out-of-order match becomes a generator diagnostic instead of published C. Output is
+  byte-identical for every currently valid snippet.
 
 ### Removed
 
