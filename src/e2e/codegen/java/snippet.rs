@@ -304,6 +304,118 @@ mod tests {
         );
     }
 
+    fn client_release_snippet(expects_error: bool) -> String {
+        let mut fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        if expects_error {
+            fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+        }
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+        )
+    }
+
+    /// The generated Java facade class implements `AutoCloseable` (`service_close.jinja` /
+    /// `opaque_handle_header.jinja` in the Java backend), so try-with-resources is the correct,
+    /// idiomatic release for a client a docs snippet constructs. Mirrors the C# lane's `using var
+    /// client`, which is the same construct for the same reason. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_in_a_try_with_resources_block() {
+        let body = client_release_snippet(false);
+
+        assert!(
+            body.contains("try (var client = Sample.createClient(apiKey, null, null, null, null)) {"),
+            "the client must be constructed inside a try-with-resources header:\n{body}"
+        );
+        assert!(
+            body.contains("var result = client.chat();"),
+            "the call moves onto the client the try-with-resources declares:\n{body}"
+        );
+    }
+
+    /// The error-path half of `client_factory_snippet_releases_the_client_in_a_try_with_resources_block`.
+    /// A `try (resource) { ... } catch (...) { ... }` releases the resource before the catch runs
+    /// regardless of which statement inside the try threw — unlike the pre-existing Kotlin
+    /// template, whose bare `client.close()` sat after the call and was skipped whenever the call
+    /// itself threw. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_on_the_error_path() {
+        let body = client_release_snippet(true);
+
+        let try_with_resources = body
+            .find("try (var client = Sample.createClient")
+            .expect("expects-error snippet still constructs the client via try-with-resources");
+        let catch_clause = body
+            .find("catch (SampleException error)")
+            .expect("catch clause present");
+        assert!(
+            try_with_resources < catch_clause,
+            "the catch must follow the try-with-resources that declares the client:\n{body}"
+        );
+        assert!(
+            !body.contains("} catch (SampleException error)"),
+            "the try-with-resources closes on its own line before catch, not on the same brace:\n{body}"
+        );
+    }
+
+    /// Negative control for the two tests above, and the pin that keeps this change scoped: a
+    /// fixture with no `client_factory` constructs no client, so its snippet must be byte-for-byte
+    /// what it was — no `try (`, no `AutoCloseable` resource, and the existing plain `try { ... }
+    /// catch` shape for `expects_error`. A change that wraps every snippet's call in
+    /// try-with-resources unconditionally would fail here. ~keep
+    #[test]
+    fn snippet_without_a_client_factory_is_unchanged() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let body = render_snippet_body(&fixture, &E2eConfig::default(), &config, &[]);
+
+        assert!(
+            !body.contains("try ("),
+            "a snippet that constructs no client must emit no try-with-resources:\n{body}"
+        );
+        assert!(
+            body.contains("        try {\n"),
+            "the plain expects_error try block must be unchanged:\n{body}"
+        );
+        assert!(
+            body.contains("        } catch (SampleException error) {\n"),
+            "the plain expects_error catch must still close the try on the same line:\n{body}"
+        );
+    }
+
     fn client_snippet(docs: Option<serde_json::Value>, trailing_args: &[&str]) -> String {
         let mut fixture = Fixture {
             id: "custom_base_url".into(),

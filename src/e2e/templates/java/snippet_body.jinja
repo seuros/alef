@@ -6,13 +6,13 @@ public final class Example {
     public static void main(String[] args) throws Exception {
 {% if needs_mapper %}        var MAPPER = new ObjectMapper();
 {% endif %}
-{% if expects_error %}        try {
+{% if expects_error and not client_factory %}        try {
 {% endif %}
 {% for line in setup_lines %}        {{ line }}
 {% endfor %}
 {% if client_factory %}        var apiKey = System.getenv("{{ api_key_var }}");
         if (apiKey == null || apiKey.isEmpty()) throw new IllegalStateException("{{ api_key_var }} must be set");
-        var client = {{ class_name }}.{{ client_factory }}({{ client_args }});
+        try (var client = {{ class_name }}.{{ client_factory }}({{ client_args }})) {
 {% if returns_void %}        client.{{ function_name }}({{ args }});
 {% else %}        var {{ result_var }} = client.{{ function_name }}({{ args }});
 {% endif %}
@@ -25,7 +25,11 @@ public final class Example {
 {% endfor %}        }
 {% endif %}{% endfor %}{% else %}        System.out.println({{ result_var }});
 {% endif %}{% endif %}
-{% if expects_error %}        } catch ({{ exception_class }} error) {
+{% if client_factory %}        }
+{% endif %}
+{% if expects_error %}{% if client_factory %}        catch ({{ exception_class }} error) {
+{% else %}        } catch ({{ exception_class }} error) {
+{% endif %}
             System.err.println(error.getClass().getSimpleName() + ": " + error.getMessage());
         }
 {% endif %}

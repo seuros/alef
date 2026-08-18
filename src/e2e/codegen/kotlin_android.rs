@@ -157,6 +157,57 @@ mod tests {
         );
     }
 
+    /// Confirms the `use`-block client release (`kotlin::snippet::render_snippet_body`'s
+    /// `client_factory` branch) reaches the Kotlin Android entry point too, since
+    /// `KotlinAndroidE2eCodegen::render_snippet_body` delegates to the same shared renderer
+    /// rather than a separate `kotlin_android/snippet_body.jinja`. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_in_a_use_block() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin_android".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let body = KotlinAndroidE2eCodegen
+            .render_snippet_body(
+                &fixture,
+                &E2eConfig {
+                    call,
+                    ..E2eConfig::default()
+                },
+                &config,
+                &[],
+                &[],
+            )
+            .expect("snippet renders");
+
+        assert!(
+            body.contains("Sample.createClient(apiKey = apiKey).use { client -> client.chat() }"),
+            "the client must be released via a `use` block around the call:\n{body}"
+        );
+        assert!(
+            !body.contains("client.close()"),
+            "no bare close() call must remain:\n{body}"
+        );
+    }
+
     #[test]
     fn excluded_binding_fixture_uses_native_disabled_test() {
         let rendered = crate::e2e::template_env::render(
