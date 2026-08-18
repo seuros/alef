@@ -967,3 +967,146 @@ fn json_object_argument_still_constructs_a_handle_for_the_same_parameter() {
         ),
     );
 }
+
+/// The release-blocking defect's actual residual: the control test above proves the
+/// free-function (non-`returns_void`) path constructs a handle correctly, but the
+/// `returns_void` snippet path in `render_snippet_body` (`c/test_function.rs`) took an early
+/// return before that construction ever ran, passing `build_args_string_c` an empty handle
+/// map. A `json_object` arg onto a handle parameter therefore fell through to `json_to_c`'s
+/// literal fallback -- the same `incompatible pointer to integer conversion` this whole family
+/// of fixes exists to prevent, just reached through the void-call branch instead of the
+/// legacy-call one. ~keep
+#[test]
+fn returns_void_call_constructs_a_handle_for_a_json_object_arg_onto_a_handle_parameter() {
+    let fixture = Fixture {
+        id: "configure_custom_dir".into(),
+        description: "Configure the cache directory".into(),
+        input: serde_json::json!({"config": {"cache_dir": "/tmp/sample_cache"}}),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "configure".into();
+    e2e.call.returns_void = true;
+    e2e.call.args = vec![json_arg("config", "input.config", "SampleConfig")];
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            function: Some("sample_configure".into()),
+            ..Default::default()
+        },
+    );
+    let functions = [FunctionDef {
+        name: "configure".into(),
+        params: vec![ParamDef {
+            name: "config".into(),
+            ty: TypeRef::Named("SampleConfig".into()),
+            ..ParamDef::default()
+        }],
+        return_type: TypeRef::Unit,
+        ..FunctionDef::default()
+    }];
+    let type_defs = [handle_param_config_type()];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rendered = render_c_snippet(&fixture, &e2e, &config, &type_defs, &functions)
+        .expect("a json_object arg onto a handle parameter must render, not refuse");
+
+    assert!(
+        rendered.contains("sample_sample_config_from_json"),
+        "the handle must be constructed before the call:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("sample_configure(config_handle);"),
+        "the constructed handle must be what reaches the parameter:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("sample_configure(\""),
+        "no string literal may reach a handle-typed parameter:\n{rendered}"
+    );
+    compile_snippet(
+        &rendered,
+        "sample_ffi.h",
+        concat!(
+            "#include <stdint.h>\n",
+            "typedef uint64_t SAMPLEAlefHandle;\n",
+            "SAMPLEAlefHandle sample_sample_config_from_json(const char *json);\n",
+            "void sample_sample_config_free(SAMPLEAlefHandle value);\n",
+            "void sample_configure(SAMPLEAlefHandle config);\n",
+        ),
+    );
+}
+
+/// The other candidate site the release-blocking defect could have lived in: the
+/// client-method byte-buffer pattern (`render_bytes_test_function` in `c/call_patterns.rs`),
+/// which builds its argument list independently of `build_args_string_c`/`TargetParams`
+/// entirely. Unlike the `returns_void` snippet path, this one already constructs the handle
+/// unconditionally for every `json_object` arg -- this test pins that as a control so a future
+/// change to this path cannot silently regress it back to a literal. ~keep
+#[test]
+#[ignore = "alef #243: doc-mode assert stripping orphans the `int32_t status` binding, so the \
+            emitted snippet fails -Werror -Wunused-variable. The handle-construction assertions \
+            below already pass; only the compile step fails, and it fails on a REAL defect in \
+            published output. Un-ignore with the #243 fix -- do not weaken the assertions. ~keep"]
+fn bytes_result_client_method_still_constructs_a_handle_for_a_json_object_arg() {
+    let fixture = Fixture {
+        id: "transcribe_bytes".into(),
+        description: "Transcribe audio".into(),
+        input: serde_json::json!({"request": {"text": "hello"}}),
+        ..Fixture::default()
+    };
+    let mut e2e = E2eConfig::default();
+    e2e.call.function = "transcribe".into();
+    e2e.call.result_is_bytes = true;
+    e2e.call.options_type = Some("SampleTranscribeRequest".into());
+    e2e.call.args = vec![json_arg("request", "input.request", "SampleTranscribeRequest")];
+    e2e.call.overrides.insert(
+        "c".into(),
+        crate::core::config::e2e::CallOverride {
+            header: Some("sample_ffi.h".into()),
+            client_factory: Some("client_new".into()),
+            ..Default::default()
+        },
+    );
+    let type_defs = [crate::core::ir::TypeDef {
+        name: "SampleClient".into(),
+        rust_path: "samplelib::SampleClient".into(),
+        is_opaque: true,
+        ..crate::core::ir::TypeDef::default()
+    }];
+    let config = ResolvedCrateConfig {
+        name: "sample".into(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let rendered =
+        render_c_snippet(&fixture, &e2e, &config, &type_defs, &[]).expect("bytes-result client snippet renders");
+
+    assert!(
+        rendered.contains("sample_sample_transcribe_request_from_json"),
+        "the request handle must be constructed before the call:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("sample_default_client_transcribe(client, sample_transcribe_request_handle"),
+        "the constructed handle must be what reaches the call:\n{rendered}"
+    );
+    compile_snippet(
+        &rendered,
+        "sample_ffi.h",
+        concat!(
+            "#include <stdint.h>\n",
+            "typedef uint64_t SAMPLEAlefHandle;\n",
+            "SAMPLEAlefHandle sample_client_new(const char *api_key, const char *base_url, ",
+            "uint64_t timeout_ms, uint32_t max_retries, const char *user_agent);\n",
+            "void sample_default_client_free(SAMPLEAlefHandle client);\n",
+            "SAMPLEAlefHandle sample_sample_transcribe_request_from_json(const char *json);\n",
+            "void sample_sample_transcribe_request_free(SAMPLEAlefHandle value);\n",
+            "int32_t sample_default_client_transcribe(SAMPLEAlefHandle client, SAMPLEAlefHandle request, ",
+            "uint8_t **out_ptr, uintptr_t *out_len, uintptr_t *out_cap);\n",
+            "void sample_free_bytes(uint8_t *ptr, uintptr_t len, uintptr_t cap);\n",
+        ),
+    );
+}

@@ -229,6 +229,28 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         TargetParams::resolve(call, "c", ir)
     };
     if info.returns_void {
+        // `{prefix_upper}AlefHandle` must be spelled the way the header declares it -- see
+        // `render_test_function_impl`'s identical lookup for why this can't be a bare
+        // uppercase. Needed here (not just there) because a `json_object` arg onto a
+        // handle parameter constructs that handle via `from_json` before this call, same as
+        // every other C call path. ~keep
+        let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
+        // Build the handle(s) any `json_object` arg needs before the call that consumes
+        // them -- exactly what the free-function path in `render_test_function_impl` does.
+        // Before this, this branch passed `build_args_string_c` an empty handle map, so a
+        // `json_object` arg matching a handle-typed parameter fell through to a raw JSON
+        // string literal (`json_to_c`'s fallback) instead of a constructed `AlefHandle`,
+        // which does not compile against the exported header. ~keep
+        let mut setup = String::new();
+        let (typed_arg_handles, typed_arg_cleanup) = build_json_object_arg_handles(
+            &mut setup,
+            fixture,
+            prefix,
+            &prefix_upper,
+            &info.args,
+            &info.options_type_name,
+            true,
+        );
         // The shared, language-agnostic `[crates.e2e.calls.*]` args config has no
         // concept of the C-only trailing `out_error` out-param that trait-bridge
         // `unregister`/`clear` exports always take; `extra_args` is where the C
@@ -241,7 +263,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
             vec![build_args_string_c(
                 &fixture.input,
                 &info.args,
-                &HashMap::new(),
+                &typed_arg_handles,
                 config,
                 type_defs,
                 fixture,
@@ -251,10 +273,33 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         };
         arg_parts.extend(info.extra_args.iter().cloned());
         let args = arg_parts.join(", ");
-        let body = crate::e2e::template_env::render(
+        let call_line = crate::e2e::template_env::render(
             "c/snippet_void_call.jinja",
             minijinja::context! { function_name => info.function_name, args => args },
         );
+        let mut cleanup = String::new();
+        render_typed_arg_cleanup(&mut cleanup, prefix, &typed_arg_cleanup);
+        // `build_json_object_arg_handles`/`render_typed_arg_cleanup` pre-indent their lines
+        // four spaces for the `void test_{fn}(void) { ... }` wrapper the free-function path
+        // writes them into; `c/snippet_body.jinja` applies that same four-space indent once
+        // more via `indent(4, true)`, so strip the baked-in indent here rather than stacking
+        // the two. ~keep
+        let dedent = |text: &str| -> String {
+            text.lines()
+                .map(|line| line.strip_prefix("    ").unwrap_or(line))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let mut body = dedent(&setup);
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(call_line.trim_end());
+        let cleanup = dedent(&cleanup);
+        if !cleanup.is_empty() {
+            body.push('\n');
+            body.push_str(&cleanup);
+        }
         return Ok(crate::e2e::template_env::render(
             "c/snippet_body.jinja",
             minijinja::context! { header => header, declarations => "", body => body.trim_end() },
@@ -523,6 +568,22 @@ pub(super) fn render_test_function_impl(
                 fixture.id
             );
         }
+        // No registry export (`register_fn` / `unregister_fn` / `clear_fn`) currently declares a
+        // `json_object`-typed parameter -- their shared `args` config is a plain `name` string
+        // plus the C-only `out_error` `extra_args` appends -- but nothing about this branch
+        // enforces that, and it shares `build_args_string_c` with every path that does take one.
+        // Building any handle a `json_object` arg needs before the call keeps this branch from
+        // being the next place a raw JSON literal reaches an `AlefHandle` parameter, exactly the
+        // `returns_void` path above until it did the same. ~keep
+        let (typed_arg_handles, typed_arg_cleanup) = build_json_object_arg_handles(
+            out,
+            fixture,
+            prefix,
+            &prefix_upper,
+            args,
+            options_type_name,
+            documentation_snippet,
+        );
         // Argument construction mirrors the void-call path in `render_snippet_body`, for the
         // same reason: with no configured `args` the call's argument list is genuinely empty
         // (`TargetParams::Known(&[])`), so `extra_args` -- which carries the mandatory trailing
@@ -535,7 +596,7 @@ pub(super) fn render_test_function_impl(
             vec![build_args_string_c(
                 &fixture.input,
                 args,
-                &HashMap::new(),
+                &typed_arg_handles,
                 config,
                 type_defs,
                 fixture,
@@ -552,6 +613,7 @@ pub(super) fn render_test_function_impl(
         } else {
             let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to succeed\");");
         }
+        render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         let _ = writeln!(out, "}}");
         return Ok(());
     }
@@ -1230,62 +1292,15 @@ pub(super) fn render_test_function_impl(
     let prefixed_fn = function_name.to_string();
 
     // For json_object args, emit a from_json call to construct the options handle.
-    let mut typed_arg_handles = HashMap::new();
-    let mut typed_arg_cleanup = Vec::new();
-    for arg in args {
-        if arg.arg_type == "json_object" {
-            let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
-            if !val.is_null() {
-                // Fixture keys are camelCase; generated FFI from_json helpers
-                // deserialize into Rust types using serde's configured casing.
-                // Normalize keys before serializing.
-                let normalized = transform_json_keys_for_language(val, "snake_case");
-                let (docs_setup, json_expr, docs_cleanup) = render_c_docs_json(
-                    &arg.name,
-                    &normalized,
-                    &fixture.docs_files_for_arg(&arg.field),
-                    documentation_snippet,
-                );
-                out.push_str(&docs_setup);
-                // A `json_object` arg needs a type name to call the FFI `from_json` helper
-                // and produce a typed handle below. Silently skipping here used to leave
-                // `arg.name` out of `typed_arg_handles`, so `build_args_string_c` fell
-                // through to splicing the raw JSON literal as the argument expression
-                // (`c/assertions.rs`'s `parts.push(json_to_c(v))` fallback) — exactly the
-                // untyped-literal bug the `element_type` backfill exists to prevent. Fail
-                // generation loudly instead, matching the other "cannot render this" panics
-                // in this backend (see `build_args_string_c`'s `test_backend` arm). ~keep
-                let Some(type_name) = arg
-                    .element_type
-                    .as_deref()
-                    .or_else(|| (!options_type_name.is_empty()).then_some(options_type_name))
-                else {
-                    panic!(
-                        "C e2e generator: fixture `{}` declares a `json_object` arg `{}` with no resolvable type — \
-                         `element_type` is unset and no `options_type_name` fallback is configured; cannot construct \
-                         a typed `from_json` handle without knowing the target type",
-                        fixture.id, arg.name
-                    );
-                };
-                let type_snake = type_name.to_snake_case();
-                let handle = format!("{}_handle", sanitize_ident(&arg.name));
-                out.push_str(&crate::e2e::template_env::render(
-                    "c/typed_handle.jinja",
-                    minijinja::context! {
-                        prefix_upper => &prefix_upper,
-                        type_name => type_name,
-                        handle => handle,
-                        prefix => prefix,
-                        type_snake => type_snake,
-                        json_expression => json_expr,
-                    },
-                ));
-                out.push_str(&docs_cleanup);
-                typed_arg_handles.insert(arg.name.clone(), handle.clone());
-                typed_arg_cleanup.push((handle, type_snake));
-            }
-        }
-    }
+    let (typed_arg_handles, typed_arg_cleanup) = build_json_object_arg_handles(
+        out,
+        fixture,
+        prefix,
+        &prefix_upper,
+        args,
+        options_type_name,
+        documentation_snippet,
+    );
 
     let configured_args = build_args_string_c(
         &fixture.input,
@@ -1535,6 +1550,99 @@ pub(super) fn render_test_function_impl(
     let _ = writeln!(out, "    {prefix}_{result_type_snake}_free({result_var});");
     let _ = writeln!(out, "}}");
     Ok(())
+}
+
+/// Construct a typed `AlefHandle` via `{prefix}_{type}_from_json(...)` for every `json_object`
+/// arg with a non-null value, ahead of the call that consumes it, appending the construction
+/// (and any documentation setup/cleanup) to `out`.
+///
+/// Returns the arg-name -> handle-variable map [`build_args_string_c`] needs to splice a real
+/// handle expression instead of a JSON literal, and the `(handle, type_snake)` pairs the caller
+/// frees afterward via [`render_typed_arg_cleanup`].
+///
+/// The free-function path and the `returns_void` snippet path in [`render_snippet_body`] both
+/// need this: a `json_object` arg lowers to a C literal unless something builds the handle first,
+/// and the two call sites independently doing so is exactly how the `returns_void` path went
+/// without it — the free-function path built handles, the void path never did. One function
+/// both paths call is what keeps that from happening again, the same shape the Go-enum sibling
+/// of this defect was fixed with. ~keep
+///
+/// Lines are written pre-indented four spaces, matching the `void test_{fn}(void) { ... }`
+/// wrapper the free-function path (and [`render_test_function_impl`]'s other `out`-writing
+/// branches) builds directly. [`render_snippet_body`]'s `returns_void` branch has no such
+/// wrapper — it hands its whole body to `c/snippet_body.jinja`, which applies the same
+/// four-space indent once via its `indent(4, true)` filter — so that caller strips this
+/// baked-in indent before combining it with the call line, rather than this function knowing
+/// two different indent conventions. ~keep
+#[allow(clippy::too_many_arguments)]
+fn build_json_object_arg_handles(
+    out: &mut String,
+    fixture: &Fixture,
+    prefix: &str,
+    prefix_upper: &str,
+    args: &[crate::e2e::config::ArgMapping],
+    options_type_name: &str,
+    documentation_snippet: bool,
+) -> (HashMap<String, String>, Vec<(String, String)>) {
+    let mut typed_arg_handles = HashMap::new();
+    let mut typed_arg_cleanup = Vec::new();
+    for arg in args {
+        if arg.arg_type != "json_object" {
+            continue;
+        }
+        let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
+        if val.is_null() {
+            continue;
+        }
+        // Fixture keys are camelCase; generated FFI from_json helpers
+        // deserialize into Rust types using serde's configured casing.
+        // Normalize keys before serializing.
+        let normalized = transform_json_keys_for_language(val, "snake_case");
+        let (docs_setup, json_expr, docs_cleanup) = render_c_docs_json(
+            &arg.name,
+            &normalized,
+            &fixture.docs_files_for_arg(&arg.field),
+            documentation_snippet,
+        );
+        out.push_str(&docs_setup);
+        // A `json_object` arg needs a type name to call the FFI `from_json` helper
+        // and produce a typed handle below. Silently skipping here used to leave
+        // `arg.name` out of `typed_arg_handles`, so `build_args_string_c` fell
+        // through to splicing the raw JSON literal as the argument expression
+        // (`c/assertions.rs`'s `parts.push(json_to_c(v))` fallback) — exactly the
+        // untyped-literal bug the `element_type` backfill exists to prevent. Fail
+        // generation loudly instead, matching the other "cannot render this" panics
+        // in this backend (see `build_args_string_c`'s `test_backend` arm). ~keep
+        let Some(type_name) = arg
+            .element_type
+            .as_deref()
+            .or_else(|| (!options_type_name.is_empty()).then_some(options_type_name))
+        else {
+            panic!(
+                "C e2e generator: fixture `{}` declares a `json_object` arg `{}` with no resolvable type — \
+                 `element_type` is unset and no `options_type_name` fallback is configured; cannot construct \
+                 a typed `from_json` handle without knowing the target type",
+                fixture.id, arg.name
+            );
+        };
+        let type_snake = type_name.to_snake_case();
+        let handle = format!("{}_handle", sanitize_ident(&arg.name));
+        out.push_str(&crate::e2e::template_env::render(
+            "c/typed_handle.jinja",
+            minijinja::context! {
+                prefix_upper => prefix_upper,
+                type_name => type_name,
+                handle => handle,
+                prefix => prefix,
+                type_snake => type_snake,
+                json_expression => json_expr,
+            },
+        ));
+        out.push_str(&docs_cleanup);
+        typed_arg_handles.insert(arg.name.clone(), handle.clone());
+        typed_arg_cleanup.push((handle, type_snake));
+    }
+    (typed_arg_handles, typed_arg_cleanup)
 }
 
 fn render_typed_arg_cleanup(out: &mut String, prefix: &str, handles: &[(String, String)]) {
