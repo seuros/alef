@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use files::{
-    csharp_file_header, delete_stale_visitor_files, delete_superseded_visitor_files, gen_directory_build_props,
-    strip_trailing_whitespace,
+    csharp_file_header, gen_directory_build_props, report_unemitted_visitor_files, stale_visitor_filenames,
+    strip_trailing_whitespace, superseded_visitor_filenames,
 };
 use marshalling::{
     CAPSULE_PINVOKE_RETURN_TYPE, bytes_len_arg, emit_named_param_setup, emit_named_param_teardown,
@@ -413,9 +413,9 @@ impl Backend for CsharpBackend {
                     visitor_bridge_cfg.map_or("<unknown>", |bridge| bridge.trait_name.as_str())
                 );
             }
-            delete_superseded_visitor_files(&base_path)?;
+            report_unemitted_visitor_files(&base_path, &superseded_visitor_filenames());
         } else {
-            delete_stale_visitor_files(&base_path, config)?;
+            report_unemitted_visitor_files(&base_path, &stale_visitor_filenames(config));
         }
 
         if !config.trait_bridges.is_empty() {
@@ -719,6 +719,158 @@ mod tests {
             }],
             ..ResolvedCrateConfig::default()
         }
+    }
+
+    /// `ocr_bridge_config`, rooted at an absolute temp output directory so `base_path` lands
+    /// inside `temp` instead of resolving `packages/csharp/` against the test process's working
+    /// directory — which is the alef checkout itself, and is where the deleting version of this
+    /// code aimed `fs::remove_file` every time the existing suite ran. ~keep
+    fn temp_rooted_bridge_config(temp: &std::path::Path) -> ResolvedCrateConfig {
+        let mut config = ocr_bridge_config();
+        config.name = "sample".to_string();
+        config.trait_bridges[0].context_type = Some("VisitContext".to_string());
+        config.trait_bridges[0].result_type = Some("VisitOutcome".to_string());
+        config.output_paths.insert("csharp".to_string(), temp.to_path_buf());
+        config
+    }
+
+    /// Every file and directory under `root`, keyed by path; `None` marks a directory so a newly
+    /// created empty directory is as visible as a written file.
+    fn snapshot_tree(root: &std::path::Path) -> std::collections::BTreeMap<PathBuf, Option<Vec<u8>>> {
+        let mut snapshot = std::collections::BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    snapshot.insert(path.clone(), None);
+                    stack.push(path);
+                } else {
+                    snapshot.insert(path.clone(), Some(std::fs::read(&path).unwrap_or_default()));
+                }
+            }
+        }
+        snapshot
+    }
+
+    /// The load-bearing regression. `config.ffi` is an `Option`, and `generate_bindings` read an
+    /// absent `[ffi]` section as `visitor_callbacks == false`, taking an else-branch that
+    /// `fs::remove_file`d `IVisitor.cs`, `VisitorCallbacks.cs`, and a class per configured
+    /// bridge `context_type`/`result_type` — names that come out of the consumer's own config.
+    ///
+    /// Asserting that the flag resolves to `false` would pass with the deletion still in place,
+    /// so this asserts on the filesystem. The seeded set is taken from `stale_visitor_filenames`
+    /// itself, deliberately: that is the exact blast radius the delete had, so the test cannot
+    /// drift narrower than the thing it guards, and a future entry added to that list is covered
+    /// the day it is added rather than the day someone remembers to extend a literal here. ~keep
+    #[test]
+    fn absent_ffi_section_deletes_no_visitor_files() {
+        let temp = tempfile::tempdir().expect("temp output root");
+        let config = temp_rooted_bridge_config(temp.path());
+        assert!(
+            config.ffi.is_none(),
+            "sanity: this test is only about the absent-[ffi] branch"
+        );
+
+        let victims = files::stale_visitor_filenames(&config);
+        assert!(
+            victims.len() > 2,
+            "sanity: the blast radius must include the consumer-named context/result classes, not \
+             just the two hardcoded support files; got {victims:?}"
+        );
+
+        let base_path = temp.path().join(config.csharp_namespace());
+        std::fs::create_dir_all(&base_path).expect("namespace directory");
+        for filename in &victims {
+            std::fs::write(base_path.join(filename), "// hand written\n").expect("seed victim file");
+        }
+
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            types: vec![ocr_shaped_trait()],
+            ..ApiSurface::default()
+        };
+        CsharpBackend
+            .generate_bindings(&api, &config)
+            .expect("C# bindings must render");
+
+        for filename in &victims {
+            let path = base_path.join(filename);
+            assert_eq!(
+                std::fs::read_to_string(&path).ok().as_deref(),
+                Some("// hand written\n"),
+                "{} must survive a render with no [ffi] section, byte for byte",
+                path.display()
+            );
+        }
+    }
+
+    /// `bin_cli::helpers::collect_managed_surface` documents this stage as "a pure in-memory
+    /// render; nothing here writes to disk", and `alef verify`, `alef adopt`, and `alef diff` are
+    /// safe to run on a consumer's tree only because of that. The sibling test above checks the
+    /// visitor filenames specifically and would still pass if some other path in the backend
+    /// started writing or unlinking, so this one asserts the property the purity claim actually
+    /// makes: the output tree is bit-identical across the call. Scope is the configured output
+    /// root, which is where every path this backend constructs points. ~keep
+    #[test]
+    fn render_stage_writes_nothing_under_the_output_root() {
+        let temp = tempfile::tempdir().expect("temp output root");
+        let config = temp_rooted_bridge_config(temp.path());
+
+        let base_path = temp.path().join(config.csharp_namespace());
+        std::fs::create_dir_all(&base_path).expect("namespace directory");
+        for filename in files::stale_visitor_filenames(&config) {
+            std::fs::write(base_path.join(filename), "// hand written\n").expect("seed file");
+        }
+        std::fs::write(base_path.join("NativeMethods.cs"), "// stale generated\n").expect("seed emitted path");
+
+        let before = snapshot_tree(temp.path());
+        assert!(
+            before.len() > 4,
+            "sanity: an empty tree would make the comparison below vacuous; got {before:?}"
+        );
+
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            types: vec![ocr_shaped_trait()],
+            ..ApiSurface::default()
+        };
+        CsharpBackend
+            .generate_bindings(&api, &config)
+            .expect("C# bindings must render");
+
+        assert_eq!(
+            snapshot_tree(temp.path()),
+            before,
+            "generate_bindings must not create, modify, or remove anything under the output root"
+        );
+    }
+
+    /// The report replacing the delete has to name the paths a human is being asked to check, and
+    /// has to report only what is actually there — a candidate list is not a finding. ~keep
+    #[test]
+    fn unemitted_visitor_files_are_reported_not_removed() {
+        let temp = tempfile::tempdir().expect("temp output root");
+        let base_path = temp.path();
+        std::fs::write(base_path.join("IVisitor.cs"), "// hand written\n").expect("seed present file");
+
+        let reported = files::report_unemitted_visitor_files(
+            base_path,
+            &["IVisitor.cs".to_string(), "VisitorCallbacks.cs".to_string()],
+        );
+
+        assert_eq!(
+            reported,
+            vec![base_path.join("IVisitor.cs")],
+            "only the file that exists is reported"
+        );
+        assert!(
+            base_path.join("IVisitor.cs").is_file(),
+            "reporting must leave the file on disk"
+        );
     }
 
     /// Ordered slot-comment identities the bridge class writes, e.g. `["name_fn", "backend_type_fn"]`.

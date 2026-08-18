@@ -34,30 +34,26 @@ pub(super) fn gen_directory_build_props() -> String {
         .to_string()
 }
 
-/// Delete `IVisitor.cs` and `VisitorCallbacks.cs` when visitor_callbacks is enabled but the
-/// modern configured bridge / `TraitBridges.cs` path supersedes them.
-/// These files are no longer emitted by `gen_visitor_files()` but may exist on disk from older
-/// generator runs.
-pub(super) fn delete_superseded_visitor_files(base_path: &std::path::Path) -> anyhow::Result<()> {
-    let superseded = ["IVisitor.cs", "VisitorCallbacks.cs"];
-    for filename in superseded {
-        let path = base_path.join(filename);
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|e| anyhow::anyhow!("Failed to delete superseded visitor file {}: {}", path.display(), e))?;
-        }
-    }
-    Ok(())
+/// Visitor support files earlier alef releases wrote at the namespace root and that
+/// `gen_visitor_files` no longer emits under any configuration — the modern configured-bridge
+/// path folds both into `TraitBridges.cs`.
+const VISITOR_SUPPORT_FILES: [&str; 2] = ["IVisitor.cs", "VisitorCallbacks.cs"];
+
+/// Filenames a `visitor_callbacks`-enabled run supersedes: the two support files
+/// `TraitBridges.cs` now carries.
+pub(super) fn superseded_visitor_filenames() -> Vec<String> {
+    VISITOR_SUPPORT_FILES.iter().map(|name| (*name).to_string()).collect()
 }
 
-/// Delete stale visitor-related files when visitor_callbacks is disabled.
-/// When visitor_callbacks transitions from true → false, these files remain on disk
-/// and cause CS8632 warnings (nullable context not enabled in these files).
-pub(super) fn delete_stale_visitor_files(
-    base_path: &std::path::Path,
-    config: &crate::core::config::ResolvedCrateConfig,
-) -> anyhow::Result<()> {
-    let mut stale_files = vec!["IVisitor.cs".to_string(), "VisitorCallbacks.cs".to_string()];
+/// Filenames a run without visitor callbacks does not emit: the two support files plus every
+/// configured trait bridge's `context_type` / `result_type` class.
+///
+/// Note what the second group is: names taken straight out of the consumer's own
+/// `[[trait_bridges]]` entries. `{ContextType}.cs` under the consumer's own namespace directory
+/// is exactly as likely to be a file a human wrote as one alef did, which is why nothing here is
+/// eligible for unlinking on a filename match. ~keep
+pub(super) fn stale_visitor_filenames(config: &crate::core::config::ResolvedCrateConfig) -> Vec<String> {
+    let mut stale_files = superseded_visitor_filenames();
     stale_files.extend(config.trait_bridges.iter().filter_map(|bridge| {
         bridge
             .context_type
@@ -70,14 +66,62 @@ pub(super) fn delete_stale_visitor_files(
             .as_deref()
             .map(|name| format!("{}.cs", crate::codegen::naming::csharp_type_name(name)))
     }));
+    stale_files
+}
 
-    for filename in stale_files {
-        let path = base_path.join(filename);
-        if path.exists() {
-            std::fs::remove_file(&path)
-                .map_err(|e| anyhow::anyhow!("Failed to delete stale visitor file {}: {}", path.display(), e))?;
-        }
+/// Report visitor support files present under `base_path` that this run did not emit.
+/// **Reports only — never deletes.** Returns the reported paths so a test can assert on the
+/// surface without reading the log.
+///
+/// ## What this replaces
+///
+/// Two `fs::remove_file` loops (`delete_superseded_visitor_files`, `delete_stale_visitor_files`)
+/// called from `generate_bindings` — that is, from inside the stage
+/// `bin_cli::helpers::collect_managed_surface` documents as "a pure in-memory render; nothing
+/// here writes to disk". `alef verify` and `alef adopt` both compose that stage, and `alef diff`
+/// calls `pipeline::generate` directly, so three read-only commands unlinked files in the
+/// consumer's tree. `base_path` is also relative (`resolve_output_dir` returns the configured
+/// `[crates.output]` string verbatim), so the unlink resolved against the process working
+/// directory rather than the project root it was pointed at.
+///
+/// ## Why reporting, and not a narrower delete
+///
+/// `cli::pipeline::generate::orphans::report_disk_scan_candidates` already settled this trade in
+/// this codebase. Its candidates cleared five gates — alef marker, git-tracked, under an owned
+/// output root, absent from the run's keep set, non-degenerate manifest for that root — and it
+/// still only reports, because a consumer's hand-written 408-line Java public API class cleared
+/// all five. The deletes removed here cleared none of them: a filename match was the entire test.
+///
+/// The disabled branch's trigger was weaker again. `config.ffi` is an `Option`, and an absent
+/// `[ffi]` section read as `visitor_callbacks == false`, so a consumer who had simply never
+/// written an `[ffi]` section was treated identically to one who had explicitly disabled the
+/// feature. Requiring an explicit `false` would fix only that third fault and leave the other two
+/// standing; a marker/ownership gate would leave a read-only command deleting, and the precedent
+/// above has already found that gate insufficient. The asymmetry decides it exactly as it did
+/// there: a file left behind costs a CS8632 warning and a line in the log naming the path; a file
+/// wrongly removed costs a consumer source file nobody reads by hand. ~keep
+pub(super) fn report_unemitted_visitor_files(
+    base_path: &std::path::Path,
+    filenames: &[String],
+) -> Vec<std::path::PathBuf> {
+    let present: Vec<std::path::PathBuf> = filenames
+        .iter()
+        .map(|filename| base_path.join(filename))
+        .filter(|path| path.is_file())
+        .collect();
+    if present.is_empty() {
+        return present;
     }
-
-    Ok(())
+    tracing::warn!(
+        "gen_bindings(csharp): {} visitor support file(s) under {} were not emitted by this run. These are NOT \
+         deleted: this generator cannot tell a file an older alef release wrote from one a human wrote at the same \
+         path, and an absent `[ffi]` config section is not a decision to disable visitor callbacks. Review each and \
+         remove by hand if genuinely stale:",
+        present.len(),
+        base_path.display()
+    );
+    for path in &present {
+        tracing::warn!("  unemitted visitor support file: {}", path.display());
+    }
+    present
 }

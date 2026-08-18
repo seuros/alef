@@ -202,7 +202,8 @@ pub(crate) fn callback_specs_from_trait(trait_def: &crate::core::ir::TypeDef, co
 ///
 /// IVisitor.cs and VisitorCallbacks.cs are superseded by IVisitor and VisitorCallbacks
 /// in TraitBridges.cs which use the configured trait bridge approach. They are intentionally
-/// excluded here; stale committed copies are removed by delete_superseded_visitor_files.
+/// excluded here; stale committed copies are reported (never removed) by
+/// `gen_bindings::files::report_unemitted_visitor_files`.
 pub fn gen_visitor_files(
     namespace: &str,
     api: &crate::core::ir::ApiSurface,
