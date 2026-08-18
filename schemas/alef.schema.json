@@ -553,7 +553,7 @@
         },
         "result_var": {
           "default": "result",
-          "description": "Variable name for the return value (default: \"result\").",
+          "description": "Variable name for the return value (default: \"result\").\n\n**Do not read this field to emit an identifier.** A TOML-loaded call always carries a\nname — the serde default below supplies one — but a programmatically built call or an\nexplicit `result_var = \"\"` leaves it blank, and every emitter that splices it straight\ninto a binding then writes the binding with no identifier at all (`val  = ...`), which\nis not valid source in any target language. Read [`CallConfig::effective_result_var`]\ninstead; it is the only place the blank-means-default rule is decided.",
           "type": "string"
         },
         "returns_result": {
