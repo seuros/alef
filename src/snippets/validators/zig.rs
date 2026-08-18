@@ -82,9 +82,14 @@ impl SnippetValidator for ZigValidator {
                     .args(["--dep", &module_name])
                     .arg(format!("-Mroot={}", file.display()))
                     .arg(format!("-M{module_name}={}", module_source.display()));
+                // Resolved against the manifest's own directory, not the session's working
+                // directory: the scaffolded `build.zig` rebases these defaults onto its build
+                // root, and the two directories only coincide when the session happens to set
+                // `cwd` to the package. ~keep
+                let build_root = manifest.parent().unwrap_or_else(|| std::path::Path::new("."));
                 declared_include_paths = zig_manifest_include_paths(manifest)?
                     .into_iter()
-                    .map(|path| session.working_directory.join(path))
+                    .map(|path| build_root.join(path))
                     .collect();
             }
         } else {
@@ -130,15 +135,15 @@ fn apply_include_paths(command: &mut std::process::Command, include_paths: &[std
 ///
 /// A `build.zig` is a program rather than a manifest, so this reads back only the shape Alef's own
 /// scaffold (`scaffold::languages::zig::scaffold_zig`) emits:
-/// `addIncludePath(.{ .cwd_relative = <expr> })`, where `<expr>` is either
-/// a string literal or an identifier bound by `const <expr> = b.option(...) orelse "<default>";`.
-/// Any other expression is skipped rather than guessed at — a wrong `-I` is worse than none.
+/// `addIncludePath(.{ .cwd_relative = <expr> })`, where `<expr>` is either a string literal or an
+/// identifier [`binding_default`] can trace back to one. Any other expression is skipped rather
+/// than guessed at — a wrong `-I` is worse than none.
 ///
 /// Without this the reconstructed `build-exe` command carries no `-I` at all unless the consumer
 /// also repeats the path under `include_paths`, so every snippet reaching a `@cInclude` in the
 /// binding fails with `C import failed ... 'header.h' not found` while `zig build` succeeds.
-/// Paths are returned verbatim: `.cwd_relative` is relative to the build's working directory,
-/// which is exactly the directory the session runs zig in.
+/// Paths are returned verbatim, relative to the manifest's own directory — the build root the
+/// scaffolded manifest rebases them onto, which the caller supplies.
 fn zig_manifest_include_paths(manifest: &std::path::Path) -> Result<Vec<String>> {
     const DECLARATION: &str = "addIncludePath(.{ .cwd_relative = ";
 
@@ -151,7 +156,7 @@ fn zig_manifest_include_paths(manifest: &std::path::Path) -> Result<Vec<String>>
         let expression = occurrence[..end].trim();
         let Some(path) = string_literal(expression)
             .map(str::to_owned)
-            .or_else(|| option_default(&source, expression))
+            .or_else(|| binding_default(&source, expression))
         else {
             continue;
         };
@@ -166,12 +171,44 @@ fn string_literal(expression: &str) -> Option<&str> {
     expression.strip_prefix('"')?.strip_suffix('"')
 }
 
-/// The literal in `const <name> = b.option(...) orelse "<default>";`, if `name` is bound that way.
-fn option_default(source: &str, name: &str) -> Option<String> {
-    let binding = source.find(&format!("const {name} = b.option("))?;
-    let default = source[binding..].find("orelse ")? + binding + "orelse ".len();
-    let rest = source[default..].trim_start();
-    let literal = rest.strip_prefix('"')?;
+/// How many `const` hops [`binding_default`] follows before giving up. The scaffold emits exactly
+/// one (`ffi_include` → `ffi_include_option`); the rest is headroom, and the bound is what keeps a
+/// hand-written manifest with a cyclic binding from spinning here. ~keep
+const MAX_BINDING_INDIRECTIONS: usize = 4;
+
+/// The default path a scaffolded `build.zig` binds to `name`.
+///
+/// Two shapes, both of which alef's own scaffold has emitted:
+/// `const <name> = b.option(...) orelse "<default>";`, and the build-root-rebased pair
+/// `const <name> = b.pathResolve(&.{ <build root>, <inner> });` whose `<inner>` is itself a
+/// binding resolved the same way. The build-root argument is deliberately dropped rather than
+/// joined in: the caller already knows that directory as the manifest's own, and it is an
+/// expression here (`b.build_root.path orelse "."`) rather than a literal this could read. ~keep
+fn binding_default(source: &str, name: &str) -> Option<String> {
+    const REBASE: &str = "b.pathResolve(&.{";
+
+    let mut name = name.to_owned();
+    for _ in 0..MAX_BINDING_INDIRECTIONS {
+        let marker = format!("const {name} = ");
+        let start = source.find(&marker)? + marker.len();
+        let statement = source[start..]
+            .split_once(';')
+            .map_or(&source[start..], |(head, _)| head);
+        let Some(arguments) = statement.strip_prefix(REBASE) else {
+            return orelse_literal(statement);
+        };
+        let end = arguments.find("})")?;
+        name = arguments[..end].rsplit(',').next()?.trim().to_owned();
+    }
+    None
+}
+
+/// The literal in `... orelse "<default>"` within a single statement.
+fn orelse_literal(statement: &str) -> Option<String> {
+    const ORELSE: &str = "orelse ";
+
+    let default = statement.find(ORELSE)? + ORELSE.len();
+    let literal = statement[default..].trim_start().strip_prefix('"')?;
     let end = literal.find('"')?;
     Some(literal[..end].to_owned())
 }
@@ -671,6 +708,167 @@ mod tests {
              \x20   {include}\
              }}\n"
         )
+    }
+
+    /// The include declaration alef's scaffold emits today: the option default is rebased onto the
+    /// package's own build root before it reaches `.cwd_relative`, so the literal the parser needs
+    /// sits one `const` further away than it used to.
+    fn build_root_rebased_build_zig(package_name: &str) -> String {
+        format!(
+            "const std = @import(\"std\");\n\
+             pub fn build(b: *std.Build) void {{\n\
+             \x20   const target = b.standardTargetOptions(.{{}});\n\
+             \x20   const optimize = b.standardOptimizeOption(.{{}});\n\
+             \x20   const build_root = b.build_root.path orelse \".\";\n\
+             \x20   const ffi_include_option = b.option(\n\
+             \x20       []const u8,\n\
+             \x20       \"ffi_include_path\",\n\
+             \x20       \"Path to directory containing the FFI C header\"\n\
+             \x20   ) orelse \"vendor/include\";\n\
+             \x20   const ffi_include = b.pathResolve(&.{{ build_root, ffi_include_option }});\n\
+             \x20   const module = b.addModule(\"{package_name}\", .{{\n\
+             \x20       .root_source_file = b.path(\"src/root.zig\"),\n\
+             \x20       .target = target,\n\
+             \x20       .optimize = optimize,\n\
+             \x20       .link_libc = true,\n\
+             \x20   }});\n\
+             \x20   module.addIncludePath(.{{ .cwd_relative = ffi_include }});\n\
+             }}\n"
+        )
+    }
+
+    /// Regression: reading only `const <name> = b.option(...) orelse "<literal>"` finds nothing in
+    /// the manifest alef writes today, because the binding `.cwd_relative` names is the rebased one.
+    #[test]
+    fn manifest_include_paths_resolve_through_a_build_root_rebased_binding() {
+        let directory = tempfile::tempdir().expect("project directory");
+        let manifest = directory.path().join("build.zig");
+        std::fs::write(&manifest, build_root_rebased_build_zig("sample_binding")).unwrap();
+
+        let paths = zig_manifest_include_paths(&manifest).unwrap();
+
+        assert_eq!(paths, ["vendor/include"]);
+    }
+
+    #[test]
+    fn binding_default_gives_up_rather_than_looping_on_a_cyclic_binding() {
+        let source = "const a = b.pathResolve(&.{ root, b_name });\nconst b_name = b.pathResolve(&.{ root, a });\n";
+
+        assert_eq!(binding_default(source, "a"), None);
+    }
+
+    /// The decisive cwd-independence check, and the exact shape the Zig snippet validator itself
+    /// builds: the scaffolded package is consumed as a `.path` dependency from a scratch directory
+    /// while zig runs with its working directory somewhere else entirely. A `.cwd_relative` search
+    /// path built from a raw relative default cannot resolve from there — which is why the paired
+    /// negative control below must fail. ~keep
+    #[test]
+    fn a_snippet_compiles_when_the_package_is_built_from_an_unrelated_working_directory() {
+        if which::which("zig").is_err() {
+            return;
+        }
+
+        let (rebased, rebased_session) = sample_package(true);
+        let (raw, raw_session) = sample_package(false);
+        let snippet = zig_snippet(
+            "const sample_package = @import(\"sample_package\");\n\npub fn main() void {\n    _ = sample_package.value();\n}\n",
+        );
+
+        let (rebased_status, rebased_output) = ZigValidator
+            .validate_in_session(
+                &snippet,
+                ValidationLevel::Compile,
+                TOOLCHAIN_TEST_TIMEOUT_SECS,
+                Some(&rebased_session),
+            )
+            .expect("rebased session validates");
+        let (raw_status, _) = ZigValidator
+            .validate_in_session(
+                &snippet,
+                ValidationLevel::Compile,
+                TOOLCHAIN_TEST_TIMEOUT_SECS,
+                Some(&raw_session),
+            )
+            .expect("raw session validates");
+
+        assert_eq!(
+            rebased_status,
+            SnippetStatus::Pass,
+            "rebasing onto the build root makes the include directory resolve from any cwd: {rebased_output:?}"
+        );
+        assert_eq!(
+            raw_status,
+            SnippetStatus::Fail,
+            "a raw cwd-relative default cannot resolve from a foreign working directory"
+        );
+        drop((rebased, raw));
+    }
+
+    /// A complete Zig package (`build.zig` + `build.zig.zon`) whose module only compiles when its
+    /// include directory resolves, paired with a session whose working directory is a *sibling* of
+    /// the package rather than the package itself. `rebase_onto_build_root` selects between the
+    /// declaration alef emits today and the raw `.cwd_relative` one it emitted before.
+    fn sample_package(rebase_onto_build_root: bool) -> (tempfile::TempDir, ValidationSession) {
+        const PACKAGE: &str = "sample_package";
+
+        let directory = tempfile::tempdir().expect("project directory");
+        let package = directory.path().join("package");
+        let elsewhere = directory.path().join("elsewhere");
+        std::fs::create_dir_all(package.join("src")).unwrap();
+        std::fs::create_dir_all(package.join("vendor/include")).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+
+        let manifest = if rebase_onto_build_root {
+            build_root_rebased_build_zig(PACKAGE)
+        } else {
+            build_root_rebased_build_zig(PACKAGE).replace(
+                "const ffi_include = b.pathResolve(&.{ build_root, ffi_include_option });",
+                "const ffi_include = ffi_include_option;",
+            )
+        };
+        std::fs::write(package.join("build.zig"), manifest).unwrap();
+        std::fs::write(
+            package.join("build.zig.zon"),
+            format!(
+                ".{{\n    .name = .{PACKAGE},\n    .version = \"0.0.0\",\n    \
+                 .fingerprint = 0x{fingerprint:016x},\n    \
+                 .minimum_zig_version = \"0.16.0\",\n    \
+                 .paths = .{{ \"build.zig\", \"build.zig.zon\", \"src\", \"vendor\" }},\n}}\n",
+                fingerprint = package_fingerprint(PACKAGE.as_bytes()),
+            ),
+        )
+        .unwrap();
+        std::fs::write(package.join("vendor/include/fixture.h"), "#define FIXTURE_VALUE 7\n").unwrap();
+        std::fs::write(
+            package.join("src/root.zig"),
+            "pub const c = @cImport(@cInclude(\"fixture.h\"));\n\npub fn value() c_int {\n    return c.FIXTURE_VALUE;\n}\n",
+        )
+        .unwrap();
+
+        let session = ValidationSession {
+            language: Language::Zig,
+            working_directory: elsewhere,
+            manifest: Some(package.join("build.zig")),
+            fingerprint: "foreign-cwd-project".into(),
+            env: std::collections::BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: std::collections::BTreeMap::new(),
+        };
+        (directory, session)
+    }
+
+    /// Zig 0.16's `build.zig.zon` fingerprint scheme, for fixture packages `zig build` must accept.
+    fn package_fingerprint(name: &[u8]) -> u64 {
+        let mut id: u32 = 0x811c_9dc5;
+        for byte in name {
+            id ^= u32::from(*byte);
+            id = id.wrapping_mul(0x0100_0193);
+        }
+        if id == 0 || id == 0xffff_ffff {
+            id = 0x1;
+        }
+        (u64::from(crc32_ieee(name)) << 32) | u64::from(id)
     }
 
     /// A self-contained Zig project whose module only compiles when its declared include directory
