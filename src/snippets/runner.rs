@@ -1926,11 +1926,13 @@ mod tests {
 
         reporter.record(&unavailable_result(
             &snippets[0],
-            "error NU1101: Unable to find package XbergIo.Sample",
+            "error NU1101: Unable to find package Contoso.Sample",
         ));
 
-        assert!(logs_contain("First snippet validation unavailability for this language"));
-        assert!(logs_contain("Unable to find package XbergIo.Sample"));
+        assert!(logs_contain(
+            "First snippet validation unavailability for this language"
+        ));
+        assert!(logs_contain("Unable to find package Contoso.Sample"));
     }
 
     /// A language whose every snippet came back unvalidated must say so at the end of its stage. It

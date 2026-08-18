@@ -244,6 +244,17 @@ fn replace_or_append_options(args: &str, options_type: &str) -> String {
     }
 }
 
+/// Strip the uniform four-space indent `build_csharp_visitor` adds for nesting inside an e2e test
+/// class, so the same declaration reads correctly at a snippet's file scope. Lines that do not
+/// carry the indent (blank ones) are passed through unchanged.
+fn dedent_file_scope_declaration(declaration: &str) -> String {
+    declaration
+        .lines()
+        .map(|line| line.strip_prefix("    ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::dedent_file_scope_declaration;
@@ -264,7 +275,10 @@ mod tests {
 
     #[test]
     fn a_blank_line_survives_dedenting_unchanged() {
-        assert_eq!(dedent_file_scope_declaration("    class A\n\n    {\n    }"), "class A\n\n{\n}");
+        assert_eq!(
+            dedent_file_scope_declaration("    class A\n\n    {\n    }"),
+            "class A\n\n{\n}"
+        );
     }
 
     use super::*;
@@ -792,15 +806,4 @@ mod tests {
             "a snippet that constructs no client must not declare one:\n{body}"
         );
     }
-}
-
-/// Strip the uniform four-space indent `build_csharp_visitor` adds for nesting inside an e2e test
-/// class, so the same declaration reads correctly at a snippet's file scope. Lines that do not
-/// carry the indent (blank ones) are passed through unchanged.
-fn dedent_file_scope_declaration(declaration: &str) -> String {
-    declaration
-        .lines()
-        .map(|line| line.strip_prefix("    ").unwrap_or(line))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
