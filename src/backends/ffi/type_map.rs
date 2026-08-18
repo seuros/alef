@@ -237,8 +237,58 @@ pub fn is_passthrough_return(ty: &TypeRef) -> bool {
     )
 }
 
+/// The Rust spelling of a `Named` parameter that crosses the C ABI as a bare scalar
+/// discriminant rather than as a handle-registry key. cbindgen renders it `int32_t`.
+pub const SCALAR_NAMED_C_PARAM_TYPE: &str = "i32";
+
+/// The Rust spelling of a `Named` parameter that crosses the C ABI as an `AlefHandle`
+/// (`uint64_t`) registry key.
+pub const HANDLE_NAMED_C_PARAM_TYPE: &str = "AlefHandle";
+
+/// The set of IR type names whose `Named` parameter positions cross the C ABI as
+/// [`SCALAR_NAMED_C_PARAM_TYPE`] instead of [`HANDLE_NAMED_C_PARAM_TYPE`].
+///
+/// This is the single construction of that set. Every backend that has to mirror an emitted C
+/// signature — the C FFI crate itself, and the C-ABI consumers such as the C# `[DllImport]`
+/// emitters — must build it from here rather than deriving an independent notion of
+/// "is this an enum", so a host binding can never declare a width the C header contradicts. ~keep
+pub fn scalar_c_abi_named_types(api: &crate::core::ir::ApiSurface) -> AHashSet<String> {
+    api.enums
+        .iter()
+        .filter(|enum_def| enum_def.is_copy)
+        .map(|enum_def| enum_def.name.clone())
+        .chain(
+            api.types
+                .iter()
+                .filter(|type_def| !type_def.is_trait && type_def.is_copy)
+                .map(|type_def| type_def.name.clone()),
+        )
+        .collect()
+}
+
+/// True when the IR type called `name` has parameter positions that cross the C ABI as
+/// [`SCALAR_NAMED_C_PARAM_TYPE`]. Convenience over [`scalar_c_abi_named_types`] for callers that
+/// resolve one name at a time; it builds the set so there is still only one such construction.
+pub fn is_scalar_c_abi_named_type(api: &crate::core::ir::ApiSurface, name: &str) -> bool {
+    scalar_c_abi_named_types(api).contains(name)
+}
+
+/// True when `ty` occupies a `Named` (or `Optional<Named>`) position that crosses the C ABI as
+/// [`SCALAR_NAMED_C_PARAM_TYPE`]. Pair with [`scalar_c_abi_named_types`].
+pub fn crosses_c_abi_as_scalar(ty: &TypeRef, scalar_named_types: &AHashSet<String>) -> bool {
+    let named = match ty {
+        TypeRef::Named(name) => Some(name),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(name) => Some(name),
+            _ => None,
+        },
+        _ => None,
+    };
+    named.is_some_and(|name| scalar_named_types.contains(name.as_str()))
+}
+
 /// Maps a TypeRef to the C FFI parameter type, using full rust_path from path_map for Named
-/// types and emitting `i32` for enum types.
+/// types and emitting [`SCALAR_NAMED_C_PARAM_TYPE`] for scalar-discriminant types.
 pub fn c_param_type_with_paths_and_enums(
     ty: &TypeRef,
     core_import: &str,
@@ -246,26 +296,15 @@ pub fn c_param_type_with_paths_and_enums(
     enum_names: &AHashSet<String>,
     _is_mut: bool,
 ) -> Cow<'static, str> {
-    match ty {
-        TypeRef::Named(name) => {
-            if enum_names.contains(name.as_str()) {
-                Cow::Borrowed("i32")
-            } else {
-                Cow::Borrowed("AlefHandle")
-            }
-        }
-        TypeRef::Optional(inner) => {
-            if let TypeRef::Named(name) = inner.as_ref() {
-                if enum_names.contains(name.as_str()) {
-                    Cow::Borrowed("i32")
-                } else {
-                    Cow::Borrowed("AlefHandle")
-                }
-            } else {
-                c_param_type(ty, core_import)
-            }
-        }
-        _ => c_param_type(ty, core_import),
+    let is_named_position = matches!(ty, TypeRef::Named(_))
+        || matches!(ty, TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)));
+    if !is_named_position {
+        return c_param_type(ty, core_import);
+    }
+    if crosses_c_abi_as_scalar(ty, enum_names) {
+        Cow::Borrowed(SCALAR_NAMED_C_PARAM_TYPE)
+    } else {
+        Cow::Borrowed(HANDLE_NAMED_C_PARAM_TYPE)
     }
 }
 

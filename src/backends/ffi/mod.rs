@@ -10,6 +10,6 @@ mod gen_visitor;
 pub(crate) mod handle_abi_stamp;
 pub(crate) mod template_env;
 pub mod trait_bridge;
-mod type_map;
+pub mod type_map;
 
 pub use gen_bindings::FfiBackend;

@@ -7,11 +7,11 @@ use std::collections::{HashMap, HashSet};
 /// True when `ty` crosses the C ABI as the scalar `AlefHandle` (`uint64_t`) rather than a
 /// real pointer. Mirrors `FfiParamMapper`/`FfiReturnMapper::named` in
 /// `backends::ffi::type_map`, which map *every* `TypeRef::Named` — opaque handle or
-/// JSON-backed data struct alike — to `AlefHandle`, including through `Optional`. Enum-typed
-/// `Named` params/returns are unaffected: the FFI backend's `c_param_type_with_paths_and_enums`
-/// still emits `i32` for those, and this backend has never special-cased enum-ness at this
-/// layer either, so the pre-existing (non-)handling of enum positions is left exactly as it
-/// was. ~keep
+/// JSON-backed data struct alike — to `AlefHandle`, including through `Optional`.
+///
+/// This is the *return*-position and default answer only. In parameter position the FFI backend
+/// narrows a `Named` whose type is `Copy` to `i32`, so `[DllImport]` parameters must go through
+/// [`pinvoke_param_type_with_scalars`] rather than reading this predicate directly. ~keep
 pub(super) fn is_handle_type(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Named(_) => true,
@@ -207,6 +207,33 @@ pub(super) fn pinvoke_param_type(ty: &TypeRef) -> &'static str {
     }
 }
 
+/// The P/Invoke type of a `Named` parameter the C FFI crate declares as
+/// `type_map::SCALAR_NAMED_C_PARAM_TYPE` (`i32`, rendered `int32_t` by cbindgen).
+///
+/// Declared next to [`HANDLE_PINVOKE_TYPE`] so the two widths a `Named` parameter can take are
+/// stated in one place. ~keep
+pub(super) const SCALAR_NAMED_PINVOKE_TYPE: &str = "int";
+
+/// Returns the C# `[DllImport]` parameter type, resolving a `Named` position against the same
+/// scalar/handle split the C FFI crate emits.
+///
+/// `scalar_named_types` must come from `backends::ffi::type_map::scalar_c_abi_named_types` — the
+/// one construction of that set — so the C# declaration and the C header are two renderings of a
+/// single fact instead of two independent assertions. Declaring `ulong` where the header says
+/// `int32_t` is not merely a C# compile error against the wrapper's `(int)` cast: it is a live
+/// ABI violation, and the absent-sentinel `-1` that `named_param_enum_optional.jinja` emits is
+/// not even representable in `ulong`. ~keep
+pub(super) fn pinvoke_param_type_with_scalars(
+    ty: &TypeRef,
+    scalar_named_types: &ahash::AHashSet<String>,
+) -> &'static str {
+    if crate::backends::ffi::type_map::crosses_c_abi_as_scalar(ty, scalar_named_types) {
+        SCALAR_NAMED_PINVOKE_TYPE
+    } else {
+        pinvoke_param_type(ty)
+    }
+}
+
 /// Returns true if a parameter should be hidden from the public API because it is a
 /// trait-bridge param (e.g. the FFI visitor handle).
 pub(super) fn is_bridge_param(
@@ -277,9 +304,9 @@ pub(super) fn native_call_arg(
         }
         TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => {
             if optional {
-                format!("({param_name} ?? false)")
+                format!("(({param_name} ?? false) ? 1 : 0)")
             } else {
-                param_name.to_string()
+                format!("({param_name} ? 1 : 0)")
             }
         }
         ty => {

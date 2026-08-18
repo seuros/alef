@@ -602,7 +602,7 @@ fn test_opaque_method_return_wraps_handle_without_to_json() {
 }
 
 #[test]
-fn test_bool_param_call_site_matches_pinvoke_bool_decl() {
+fn bool_param_call_site_matches_the_c_int_pinvoke_declaration() {
     let backend = CsharpBackend;
     let config = minimal_csharp_config("test");
     let api = ApiSurface {
@@ -690,25 +690,28 @@ fn test_bool_param_call_site_matches_pinvoke_bool_decl() {
         .unwrap();
 
     assert!(
-        native.content.contains("[MarshalAs(UnmanagedType.U1)] bool enable"),
-        "P/Invoke decl must keep `[MarshalAs(UnmanagedType.U1)] bool` for the enable param; got:\n{}",
+        native.content.contains("int enable"),
+        "P/Invoke must declare the enable param `int` — the C FFI crate declares it `i32` and \
+         cbindgen renders that `int32_t`, so a one-byte managed bool underfills it; got:\n{}",
+        native.content
+    );
+    assert!(
+        !native.content.contains("[MarshalAs(UnmanagedType.U1)] bool enable"),
+        "P/Invoke must not marshal the enable param as a one-byte bool; got:\n{}",
         native.content
     );
 
-    assert!(
-        !wrapper.content.contains("(enable ? 1 : 0)"),
-        "Call site must not emit `(enable ? 1 : 0)` (would not type-check against the bool P/Invoke param); got:\n{}",
-        wrapper.content
-    );
     // The receiver arg is a leased handle (`handleLease.Handle`, not the bare `Handle`
     // property) since every borrowed instance call now takes `using var handleLease =
-    // BorrowHandle()`; `enable` still follows it directly and unconverted. ~keep
+    // BorrowHandle()`; `enable` follows it, widened to the `int` the declaration expects. ~keep
     assert!(
         wrapper
             .content
-            .contains("EnablePlayground(\n            handleLease.Handle,\n            enable\n")
-            || wrapper.content.contains("EnablePlayground(handleLease.Handle, enable"),
-        "Call site must pass `enable` directly to the P/Invoke; got:\n{}",
+            .contains("EnablePlayground(\n            handleLease.Handle,\n            (enable ? 1 : 0)\n")
+            || wrapper
+                .content
+                .contains("EnablePlayground(handleLease.Handle, (enable ? 1 : 0)"),
+        "Call site must pass `enable` as the C int the declaration expects; got:\n{}",
         wrapper.content
     );
 }
@@ -3397,7 +3400,7 @@ type = "*const std::ffi::c_char"
 }
 
 #[test]
-fn test_record_method_bool_param_passes_bool_directly() {
+fn record_method_bool_param_crosses_as_the_c_int_the_header_declares() {
     let backend = CsharpBackend;
     let config = minimal_csharp_config("test");
 
@@ -3488,22 +3491,14 @@ fn test_record_method_bool_param_passes_bool_directly() {
         .expect("NativeMethods.cs should be generated");
 
     assert!(
-        native_file
-            .content
-            .contains("[MarshalAs(UnmanagedType.U1)] bool enable"),
-        "P/Invoke should declare bool parameter with marshaling attribute: {}",
+        native_file.content.contains("int enable"),
+        "P/Invoke should declare the bool parameter at the C `int32_t` width: {}",
         native_file.content
     );
 
     assert!(
-        config_file.content.contains("enable"),
-        "Bool parameter should be passed directly in method call: {}",
-        config_file.content
-    );
-
-    assert!(
-        !config_file.content.contains("(enable ? 1 : 0)"),
-        "Bool parameter should not be converted to int with (enable ? 1 : 0): {}",
+        config_file.content.contains("(enable ? 1 : 0)"),
+        "Bool parameter should be widened to the C int the declaration expects: {}",
         config_file.content
     );
 }

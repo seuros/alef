@@ -1,13 +1,13 @@
 //! C# NativeMethods (P/Invoke) code generation.
 
 use super::{
-    FfiEmitter, HANDLE_PINVOKE_TYPE, StreamingMethodMeta, is_bridge_param, pinvoke_param_type,
+    FfiEmitter, HANDLE_PINVOKE_TYPE, StreamingMethodMeta, is_bridge_param, pinvoke_param_type_with_scalars,
     pinvoke_return_type_with_capsules,
 };
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::config::workspace::ClientConstructorConfig;
-use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, PrimitiveType, TypeRef};
+use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, TypeRef};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
@@ -148,6 +148,8 @@ pub(super) fn gen_native_methods(
 ) -> anyhow::Result<String> {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
+
+    let scalar_named_types = crate::backends::ffi::type_map::scalar_c_abi_named_types(api);
 
     let mut out = render(
         "native_methods_header.jinja",
@@ -354,6 +356,7 @@ pub(super) fn gen_native_methods(
                 bridge_param_names,
                 bridge_type_aliases,
                 capsule_types,
+                &scalar_named_types,
             ));
         }
     }
@@ -375,6 +378,7 @@ pub(super) fn gen_native_methods(
                     &cs_method_name,
                     method,
                     capsule_types,
+                    &scalar_named_types,
                 ));
             }
         }
@@ -641,12 +645,14 @@ pub(super) fn is_bytes_result_method(method: &MethodDef) -> bool {
     matches!(method.return_type, TypeRef::Bytes)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn gen_pinvoke_for_func(
     c_name: &str,
     func: &FunctionDef,
     bridge_param_names: &HashSet<String>,
     bridge_type_aliases: &HashSet<String>,
     capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    scalar_named_types: &ahash::AHashSet<String>,
 ) -> String {
     use crate::backends::csharp::template_env::render;
 
@@ -682,15 +688,9 @@ pub(super) fn gen_pinvoke_for_func(
         out.push('\n');
         for param in visible_params.iter() {
             out.push_str("        ");
-            let pinvoke_ty = pinvoke_param_type(&param.ty);
+            let pinvoke_ty = pinvoke_param_type_with_scalars(&param.ty, scalar_named_types);
             if pinvoke_ty == "string" {
                 out.push_str("[MarshalAs(UnmanagedType.LPUTF8Str)] ");
-            } else if pinvoke_ty == "int" && matches!(param.ty, TypeRef::Primitive(PrimitiveType::Bool)) {
-                out.push_str("[MarshalAs(UnmanagedType.U1)] bool ");
-                let param_name = param.name.to_lower_camel_case();
-                out.push_str(&param_name);
-                out.push_str(",\n");
-                continue;
             }
             let param_name = param.name.to_lower_camel_case();
             out.push_str(
@@ -729,6 +729,7 @@ pub(super) fn gen_pinvoke_for_method(
     cs_name: &str,
     method: &MethodDef,
     capsule_types: &HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    scalar_named_types: &ahash::AHashSet<String>,
 ) -> String {
     use crate::backends::csharp::template_env::render;
 
@@ -765,15 +766,9 @@ pub(super) fn gen_pinvoke_for_method(
         }
         for param in method.params.iter() {
             out.push_str("        ");
-            let pinvoke_ty = pinvoke_param_type(&param.ty);
+            let pinvoke_ty = pinvoke_param_type_with_scalars(&param.ty, scalar_named_types);
             if pinvoke_ty == "string" {
                 out.push_str("[MarshalAs(UnmanagedType.LPUTF8Str)] ");
-            } else if pinvoke_ty == "int" && matches!(param.ty, TypeRef::Primitive(PrimitiveType::Bool)) {
-                out.push_str("[MarshalAs(UnmanagedType.U1)] bool ");
-                let param_name = param.name.to_lower_camel_case();
-                out.push_str(&param_name);
-                out.push_str(",\n");
-                continue;
             }
             let param_name = param.name.to_lower_camel_case();
             out.push_str(

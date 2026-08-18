@@ -23,18 +23,7 @@ pub(super) fn build_lib_setup_context<'a>(api: &ApiSurface, config: &'a Resolved
         path_map.insert(err.name.clone(), err.rust_path.replace('-', "_"));
     }
 
-    let enum_names: AHashSet<String> = api
-        .enums
-        .iter()
-        .filter(|e| e.is_copy)
-        .map(|e| e.name.clone())
-        .chain(
-            api.types
-                .iter()
-                .filter(|t| !t.is_trait && t.is_copy)
-                .map(|t| t.name.clone()),
-        )
-        .collect();
+    let enum_names = crate::backends::ffi::type_map::scalar_c_abi_named_types(api);
 
     let ffi_param_enums: AHashSet<String> = api
         .enums

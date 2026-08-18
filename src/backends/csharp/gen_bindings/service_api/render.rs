@@ -15,8 +15,13 @@ fn is_opaque(api: &ApiSurface, name: &str) -> bool {
     api.types.iter().any(|typ| typ.name == name && typ.is_opaque)
 }
 
-fn is_enum(api: &ApiSurface, name: &str) -> bool {
-    api.enums.iter().any(|enumeration| enumeration.name == name)
+/// True when a `Named` service param crosses the C ABI as a bare scalar discriminant.
+///
+/// Reads `backends::ffi::type_map`, the module that decides the C signature, rather than asking
+/// `api.enums` directly: enum-ness is not the deciding fact — being `Copy` is — so a non-`Copy`
+/// enum is boxed as an `AlefHandle` and a `Copy` struct is not. ~keep
+fn crosses_as_scalar(api: &ApiSurface, name: &str) -> bool {
+    crate::backends::ffi::type_map::is_scalar_c_abi_named_type(api, name)
 }
 
 fn primitive_managed_type(primitive: &crate::core::ir::PrimitiveType) -> &'static str {
@@ -85,7 +90,7 @@ fn native_type(ty: &TypeRef, api: &ApiSurface) -> &'static str {
         TypeRef::Primitive(PrimitiveType::F64) => "double",
         TypeRef::Primitive(PrimitiveType::Usize) => "nuint",
         TypeRef::Primitive(PrimitiveType::Isize) => "nint",
-        TypeRef::Named(name) if is_enum(api, name) => "int",
+        TypeRef::Named(name) if crosses_as_scalar(api, name) => "int",
         TypeRef::Named(_) => super::super::HANDLE_PINVOKE_TYPE,
         _ => "IntPtr",
     }
@@ -114,7 +119,7 @@ fn call_marshalling(params: &[ParamDef], api: &ApiSurface, indent: &str) -> Call
     for param in params {
         let name = param.name.to_lower_camel_case();
         match &param.ty {
-            TypeRef::Named(type_name) if is_enum(api, type_name) => {
+            TypeRef::Named(type_name) if crosses_as_scalar(api, type_name) => {
                 result.arg_lines.push_str(&format!(",\n{indent}(int){name}"));
             }
             TypeRef::Named(type_name) if is_opaque(api, type_name) => {
@@ -178,9 +183,9 @@ fn begin_named_setup<'a>(result: &mut CallMarshalling, param: &ParamDef, name: &
 
 fn service_needs_error_resolver(service: &ServiceDef, api: &ApiSurface) -> bool {
     let has_named_record = |params: &[ParamDef]| {
-        params
-            .iter()
-            .any(|param| matches!(&param.ty, TypeRef::Named(name) if !is_enum(api, name) && !is_opaque(api, name)))
+        params.iter().any(
+            |param| matches!(&param.ty, TypeRef::Named(name) if !crosses_as_scalar(api, name) && !is_opaque(api, name)),
+        )
     };
     !service.configurators.is_empty()
         || service

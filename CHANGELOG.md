@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C# `[DllImport]` parameters now derive their width from the same fact as the emitted C signature.**
+  `marshalling::pinvoke_param_type` mapped every `TypeRef::Named` to `ulong`, but the C FFI backend
+  narrows a `Named` parameter whose type is `Copy` to `i32` — cbindgen renders that `int32_t`. A `Copy`
+  enum parameter was therefore declared eight bytes wide against a four-byte signed argument, and the
+  wrapper's own `(int)` cast (`named_param_enum_required.jinja`) could not even be passed to it, so the
+  generated package failed to compile with `CS1503: cannot convert from 'int' to 'ulong'`. Casting the
+  argument to `ulong` would have silenced the compiler while cementing the ABI violation; instead the
+  scalar/handle split is now constructed once, in `backends::ffi::type_map::scalar_c_abi_named_types`,
+  and read by the C FFI backend, both P/Invoke emitters and the service-API emitter. The C# service-API
+  path additionally stopped keying that decision off enum-ness, which disagreed with the C header for a
+  non-`Copy` enum (boxed as a handle) and for a `Copy` struct.
+- **C# `bool` parameters cross the C ABI as `int32`, not a one-byte managed `bool`.** The free-function
+  and method P/Invoke emitters declared `[MarshalAs(UnmanagedType.U1)] bool`, which marshals one byte,
+  while the C FFI crate declares `i32` and cbindgen emits `int32_t`. The callee reads four bytes, so the
+  upper three were whatever the calling convention left there — reachable in practice for any argument
+  passed on the stack rather than in a register. Every other boundary in the same backend already
+  agreed on `int` (trait-bridge delegates, the service-API map, and the `bool` *return* mapping), so the
+  P/Invoke declaration was the outlier; the wrapper now passes `(value ? 1 : 0)` to match.
+
 - **`alef snippets check --lang` accepts the session names a user actually has.** The filter resolved
   its values as fence tags only, so every session target whose name differs from its fence tag —
   `kotlin_android`, `node`, `wasm`, `c_ffi` — was rejected as unrecognised. Those names are the only

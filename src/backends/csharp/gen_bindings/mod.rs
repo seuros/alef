@@ -13,9 +13,9 @@ use files::{
 use marshalling::{
     CAPSULE_PINVOKE_RETURN_TYPE, FfiEmitter, HANDLE_PINVOKE_TYPE, bytes_len_arg, emit_named_param_setup,
     emit_named_param_teardown, emit_named_param_teardown_indented, enum_names_with_data_variants, is_bridge_param,
-    is_capsule_return, native_call_arg, needs_param_teardown, pinvoke_param_type, pinvoke_return_type_with_capsules,
-    returns_bool_via_int, returns_json_object, returns_ptr, returns_string, zero_sentinel,
-    zero_sentinel_for_pinvoke_type,
+    is_capsule_return, native_call_arg, needs_param_teardown, pinvoke_param_type_with_scalars,
+    pinvoke_return_type_with_capsules, returns_bool_via_int, returns_json_object, returns_ptr, returns_string,
+    zero_sentinel, zero_sentinel_for_pinvoke_type,
 };
 
 /// Metadata for a streaming adapter, used to drive emission of an
@@ -30,6 +30,8 @@ pub(super) struct StreamingMethodMeta {
     pub item_type: String,
 }
 
+#[cfg(test)]
+mod abi_parity_tests;
 pub(super) mod enums;
 pub(super) mod errors;
 mod files;

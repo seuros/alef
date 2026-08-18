@@ -991,6 +991,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
             capsule_types,
+            &ahash::AHashSet::new(),
         )
     }
 
@@ -1089,6 +1090,7 @@ mod tests {
             "RegistryGetLanguage",
             method,
             capsule_types,
+            &ahash::AHashSet::new(),
         )
     }
 
