@@ -1,4 +1,4 @@
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_elixir;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -283,6 +283,12 @@ pub(super) fn render_assertion(
         && let Some(f) = assertion.field.as_deref()
         && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
     {
+        // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a
+        // second wildcard in `elem_part` that the element accessor below lowers to index 0. ~keep
+        if let Some(line) = nested_wildcard_skip_line("      ", "#", f, &elem_part) {
+            let _ = writeln!(out, "{line}");
+            return;
+        }
         let array_accessor = if array_part.is_empty() {
             result_var.to_string()
         } else {
@@ -1303,5 +1309,18 @@ mod wildcard_tests {
         assert!(!out.contains("Enum.at("), "index-pinned lookup survived: {out}");
         assert!(out.contains("Enum.any?((result.items || [])"), "got: {out}");
         assert!(out.contains("to_string(e.name)"), "got: {out}");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `Enum.any?`
+    /// ranged over `pages` while its body read `Enum.at(e.links, 0).url` — a whole-array
+    /// claim that only ever inspected element zero of the inner list. Pre-guard this test
+    /// fails: the skip line is absent and `Enum.at(e.links, 0)` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render(&contains_on("pages[].links[].url"), &array_resolver("pages"));
+        assert_eq!(
+            out, "      # skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
     }
 }

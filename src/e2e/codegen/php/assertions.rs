@@ -1,5 +1,6 @@
 //! PHP fixture assertion rendering helpers.
 
+use crate::e2e::codegen::field_skip::nested_wildcard_skip_line;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::fmt::Write as FmtWrite;
@@ -265,6 +266,12 @@ pub(super) fn render_assertion(
         && let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
         && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
     {
+        // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a
+        // second wildcard in `elem_part` that the element accessor below lowers to index 0. ~keep
+        if let Some(line) = nested_wildcard_skip_line("        ", "//", f, &elem_part) {
+            let _ = writeln!(out, "{line}");
+            return;
+        }
         let raw_array_accessor = if array_part.is_empty() {
             format!("${result_var}")
         } else {
@@ -650,8 +657,8 @@ mod tests {
         FieldResolver::new(
             &HashMap::new(),
             &HashSet::new(),
-            &HashSet::from(["links".to_string()]),
-            &HashSet::from(["links".to_string()]),
+            &HashSet::from(["links".to_string(), "pages".to_string()]),
+            &HashSet::from(["links".to_string(), "pages".to_string()]),
             &HashSet::new(),
         )
     }
@@ -721,6 +728,19 @@ mod tests {
         assert!(
             !out.contains("array_filter"),
             "explicit index must not become a quantifier, got:\n{out}"
+        );
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `array_filter`
+    /// ranged over `pages` while its closure read `$e->links[0]->url` — a whole-array claim
+    /// that only ever inspected element zero of the inner array. Pre-guard this test fails:
+    /// the skip line is absent and a quantifier over `[0]` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_wildcard("contains", "pages[].links[].url");
+        assert_eq!(
+            out, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got:\n{out}"
         );
     }
 }

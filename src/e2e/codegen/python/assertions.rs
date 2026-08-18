@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 
@@ -133,6 +133,12 @@ fn render_python_wildcard_assertion(
     result_var: &str,
     field_resolver: &FieldResolver,
 ) {
+    // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a second
+    // wildcard in `elem_part` that the element accessor below would lower to index 0. ~keep
+    if let Some(line) = nested_wildcard_skip_line("    ", "#", field, elem_part) {
+        let _ = writeln!(out, "{line}");
+        return;
+    }
     let array_accessor = if array_part.is_empty() {
         result_var.to_string()
     } else {
@@ -759,6 +765,28 @@ mod tests {
         assert!(out.contains("for _e in"), "got: {out}");
         assert!(!out.contains("links[0]"), "got: {out}");
         assert!(!out.contains("links[1]"), "predicate must be index-free, got: {out}");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the comprehension
+    /// ranged over `pages` while its body read `_e.links[0].url` — a whole-array claim that
+    /// only ever inspected element zero of the inner list. Pre-guard this test fails on both
+    /// assertions: the skip line is absent and `links[0]` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_field_contains(
+            &resolver_with_array_field("pages"),
+            "pages[].links[].url",
+            "example.test",
+        );
+        assert!(
+            out.contains("# skipped: nested array-wildcard field 'pages[].links[].url' not supported"),
+            "expected a visible skip, got: {out}"
+        );
+        assert!(!out.contains("links[0]"), "inner wildcard collapsed to index 0: {out}");
+        assert!(
+            !out.contains("any("),
+            "no quantifier may be emitted for a refused path: {out}"
+        );
     }
 
     #[test]

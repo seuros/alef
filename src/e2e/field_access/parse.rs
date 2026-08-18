@@ -101,7 +101,14 @@ pub(super) fn parse_path(path: &str) -> Vec<PathSegment> {
             let name = part[..bracket_pos].to_string();
             let key = part[bracket_pos + 1..].trim_end_matches(']').to_string();
             if key.is_empty() {
-                // `foo[]` — bare array bracket, index defaults to 0 (upgraded by inject_array_indexing).
+                // `foo[]` — a bare bracket LOSES its wildcard meaning here and becomes index 0,
+                // indistinguishable from a hand-written `foo[0]`. Nothing downstream restores it:
+                // `FieldResolver::inject_array_indexing` passes an explicit `ArrayField` straight
+                // through ("the user's explicit index takes precedence"), and the renderers emit
+                // the index verbatim. A caller that means "every element" must therefore split the
+                // wildcard off with `FieldResolver::wildcard_split` BEFORE building an accessor —
+                // reaching this arm with a wildcard is how a whole-array claim silently becomes an
+                // element-zero check. ~keep
                 segments.push(PathSegment::ArrayField { name, index: 0 });
             } else if !key.is_empty() && key.chars().all(|c| c.is_ascii_digit()) {
                 // `foo[N]` — user-typed explicit numeric index.

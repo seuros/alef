@@ -1,4 +1,5 @@
 use crate::codegen::keywords::swift_ident;
+use crate::e2e::codegen::field_skip::nested_wildcard_skip_line;
 use crate::e2e::field_access::FieldResolver;
 use heck::ToLowerCamelCase;
 use std::collections::HashMap;
@@ -232,6 +233,13 @@ pub(super) fn swift_traversal_contains_assert(
         .find("[].")
         .map(|d| &resolved_full[d + 3..])
         .unwrap_or(element_part);
+    // The split above consumes the first `[].` only, so a doubly-nested path leaves a second
+    // wildcard in the element sub-path that `accessor` would lower to index 0 — the
+    // `contains(where:)` closure would then range over `pages` while reading `links[0]`. Return
+    // the refusal as this function's rendered line; every caller writes the return value out. ~keep
+    if let Some(line) = nested_wildcard_skip_line("        ", "//", full_field, resolved_elem_part) {
+        return line;
+    }
     let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
     let elem_is_enum = enum_fields.contains(full_field) || enum_fields.contains(resolved_full);
     let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
@@ -469,4 +477,52 @@ pub(super) fn swift_count_target(
     // meaningful `.count` (character length), so wrap with `.toString()` and let the
     // caller append `.count` for length assertions (e.g. `count_min`, `is_empty`).
     Some(format!("{field_expr}.toString()"))
+}
+
+#[cfg(test)]
+mod nested_wildcard_tests {
+    use super::swift_traversal_contains_assert;
+    use crate::e2e::field_access::FieldResolver;
+    use std::collections::{HashMap, HashSet};
+
+    fn array_resolver(field: &str) -> FieldResolver {
+        let names: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(&HashMap::new(), &HashSet::new(), &names, &names, &HashSet::new())
+    }
+
+    fn render(full_field: &str, array_part: &str, element_part: &str, resolver: &FieldResolver) -> String {
+        swift_traversal_contains_assert(
+            array_part,
+            element_part,
+            full_field,
+            "\"example.test\"",
+            "result",
+            false,
+            "expected to contain",
+            &HashSet::new(),
+            resolver,
+        )
+    }
+
+    /// Baseline: a single wildcard still builds a `contains(where:)` over the whole array, so
+    /// the refusal below cannot have been implemented by refusing traversals generally. ~keep
+    #[test]
+    fn single_wildcard_still_builds_a_contains_where_closure() {
+        let line = render("links[].url", "links", "url", &array_resolver("links"));
+        assert!(line.contains(".contains(where: {"), "got: {line}");
+        assert!(!line.contains("skipped:"), "got: {line}");
+    }
+
+    /// The element sub-path handed to this helper keeps everything after the FIRST `[].`, so a
+    /// doubly-nested path arrives here as `links[].url` and `accessor` lowers the surviving
+    /// wildcard to index 0 — the closure would range over `pages` while reading `links[0]`.
+    /// Pre-guard this test fails: the returned line is a `contains(where:)` naming `[0]`. ~keep
+    #[test]
+    fn nested_wildcard_should_return_a_visible_skip_rather_than_an_index_zero_check() {
+        let line = render("pages[].links[].url", "pages", "links[].url", &array_resolver("pages"));
+        assert_eq!(
+            line, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported",
+            "got: {line}"
+        );
+    }
 }

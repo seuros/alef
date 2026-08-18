@@ -638,6 +638,14 @@ impl FieldResolver {
     /// the element side; the raw split is only a fallback for when resolution drops
     /// the marker. Explicit numeric indices (`choices[0].message`) return `None` and
     /// keep their existing index-preserving path through `accessor`. ~keep
+    ///
+    /// The split is NOT recursive: it consumes the FIRST `[].` only. A doubly-nested path
+    /// (`pages[].links[].url`) therefore returns an element sub-path that still carries a
+    /// wildcard, and handing that to `accessor` lowers the inner `[]` to index 0 (see
+    /// `parse_path`) — the caller's loop covers `pages` while the assertion inside it silently
+    /// reads `links[0]`. Gate the element sub-path with
+    /// `crate::e2e::codegen::field_skip::nested_wildcard_skip_line` before building an
+    /// accessor from it. ~keep
     pub fn wildcard_split(&self, fixture_field: &str) -> Option<(String, String)> {
         let raw_dot = fixture_field.find("[].")?;
         let resolved = self.resolve(fixture_field);

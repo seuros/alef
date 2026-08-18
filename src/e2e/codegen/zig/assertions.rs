@@ -1,5 +1,5 @@
 use super::*;
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 
 /// Variant names of `FormatMetadata` (snake_case, from `#[serde(rename_all = "snake_case")]`).
 ///
@@ -144,12 +144,8 @@ fn render_wildcard_json_assertion(
     // A second wildcard inside the element sub-path would need a nested loop.
     // Emitting `items[0]` for it would reintroduce exactly the false green this
     // function exists to remove, so leave a visible gap instead. ~keep
-    if element_sub_path.contains("[]") {
-        let _ = writeln!(
-            out,
-            "    // skipped: {}",
-            FieldSkip::NestedArrayWildcardNotSupportedInZig.message(field_name)
-        );
+    if let Some(line) = nested_wildcard_skip_line("    ", "//", field_name, element_sub_path) {
+        let _ = writeln!(out, "{line}");
         return;
     }
 

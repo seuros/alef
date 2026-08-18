@@ -2,7 +2,7 @@
 
 use std::fmt::Write as FmtWrite;
 
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_rust;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -765,6 +765,12 @@ fn render_rust_wildcard_assertion(
     result_var: &str,
     field_resolver: &FieldResolver,
 ) {
+    // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a second
+    // wildcard in `elem_part` that the element accessor below would lower to index 0. ~keep
+    if let Some(line) = nested_wildcard_skip_line("    ", "//", field, elem_part) {
+        let _ = writeln!(out, "{line}");
+        return;
+    }
     let array_accessor = if array_part.is_empty() {
         result_var.to_string()
     } else {
@@ -924,6 +930,19 @@ mod tests {
         assert!(out.contains(".iter().any("), "got: {out}");
         assert!(!out.contains("links[0]"), "got: {out}");
         assert!(!out.contains("links[1]"), "predicate must be index-free, got: {out}");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `.iter().any()`
+    /// ranged over `pages` while its closure read `e.links[0].url` — a whole-array claim that
+    /// only ever inspected element zero of the inner vector. Pre-guard this test fails: the
+    /// skip line is absent and `links[0]` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_field_contains(&array_resolver("pages"), "pages[].links[].url", "example.test");
+        assert_eq!(
+            out, "    // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
     }
 
     #[test]

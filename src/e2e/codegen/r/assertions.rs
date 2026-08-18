@@ -1,6 +1,6 @@
 //! R e2e assertion rendering.
 
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use std::fmt::Write as FmtWrite;
@@ -241,6 +241,13 @@ pub(super) fn render_assertion(
         && let Some(f) = assertion.field.as_deref()
         && let Some((array_part, elem_part)) = context.field_resolver.wildcard_split(f)
     {
+        // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a
+        // second wildcard in `elem_part`. R's renderer is 1-based, so the collapse surfaces as
+        // `[[1]]` rather than a `[0]` a reviewer would recognise as an index pin. ~keep
+        if let Some(line) = nested_wildcard_skip_line("  ", "#", f, &elem_part) {
+            let _ = writeln!(out, "{line}");
+            return;
+        }
         let array_accessor = if array_part.is_empty() {
             result_var.to_string()
         } else {
@@ -1045,5 +1052,27 @@ mod wildcard_tests {
         assert!(!out.contains("[["), "index-pinned lookup survived: {out}");
         assert!(out.contains("any(vapply(result$items,"), "got: {out}");
         assert!(out.contains("e$name"), "got: {out}");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `vapply`
+    /// ranged over `pages` while its body read `e$links[[1]]$url` — a whole-array claim that
+    /// only ever inspected the first element of the inner list. R being 1-based is what made
+    /// this collapse hardest to see: it surfaces as `[[1]]`, not as a `[0]` a reviewer
+    /// recognises as an index pin. Pre-guard this test fails on both assertions. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render(
+            &Assertion {
+                assertion_type: "contains".to_string(),
+                field: Some("pages[].links[].url".to_string()),
+                value: Some(json!("example.test")),
+                ..Assertion::default()
+            },
+            &array_resolver("pages"),
+        );
+        assert_eq!(
+            out, "  # skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
     }
 }

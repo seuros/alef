@@ -151,11 +151,13 @@ field_skip_variants! {
         "field ",
         " references a field or type excluded from the Swift binding",
     ),
-    /// ~keep Declared generator limitation, not a resolution failure: the path resolves fine, the
-    /// zig backend just cannot lower a nested array wildcard yet.
-    NestedArrayWildcardNotSupportedInZig: LanguageLimitation => (
+    /// ~keep Was `NestedArrayWildcardNotSupportedInZig` (" not supported in zig"), emitted by the
+    /// one backend that had ever guarded the case. Every other backend now refuses it too, so the
+    /// wording is language-neutral and single-sourced through `nested_wildcard_skip_line`. The
+    /// old text is a prefix of the new one, so anything grepping for it still matches.
+    NestedArrayWildcardNotSupported: LanguageLimitation => (
         "nested array-wildcard field ",
-        " not supported in zig",
+        " not supported",
     ),
     ArrayElementNotSupportedInGleam: LanguageLimitation => (
         "array element field ",
@@ -245,9 +247,45 @@ impl FieldSkip {
     }
 }
 
+/// The `skipped:` line refusing a doubly-nested bracket-wildcard path, or `None` when
+/// `element_sub_path` carries no second wildcard.
+///
+/// `FieldResolver::wildcard_split` consumes the FIRST `[].` only, so for `pages[].links[].url`
+/// it hands back the element sub-path `links[].url`. Every backend then builds its per-element
+/// accessor from that sub-path — and `parse_path` lowers the surviving `[]` to index 0, so the
+/// emitted loop covers `pages` while the check inside it silently reads `links[0]`. A fixture
+/// claiming "every element" then passes on element zero alone, in a language whose output is
+/// green.
+///
+/// Refusing is the deliberate answer, not a placeholder: a nested quantifier is expressible in
+/// most of these languages but not all (Go emits statements rather than an expression, R goes
+/// through `vapply`, Dart's element accessor renders the wildcard as the syntactically invalid
+/// `links![]`), so emitting it would land unevenly — and an index-0 fallback in the backends
+/// that could not keep up is exactly the false green this function exists to remove. `zig` had
+/// already made that call for itself; this is the same call for everyone, single-sourced so the
+/// predicate and the wording cannot drift apart between backends.
+///
+/// The returned line carries no trailing newline: callers `writeln!` it, or return it where a
+/// rendered line is expected. Indentation and comment syntax stay at the call site, matching the
+/// rest of this module. ~keep
+pub(crate) fn nested_wildcard_skip_line(
+    indent: &str,
+    comment_open: &str,
+    field: &str,
+    element_sub_path: &str,
+) -> Option<String> {
+    if !element_sub_path.contains("[]") {
+        return None;
+    }
+    Some(format!(
+        "{indent}{comment_open} skipped: {}",
+        FieldSkip::NestedArrayWildcardNotSupported.message(field)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{FieldSkip, SkipClass};
+    use super::{FieldSkip, SkipClass, nested_wildcard_skip_line};
 
     /// ~keep The classification is what decides whose build breaks, so it is pinned here rather
     /// than left implicit in the variant list. These four are the load-bearing calls:
@@ -352,5 +390,38 @@ mod tests {
     fn extracts_the_quoted_name_not_a_later_phrase() {
         let line = "  # skipped: result_is_simple for field 'metadata' not available on result type";
         assert_eq!(FieldSkip::extract(line), Some("metadata"));
+    }
+
+    #[test]
+    fn should_refuse_when_the_element_sub_path_still_carries_a_wildcard() {
+        assert_eq!(
+            nested_wildcard_skip_line("    ", "//", "pages[].links[].url", "links[].url").as_deref(),
+            Some("    // skipped: nested array-wildcard field 'pages[].links[].url' not supported")
+        );
+    }
+
+    /// A single wildcard leaves nothing behind on the element side, and that is the case every
+    /// backend must keep quantifying over — refusing it would delete working coverage. ~keep
+    #[test]
+    fn should_not_refuse_a_single_wildcard() {
+        assert_eq!(nested_wildcard_skip_line("    ", "#", "links[].url", "url"), None);
+    }
+
+    /// An explicit numeric index is a different, correct feature: `pages[].links[0].url` names
+    /// element zero because the fixture author asked for it. ~keep
+    #[test]
+    fn should_not_refuse_an_explicit_inner_index() {
+        assert_eq!(
+            nested_wildcard_skip_line("    ", "#", "pages[].links[0].url", "links[0].url"),
+            None
+        );
+    }
+
+    /// The refusal must round-trip through the strict field-availability gate, or the honest
+    /// gap is invisible to the very tooling that counts gaps. ~keep
+    #[test]
+    fn the_nested_wildcard_refusal_is_counted_by_the_strict_gate() {
+        let line = nested_wildcard_skip_line("  ", "#", "pages[].links[].url", "links[].url").unwrap();
+        assert_eq!(FieldSkip::extract(&line), Some("pages[].links[].url"));
     }
 }

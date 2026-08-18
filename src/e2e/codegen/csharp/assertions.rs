@@ -1,6 +1,6 @@
 //! C# assertion rendering for generated e2e tests.
 
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_csharp;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -1175,6 +1175,12 @@ fn render_wildcard_assertion(
     array_part: &str,
     elem_part: &str,
 ) {
+    // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a second
+    // wildcard in `elem_part` that the element accessor below would lower to index 0. ~keep
+    if let Some(line) = nested_wildcard_skip_line("        ", "//", field, elem_part) {
+        let _ = writeln!(out, "{line}");
+        return;
+    }
     let array_accessor = if array_part.is_empty() {
         result_var.to_string()
     } else {
@@ -1341,5 +1347,18 @@ mod wildcard_traversal_tests {
             s[start..start + s[start..].find(' ').expect("param is space-delimited")].to_string()
         };
         assert_ne!(param_of(&first), param_of(&second), "lambda params must not collide");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `Any` ranged
+    /// over `pages` while its body read `e.Links[0].Url` — a whole-array claim that only ever
+    /// inspected element zero of the inner list. Pre-guard this test fails on both
+    /// assertions: the skip line is absent and `[0]` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_bare(&contains_assertion("pages[].links[].url", "example.test"));
+        assert_eq!(
+            out, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
     }
 }

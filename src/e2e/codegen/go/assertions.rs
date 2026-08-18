@@ -1,6 +1,6 @@
 //! Go assertion rendering.
 
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::go_string_literal;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -1045,6 +1045,12 @@ fn render_wildcard_assertion(
     array_part: &str,
     elem_part: &str,
 ) {
+    // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a second
+    // wildcard in `elem_part` that the element accessor below would lower to index 0. ~keep
+    if let Some(line) = nested_wildcard_skip_line("\t", "//", field, elem_part) {
+        let _ = writeln!(out, "{line}");
+        return;
+    }
     let array_accessor = if array_part.is_empty() {
         result_var.to_string()
     } else {
@@ -1222,6 +1228,19 @@ mod tests {
         assert!(
             !out.contains("result.Links[0]"),
             "an index-0 accessor would miss a match in element 1, got: {out}"
+        );
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the emitted scan
+    /// ranged over `pages` while its body read `e.Links[0].Url` — a whole-array claim that
+    /// only ever inspected element zero of the inner slice. Pre-guard this test fails: the
+    /// skip line is absent and a `range` scan over `[0]` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_bare(&contains_assertion("pages[].links[].url", "example.test"));
+        assert_eq!(
+            out, "\t// skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
         );
     }
 

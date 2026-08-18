@@ -3,7 +3,7 @@
 use heck::ToLowerCamelCase;
 use std::fmt::Write as FmtWrite;
 
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_kotlin;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -264,6 +264,13 @@ pub(super) fn render_assertion(
         && let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
         && let Some((array_part, elem_part)) = field_resolver.wildcard_split(f)
     {
+        // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a
+        // second wildcard in `elem_part`. Kotlin's renderer lowers it to `.first()` rather than
+        // a visible `[0]`, which makes the collapse even harder to spot in review. ~keep
+        if let Some(line) = nested_wildcard_skip_line("        ", "//", f, &elem_part) {
+            let _ = writeln!(out, "{line}");
+            return;
+        }
         let raw_array_accessor = if array_part.is_empty() {
             result_var.to_string()
         } else {
@@ -797,5 +804,67 @@ mod strict_field_availability_marker_tests {
             false,
         );
         assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
+    }
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn array_resolver(field: &str) -> FieldResolver {
+        let names: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(&HashMap::new(), &HashSet::new(), &names, &names, &HashSet::new())
+    }
+
+    fn render_contains(resolver: &FieldResolver, field: &str, value: &str) -> String {
+        let assertion = Assertion {
+            assertion_type: "contains".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClient",
+            resolver,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+        );
+        out
+    }
+
+    /// Baseline: a single wildcard still quantifies over the whole list, so the refusal added
+    /// for the nested case cannot have been implemented by refusing wildcards generally. ~keep
+    #[test]
+    fn single_wildcard_still_quantifies_over_every_element() {
+        let out = render_contains(&array_resolver("links"), "links[].url", "example.test");
+        assert!(out.contains(".any {"), "got: {out}");
+        assert!(!out.contains(".first()"), "wildcard must not pin element 0, got: {out}");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `any {}` ranged
+    /// over `pages` while its lambda read `e.links().first().url()` — a whole-array claim that
+    /// only ever inspected element zero of the inner list. Kotlin is the worst case for
+    /// spotting this in review: `index == 0` renders as `.first()`, never as a literal `[0]`,
+    /// so an index-free assertion would have passed vacuously. Pre-guard this test fails: the
+    /// skip line is absent and `.first()` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_contains(&array_resolver("pages"), "pages[].links[].url", "example.test");
+        assert_eq!(
+            out, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
     }
 }

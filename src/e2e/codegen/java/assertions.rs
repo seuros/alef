@@ -1,3 +1,4 @@
+use crate::e2e::codegen::field_skip::nested_wildcard_skip_line;
 use crate::e2e::escape::escape_java;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
@@ -755,6 +756,13 @@ fn render_wildcard_assertion(
     array_part: &str,
     elem_part: &str,
 ) {
+    // `wildcard_split` consumes the first `[].` only, so a doubly-nested path leaves a second
+    // wildcard in `elem_part` that the element accessor below would lower to index 0. ~keep
+    if let Some(line) = nested_wildcard_skip_line("        ", "//", field, elem_part) {
+        out.push_str(&line);
+        out.push('\n');
+        return;
+    }
     let array_accessor = if array_part.is_empty() {
         result_var.to_string()
     } else {
@@ -939,6 +947,20 @@ mod tests {
         );
         assert!(out.contains("\"internal\""), "got: {out}");
         assert!(!out.contains(".get(0)"), "got: {out}");
+    }
+
+    /// `wildcard_split` consumes the first `[].` only, so before the guard the `anyMatch`
+    /// ranged over `pages` while its body read `e.links().get(0).url()` — a whole-array claim
+    /// that only ever inspected element zero of the inner list. Java hides the collapse
+    /// behind `.get(0)` rather than a bracket index. Pre-guard this test fails on both
+    /// assertions: the skip line is absent and `.get(0)` is present. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_bare(&make_contains_assertion("pages[].links[].url", "example.test"));
+        assert_eq!(
+            out, "        // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
     }
 
     #[test]

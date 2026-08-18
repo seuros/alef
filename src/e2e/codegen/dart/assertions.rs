@@ -1,4 +1,4 @@
-use crate::e2e::codegen::field_skip::FieldSkip;
+use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use heck::ToLowerCamelCase;
@@ -104,6 +104,15 @@ pub(super) fn render_assertion_dart(
             // split, since generated code expects the array/elem structure.
             None => (&f[..dot], &f[dot + 3..]),
         };
+        // The split above consumes the first `[].` only, so a doubly-nested path leaves a
+        // second wildcard in `elem_part`. Dart is the one backend where that is not even a
+        // silent index-0 collapse: `field_to_dart_accessor` renders the bare bracket verbatim,
+        // producing `e.links![].url`, which is not valid Dart. Refuse it here so the gap is a
+        // recorded skip rather than a generated file that fails to analyze. ~keep
+        if let Some(line) = nested_wildcard_skip_line("    ", "//", f, elem_part) {
+            let _ = writeln!(out, "{line}");
+            return;
+        }
         let array_accessor = if array_part.is_empty() {
             result_var.to_string()
         } else {
@@ -734,4 +743,56 @@ pub(super) fn dart_stringy_aggregator_contains_assert(
     Some(format!(
         "    expect({array_accessor}.where((item) => item.toString().toLowerCase().contains(({dart_val}).toString().toLowerCase())).isEmpty, isFalse);"
     ))
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::{field_to_dart_accessor, render_assertion_dart};
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn array_resolver(field: &str) -> FieldResolver {
+        let names: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(&HashMap::new(), &HashSet::new(), &names, &names, &HashSet::new())
+    }
+
+    fn render_contains(resolver: &FieldResolver, field: &str, value: &str) -> String {
+        let assertion = Assertion {
+            assertion_type: "contains".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion_dart(&mut out, &assertion, "result", false, resolver, &HashSet::new());
+        out
+    }
+
+    /// Baseline: a single wildcard still quantifies over the whole list, so the refusal added
+    /// for the nested case cannot have been implemented by refusing wildcards generally. ~keep
+    #[test]
+    fn single_wildcard_still_quantifies_over_every_element() {
+        let out = render_contains(&array_resolver("links"), "links[].url", "example.test");
+        assert!(out.contains("result.links.any((e) => e.url"), "got: {out}");
+    }
+
+    /// The evidence that Dart's inner collapse was never even index-0-shaped: the element
+    /// accessor renders the surviving bare bracket verbatim. `links![]` is not valid Dart, so
+    /// a doubly-nested fixture would have produced a file that fails to analyze. ~keep
+    #[test]
+    fn the_element_accessor_renders_a_surviving_wildcard_as_invalid_dart() {
+        assert_eq!(field_to_dart_accessor("links[].url"), "links![].url");
+    }
+
+    /// Pre-guard this test fails: the skip line is absent and the emitted `any((e) => ...)`
+    /// closure names `e.links![].url`. ~keep
+    #[test]
+    fn nested_wildcard_should_emit_a_visible_skip_rather_than_an_index_zero_check() {
+        let out = render_contains(&array_resolver("pages"), "pages[].links[].url", "example.test");
+        assert_eq!(
+            out, "    // skipped: nested array-wildcard field 'pages[].links[].url' not supported\n",
+            "got: {out}"
+        );
+    }
 }
