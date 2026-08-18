@@ -903,6 +903,7 @@ fn render_harness_main(_e2e_config: &E2eConfig, groups: &[FixtureGroup], go_modu
 }
 
 mod assertions;
+mod enum_literals;
 mod json_values;
 mod method_calls;
 mod setup;

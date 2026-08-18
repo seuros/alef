@@ -48,6 +48,31 @@ fn named_field_type_mismatch(
     )
 }
 
+/// The lowering environment a native Go DTO literal is built in.
+///
+/// The four registries travel together through every level of the recursion — a struct
+/// field, an enum payload, a sealed-interface variant's own named fields — and threading
+/// them individually pushes each recursive entry point past the argument limit. ~keep
+#[derive(Clone, Copy)]
+pub(super) struct GoValueContext<'a> {
+    pub import_alias: &'a str,
+    pub type_defs: &'a [crate::core::ir::TypeDef],
+    pub enums: &'a [crate::core::ir::EnumDef],
+    pub files: &'a [crate::e2e::fixture::FixtureDocsFileInput],
+}
+
+/// Where in the fixture a value is being lowered, and into what.
+///
+/// `owner_type` and `field_name` are what a refusal names, so they must describe the field
+/// that actually failed rather than the outermost DTO an operator would then have to search. ~keep
+#[derive(Clone, Copy)]
+pub(super) struct GoFieldSite<'a> {
+    pub owner_type: &'a str,
+    pub field_name: &'a str,
+    /// This field's `docs.files` pointer, e.g. `/document/content`.
+    pub pointer: &'a str,
+}
+
 /// Lower a scalar fixture value into an expression of the Go type declared for `type_name`.
 ///
 /// This is the one point where the value's JSON shape and the *declared type it lands in* are
@@ -57,23 +82,27 @@ fn named_field_type_mismatch(
 /// as a struct or a sealed interface. A name that resolves to no IR enum is left exactly as it
 /// was: nothing here can prove what such a type is, and a false refusal deletes published
 /// documentation. ~keep
+///
+/// The order of the three answers is deliberate. A named constant and the string conversion
+/// come first so the representations that already compile keep their exact rendering; only
+/// then does [`super::enum_literals::go_enum_value_expression`] try to *construct* a value of a
+/// struct- or interface-shaped enum, and only a value that identifies no variant reaches the
+/// refusal. ~keep
 fn go_named_scalar_expression(
     value: &serde_json::Value,
     type_name: &str,
-    import_alias: &str,
-    enums: &[crate::core::ir::EnumDef],
-    owner_type: &str,
-    field_name: &str,
+    context: GoValueContext<'_>,
+    site: GoFieldSite<'_>,
 ) -> anyhow::Result<String> {
     let go_type = crate::codegen::naming::go_type_name(type_name);
-    let conversion = format!("{import_alias}.{go_type}({})", json_to_go(value));
-    let Some(enum_def) = enums.iter().find(|candidate| candidate.name == type_name) else {
+    let conversion = format!("{}.{go_type}({})", context.import_alias, json_to_go(value));
+    let Some(enum_def) = context.enums.iter().find(|candidate| candidate.name == type_name) else {
         return Ok(conversion);
     };
     if let Some(wire_value) = value.as_str()
         && let Some(constant) = crate::backends::go::go_enum_constant_for_wire_value(enum_def, wire_value)
     {
-        return Ok(format!("{import_alias}.{constant}"));
+        return Ok(format!("{}.{constant}", context.import_alias));
     }
     let representation = crate::backends::go::go_enum_representation(enum_def);
     // A value that names no variant is still emitted as the conversion when the binding
@@ -82,24 +111,118 @@ fn go_named_scalar_expression(
     if representation.accepts_string_conversion() && json_to_go_yields_string_literal(value) {
         return Ok(conversion);
     }
+    if let Some(constructed) = super::enum_literals::go_enum_value_expression(value, enum_def, context, site)? {
+        return Ok(constructed);
+    }
     Err(named_field_type_mismatch(
-        owner_type,
-        field_name,
+        site.owner_type,
+        site.field_name,
         &go_type,
         representation,
         &json_to_go(value),
     ))
 }
 
+/// Lower a value into an expression of the Go type `type_name`, as a field of that type takes
+/// it: a composite literal when the value is a DTO object, otherwise the scalar lowering, each
+/// address-taken when the emitted field is a pointer.
+///
+/// A composite literal is addressable with `&`; a constant, a conversion and a bare literal are
+/// not, which is why the second arm goes through the generic `ptr[T any]` helper instead. ~keep
+pub(super) fn go_named_field_expression(
+    value: &serde_json::Value,
+    type_name: &str,
+    context: GoValueContext<'_>,
+    site: GoFieldSite<'_>,
+    uses_pointer: bool,
+) -> anyhow::Result<String> {
+    if let Some(nested) = native_go_dto_literal_at(value, type_name, context, site.pointer)? {
+        return Ok(if uses_pointer { format!("&{nested}") } else { nested });
+    }
+    let literal = go_named_scalar_expression(value, type_name, context, site)?;
+    Ok(if uses_pointer {
+        format!("ptr({literal})")
+    } else {
+        literal
+    })
+}
+
+/// Lower one IR field's fixture value into the expression its emitted Go field takes.
+///
+/// `Ok(None)` means the value's JSON shape has no expression at this field's type and the
+/// field is omitted from the literal (Go's zero value stands in); `Err` means the value has no
+/// valid expression at all and no snippet may be published. Shared by the struct-literal
+/// builder and by the sealed-interface variant builder, which fills fields declared exactly
+/// the same way. ~keep
+pub(super) fn go_struct_field_expression(
+    field: &crate::core::ir::FieldDef,
+    value: &serde_json::Value,
+    context: GoValueContext<'_>,
+    site: GoFieldSite<'_>,
+    uses_pointer: bool,
+) -> anyhow::Result<Option<String>> {
+    let inner = match &field.ty {
+        crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
+        other => other,
+    };
+    if context.files.iter().any(|file| file.field == site.pointer) && matches!(inner, crate::core::ir::TypeRef::Bytes) {
+        let Some(path) = value.as_str() else {
+            return Ok(None);
+        };
+        return Ok(Some(format!("mustReadFile({})", go_string_literal(path))));
+    }
+    let expression = match inner {
+        crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
+            let Some(literal) = value.as_str().map(go_string_literal) else {
+                return Ok(None);
+            };
+            if uses_pointer {
+                format!("ptr({literal})")
+            } else {
+                literal
+            }
+        }
+        crate::core::ir::TypeRef::Bytes => {
+            let Some(array) = value.as_array() else {
+                return Ok(None);
+            };
+            let items = array.iter().filter_map(serde_json::Value::as_u64).collect::<Vec<_>>();
+            format!(
+                "[]byte{{{}}}",
+                items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+            )
+        }
+        crate::core::ir::TypeRef::Named(name) => go_named_field_expression(value, name, context, site, uses_pointer)?,
+        crate::core::ir::TypeRef::Primitive(primitive) => {
+            let literal = json_to_go(value);
+            if uses_pointer {
+                // `ptr[T any](value T) *T` infers `T` from the argument expression. A bare
+                // numeric literal (e.g. `30`) defaults to Go's untyped-constant rule (`int`
+                // for integers, `float64` for floats), which only matches the field's actual
+                // pointer type by coincidence — `*uint`/`*uint64`/`*int32`/etc. fields need an
+                // explicit conversion so `ptr(...)` infers the field's real width instead.
+                // `bool` has exactly one Go type, so it never needs this. ~keep
+                if matches!(primitive, crate::core::ir::PrimitiveType::Bool) {
+                    format!("ptr({literal})")
+                } else {
+                    let go_primitive_type = crate::backends::go::type_map::go_struct_field_type(inner);
+                    format!("ptr({go_primitive_type}({literal}))")
+                }
+            } else {
+                literal
+            }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(expression))
+}
+
 fn native_go_dto_literal(
     value: &serde_json::Value,
     type_name: &str,
-    import_alias: &str,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    context: GoValueContext<'_>,
 ) -> anyhow::Result<Option<String>> {
-    native_go_dto_literal_at(value, type_name, import_alias, type_defs, enums, files, "")
+    native_go_dto_literal_at(value, type_name, context, "")
 }
 
 /// `Ok(None)` means "this is not a struct literal, render it some other way"; `Err` means the
@@ -108,21 +231,19 @@ fn native_go_dto_literal(
 fn native_go_dto_literal_at(
     value: &serde_json::Value,
     type_name: &str,
-    import_alias: &str,
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
-    files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    context: GoValueContext<'_>,
     pointer: &str,
 ) -> anyhow::Result<Option<String>> {
     let Some(object) = value.as_object() else {
         return Ok(None);
     };
-    let Some(definition) = type_defs.iter().find(|definition| definition.name == type_name) else {
+    let Some(definition) = context.type_defs.iter().find(|definition| definition.name == type_name) else {
         return Ok(None);
     };
     // Mirrors the `struct_names` set `binding_file.rs` builds for the real Go emitter (every
     // non-opaque `TypeDef`) — see the `uses_pointer` comment below for why this must agree. ~keep
-    let struct_names: std::collections::HashSet<&str> = type_defs
+    let struct_names: std::collections::HashSet<&str> = context
+        .type_defs
         .iter()
         .filter(|t| !t.is_opaque)
         .map(|t| t.name.as_str())
@@ -152,89 +273,13 @@ fn native_go_dto_literal_at(
             // never consulted it. ~keep
             let uses_pointer = field.optional
                 || (!field.optional && crate::backends::go::needs_omitempty_pointer(definition, field, &struct_names));
-            let inner = match &field.ty {
-                crate::core::ir::TypeRef::Optional(inner) => inner.as_ref(),
-                other => other,
+            let site = GoFieldSite {
+                owner_type: &definition.name,
+                field_name: &field.name,
+                pointer: &field_pointer,
             };
-            let expression = if files.iter().any(|file| file.field == field_pointer)
-                && matches!(inner, crate::core::ir::TypeRef::Bytes)
-            {
-                let Some(path) = value.as_str() else {
-                    return Ok(None);
-                };
-                format!("mustReadFile({})", go_string_literal(path))
-            } else {
-                match inner {
-                    crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
-                        let Some(literal) = value.as_str().map(go_string_literal) else {
-                            return Ok(None);
-                        };
-                        if uses_pointer {
-                            format!("ptr({literal})")
-                        } else {
-                            literal
-                        }
-                    }
-                    crate::core::ir::TypeRef::Bytes => {
-                        let Some(array) = value.as_array() else {
-                            return Ok(None);
-                        };
-                        let items = array.iter().filter_map(serde_json::Value::as_u64).collect::<Vec<_>>();
-                        format!(
-                            "[]byte{{{}}}",
-                            items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
-                        )
-                    }
-                    crate::core::ir::TypeRef::Named(name) => {
-                        if let Some(nested) = native_go_dto_literal_at(
-                            value,
-                            name,
-                            import_alias,
-                            type_defs,
-                            enums,
-                            files,
-                            &field_pointer,
-                        )? {
-                            if uses_pointer { format!("&{nested}") } else { nested }
-                        } else {
-                            let literal = go_named_scalar_expression(
-                                value,
-                                name,
-                                import_alias,
-                                enums,
-                                &definition.name,
-                                &field.name,
-                            )?;
-                            if uses_pointer {
-                                format!("ptr({literal})")
-                            } else {
-                                literal
-                            }
-                        }
-                    }
-                    crate::core::ir::TypeRef::Primitive(primitive) => {
-                        let literal = json_to_go(value);
-                        if uses_pointer {
-                            // `ptr[T any](value T) *T` infers `T` from the argument
-                            // expression. A bare numeric literal (e.g. `30`) defaults to
-                            // Go's untyped-constant rule (`int` for integers, `float64` for
-                            // floats), which only matches the field's actual pointer type
-                            // by coincidence — `*uint`/`*uint64`/`*int32`/etc. fields need
-                            // an explicit conversion so `ptr(...)` infers the field's real
-                            // width instead. `bool` has exactly one Go type, so it never
-                            // needs this. ~keep
-                            if matches!(primitive, crate::core::ir::PrimitiveType::Bool) {
-                                format!("ptr({literal})")
-                            } else {
-                                let go_primitive_type = crate::backends::go::type_map::go_struct_field_type(inner);
-                                format!("ptr({go_primitive_type}({literal}))")
-                            }
-                        } else {
-                            literal
-                        }
-                    }
-                    _ => return Ok(None),
-                }
+            let Some(expression) = go_struct_field_expression(field, value, context, site, uses_pointer)? else {
+                return Ok(None);
             };
             Ok(Some((crate::codegen::naming::to_go_name(&field.name), expression)))
         })
@@ -258,7 +303,7 @@ fn native_go_dto_literal_at(
         return Ok(Some(
             crate::e2e::template_env::render(
                 "go/empty_dto_literal.jinja",
-                minijinja::context! { type_name => qualified_go_type(import_alias, type_name) },
+                minijinja::context! { type_name => qualified_go_type(context.import_alias, type_name) },
             )
             .trim_end()
             .to_string(),
@@ -268,7 +313,7 @@ fn native_go_dto_literal_at(
         crate::e2e::template_env::render(
             "go/dto_literal.jinja",
             minijinja::context! {
-                type_name => qualified_go_type(import_alias, type_name), fields => fields,
+                type_name => qualified_go_type(context.import_alias, type_name), fields => fields,
             },
         )
         .trim_end()
@@ -479,6 +524,13 @@ pub(super) fn build_args_and_setup(
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             input.get(field)
         };
+        let docs_files = fixture.docs_files_for_arg(&arg.field);
+        let value_context = GoValueContext {
+            import_alias,
+            type_defs,
+            enums,
+            files: &docs_files,
+        };
 
         if native_dtos
             && arg.arg_type == "json_object"
@@ -487,10 +539,7 @@ pub(super) fn build_args_and_setup(
             && let Some(literal) = native_go_dto_literal(
                 &serde_json::Value::Object(serde_json::Map::new()),
                 type_name,
-                import_alias,
-                type_defs,
-                enums,
-                &fixture.docs_files_for_arg(&arg.field),
+                value_context,
             )?
         {
             setup_lines.push(format!("{} := {literal}", arg.name));
@@ -566,14 +615,7 @@ pub(super) fn build_args_and_setup(
                     if native_dtos
                         && !is_array
                         && let Some(opts_type) = json_object_go_type(arg, options_type)
-                        && let Some(literal) = native_go_dto_literal(
-                            v,
-                            opts_type,
-                            import_alias,
-                            type_defs,
-                            enums,
-                            &fixture.docs_files_for_arg(&arg.field),
-                        )?
+                        && let Some(literal) = native_go_dto_literal(v, opts_type, value_context)?
                     {
                         if literal.contains("ptr(")
                             && !package_decls
@@ -750,10 +792,12 @@ mod file_dto_tests {
         let rendered = native_go_dto_literal(
             &serde_json::json!({"content": "guide.pdf"}),
             "Upload",
-            "sample",
-            &types,
-            &[],
-            &files,
+            GoValueContext {
+                import_alias: "sample",
+                type_defs: &types,
+                enums: &[],
+                files: &files,
+            },
         )
         .expect("no refusal")
         .expect("native DTO");
@@ -780,10 +824,12 @@ mod file_dto_tests {
         let rendered = native_go_dto_literal(
             &serde_json::json!({"max_characters": 300}),
             "ChunkingConfig",
-            "xberg",
-            &types,
-            &[],
-            &[],
+            GoValueContext {
+                import_alias: "xberg",
+                type_defs: &types,
+                enums: &[],
+                files: &[],
+            },
         )
         .expect("no refusal")
         .expect("native DTO");
@@ -812,10 +858,12 @@ mod file_dto_tests {
         let rendered = native_go_dto_literal(
             &serde_json::json!({"retry": true}),
             "SampleConfig",
-            "xberg",
-            &types,
-            &[],
-            &[],
+            GoValueContext {
+                import_alias: "xberg",
+                type_defs: &types,
+                enums: &[],
+                files: &[],
+            },
         )
         .expect("no refusal")
         .expect("native DTO");
@@ -851,10 +899,12 @@ mod file_dto_tests {
         let rendered = native_go_dto_literal(
             &serde_json::json!({"max_chars": 300}),
             "ChunkingConfig",
-            "xberg",
-            &types,
-            &[],
-            &[],
+            GoValueContext {
+                import_alias: "xberg",
+                type_defs: &types,
+                enums: &[],
+                files: &[],
+            },
         )
         .expect("no refusal")
         .expect("native DTO");

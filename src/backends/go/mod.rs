@@ -9,5 +9,8 @@ pub mod type_map;
 
 pub use gen_bindings::GoBackend;
 pub(crate) use gen_bindings::types::{
-    GoEnumRepresentation, go_enum_constant_for_wire_value, go_enum_representation, needs_omitempty_pointer,
+    GoEnumRepresentation, GoStructEnumVariantField, go_adjacent_tagged_constructor,
+    go_data_enum_untagged_variant_matches, go_data_enum_variant_field, go_data_enum_variant_scalar_tuple_field,
+    go_data_enum_variant_struct, go_enum_constant_for_wire_value, go_enum_representation, go_struct_enum_tag_field,
+    go_struct_enum_variant_fields, needs_omitempty_pointer,
 };

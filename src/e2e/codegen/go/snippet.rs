@@ -1305,14 +1305,87 @@ mod tests {
         fields: Vec<crate::core::ir::FieldDef>,
         enums: &[EnumDef],
     ) -> anyhow::Result<String> {
+        render_request_snippet_with_types(request, fields, Vec::new(), enums)
+    }
+
+    fn render_request_snippet_with_types(
+        request: serde_json::Value,
+        fields: Vec<crate::core::ir::FieldDef>,
+        extra_types: Vec<TypeDef>,
+        enums: &[EnumDef],
+    ) -> anyhow::Result<String> {
+        let mut type_defs = vec![request_type(fields)];
+        type_defs.extend(extra_types);
         render_snippet_body(
             &request_fixture(request),
             &request_e2e(),
             &ResolvedCrateConfig::default(),
-            &[request_type(fields)],
+            &type_defs,
             enums,
             &[],
         )
+    }
+
+    /// A plain DTO used as an enum variant's payload.
+    fn sample_target_type() -> TypeDef {
+        TypeDef {
+            name: "SampleTarget".into(),
+            rust_path: "samplelib::SampleTarget".into(),
+            fields: vec![dto_field("name", TypeRef::String, false)],
+            ..TypeDef::default()
+        }
+    }
+
+    /// `type SampleSelector struct { .. }` with no discriminator field: `#[serde(untagged)]`
+    /// over single-field tuple variants. This is the shape of the field that produced five of
+    /// the eleven gaps -- and the one whose fixture values are bare strings.
+    fn untagged_struct_enum() -> EnumDef {
+        EnumDef {
+            serde_untagged: true,
+            ..sample_enum(
+                "SampleSelector",
+                vec![
+                    variant(
+                        "Mode",
+                        vec![dto_field("_0", TypeRef::Named("SampleMode".into()), false)],
+                    ),
+                    variant(
+                        "Explicit",
+                        vec![dto_field("_0", TypeRef::Named("SampleTarget".into()), false)],
+                    ),
+                ],
+            )
+        }
+    }
+
+    /// `type SampleTagged struct { Kind string; .. }` -- `#[serde(tag = "kind")]` over tuple
+    /// variants, which `gen_tuple_tagged_union_type` renders with a discriminator field.
+    fn tagged_struct_enum() -> EnumDef {
+        EnumDef {
+            serde_tag: Some("kind".into()),
+            ..sample_enum(
+                "SampleTagged",
+                vec![variant(
+                    "Explicit",
+                    vec![dto_field("_0", TypeRef::Named("SampleTarget".into()), false)],
+                )],
+            )
+        }
+    }
+
+    /// `type SampleDoc interface { .. }` with `#[serde(tag = "type")]` -- the shape of the two
+    /// enums behind the other six gaps.
+    fn tagged_interface_enum() -> EnumDef {
+        EnumDef {
+            serde_tag: Some("type".into()),
+            ..sample_enum(
+                "SampleDoc",
+                vec![
+                    variant("Remote", vec![dto_field("location", TypeRef::String, false)]),
+                    variant("Inline", vec![dto_field("payload", TypeRef::String, false)]),
+                ],
+            )
+        }
     }
 
     /// The release-blocking half: a field declared as an IR enum must be filled with the
@@ -1368,14 +1441,15 @@ mod tests {
         );
     }
 
-    /// The published defect, reduced: an untagged enum whose variants each carry one positional
-    /// field is emitted as `type X struct { .. }`, and `pkg.X("auto")` is rejected as `cannot
-    /// convert (untyped string constant) to type X`. Four of the eleven Go snippets that failed
-    /// `go vet` in the regen that surfaced this had exactly that shape. No expression of a
-    /// struct enum's type is derivable from a bare string, so the emitter must refuse: a
-    /// recorded coverage gap beats a published snippet that does not build. ~keep
+    /// The refusal's remaining half, and the control on the constructors below: `SampleChoice`
+    /// is serde's DEFAULT external tagging, whose wire form is the single-key object
+    /// `{"explicit": {..}}`. A bare string names no key, so it identifies no variant, and no
+    /// expression of the emitted `type SampleChoice struct { .. }` follows from it -- neither a
+    /// conversion (`cannot convert`) nor a composite literal (which variant?). The emitter must
+    /// still refuse here: a recorded coverage gap beats a published snippet that does not build,
+    /// and a fix that constructed *something* for every struct-shaped enum would fail this. ~keep
     #[test]
-    fn struct_shaped_data_enum_dto_field_is_refused_rather_than_converted() {
+    fn struct_shaped_data_enum_dto_field_is_refused_when_no_variant_is_identified() {
         let error = match render_request_snippet(
             serde_json::json!({"choice": "auto"}),
             vec![dto_field("choice", TypeRef::Named("SampleChoice".into()), true)],
@@ -1401,14 +1475,24 @@ mod tests {
             error.contains("auto"),
             "must quote the offending value so the operator can find the fixture entry: {error}"
         );
+        assert!(
+            error.contains("will not publish a snippet that does not compile"),
+            "must keep saying why it refused rather than degrading to a bare `incompatible`: {error}"
+        );
+        assert!(
+            error.contains("docs.coverage_exceptions"),
+            "must keep naming the recorded-exception escape hatch: {error}"
+        );
     }
 
-    /// The other seven of the eleven: an enum with struct variants is emitted as a sealed
-    /// interface, where the conversion fails for a different reason than the struct case but
-    /// fails just the same. Covered separately so a fix that only recognised `struct` would
-    /// still leave a published snippet that does not compile. ~keep
+    /// The same control for the sealed-interface shape: `SampleDocument` carries neither
+    /// `#[serde(tag)]` nor `#[serde(untagged)]`, so the JSON below has no discriminator to read
+    /// and the emitted decoder has none to write. An interface cannot be converted to and cannot
+    /// be constructed directly, so with no variant identified there is no expression at all --
+    /// and the refusal must survive the variant construction added for the tagged and untagged
+    /// forms. ~keep
     #[test]
-    fn interface_shaped_data_enum_dto_field_is_refused_rather_than_converted() {
+    fn interface_shaped_data_enum_dto_field_is_refused_when_no_variant_is_identified() {
         let error = match render_request_snippet(
             serde_json::json!({"document": {"url": "https://example.com/doc.pdf"}}),
             vec![dto_field("document", TypeRef::Named("SampleDocument".into()), false)],
@@ -1460,6 +1544,167 @@ mod tests {
         assert!(
             rendered.contains("Mode: pkg.SampleMode(`not-a-mode`)"),
             "an unmatched value must keep the conversion the binding accepts:\n{rendered}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Constructing a value of a struct- or interface-shaped enum.
+    //
+    // The refusal above is correct but terminal: neither a `struct` nor an `interface` target
+    // has *any* conversion, so "give the fixture a value matching one of the variants" cannot
+    // be acted on until the emitter can build the variant. These pin the expression built for
+    // each emitted shape, spelled the way `backends::go::gen_bindings::types::enums` declares
+    // it -- a name invented here would not compile any better than the conversion it replaces.
+    // ---------------------------------------------------------------------------------
+
+    /// The five-fixture half of the blocker: an `#[serde(untagged)]` enum over single-field
+    /// tuple variants is `type SampleSelector struct { Mode *SampleMode; Explicit *SampleTarget }`,
+    /// and the fixture value is the bare string `"fast"`. The untagged decoder picks the first
+    /// variant whose payload can hold the value, so a JSON string selects the `type X string`
+    /// payload -- and the constant, not a `*string`, is what that pointer field takes. ~keep
+    #[test]
+    fn untagged_struct_enum_builds_the_variant_a_bare_string_selects() {
+        let rendered = render_request_snippet_with_types(
+            serde_json::json!({"selector": "fast"}),
+            vec![dto_field("selector", TypeRef::Named("SampleSelector".into()), true)],
+            vec![sample_target_type()],
+            &[untagged_struct_enum(), unit_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Selector: ptr(pkg.SampleSelector{Mode: ptr(pkg.SampleModeFast)})"),
+            "an untagged struct enum must be built from the variant its payload type admits:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("pkg.SampleSelector(`fast`)"),
+            "the `cannot convert` conversion must not come back:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Explicit:"),
+            "a string must not select the struct-payload variant:\n{rendered}"
+        );
+    }
+
+    /// The same enum, the other variant: a JSON object cannot be a `type SampleMode string`, so
+    /// the untagged selection falls through to the struct payload and builds it as a nested DTO
+    /// literal. The pointer is `&` here rather than `ptr(...)` because a composite literal is
+    /// addressable where a constant is not. ~keep
+    #[test]
+    fn untagged_struct_enum_builds_the_variant_a_json_object_selects() {
+        let rendered = render_request_snippet_with_types(
+            serde_json::json!({"selector": {"name": "search"}}),
+            vec![dto_field("selector", TypeRef::Named("SampleSelector".into()), true)],
+            vec![sample_target_type()],
+            &[untagged_struct_enum(), unit_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Selector: ptr(pkg.SampleSelector{Explicit: &pkg.SampleTarget{"),
+            "a JSON object must select the struct-payload variant:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Name: `search`"),
+            "the payload's own fields must be lowered as a DTO literal:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Mode:"),
+            "an object must not select the string-payload variant:\n{rendered}"
+        );
+    }
+
+    /// An internally tagged struct union additionally declares the discriminator field its
+    /// generated `MarshalJSON` switches on. A literal that set only the variant pointer would
+    /// compile and then serialise through the marshaler's tag-only fallback, dropping the
+    /// payload -- so the tag is part of the constructed expression, not decoration. ~keep
+    #[test]
+    fn internally_tagged_struct_enum_sets_the_discriminator_field() {
+        let rendered = render_request_snippet_with_types(
+            serde_json::json!({"selector": {"kind": "explicit", "name": "search"}}),
+            vec![dto_field("selector", TypeRef::Named("SampleTagged".into()), true)],
+            vec![sample_target_type()],
+            &[tagged_struct_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Selector: ptr(pkg.SampleTagged{Kind: `explicit`, Explicit: &pkg.SampleTarget{"),
+            "an internally tagged union must set both the tag and the variant pointer:\n{rendered}"
+        );
+    }
+
+    /// serde's default external tagging is a single-key object, and the emitted struct keys its
+    /// pointer fields by the variant's own wire name (`explicit`), not by the snake-cased field
+    /// name the internally tagged generator uses. Keying on the wrong one would look up the
+    /// wrong JSON member and silently build an empty enum. ~keep
+    #[test]
+    fn externally_tagged_struct_enum_builds_the_variant_its_single_key_names() {
+        let rendered = render_request_snippet_with_types(
+            serde_json::json!({"choice": {"explicit": {"name": "search"}}}),
+            vec![dto_field("choice", TypeRef::Named("SampleChoice".into()), true)],
+            vec![sample_target_type()],
+            &[struct_shaped_enum(), unit_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Choice: ptr(pkg.SampleChoice{Explicit: &pkg.SampleTarget{"),
+            "an externally tagged union must be built from the variant its key names:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Name: `search`"),
+            "the payload under that key is the variant's payload:\n{rendered}"
+        );
+    }
+
+    /// The six-fixture half: a sealed interface has no constructor and no conversion, so the
+    /// only thing a snippet can write is the CONCRETE variant struct the binding declares
+    /// (`{Enum}{Variant}`), which satisfies the interface through its marker method. The
+    /// discriminator selects it and is not itself a field of that struct -- the emitted
+    /// `MarshalJSON` writes it back from the variant's own `Type()` method. ~keep
+    #[test]
+    fn tagged_interface_enum_builds_the_concrete_variant_struct() {
+        let rendered = render_request_snippet(
+            serde_json::json!({"document": {"type": "remote", "location": "https://example.com/doc.pdf"}}),
+            vec![dto_field("document", TypeRef::Named("SampleDoc".into()), false)],
+            &[tagged_interface_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Document: pkg.SampleDocRemote{Location: `https://example.com/doc.pdf`}"),
+            "a sealed interface must be filled with the concrete variant struct:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("pkg.SampleDoc{"),
+            "the interface type itself has no composite literal:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("Type:"),
+            "the discriminator selects the variant struct; it is not one of its fields:\n{rendered}"
+        );
+    }
+
+    /// The discriminator must actually be matched: an unknown tag names no variant, so the
+    /// emitter refuses instead of picking the first one. Without this a typo'd fixture would
+    /// publish a snippet demonstrating the wrong variant. ~keep
+    #[test]
+    fn tagged_interface_enum_with_an_unknown_discriminator_is_refused() {
+        let error = match render_request_snippet(
+            serde_json::json!({"document": {"type": "carrier-pigeon", "location": "somewhere"}}),
+            vec![dto_field("document", TypeRef::Named("SampleDoc".into()), false)],
+            &[tagged_interface_enum()],
+        ) {
+            Ok(rendered) => panic!("an unknown discriminator must not select a variant:\n{rendered}"),
+            Err(error) => format!("{error:#}"),
+        };
+
+        assert!(error.contains("`document`"), "must name the field: {error}");
+        assert!(error.contains("SampleDoc"), "must name the enum: {error}");
+        assert!(
+            error.contains("interface"),
+            "must name the emitted Go declaration: {error}"
         );
     }
 }

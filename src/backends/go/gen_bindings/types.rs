@@ -5,7 +5,12 @@ mod mapping;
 mod structs;
 
 pub(super) use config_options::gen_config_options;
-pub(crate) use enums::{GoEnumRepresentation, go_enum_constant_for_wire_value, go_enum_representation};
+pub(crate) use enums::{
+    GoEnumRepresentation, GoStructEnumVariantField, go_adjacent_tagged_constructor,
+    go_data_enum_untagged_variant_matches, go_data_enum_variant_field, go_data_enum_variant_scalar_tuple_field,
+    go_data_enum_variant_struct, go_enum_constant_for_wire_value, go_enum_representation, go_struct_enum_tag_field,
+    go_struct_enum_variant_fields,
+};
 pub(super) use enums::{gen_enum_type, is_passthrough_raw_message_enum};
 pub(crate) use helpers::needs_omitempty_pointer;
 pub(super) use helpers::{

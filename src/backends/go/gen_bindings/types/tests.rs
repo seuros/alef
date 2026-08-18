@@ -1522,3 +1522,122 @@ fn adjacent_tagged_enum_with_collection_payloads_is_not_reported_as_a_raw_passth
         "a type emitted as a struct must not be partitioned as a json.RawMessage passthrough"
     );
 }
+
+/// The spellings `e2e::codegen::go::enum_literals` builds its expressions out of must be the
+/// ones the binding actually declares.
+///
+/// That module can no longer fall back on a conversion for a struct- or interface-shaped enum;
+/// it writes the variant's field name, the field's JSON key, the discriminator field, the
+/// adjacent-tagged constructor and the concrete variant struct by name. Any one of those it got
+/// wrong would name nothing in the emitted package, and the published snippet would fail to
+/// compile for a new reason instead of the old one. So assert every accessor against the real
+/// emitted text rather than against a second copy of the naming rule. ~keep
+#[test]
+fn go_enum_variant_spellings_match_the_emitted_declarations() {
+    fn variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields,
+            ..EnumVariant::default()
+        }
+    }
+    fn enum_def(name: &str, variants: Vec<EnumVariant>) -> EnumDef {
+        EnumDef {
+            name: name.to_string(),
+            rust_path: format!("samplelib::{name}"),
+            variants,
+            ..EnumDef::default()
+        }
+    }
+
+    let internally_tagged = EnumDef {
+        serde_tag: Some("kind".to_string()),
+        ..enum_def(
+            "SampleChoice",
+            vec![variant(
+                "Explicit",
+                vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
+            )],
+        )
+    };
+    let emitted = gen_enum_type(&internally_tagged, &[]);
+    let (tag_field, tag_json) = super::enums::go_struct_enum_tag_field(&internally_tagged).expect("a tag field");
+    assert!(
+        emitted.contains(&format!("{tag_field} string `json:\"{tag_json}\"`")),
+        "the discriminator spelling must be the emitted one:\n{emitted}"
+    );
+    let variant_fields = super::enums::go_struct_enum_variant_fields(&internally_tagged);
+    let explicit = variant_fields.first().expect("one variant field");
+    assert!(
+        emitted.contains(&format!(
+            "{} *SampleTarget `json:\"{},omitempty\"`",
+            explicit.field_name, explicit.json_key
+        )),
+        "the variant field spelling must be the emitted one:\n{emitted}"
+    );
+
+    let externally_tagged = enum_def(
+        "SampleExternal",
+        vec![variant(
+            "Explicit",
+            vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
+        )],
+    );
+    let emitted = gen_enum_type(&externally_tagged, &[]);
+    assert!(
+        super::enums::go_struct_enum_tag_field(&externally_tagged).is_none(),
+        "an externally tagged union declares no discriminator field"
+    );
+    let variant_fields = super::enums::go_struct_enum_variant_fields(&externally_tagged);
+    let explicit = variant_fields.first().expect("one variant field");
+    assert!(
+        emitted.contains(&format!(
+            "{} *SampleTarget `json:\"{},omitempty\"`",
+            explicit.field_name, explicit.json_key
+        )),
+        "an externally tagged union keys its field by the variant's wire name:\n{emitted}"
+    );
+
+    let sealed = EnumDef {
+        serde_tag: Some("type".to_string()),
+        ..enum_def(
+            "SampleDocument",
+            vec![variant("Url", vec![simple_field("url", TypeRef::String)])],
+        )
+    };
+    let emitted = gen_enum_type(&sealed, &[]);
+    let url_variant = &sealed.variants[0];
+    let struct_name = super::enums::go_data_enum_variant_struct(&sealed, url_variant);
+    assert!(
+        emitted.contains(&format!("type {struct_name} struct {{")),
+        "the concrete variant struct spelling must be the emitted one:\n{emitted}"
+    );
+    let (field_name, json_key) =
+        super::enums::go_data_enum_variant_field(&sealed, &url_variant.fields[0]).expect("a named field");
+    assert!(
+        emitted.contains(&format!("{field_name} string `json:\"{json_key}\"`")),
+        "the variant struct's field spelling must be the emitted one:\n{emitted}"
+    );
+    assert!(
+        super::enums::go_data_enum_variant_field(&sealed, &simple_field("_0", TypeRef::String)).is_none(),
+        "a positional field has no declared Go field on the variant struct"
+    );
+
+    let adjacent = EnumDef {
+        serde_tag: Some("kind".to_string()),
+        serde_content: Some("payload".to_string()),
+        ..enum_def(
+            "SampleAdjacent",
+            vec![variant(
+                "Text",
+                vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
+            )],
+        )
+    };
+    let emitted = gen_enum_type(&adjacent, &[]);
+    let constructor = super::enums::go_adjacent_tagged_constructor(&adjacent, &adjacent.variants[0]);
+    assert!(
+        emitted.contains(&format!("func {constructor}(")),
+        "the adjacent-tagged constructor spelling must be the emitted one:\n{emitted}"
+    );
+}

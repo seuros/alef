@@ -1,6 +1,6 @@
 use crate::backends::go::type_map::{go_optional_type, go_type};
 use crate::codegen::naming::{apply_serde_rename_all, go_type_name, to_go_name};
-use crate::core::ir::{EnumDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
 use minijinja::context;
 
 use super::helpers::{emit_type_doc, is_tuple_field};
@@ -127,6 +127,193 @@ fn is_externally_tagged_named_union(enum_def: &EnumDef) -> bool {
                 && is_tuple_field(&variant.fields[0])
                 && matches!(&variant.fields[0].ty, TypeRef::Named(_))
         })
+}
+
+/// The Go struct field a struct-shaped enum declares for one of its variants.
+///
+/// Mirrors the two generators that render `tagged_union_variant_field.jinja`
+/// ([`gen_tuple_tagged_union_type`] and [`gen_externally_tagged_union_type`]): both name the
+/// field `to_go_name(variant)`, and they differ only in the JSON key — the internally tagged
+/// generator snake-cases the variant name for a wire-invisible container field, while the
+/// externally tagged one must use serde's own variant wire name because that key *is* the
+/// wire form. A consumer that re-derived either spelling would fill a field the binding does
+/// not declare, which is a compile error rather than a wrong value. ~keep
+pub(crate) struct GoStructEnumVariantField<'a> {
+    pub variant: &'a EnumVariant,
+    /// The exported Go identifier of the pointer field.
+    pub field_name: String,
+    /// The key the field's `json:"..."` tag carries.
+    pub json_key: String,
+    /// The IR field whose type the pointer points at.
+    pub payload: &'a FieldDef,
+}
+
+/// Every variant a struct-shaped enum emits a pointer field for, in declaration order.
+///
+/// Empty for every representation that declares no per-variant field, so a caller can ask
+/// without first matching on [`go_enum_representation`]. Declaration order is load-bearing:
+/// it is the order `untagged_union_marshalers.jinja` tries variants in. ~keep
+pub(crate) fn go_struct_enum_variant_fields(enum_def: &EnumDef) -> Vec<GoStructEnumVariantField<'_>> {
+    let externally_tagged = match go_enum_representation(enum_def) {
+        GoEnumRepresentation::TupleTaggedStruct => false,
+        GoEnumRepresentation::ExternallyTaggedStruct => true,
+        _ => return Vec::new(),
+    };
+    enum_def
+        .variants
+        .iter()
+        .filter_map(|variant| {
+            let payload = variant.fields.iter().find(|field| is_tuple_field(field))?;
+            if !matches!(&payload.ty, TypeRef::Named(_)) {
+                return None;
+            }
+            let json_key = if externally_tagged {
+                crate::codegen::naming::wire_variant_value(
+                    &variant.name,
+                    variant.serde_rename.as_deref(),
+                    enum_def.serde_rename_all.as_deref(),
+                )
+            } else {
+                apply_serde_rename_all(
+                    &crate::codegen::naming::pascal_to_snake(&variant.name),
+                    enum_def.serde_rename_all.as_deref(),
+                )
+            };
+            Some(GoStructEnumVariantField {
+                variant,
+                field_name: to_go_name(&variant.name),
+                json_key,
+                payload,
+            })
+        })
+        .collect()
+}
+
+/// The discriminator field a struct-shaped enum declares, as `(Go identifier, JSON key)`.
+///
+/// `None` when the emitted struct carries no tag field — an untagged union, or a
+/// representation that is not a struct at all. The tag is not decoration: the emitted
+/// `MarshalJSON` switches on it, so a literal that sets a variant pointer without also
+/// setting the tag serialises to the footer's tag-only fallback. ~keep
+pub(crate) fn go_struct_enum_tag_field(enum_def: &EnumDef) -> Option<(String, &str)> {
+    match go_enum_representation(enum_def) {
+        GoEnumRepresentation::TupleTaggedStruct | GoEnumRepresentation::AdjacentTaggedStruct => {
+            let tag_name = enum_def.serde_tag.as_deref()?;
+            Some((to_go_name(tag_name), tag_name))
+        }
+        _ => None,
+    }
+}
+
+/// The constructor `adjacent_tagged_enum.jinja` declares for a variant, e.g. `NewShapeCircle`.
+pub(crate) fn go_adjacent_tagged_constructor(enum_def: &EnumDef, variant: &EnumVariant) -> String {
+    format!("New{}{}", go_type_name(&enum_def.name), to_go_name(&variant.name))
+}
+
+/// The concrete Go struct [`gen_data_enum_type`] declares for a variant of a sealed-interface
+/// enum, e.g. `ResponseFormatJSONSchema`. An interface value cannot be constructed directly,
+/// so this name is the only way a snippet can produce one. ~keep
+pub(crate) fn go_data_enum_variant_struct(enum_def: &EnumDef, variant: &EnumVariant) -> String {
+    format!("{}{}", go_type_name(&enum_def.name), to_go_name(&variant.name))
+}
+
+/// The exported field name and JSON key a sealed-interface variant struct declares for one of
+/// its fields, or `None` for a positional field the struct declares nothing for.
+///
+/// The rename-all in force is the *enum's*, not the variant's. `None` is the same condition
+/// [`gen_data_enum_type`] skips on, so a consumer building a literal cannot fill a field the
+/// emitter never declared. ~keep
+pub(crate) fn go_data_enum_variant_field(enum_def: &EnumDef, field: &FieldDef) -> Option<(String, String)> {
+    if is_tuple_field(field) {
+        return None;
+    }
+    Some((
+        to_go_name(&field.name),
+        apply_serde_rename_all(&field.name, enum_def.serde_rename_all.as_deref()),
+    ))
+}
+
+/// The single positional field an untagged sealed-interface variant stores in its `Value`
+/// field, or `None` when the variant has no such field.
+///
+/// [`gen_data_enum_type`] consumes this so the condition has exactly one definition; a
+/// consumer building a literal must set `Value` precisely when the emitter declared it. ~keep
+pub(crate) fn go_data_enum_variant_scalar_tuple_field<'a>(
+    enum_def: &EnumDef,
+    variant: &'a EnumVariant,
+) -> Option<&'a FieldDef> {
+    if !enum_def.serde_untagged || variant.fields.len() != 1 || !is_tuple_field(&variant.fields[0]) {
+        return None;
+    }
+    match &variant.fields[0].ty {
+        TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Primitive(_) => Some(&variant.fields[0]),
+        _ => None,
+    }
+}
+
+/// The JSON shape an untagged sealed-interface enum's decoder tests before it will decode a
+/// variant, or `None` for a variant it never tries (one with no fields at all).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum GoDataEnumShape {
+    /// A JSON string.
+    Text,
+    /// A JSON array.
+    Array,
+    /// A JSON number or boolean — anything that is neither a string, an object nor an array.
+    Scalar,
+    /// A JSON object.
+    Object,
+}
+
+impl GoDataEnumShape {
+    /// The `firstByte` predicate `data_enum_unmarshal_shape_variant.jinja` is given.
+    fn go_first_byte_check(self) -> &'static str {
+        match self {
+            Self::Text => "firstByte == '\"'",
+            Self::Array => "firstByte == '['",
+            Self::Scalar => "firstByte != '\"' && firstByte != '{' && firstByte != '['",
+            Self::Object => "firstByte == '{'",
+        }
+    }
+
+    /// Whether a fixture value has the shape this predicate admits. Mirrors the predicate
+    /// above rather than restating it, so the emitted decoder and any statically constructed
+    /// literal agree on which variant a value selects. ~keep
+    fn matches(self, value: &serde_json::Value) -> bool {
+        match self {
+            Self::Text => value.is_string(),
+            Self::Array => value.is_array(),
+            Self::Scalar => value.is_number() || value.is_boolean(),
+            Self::Object => value.is_object(),
+        }
+    }
+}
+
+/// The shape check [`gen_data_enum_type`] emits for an untagged variant, in declaration order.
+fn go_data_enum_untagged_shape(variant: &EnumVariant) -> Option<GoDataEnumShape> {
+    if variant.fields.len() == 1 && is_tuple_field(&variant.fields[0]) {
+        return Some(match &variant.fields[0].ty {
+            TypeRef::String | TypeRef::Char | TypeRef::Path => GoDataEnumShape::Text,
+            TypeRef::Vec(_) | TypeRef::Bytes => GoDataEnumShape::Array,
+            TypeRef::Primitive(_) => GoDataEnumShape::Scalar,
+            _ => GoDataEnumShape::Object,
+        });
+    }
+    if variant.fields.is_empty() {
+        return None;
+    }
+    Some(GoDataEnumShape::Object)
+}
+
+/// Whether the decoder [`gen_data_enum_type`] emits for an *untagged* sealed-interface enum
+/// would try `variant` for a value of this JSON shape.
+///
+/// The shape predicate itself stays private: a consumer needs the verdict, not the `firstByte`
+/// expression the template is handed, and exporting the latter would invite a second reading of
+/// it. Declaration order is the caller's to preserve — the emitted decoder returns the first
+/// variant that both matches the shape and decodes. ~keep
+pub(crate) fn go_data_enum_untagged_variant_matches(variant: &EnumVariant, value: &serde_json::Value) -> bool {
+    go_data_enum_untagged_shape(variant).is_some_and(|shape| shape.matches(value))
 }
 
 /// Emit the Go declaration for the variant [`go_enum_representation`] selected.
@@ -795,15 +982,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
             &format!("is the {} variant of {}.", variant.name, enum_def.name),
         );
 
-        let scalar_tuple_field =
-            if enum_def.serde_untagged && variant.fields.len() == 1 && is_tuple_field(&variant.fields[0]) {
-                match &variant.fields[0].ty {
-                    TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Primitive(_) => Some(&variant.fields[0]),
-                    _ => None,
-                }
-            } else {
-                None
-            };
+        let scalar_tuple_field = go_data_enum_variant_scalar_tuple_field(enum_def, variant);
 
         out.push_str(&crate::backends::go::template_env::render(
             "data_enum_struct_header.jinja",
@@ -821,16 +1000,14 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
             ));
         }
         for field in &variant.fields {
-            if is_tuple_field(field) {
+            let Some((field_go_name, json_name)) = go_data_enum_variant_field(enum_def, field) else {
                 continue;
-            }
-            let field_go_name = to_go_name(&field.name);
+            };
             let field_type = if field.optional {
                 go_optional_type(&field.ty)
             } else {
                 go_type(&field.ty)
             };
-            let json_name = apply_serde_rename_all(&field.name, enum_def.serde_rename_all.as_deref());
             let json_tag = if field.optional {
                 format!("json:\"{},omitempty\"", json_name)
             } else {
@@ -901,16 +1078,14 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
                 ));
             }
             for field in &variant.fields {
-                if is_tuple_field(field) {
+                let Some((field_go_name, json_name)) = go_data_enum_variant_field(enum_def, field) else {
                     continue;
-                }
-                let field_go_name = to_go_name(&field.name);
+                };
                 let field_type = if field.optional {
                     go_optional_type(&field.ty)
                 } else {
                     go_type(&field.ty)
                 };
-                let json_name = apply_serde_rename_all(&field.name, enum_def.serde_rename_all.as_deref());
                 let json_tag = if field.optional {
                     format!("json:\"{json_name},omitempty\"")
                 } else {
@@ -976,18 +1151,7 @@ pub(in crate::backends::go::gen_bindings) fn gen_data_enum_type(enum_def: &EnumD
         for variant in &enum_def.variants {
             let variant_struct_name = format!("{go_enum_name}{}", to_go_name(&variant.name));
 
-            let shape_check = if variant.fields.len() == 1 && is_tuple_field(&variant.fields[0]) {
-                match &variant.fields[0].ty {
-                    TypeRef::String | TypeRef::Char | TypeRef::Path => Some("firstByte == '\"'"),
-                    TypeRef::Vec(_) | TypeRef::Bytes => Some("firstByte == '['"),
-                    TypeRef::Primitive(_) => Some("firstByte != '\"' && firstByte != '{' && firstByte != '['"),
-                    _ => Some("firstByte == '{'"),
-                }
-            } else if variant.fields.is_empty() {
-                None
-            } else {
-                Some("firstByte == '{'")
-            };
+            let shape_check = go_data_enum_untagged_shape(variant).map(GoDataEnumShape::go_first_byte_check);
 
             if let Some(check) = shape_check {
                 out.push_str(&crate::backends::go::template_env::render(
