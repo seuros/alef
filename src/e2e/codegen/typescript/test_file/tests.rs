@@ -1282,3 +1282,71 @@ fn zero_declared_assertions_are_left_untouched() {
         "a fixture with zero declared assertions must stay vacuous, got:\n{output}"
     );
 }
+
+fn node_client_snippet(expects_error: bool) -> String {
+    let mut fixture = Fixture {
+        id: "rate_limit_429".to_string(),
+        description: "Rate limited".to_string(),
+        input: serde_json::Value::Null,
+        ..Default::default()
+    };
+    if expects_error {
+        fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+    }
+    let mut e2e_config = crate::e2e::config::E2eConfig::default();
+    e2e_config.call.function = "chat".into();
+    e2e_config.call.result_var = "result".into();
+    e2e_config.call.r#async = true;
+    let config = crate::core::config::ResolvedCrateConfig::default();
+
+    render_snippet_body(SnippetContext {
+        lang: "node",
+        fixture: &fixture,
+        module: "@test/node",
+        client_factory: Some("createClient"),
+        e2e_config: &e2e_config,
+        type_defs: &[],
+        enums: &[],
+        wasm_type_prefix: "Wasm",
+        config: &config,
+    })
+}
+
+/// The negative control that keeps the WASM client release off node: both languages share this
+/// renderer and `typescript/snippet_body.jinja`, and node has nothing to release — alef's napi
+/// wrapper emits an empty `impl`, so the generated `DefaultClient` exposes no `free`, `close`, or
+/// `Symbol.dispose`. A node snippet that constructs a client must therefore be byte-for-byte what
+/// it was: no release call, no `finally` scope, and the two-space body indentation. This is the
+/// pin that a `lang == "wasm"` gate exists at all; without it the fix silently reaches 188 node
+/// snippets and emits a call to a method that does not exist. ~keep
+#[test]
+fn node_client_snippet_gains_no_release() {
+    let body = node_client_snippet(false);
+
+    assert!(
+        !body.contains(".free()") && !body.contains(".close()") && !body.contains("dispose"),
+        "node has no client release surface to call:\n{body}"
+    );
+    assert!(!body.contains("finally"), "node must not gain a release scope:\n{body}");
+    assert!(
+        body.contains("  const result = await client.chat("),
+        "node must keep its two-space body indentation:\n{body}"
+    );
+}
+
+/// The `expects_error` half of `node_client_snippet_gains_no_release`: that arm is where the
+/// release scope is attached for WASM, so pin that node's `try`/`catch` gains no `finally`. ~keep
+#[test]
+fn node_expects_error_snippet_gains_no_release_scope() {
+    let body = node_client_snippet(true);
+
+    assert!(body.contains("} catch (error) {"), "{body}");
+    assert!(
+        !body.contains("finally"),
+        "node must not gain a release scope on the error path:\n{body}"
+    );
+    assert!(
+        !body.contains(".free()"),
+        "node has no client release surface to call:\n{body}"
+    );
+}

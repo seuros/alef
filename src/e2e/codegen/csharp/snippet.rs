@@ -644,4 +644,104 @@ mod tests {
         );
         assert!(!body.contains("new Options"), "{body}");
     }
+
+    fn client_release_snippet(expects_error: bool) -> String {
+        let mut fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        if expects_error {
+            fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+        }
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "csharp".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders")
+    }
+
+    /// Every C# opaque handle alef generates is `IDisposable` over an owning `SafeHandle`, so a
+    /// snippet holding a bare `var client` defers release to finalization. A `using` declaration
+    /// binds it to the enclosing scope instead, which the compiler lowers to a `try`/`finally` —
+    /// the reason this is a declaration and not a trailing `client.Dispose();`. ~keep
+    #[test]
+    fn client_factory_snippet_scopes_the_client_to_a_using_declaration() {
+        let body = client_release_snippet(false);
+
+        assert!(
+            body.contains("using var client = "),
+            "a constructed client must be scoped to a using declaration:\n{body}"
+        );
+        assert!(
+            !body.contains("\nvar client = ") && !body.contains("  var client = "),
+            "the unscoped declaration must be replaced, not duplicated:\n{body}"
+        );
+    }
+
+    /// The error-path half of `client_factory_snippet_scopes_the_client_to_a_using_declaration`.
+    /// The `expects_error` arm wraps the body in `try`/`catch`, and the whole point of a `using`
+    /// declaration over a trailing `Dispose()` is that the release still runs when the call
+    /// throws — so pin that the declaration lands inside the `try` the failing call sits in. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_on_the_error_path() {
+        let body = client_release_snippet(true);
+
+        let try_block = body.find("try\n{").expect("expects-error snippet opens a try block");
+        let declaration = body.find("using var client = ").expect("using declaration");
+        let catch_block = body.find("catch (Exception error)").expect("catch block");
+        assert!(
+            try_block < declaration && declaration < catch_block,
+            "the using declaration must sit inside the try the failing call runs in:\n{body}"
+        );
+    }
+
+    /// Negative control for the two tests above, and the pin that keeps this change scoped: a
+    /// fixture with no `client_factory` constructs no client, so its snippet must be untouched.
+    /// `using System;` and the namespace import are using *directives*, not declarations, so this
+    /// asserts on `using var` specifically — an unconditional change would fail here. ~keep
+    #[test]
+    fn snippet_without_a_client_factory_emits_no_using_declaration() {
+        let body = render_snippet_body(
+            &Fixture {
+                id: "quick_start".into(),
+                description: "Quick start".into(),
+                input: serde_json::Value::Null,
+                ..Fixture::default()
+            },
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            !body.contains("using var"),
+            "a snippet that constructs no client must emit no using declaration:\n{body}"
+        );
+        assert!(
+            !body.contains("var client"),
+            "a snippet that constructs no client must not declare one:\n{body}"
+        );
+    }
 }

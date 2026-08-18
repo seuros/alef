@@ -117,6 +117,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
     let client_setup = effective_factory
         .map(|factory| format!("const client = {factory}(\"your-api-key\");"))
         .unwrap_or_default();
+    let client_release = wasm_client_release(lang, effective_factory);
     let expects_error = fixture
         .assertions
         .iter()
@@ -188,13 +189,34 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             imports => imports.into_iter().collect::<Vec<_>>(), module => module,
             setup_lines => setup_lines, client_setup => client_setup, call_expr => call_expr,
             result_var => call.result_var, is_async => override_config.and_then(|value| value.r#async).unwrap_or(call.r#async),
-            expects_error => expects_error,
+            expects_error => expects_error, client_release => client_release,
             error_type => error_type_name.clone(),
             thrown_value_is_opaque => lang == "wasm",
             returns_void => call.returns_void,
             presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
         },
     )
+}
+
+/// The statement a WASM snippet must run to release the client it constructed, if any.
+///
+/// This renderer serves both `node` and `wasm`, and only `wasm` has anything to release:
+/// wasm-bindgen gives every exported class a `free()`, while alef's napi wrapper
+/// (`backends/napi/templates/config_opaque_wrapper.rs.jinja`) emits an empty `impl` with no
+/// release surface at all. Returning `None` for node therefore keeps every node snippet
+/// byte-identical, and so does a snippet with no `client_factory` in either language.
+///
+/// Only the client is released, deliberately. wasm-bindgen passes an owned class argument by
+/// calling `__destroy_into_raw()` on it at the call site, which zeroes the JS wrapper's pointer,
+/// and the generated `free()` carries no null guard — so releasing a request DTO the snippet
+/// already handed to the call is a free of a null pointer, not a fix. The client is never
+/// consumed that way (its methods read `this.__wbg_ptr` and leave it intact), so it is the one
+/// object the snippet still owns when the body ends.
+///
+/// Emitted as an explicit `free()` rather than a TypeScript 5.2 `using` declaration so a
+/// published snippet imposes no TypeScript version floor on the consumer's docs site. ~keep
+fn wasm_client_release(lang: &str, effective_factory: Option<&str>) -> Option<&'static str> {
+    (lang == "wasm" && effective_factory.is_some()).then_some("client.free();")
 }
 
 fn infer_enum_fields(

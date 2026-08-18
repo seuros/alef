@@ -268,9 +268,15 @@ pub(super) fn render_snippet_body(
             "\tclient, clientErr := {import_alias}.{}(\"your-api-key\", {base_url_arg}, nil, nil, nil)",
             to_go_name(factory),
         );
+        // The Go binding backend gives every opaque handle a `Free()` (not `Close()`) and
+        // registers no `runtime.SetFinalizer`/`AddCleanup` (`backends/go/templates/opaque_type.jinja`),
+        // so a snippet that constructs a client and returns leaks the FFI handle. `defer` is the
+        // scope construct rather than a trailing call because the body below panics on the
+        // operation's error path, and deferred calls still run while a panic unwinds. It is
+        // registered after the construction guard so it is never reached with a nil client. ~keep
         (
             "client".to_string(),
-            format!("{call_line}\n\tif clientErr != nil {{\n\t\tpanic(clientErr)\n\t}}"),
+            format!("{call_line}\n\tif clientErr != nil {{\n\t\tpanic(clientErr)\n\t}}\n\tdefer client.Free()"),
         )
     } else {
         (import_alias.to_string(), String::new())
@@ -1079,6 +1085,88 @@ mod tests {
         assert!(
             body.contains("func ptr[T any](value T) *T { return &value }"),
             "the base-url pointer needs the shared ptr[T any] helper declared:\n{body}"
+        );
+    }
+
+    fn client_factory_snippet(expects_error: bool) -> String {
+        let mut fixture = fixture();
+        fixture.id = "rate_limit_429".into();
+        fixture.description = "Rate limited".into();
+        if expects_error {
+            fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+        }
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.overrides.insert(
+            "go".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]).expect("snippet renders")
+    }
+
+    /// The Go binding backend registers no finalizer for an opaque handle, so a snippet that
+    /// constructs a client and never calls `Free()` publishes a leak. `defer` rather than a
+    /// trailing call is the load-bearing part: the body panics on the operation's error path,
+    /// and only a deferred call still runs while a panic unwinds. ~keep
+    #[test]
+    fn client_factory_snippet_defers_the_clients_release() {
+        let body = client_factory_snippet(false);
+
+        assert!(
+            body.contains("\tdefer client.Free()"),
+            "a constructed client must be released, tab-indented for gofmt:\n{body}"
+        );
+        let release = body.find("defer client.Free()").expect("release statement");
+        let guard = body.find("panic(clientErr)").expect("construction guard");
+        let call = body.find("client.Chat(").expect("operation call");
+        assert!(
+            guard < release && release < call,
+            "the release must be deferred after the construction guard and before the call:\n{body}"
+        );
+    }
+
+    /// The error-path half of `client_factory_snippet_defers_the_clients_release`: the fixture
+    /// that documents a failure is the one Kotlin's straight-line `client.close()` leaks, so pin
+    /// that Go's release is registered before the failing call rather than after it. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_on_the_error_path() {
+        let body = client_factory_snippet(true);
+
+        let release = body.find("defer client.Free()").expect("release statement");
+        let call = body.find("client.Chat(").expect("operation call");
+        assert!(
+            release < call,
+            "an expects-error snippet must defer the release before the call that fails:\n{body}"
+        );
+    }
+
+    /// Negative control for the two tests above, and the pin that keeps this change scoped: a
+    /// fixture with no `client_factory` constructs no client, so it must gain no release at all.
+    /// Without this, an unconditional `defer` would emit a call on an identifier that does not
+    /// exist and rewrite every client-less snippet in the published corpus. ~keep
+    #[test]
+    fn snippet_without_a_client_factory_emits_no_release() {
+        let body = render_snippet_body(
+            &fixture(),
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            !body.contains("defer "),
+            "a snippet that constructs no client must emit no deferred release:\n{body}"
+        );
+        assert!(
+            !body.contains(".Free()"),
+            "a snippet that constructs no client must emit no release call:\n{body}"
         );
     }
 }

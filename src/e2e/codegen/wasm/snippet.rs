@@ -453,4 +453,102 @@ mod tests {
         );
         assert!(!absent.contains("does not export"), "{absent}");
     }
+
+    fn client_release_snippet(expects_error: bool) -> String {
+        let mut fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        if expects_error {
+            fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+        }
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.r#async = true;
+        e2e.call.overrides.insert(
+            "wasm".into(),
+            crate::core::config::e2e::CallOverride {
+                client_factory: Some("createClient".into()),
+                ..Default::default()
+            },
+        );
+        render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]).expect("snippet renders")
+    }
+
+    /// wasm-bindgen gives every exported class a `free()` and JS never calls it on its own
+    /// schedule, so a snippet that constructs a client and returns hands the reader an example
+    /// that grows the wasm linear heap. `try`/`finally` rather than a trailing `client.free();`
+    /// is the load-bearing part: an awaited call that rejects skips every statement after it. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_in_a_finally_block() {
+        let body = client_release_snippet(false);
+
+        assert!(body.contains("  try {\n"), "the body must be scoped to a try:\n{body}");
+        assert!(
+            body.contains("  } finally {\n    client.free();\n  }"),
+            "the client must be released from a finally block:\n{body}"
+        );
+        assert!(
+            body.contains("    const result = await client.chat("),
+            "the call moves one level in under the try:\n{body}"
+        );
+    }
+
+    /// The error-path half of `client_factory_snippet_releases_the_client_in_a_finally_block`.
+    /// The `expects_error` arm already carries a `try`/`catch`, and Kotlin's existing release is
+    /// broken precisely because it sits inside the `try` while the `catch` releases nothing — so
+    /// pin that the release is attached as a `finally` on that same statement, after the `catch`.
+    /// ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_on_the_error_path() {
+        let body = client_release_snippet(true);
+
+        let catch_block = body.find("} catch (error) {").expect("expects-error snippet catches");
+        let release = body.find("} finally {").expect("finally clause");
+        assert!(
+            catch_block < release,
+            "the release must be a finally on the try the failing call sits in:\n{body}"
+        );
+        assert!(
+            body.contains("  } finally {\n    client.free();\n  }"),
+            "the error-path snippet must release the client too:\n{body}"
+        );
+    }
+
+    /// Negative control for the two tests above, and the pin that keeps this change scoped: a
+    /// fixture with no `client_factory` constructs no client, so its snippet must be byte-for-byte
+    /// what it was — no release, no `finally`, and the two-space body indentation the shared
+    /// TypeScript template has always emitted. Re-indenting unconditionally would fail here, and
+    /// so would emitting a `free()` on an identifier the snippet never declares. ~keep
+    #[test]
+    fn snippet_without_a_client_factory_is_unchanged() {
+        let fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rate limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "chat".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.r#async = true;
+
+        let body = render(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], &[], &[]).expect("snippet renders");
+
+        assert!(
+            !body.contains(".free()"),
+            "a snippet that constructs no client must emit no release:\n{body}"
+        );
+        assert!(
+            !body.contains("finally"),
+            "a snippet that constructs no client must not gain a release scope:\n{body}"
+        );
+        assert!(
+            body.contains("  const result = await chat("),
+            "the body must keep its two-space indentation:\n{body}"
+        );
+    }
 }
