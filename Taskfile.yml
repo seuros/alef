@@ -47,6 +47,18 @@ tasks:
     cmds:
       - cargo test --release --workspace
 
+  gate:generated-output:
+    desc: "Run the consumer toolchain gate (clippy, cargo sort, poly fmt) over an emitted tree"
+    cmds:
+      - cargo test --test generated_output_downstream_gate -- --nocapture
+      - cargo test --test generated_output_downstream_gate -- --ignored --nocapture
+
+  gate:generated-output:text:
+    desc: "Generated-output gate, text lanes only (cargo sort + poly fmt; compiles nothing)"
+    cmds:
+      - cargo test --test generated_output_downstream_gate -- --ignored --nocapture cargo_sort
+      - cargo test --test generated_output_downstream_gate -- --ignored --nocapture poly_fmt
+
   bench:
     desc: "Run codegen benchmarks (criterion)"
     cmds:

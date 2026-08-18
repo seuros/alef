@@ -70,6 +70,46 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  # Runs the consumer's own toolchain gate over a tree alef emits, in a scratch directory.
+  # The `validate` job above lints alef; this one lints alef's *output*, which nothing
+  # else in this workflow looks at. Kept a separate job because it needs poly and
+  # cargo-sort — which the three-OS `test` matrix does not install — and because it
+  # compiles the emitted crates.
+  generated-output-gate:
+    name: Generated output gate
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: xberg-io/actions/setup-rust@v1
+        with:
+          components: "clippy"
+          install-llvm-cov: "false"
+          cache-key-prefix: ci-generated-output-gate
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-sort
+      - uses: xberg-io/actions/install-homebrew-linux@v1
+      - name: Install poly
+        run: brew install goldziher/tap/poly
+      # Both tools must be present *before* the lanes run. The lanes fail on a missing
+      # tool rather than skipping, so this step exists to fail earlier and more legibly,
+      # not to decide whether the gate runs.
+      - name: Verify downstream tooling is present
+        run: |
+          cargo sort --version
+          poly --version
+      # Not ignored, needs no tooling: the isolation guard and the wiring check. Run as
+      # its own step so "the gate refuses to lint alef itself" is a named, visible result
+      # in the CI log rather than an assertion buried inside a long run.
+      - name: Prove the gate refuses to lint alef itself
+        run: cargo test --test generated_output_downstream_gate -- --nocapture
+      # The lanes and their sabotage proofs. Every test here is #[ignore]d, so dropping
+      # `--ignored` would run none of them and still exit 0 — which is why
+      # `ci_workflow_runs_the_generated_output_gate` asserts this flag is still here.
+      - name: Run downstream gate over the emitted tree
+        run: cargo test --test generated_output_downstream_gate -- --ignored --nocapture
+
   build:
     name: Build release
     needs: validate
