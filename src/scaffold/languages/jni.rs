@@ -101,11 +101,11 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let rel_path = format!("../{core_crate_dir}");
 
     let mut dep_lines: Vec<String> = vec![
-        crate::scaffold::render_workspace_dep_or(config, "async-trait", "\"0.1\""),
-        crate::scaffold::render_workspace_dep_or(config, "base64", "\"0.22\""),
-        crate::scaffold::render_workspace_dep_or(config, "futures-util", "\"0.3\""),
-        crate::scaffold::render_workspace_dep_or(config, "jni", "\"0.22\""),
-        crate::scaffold::render_workspace_dep_or(config, "serde_json", "\"1\""),
+        crate::scaffold::render_workspace_dep_or(config, "async-trait", &format!("\"{}\"", tv::cargo::ASYNC_TRAIT)),
+        crate::scaffold::render_workspace_dep_or(config, "base64", &format!("\"{}\"", tv::cargo::BASE64)),
+        crate::scaffold::render_workspace_dep_or(config, "futures-util", &format!("\"{}\"", tv::cargo::FUTURES_UTIL)),
+        crate::scaffold::render_workspace_dep_or(config, "jni", &format!("\"{}\"", tv::cargo::JNI)),
+        crate::scaffold::render_workspace_dep_or(config, "serde_json", &format!("\"{}\"", tv::cargo::SERDE_JSON)),
         crate::scaffold::render_workspace_dep_or(
             config,
             "tokio",

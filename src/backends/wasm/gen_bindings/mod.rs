@@ -1002,8 +1002,16 @@ impl Backend for WasmBackend {
                 generated_header: false,
             },
             GeneratedFile {
+                // The wasm crate builds its own manifest instead of going through
+                // `scaffold::scaffold`, so it needs the version floor applied here or it
+                // stays the one regenerated binding manifest that can still downgrade a
+                // dependency the consumer has already moved forward. ~keep
+                content: crate::scaffold::version_floor::floor_manifest(
+                    &gen_cargo_toml(api, config),
+                    config,
+                    &cargo_toml_path,
+                ),
                 path: cargo_toml_path,
-                content: gen_cargo_toml(api, config),
                 generated_header: true,
             },
         ])

@@ -98,6 +98,21 @@ pub mod cargo {
     // renovate: datasource=crate depName=async-trait
     pub const ASYNC_TRAIT: &str = "0.1";
 
+    // Hoisted out of `scaffold::languages::jni`, where it sat as an inline `"0.22"`. Only
+    // this file is in `renovate.json`'s `managerFilePatterns`, so a version literal written
+    // anywhere else is bumped by nothing and drifts behind the ecosystem for as long as it
+    // stays there -- which is how consumers on 0.23 came to be handed 0.22 on every regen.
+    // Every other Cargo literal still inlined in a scaffolder has the same defect latent in
+    // it; the floor in `scaffold::version_floor` is what keeps a stale one from being
+    // destructive, not this hoist. The prose has to sit *above* the marker: the
+    // `customManager` regex requires the marker line to be followed directly by the
+    // `pub const`, so a comment wedged between the two silently un-tracks the entry. ~keep
+    // renovate: datasource=crate depName=base64
+    pub const BASE64: &str = "0.23";
+
+    // renovate: datasource=crate depName=jni
+    pub const JNI: &str = "0.22";
+
     // renovate: datasource=crate depName=extendr-api
     pub const EXTENDR_API: &str = "0.9";
 

@@ -8,6 +8,7 @@ use anyhow::Context as _;
 mod languages;
 pub(crate) mod naming;
 mod template_env;
+pub(crate) mod version_floor;
 
 pub use languages::{
     PUBLISHED_RUNTIME_IDENTIFIERS, render_csharp_csproj, render_csharp_runtime_csproj,
@@ -471,13 +472,23 @@ pub(crate) fn render_workspace_dep_or(config: &ResolvedCrateConfig, name: &str, 
 /// reason `[lints]\nworkspace = true` cannot be used: these crates cross a C-ABI / PyO3 /
 /// napi / ext-php-rs / NIF boundary that requires `unsafe`, and that table is
 /// all-or-nothing. ~keep
+///
+/// The emitted text carries its own `~keep` for the same reason any hand-authored
+/// rationale in a consumer's tree does. Regeneration replaces this comment on every run,
+/// but poly's uncomment pass runs *between* regenerations and strips any comment that is
+/// not marked — so an unmarked rationale is deleted by the next `poly fmt`, and the
+/// deletion lands in a commit that looks like unrelated formatting. Marking it also means
+/// that where alef overwrites a consumer's own marked rationale here, what replaces it is
+/// at least as durable as what it displaced. `strip_internal_doc_markers` does not reach
+/// this text: it runs only inside `normalize_rustdoc`, on doc comments harvested from a
+/// consumer's Rust source, never on scaffold-emitted TOML. ~keep
 const CLIPPY_WORKSPACE_LINTS_RATIONALE: &str = "\
-# This crate deliberately does not use `[lints]` / `workspace = true`: its C-ABI / \n\
-# PyO3 / napi / ext-php-rs / NIF boundary requires `unsafe` code, and the workspace's \n\
-# `[workspace.lints.rust]` sets `unsafe_code = \"deny\"` -- an all-or-nothing table that \n\
-# would turn every such boundary into a compile error. The `[lints.clippy]` block below \n\
-# instead carries the subset of the workspace's deny-by-default lint policy this crate \n\
-# can actually satisfy.";
+# This crate deliberately does not use `[lints]` / `workspace = true`: its C-ABI /\n\
+# PyO3 / napi / ext-php-rs / NIF boundary requires `unsafe` code, and the workspace's\n\
+# `[workspace.lints.rust]` sets `unsafe_code = \"deny\"` -- an all-or-nothing table that\n\
+# would turn every such boundary into a compile error. The `[lints.clippy]` block below\n\
+# instead carries the subset of the workspace's deny-by-default lint policy this crate\n\
+# can actually satisfy. ~keep";
 
 /// Insert [`CLIPPY_WORKSPACE_LINTS_RATIONALE`] immediately above the first
 /// `[lints.clippy]` header in `rendered` (which may also carry a preceding
@@ -708,6 +719,12 @@ pub fn scaffold(
     for &lang in languages {
         files.extend(scaffold_language(api, config, lang)?);
     }
+    // Every binding manifest above is `generated_header: true` and therefore rewritten in
+    // full, so a dependency literal that has fallen behind the consumer's own tree is
+    // written back over their bump on every run. Raise each requirement to the committed
+    // one before anything else sees these files, so the whole pipeline -- write, `diff`,
+    // `verify` -- agrees that a version alef would have lowered is not a difference. ~keep
+    version_floor::apply_version_floors(&mut files, config);
     files.extend(scaffold_poly_config(config, languages));
 
     // LICENSE sync — copy the workspace-root LICENSE into every per-language

@@ -774,7 +774,7 @@ print_stdout = "deny"
         );
         assert!(
             cargo.contains(
-                "can actually satisfy.\n\
+                "can actually satisfy. ~keep\n\
                  [lints.clippy]\ndbg_macro = \"deny\"\nprint_stderr = \"deny\"\nprint_stdout = \"deny\""
             ),
             "expected the rationale comment to attach directly to [lints.clippy] (no blank line), and the \
@@ -934,7 +934,7 @@ print_stdout = "deny"
              block itself:\n{reconciled}"
         );
         assert!(
-            reconciled.contains("can actually satisfy.\n[lints.clippy]"),
+            reconciled.contains("can actually satisfy. ~keep\n[lints.clippy]"),
             "the rationale comment must attach directly above [lints.clippy] with no blank line, \
              got:\n{reconciled}"
         );
