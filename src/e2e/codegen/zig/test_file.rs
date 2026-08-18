@@ -518,7 +518,12 @@ fn render_test_fn(
                 for assertion in &fixture.assertions {
                     render_json_assertion(&mut assertions_body, assertion, result_var, field_resolver, true);
                 }
-                crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "zig", &fixture.id);
+                crate::e2e::codegen::fail_on_unavailable_field_markers(
+                    &assertions_body,
+                    "zig",
+                    &fixture.id,
+                    &fixture.assertions,
+                );
                 out.push_str(&assertions_body);
             } else {
                 // JSON struct path: parse result JSON and access fields dynamically.
@@ -564,7 +569,12 @@ fn render_test_fn(
                     for assertion in &fixture.assertions {
                         render_json_assertion(&mut assertions_body, assertion, result_var, field_resolver, false);
                     }
-                    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "zig", &fixture.id);
+                    crate::e2e::codegen::fail_on_unavailable_field_markers(
+                        &assertions_body,
+                        "zig",
+                        &fixture.id,
+                        &fixture.assertions,
+                    );
                     out.push_str(&assertions_body);
                 } else {
                     let _ = writeln!(out, "    std.debug.print(\"{{s}}\\n\", .{{_result_json}});");
@@ -588,7 +598,12 @@ fn render_test_fn(
                     result_is_simple,
                 );
             }
-            crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "zig", &fixture.id);
+            crate::e2e::codegen::fail_on_unavailable_field_markers(
+                &assertions_body,
+                "zig",
+                &fixture.id,
+                &fixture.assertions,
+            );
             out.push_str(&assertions_body);
         } else if call_returns_error_union {
             let _ = writeln!(out, "    _ = try {call_prefix}.{function_name}({args_str});");

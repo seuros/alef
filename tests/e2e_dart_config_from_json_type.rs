@@ -55,6 +55,7 @@ fn fixture(id: &str, call: Option<&str>, input: serde_json::Value) -> Fixture {
         call: call.map(str::to_string),
         input,
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,

@@ -496,7 +496,12 @@ pub(super) fn render_test_method(
                 kotlin_android_style,
             );
         }
-        crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "kotlin", &fixture.id);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(
+            &out[assertions_start..],
+            "kotlin",
+            &fixture.id,
+            &fixture.assertions,
+        );
         let _ = writeln!(out, "        client.close()");
         let _ = writeln!(out, "    }}");
         return Ok(());
@@ -554,7 +559,12 @@ pub(super) fn render_test_method(
             kotlin_android_style,
         );
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "kotlin", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &out[assertions_start..],
+        "kotlin",
+        &fixture.id,
+        &fixture.assertions,
+    );
 
     let _ = writeln!(out, "    }}");
     Ok(())

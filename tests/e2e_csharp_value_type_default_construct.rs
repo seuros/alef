@@ -37,6 +37,7 @@ fn make_fixture_omit_config(id: &str) -> Fixture {
         args: Vec::new(),
         assertion_recipes: vec!["items".to_string()],
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,

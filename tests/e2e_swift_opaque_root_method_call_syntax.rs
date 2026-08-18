@@ -139,6 +139,7 @@ fn make_contains_fixture(id: &str, field: &str, value: &str) -> Fixture {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: Some(field.to_string()),
             value: Some(serde_json::json!(value)),

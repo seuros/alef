@@ -88,13 +88,20 @@ fn declared_variable(line: &str) -> Option<&str> {
 /// the rewrite with it: a matching assertion reached before the declaration is an upstream
 /// emitter defect and is reported here rather than published as use-before-declaration C, which
 /// no snippet-level test could catch because the translation unit would not compile at all. ~keep
+///
+/// `unexpected_success_condition` is the condition under which the call did NOT fail as the
+/// fixture expects, and it is passed in rather than derived because it depends on the return
+/// shape the emitter chose: a null-on-failure handle has not failed while it is non-zero, an
+/// `i32` status export has not failed while it is zero. Hardcoding one polarity here published a
+/// guard that returned `EXIT_FAILURE` on precisely the outcome the fixture was asserting. ~keep
 fn assemble_snippet_body(
     function: &str,
     result_var: &str,
     expects_error: bool,
     fixture_id: &str,
+    unexpected_success_condition: &str,
 ) -> anyhow::Result<String> {
-    let failure_check = format!("if ({result_var} != 0) {{ return EXIT_FAILURE; }}");
+    let failure_check = format!("if ({unexpected_success_condition}) {{ return EXIT_FAILURE; }}");
     let body_line_count = function.lines().count().saturating_sub(3);
     let mut result_declared = false;
     let mut lines: Vec<String> = Vec::new();
@@ -278,7 +285,21 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         &config_sources,
         target_params,
     )?;
-    let body = assemble_snippet_body(&function, result_var, expects_error, &fixture.id)?;
+    // A status-code export reports failure as a NON-zero return, so the outcome that
+    // contradicts an `expects_error` fixture is `== 0`; every handle/pointer shape reports
+    // failure as null, so theirs is `!= 0`. ~keep
+    let unexpected_success_condition = if info.result_type_name.returns_status_code() {
+        format!("{result_var} == 0")
+    } else {
+        format!("{result_var} != 0")
+    };
+    let body = assemble_snippet_body(
+        &function,
+        result_var,
+        expects_error,
+        &fixture.id,
+        &unexpected_success_condition,
+    )?;
     Ok(crate::e2e::template_env::render(
         "c/snippet_body.jinja",
         minijinja::context! { header => header, declarations => snippet_declarations(&body), body => body },
@@ -379,11 +400,11 @@ pub(super) fn render_test_function_impl(
     type_defs: &[crate::core::ir::TypeDef],
     documentation_snippet: bool,
     config_sources: &FieldConfigSources,
-    // What the core IR says about the target's parameters, for the legacy (non-client) call
-    // path below -- see `TargetParams` and `build_args_string_c`'s doc comment. Every other
-    // branch in this function (`c_engine_factory`, streaming, bytes, `client_factory`) builds
-    // its own argument list without going through `build_args_string_c` at all, so this is
-    // inert on those paths. ~keep
+    // What the core IR says about the target's parameters, for the status-code and legacy
+    // (non-client) call paths below -- see `TargetParams` and `build_args_string_c`'s doc
+    // comment. Every other branch in this function (`c_engine_factory`, streaming, bytes,
+    // `client_factory`) builds its own argument list without going through
+    // `build_args_string_c` at all, so this is inert on those paths. ~keep
     target_params: TargetParams<'_>,
 ) -> anyhow::Result<()> {
     let fn_name = sanitize_ident(&fixture.id);
@@ -447,6 +468,68 @@ pub(super) fn render_test_function_impl(
     // with an internal word boundary). Route through the helper the header producer uses. ~keep
     let prefix_upper = crate::codegen::c_consumer::export_type_prefix(prefix);
 
+    // Status-code shape, decided BEFORE every other branch because every other branch
+    // presupposes a return shape rather than establishing one. A trait-bridge registry export
+    // (`register_fn` / `unregister_fn` / `clear_fn`) is emitted by alef's own FFI templates as
+    // `pub unsafe extern "C" fn ...(..) -> i32`, `0` for success -- so there is no result to
+    // own, nothing to free, and the value that reaches the caller is a status, not a pointer.
+    //
+    // Ordering this first is the whole fix. Reached later, a call that inherited a default
+    // `client_factory` would already have been rewritten into a client method, and the
+    // fallthrough would have bound an `i32` to `{prefix_upper}AlefHandle` and passed it to
+    // `{prefix}_{result}_free`, which frees an alef `Box`: freeing a status integer as a heap
+    // handle, in code alef publishes as a documentation example. ~keep
+    if result_type_name.returns_status_code() {
+        // An `i32` has no fields, so a field assertion on one cannot be emitted -- and a branch
+        // that quietly dropped it would render a test that passes without checking the thing the
+        // fixture names, which is worse than the crash it replaced. Refuse instead. ~keep
+        if let Some(field) = fixture
+            .assertions
+            .iter()
+            .filter_map(|assertion| assertion.field.as_deref())
+            .find(|field| !field.is_empty())
+        {
+            anyhow::bail!(
+                "C e2e generator: fixture `{}` asserts on field `{field}` of `{function_name}`, but \
+                 that export is a trait-bridge registry function returning an `i32` status code -- \
+                 it has no result object and therefore no fields. Assert on the status instead \
+                 (`not_error` / `error`), or point the fixture at the call that returns the value \
+                 being checked.",
+                fixture.id
+            );
+        }
+        // Argument construction mirrors the void-call path in `render_snippet_body`, for the
+        // same reason: with no configured `args` the call's argument list is genuinely empty
+        // (`TargetParams::Known(&[])`), so `extra_args` -- which carries the mandatory trailing
+        // `out_error` these exports declare -- is the whole list. Routing an empty list through
+        // `build_args_string_c` would instead splice the fixture `input` JSON in as an argument
+        // on any `TargetParams::IrAbsent` caller. ~keep
+        let mut arg_parts: Vec<String> = if args.is_empty() {
+            Vec::new()
+        } else {
+            vec![build_args_string_c(
+                &fixture.input,
+                args,
+                &HashMap::new(),
+                config,
+                type_defs,
+                fixture,
+                function_name,
+                target_params,
+            )?]
+        };
+        arg_parts.extend(extra_args.iter().cloned());
+        let args_str = arg_parts.join(", ");
+        let _ = writeln!(out, "    int32_t {result_var} = {function_name}({args_str});");
+        if expects_error {
+            let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to fail\");");
+        } else {
+            let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to succeed\");");
+        }
+        let _ = writeln!(out, "}}");
+        return Ok(());
+    }
+
     // Engine-factory pattern: used when c_engine_factory is configured.
     // Creates a config handle from JSON, builds an engine, calls {prefix}_{function}(engine, url),
     // frees result and engine.
@@ -460,7 +543,10 @@ pub(super) fn render_test_function_impl(
             field_resolver,
             fields_c_types,
             fields_enum,
-            result_type_name.require()?,
+            // `require_owned_handle`, not `require`: this pattern ends in
+            // `{prefix}_{result_snake}_free({result_var})` (`call_patterns.rs`), so it takes
+            // ownership of whatever the call returned. ~keep
+            result_type_name.require_owned_handle()?,
             config_type,
             expects_error,
             raw_c_result_type,
@@ -546,8 +632,11 @@ pub(super) fn render_test_function_impl(
         };
         // This branch spells the result type into the request-type derivation, every field
         // accessor, and the trailing `_free`; resolve it once, up front, so an unnameable
-        // result stops the branch before any of the three is written. ~keep
-        let result_type_name = result_type_name.require()?;
+        // result stops the branch before any of the three is written. `require_owned_handle`
+        // rather than `require` because of that trailing `_free`: a call whose config declares
+        // its result is a bare scalar or a raw byte buffer has said the result is not a handle,
+        // and freeing it as one is a heap bug, not a naming slip. ~keep
+        let result_type_name = result_type_name.require_owned_handle()?;
         let mut request_handle_vars: Vec<(String, String)> = Vec::new(); // (arg_name, var_name)
         // Inline argument expressions appended after request handles in the
         // method call (e.g. literal C strings for `string` args, `NULL` for
@@ -1096,13 +1185,13 @@ pub(super) fn render_test_function_impl(
     // Legacy (non-client) path: call the function directly.
     // Used for libraries that expose standalone FFI functions.
 
-    // Everything from here on treats the result as an opaque handle of a *named* type: the
-    // capsule lookup keys on it, the field accessors prefix with it, and the cleanup call is
-    // `{prefix}_{result_snake}_free`. This is the path that emitted `{prefix}_list_ocr_backends_free`
-    // for a family whose header declares no `_free` at all, so the name has to be real or the
-    // generation has to fail — the earlier `raw_c_result_type` and streaming branches already
-    // returned, and neither of them names a result type. ~keep
-    let result_type_name = result_type_name.require()?;
+    // The capsule lookup below keys on the result type name without taking ownership of
+    // anything -- a capsule is a borrowed, host-owned pointer that is deliberately never freed
+    // -- so it asks the weaker `require`. The opaque-handle emission after it asks
+    // `require_owned_handle` instead, at the point ownership is actually claimed. Resolving
+    // once for both would have to pick one of the two questions, and picking the weaker one is
+    // what let a non-handle reach `{prefix}_{result_snake}_free`. ~keep
+    let result_type_label = result_type_name.require()?;
 
     // Use the function name directly — the override already includes the prefix
     // (e.g. "htm_convert"), so we must NOT prepend it again.
@@ -1200,7 +1289,7 @@ pub(super) fn render_test_function_impl(
     // static grammar / registry-owned object, so freeing it corrupts the heap).
     // Emit a minimal declare + null-check with no free, mirroring the borrowed
     // semantics the Go/Zig bindings get for free via GC / borrow checking.
-    if let Some(capsule) = config.ffi.as_ref().and_then(|f| f.capsule_types.get(result_type_name)) {
+    if let Some(capsule) = config.ffi.as_ref().and_then(|f| f.capsule_types.get(result_type_label)) {
         let c_return_type = &capsule.c_return_type;
         let _ = writeln!(
             out,
@@ -1215,6 +1304,15 @@ pub(super) fn render_test_function_impl(
         let _ = writeln!(out, "}}");
         return Ok(());
     }
+
+    // Everything from here on binds the result to `{prefix_upper}AlefHandle` and ends in
+    // `{prefix}_{result_snake}_free({result_var})` — it claims ownership of an alef `Box`. The
+    // name therefore has to be backed by something that says the result IS such a handle; the
+    // mere absence of a resolved type is not that, and reading it as one is how an `i32` status
+    // and a declared-scalar result both ended up being freed. This is also the path that
+    // emitted `{prefix}_list_ocr_backends_free` for a family whose header declares no `_free`
+    // at all. ~keep
+    let result_type_name = result_type_name.require_owned_handle()?;
 
     if expects_error {
         let _ = writeln!(
@@ -1483,7 +1581,8 @@ mod snippet_tests {
             "assert(result == 0 && \"expected call to fail\");",
         ]);
 
-        let body = assemble_snippet_body(&function, "result", true, "chat_auth_401").expect("body assembles");
+        let body =
+            assemble_snippet_body(&function, "result", true, "chat_auth_401", "result != 0").expect("body assembles");
 
         let guard = body
             .lines()
@@ -1512,7 +1611,7 @@ mod snippet_tests {
             "SAMPLEAlefHandle result = sample_default_client_chat(client);",
         ]);
 
-        let error = assemble_snippet_body(&function, "result", true, "chat_auth_401")
+        let error = assemble_snippet_body(&function, "result", true, "chat_auth_401", "result != 0")
             .expect_err("a guard preceding its declaration must be rejected");
 
         assert!(error.to_string().contains("before `result` is declared"), "{error}");
@@ -1526,7 +1625,8 @@ mod snippet_tests {
             "sample_chat_response_free(result);",
         ]);
 
-        let body = assemble_snippet_body(&function, "result", false, "chat_basic").expect("body assembles");
+        let body =
+            assemble_snippet_body(&function, "result", false, "chat_basic", "result != 0").expect("body assembles");
 
         assert!(!body.contains("assert("), "{body}");
         assert!(

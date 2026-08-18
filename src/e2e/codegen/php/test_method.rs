@@ -391,7 +391,7 @@ pub(super) fn render_test_method(
     // leaves assertions_body with no executable statement. Fall back to a
     // real assertion instead of a vacuous test body.
     apply_vacuous_assertion_fallback(&mut assertions_body, is_streaming, expects_error, result_var);
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "php", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "php", &fixture.id, &fixture.assertions);
 
     let error_test_body = if expects_error {
         render_error_test_body(

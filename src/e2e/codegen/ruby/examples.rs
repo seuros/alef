@@ -430,7 +430,12 @@ pub(super) fn render_example(
             enum_fields,
         );
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_rendered, "ruby", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &assertions_rendered,
+        "ruby",
+        &fixture.id,
+        &fixture.assertions,
+    );
 
     let has_mock = fixture.mock_response.is_some() || fixture.http.is_some();
     let api_key_var = fixture.env.as_ref().and_then(|e| e.api_key_var.as_deref());

@@ -329,6 +329,7 @@ mod fmt_import_tests {
     fn error_fixture(value: Option<serde_json::Value>) -> Fixture {
         Fixture {
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "error".to_string(),
                 field: None,
                 value,

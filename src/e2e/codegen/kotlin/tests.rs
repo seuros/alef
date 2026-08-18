@@ -38,6 +38,7 @@ fn kotlin_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
     )
     .with_ir_fields(reachable, HashSet::new());
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("data".to_string()),
         value: Some(serde_json::Value::String("hello".to_string())),
@@ -84,6 +85,7 @@ fn kotlin_ir_excluded_field_present_in_result_fields_is_still_skipped() {
     )
     .with_ir_fields(HashSet::new(), excluded);
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("internal_diagnostics".to_string()),
         value: Some(serde_json::Value::String("hello".to_string())),
@@ -120,6 +122,7 @@ fn assertion_enum_optional_uses_safe_get_value_then_or_empty() {
     let mut enum_fields = HashSet::new();
     enum_fields.insert("choices.finish_reason".to_string());
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("choices.finish_reason".to_string()),
         value: Some(serde_json::Value::String("stop".to_string())),
@@ -245,6 +248,7 @@ fn not_empty_is_type_aware_for_nullable_values() {
         }
         let resolver = FieldResolver::new(&HashMap::new(), &optional, &HashSet::new(), &arrays, &HashSet::new());
         let assertion = Assertion {
+            skip: None,
             assertion_type: "not_empty".to_string(),
             field: Some(field.to_string()),
             value: None,
@@ -285,6 +289,7 @@ fn assertion_json_scalar_optional_field_stringifies_before_or_empty() {
     let mut json_scalar_fields = HashSet::new();
     json_scalar_fields.insert("data".to_string());
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("data".to_string()),
         value: Some(serde_json::Value::String("JS Test Page".to_string())),
@@ -329,6 +334,7 @@ fn assertion_json_scalar_matches_configured_array_wildcard() {
         &HashSet::new(),
     );
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("action_results[0].data".to_string()),
         value: Some(serde_json::json!("JS Test Page")),
@@ -367,6 +373,7 @@ fn assertion_json_scalar_and_nullable_root_are_stringified_for_contains() {
         &HashSet::new(),
     );
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("data".to_string()),
         value: Some(serde_json::json!("needle")),
@@ -426,6 +433,7 @@ fn assertion_json_scalar_and_nullable_root_are_stringified_for_contains() {
 fn assertion_string_optional_field_still_uses_plain_or_empty() {
     let resolver = make_resolver_for_optional_field("title");
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("title".to_string()),
         value: Some(serde_json::Value::String("Example".to_string())),
@@ -476,6 +484,7 @@ fn assertion_enum_non_optional_uses_plain_get_value() {
     let mut enum_fields = HashSet::new();
     enum_fields.insert("choices.finish_reason".to_string());
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("choices.finish_reason".to_string()),
         value: Some(serde_json::Value::String("stop".to_string())),
@@ -528,6 +537,7 @@ fn per_call_enum_field_override_routes_through_get_value() {
     per_call_enum_fields.insert("status".to_string());
 
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("status".to_string()),
         value: Some(serde_json::Value::String("validating".to_string())),
@@ -717,6 +727,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
         &HashSet::new(),
     );
     let assertion = Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("status".to_string()),
         value: Some(serde_json::Value::String("validating".to_string())),
@@ -1344,6 +1355,7 @@ fn assertion_json_scalar_matches_namespace_stripped_path() {
         &HashSet::new(),
     );
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("interaction.action_results[0].data".to_string()),
         value: Some(serde_json::json!("JS Test Page")),
@@ -1393,6 +1405,7 @@ fn assertion_namespace_stripped_string_field_still_uses_plain_or_empty() {
         &HashSet::new(),
     );
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("interaction.action_results[0].action_type".to_string()),
         value: Some(serde_json::json!("executeJs")),
@@ -1445,6 +1458,7 @@ fn assertion_json_scalar_accepts_both_bracket_and_dotted_spellings() {
         )
     };
     let assertion = Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("action_results[0].data".to_string()),
         value: Some(serde_json::json!("JS Test Page")),

@@ -80,6 +80,7 @@ fn make_bool_fixture() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "is_true".to_string(),
                 field: None,
                 value: None,
@@ -118,6 +119,7 @@ fn make_uint_fixture() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "greater_than_or_equal".to_string(),
                 field: None,
                 value: Some(serde_json::json!(1)),

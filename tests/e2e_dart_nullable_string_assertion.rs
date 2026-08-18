@@ -92,6 +92,7 @@ fn nullable_string_equals_assertion_uses_null_coalescing() {
         "detect_language_simple_nullable_string",
         "detect_language_from_content recognizes #!/bin/bash shebang",
         vec![Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: None,
             value: Some(serde_json::Value::String("bash".to_string())),
@@ -123,6 +124,7 @@ fn nullable_string_not_equals_assertion_uses_null_coalescing() {
         "detect_language_not_equal_nullable",
         "detect_language from content is not unknown",
         vec![Assertion {
+            skip: None,
             assertion_type: "not_equals".to_string(),
             field: None,
             value: Some(serde_json::Value::String("unknown".to_string())),

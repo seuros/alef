@@ -166,6 +166,7 @@ fn build_fixture_with_trailing_newline_equals() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "equals".to_string(),
                 field: None,
                 value: Some(serde_json::Value::String("line one\nline two\n".to_string())),

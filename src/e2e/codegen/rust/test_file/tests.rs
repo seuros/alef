@@ -67,6 +67,7 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
         args: vec![],
         assertion_recipes: vec![],
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "count_min".to_string(),
             field: Some("chunks".to_string()),
             value: Some(serde_json::Value::Number(serde_json::Number::from(2u64))),
@@ -162,6 +163,7 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
         args: vec![],
         assertion_recipes: vec![],
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: Some("nonexistent_field".to_string()),
             value: Some(serde_json::Value::String("x".to_string())),
@@ -306,6 +308,7 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
         assertion_recipes: vec![],
         assertions: vec![
             Assertion {
+                skip: None,
                 assertion_type: "not_error".to_string(),
                 field: None,
                 value: None,
@@ -316,6 +319,7 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
                 return_type: None,
             },
             Assertion {
+                skip: None,
                 assertion_type: "count_equals".to_string(),
                 field: Some("embeddings".to_string()),
                 value: Some(serde_json::Value::Number(serde_json::Number::from(0u64))),

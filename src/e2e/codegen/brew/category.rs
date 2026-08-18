@@ -202,7 +202,12 @@ fn render_test_function(
     for assertion in &fixture.assertions {
         render_assertion(out, assertion, binary_name, field_resolver);
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "brew", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &out[assertions_start..],
+        "brew",
+        &fixture.id,
+        &fixture.assertions,
+    );
 
     let _ = writeln!(out, "}}");
 }

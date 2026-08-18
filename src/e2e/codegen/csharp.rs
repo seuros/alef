@@ -886,7 +886,12 @@ fn render_test_method(
             );
         }
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "csharp", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &assertions_body,
+        "csharp",
+        &fixture.id,
+        &fixture.assertions,
+    );
 
     let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
 

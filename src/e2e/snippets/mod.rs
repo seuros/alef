@@ -2163,12 +2163,19 @@ mod tests {
         assert!(report.snippets[0].file.content.contains("extension_call()"));
     }
 
-    /// A fixture that is not skipped for `c` keeps using the naive
-    /// `trait_bridge_function_identity` fallback exactly as before — this fix
-    /// only gates the fallback on `SkipDirective::should_skip`, so an unskipped
-    /// fixture must render identically to the pre-fix behaviour.
+    /// A fixture that is not skipped for `c` still resolves its trait-bridge identity and
+    /// renders — the skip gate only suppresses the fallback for fixtures that opted out.
+    ///
+    /// The assertions examine the RESULT BINDING, not just the call text. The version of this
+    /// test that shipped with the skip-gate fix asserted only
+    /// `contains("sample_clear_ocr_backend(NULL);")`, a substring that matches the tail of an
+    /// assignment line as happily as a standalone statement — so it passed while the emitter
+    /// bound the `i32` this export returns to `{PREFIX}AlefHandle` and then passed it to
+    /// `{prefix}__free`. A whole return type and a heap-corrupting free sat inside the span the
+    /// assertion did not look at. Substring checks on a call site are blind to everything to the
+    /// left of the symbol and everything on the following lines; both are pinned here. ~keep
     #[test]
-    fn not_skipped_c_fixture_renders_naive_trait_bridge_identity_as_before() {
+    fn not_skipped_c_fixture_binds_the_trait_bridge_status_and_frees_nothing() {
         let mut fixture = documented_fixture();
         fixture.call = Some("clear_ocr_backends".into());
         let e2e = E2eConfig::default();
@@ -2199,19 +2206,26 @@ mod tests {
         assert_eq!(report.coverage.generated.len(), 1);
         assert!(report.coverage.missing.is_empty());
         assert_eq!(report.snippets.len(), 1);
-        // A fixture that is NOT skipped still renders, and now renders the symbol the FFI
-        // backend actually exports: `{prefix}_clear_{trait_snake}` derived from the trait name
-        // (`registration.rs:141`), SINGULAR — not the pluralised `clear_fn` config text, which
-        // only ever matched the fixture to a bridge. The trailing `NULL` is the C out-error
-        // argument. Before the derivation fix this emitted `sample_clear_ocr_backends(NULL)`,
-        // naming a symbol the header does not declare.
+        let content = &report.snippets[0].file.content;
+        // The symbol is the one the FFI backend actually exports:
+        // `{prefix}_clear_{trait_snake}` derived from the trait name (`registration.rs:141`),
+        // SINGULAR — not the pluralised `clear_fn` config text, which only ever matched the
+        // fixture to a bridge. The trailing `NULL` is the C out-error argument. The whole
+        // statement is spelled out, so the declared type is inside what this examines. ~keep
         assert!(
-            report.snippets[0]
-                .file
-                .content
-                .contains("sample_clear_ocr_backend(NULL);"),
-            "expected the derived singular ABI symbol, got:\n{}",
-            report.snippets[0].file.content
+            content.contains("int32_t result = sample_clear_ocr_backend(NULL);"),
+            "expected the derived singular ABI symbol bound as the i32 status `clear_fn.jinja` \
+             returns, got:\n{content}"
+        );
+        assert!(
+            !content.contains("AlefHandle"),
+            "an i32 status must never be bound to an opaque handle type, got:\n{content}"
+        );
+        assert!(
+            !content.contains("free"),
+            "a status code owns nothing, so the snippet must free nothing — this is the \
+             heap-corruption half of the defect and no substring of the call site would show \
+             it, got:\n{content}"
         );
     }
 

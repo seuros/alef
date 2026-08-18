@@ -40,6 +40,7 @@ fn make_extract_fixture() -> Fixture {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: Some("mime_type".to_string()),
             value: Some(serde_json::Value::String("application/pdf".to_string())),

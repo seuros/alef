@@ -1093,7 +1093,12 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         {
             let _ = writeln!(out, "    expect({result_var}, isNotNull);");
         }
-        crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "dart", &fixture.id);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(
+            &out[assertions_start..],
+            "dart",
+            &fixture.id,
+            &fixture.assertions,
+        );
     }
 
     let _ = writeln!(out, "  }});");

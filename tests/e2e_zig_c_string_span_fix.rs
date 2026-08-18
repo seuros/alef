@@ -106,6 +106,7 @@ result_is_json_struct = true
     let fixture = make_fixture_with_assertions(
         "parse_span_test",
         vec![Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: Some("id".to_string()),
             value: Some(serde_json::Value::String("test".to_string())),
@@ -144,6 +145,7 @@ result_is_json_struct = true
     let fixture = make_fixture_with_assertions(
         "interact_format_span_test",
         vec![Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: Some("interaction.action_results".to_string()),
             value: Some(serde_json::Value::String("success".to_string())),
@@ -187,6 +189,7 @@ result_is_json_struct = true
     let fixture = make_fixture_with_assertions(
         "extract_span_test",
         vec![Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: Some("text".to_string()),
             value: Some(serde_json::Value::String("hello".to_string())),

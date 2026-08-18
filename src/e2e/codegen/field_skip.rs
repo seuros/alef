@@ -25,8 +25,34 @@ struct Shape {
     after: &'static str,
 }
 
+/// Why a field assertion was dropped, and therefore whether dropping it is defensible.
+///
+/// ~keep The axis is *not* "which backend emitted it" but "could an edit to the fixture or the
+/// alef config have made this assertion run?".
+///
+/// [`SkipClass::LanguageLimitation`] names a property of the target language, ABI or declared
+/// call shape. No fixture edit makes the assertion expressible, so rendering a comment is the
+/// only honest option and the fixture author is not at fault.
+///
+/// [`SkipClass::AuthoringGap`] names a *lookup that failed*: a field path that did not resolve
+/// against a result type or virtual-field set which is itself derived from the same IR the
+/// fixture is written against. That is drift between fixture and config, it is fixable, and
+/// rendering a green test for it is the defect this module exists to stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkipClass {
+    /// A resolution failure a fixture or config edit can fix. Fatal unless explicitly opted out.
+    AuthoringGap,
+    /// ~keep alef itself cannot express this assertion yet — a missing generator feature, not a
+    /// mistake in the fixture. Never fatal: a consumer cannot fix it from their own `alef.toml`,
+    /// so failing their build on it would only force a blanket opt-out and rebuild the silent
+    /// skip with extra steps. Counted in its own bucket instead, because this debt is alef's.
+    GeneratorGap,
+    /// A real property of the language, ABI or declared call shape. Counted, never fatal.
+    LanguageLimitation,
+}
+
 macro_rules! field_skip_variants {
-    ($($(#[$meta:meta])* $variant:ident => ($before:expr, $after:expr $(,)?)),+ $(,)?) => {
+    ($($(#[$meta:meta])* $variant:ident : $class:ident => ($before:expr, $after:expr $(,)?)),+ $(,)?) => {
         /// A registered reason a field assertion was dropped from generated e2e code.
         ///
         /// Out of scope by design: skips whose cause is the *assertion type* rather than the
@@ -49,61 +75,127 @@ macro_rules! field_skip_variants {
                     $(Self::$variant => Shape { before: $before, after: $after },)+
                 }
             }
+
+            /// Whether dropping this assertion is a defensible language limit or a fixable gap.
+            ///
+            /// Read from the same macro arm as the wording, so a new variant cannot be added
+            /// without its author deciding — in the same edit — which side of the line it sits
+            /// on. There is no default. ~keep
+            pub(crate) const fn class(self) -> SkipClass {
+                match self {
+                    $(Self::$variant => SkipClass::$class,)+
+                }
+            }
         }
     };
 }
 
 field_skip_variants! {
-    NotAvailableOnResultType => ("field ", " not available on result type"),
-    /// zig's JSON-struct return shape, where the result is parsed JSON rather than a binding type.
-    NotAvailableOnJsonStructResult => ("field ", " not available on the JSON-struct result"),
-    NotAvailableWhenResultIsSimple => ("field ", " not available when result_is_simple"),
-    NotAvailableInCFfi => ("field ", " not available in C FFI"),
-    NotAvailableOnGoProcessingResult => ("field ", " not available on Go ProcessingResult"),
-    NotAvailableOnPythonProcessingResult => ("field ", " not available on Python ProcessingResult"),
-    NotAvailableOnRubyProcessingResult => ("field ", " not available on Ruby ProcessingResult"),
-    NotAvailableOnRProcessingResult => ("field ", " not available on R ProcessingResult"),
-    NotAvailableOnNodeProcessingResult => ("field ", " not available on Node JsProcessingResult"),
+    /// ~keep The canonical gap: `FieldResolver::is_valid_for_result` did not find the path. The
+    /// resolver is fed from the same IR the binding types are generated from, so a miss means the
+    /// fixture names a field that no longer exists (or never did), not that the language is
+    /// incapable of asserting it.
+    NotAvailableOnResultType: AuthoringGap => ("field ", " not available on result type"),
+    /// ~keep zig's JSON-struct return shape, where the result is parsed JSON rather than a binding
+    /// type. The struct is generated from the IR, so an unresolved path is drift, not a zig limit —
+    /// parsed JSON can express any shape the fixture could name.
+    NotAvailableOnJsonStructResult: AuthoringGap => ("field ", " not available on the JSON-struct result"),
+    /// ~keep The call declares `result_is_simple`, so the binding returns a bare scalar and a dotted
+    /// path has nowhere to live. A property of the declared call shape, not a fixture typo.
+    NotAvailableWhenResultIsSimple: LanguageLimitation => ("field ", " not available when result_is_simple"),
+    /// ~keep The C ABI flattens to primitives and opaque handles; deeply nested and richly typed
+    /// fields are genuinely unreachable across it. No fixture edit changes that.
+    NotAvailableInCFfi: LanguageLimitation => ("field ", " not available in C FFI"),
+    NotAvailableOnGoProcessingResult: AuthoringGap => ("field ", " not available on Go ProcessingResult"),
+    NotAvailableOnPythonProcessingResult: AuthoringGap => ("field ", " not available on Python ProcessingResult"),
+    NotAvailableOnRubyProcessingResult: AuthoringGap => ("field ", " not available on Ruby ProcessingResult"),
+    NotAvailableOnRProcessingResult: AuthoringGap => ("field ", " not available on R ProcessingResult"),
+    NotAvailableOnNodeProcessingResult: AuthoringGap => ("field ", " not available on Node JsProcessingResult"),
     /// ~keep csharp builds its reason into a `skipped_reason` context variable that
     /// `templates/csharp/assertion.jinja` prefixes with `skipped: `, so this wording never appears
     /// on a source line next to the word `skipped:` — grepping for the marker text misses it.
-    NotAvailableOnGeneratedCsharpResultType => ("field ", " not available on the generated C# result type"),
-    NotAvailableOnDartResultType => ("field ", " not available on dart result type"),
-    NotAvailableOnElixirResultType => ("field ", " not available on Elixir result type"),
-    NotAvailableOnStreamingResultType => ("field ", " not available on streaming result type"),
-    NotApplicableForSimpleResultType => ("field ", " not applicable for simple result type"),
-    NotAccessibleOnSimpleResultType => ("field ", " not accessible on simple result type"),
-    ResultIsSimpleForFieldNotAvailable => ("result_is_simple for field ", " not available on result type"),
-    CrossesTaggedUnionBoundaryInDart => (
+    NotAvailableOnGeneratedCsharpResultType: AuthoringGap => (
+        "field ",
+        " not available on the generated C# result type",
+    ),
+    NotAvailableOnDartResultType: AuthoringGap => ("field ", " not available on dart result type"),
+    NotAvailableOnElixirResultType: AuthoringGap => ("field ", " not available on Elixir result type"),
+    /// ~keep A streaming call yields an event sequence, not a struct, so no field path can name a
+    /// property of it. This is a missing generator feature (a first-class stream assertion), not a
+    /// fixture mistake — see the `StreamingAssertionOnUnsupportedField` note.
+    NotAvailableOnStreamingResultType: GeneratorGap => ("field ", " not available on streaming result type"),
+    /// ~keep Simple-result sibling of `NotAvailableWhenResultIsSimple`; same declared-call-shape
+    /// reason, different backend's wording.
+    NotApplicableForSimpleResultType: LanguageLimitation => ("field ", " not applicable for simple result type"),
+    NotAccessibleOnSimpleResultType: LanguageLimitation => ("field ", " not accessible on simple result type"),
+    /// ~keep Despite the `result_is_simple` prefix this is the *resolver* rejecting the path, not
+    /// the simple-result shape rejecting it — the wording pairs `result_is_simple for field` with
+    /// `not available on result type`, which is the `NotAvailableOnResultType` oracle talking.
+    ResultIsSimpleForFieldNotAvailable: AuthoringGap => (
+        "result_is_simple for field ",
+        " not available on result type",
+    ),
+    /// ~keep Reaching the field would require narrowing a tagged union to one variant first, which
+    /// neither language's type system lets generated straight-line assertion code do.
+    CrossesTaggedUnionBoundaryInDart: LanguageLimitation => (
         "field ",
         " crosses a tagged-union variant boundary (not expressible in Dart)",
     ),
-    CrossesTaggedUnionBoundaryInSwift => (
+    CrossesTaggedUnionBoundaryInSwift: LanguageLimitation => (
         "field ",
         " crosses a tagged-union variant boundary (not expressible in Swift)",
     ),
-    ExcludedFromSwiftBinding => ("field ", " references a field or type excluded from the Swift binding"),
-    NestedArrayWildcardNotSupportedInZig => ("nested array-wildcard field ", " not supported in zig"),
-    ArrayElementNotSupportedInGleam => ("array element field ", " not yet supported in Gleam e2e"),
-    EnumVariantAccessorNotAvailableInRuby => (
+    /// ~keep The field or its type is excluded from the binding by explicit config. The exclusion
+    /// is already a visible, deliberate decision, so the skip is its honest consequence.
+    ExcludedFromSwiftBinding: LanguageLimitation => (
+        "field ",
+        " references a field or type excluded from the Swift binding",
+    ),
+    /// ~keep Declared generator limitation, not a resolution failure: the path resolves fine, the
+    /// zig backend just cannot lower a nested array wildcard yet.
+    NestedArrayWildcardNotSupportedInZig: LanguageLimitation => (
+        "nested array-wildcard field ",
+        " not supported in zig",
+    ),
+    ArrayElementNotSupportedInGleam: LanguageLimitation => (
+        "array element field ",
+        " not yet supported in Gleam e2e",
+    ),
+    /// ~keep Ruby serializes enums to a Hash, so there is no variant accessor to call. A property
+    /// of the Ruby binding's representation choice.
+    EnumVariantAccessorNotAvailableInRuby: LanguageLimitation => (
         "enum variant accessor ",
         " not available on Ruby (serialized to Hash)",
     ),
     /// ~keep Reworded from `metadata.format enum field serialization differs in Ruby`, which named
     /// no quoted field and so was structurally uncountable — the strict gate could never have seen
     /// it whatever patterns it matched. The reason is unchanged; only the field is now named.
-    EnumSerializationDiffersInRuby => ("field ", " enum serialization differs in Ruby"),
-    NoPythonStreamingAccessor => ("streaming field ", ": no python accessor"),
-    StreamingAssertionOnUnsupportedField => ("streaming assertion on unsupported field ", ""),
+    EnumSerializationDiffersInRuby: LanguageLimitation => ("field ", " enum serialization differs in Ruby"),
+    /// ~keep The python streaming adapter has no accessor for this virtual field. Same missing
+    /// feature as `StreamingAssertionOnUnsupportedField`, seen from the python side.
+    NoPythonStreamingAccessor: GeneratorGap => ("streaming field ", ": no python accessor"),
+    /// ~keep This is the variant that hid whole expected-event-sequence assertions — a fixture
+    /// asserting a traversal order rendered a comment and the test still passed.
+    ///
+    /// It is nonetheless a `GeneratorGap`, not an `AuthoringGap`: a streaming call returns an
+    /// event sequence rather than a struct, so *no* field mapping can ever express an assertion
+    /// over that sequence. Consumers cannot fix these from their own config — the fix is a
+    /// first-class streaming assertion type in alef. Failing their build on it would force a
+    /// blanket opt-out, which is the silent skip again with more ceremony. Counted loudly instead,
+    /// in a bucket that names alef as the owner.
+    StreamingAssertionOnUnsupportedField: GeneratorGap => ("streaming assertion on unsupported field ", ""),
     /// Emitted by `templates/{java,php}/synthetic_assertion.jinja`, which cannot call into Rust;
-    /// registered here so the strict gate still counts it. ~keep
-    ResultIsSimpleNotOnSimpleResultType => ("result_is_simple, field ", " not on simple result type"),
+    /// registered here so the strict gate still counts it. Declared-call-shape reason. ~keep
+    ResultIsSimpleNotOnSimpleResultType: LanguageLimitation => (
+        "result_is_simple, field ",
+        " not on simple result type",
+    ),
     /// Emitted by `templates/java/synthetic_assertion.jinja`. ~keep
-    NotAvailableOnJavaResultType => ("field ", " not available on Java result type"),
+    NotAvailableOnJavaResultType: AuthoringGap => ("field ", " not available on Java result type"),
     /// Emitted by `templates/php/synthetic_assertion.jinja`. ~keep
-    NotAvailableOnPhpResultType => ("field ", " not available on PHP result type"),
+    NotAvailableOnPhpResultType: AuthoringGap => ("field ", " not available on PHP result type"),
     /// Emitted by `templates/r/synthetic_assertion.jinja`. ~keep
-    NotAvailableOnRResultType => ("field ", " not available on R result type"),
+    NotAvailableOnRResultType: AuthoringGap => ("field ", " not available on R result type"),
 }
 
 impl FieldSkip {
@@ -115,8 +207,21 @@ impl FieldSkip {
     }
 
     /// The field name a single rendered line names, if the line carries any registered wording.
+    ///
+    /// Production code uses [`Self::extract_classified`]; this narrower form exists so the
+    /// recognition tests below can assert *what* is matched without also restating every
+    /// variant's classification. ~keep
+    #[cfg(test)]
     pub(crate) fn extract(line: &str) -> Option<&str> {
-        Self::ALL.iter().find_map(|variant| variant.field_in(line))
+        Self::extract_classified(line).map(|(field, _)| field)
+    }
+
+    /// The field name *and* the variant that named it, so a caller can tell an authoring gap
+    /// from a language limitation without re-matching the wording itself.
+    pub(crate) fn extract_classified(line: &str) -> Option<(&str, Self)> {
+        Self::ALL
+            .iter()
+            .find_map(|variant| variant.field_in(line).map(|field| (field, *variant)))
     }
 
     /// ~keep Every occurrence of `before` is tried, not just the first: `before` is often the bare
@@ -142,7 +247,51 @@ impl FieldSkip {
 
 #[cfg(test)]
 mod tests {
-    use super::FieldSkip;
+    use super::{FieldSkip, SkipClass};
+
+    /// ~keep The classification is what decides whose build breaks, so it is pinned here rather
+    /// than left implicit in the variant list. These four are the load-bearing calls:
+    ///
+    /// - `NotAvailableOnResultType` is the canonical fixable gap and must stay fatal, or this
+    ///   whole change is inert.
+    /// - the streaming wordings must NOT be fatal: a stream is an event sequence, so no field
+    ///   mapping can express an assertion over it and a consumer cannot fix it from their config.
+    ///   Making them fatal would force a blanket opt-out and rebuild the silent skip.
+    /// - a tagged-union boundary is a real type-system limit and was never anyone's mistake.
+    #[test]
+    fn the_load_bearing_classifications_are_pinned() {
+        assert_eq!(FieldSkip::NotAvailableOnResultType.class(), SkipClass::AuthoringGap);
+        assert_eq!(
+            FieldSkip::StreamingAssertionOnUnsupportedField.class(),
+            SkipClass::GeneratorGap
+        );
+        assert_eq!(FieldSkip::NoPythonStreamingAccessor.class(), SkipClass::GeneratorGap);
+        assert_eq!(
+            FieldSkip::NotAvailableOnStreamingResultType.class(),
+            SkipClass::GeneratorGap
+        );
+        assert_eq!(
+            FieldSkip::CrossesTaggedUnionBoundaryInDart.class(),
+            SkipClass::LanguageLimitation
+        );
+        assert_eq!(FieldSkip::NotAvailableInCFfi.class(), SkipClass::LanguageLimitation);
+    }
+
+    /// Every class must actually be populated: a table where one arm went empty would silently
+    /// collapse the three-way distinction back into a two-way one.
+    #[test]
+    fn every_class_is_represented() {
+        for class in [
+            SkipClass::AuthoringGap,
+            SkipClass::GeneratorGap,
+            SkipClass::LanguageLimitation,
+        ] {
+            assert!(
+                FieldSkip::ALL.iter().any(|variant| variant.class() == class),
+                "no variant is classified {class:?}"
+            );
+        }
+    }
 
     /// The load-bearing invariant: render and recognition read the same `Shape`, so anything a
     /// backend can emit through the funnel is by construction something the strict gate counts.

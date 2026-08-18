@@ -111,6 +111,7 @@ fn nullable_boolean_is_true_assertion_uses_equality_comparison() {
         "markdown_with_citations_true",
         "markdown contains citations",
         vec![Assertion {
+            skip: None,
             assertion_type: "is_true".to_string(),
             field: Some("markdown.citations".to_string()),
             value: None,
@@ -147,6 +148,7 @@ fn nullable_boolean_is_false_assertion_uses_equality_comparison() {
         "markdown_with_citations_false",
         "markdown does not contain citations",
         vec![Assertion {
+            skip: None,
             assertion_type: "is_false".to_string(),
             field: Some("markdown.citations".to_string()),
             value: None,

@@ -221,7 +221,12 @@ pub(super) fn render_test_case(
         call_config.returns_void,
         result_var,
     );
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "r", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &out[assertions_start..],
+        "r",
+        &fixture.id,
+        &fixture.assertions,
+    );
 
     // Emit teardown for trait-bridge tests to clean up registered test backends.
     for line in teardown_block.lines() {

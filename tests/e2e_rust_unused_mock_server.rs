@@ -49,6 +49,7 @@ fn error_fixture_with_mock() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "error".to_string(),
                 field: None,
                 value: Some(serde_json::Value::String("500".to_string())),

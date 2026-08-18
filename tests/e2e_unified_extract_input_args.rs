@@ -66,6 +66,7 @@ fn fixture() -> Fixture {
             "uri": "pdf/fake_memo.pdf"
         }),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,

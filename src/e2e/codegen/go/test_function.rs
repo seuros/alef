@@ -714,7 +714,12 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
             streaming_item_type,
         );
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&out[assertions_start..], "go", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &out[assertions_start..],
+        "go",
+        &fixture.id,
+        &fixture.assertions,
+    );
 
     emit_trait_bridge_cleanup(out, fixture, base_function_name, import_alias);
     let _ = writeln!(out, "}}");

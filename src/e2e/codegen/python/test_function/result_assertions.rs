@@ -105,7 +105,12 @@ pub(super) fn emit_result_and_assertions(
             }
         }
         apply_vacuous_assertion_fallback(&mut streaming_assertions, !fixture.assertions.is_empty(), chunks_var);
-        crate::e2e::codegen::fail_on_unavailable_field_markers(&streaming_assertions, "python", &fixture.id);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(
+            &streaming_assertions,
+            "python",
+            &fixture.id,
+            &fixture.assertions,
+        );
         out.push_str(&streaming_assertions);
     } else {
         // For non-streaming: render assertions to a temporary buffer first,
@@ -130,7 +135,12 @@ pub(super) fn emit_result_and_assertions(
         }
 
         apply_vacuous_assertion_fallback(&mut temp_assertions, !fixture.assertions.is_empty(), result_var);
-        crate::e2e::codegen::fail_on_unavailable_field_markers(&temp_assertions, "python", &fixture.id);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(
+            &temp_assertions,
+            "python",
+            &fixture.id,
+            &fixture.assertions,
+        );
 
         // Check if result_var appears in actual code (not in comments).
         // Only count lines that start with "assert" or contain actual code tokens.
@@ -253,6 +263,7 @@ mod tests {
 
     fn assertion(assertion_type: &str, field: Option<&str>, value: Option<serde_json::Value>) -> Assertion {
         Assertion {
+            skip: None,
             assertion_type: assertion_type.to_string(),
             field: field.map(str::to_string),
             value,

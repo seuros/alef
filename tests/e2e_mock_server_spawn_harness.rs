@@ -40,6 +40,7 @@ fn make_http_fixture(id: &str) -> Fixture {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "status_code".to_string(),
             field: None,
             value: Some(serde_json::json!(200)),

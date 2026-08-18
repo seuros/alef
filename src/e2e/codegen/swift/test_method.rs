@@ -529,7 +529,7 @@ pub(super) fn render_test_method(
         }
         body_buffer.push_str(&assertion_out);
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&body_buffer, "swift", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&body_buffer, "swift", &fixture.id, &fixture.assertions);
 
     // Decide how to emit the call based on return type and whether result is referenced.
     // - void returns: emit bare call

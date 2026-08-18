@@ -63,6 +63,7 @@ fn swift_emits_labelled_arguments_on_free_function_calls() {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "not_empty".to_string(),
             field: None,
             value: None,
@@ -153,6 +154,7 @@ name = "SampleLanguagePack"
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "greater_than".to_string(),
             field: None,
             value: Some(serde_json::Value::Number(0.into())),

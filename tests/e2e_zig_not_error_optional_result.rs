@@ -17,6 +17,7 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn not_error_assertion() -> Assertion {
     Assertion {
+        skip: None,
         assertion_type: "not_error".to_string(),
         field: None,
         value: None,
@@ -30,6 +31,7 @@ fn not_error_assertion() -> Assertion {
 
 fn is_empty_assertion() -> Assertion {
     Assertion {
+        skip: None,
         assertion_type: "is_empty".to_string(),
         field: None,
         value: None,

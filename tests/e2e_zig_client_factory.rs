@@ -34,6 +34,7 @@ fn make_fixture(id: &str) -> Fixture {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,

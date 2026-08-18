@@ -96,6 +96,7 @@ fn build_function_call_fixture(id: &str) -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_error".to_string(),
                 field: None,
                 value: None,
@@ -192,6 +193,7 @@ result_is_simple = true
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_error".to_string(),
                 field: None,
                 value: None,
@@ -285,6 +287,7 @@ result_is_simple = true
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_error".to_string(),
                 field: None,
                 value: None,
@@ -376,6 +379,7 @@ result_is_simple = true
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_error".to_string(),
                 field: None,
                 value: None,
@@ -502,6 +506,7 @@ function = "process"
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "count_min".to_string(),
                 field: Some("chunks".to_string()),
                 value: Some(serde_json::json!(1)),

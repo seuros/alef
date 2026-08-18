@@ -381,7 +381,7 @@ pub(super) fn render_test_method(
         );
         ensure_assertion_line_ending(&mut assertions_body);
     }
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "java", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "java", &fixture.id, &fixture.assertions);
 
     let throws_clause = " throws Exception";
 

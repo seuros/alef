@@ -361,6 +361,7 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
             }
         }),
         assertions: vec![crate::e2e::fixture::Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,
@@ -1141,6 +1142,7 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
         description: "test".to_string(),
         input: serde_json::Value::Null,
         assertions: vec![crate::e2e::fixture::Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: Some("nonexistent_field".to_string()),
             value: Some(serde_json::json!("x")),
@@ -1198,6 +1200,7 @@ fn dropped_field_assertion_still_gets_a_real_fallback_assertion() {
         description: "test".to_string(),
         input: serde_json::Value::Null,
         assertions: vec![crate::e2e::fixture::Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: Some("nonexistent_field".to_string()),
             value: Some(serde_json::json!("x")),

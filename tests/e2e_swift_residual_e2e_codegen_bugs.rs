@@ -188,6 +188,7 @@ type = "json_object"
     let fixture = make_fixture(
         "init_default",
         Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,
@@ -238,6 +239,7 @@ args = []
     let fixture = make_fixture(
         "manifest_languages",
         Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: None,
             value: Some(serde_json::json!("python")),
@@ -290,6 +292,7 @@ type = "string"
     let fixture = make_fixture(
         "detect_ext_cpp",
         Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: None,
             value: Some(serde_json::json!("cpp")),
@@ -356,6 +359,7 @@ type = "string"
     let fixture = make_fixture(
         "process_structure_contains_function",
         Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: Some("structure".to_string()),
             value: Some(serde_json::json!("Function")),
@@ -407,6 +411,7 @@ type = "string"
     let fixture = make_fixture(
         "extract_text_min_length",
         Assertion {
+            skip: None,
             assertion_type: "count_min".to_string(),
             field: Some("text".to_string()),
             value: Some(serde_json::json!(5)),
@@ -466,6 +471,7 @@ type = "string"
     let fixture = make_fixture(
         "extract_text_optional_count_min",
         Assertion {
+            skip: None,
             assertion_type: "count_min".to_string(),
             field: Some("text".to_string()),
             value: Some(serde_json::json!(1)),
@@ -528,6 +534,7 @@ type = "string"
     let fixture = make_fixture(
         "extract_text_optional_vec_count_min",
         Assertion {
+            skip: None,
             assertion_type: "count_min".to_string(),
             field: Some("elements".to_string()),
             value: Some(serde_json::json!(1)),

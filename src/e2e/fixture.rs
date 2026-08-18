@@ -702,6 +702,97 @@ impl SkipDirective {
     }
 }
 
+/// Who owns the debt behind an explicitly declared assertion skip.
+///
+/// ~keep A skip declaration that only said "skip this" would collapse two very different
+/// situations into one and rebuild the silent skip with extra ceremony. The observed distribution
+/// in real consumers is dominated by assertions alef cannot yet express *at all* — `is_error`
+/// means "the call returned an error", which is an assertion **kind** and not a field path;
+/// wall-clock timing is a property of the call, not of the result — and those must stay
+/// attributable to alef rather than being filed as consumer sloppiness. Naming the kind is what
+/// keeps the end-of-run summary able to say which backlog an entry belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssertionSkipKind {
+    /// alef cannot express this assertion shape yet. The fix is a generator feature, not a fixture
+    /// edit — an assertion kind (`is_error`), a property of the call rather than the result
+    /// (elapsed time), or an assertion over a stream's event sequence. Debt owned by alef.
+    #[default]
+    NotRepresentable,
+    /// The target language, ABI or binding genuinely cannot reach the field. Debt owned by the
+    /// binding, and usually permanent.
+    LanguageLimitation,
+}
+
+/// An author's explicit acknowledgement that one assertion cannot be generated somewhere.
+///
+/// ~keep This exists to convert an invisible skip into a visible authoring decision. An assertion
+/// whose field does not resolve is fatal by default (see
+/// `crate::e2e::codegen::STRICT_ASSERTIONS_ENV`); declaring `skip` here is the only way to keep
+/// such an assertion in a fixture. The resulting skip is still counted, and bucketed by
+/// [`AssertionSkipKind`], in the end-of-run summary — so opting out moves debt from invisible to
+/// attributed, never to gone.
+///
+/// Accepts either shape:
+/// - `"skip": true` — not expressible anywhere; defaults to [`AssertionSkipKind::NotRepresentable`].
+/// - `"skip": { "languages": ["dart"], "kind": "language_limitation", "reason": "..." }`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AssertionSkip {
+    /// `true` skips every language; `false` is a no-op and behaves as if absent.
+    All(bool),
+    /// Language-scoped skip carrying a kind and an optional reason.
+    Scoped(AssertionSkipDirective),
+}
+
+/// The object form of [`AssertionSkip`].
+///
+/// ~keep `deny_unknown_fields` matters more here than on a typical config struct: this whole
+/// mechanism exists to make a skip explicit, and a typo'd key (`"kinds"`, `"language"`) would
+/// otherwise deserialize into silent defaults — reinstating the invisible skip inside the very
+/// feature meant to abolish it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssertionSkipDirective {
+    /// Languages this assertion is skipped for (empty means all).
+    #[serde(default)]
+    pub languages: Vec<String>,
+    /// Which backlog this skip belongs to.
+    #[serde(default)]
+    pub kind: AssertionSkipKind,
+    /// Human-readable reason for skipping.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl AssertionSkip {
+    /// Whether the author has declared this assertion ungeneratable for `language`.
+    pub fn should_skip(&self, language: &str) -> bool {
+        match self {
+            Self::All(all) => *all,
+            Self::Scoped(directive) => {
+                directive.languages.is_empty() || directive.languages.iter().any(|l| l == language)
+            }
+        }
+    }
+
+    /// Which backlog this declaration assigns the skip to.
+    pub fn kind(&self) -> AssertionSkipKind {
+        match self {
+            Self::All(_) => AssertionSkipKind::default(),
+            Self::Scoped(directive) => directive.kind,
+        }
+    }
+
+    /// The author's stated reason, when the scoped form supplied one.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::All(_) => None,
+            Self::Scoped(directive) => directive.reason.as_deref(),
+        }
+    }
+}
+
 /// A single assertion in a fixture.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Assertion {
@@ -736,6 +827,12 @@ pub struct Assertion {
     /// Defaults to primitive integer dispatch when absent.
     #[serde(default)]
     pub return_type: Option<String>,
+    /// Explicit acknowledgement that this assertion cannot be generated (see [`AssertionSkip`]).
+    ///
+    /// Absent means "must generate": if a backend drops this assertion because its field did not
+    /// resolve, generation fails. ~keep
+    #[serde(default)]
+    pub skip: Option<AssertionSkip>,
 }
 
 impl Assertion {

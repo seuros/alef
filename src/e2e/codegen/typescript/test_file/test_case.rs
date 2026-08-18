@@ -306,7 +306,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         .lines()
         .any(|line| !line.trim().is_empty() && !line.trim().starts_with("//"));
 
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, lang, &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, lang, &fixture.id, &fixture.assertions);
 
     // For streaming fixtures: capture the stream in `stream`, then collect into `chunks`.
     // Pass the actual `lang` (was hardcoded to "node") so wasm gets the

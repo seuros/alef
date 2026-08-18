@@ -730,11 +730,52 @@ pub(super) enum ResultTypeName {
     ///   generates itself, not core IR functions, so they never resolve against `ir` — and a
     ///   registry register/unregister/clear operation returns a status code, not a named
     ///   response type, so there is no result to verify in the first place.
-    Unverified(String),
+    ///
+    /// The three cases are NOT interchangeable at the point the emitter decides what the call
+    /// returns, so the basis travels with the name -- see [`UnverifiedBasis`]. ~keep
+    Unverified { name: String, basis: UnverifiedBasis },
     /// The IR was available, the call resolves to nothing in it (absent, or ambiguous per
     /// [`CallIr::signature`]), and no config declaration says the result has no named type.
     /// There is nothing real to name here, so emitting fails rather than inventing one.
     Unresolvable { call: String, language: String },
+}
+
+/// Why a [`ResultTypeName::Unverified`] name is not backed by a real type.
+///
+/// The three cases answer "what does this call return" differently, and collapsing them into a
+/// bare name is what let a failed type lookup masquerade as a positive statement that the call
+/// returns an owned opaque handle. That inference is unsound in both directions: it emitted
+/// `{PREFIX}AlefHandle result = f(...)` for an `i32` status and then passed the status to
+/// `{prefix}_..._free`, which frees an alef `Box` -- heap corruption in the emitted C, reached
+/// by every call whose result type failed to resolve, not only by trait bridges. Mirrors
+/// `assertions::TargetParams`, which splits the same ambiguity on the argument axis. ~keep
+pub(super) enum UnverifiedBasis {
+    /// No IR was supplied at all (unit tests and the visitor call sites construct a [`CallIr`]
+    /// from empty slices deliberately), so nothing was consulted and nothing was learned.
+    ///
+    /// Nothing contradicts the pre-existing opaque-handle derivation either, and refusing here
+    /// would fail every IR-less caller -- a far larger blast radius than the defect being
+    /// fixed. Same trade, and same reasoning, as `assertions::TargetParams::IrAbsent`; the
+    /// two halves of one rule must agree on what an absent IR licenses. ~keep
+    IrAbsent,
+    /// The call/override declares the result carries no named fields (`result_is_bytes` /
+    /// `result_is_simple` / the Zig-only `result_is_json_struct`).
+    ///
+    /// This is the config's own statement that the result is NOT a named struct, so it is
+    /// positive evidence against the opaque-handle shape rather than mere silence. Paths that
+    /// only need something to call the result by (the byte-buffer out-pointer shape) keep
+    /// working through [`ResultTypeName::require`]; paths that would bind the result to a
+    /// handle and free it are refused by [`ResultTypeName::require_owned_handle`]. ~keep
+    DeclaredNonStruct,
+    /// The call resolves to a trait-bridge registry function (`register_fn` / `unregister_fn` /
+    /// `clear_fn` on `[[crates.trait_bridges]]`).
+    ///
+    /// Alef generates these exports itself, so their C return shape is known rather than
+    /// guessed: `register_fn_header.jinja`, `unregister_fn.jinja` and `clear_fn.jinja` all
+    /// declare `-> i32`, with `0` for success and `1` for failure. There is no result handle at
+    /// all, which is why they never resolve against the core IR -- and why binding one to
+    /// `{PREFIX}AlefHandle` and freeing it was never a naming slip. ~keep
+    TraitBridgeRegistry,
 }
 
 impl ResultTypeName {
@@ -751,7 +792,7 @@ impl ResultTypeName {
     /// plausible wrong name. ~keep
     pub(super) fn require(&self) -> Result<&str> {
         match self {
-            Self::Resolved(name) | Self::Unverified(name) => Ok(name),
+            Self::Resolved(name) | Self::Unverified { name, .. } => Ok(name),
             Self::Unresolvable { call, language } => anyhow::bail!(
                 "C e2e codegen cannot name the result type of call `{call}` for language \
                  `{language}`: it resolves to no core IR function or method with a named return \
@@ -764,6 +805,64 @@ impl ResultTypeName {
                  `result_is_simple`)."
             ),
         }
+    }
+
+    /// The name to emit on a path that binds the call's result to `{PREFIX}AlefHandle` and
+    /// hands it to `{prefix}_{result_snake}_free`.
+    ///
+    /// Deliberately stricter than [`require`](Self::require). `require` answers "what is this
+    /// result called", which the byte-buffer and streaming shapes ask without ever taking
+    /// ownership of a handle. This answers a different question -- "may this result be owned
+    /// and freed as an alef `Box`" -- and the failure to resolve a type name is never an
+    /// affirmative answer to it. Passing a non-handle to a generated `_free` corrupts the heap
+    /// in the emitted C, so the two `Unverified` bases that positively contradict the handle
+    /// shape refuse here even though they still have a usable name. ~keep
+    pub(super) fn require_owned_handle(&self) -> Result<&str> {
+        let name = self.require()?;
+        match self {
+            Self::Unverified {
+                basis: UnverifiedBasis::DeclaredNonStruct,
+                ..
+            } => anyhow::bail!(
+                "C e2e codegen would bind the result of a call it cannot name to an opaque \
+                 handle and free it with `{{prefix}}_{{result}}_free`, but the call already \
+                 declares its result carries no named fields (`result_is_bytes` / \
+                 `result_is_simple` / `result_is_json_struct`) -- so there is no handle to own \
+                 and the free would be passed a value that was never an alef `Box`. Fix by \
+                 setting `raw_c_result_type` on the call's `c` override to the C spelling the \
+                 export actually returns (`char*`, `int32_t`, `uintptr_t`, ...), or by setting \
+                 `result_type` to the real handle type if the result IS a named struct."
+            ),
+            Self::Unverified {
+                basis: UnverifiedBasis::TraitBridgeRegistry,
+                ..
+            } => anyhow::bail!(
+                "C e2e codegen would bind the result of trait-bridge registry export \
+                 `{name}` to an opaque handle and free it, but `register_fn` / `unregister_fn` \
+                 / `clear_fn` exports return an `i32` status code (see \
+                 `src/backends/ffi/templates/`), not a handle. The status-code emission in \
+                 `test_function.rs` should have claimed this call before any handle path did."
+            ),
+            Self::Resolved(_) | Self::Unverified { .. } | Self::Unresolvable { .. } => Ok(name),
+        }
+    }
+
+    /// True when the C export this call names returns an `i32` status code rather than a
+    /// result the emitted test could own, assert on, or free.
+    ///
+    /// Positive knowledge, not a fallback: the only calls that answer `true` are trait-bridge
+    /// registry exports, which alef generates from its own templates and which all declare
+    /// `-> i32`. Every branch that presupposes a different return shape -- a client method, an
+    /// engine factory, an opaque handle -- must consult this first, because a wrong shape here
+    /// is not a cosmetic mismatch: it emits a free for a value that is not a heap allocation. ~keep
+    pub(super) fn returns_status_code(&self) -> bool {
+        matches!(
+            self,
+            Self::Unverified {
+                basis: UnverifiedBasis::TraitBridgeRegistry,
+                ..
+            }
+        )
     }
 }
 
@@ -792,27 +891,14 @@ fn unresolved_result_type_name(
     trait_bridge_registry_identity: Option<&str>,
 ) -> ResultTypeName {
     let result_type = call.function.to_pascal_case();
-    if ir.is_absent() {
-        tracing::debug!(
-            call = %call.function,
-            language = %lang,
-            %result_type,
-            "no core IR available to this generator; result type derived from the call name"
-        );
-        return ResultTypeName::Unverified(result_type);
-    }
-    if call_declares_non_struct_result(call, lang) {
-        tracing::debug!(
-            call = %call.function,
-            language = %lang,
-            %result_type,
-            "call did not resolve to a core IR function or method with a named return type, but \
-             the call/override already declares the result carries no named fields \
-             (result_is_bytes / result_is_simple / result_is_json_struct) — there is no named \
-             type to set and no nested field for the derived type to hide"
-        );
-        return ResultTypeName::Unverified(result_type);
-    }
+    // Checked BEFORE `ir.is_absent()`, unlike the other two arms: a registry export is matched
+    // against `[[crates.trait_bridges]]` config, which is available whether or not any IR is,
+    // so an absent IR tells us strictly less about this call than the config already does.
+    // Ordering it second made an IR-less run classify a bridge call as `IrAbsent` -- "nothing
+    // is known" -- when its return shape is in fact fully known, and `IrAbsent` is the one
+    // basis that still licenses the opaque-handle path. That is how a status code reached
+    // `{prefix}_..._free`. ~keep
+    //
     // A registry register/unregister/clear export is generated by the FFI backend itself
     // (`src/backends/ffi/trait_bridge/registration.rs`), never appears in the core IR, and
     // returns an `i32` status code -- there is no named response type it could ever resolve
@@ -831,7 +917,37 @@ fn unresolved_result_type_name(
              clear_fn), which is a generated FFI export with no core IR counterpart and no named \
              result to verify"
         );
-        return ResultTypeName::Unverified(result_type);
+        return ResultTypeName::Unverified {
+            name: result_type,
+            basis: UnverifiedBasis::TraitBridgeRegistry,
+        };
+    }
+    if ir.is_absent() {
+        tracing::debug!(
+            call = %call.function,
+            language = %lang,
+            %result_type,
+            "no core IR available to this generator; result type derived from the call name"
+        );
+        return ResultTypeName::Unverified {
+            name: result_type,
+            basis: UnverifiedBasis::IrAbsent,
+        };
+    }
+    if call_declares_non_struct_result(call, lang) {
+        tracing::debug!(
+            call = %call.function,
+            language = %lang,
+            %result_type,
+            "call did not resolve to a core IR function or method with a named return type, but \
+             the call/override already declares the result carries no named fields \
+             (result_is_bytes / result_is_simple / result_is_json_struct) — there is no named \
+             type to set and no nested field for the derived type to hide"
+        );
+        return ResultTypeName::Unverified {
+            name: result_type,
+            basis: UnverifiedBasis::DeclaredNonStruct,
+        };
     }
     // WARN, not ERROR: whether this is fatal depends on which emission path the call takes. A
     // `raw_c_result_type` call — `char*` derived from a `Vec<String>` return, say — renders
@@ -948,9 +1064,20 @@ fn resolve_fixture_call_info(
 
     let default_overrides = e2e_config.call.overrides.get(lang);
 
+    // Neither factory fallback may reach a status-code export. Both describe how to obtain a
+    // receiver for a *method* call, and a trait-bridge registry export is a free function on
+    // the registry with no receiver at all -- inheriting a default `client_factory` makes the
+    // emitter call `{prefix}_default_client_clear_{trait}(client, ...)`, a symbol the header
+    // never declares, and (in a docs snippet) prefaces it with an `API key must be set` guard
+    // for a purely local registry operation. The inheritance is a convenience for suites where
+    // every call really is a method on one client; it is not evidence about a call whose shape
+    // is already known. ~keep
+    let returns_status_code = info.result_type_name.returns_status_code();
+
     // Fallback: if the named call has no client_factory override, inherit from the
     // default call config so all calls use the same client pattern.
     if info.client_factory.is_none()
+        && !returns_status_code
         && let Some(factory) = default_overrides.and_then(|o| o.client_factory.as_ref())
     {
         info.client_factory = Some(factory.clone());
@@ -959,6 +1086,7 @@ fn resolve_fixture_call_info(
     // Fallback: if the named call has no c_engine_factory override, inherit from the
     // default call config so all calls use the same engine pattern.
     if info.c_engine_factory.is_none()
+        && !returns_status_code
         && let Some(factory) = default_overrides.and_then(|o| o.c_engine_factory.as_ref())
     {
         info.c_engine_factory = Some(factory.clone());
@@ -1145,7 +1273,12 @@ fn render_test_file(
             false,
             &config_sources,
         )?;
-        crate::e2e::codegen::fail_on_unavailable_field_markers(&out[fixture_start..], "c", &fixture.id);
+        crate::e2e::codegen::fail_on_unavailable_field_markers(
+            &out[fixture_start..],
+            "c",
+            &fixture.id,
+            &fixture.assertions,
+        );
         if i + 1 < fixtures.len() {
             let _ = writeln!(out);
         }
@@ -2467,15 +2600,22 @@ mod result_type_resolution_tests {
         }
     }
 
-    /// The literal regression this fix exists to prevent: the removed fallback derived a
-    /// result type by PascalCasing `call.function`, which is legitimately blank for a call that
-    /// names itself only via a per-language override -- the shape every trait-bridge registry
-    /// call takes -- so it emitted a `{prefix}__free` cleanup call for a symbol that can never
-    /// exist. Pinning the ABSENCE of the double-underscore shape, not just that generation
-    /// completes, is what would actually catch a regression that reintroduced the empty
-    /// derivation. ~keep
+    /// A trait-bridge `clear` export returns an `i32` status (`clear_fn.jinja`), so the emitted
+    /// C must bind it to `int32_t` and free NOTHING.
+    ///
+    /// This assertion replaces one that required a `clear_sample_validator_free(` call. That
+    /// earlier pin was a partial reading of the same defect: it correctly rejected the
+    /// degenerate `{prefix}__free` an empty derived name produced, and then demanded a
+    /// non-degenerate spelling of a free that must not be emitted at all. Freeing a status
+    /// integer as an alef `Box` corrupts the heap whatever the symbol is called, so the
+    /// absence of ANY free -- not the well-formedness of one -- is the property worth pinning.
+    ///
+    /// Every clause below examines a different way to get this wrong: the bound type (an `i32`
+    /// bound to `{PREFIX}AlefHandle` is the original defect), the polarity of the status check
+    /// (`0` is success here, the inverse of the null-handle convention every other C path
+    /// uses), and the presence of any cleanup call. ~keep
     #[test]
-    fn render_c_snippet_never_emits_a_double_underscore_free_for_a_trait_bridge_clear_call() {
+    fn trait_bridge_clear_snippet_binds_an_int32_status_and_frees_nothing() {
         let fixture = Fixture {
             id: "clear_sample_validators".into(),
             description: "Clear registered sample validators".into(),
@@ -2514,14 +2654,111 @@ mod result_type_resolution_tests {
         let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &functions)
             .expect("a trait-bridge clear call absent from the IR must still render");
 
+        // Matched up to the opening paren, not through the argument list: this fixture names
+        // the call through a per-language `function` override, and the `extra_args` fallback
+        // that appends the mandatory trailing `out_error` is gated on an EMPTY `function_name`
+        // (`resolve_fixture_call_info`), so the arguments here are a separate, still-open
+        // defect on the argument axis. Spelling them out would pin it as correct. The
+        // out_error argument is covered by
+        // `trait_bridge_out_error_arg_comes_from_extra_args_not_from_a_null_fixture_input`. ~keep
         assert!(
-            !rendered.contains("__free"),
-            "must never emit the degenerate double-underscore cleanup symbol an empty derived \
-             result type produces: {rendered}"
+            rendered.contains("int32_t result = sample_clear_sample_validators("),
+            "a registry export returns an i32 status and must be bound as one: {rendered}"
         );
         assert!(
-            rendered.contains("clear_sample_validator_free("),
-            "must derive a real cleanup symbol from the registry identity: {rendered}"
+            !rendered.contains("AlefHandle result"),
+            "an i32 status must never be bound to an opaque handle type: {rendered}"
+        );
+        assert!(
+            !rendered.contains("_free("),
+            "a status code owns nothing; any `_free` here passes a non-pointer to a function \
+             that frees an alef `Box`: {rendered}"
+        );
+    }
+
+    /// The e2e test-file counterpart of the snippet test above -- `render_test_file` keeps the
+    /// assertions a documentation snippet strips, so it is the only place the status CHECK is
+    /// observable. `0` is success for these exports (`clear_fn.jinja` returns `0` on success
+    /// and `1` on failure), which inverts the `!= 0` convention every opaque-handle path in
+    /// this backend uses; a test that only checked for "some assertion mentioning result"
+    /// would pass on the inverted one. ~keep
+    #[test]
+    fn trait_bridge_clear_e2e_test_asserts_a_zero_status_and_emits_no_cleanup() {
+        let fixture = Fixture {
+            id: "clear_sample_validators".into(),
+            description: "Clear registered sample validators".into(),
+            call: Some("clear_sample_validators".into()),
+            assertions: vec![crate::e2e::fixture::Assertion {
+                assertion_type: "not_error".into(),
+                ..Default::default()
+            }],
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        let mut call = CallConfig::default();
+        call.overrides.insert(
+            "c".to_string(),
+            // Already prefixed: unlike the snippet path, `render_test_file` uses
+            // `function_name` verbatim -- the `c` override is documented as carrying the full
+            // ABI symbol. ~keep
+            crate::e2e::config::CallOverride {
+                function: Some("sample_clear_sample_validators".to_string()),
+                ..crate::e2e::config::CallOverride::default()
+            },
+        );
+        e2e.calls.insert("clear_sample_validators".into(), call);
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleValidator".into(),
+                clear_fn: Some("clear_sample_validators".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let functions = [crate::core::ir::FunctionDef {
+            name: "unrelated".into(),
+            return_type: TypeRef::Named("Unrelated".into()),
+            ..crate::core::ir::FunctionDef::default()
+        }];
+        let resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+
+        let rendered = render_test_file(
+            "plugins",
+            &[&fixture],
+            "sample.h",
+            "sample",
+            "result",
+            &e2e,
+            "c",
+            &resolver,
+            &config,
+            &[],
+            &[],
+            CallIr {
+                functions: &functions,
+                type_defs: &[],
+            },
+        )
+        .expect("a trait-bridge clear call renders an e2e test function");
+
+        assert!(
+            rendered.contains("int32_t result = sample_clear_sample_validators("),
+            "the e2e path must bind the status as an int32_t too: {rendered}"
+        );
+        assert!(
+            rendered.contains("assert(result == 0 && \"expected call to succeed\");"),
+            "success for a registry export is a ZERO status, not a non-null handle: {rendered}"
+        );
+        assert!(
+            !rendered.contains("_free("),
+            "the e2e test must not free a status code: {rendered}"
         );
     }
 

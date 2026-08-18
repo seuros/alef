@@ -48,6 +48,7 @@ fn test_fixture(input: serde_json::Value) -> Fixture {
         call: None,
         input,
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "contains".to_string(),
             field: Some("result".to_string()),
             value: Some(serde_json::Value::String("expected_value".to_string())),

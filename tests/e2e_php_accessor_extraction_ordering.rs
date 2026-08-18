@@ -78,6 +78,7 @@ fn build_fixture_group() -> FixtureGroup {
             assertion_recipes: Vec::new(),
             assertions: vec![
                 Assertion {
+                    skip: None,
                     assertion_type: "length".to_string(),
                     field: Some("structure".to_string()),
                     value: Some(serde_json::json!(1)),
@@ -88,6 +89,7 @@ fn build_fixture_group() -> FixtureGroup {
                     return_type: None,
                 },
                 Assertion {
+                    skip: None,
                     assertion_type: "length".to_string(),
                     field: Some("imports".to_string()),
                     value: Some(serde_json::json!(0)),

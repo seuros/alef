@@ -581,7 +581,12 @@ pub(super) fn render_test_case(
         chunks_var,
         &result_var,
     );
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "elixir", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(
+        &assertions_body,
+        "elixir",
+        &fixture.id,
+        &fixture.assertions,
+    );
     out.push_str(&assertions_body);
 
     if needs_api_key_skip {

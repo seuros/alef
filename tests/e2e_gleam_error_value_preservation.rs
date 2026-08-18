@@ -9,6 +9,7 @@ use alef::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 
 fn error_assertion(value: Option<&str>) -> Assertion {
     Assertion {
+        skip: None,
         assertion_type: "error".to_string(),
         field: None,
         value: value.map(|v| serde_json::Value::String(v.to_string())),

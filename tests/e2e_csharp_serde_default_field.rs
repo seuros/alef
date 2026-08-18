@@ -33,6 +33,7 @@ fn make_fixture(id: &str) -> Fixture {
         assertion_recipes: Vec::new(),
         assertions: vec![
             Assertion {
+                skip: None,
                 assertion_type: "equals".to_string(),
                 field: Some("mime_type".to_string()),
                 value: Some(serde_json::json!(
@@ -45,6 +46,7 @@ fn make_fixture(id: &str) -> Fixture {
                 return_type: None,
             },
             Assertion {
+                skip: None,
                 assertion_type: "not_empty".to_string(),
                 field: Some("document".to_string()),
                 value: None,

@@ -161,6 +161,7 @@ fn build_fixture() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_empty".to_string(),
                 field: Some("content".to_string()),
                 value: None,
@@ -250,6 +251,7 @@ returns_result = true
 fn bug_a_optional_vec_string_unwrap_fallback_is_empty_slice() {
     let config = build_config_with_optional_array_fields("");
     let assertions = vec![Assertion {
+        skip: None,
         assertion_type: "contains".to_string(),
         field: Some("detected_languages".to_string()),
         value: Some(serde_json::Value::String("eng".to_string())),
@@ -274,6 +276,7 @@ fn bug_a_optional_vec_string_unwrap_fallback_is_empty_slice() {
 fn bug_b_optional_numeric_greater_than_or_equal_wraps_unwrap_or() {
     let config = build_config_with_optional_array_fields("");
     let assertions = vec![Assertion {
+        skip: None,
         assertion_type: "greater_than_or_equal".to_string(),
         field: Some("metadata.sheet_count".to_string()),
         value: Some(serde_json::Value::Number(2.into())),
@@ -298,6 +301,7 @@ fn bug_b_optional_numeric_greater_than_or_equal_wraps_unwrap_or() {
 fn bug_c_optional_string_equals_in_vec_result_uses_as_deref_unwrap_or() {
     let config = build_config_with_optional_array_fields("result_is_vec = true");
     let assertions = vec![Assertion {
+        skip: None,
         assertion_type: "equals".to_string(),
         field: Some("metadata.output_format".to_string()),
         value: Some(serde_json::Value::String("markdown".to_string())),
@@ -329,6 +333,7 @@ fn bug_c_optional_string_equals_in_vec_result_uses_as_deref_unwrap_or() {
 fn bug_d_field_named_result_refers_to_whole_result_not_struct_field() {
     let config = build_config_with_optional_array_fields("");
     let assertions = vec![Assertion {
+        skip: None,
         assertion_type: "not_empty".to_string(),
         field: Some("result".to_string()),
         value: None,

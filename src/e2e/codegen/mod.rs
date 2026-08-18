@@ -18,6 +18,7 @@
 //! both can coexist behind the per-language [`E2eCodegen::generate`] entry.
 
 pub mod assertion_recipes;
+pub mod assertion_types;
 pub mod brew;
 pub mod c;
 pub mod client;
@@ -267,228 +268,627 @@ pub(crate) fn preserved_url_list(preserve: bool, value: &serde_json::Value) -> O
 /// backends until they get the same IR wiring. `homebrew` never constructs a
 /// `FieldResolver` at all (it generates a Brewfile + shell smoke script, not
 /// fixture-driven assertions) and cannot hit this path.
-pub(crate) const STRICT_FIELD_AVAILABILITY_ENV: &str = "ALEF_E2E_STRICT_FIELD_AVAILABILITY";
+pub(crate) const STRICT_ASSERTIONS_ENV: &str = "ALEF_E2E_STRICT_ASSERTIONS";
 
-/// True when [`STRICT_FIELD_AVAILABILITY_ENV`] is set to an arming value.
+/// ~keep The default is now ON, which is a deliberate reversal. The previous default was OFF and
+/// that is precisely how the debt accumulated: an opt-in gate that nobody opted into is
+/// indistinguishable from no gate at all, and a survey of the committed e2e trees found 177
+/// rendered skip markers across four consumer repos — including whole expected-event-sequence
+/// assertions that were inert in every language that emitted them. Adding a *second* opt-in flag
+/// would have repeated a control that had already failed once. Setting this variable to `0` or
+/// `false` (or passing `--no-strict-assertions`) restores the old lenient behaviour for an
+/// emergency regeneration; the end-of-run summary is printed either way, so turning it off
+/// downgrades the failure to a visible number rather than to silence.
+fn strict_assertions_default() -> bool {
+    true
+}
+
+/// True unless [`STRICT_ASSERTIONS_ENV`] is explicitly set to a disarming value.
 ///
-/// Reads the process environment directly; call sites that need a unit-testable
-/// (env-independent) core should exercise [`fail_on_unavailable_field_markers_if`]
-/// with an explicit `armed` bool instead of mutating process env in a test —
-/// mutating shared process env from parallel `#[test]` runs is not independent.
-pub(crate) fn strict_field_availability_enabled() -> bool {
-    std::env::var(STRICT_FIELD_AVAILABILITY_ENV)
+/// Reads the process environment directly; call sites that need a unit-testable (env-independent)
+/// core should exercise [`strict_assertion_failure`] with an explicit `strict` bool instead of
+/// mutating process env in a test — mutating shared process env from parallel `#[test]` runs is
+/// not independent.
+pub(crate) fn strict_assertions_enabled() -> bool {
+    std::env::var(STRICT_ASSERTIONS_ENV)
         .ok()
-        .is_some_and(|raw| is_truthy_flag(&raw))
+        .map_or_else(strict_assertions_default, |raw| !is_falsy_flag(&raw))
 }
 
-fn is_truthy_flag(raw: &str) -> bool {
-    raw == "1" || raw.eq_ignore_ascii_case("true")
+fn is_falsy_flag(raw: &str) -> bool {
+    raw == "0" || raw.eq_ignore_ascii_case("false")
 }
 
-/// The diagnostic panic message for an assertion whose field the availability
-/// oracle rejects, naming both the fixture and the field so a consumer can find
-/// the offending fixture without re-deriving it from the generated file.
-pub(crate) fn unavailable_field_diagnostic(language: &str, fixture_id: &str, field: &str) -> String {
-    format!(
-        "e2e codegen [{language}] fixture `{fixture_id}`: assertion references field `{field}`, \
-         which the field-availability oracle says is not reachable on the result type. A \
-         generated test must never silently downgrade a dropped assertion to a comment and keep \
-         passing — fix the fixture's field path, or the field-availability config, so this \
-         assertion asserts something real."
-    )
+/// ~keep `gleam` and `brew` do not have IR-derived field data threaded into their `FieldResolver`
+/// (see their `assertions.rs` / `test_case.rs` construction sites): their oracle consults only the
+/// hand-maintained `result_fields` TOML list, which is known to drift in both directions. A
+/// rejection there is not trustworthy enough to fail a build on, so their authoring gaps are
+/// recorded and summarised but never fatal. Remove a backend from this list once its resolver is
+/// IR-wired. `homebrew` never constructs a `FieldResolver` at all and cannot reach this path.
+const COARSE_FIELD_ORACLE_LANGUAGES: &[&str] = &["gleam", "brew"];
+
+/// What the gate decided about one rendered skip marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkipVerdict {
+    /// A fixable resolution failure the fixture did not acknowledge. Fatal when strict.
+    UnacknowledgedGap,
+    /// A real language/ABI limit, or a gap from a backend whose oracle is too coarse to trust.
+    Limitation,
+    /// alef cannot express this assertion shape yet. Never fatal — the debt is alef's, not the
+    /// consumer's, and no fixture edit clears it.
+    AwaitingGeneratorSupport,
+    /// The fixture explicitly declared this assertion skipped for this language, and named which
+    /// backlog it belongs to.
+    Acknowledged(crate::e2e::fixture::AssertionSkipKind),
 }
 
-/// Pull the field name out of a single rendered line carrying any wording registered in
-/// [`field_skip::FieldSkip`].
+/// One rendered skip marker, with the fixture and language it came from.
+#[derive(Debug, Clone)]
+pub(crate) struct SkipRecord {
+    pub(crate) language: String,
+    pub(crate) fixture_id: String,
+    pub(crate) field: String,
+    pub(crate) verdict: SkipVerdict,
+}
+
+thread_local! {
+    /// ~keep Thread-local rather than a `Mutex` global: e2e generation runs the backends
+    /// sequentially on the driver's thread, and a thread-local keeps `#[test]` cases independent
+    /// for free (cargo gives each test its own thread), which a process-global ledger would not.
+    static SKIP_LEDGER: std::cell::RefCell<Vec<SkipRecord>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Drain every skip recorded on this thread since the last drain.
+pub(crate) fn take_skip_records() -> Vec<SkipRecord> {
+    SKIP_LEDGER.with(|ledger| std::mem::take(&mut *ledger.borrow_mut()))
+}
+
+/// The one-line residual-debt summary, or `None` when nothing was skipped.
 ///
-/// ~keep This used to match two hand-written substring patterns, which recognised only the
-/// wordings this module happened to know about and silently ignored every backend that invented
-/// its own (dart/swift's tagged-union boundary, ruby's serialized-enum accessor, every
-/// `result_is_simple` branch, ...). Recognition now shares its per-variant shape table with the
-/// renderer, so a wording cannot be emitted without being counted.
-fn extract_unavailable_field_name(line: &str) -> Option<&str> {
-    field_skip::FieldSkip::extract(line)
-}
-
-/// Env-independent core of the loud-failure path: scans every line of a
-/// fully-rendered assertions body for the unavailable-field comment shape and, if
-/// `armed`, panics naming the fixture and the first offending field. A no-op
-/// (including on a body containing the marker) when `armed` is false.
-///
-/// Called once per fixture, after every assertion has been rendered into `body` —
-/// the same point every backend's existing vacuous-assertion-body fallback (where
-/// one exists, e.g. python's `apply_vacuous_assertion_fallback`) already inspects
-/// the finished text, so wiring this in adds no new call-site shape to any
-/// backend. ~keep
-pub(crate) fn fail_on_unavailable_field_markers_if(armed: bool, body: &str, language: &str, fixture_id: &str) {
-    if !armed {
-        return;
+/// ~keep Printed on every run, strict or not: a skip that is legitimate today is still an
+/// assertion that is not running, and this count is the only thing that makes that visible.
+/// The buckets are deliberately separate rather than one total, because they have different
+/// owners — `awaiting alef support` is a queue of generator features, `language/ABI limit` is
+/// usually permanent, and `unresolved field path` is the only one a consumer can fix today.
+/// Collapsing them would make the number un-actionable and it would stop being read.
+pub(crate) fn skip_summary(records: &[SkipRecord]) -> Option<String> {
+    if records.is_empty() {
+        return None;
     }
+    use crate::e2e::fixture::AssertionSkipKind;
+    let fixtures: std::collections::BTreeSet<&str> = records.iter().map(|r| r.fixture_id.as_str()).collect();
+    let count = |predicate: fn(&SkipVerdict) -> bool| records.iter().filter(|r| predicate(&r.verdict)).count();
+    let awaiting = count(|v| {
+        matches!(
+            v,
+            SkipVerdict::AwaitingGeneratorSupport | SkipVerdict::Acknowledged(AssertionSkipKind::NotRepresentable)
+        )
+    });
+    let limitations = count(|v| {
+        matches!(
+            v,
+            SkipVerdict::Limitation | SkipVerdict::Acknowledged(AssertionSkipKind::LanguageLimitation)
+        )
+    });
+    let gaps = count(|v| matches!(v, SkipVerdict::UnacknowledgedGap));
+    Some(format!(
+        "{} assertion(s) skipped across {} fixture(s): {awaiting} awaiting alef support, \
+         {limitations} language/ABI limitation(s), {gaps} unresolved field path(s)",
+        records.len(),
+        fixtures.len(),
+    ))
+}
+
+/// Scan every line of a fully-rendered assertions body for a registered skip marker, classify each
+/// against the fixture's own assertions, and record it on the ledger.
+///
+/// ~keep This records but never fails. Enforcement lives in the driver
+/// ([`strict_assertion_failure`]) for two reasons: `run_generators` isolates a backend's `Err` but
+/// does not catch a panic, so failing here would abort the whole run instead of one backend; and a
+/// consumer facing many unresolved paths needs to see all of them in one error, not to fix one and
+/// rediscover the next on the following run.
+///
+/// Called once per fixture, after every assertion has been rendered into `body` — the same point
+/// every backend's existing vacuous-assertion-body fallback (where one exists, e.g. python's
+/// `apply_vacuous_assertion_fallback`) already inspects the finished text, so wiring this in adds
+/// no new call-site shape to any backend.
+pub(crate) fn fail_on_unavailable_field_markers(
+    body: &str,
+    language: &str,
+    fixture_id: &str,
+    assertions: &[crate::e2e::fixture::Assertion],
+) {
+    let coarse_oracle = COARSE_FIELD_ORACLE_LANGUAGES.contains(&language);
     for line in body.lines() {
-        if let Some(field) = extract_unavailable_field_name(line) {
-            panic!("{}", unavailable_field_diagnostic(language, fixture_id, field));
-        }
+        let Some((field, skip)) = field_skip::FieldSkip::extract_classified(line) else {
+            continue;
+        };
+        let declared = assertions
+            .iter()
+            .filter(|assertion| assertion.field.as_deref() == Some(field))
+            .find_map(|assertion| assertion.skip.as_ref())
+            .filter(|skip| skip.should_skip(language));
+        let verdict = match (declared, skip.class()) {
+            (Some(declaration), _) => SkipVerdict::Acknowledged(declaration.kind()),
+            (None, field_skip::SkipClass::GeneratorGap) => SkipVerdict::AwaitingGeneratorSupport,
+            (None, field_skip::SkipClass::AuthoringGap) if !coarse_oracle => SkipVerdict::UnacknowledgedGap,
+            (None, _) => SkipVerdict::Limitation,
+        };
+        SKIP_LEDGER.with(|ledger| {
+            ledger.borrow_mut().push(SkipRecord {
+                language: language.to_string(),
+                fixture_id: fixture_id.to_string(),
+                field: field.to_string(),
+                verdict,
+            });
+        });
     }
 }
 
-/// Convenience wrapper over [`fail_on_unavailable_field_markers_if`] that reads
-/// [`strict_field_availability_enabled`]. This is the function every backend's
-/// assertion-assembly site calls; see [`STRICT_FIELD_AVAILABILITY_ENV`] for the
-/// full contract.
-pub(crate) fn fail_on_unavailable_field_markers(body: &str, language: &str, fixture_id: &str) {
-    fail_on_unavailable_field_markers_if(strict_field_availability_enabled(), body, language, fixture_id);
+/// Env-independent core of the loud-failure path: the error for every unacknowledged authoring gap
+/// recorded this run, or `None` when there are none or `strict` is off.
+///
+/// Every offender is listed, deduplicated by (fixture, field, language) ordering, so one
+/// regeneration surfaces the whole authoring backlog rather than its first entry. ~keep
+pub(crate) fn strict_assertion_failure(records: &[SkipRecord], strict: bool) -> Option<anyhow::Error> {
+    if !strict {
+        return None;
+    }
+    let gaps: Vec<&SkipRecord> = records
+        .iter()
+        .filter(|r| r.verdict == SkipVerdict::UnacknowledgedGap)
+        .collect();
+    if gaps.is_empty() {
+        return None;
+    }
+    let detail = gaps
+        .iter()
+        .map(|r| format!("  [{}] fixture `{}`: field `{}`", r.language, r.fixture_id, r.field))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(anyhow::anyhow!(
+        "{} e2e assertion(s) reference a field the availability oracle cannot resolve, so they \
+         would have been silently dropped and the generated tests would have passed while \
+         asserting nothing:\n{detail}\n\nEither fix the field path (or the field-availability \
+         config) so the assertion runs, or declare on the assertion why it cannot:\n  \
+         \"skip\": {{ \"kind\": \"not_representable\", \"reason\": \"...\" }}      — alef cannot \
+         express this shape yet (an assertion *kind* such as \"the call errored\", a property of \
+         the call rather than the result, or an assertion over a stream's events)\n  \
+         \"skip\": {{ \"kind\": \"language_limitation\", \"languages\": [\"<lang>\"], \
+         \"reason\": \"...\" }}  — this binding genuinely cannot reach the field\nEither way the \
+         skip stays counted in the end-of-run summary, in the bucket that names who owns it. Set \
+         {}=0 to downgrade this to a warning for one run.",
+        gaps.len(),
+        STRICT_ASSERTIONS_ENV,
+    ))
 }
 
 #[cfg(test)]
 mod unavailable_field_marker_tests {
-    use super::{fail_on_unavailable_field_markers_if, is_truthy_flag, unavailable_field_diagnostic};
+    use super::{
+        SkipVerdict, fail_on_unavailable_field_markers, is_falsy_flag, skip_summary, strict_assertion_failure,
+        take_skip_records,
+    };
+    use crate::e2e::fixture::{Assertion, AssertionSkip, AssertionSkipDirective, AssertionSkipKind};
 
+    /// Record `body` and return the verdicts, so a wording's *classification* can be asserted
+    /// directly rather than inferred from whether generation failed. ~keep
+    fn verdicts_for(body: &str, language: &str, assertions: &[Assertion]) -> Vec<SkipVerdict> {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(body, language, "smoke", assertions);
+        take_skip_records().into_iter().map(|r| r.verdict).collect()
+    }
+
+    /// The strict-mode error for one rendered body, or `None` if it is generatable.
+    fn strict_error_for(body: &str, language: &str, fixture_id: &str, assertions: &[Assertion]) -> Option<String> {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(body, language, fixture_id, assertions);
+        strict_assertion_failure(&take_skip_records(), true).map(|error| format!("{error:#}"))
+    }
+
+    fn assertion_on(field: &str, skip: Option<AssertionSkip>) -> Assertion {
+        Assertion {
+            field: Some(field.to_string()),
+            skip,
+            ..Assertion::default()
+        }
+    }
+
+    /// The escape hatch must still generate: with strict off, a marker body is not an error.
     #[test]
-    fn disarmed_is_a_noop_even_on_a_marker_body() {
-        // Must never panic: this is the default (env var unset) path every
-        // backend runs through today, and it must stay byte-identical.
-        fail_on_unavailable_field_markers_if(
-            false,
+    fn non_strict_is_a_noop_even_on_a_marker_body() {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(
             "    # skipped: field 'chunks' not available on result type\n",
             "python",
             "widget_smoke",
+            &[],
+        );
+        assert!(strict_assertion_failure(&take_skip_records(), false).is_none());
+    }
+
+    #[test]
+    fn strict_fails_loudly_naming_fixture_and_field() {
+        let error = strict_error_for(
+            "    # skipped: field 'chunks' not available on result type\n",
+            "python",
+            "widget_smoke",
+            &[],
+        )
+        .expect("an unresolved field must fail under strict");
+        assert!(
+            error.contains("[python] fixture `widget_smoke`: field `chunks`"),
+            "got: {error}"
+        );
+    }
+
+    /// The headline requirement: an unmappable field must fail generation *by default*, with no
+    /// environment variable armed. This reads the real default rather than a hard-coded `true`,
+    /// so flipping the default back would fail this test. ~keep
+    #[test]
+    fn an_unmappable_field_is_fatal_by_default() {
+        let _ = take_skip_records();
+        let body = "    // skipped: field 'strategy.crawl_order' not available on result type\n";
+        fail_on_unavailable_field_markers(
+            body,
+            "go",
+            "traversal_order",
+            &[assertion_on("strategy.crawl_order", None)],
+        );
+        let error = strict_assertion_failure(&take_skip_records(), super::strict_assertions_enabled())
+            .expect("an unmappable field must fail generation by default");
+        assert!(
+            format!("{error:#}").contains("field `strategy.crawl_order`"),
+            "got: {error:#}"
+        );
+    }
+
+    /// Every offender is listed, not just the first — one regeneration must surface the whole
+    /// backlog. ~keep
+    #[test]
+    fn strict_error_lists_every_offender() {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(
+            "    // skipped: field 'alpha' not available on result type\n\
+             \x20   // skipped: field 'beta' not available on result type\n",
+            "go",
+            "smoke",
+            &[],
+        );
+        let error = strict_assertion_failure(&take_skip_records(), true).expect("two gaps must fail");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("field `alpha`"), "got: {rendered}");
+        assert!(rendered.contains("field `beta`"), "got: {rendered}");
+        assert!(rendered.starts_with("2 e2e assertion(s)"), "got: {rendered}");
+    }
+
+    /// The opt-in half: the same body, with the fixture declaring the skip, generates cleanly and
+    /// is recorded as an acknowledged skip rather than silently vanishing. ~keep
+    #[test]
+    fn an_explicitly_opted_out_field_skips_and_is_counted() {
+        let _ = take_skip_records();
+        let body = "    // skipped: field 'strategy.crawl_order' not available on result type\n";
+        let assertions = [assertion_on(
+            "strategy.crawl_order",
+            Some(AssertionSkip::Scoped(AssertionSkipDirective {
+                languages: vec!["go".to_string()],
+                kind: AssertionSkipKind::LanguageLimitation,
+                reason: Some("traversal order is not exposed on the Go result".to_string()),
+            })),
+        )];
+        fail_on_unavailable_field_markers(body, "go", "traversal_order", &assertions);
+
+        let records = take_skip_records();
+        assert!(
+            strict_assertion_failure(&records, true).is_none(),
+            "an acknowledged skip must not fail generation"
+        );
+        assert_eq!(records.len(), 1, "the acknowledged skip must still be recorded");
+        assert_eq!(
+            records[0].verdict,
+            SkipVerdict::Acknowledged(AssertionSkipKind::LanguageLimitation)
+        );
+        assert_eq!(records[0].field, "strategy.crawl_order");
+        let summary = skip_summary(&records).expect("an acknowledged skip must still produce a summary");
+        assert_eq!(
+            summary,
+            "1 assertion(s) skipped across 1 fixture(s): 0 awaiting alef support, \
+             1 language/ABI limitation(s), 0 unresolved field path(s)"
+        );
+    }
+
+    /// An opt-out declared `not_representable` lands in alef's backlog, not the binding's, so the
+    /// summary attributes it to alef rather than filing it as a consumer limitation. ~keep
+    #[test]
+    fn a_not_representable_opt_out_is_attributed_to_alef() {
+        let _ = take_skip_records();
+        let body = "    // skipped: field 'is_error' not available on result type\n";
+        let assertions = [assertion_on(
+            "is_error",
+            Some(AssertionSkip::Scoped(AssertionSkipDirective {
+                languages: Vec::new(),
+                kind: AssertionSkipKind::NotRepresentable,
+                reason: Some("`is_error` is an assertion kind, not a field path".to_string()),
+            })),
+        )];
+        fail_on_unavailable_field_markers(body, "go", "error_smoke", &assertions);
+        let records = take_skip_records();
+        assert!(strict_assertion_failure(&records, true).is_none());
+        let summary = skip_summary(&records).expect("summary");
+        assert!(summary.contains("1 awaiting alef support"), "got: {summary}");
+        assert!(summary.contains("0 language/ABI limitation(s)"), "got: {summary}");
+    }
+
+    /// A `"skip": true` opt-out covers every language, and defaults to alef's backlog — the
+    /// observed common case is an assertion shape alef cannot express, not a binding limit.
+    #[test]
+    fn a_bare_true_skip_covers_every_language() {
+        let body = "    // skipped: field 'chunks' not available on result type\n";
+        let assertions = [assertion_on("chunks", Some(AssertionSkip::All(true)))];
+        let expected = [SkipVerdict::Acknowledged(AssertionSkipKind::NotRepresentable)];
+        assert_eq!(verdicts_for(body, "dart", &assertions), expected);
+        assert_eq!(verdicts_for(body, "ruby", &assertions), expected);
+    }
+
+    /// A language-scoped opt-out must not silence the same field in a language it does not name.
+    #[test]
+    fn a_scoped_skip_does_not_cover_other_languages() {
+        let body = "    // skipped: field 'chunks' not available on result type\n";
+        let assertions = [assertion_on(
+            "chunks",
+            Some(AssertionSkip::Scoped(AssertionSkipDirective {
+                languages: vec!["dart".to_string()],
+                kind: AssertionSkipKind::LanguageLimitation,
+                reason: None,
+            })),
+        )];
+        assert_eq!(
+            verdicts_for(body, "dart", &assertions),
+            vec![SkipVerdict::Acknowledged(AssertionSkipKind::LanguageLimitation)]
+        );
+        assert_eq!(
+            verdicts_for(body, "go", &assertions),
+            vec![SkipVerdict::UnacknowledgedGap],
+            "an opt-out scoped to dart must leave go fatal"
+        );
+    }
+
+    /// `"skip": false` is an explicit *refusal* to opt out and must behave as if absent.
+    #[test]
+    fn a_false_skip_does_not_opt_out() {
+        let body = "    // skipped: field 'chunks' not available on result type\n";
+        let assertions = [assertion_on("chunks", Some(AssertionSkip::All(false)))];
+        assert_eq!(
+            verdicts_for(body, "go", &assertions),
+            vec![SkipVerdict::UnacknowledgedGap]
+        );
+    }
+
+    /// An opt-out on a *different* field must not silence this one.
+    #[test]
+    fn a_skip_on_another_field_does_not_opt_this_one_out() {
+        let body = "    // skipped: field 'chunks' not available on result type\n";
+        let assertions = [assertion_on("usage", Some(AssertionSkip::All(true)))];
+        assert_eq!(
+            verdicts_for(body, "go", &assertions),
+            vec![SkipVerdict::UnacknowledgedGap]
         );
     }
 
     #[test]
-    #[should_panic(expected = "e2e codegen [python] fixture `widget_smoke`: assertion references field `chunks`")]
-    fn armed_fails_loudly_naming_fixture_and_field() {
-        fail_on_unavailable_field_markers_if(
-            true,
-            "    # skipped: field 'chunks' not available on result type\n",
-            "python",
-            "widget_smoke",
-        );
-    }
-
-    #[test]
-    fn armed_is_a_noop_on_a_body_with_no_marker() {
-        fail_on_unavailable_field_markers_if(
-            true,
-            "    assert result.count == 1  # noqa: S101\n",
-            "python",
-            "widget_smoke",
-        );
+    fn a_body_with_no_marker_records_nothing() {
+        assert!(verdicts_for("    assert result.count == 1  # noqa: S101\n", "python", &[]).is_empty());
     }
 
     /// Regression control: a synthetic field's "unsupported assertion type" comment
     /// is a different defect (bad assertion shape) and must not trip this check.
     #[test]
-    fn armed_does_not_fire_on_unsupported_assertion_type_comments() {
-        fail_on_unavailable_field_markers_if(
-            true,
-            "    // skipped: unsupported assertion type on synthetic field 'embeddings'\n",
-            "go",
-            "embed_smoke",
+    fn unsupported_assertion_type_comments_are_not_recorded() {
+        assert!(
+            verdicts_for(
+                "    // skipped: unsupported assertion type on synthetic field 'embeddings'\n",
+                "go",
+                &[]
+            )
+            .is_empty()
         );
     }
 
     /// The language-suffixed variants (`not available on Python ProcessingResult`,
-    /// `not available on PHP result type`, `not available in C FFI`, ...) must all
-    /// still match — only the `field '<name>' ... not available` shape matters, not
-    /// what follows it.
+    /// `not available on PHP result type`, ...) resolve against a *generated* binding type, so
+    /// they are gaps and stay fatal.
     #[test]
-    #[should_panic(expected = "fixture `smoke`: assertion references field `keywords`")]
-    fn armed_matches_language_suffixed_not_available_comments() {
-        fail_on_unavailable_field_markers_if(
-            true,
+    fn language_suffixed_not_available_comments_stay_fatal() {
+        let error = strict_error_for(
             "\t// skipped: field 'keywords' not available on Go ProcessingResult\n",
             "go",
             "smoke",
+            &[],
+        )
+        .expect("a binding-type resolution miss is a gap");
+        assert!(error.contains("field `keywords`"), "got: {error}");
+    }
+
+    /// ~keep This is the variant that hid whole expected-event-sequence assertions, so it is
+    /// tempting to make it fatal. It must not be: a streaming call returns an event sequence, not
+    /// a struct, so no field mapping can express the assertion and a consumer cannot fix it from
+    /// their own config. Failing their build would force a blanket opt-out — the silent skip
+    /// again, with ceremony. It is loudly *counted* against alef's backlog instead.
+    #[test]
+    fn streaming_field_assertions_await_alef_support_rather_than_failing() {
+        let body = "    // streaming assertion on unsupported field 'has_page_event'\n";
+        assert_eq!(
+            verdicts_for(body, "csharp", &[]),
+            vec![SkipVerdict::AwaitingGeneratorSupport]
+        );
+        assert!(
+            strict_error_for(body, "csharp", "stream_smoke", &[]).is_none(),
+            "a missing generator feature must not fail a consumer's build"
         );
     }
 
-    /// csharp's separate streaming skip path (`csharp/streaming.rs`) uses a
-    /// differently-worded comment; the extractor must still find the field name.
+    /// The same holds for python's streaming-accessor wording and the streaming result type.
     #[test]
-    #[should_panic(expected = "fixture `stream_smoke`: assertion references field `has_page_event`")]
-    fn armed_matches_the_unsupported_field_streaming_variant() {
-        fail_on_unavailable_field_markers_if(
-            true,
+    fn every_streaming_wording_awaits_alef_support() {
+        for (body, language) in [
+            (
+                "    # skipped: streaming field 'stream.items': no python accessor\n",
+                "python",
+            ),
+            (
+                "    // skipped: field 'stream.items' not available on streaming result type\n",
+                "go",
+            ),
+        ] {
+            assert_eq!(
+                verdicts_for(body, language, &[]),
+                vec![SkipVerdict::AwaitingGeneratorSupport],
+                "{language} streaming wording must be alef's debt, not the consumer's"
+            );
+        }
+    }
+
+    /// The summary must keep alef's backlog and the binding's backlog in separate buckets, or the
+    /// number stops being actionable and stops being read. ~keep
+    #[test]
+    fn summary_separates_alef_backlog_from_binding_limits() {
+        let _ = take_skip_records();
+        fail_on_unavailable_field_markers(
             "    // streaming assertion on unsupported field 'has_page_event'\n",
             "csharp",
             "stream_smoke",
+            &[],
+        );
+        fail_on_unavailable_field_markers(
+            "        // skipped: field 'usage.tokens' references a field or type excluded from \
+             the Swift binding\n",
+            "swift",
+            "excluded_smoke",
+            &[],
+        );
+        let summary = skip_summary(&take_skip_records()).expect("summary");
+        assert_eq!(
+            summary,
+            "2 assertion(s) skipped across 2 fixture(s): 1 awaiting alef support, \
+             1 language/ABI limitation(s), 0 unresolved field path(s)"
         );
     }
 
-    /// Coverage-loss regression: dart's traversal limit emits its own wording from
-    /// `dart/assertions.rs`, not `mod.rs`'s `not available` shape. Before the shared
-    /// [`super::field_skip::FieldSkip`] table it was emitted but never counted, so an armed run
-    /// passed while the field went unasserted.
+    /// ~keep The wordings below are all still *recognised* — that is the invariant the shared
+    /// `FieldSkip` table exists to hold — but they name real language/ABI limits, so recognition
+    /// now means "counted in the summary", not "fails the build". Asserting the verdict rather
+    /// than a panic is what keeps that distinction honest: if one of them were ever reclassified
+    /// as a gap, these assertions fail rather than silently changing the default's blast radius.
     #[test]
-    #[should_panic(expected = "[dart] fixture `union_smoke`: assertion references field `payload.tags`")]
-    fn armed_counts_the_dart_tagged_union_boundary_wording() {
-        let body = "    // skipped: field 'payload.tags' crosses a tagged-union variant boundary \
+    fn tagged_union_boundary_wordings_are_counted_not_fatal() {
+        let dart = "    // skipped: field 'payload.tags' crosses a tagged-union variant boundary \
                     (not expressible in Dart)\n";
-        fail_on_unavailable_field_markers_if(true, body, "dart", "union_smoke");
+        assert_eq!(verdicts_for(dart, "dart", &[]), vec![SkipVerdict::Limitation]);
+        let swift = "    // skipped: field 'payload.tags' crosses a tagged-union variant boundary \
+                     (not expressible in Swift)\n";
+        assert_eq!(verdicts_for(swift, "swift", &[]), vec![SkipVerdict::Limitation]);
     }
 
     #[test]
-    #[should_panic(expected = "[swift] fixture `union_smoke`: assertion references field `payload.tags`")]
-    fn armed_counts_the_swift_tagged_union_boundary_wording() {
-        let body = "    // skipped: field 'payload.tags' crosses a tagged-union variant boundary \
-                    (not expressible in Swift)\n";
-        fail_on_unavailable_field_markers_if(true, body, "swift", "union_smoke");
-    }
-
-    /// ruby's wording names an "enum variant accessor", never the word `field`, so the old
-    /// `field '<name>'` pattern could not have matched it under any suffix.
-    #[test]
-    #[should_panic(expected = "[ruby] fixture `union_smoke`: assertion references field `metadata.format.excel`")]
-    fn armed_counts_the_ruby_serialized_enum_accessor_wording() {
+    fn ruby_serialized_enum_accessor_wording_is_counted_not_fatal() {
         let body = "    # skipped: enum variant accessor 'metadata.format.excel' not available on Ruby \
                     (serialized to Hash)\n";
-        fail_on_unavailable_field_markers_if(true, body, "ruby", "union_smoke");
+        assert_eq!(verdicts_for(body, "ruby", &[]), vec![SkipVerdict::Limitation]);
     }
 
-    /// The `result_is_simple` branch of `templates/{java,php}/synthetic_assertion.jinja` says
-    /// `not on simple result type`, never `not available`.
     #[test]
-    #[should_panic(expected = "[php] fixture `simple_smoke`: assertion references field `metadata.title`")]
-    fn armed_counts_the_result_is_simple_template_wording() {
+    fn result_is_simple_template_wording_is_counted_not_fatal() {
         let body = "        // skipped: result_is_simple, field 'metadata.title' not on simple result type\n";
-        fail_on_unavailable_field_markers_if(true, body, "php", "simple_smoke");
+        assert_eq!(verdicts_for(body, "php", &[]), vec![SkipVerdict::Limitation]);
     }
 
-    /// python/typescript/ruby's simple-result branch says `not applicable`, not `not available`.
     #[test]
-    #[should_panic(expected = "[python] fixture `simple_smoke`: assertion references field `structure.headings`")]
-    fn armed_counts_the_not_applicable_for_simple_result_wording() {
+    fn not_applicable_for_simple_result_wording_is_counted_not_fatal() {
         let body = "    # skipped: field 'structure.headings' not applicable for simple result type\n";
-        fail_on_unavailable_field_markers_if(true, body, "python", "simple_smoke");
+        assert_eq!(verdicts_for(body, "python", &[]), vec![SkipVerdict::Limitation]);
     }
 
-    /// swift's binding-exclusion skip in `swift/test_method.rs` uses a third wording again.
     #[test]
-    #[should_panic(expected = "[swift] fixture `excluded_smoke`: assertion references field `usage.tokens`")]
-    fn armed_counts_the_swift_binding_exclusion_wording() {
+    fn swift_binding_exclusion_wording_is_counted_not_fatal() {
         let body = "        // skipped: field 'usage.tokens' references a field or type excluded from \
                     the Swift binding\n";
-        fail_on_unavailable_field_markers_if(true, body, "swift", "excluded_smoke");
+        assert_eq!(verdicts_for(body, "swift", &[]), vec![SkipVerdict::Limitation]);
+    }
+
+    /// `result_is_simple for field '<x>' not available on result type` is the *resolver* talking
+    /// despite the prefix, so it stays a gap while the other `result_is_simple` wordings do not.
+    #[test]
+    fn the_result_is_simple_resolver_wording_stays_a_gap() {
+        let body = "  # skipped: result_is_simple for field 'metadata' not available on result type\n";
+        assert_eq!(verdicts_for(body, "ruby", &[]), vec![SkipVerdict::UnacknowledgedGap]);
+    }
+
+    /// gleam and brew resolve fields against a hand-maintained TOML list rather than the IR, so a
+    /// rejection there is not trustworthy enough to fail a build on. ~keep
+    #[test]
+    fn coarse_oracle_backends_downgrade_gaps_to_limitations() {
+        let body = "    // skipped: field 'chunks' not available on result type\n";
+        assert_eq!(verdicts_for(body, "gleam", &[]), vec![SkipVerdict::Limitation]);
+        assert_eq!(verdicts_for(body, "brew", &[]), vec![SkipVerdict::Limitation]);
+        assert_eq!(
+            verdicts_for(body, "go", &[]),
+            vec![SkipVerdict::UnacknowledgedGap],
+            "the same wording must stay fatal on an IR-wired backend"
+        );
     }
 
     #[test]
-    fn is_truthy_flag_accepts_one_and_case_insensitive_true_only() {
-        assert!(is_truthy_flag("1"));
-        assert!(is_truthy_flag("true"));
-        assert!(is_truthy_flag("TRUE"));
-        assert!(!is_truthy_flag("0"));
-        assert!(!is_truthy_flag("false"));
-        assert!(!is_truthy_flag(""));
-        assert!(!is_truthy_flag("yes"));
+    fn summary_is_none_when_nothing_was_skipped() {
+        assert_eq!(skip_summary(&[]), None);
     }
 
     #[test]
-    fn diagnostic_names_language_fixture_and_field() {
-        let message = unavailable_field_diagnostic("ruby", "batch_smoke", "usage");
+    fn summary_counts_distinct_fixtures_not_markers() {
+        let _ = take_skip_records();
+        let body = "    // skipped: field 'usage.tokens' references a field or type excluded from \
+                    the Swift binding\n";
+        fail_on_unavailable_field_markers(body, "swift", "alpha", &[]);
+        fail_on_unavailable_field_markers(body, "swift", "alpha", &[]);
+        fail_on_unavailable_field_markers(body, "swift", "beta", &[]);
+        let summary = skip_summary(&take_skip_records()).expect("three markers must summarise");
+        assert!(
+            summary.starts_with("3 assertion(s) skipped across 2 fixture(s):"),
+            "got: {summary}"
+        );
+    }
+
+    #[test]
+    fn is_falsy_flag_accepts_zero_and_case_insensitive_false_only() {
+        assert!(is_falsy_flag("0"));
+        assert!(is_falsy_flag("false"));
+        assert!(is_falsy_flag("FALSE"));
+        assert!(!is_falsy_flag("1"));
+        assert!(!is_falsy_flag("true"));
+        assert!(!is_falsy_flag(""));
+        assert!(!is_falsy_flag("no"));
+    }
+
+    /// The diagnostic has to be actionable on its own: it must name where to look and how to
+    /// declare the skip, or a consumer hitting it has no path forward but to disable the gate.
+    #[test]
+    fn diagnostic_names_language_fixture_field_and_the_opt_in() {
+        let message = strict_error_for(
+            "    # skipped: field 'usage' not available on result type\n",
+            "ruby",
+            "batch_smoke",
+            &[],
+        )
+        .expect("an unresolved field must fail under strict");
         assert!(message.contains("[ruby]"), "got: {message}");
         assert!(message.contains("`batch_smoke`"), "got: {message}");
         assert!(message.contains("`usage`"), "got: {message}");
+        assert!(message.contains("\"skip\""), "must name the opt-in: {message}");
+        assert!(
+            message.contains(super::STRICT_ASSERTIONS_ENV),
+            "must name the escape hatch: {message}"
+        );
     }
 }
 
@@ -523,6 +923,39 @@ pub trait E2eCodegen: Send + Sync {
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
     ) -> Result<Vec<GeneratedFile>>;
+
+    /// The assertion `type` values this backend can render.
+    ///
+    /// Defaults to the full schema-known set minus this language's row in
+    /// [`assertion_types::BACKEND_UNSUPPORTED_ASSERTION_TYPES`], so a backend added later
+    /// is covered by [`Self::generate_gated`] without touching its own file. ~keep
+    fn supported_assertion_types(&self) -> Vec<&'static str> {
+        assertion_types::supported_assertion_types(self.language_name())
+    }
+
+    /// Run the shared fixture gates, then this backend's [`Self::generate`].
+    ///
+    /// Every driver must call this rather than `generate` directly: it is the one place a
+    /// cross-backend gate can be added without a per-backend edit, and the one place that
+    /// turns an unrenderable assertion into an error naming the fixture it came from
+    /// instead of an empty render, a stray comment, or a panic. ~keep
+    fn generate_gated(
+        &self,
+        groups: &[FixtureGroup],
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+    ) -> Result<Vec<GeneratedFile>> {
+        assertion_types::ensure_supported_assertion_types(
+            groups,
+            e2e_config,
+            self.language_name(),
+            &self.supported_assertion_types(),
+        )?;
+        self.generate(groups, e2e_config, config, type_defs, enums, functions)
+    }
 
     /// Render the target-language source inside a generated documentation snippet.
     fn render_snippet_body(

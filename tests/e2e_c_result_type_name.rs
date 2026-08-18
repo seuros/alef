@@ -83,6 +83,7 @@ fn build_simple_fixture() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_empty".to_string(),
                 field: None,
                 value: None,

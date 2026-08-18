@@ -65,6 +65,7 @@ fn make_simple_fixture() -> FixtureGroup {
             args: vec![],
             assertion_recipes: vec![],
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_error".to_string(),
                 field: None,
                 value: None,

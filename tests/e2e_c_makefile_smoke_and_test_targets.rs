@@ -86,6 +86,7 @@ fn build_fixture_with_http() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_empty".to_string(),
                 field: None,
                 value: None,
@@ -248,6 +249,7 @@ prefix = "htm"
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "not_empty".to_string(),
                 field: None,
                 value: None,

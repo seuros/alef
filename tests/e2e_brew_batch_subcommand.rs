@@ -96,6 +96,7 @@ fn build_batch_scrape_fixture() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "equals".to_string(),
                 field: Some("total_count".to_string()),
                 value: Some(serde_json::json!(3)),
@@ -137,6 +138,7 @@ fn build_batch_crawl_fixture() -> FixtureGroup {
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "equals".to_string(),
                 field: Some("total_count".to_string()),
                 value: Some(serde_json::json!(2)),

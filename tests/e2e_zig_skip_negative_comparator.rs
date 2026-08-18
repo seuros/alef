@@ -91,6 +91,7 @@ fn greater_than_negative_one_is_skipped() {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "greater_than".to_string(),
             field: Some("object.links.length".to_string()),
             value: Some(json!(-1)),
@@ -148,6 +149,7 @@ fn greater_than_or_equal_negative_one_is_skipped() {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "greater_than_or_equal".to_string(),
             field: Some("array.length".to_string()),
             value: Some(json!(-1)),
@@ -209,6 +211,7 @@ fn greater_than_positive_value_is_emitted() {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "greater_than".to_string(),
             field: Some("object.links.length".to_string()),
             value: Some(json!(0)),
@@ -263,6 +266,7 @@ fn less_than_negative_value_is_emitted() {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "less_than".to_string(),
             field: Some("count".to_string()),
             value: Some(json!(-1)),

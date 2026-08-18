@@ -44,6 +44,7 @@ fn make_fixture_with_contains_on_string() -> FixtureGroup {
             assertion_recipes: Vec::new(),
             assertions: vec![
                 Assertion {
+                    skip: None,
                     assertion_type: "contains".to_string(),
                     field: Some("text".to_string()),
                     value: Some(serde_json::Value::String("hello world".to_string())),
@@ -54,6 +55,7 @@ fn make_fixture_with_contains_on_string() -> FixtureGroup {
                     return_type: None,
                 },
                 Assertion {
+                    skip: None,
                     assertion_type: "contains_all".to_string(),
                     field: Some("text".to_string()),
                     value: None,
@@ -67,6 +69,7 @@ fn make_fixture_with_contains_on_string() -> FixtureGroup {
                     return_type: None,
                 },
                 Assertion {
+                    skip: None,
                     assertion_type: "not_contains".to_string(),
                     field: Some("text".to_string()),
                     value: Some(serde_json::Value::String("goodbye".to_string())),
@@ -223,6 +226,7 @@ type = "json_object"
             args: Vec::new(),
             assertion_recipes: Vec::new(),
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "contains".to_string(),
                 field: Some("tags".to_string()),
                 value: Some(serde_json::Value::String("python".to_string())),

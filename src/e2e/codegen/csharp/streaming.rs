@@ -366,7 +366,7 @@ pub(super) fn render_streaming_test_method(
         body.push_str("        Assert.True(streamComplete);\n");
     }
 
-    crate::e2e::codegen::fail_on_unavailable_field_markers(&body, "csharp", &fixture.id);
+    crate::e2e::codegen::fail_on_unavailable_field_markers(&body, "csharp", &fixture.id, &fixture.assertions);
 
     body.push_str("    }\n");
 

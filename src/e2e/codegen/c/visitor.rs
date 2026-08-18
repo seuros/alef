@@ -608,6 +608,7 @@ mod visitor_tests {
             args: vec![],
             assertion_recipes: vec![],
             assertions: vec![Assertion {
+                skip: None,
                 assertion_type: "contains".to_string(),
                 field: None,
                 value: Some(serde_json::json!("Hello")),

@@ -40,6 +40,7 @@ fn make_chat_fixture(id: &str) -> Fixture {
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "not_error".to_string(),
             field: None,
             value: None,
@@ -83,6 +84,7 @@ fn make_chat_fixture_with_field_assertion(id: &str, field: &str, expected: &str)
         args: Vec::new(),
         assertion_recipes: Vec::new(),
         assertions: vec![Assertion {
+            skip: None,
             assertion_type: "equals".to_string(),
             field: Some(field.to_string()),
             value: Some(serde_json::Value::String(expected.to_string())),
@@ -283,6 +285,7 @@ fn make_streaming_fixture(id: &str) -> Fixture {
         assertion_recipes: Vec::new(),
         assertions: vec![
             Assertion {
+                skip: None,
                 assertion_type: "equals".to_string(),
                 field: Some("stream_content".to_string()),
                 value: Some(serde_json::Value::String("hello".to_string())),
@@ -293,6 +296,7 @@ fn make_streaming_fixture(id: &str) -> Fixture {
                 return_type: None,
             },
             Assertion {
+                skip: None,
                 assertion_type: "equals".to_string(),
                 field: Some("stream_complete".to_string()),
                 value: Some(serde_json::Value::Bool(true)),

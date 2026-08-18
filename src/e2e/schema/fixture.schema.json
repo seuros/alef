@@ -308,6 +308,33 @@
         "return_type": {
           "type": "string",
           "description": "Return type hint for generated assertion code"
+        },
+        "skip": {
+          "description": "Explicit acknowledgement that this assertion cannot be generated. An assertion whose field does not resolve fails generation by default; declaring it here is the only way to keep such an assertion, and the skip is still counted -- bucketed by `kind` -- in the end-of-run summary. Use `true` for every language, or an object to scope it.",
+          "oneOf": [
+            { "type": "boolean" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "languages": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Languages this assertion is skipped for (empty means all)"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": ["not_representable", "language_limitation"],
+                  "default": "not_representable",
+                  "description": "Which backlog this skip belongs to. `not_representable`: alef cannot express this assertion shape yet -- an assertion *kind* such as \"the call returned an error\", a property of the call rather than the result, or an assertion over a stream's event sequence. `language_limitation`: the target language, ABI or binding genuinely cannot reach the field."
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Why this assertion cannot be expressed here"
+                }
+              }
+            }
+          ]
         }
       }
     }

@@ -227,6 +227,20 @@ fn generate_e2e_with_extensions(
     // first rather than losing any of them. ~keep
     let mut deferred_error = ensure_no_generator_failures(&generator_failures, generators.len());
 
+    // Every assertion a backend dropped rather than rendered is on the ledger by now. Report the
+    // count unconditionally -- a skip that is legitimate today is still an assertion that is not
+    // running, and this line is the only thing that keeps that debt visible -- then defer the
+    // strict failure alongside the generator failures above, so the files that did generate are
+    // still written and the consumer sees every unresolved field path in one error. ~keep
+    let skip_records = codegen::take_skip_records();
+    if let Some(summary) = codegen::skip_summary(&skip_records) {
+        info!("{summary}");
+    }
+    if let Some(error) = codegen::strict_assertion_failure(&skip_records, codegen::strict_assertions_enabled()) {
+        warn!("e2e strict-assertion check failed, deferring failure");
+        deferred_error.get_or_insert(error);
+    }
+
     // Let registered extensions (passed in by the caller -- see `generate_e2e`'s doc
     // comment) contribute e2e files per language. The default `Extension::emit_e2e`
     // returns empty, so consumers without an e2e extension see no change. Returned files
@@ -350,7 +364,7 @@ fn run_generators(
     let mut all_files = Vec::new();
     let mut failures = Vec::new();
     for generator in generators {
-        match generator.generate(groups, e2e_config, config, type_defs, enums, functions) {
+        match generator.generate_gated(groups, e2e_config, config, type_defs, enums, functions) {
             Ok(files) => {
                 info!("  [{}] generated {} file(s)", generator.language_name(), files.len());
                 all_files.extend(files);
