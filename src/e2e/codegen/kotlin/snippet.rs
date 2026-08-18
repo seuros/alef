@@ -218,6 +218,15 @@ pub(crate) fn render_snippet_body(
     };
 
     let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
+    // An unset `result_var` would render `val  = ...` -- syntactically invalid Kotlin, since the
+    // template splices the name straight into a binding. `presentation::resolve` above already
+    // defaults the same field to "result" for the printed lines, so leaving it raw here also let
+    // the two disagree about what the variable is called. ~keep
+    let result_var = if call.result_var.is_empty() {
+        "result"
+    } else {
+        &call.result_var
+    };
     Ok(crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",
         minijinja::context! {
@@ -228,7 +237,7 @@ pub(crate) fn render_snippet_body(
             class_name => call_target_class_name,
             function_name => function_name,
             args => args,
-            result_var => call.result_var,
+            result_var => result_var,
             returns_void => call.returns_void,
             is_async => is_async,
             fixture_id => fixture.id,
@@ -473,6 +482,124 @@ mod tests {
         assert!(
             body.contains("createClient(apiKey = apiKey)"),
             "an unconfigured project must construct the client without a mock base URL:\n{body}"
+        );
+    }
+
+    fn client_release_snippet(expects_error: bool) -> String {
+        let mut fixture = Fixture {
+            id: "rate_limit_429".into(),
+            description: "Rated limited".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        if expects_error {
+            fixture.assertions = serde_json::from_value(serde_json::json!([{"type": "error"}])).expect("assertions");
+        }
+        let mut call = CallConfig {
+            function: "chat".into(),
+            result_var: "result".into(),
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin".into(),
+            CallOverride {
+                client_factory: Some("create_client".into()),
+                ..CallOverride::default()
+            },
+        );
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            &[],
+            false,
+        )
+        .expect("snippet renders")
+    }
+
+    /// The generated Kotlin client wrapper implements `AutoCloseable` and delegates `close()` to
+    /// the underlying Java facade (`client_class_header.jinja` / `client_close_method.jinja` in
+    /// the Kotlin backend), so `kotlin.use` is the correct release for a client a docs snippet
+    /// constructs — it is the stdlib idiom for exactly this type, and it closes on both normal
+    /// return and a thrown exception, unlike a bare trailing `client.close()`. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_in_a_use_block() {
+        let body = client_release_snippet(false);
+
+        assert!(
+            body.contains("Sample.createClient(apiKey = apiKey).use { client -> client.chat() }"),
+            "the client must be released via a `use` block around the call:\n{body}"
+        );
+        assert!(
+            !body.contains("client.close()"),
+            "no bare close() call must remain:\n{body}"
+        );
+    }
+
+    /// The error-path half of `client_factory_snippet_releases_the_client_in_a_use_block`.
+    /// `kotlin.use` is implemented as try/finally internally, so it releases the client
+    /// whether `client.chat(...)` returns or throws — unlike the pre-existing template, whose
+    /// `client.close()` sat on its own line after the call and was skipped whenever the call
+    /// itself threw, leaking the client on every failed request. ~keep
+    #[test]
+    fn client_factory_snippet_releases_the_client_on_the_error_path() {
+        let body = client_release_snippet(true);
+
+        let try_open = body
+            .find("    try {")
+            .expect("expects-error snippet still opens a try block");
+        let use_block = body
+            .find("Sample.createClient(apiKey = apiKey).use { client -> client.chat() }")
+            .expect("client construction moves inside the try, unchanged in shape");
+        let catch_clause = body.find("catch (error: Exception)").expect("catch clause present");
+        assert!(
+            try_open < use_block && use_block < catch_clause,
+            "the use block must sit inside the try that the catch closes:\n{body}"
+        );
+        assert!(
+            !body.contains("client.close()"),
+            "no bare close() call must remain:\n{body}"
+        );
+    }
+
+    /// Negative control for the two tests above, and the pin that keeps this change scoped: a
+    /// fixture with no `client_factory` constructs no client, so its snippet must be byte-for-byte
+    /// what it was — no `.use {`, no `close()`, just the plain call. A change that wraps every
+    /// snippet's call in a `use` block unconditionally would fail here.
+    #[test]
+    fn snippet_without_a_client_factory_is_unchanged() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let body = render_snippet_body(&fixture, &e2e, &config, &[], &[], false).expect("snippet renders");
+
+        assert!(
+            !body.contains(".use {"),
+            "a snippet that constructs no client must emit no use block:\n{body}"
+        );
+        assert!(
+            !body.contains("close()"),
+            "a snippet that constructs no client must emit no close call:\n{body}"
+        );
+        assert!(
+            body.contains("    val result = Sample.process()"),
+            "the plain call must be unchanged:\n{body}"
         );
     }
 
