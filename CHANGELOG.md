@@ -106,6 +106,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   emit side only; the ownership predicate is deliberately unchanged, because reclassifying `.R` from unmarkable to
   markable would retroactively freeze every already-committed `.R` that proves ownership through the record.
 
+- **Zig snippets no longer rebind the allocator teardown.** The rewrite that names the discarded call
+  result ran per line with no guard, so it also matched the teardown every snippet emits:
+  `defer _ = gpa.deinit();` became `defer const result = gpa.deinit();`, which no Zig grammar accepts.
+  It failed 54 of one consumer's 283 Zig snippets on `expected block or expression`. The rewrite now
+  requires the discard to open the statement, and applies once per body.
+- **The generated `build.zig` resolves its FFI search paths against its own build root.** Both were
+  attached with `.{ .cwd_relative = ... }`, which resolves against the invoking process's working
+  directory — so the package built correctly only when invoked from its own directory, and failed as a
+  `.path` dependency or from the repo root.
+- **A stale `-Dffi_include_path` default is repaired in place.** `build.zig` is create-once, so a repo
+  scaffolded before the default was derived from `[crates.output] ffi` kept a path guessed from the
+  crate name (`crates/<crate>-ffi/include`) that alef could never correct. The migration fires only when
+  the on-disk value still matches that guessed shape and differs from what this run generates; a
+  consumer who repointed the option keeps their value.
 - **A Go visitor fixture attaches its visitor to the options value the call already binds.** The
   generator unconditionally introduced a second `opts` object, which was wrong twice over: the call then
   carried both bindings — `Convert(html, &options, opts)`, a hard "too many arguments" from the Go

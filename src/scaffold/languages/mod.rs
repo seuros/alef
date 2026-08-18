@@ -16,6 +16,7 @@ mod ruby;
 mod swift;
 mod wasm;
 mod zig;
+mod zig_migrations;
 
 pub(crate) use csharp::scaffold_csharp;
 pub use csharp::{
@@ -38,4 +39,7 @@ pub(crate) use r::{scaffold_r, scaffold_r_cargo};
 pub(crate) use ruby::{scaffold_ruby, scaffold_ruby_cargo};
 pub(crate) use swift::{migrate_swift_placeholder_test, scaffold_swift};
 pub(crate) use wasm::{migrate_wasm_package_json_exports, scaffold_wasm};
-pub(crate) use zig::{migrate_build_zig_test_target, migrate_zig_example, scaffold_zig};
+pub(crate) use zig::scaffold_zig;
+pub(crate) use zig_migrations::{
+    migrate_build_zig_test_target, migrate_zig_build_ffi_include_default, migrate_zig_example,
+};

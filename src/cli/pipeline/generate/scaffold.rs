@@ -407,12 +407,19 @@ pub fn write_scaffold_files_report(
     // (a consumer repo is in exactly that state). Repairing first would leave any run that
     // failed between the two steps pointing at a nonexistent root source file -- trading
     // silent coverage loss for a build graph that will not resolve. ~keep
-    if files
+    if let Some(build_zig) = files
         .iter()
-        .any(|file| file.path == Path::new("packages/zig/build.zig"))
+        .find(|file| file.path == Path::new("packages/zig/build.zig"))
     {
         crate::scaffold::migrate_build_zig_test_target(base_dir)
             .context("failed to migrate pre-existing packages/zig/build.zig test target")?;
+        // Same reachability gap, same file: a `build.zig` seeded before `scaffold_zig` derived
+        // the FFI crate directory from `[crates.output] ffi` still searches the directory
+        // guessed from the crate name, so every `@cInclude` in the binding fails to resolve.
+        // The corrected default is read out of this run's freshly generated content rather
+        // than re-derived from config, so the two can never disagree. ~keep
+        crate::scaffold::migrate_zig_build_ffi_include_default(base_dir, &build_zig.content)
+            .context("failed to migrate pre-existing packages/zig/build.zig ffi include default")?;
     }
 
     // Same reachability gap, same shape of fix, for Dart: `packages/dart/test/*_test.dart` is

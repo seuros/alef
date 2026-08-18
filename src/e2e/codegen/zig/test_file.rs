@@ -708,6 +708,14 @@ pub(super) fn render_snippet_body(
     // The test-mode error path captures the failure with a discarded `else |_|` arm
     // (nothing to report inside `test { ... }`). The snippet is a runnable `main`,
     // so swap in a named capture that prints the caught error instead. ~keep
+    // Rebinding the discarded call result is a ONE-LINE, ONCE-PER-BODY edit, and both halves of
+    // that had to be stated explicitly. Applied per line with no guard, `"_ = "` also matched the
+    // allocator teardown every snippet emits -- `defer _ = gpa.deinit();` became
+    // `defer const result = gpa.deinit();`, which is not Zig at all and failed 54 of one consumer's
+    // snippets on `expected block or expression`. Requiring the discard to open the statement is
+    // what separates the call from `defer`/`errdefer`-prefixed ones; `bound` stops a second,
+    // later discard from being rebound to the same name. ~keep
+    let mut bound = false;
     let mut body = test
         .lines()
         .map(|line| {
@@ -715,12 +723,15 @@ pub(super) fn render_snippet_body(
                 "else |_| {}",
                 "else |err| { std.debug.print(\"call failed as expected: {s}\\n\", .{@errorName(err)}); }",
             );
-            if !expects_error && !call.returns_void {
-                line.replacen("_ = try ", &format!("const {result_var} = try "), 1)
-                    .replacen("_ = ", &format!("const {result_var} = "), 1)
-            } else {
-                line
+            if expects_error || call.returns_void || bound {
+                return line;
             }
+            let Some(discarded) = discarded_call_statement(&line) else {
+                return line;
+            };
+            bound = true;
+            let indent = &line[..line.len() - line.trim_start().len()];
+            format!("{indent}const {result_var} = {discarded}")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -1470,5 +1481,47 @@ mod error_value_and_error_field_tests {
         assert_eq!(records.len(), 1, "got: {records:?}");
         assert_eq!(records[0].language, "zig");
         assert_eq!(records[0].field, "equals");
+    }
+}
+
+/// The remainder of a statement that opens by discarding a value, i.e. `_ = <rest>`.
+///
+/// Anchored at the start of the trimmed statement on purpose: `defer _ = gpa.deinit();` and
+/// `errdefer _ = ...` are discards too, and rebinding one produces `defer const x = ...`, which no
+/// Zig grammar accepts. ~keep
+fn discarded_call_statement(line: &str) -> Option<&str> {
+    line.trim_start().strip_prefix("_ = ")
+}
+
+#[cfg(test)]
+mod discard_rebinding_tests {
+    use super::discarded_call_statement;
+
+    /// The defect: applied per line with no guard, the rebinding also matched the allocator
+    /// teardown every Zig snippet emits, turning `defer _ = gpa.deinit();` into
+    /// `defer const result = gpa.deinit();`. That is not Zig, and it failed 54 of one consumer's
+    /// snippets on `expected block or expression`. ~keep
+    #[test]
+    fn a_deferred_discard_is_not_a_rebindable_call_statement() {
+        assert_eq!(discarded_call_statement("    defer _ = gpa.deinit();"), None);
+        assert_eq!(discarded_call_statement("    errdefer _ = allocator.free(buffer);"), None);
+    }
+
+    #[test]
+    fn a_statement_opening_with_a_discard_yields_the_call_it_discards() {
+        assert_eq!(
+            discarded_call_statement("    _ = try htmd.convert(allocator, html, null);"),
+            Some("try htmd.convert(allocator, html, null);")
+        );
+        assert_eq!(
+            discarded_call_statement("_ = htmd.convert(allocator, html, null);"),
+            Some("htmd.convert(allocator, html, null);")
+        );
+    }
+
+    /// A discard appearing mid-statement is not a statement-opening discard and must be left alone.
+    #[test]
+    fn a_discard_that_does_not_open_the_statement_is_not_matched() {
+        assert_eq!(discarded_call_statement("    const pair = .{ _ = 1 };"), None);
     }
 }
