@@ -123,7 +123,7 @@ pub(crate) fn scaffold_ruby_cargo(
 
     let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}{lints_section}
+        r#"{pkg_header}
 
 {machete_section}[lib]
 name = "{lib_name}"
@@ -131,7 +131,8 @@ path = "../src/lib.rs"
 crate-type = ["cdylib"]
 
 {features_table}[dependencies]
-{deps_section}{core_target_blocks_section}"#,
+{deps_section}
+{core_target_blocks_section}{lints_section}"#,
         pkg_header = pkg_header,
         lints_section = lints_section,
         machete_section = machete_section,

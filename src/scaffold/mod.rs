@@ -508,20 +508,27 @@ pub(crate) fn cargo_lints_clippy_block_with_rationale(config: &ResolvedCrateConf
 /// Checks for per-language feature overrides first, then falls back to `[crate] features`.
 /// Returns an empty string if no features are configured, otherwise returns
 /// `, features = ["feat1", "feat2"]`.
-/// Render `config.cargo_lints` for splicing into a generated Cargo.toml
-/// immediately after the `[package]` header, with its own leading blank-line
-/// separator already applied. Returns an empty string when no lints are
-/// configured, so callers can splice the result in unconditionally: `{pkg_header}
-/// {lints_section}\n\n# next section...` reproduces the pre-existing single
-/// blank line before the next section when `lints_section` is empty, and adds a
-/// blank-line-delimited `[lints.rust]` / `[lints.clippy]` block between them
-/// otherwise.
+/// Render `config.cargo_lints` for appending at the very END of a generated
+/// Cargo.toml, after every dependency table.
+///
+/// `lints` is absent from cargo-sort's `DEF_TABLE_ORDER` (`package`, `workspace`,
+/// `lib`, `bin`, `features`, `dependencies`, `build-dependencies`,
+/// `dev-dependencies`), and cargo-sort appends every unlisted table after the
+/// listed ones. Emitting `[lints.*]` between `[package]` and `[dependencies]`
+/// therefore makes `cargo sort --check` reorder the manifest and fail it — under
+/// the misleading message "Dependencies for <crate> are not sorted", even though
+/// the dependency KEYS are already alphabetical. ~keep
+///
+/// The caller's template must already end with a newline; this returns
+/// `\n{block}\n`, i.e. one blank separator line, the block, and the file's
+/// trailing newline. Returns an empty string when no lints are configured, so
+/// `...last-line\n{lints_section}"#` stays correct either way.
 pub(crate) fn cargo_lints_section(config: &ResolvedCrateConfig) -> String {
     let rendered = with_clippy_rationale(&config.cargo_lints.render());
     if rendered.is_empty() {
         String::new()
     } else {
-        format!("\n\n{rendered}")
+        format!("\n{rendered}\n")
     }
 }
 

@@ -86,6 +86,7 @@ fn language_files(files: &[GeneratedFile]) -> Vec<&GeneratedFile> {
 }
 
 mod cargo_config;
+mod cargo_table_order;
 mod core_deps;
 mod extra_deps;
 mod ffi_go_java_ruby;

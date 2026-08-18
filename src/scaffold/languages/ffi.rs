@@ -236,7 +236,7 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     let lints_section = crate::scaffold::cargo_lints_section(config);
 
     let content = format!(
-        r#"{pkg_header}{repository_line}{lints_section}
+        r#"{pkg_header}{repository_line}
 
 # `serde`, `serde_json`, `ahash`, and `tokio` are emitted unconditionally above so the
 # manifest is stable across regens (and so the C FFI codegen can pull them in
@@ -264,7 +264,7 @@ cbindgen = "{cbindgen}"
 
 [dev-dependencies]
 tempfile = "{tempfile}"
-"#,
+{lints_section}"#,
         pkg_header = pkg_header,
         repository_line = repository_line,
         lints_section = lints_section,
@@ -748,15 +748,21 @@ print_stdout = "deny"
             .find(|f| f.path.ends_with("Cargo.toml"))
             .expect("ffi Cargo.toml emitted")
             .content;
-        // Exactly one blank line must separate the `[package]` header from the
-        // spliced `[lints.rust]` block -- not the whole file, since the `[features]`
-        // block's `{core_features_passthrough_block}` slot is independently blank
-        // whenever no cfg-gated feature is emitted (true for this test's empty API
-        // surface), which pre-existingly leaves a double blank line before
-        // `[dependencies]` regardless of cargo_lints. ~keep
+        // Exactly one blank line must precede the spliced `[lints.rust]` block. This is asserted
+        // without naming the table before it: cargo-sort's canonical order puts every lints table
+        // last, so pinning the preceding table would re-break this test the next time a table is
+        // added at the tail. The check deliberately does not look at the whole file, because the
+        // `[features]` block's `{core_features_passthrough_block}` slot is independently blank
+        // whenever no cfg-gated feature is emitted (true for this test's empty API surface), which
+        // pre-existingly leaves a double blank line before `[dependencies]` regardless of
+        // cargo_lints. ~keep
         assert!(
-            cargo.contains("categories = []\n\n[lints.rust]\nunused_must_use = \"deny\""),
-            "expected exactly one blank line between [package] and [lints.rust], got:\n{cargo}"
+            cargo.contains("\n\n[lints.rust]\nunused_must_use = \"deny\""),
+            "expected a blank line before [lints.rust], got:\n{cargo}"
+        );
+        assert!(
+            !cargo.contains("\n\n\n[lints.rust]"),
+            "expected exactly one blank line before [lints.rust], not more, got:\n{cargo}"
         );
         assert!(
             cargo.contains(
@@ -774,9 +780,19 @@ print_stdout = "deny"
             "expected the rationale comment to attach directly to [lints.clippy] (no blank line), and the \
              configured print_stdout to merge with the builtin dbg_macro/print_stderr defaults, got:\n{cargo}"
         );
+        // `[lints.clippy]` is last under cargo-sort's canonical table order, so there is no
+        // following section to be separated from -- this previously pinned the `# `serde`` comment
+        // that used to follow it. What still matters is that the file ends cleanly: the clippy
+        // block is the final table and the tail does not accumulate blank lines. A global
+        // "no triple newline" check would be wrong here, because the `[features]` block leaves a
+        // documented double blank before `[dependencies]` on an empty API surface. ~keep
         assert!(
-            cargo.contains("print_stdout = \"deny\"\n\n# `serde`"),
-            "expected exactly one blank line between [lints.clippy] and the next section, got:\n{cargo}"
+            cargo.trim_end().ends_with("print_stdout = \"deny\""),
+            "expected [lints.clippy] to be the final table, got:\n{cargo}"
+        );
+        assert!(
+            cargo.len() - cargo.trim_end_matches('\n').len() <= 2,
+            "expected at most one trailing blank line after [lints.clippy], got:\n{cargo}"
         );
         toml::from_str::<toml::Value>(cargo).expect("generated Cargo.toml with cargo_lints must be valid TOML");
     }

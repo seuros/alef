@@ -278,7 +278,7 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
 
     let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}{lints_section}
+        r#"{pkg_header}
 
 # `ahash` and `futures-util` are conditionally included but not directly used in PHP code.
 [package.metadata.cargo-machete]
@@ -292,8 +292,7 @@ extension-module = []
 {cfg_forwarding}
 [dependencies]
 {dep_block}
-{core_target_blocks_section}
-"#,
+{core_target_blocks_section}{lints_section}"#,
         pkg_header = pkg_header,
         lints_section = lints_section,
         dep_block = dep_block,

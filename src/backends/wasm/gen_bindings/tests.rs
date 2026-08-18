@@ -1060,3 +1060,27 @@ fn async_method_returning_named_still_uses_from() {
         "a wrapper-mapped return must not detour through serde:\n{output}"
     );
 }
+
+/// The WASM binding manifest is emitted by this backend rather than by `alef scaffold`, so it
+/// needs its own guard that `cargo sort --check` would accept it -- in particular that
+/// `[lints.*]` trails every dependency table instead of sitting after `[package]`. ~keep
+#[test]
+fn cargo_toml_tables_are_in_cargo_sort_canonical_order() {
+    let config = make_config();
+    let cargo_toml = gen_cargo_toml(&empty_api(), &config);
+
+    crate::test_support::cargo_sort_order::assert_canonical_table_order("wasm Cargo.toml", &cargo_toml);
+
+    let lints_at = cargo_toml
+        .find("[lints.")
+        .expect("wasm manifest must carry a lints table");
+    for table in ["[dependencies]", "[dev-dependencies]", "[target."] {
+        if let Some(table_at) = cargo_toml.find(table) {
+            assert!(
+                lints_at > table_at,
+                "`{table}` must precede the lints table:\n{cargo_toml}"
+            );
+        }
+    }
+    toml::from_str::<toml::Value>(&cargo_toml).expect("generated wasm Cargo.toml must be valid TOML");
+}

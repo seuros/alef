@@ -187,12 +187,11 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     };
     let tracing_ignored_line = if has_trait_bridges { "    \"tracing\",\n" } else { "" };
 
-    // Unlike the scaffold emitters' `cargo_lints_section` (a "\n\n" + block glue
-    // meant to follow a header with no trailing newline), `keywords_toml` above
-    // always self-terminates with its own trailing "\n" (or is empty), and the
-    // template's own newline before `[package.metadata...]` already supplies the
-    // blank-line separator either way — so the block here only needs a leading
-    // "\n" (never a second one) plus a trailing "\n" to close its own last line. ~keep
+    // Same glue contract as the scaffold emitters' `cargo_lints_section`: appended at the
+    // very end of the manifest (after `[dev-dependencies]`) because cargo-sort sorts every
+    // table absent from its `DEF_TABLE_ORDER` — `lints` among them — after the listed ones.
+    // The preceding template text always ends with a newline, so "\n" + block + "\n" yields
+    // one blank separator line and the file's trailing newline. ~keep
     let lints_block = config.cargo_lints.render();
     let lints_section = if lints_block.is_empty() {
         String::new()
@@ -209,7 +208,7 @@ edition = "2024"
 license = "{license}"
 description = "{description}"
 repository = "{repository}"
-{keywords_toml}{lints_section}
+{keywords_toml}
 [package.metadata.cargo-machete]
 ignored = [
     "futures",
@@ -233,7 +232,7 @@ crate-type = ["cdylib"]
 getrandom = {{ version = "0.4", features = ["wasm_js"] }}
 getrandom_02 = {{ package = "getrandom", version = "0.2", features = ["js"] }}
 getrandom_03 = {{ package = "getrandom", version = "0.3", features = ["wasm_js"] }}
-{dev_deps_section}"#,
+{dev_deps_section}{lints_section}"#,
         header = header,
         pkg_prefix = pkg_prefix,
         version = version,

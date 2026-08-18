@@ -167,7 +167,7 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
 name = "{jni_crate_name}"
 version.workspace = true
 edition.workspace = true
-license.workspace = true{lints_section}
+license.workspace = true
 
 # `base64`, `futures-util`, `serde_json`, and `tokio` are emitted unconditionally below
 # so the manifest is stable across regens (they are used when the umbrella
@@ -184,7 +184,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 {deps_section}
-{target_blocks_section}"#,
+{target_blocks_section}{lints_section}"#,
         jni_crate_name = jni_crate_name,
         jni_lib_name = jni_lib_name,
         lints_section = lints_section,

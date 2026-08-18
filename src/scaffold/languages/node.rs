@@ -282,7 +282,7 @@ pub(crate) fn scaffold_node_cargo(
 
     let lints_section = crate::scaffold::cargo_lints_section(config);
     let content = format!(
-        r#"{pkg_header}{lints_section}
+        r#"{pkg_header}
 
 # `serde_json` is emitted unconditionally above so the manifest is stable
 # across regens, but for umbrella crates with no JSON-marshalled return types
@@ -300,8 +300,7 @@ crate-type = ["cdylib"]
 
 {core_target_blocks_section}[build-dependencies]
 napi-build = "{napi_build}"
-
-"#,
+{lints_section}"#,
         pkg_header = pkg_header,
         lints_section = lints_section,
         dep_block = dep_block,
