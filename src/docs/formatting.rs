@@ -418,7 +418,7 @@ fn ffi_error_return_phrase(return_type: &TypeRef) -> String {
 }
 
 /// Format the error/exception phrase for a function that can fail.
-pub(crate) fn format_error_phrase(error_type: &str, return_type: &TypeRef, lang: Language) -> String {
+pub(crate) fn format_error_phrase(error_type: &str, return_type: &TypeRef, lang: Language, crate_name: &str) -> String {
     let short = error_type.rsplit("::").next().unwrap_or(error_type);
     match lang {
         Language::Python => {
@@ -426,13 +426,13 @@ pub(crate) fn format_error_phrase(error_type: &str, return_type: &TypeRef, lang:
             format!("Raises `{ename}`.")
         }
         Language::Go => "Returns `error`.".to_string(),
+        // ~keep The class is named by `backends::java::naming::exception_class_name`, the same
+        // derivation the signature's `throws` clause (`signatures.rs`) and the streaming
+        // override (`streaming.rs`) use. Pascal-casing the error type's own short name here
+        // used to name a *different* class -- one the domain-error hierarchy happens to
+        // declare (`codegen/error_gen/host_langs.rs`) but that no method actually throws.
         Language::Java => {
-            let ename = short.to_pascal_case();
-            let ename = if ename.ends_with("Exception") {
-                ename
-            } else {
-                format!("{ename}Exception")
-            };
+            let ename = crate::backends::java::naming::exception_class_name(crate_name);
             format!("Throws `{ename}`.")
         }
         Language::Node | Language::Wasm => "Throws `Error` with a descriptive message.".to_string(),
@@ -1334,7 +1334,7 @@ mod tests {
     use super::*;
     use crate::core::config::Language;
     use crate::core::ir::{DefaultValue, PrimitiveType, TypeRef};
-    use crate::docs::test_helpers::{TEST_PREFIX, empty_api, make_field};
+    use crate::docs::test_helpers::{TEST_CRATE_NAME, TEST_PREFIX, empty_api, make_field};
 
     // ~keep The identifier gate: rejects a reserved-word collision (Java/Dart's `new`,
     // etc.) that a curated or templated name might introduce. These are the per-language
@@ -1762,7 +1762,7 @@ mod tests {
     #[test]
     fn test_format_error_phrase_ffi_unit_return_reports_negative_one() {
         assert_eq!(
-            format_error_phrase("InitError", &TypeRef::Unit, Language::Ffi),
+            format_error_phrase("InitError", &TypeRef::Unit, Language::Ffi, TEST_CRATE_NAME),
             "Returns `-1` on error."
         );
     }
@@ -1771,7 +1771,7 @@ mod tests {
     fn test_format_error_phrase_ffi_bytes_return_reports_negative_one() {
         // A Bytes result is always delivered via out-param + i32 status, fallible or not.
         assert_eq!(
-            format_error_phrase("ReadError", &TypeRef::Bytes, Language::Ffi),
+            format_error_phrase("ReadError", &TypeRef::Bytes, Language::Ffi, TEST_CRATE_NAME),
             "Returns `-1` on error."
         );
     }
@@ -1782,6 +1782,7 @@ mod tests {
             "ParseError",
             &TypeRef::Named("ConversionResult".to_string()),
             Language::C,
+            TEST_CRATE_NAME,
         );
         assert_eq!(phrase, "Returns the sentinel handle `0` on error.");
         assert!(
@@ -1794,18 +1795,24 @@ mod tests {
     fn test_format_error_phrase_ffi_string_return_stays_null() {
         // A genuine heap-allocated pointer return really does use NULL on failure.
         assert_eq!(
-            format_error_phrase("ReadError", &TypeRef::String, Language::C),
+            format_error_phrase("ReadError", &TypeRef::String, Language::C, TEST_CRATE_NAME),
             "Returns `NULL` on error."
         );
         assert_eq!(
-            format_error_phrase("ReadError", &TypeRef::Vec(Box::new(TypeRef::String)), Language::C),
+            format_error_phrase(
+                "ReadError",
+                &TypeRef::Vec(Box::new(TypeRef::String)),
+                Language::C,
+                TEST_CRATE_NAME
+            ),
             "Returns `NULL` on error."
         );
         assert_eq!(
             format_error_phrase(
                 "ReadError",
                 &TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
-                Language::C
+                Language::C,
+                TEST_CRATE_NAME
             ),
             "Returns `NULL` on error."
         );
@@ -1814,15 +1821,25 @@ mod tests {
     #[test]
     fn test_format_error_phrase_ffi_numeric_primitive_reports_zero() {
         assert_eq!(
-            format_error_phrase("ComputeError", &TypeRef::Primitive(PrimitiveType::I32), Language::C),
+            format_error_phrase(
+                "ComputeError",
+                &TypeRef::Primitive(PrimitiveType::I32),
+                Language::C,
+                TEST_CRATE_NAME
+            ),
             "Returns `0` on error."
         );
         assert_eq!(
-            format_error_phrase("ComputeError", &TypeRef::Primitive(PrimitiveType::F64), Language::C),
+            format_error_phrase(
+                "ComputeError",
+                &TypeRef::Primitive(PrimitiveType::F64),
+                Language::C,
+                TEST_CRATE_NAME
+            ),
             "Returns `0.0` on error."
         );
         assert_eq!(
-            format_error_phrase("ComputeError", &TypeRef::Duration, Language::C),
+            format_error_phrase("ComputeError", &TypeRef::Duration, Language::C, TEST_CRATE_NAME),
             "Returns `0` on error."
         );
     }
@@ -1831,7 +1848,7 @@ mod tests {
     fn test_format_error_phrase_ffi_optional_named_recurses_to_inner_shape() {
         let ty = TypeRef::Optional(Box::new(TypeRef::Named("ClientConfig".to_string())));
         assert_eq!(
-            format_error_phrase("AttachError", &ty, Language::C),
+            format_error_phrase("AttachError", &ty, Language::C, TEST_CRATE_NAME),
             "Returns the sentinel handle `0` on error."
         );
     }
@@ -1843,14 +1860,15 @@ mod tests {
         // `<Bridge>Exception` and returns a type-specific zero, never `NULL`. See
         // docs::examples::sample_param_value; expect this test to change when the arm is fixed.
         assert_eq!(
-            format_error_phrase("InitError", &TypeRef::Unit, Language::Jni),
+            format_error_phrase("InitError", &TypeRef::Unit, Language::Jni, TEST_CRATE_NAME),
             "Returns `NULL` on error."
         );
         assert_eq!(
             format_error_phrase(
                 "ParseError",
                 &TypeRef::Named("ConversionResult".to_string()),
-                Language::Jni
+                Language::Jni,
+                TEST_CRATE_NAME
             ),
             "Returns `NULL` on error."
         );

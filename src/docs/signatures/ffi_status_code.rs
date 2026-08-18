@@ -129,6 +129,7 @@ fn test_c_signature_and_error_phrase_agree_on_fallible_void_status_value() {
         func.error_type.as_deref().expect("fallible"),
         &func.return_type,
         Language::C,
+        TEST_CRATE_NAME,
     );
 
     assert!(signature.starts_with("int32_t "), "signature: {signature}");
@@ -151,6 +152,7 @@ fn test_c_signature_and_error_phrase_agree_named_return_uses_integer_not_null() 
         func.error_type.as_deref().expect("fallible"),
         &func.return_type,
         Language::C,
+        TEST_CRATE_NAME,
     );
 
     assert!(signature.contains("HTMAlefHandle"), "signature: {signature}");

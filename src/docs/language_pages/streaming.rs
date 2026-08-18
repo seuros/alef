@@ -474,7 +474,13 @@ pub(super) fn render_method(
         lang,
         ffi_prefix,
     );
-    push_errors(&mut out, method.error_type.as_deref(), &method.return_type, lang);
+    push_errors(
+        &mut out,
+        method.error_type.as_deref(),
+        &method.return_type,
+        lang,
+        crate_name,
+    );
 
     out
 }

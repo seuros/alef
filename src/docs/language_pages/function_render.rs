@@ -83,9 +83,14 @@ pub(super) fn render_function(
         lang,
         ffi_prefix,
     );
-    push_errors(&mut out, func.error_type.as_deref(), &func.return_type, lang);
+    push_errors(
+        &mut out,
+        func.error_type.as_deref(),
+        &func.return_type,
+        lang,
+        &api.crate_name,
+    );
 
-    let _ = api;
     out
 }
 
@@ -185,9 +190,15 @@ pub(super) fn push_returns_with_override(
     }
 }
 
-pub(super) fn push_errors(out: &mut String, error_type: Option<&str>, return_type: &TypeRef, lang: Language) {
+pub(super) fn push_errors(
+    out: &mut String,
+    error_type: Option<&str>,
+    return_type: &TypeRef,
+    lang: Language,
+    crate_name: &str,
+) {
     if let Some(err) = error_type {
-        let error_phrase = format_error_phrase(err, return_type, lang);
+        let error_phrase = format_error_phrase(err, return_type, lang, crate_name);
         out.push_str(&template_env::render(
             "errors_phrase.jinja",
             minijinja::context! { phrase => error_phrase },
@@ -277,5 +288,32 @@ mod tests {
         );
         assert!(out.contains("StreamHandle"), "{out}");
         assert!(!out.contains("int32_t"), "{out}");
+    }
+
+    /// ~keep A core error type whose short name is `Error` is the case that let this bug hide:
+    /// pascal-casing that short name yields `ErrorException`, which is a real class the domain
+    /// error hierarchy declares (`codegen::error_gen::host_langs`), so the fabrication read as
+    /// plausible even though no generated method throws it. Asserting against
+    /// `exception_class_name` -- the same derivation the `throws` clause and the streaming
+    /// override use -- rather than a hardcoded literal is what would actually have caught the
+    /// original bug; a literal expectation would have pinned the wrong class just as easily.
+    #[test]
+    fn test_errors_prose_names_the_class_exception_class_name_derives() {
+        let mut out = String::new();
+        push_errors(
+            &mut out,
+            Some("Error"),
+            &TypeRef::String,
+            Language::Java,
+            TEST_CRATE_NAME,
+        );
+
+        let expected_class = crate::backends::java::naming::exception_class_name(TEST_CRATE_NAME);
+        assert_eq!(
+            out.trim(),
+            format!("**Errors:** Throws `{expected_class}`."),
+            "the Errors: prose must name the class the Java binding actually declares, not a \
+             pascal-cased spelling of the error type's own short name: {out}"
+        );
     }
 }
