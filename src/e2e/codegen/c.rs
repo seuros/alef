@@ -363,7 +363,7 @@ impl E2eCodegen for CCodegen {
         if !visitor_fixtures.is_empty() {
             files.push(GeneratedFile {
                 path: output_base.join("test_visitor.c"),
-                content: render_visitor_test_file(&visitor_fixtures, &header, &prefix, e2e_config, config, ir),
+                content: render_visitor_test_file(&visitor_fixtures, &header, &prefix, e2e_config, config, ir)?,
                 generated_header: true,
             });
         }
@@ -458,7 +458,11 @@ fn render_c_snippet(
 /// Resolve per-call-config C-specific settings for a given call config and lang.
 struct ResolvedCallInfo {
     function_name: String,
-    result_type_name: String,
+    /// Not a `String`: a call whose result type nothing real names must fail at the point the
+    /// emitter needs the name, not silently become a PascalCased call name. Paths that never
+    /// name a result type — `returns_void` calls, streaming adapters, the `raw_c_result_type`
+    /// scalar path — never call [`ResultTypeName::require`] and are unaffected. ~keep
+    result_type_name: ResultTypeName,
     options_type_name: String,
     client_factory: Option<String>,
     args: Vec<crate::e2e::config::ArgMapping>,
@@ -487,7 +491,7 @@ struct ResolvedCallInfo {
 /// inherent or trait method — a client's `chat`, say — is a [`crate::core::ir::MethodDef`]
 /// hanging off a [`crate::core::ir::TypeDef`] in `type_defs`. Passing one without the other
 /// answers `None` for half the calls in a typical suite, and every `None` here lands on
-/// [`fallback_result_type_name`], which invents a name. ~keep
+/// [`unresolved_result_type_name`], which fails generation rather than inventing a name. ~keep
 #[derive(Clone, Copy, Default)]
 pub(super) struct CallIr<'a> {
     pub functions: &'a [crate::core::ir::FunctionDef],
@@ -555,7 +559,12 @@ fn same_signature(left: &crate::core::ir::MethodDef, right: &crate::core::ir::Me
             .all(|(left, right)| left.name == right.name && left.ty == right.ty)
 }
 
-fn resolve_call_info(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> ResolvedCallInfo {
+fn resolve_call_info(
+    call: &CallConfig,
+    lang: &str,
+    ir: CallIr<'_>,
+    trait_bridge_registry_identity: Option<&str>,
+) -> ResolvedCallInfo {
     let overrides = call.overrides.get(lang);
     let function_name = overrides
         .and_then(|o| o.function.as_ref())
@@ -570,7 +579,8 @@ fn resolve_call_info(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> ResolvedC
         .cloned()
         .inspect(|configured| warn_if_result_type_override_disables_verification(configured, call, lang))
         .or_else(|| resolve_ir_result_type(call, lang, ir))
-        .unwrap_or_else(|| fallback_result_type_name(call, lang, ir));
+        .map(ResultTypeName::Resolved)
+        .unwrap_or_else(|| unresolved_result_type_name(call, lang, ir, trait_bridge_registry_identity));
     let options_type_name = overrides
         .and_then(|o| o.options_type.as_deref())
         .or(call.options_type.as_deref())
@@ -648,7 +658,7 @@ fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
 /// The named type is reached through [`named_type`], the recursive unwrapper this module
 /// already uses for argument element types — a second, one-level-deep match sitting beside it
 /// answered `None` for `Result<Vec<Model>, E>` and every other nesting, and every `None` here
-/// lands on [`fallback_result_type_name`].
+/// lands on [`unresolved_result_type_name`].
 ///
 /// The lookup goes through [`CallIr::signature`], so a call naming an inherent or trait method
 /// resolves too; `ApiSurface::functions` alone would answer `None` for every one of them.
@@ -663,15 +673,15 @@ fn resolve_ir_result_type(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> Opti
 /// doc describes.
 ///
 /// `overrides.result_type` short-circuits [`resolve_call_info`]'s `.or_else()` chain before
-/// both `resolve_ir_result_type` and [`fallback_result_type_name`] ever run — so unlike the
-/// unresolvable-call case those two cover (which does warn, per the `~keep` above), a
+/// both `resolve_ir_result_type` and [`unresolved_result_type_name`] ever run — so unlike the
+/// unresolvable-call case those two cover (which now fails generation, per the `~keep` above), a
 /// primitive spelling typed into `result_type` reaches no diagnostic at all. It still becomes
 /// `result_type_name`, which is both the accessor prefix and the `parent_is_ir_type` flag
 /// `ensure_leaf_field_exists` reads — no IR type is ever named `"char*"`, so nested-field
 /// verification silently turns off for the call, exactly as it would via the fallback path,
 /// but invisibly. A call whose result genuinely carries no named fields has a documented way
 /// to say so (`result_is_bytes` / `result_is_simple` / the Zig-only `result_is_json_struct`,
-/// all checked at the fallback site) — `result_type` is not it. ~keep
+/// all checked at [`unresolved_result_type_name`]) — `result_type` is not it. ~keep
 fn warn_if_result_type_override_disables_verification(configured: &str, call: &CallConfig, lang: &str) {
     if is_primitive_c_type(configured) || configured == "char*" || configured.ends_with('*') {
         tracing::warn!(
@@ -687,32 +697,100 @@ fn warn_if_result_type_override_disables_verification(configured: &str, call: &C
     }
 }
 
-/// Last-resort result type when neither config nor the IR names one: PascalCase the call's
-/// function name.
+/// Stands in for a call whose name is empty in both the base config and the per-language
+/// override, so a diagnostic never interpolates to nothing. ~keep
+const UNNAMED_CALL_DIAGNOSTIC: &str = "<call with no configured name>";
+
+/// The result type a C call will be emitted against, together with what backs the name.
 ///
-/// This invents a name. When it is wrong the damage surfaces stages later and quietly:
-/// `result_type_name` becomes both the accessor prefix (`{prefix}_{result_snake}_{leaf}`) and
-/// the `parent_is_ir_type` flag, and `ensure_leaf_field_exists` default-allows every leaf whose
-/// parent is not an IR type — so a fabricated type does not fail generation, it *disables* the
-/// nested-field verification for that fixture.
+/// The emitter builds three different things out of this one name — the accessor prefix
+/// (`{prefix}_{result_snake}_{leaf}`), the cleanup call (`{prefix}_{result_snake}_free`), and
+/// the `parent_is_ir_type` flag `ensure_leaf_field_exists` reads. Handing all three a
+/// PascalCased *call* name, as this module did before, was self-concealing: the fabricated
+/// type matched no IR type, so `ensure_leaf_field_exists` default-allowed every leaf under it
+/// and the very check that would have caught the fabrication was switched off by the
+/// fabrication. Carrying the outcome rather than a bare `String` forces the emitter to ask for
+/// the name through [`ResultTypeName::require`], and asking is where an unresolvable one turns
+/// into a generation error instead of a guess. ~keep
+pub(super) enum ResultTypeName {
+    /// Backed by something real: an explicit `result_type` call override, or the declared
+    /// return type the core IR gives for this call.
+    Resolved(String),
+    /// Derived from the call name in a case where nothing downstream reads it as a claim that
+    /// a type of that name exists:
+    ///
+    /// - No IR was supplied at all (unit tests and the visitor call sites construct a
+    ///   [`CallIr`] from empty slices deliberately). `type_defs` is then empty, so every
+    ///   IR-keyed check has no data either way and none is lost by the derived name.
+    /// - The call/override already declares the result carries no named fields
+    ///   (`result_is_bytes` / `result_is_simple` / the Zig-only `result_is_json_struct`), which
+    ///   is the config's own statement that there is no named type and no nested field.
+    /// - The call resolves to a trait-bridge registry function (`register_fn` / `unregister_fn`
+    ///   / `clear_fn` on `[[crates.trait_bridges]]`). Those are FFI exports the backend
+    ///   generates itself, not core IR functions, so they never resolve against `ir` — and a
+    ///   registry register/unregister/clear operation returns a status code, not a named
+    ///   response type, so there is no result to verify in the first place.
+    Unverified(String),
+    /// The IR was available, the call resolves to nothing in it (absent, or ambiguous per
+    /// [`CallIr::signature`]), and no config declaration says the result has no named type.
+    /// There is nothing real to name here, so emitting fails rather than inventing one.
+    Unresolvable { call: String, language: String },
+}
+
+impl ResultTypeName {
+    /// The name to emit, or the generation error that replaces the name this used to invent.
+    ///
+    /// This resolves against the core IR, not against the header the run is about to emit,
+    /// because the emitted symbol set is not reachable from here: neither
+    /// [`E2eCodegen::generate`] nor either snippet entry point receives it — they receive IR
+    /// slices (`type_defs`, `enums`, `functions`) and nothing else. Checking a result type
+    /// against the symbols that will actually exist would mean threading
+    /// `cli::pipeline::generate::header_freshness::scan_generated_ffi_source`'s
+    /// `BTreeMap<symbol, Option<cfg>>` down into the generator. Until that is threaded, the IR
+    /// is the only real thing available to resolve against, and failing loudly beats a
+    /// plausible wrong name. ~keep
+    pub(super) fn require(&self) -> Result<&str> {
+        match self {
+            Self::Resolved(name) | Self::Unverified(name) => Ok(name),
+            Self::Unresolvable { call, language } => anyhow::bail!(
+                "C e2e codegen cannot name the result type of call `{call}` for language \
+                 `{language}`: it resolves to no core IR function or method with a named return \
+                 type. Naming it after the call would emit `{{prefix}}_{{result}}_{{field}}` \
+                 accessors and a `{{prefix}}_{{result}}_free` cleanup for a type the generated \
+                 header never declares, and would switch nested-field verification off for this \
+                 fixture because no IR type matches an invented name. Fix by setting \
+                 `result_type` on the call's `{language}` override to the real type, or by \
+                 declaring the result carries no named fields (`result_is_bytes` / \
+                 `result_is_simple`)."
+            ),
+        }
+    }
+}
+
+/// Classify a call whose result type neither config nor the IR named.
 ///
-/// It nonetheless has to stay, because resolution legitimately cannot answer for these shapes:
+/// `trait_bridge_registry_identity` is the derived C identity
+/// ([`crate::e2e::codegen::recipe::trait_bridge_derived_c_identity`]'s second tuple element,
+/// e.g. `"clear_validator"`) when the caller has already matched this call against a
+/// `[[crates.trait_bridges]]` `register_fn` / `unregister_fn` / `clear_fn`, or `None` for an
+/// ordinary call. It is threaded in rather than recomputed here because the match needs
+/// `ResolvedCrateConfig` and the fixture, neither of which this function (or [`resolve_call_info`],
+/// its only caller) otherwise takes — widening this signature to the whole config just to run a
+/// lookup already available at the call site would be a worse trade than one extra parameter.
 ///
-/// - The call names something the IR does not model at all — a C-only export, a registry
-///   operation with no Rust-side `fn` of that name, a `mock_response` fixture whose "call" is
-///   an HTTP request. Setting `result_type` on the call override is the fix.
-/// - Every same-named method disagrees on its signature, so [`CallIr::signature`] declines to
-///   pick one (see its doc comment).
-/// - No IR was supplied at all: unit tests and the two visitor call sites construct a
-///   [`CallIr`] from empty slices deliberately.
-///
-/// Only the last is structural and not per-call actionable, so it stays at debug; the others
-/// warn, because with the IR in hand a call that still does not resolve is an authoring
-/// problem with a config fix. Before `functions` reached [`E2eCodegen::generate`] the debug
-/// arm covered the whole generated-test-file path and the warn arm was unreachable there,
-/// which is precisely why a suite could be generated with field verification off and nothing
-/// said so. ~keep
-fn fallback_result_type_name(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> String {
+/// Three of the four arms still derive a name from the call, and all three are cases where the
+/// derived name is provably not read as a type claim — see [`ResultTypeName::Unverified`]. The
+/// fourth is the authoring gap: the IR was there to consult, the call is not in it, nothing
+/// declares that it has no named result, and it does not name a trait-bridge registry function
+/// either. That one used to warn and hand back the invented name anyway, which is how a suite
+/// could be generated with field verification off for a fixture and nothing but a log line said
+/// so. It is now an error, raised where the name would have been emitted. ~keep
+fn unresolved_result_type_name(
+    call: &CallConfig,
+    lang: &str,
+    ir: CallIr<'_>,
+    trait_bridge_registry_identity: Option<&str>,
+) -> ResultTypeName {
     let result_type = call.function.to_pascal_case();
     if ir.is_absent() {
         tracing::debug!(
@@ -721,7 +799,9 @@ fn fallback_result_type_name(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> S
             %result_type,
             "no core IR available to this generator; result type derived from the call name"
         );
-    } else if call_declares_non_struct_result(call, lang) {
+        return ResultTypeName::Unverified(result_type);
+    }
+    if call_declares_non_struct_result(call, lang) {
         tracing::debug!(
             call = %call.function,
             language = %lang,
@@ -729,32 +809,63 @@ fn fallback_result_type_name(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> S
             "call did not resolve to a core IR function or method with a named return type, but \
              the call/override already declares the result carries no named fields \
              (result_is_bytes / result_is_simple / result_is_json_struct) — there is no named \
-             type to set and no nested field for the fabricated type to hide"
+             type to set and no nested field for the derived type to hide"
         );
-    } else {
-        tracing::warn!(
+        return ResultTypeName::Unverified(result_type);
+    }
+    // A registry register/unregister/clear export is generated by the FFI backend itself
+    // (`src/backends/ffi/trait_bridge/registration.rs`), never appears in the core IR, and
+    // returns an `i32` status code -- there is no named response type it could ever resolve
+    // to, so this is not the authoring gap the `Unresolvable` arm below exists to catch. The
+    // derived identity (not `call.function`, which is legitimately blank when the call names
+    // itself only per language -- exactly the shape a bridge call takes) keeps the name real
+    // and non-empty rather than collapsing to the degenerate `{prefix}__free` a blank
+    // PascalCase produced before `fallback_result_type_name` was removed. ~keep
+    if let Some(identity) = trait_bridge_registry_identity {
+        let result_type = identity.to_pascal_case();
+        tracing::debug!(
             call = %call.function,
             language = %lang,
             %result_type,
-            "call did not resolve to a core IR function or method with a named return type; \
-             result type derived from the call name, which disables nested-field verification if \
-             the name is not a real type — set `result_type` on the call override"
+            "call resolves to a trait-bridge registry function (register_fn / unregister_fn / \
+             clear_fn), which is a generated FFI export with no core IR counterpart and no named \
+             result to verify"
         );
+        return ResultTypeName::Unverified(result_type);
     }
-    result_type
+    // WARN, not ERROR: whether this is fatal depends on which emission path the call takes. A
+    // `raw_c_result_type` call — `char*` derived from a `Vec<String>` return, say — renders
+    // correctly without ever naming a result type, so classifying here is "degraded but
+    // continuing". The unrecoverable case is reported by [`ResultTypeName::require`] at the point
+    // of use, where there is enough context to say what would otherwise have been emitted. ~keep
+    // Name the call by the symbol this language actually emits, not by the raw base `function`.
+    // The base is legitimately empty when a call names itself only per language, and a diagnostic
+    // whose whole job is to tell an author which call to fix is worse than useless when it
+    // interpolates to the empty string. ~keep
+    let call_name = call.effective_function(lang).unwrap_or(UNNAMED_CALL_DIAGNOSTIC);
+    tracing::warn!(
+        call = %call_name,
+        language = %lang,
+        "call did not resolve to a core IR function or method with a named return type and \
+         declares no non-struct result; there is no real type to name, so any emission path that \
+         needs one now fails rather than inventing it — set `result_type` on the call override"
+    );
+    ResultTypeName::Unresolvable {
+        call: call_name.to_string(),
+        language: lang.to_string(),
+    }
 }
 
 /// True when the call/override already declares that the result carries no named fields to
 /// verify: `result_is_bytes` (raw byte buffer), `result_is_simple` (a bare scalar), or the
 /// Zig-only `result_is_json_struct` escape hatch (an opaque JSON blob the Zig generator parses
-/// and verifies structurally, not through named-field lookup). [`fallback_result_type_name`]'s
-/// warning exists to catch a genuine authoring gap — a call that SHOULD have resolved to a named
-/// IR type but didn't, silently disabling nested-field verification — and none of these three
-/// flags describe that gap: they are the config's own declaration that there is no named type and
-/// no nested field to check, so the fabricated PascalCase name the fallback invents is provably
-/// unused for verification. Checking only `result_is_bytes` would still fire the warning on every
-/// declared-simple or declared-json-struct call, which is the same false alarm with a narrower
-/// blast radius. ~keep
+/// and verifies structurally, not through named-field lookup). [`unresolved_result_type_name`]'s
+/// error arm exists to catch a genuine authoring gap — a call that SHOULD have resolved to a named
+/// IR type but didn't, so no real type can be named — and none of these three flags describe that
+/// gap: they are the config's own declaration that there is no named type and no nested field to
+/// check, which is what makes the derived PascalCase name provably unread as a type claim there.
+/// Checking only `result_is_bytes` would fail generation on every declared-simple or
+/// declared-json-struct call, which is the same false alarm with a much larger blast radius. ~keep
 fn call_declares_non_struct_result(call: &CallConfig, lang: &str) -> bool {
     if call.result_is_simple || call.result_is_bytes {
         return true;
@@ -783,7 +894,6 @@ fn resolve_fixture_call_info(
         &fixture.tags,
         &fixture.input,
     );
-    let mut info = resolve_call_info(call, lang, ir);
 
     // `trait_bridge_derived_c_identity` derives the C ABI symbol the FFI backend
     // actually generates for a trait-bridge registry operation, rather than trusting
@@ -797,11 +907,27 @@ fn resolve_fixture_call_info(
     // happened -- a caller that reaches this function directly (as this module's own
     // unit tests, and the compiled e2e test-file path via `render_test_file`, both do)
     // must get the same protection on its own terms.
+    //
+    // Computed once, up front: both the function-name fallback below and the
+    // result-type classification inside `resolve_call_info` need the same match, and a
+    // registry function's `function_name` may already be non-empty (an explicit
+    // per-language override, as a well-formed config sets) while its result type is
+    // still unresolvable against the core IR -- the two fallbacks are independent, so
+    // neither can be conditioned on the other having fired. ~keep
     let skipped_for_lang = fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(lang));
+    let trait_bridge_identity = (!skipped_for_lang)
+        .then(|| crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture))
+        .flatten();
+
+    let mut info = resolve_call_info(
+        call,
+        lang,
+        ir,
+        trait_bridge_identity.as_ref().map(|(_, name)| name.as_str()),
+    );
+
     if info.function_name.is_empty()
-        && !skipped_for_lang
-        && let Some((operation, derived_name)) =
-            crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture)
+        && let Some((operation, derived_name)) = trait_bridge_identity
     {
         info.function_name = derived_name;
         // `unregister`/`clear` C exports always take a trailing `out_error` out-param
@@ -849,7 +975,9 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, i
         &fixture.tags,
         &fixture.input,
     );
-    let info = resolve_call_info(call, "c", ir);
+    // `None`: this predicate only reads `info.options_type_name`, never `result_type_name`,
+    // so a trait-bridge identity would be inert here even if computed. ~keep
+    let info = resolve_call_info(call, "c", ir, None);
     let has_function = call
         .overrides
         .get("c")
@@ -931,8 +1059,9 @@ fn render_test_file(
 
         // `ir`, not an empty slice: `resolve_call_info` derives `result_type_name` from the
         // declared return type here, and `result_type_name` is what `parent_is_ir_type` — and
-        // through it `ensure_leaf_field_exists` — reads. An unresolved name is not merely
-        // cosmetic; it turns the nested-field walk's verification off for this fixture. ~keep
+        // through it `ensure_leaf_field_exists` — reads. Passing an empty slice would make
+        // every call unresolvable-but-excused (`CallIr::is_absent`), which is how a suite used
+        // to be generated with field verification off and nothing but a log line saying so. ~keep
         let call_info = resolve_fixture_call_info(fixture, e2e_config, config, lang, ir);
 
         // Effective enum fields for this fixture: merge global e2e_config.fields_enum
@@ -1074,6 +1203,98 @@ mod snippet_tests {
         assert!(!rendered.contains("void test_"));
         assert!(!rendered.contains("assert("));
         assert!(rendered.contains("_free(result)"), "{rendered}");
+    }
+
+    /// A crate IR that names one function, so `CallIr::is_absent()` is false and the generator
+    /// genuinely had something to resolve against. The fixture's call is not that function.
+    fn unrelated_ir() -> [crate::core::ir::FunctionDef; 1] {
+        [crate::core::ir::FunctionDef {
+            name: "unrelated".into(),
+            return_type: crate::core::ir::TypeRef::Named("Unrelated".into()),
+            ..crate::core::ir::FunctionDef::default()
+        }]
+    }
+
+    /// The defect this pair pins: `list_ocr_backends` was PascalCased into `ListOcrBackends`,
+    /// a type the generated header never declares, and the snippet then spelled it into a
+    /// `{prefix}_{result}_free` call for a family that has no `_free` member — while the
+    /// invented name simultaneously switched `ensure_leaf_field_exists` off, because
+    /// `parent_is_ir_type` can only be true for a name the IR actually declares. An
+    /// unresolvable result type must therefore produce an ERROR here, not a snippet: the
+    /// emitted symbol set is not reachable from this generator (see `ResultTypeName::require`),
+    /// so there is nothing better than the IR to resolve against and nothing at all to guess
+    /// from. The positive control below shares this shape exactly apart from the IR entry, so
+    /// this test cannot pass by making every render fail. ~keep
+    #[test]
+    fn should_refuse_to_emit_a_snippet_whose_result_type_resolves_to_nothing_real() {
+        let fixture = Fixture {
+            id: "list_backends".into(),
+            description: "List backends".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "sample_list_backends".into();
+        e2e.call.result_var = "result".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let error = render_c_snippet(&fixture, &e2e, &config, &[], &unrelated_ir())
+            .expect_err("a result type nothing real names must fail generation, not emit a snippet");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("sample_list_backends"),
+            "the failure must name the call an operator has to fix: {message}"
+        );
+        assert!(
+            message.contains("result_type"),
+            "the failure must name the config key that fixes it: {message}"
+        );
+        assert!(
+            !message.contains("SampleListBackends"),
+            "the failure must not hand back the PascalCased call name as if it were a type: {message}"
+        );
+    }
+
+    /// Positive control for the test above, identical apart from the IR declaring the call.
+    /// A resolvable result type must still render, and must render *through the same emission
+    /// path* — the opaque-handle path whose `{prefix}_{result_snake}_free` is exactly the symbol
+    /// the fabricated name used to corrupt. Without this, the failure test above would be
+    /// satisfied by an emitter that refused everything. ~keep
+    #[test]
+    fn should_still_emit_a_snippet_when_the_ir_names_the_result_type() {
+        let fixture = Fixture {
+            id: "list_backends".into(),
+            description: "List backends".into(),
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "sample_list_backends".into();
+        e2e.call.result_var = "result".into();
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let functions = [crate::core::ir::FunctionDef {
+            name: "sample_list_backends".into(),
+            return_type: crate::core::ir::TypeRef::Named("BackendList".into()),
+            ..crate::core::ir::FunctionDef::default()
+        }];
+
+        let rendered =
+            render_c_snippet(&fixture, &e2e, &config, &[], &functions).expect("a call the IR names must still render");
+
+        assert!(rendered.contains("sample_list_backends("), "{rendered}");
+        assert!(
+            rendered.contains("sample_backend_list_free(result)"),
+            "cleanup must be derived from the IR-declared type, not the call name: {rendered}"
+        );
+        assert!(
+            !rendered.contains("sample_list_backends_free"),
+            "the call-name-derived cleanup symbol must never appear: {rendered}"
+        );
     }
 
     /// `clear_fn = "clear_sample_backends"` (plural, human-written config text) on a
@@ -1683,7 +1904,7 @@ mod snippet_tests {
                 &field_resolver,
                 &HashMap::new(),
                 &HashSet::new(),
-                "Result",
+                &ResultTypeName::Resolved("Result".into()),
                 "",
                 None,
                 Some(raw_type),
@@ -1753,7 +1974,7 @@ mod snippet_tests {
                 &field_resolver,
                 &HashMap::new(),
                 &HashSet::new(),
-                "Result",
+                &ResultTypeName::Resolved("Result".into()),
                 "",
                 None,
                 Some(raw_type),
@@ -1997,9 +2218,10 @@ mod result_type_resolution_tests {
         );
     }
 
-    /// The fallback stays load-bearing for callers that genuinely have no IR — this module's
-    /// own cases, and the two visitor call sites. This pins that it still produces the
-    /// documented PascalCase name rather than failing generation.
+    /// The derived name stays load-bearing for callers that genuinely have no IR — this
+    /// module's own cases, and the visitor call sites. With `type_defs` empty there is nothing
+    /// any IR-keyed check could have consulted anyway, so this must stay renderable rather than
+    /// becoming a hard failure.
     #[test]
     fn should_fall_back_to_the_pascal_cased_call_name_without_ir_functions() {
         assert_eq!(
@@ -2007,43 +2229,56 @@ mod result_type_resolution_tests {
             None
         );
         assert_eq!(
-            fallback_result_type_name(&call_named("complete"), "c", CallIr::default()),
-            "Complete".to_string(),
-            "the fallback must stay, and its output must stay the documented shape"
+            unresolved_result_type_name(&call_named("complete"), "c", CallIr::default(), None)
+                .require()
+                .expect("a no-IR caller must still render"),
+            "Complete",
+            "the no-IR arm must stay, and its output must stay the documented shape"
         );
     }
 
-    /// The warning fires when a call genuinely has an unresolvable name AND no config
-    /// declaration explains why — the authoring gap the warning exists to catch. The IR is
+    /// The error fires when a call genuinely has an unresolvable name AND no config
+    /// declaration explains why — the authoring gap this arm exists to catch. The IR is
     /// deliberately non-empty (a real crate to consult, so `ir.is_absent()` is false) but does
     /// not name this call, distinguishing this from the "no IR at all" debug case above.
     #[tracing_test::traced_test]
     #[test]
-    fn fallback_result_type_name_warns_for_an_unresolvable_call_with_no_declaration() {
+    fn unresolved_result_type_name_refuses_an_unresolvable_call_with_no_declaration() {
         let functions = vec![function_returning(
             "unrelated",
             TypeRef::Named("Unrelated".to_string()),
             Some("String"),
         )];
 
-        let result_type = fallback_result_type_name(&call_named("mystery_call"), "c", ir_functions(&functions));
+        let result_type = unresolved_result_type_name(&call_named("mystery_call"), "c", ir_functions(&functions), None);
 
-        assert_eq!(result_type, "MysteryCall".to_string());
+        let error = result_type
+            .require()
+            .expect_err("an unresolvable result type must not hand back a name");
         assert!(
-            logs_contain("disables nested-field verification"),
-            "an unresolvable call with no result_is_bytes/simple/json_struct declaration must warn"
+            error.to_string().contains("mystery_call"),
+            "the error must name the call an operator has to fix: {error}"
+        );
+        assert!(
+            !error.to_string().contains("MysteryCall"),
+            "the error must not leak the PascalCased call name as if it were a type: {error}"
+        );
+        assert!(
+            logs_contain("no real type to name"),
+            "an unresolvable call with no result_is_bytes/simple/json_struct declaration must say \
+             so when it is classified, not only when an emission path happens to ask for the name"
         );
     }
 
     /// Negative control / regression for the false alarm this fix addresses: a call whose
     /// result is declared `result_is_bytes` under the C override has no named type to set and
-    /// no nested field to verify, so the warning's suggested fix ("set `result_type`") is
+    /// no nested field to verify, so the error's suggested fix ("set `result_type`") is
     /// meaningless here — and it must not fire. Mirrors the real bug report's exact shape:
     /// `[crates.e2e.calls.speech.overrides.c] result_is_bytes = true` against a call whose
     /// IR-side type (`bytes::Bytes`) has no `pub struct`/`pub enum` in core at all.
     #[tracing_test::traced_test]
     #[test]
-    fn fallback_result_type_name_stays_silent_for_a_declared_bytes_result() {
+    fn unresolved_result_type_name_stays_silent_for_a_declared_bytes_result() {
         use crate::e2e::config::CallOverride;
 
         let functions = vec![function_returning(
@@ -2060,12 +2295,14 @@ mod result_type_resolution_tests {
             },
         );
 
-        fallback_result_type_name(&call, "c", ir_functions(&functions));
+        unresolved_result_type_name(&call, "c", ir_functions(&functions), None)
+            .require()
+            .expect("a declared-bytes result must still render");
 
         assert!(
-            !logs_contain("disables nested-field verification"),
-            "a declared-bytes result has no named type and no nested field to check; warning to \
-             set `result_type` on it is a false alarm"
+            !logs_contain("no real type to name"),
+            "a declared-bytes result has no named type and no nested field to check; failing \
+             generation and telling the operator to set `result_type` is a false alarm"
         );
         assert!(
             logs_contain("carries no named fields"),
@@ -2075,11 +2312,11 @@ mod result_type_resolution_tests {
     }
 
     /// The call-level `result_is_simple` flag — identical semantics to `result_is_bytes`: no
-    /// named struct, nothing to verify — must suppress the warning too, not just the
+    /// named struct, nothing to verify — must suppress the failure too, not just the
     /// byte-buffer case.
     #[tracing_test::traced_test]
     #[test]
-    fn fallback_result_type_name_stays_silent_for_a_call_level_simple_result() {
+    fn unresolved_result_type_name_stays_silent_for_a_call_level_simple_result() {
         let functions = vec![function_returning(
             "unrelated",
             TypeRef::Named("Unrelated".to_string()),
@@ -2088,9 +2325,11 @@ mod result_type_resolution_tests {
         let mut call = call_named("ping");
         call.result_is_simple = true;
 
-        fallback_result_type_name(&call, "c", ir_functions(&functions));
+        unresolved_result_type_name(&call, "c", ir_functions(&functions), None)
+            .require()
+            .expect("a declared-simple result must still render");
 
-        assert!(!logs_contain("disables nested-field verification"));
+        assert!(!logs_contain("no real type to name"));
         assert!(logs_contain("carries no named fields"));
     }
 
@@ -2099,7 +2338,7 @@ mod result_type_resolution_tests {
     /// suppression set as `result_is_bytes` / `result_is_simple`.
     #[tracing_test::traced_test]
     #[test]
-    fn fallback_result_type_name_stays_silent_for_a_declared_json_struct_result() {
+    fn unresolved_result_type_name_stays_silent_for_a_declared_json_struct_result() {
         use crate::e2e::config::CallOverride;
 
         let functions = vec![function_returning(
@@ -2116,10 +2355,174 @@ mod result_type_resolution_tests {
             },
         );
 
-        fallback_result_type_name(&call, "c", ir_functions(&functions));
+        unresolved_result_type_name(&call, "c", ir_functions(&functions), None)
+            .require()
+            .expect("a declared-json-struct result must still render");
 
-        assert!(!logs_contain("disables nested-field verification"));
+        assert!(!logs_contain("no real type to name"));
         assert!(logs_contain("carries no named fields"));
+    }
+
+    /// Fourth case this module documents: `register_fn` / `unregister_fn` / `clear_fn` on
+    /// `[[crates.trait_bridges]]` name FFI exports the backend generates itself
+    /// (`src/backends/ffi/trait_bridge/registration.rs`), never core IR functions -- so a
+    /// trait-bridge registry call is unresolvable against `ir` by construction, not because an
+    /// author forgot to export something. That is not the authoring gap `Unresolvable` exists to
+    /// catch, and every consumer that uses trait bridges would otherwise fail its first regen.
+    #[tracing_test::traced_test]
+    #[test]
+    fn unresolved_result_type_name_stays_silent_for_a_trait_bridge_registry_call() {
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+        let call = call_named("clear_sample_validators");
+
+        let classified =
+            unresolved_result_type_name(&call, "c", ir_functions(&functions), Some("clear_sample_validator"));
+        let result_type = classified
+            .require()
+            .expect("a trait-bridge registry call must still render, not bail generation");
+
+        assert_eq!(
+            result_type, "ClearSampleValidator",
+            "the classified name must come from the derived registry identity, not the (here \
+             empty) base `function` -- an empty derivation is the exact `{{prefix}}__free` \
+             regression this guards against"
+        );
+        assert!(!logs_contain("no real type to name"));
+        assert!(logs_contain("no core IR counterpart"));
+    }
+
+    /// Control for the test above: an ORDINARY call absent from the IR, with no
+    /// result_is_bytes/simple/json_struct declaration and no trait-bridge identity (`None`),
+    /// must still bail. This is the regression guard for the fix itself: a change that
+    /// classified every unmatched call as `Unverified` -- rather than specifically a
+    /// trait-bridge registry call -- would pass the positive test above while silently
+    /// disabling the authoring-gap guard for every ordinary call, which is the exact failure
+    /// mode the preceding lane's `Unresolvable` arm was introduced to catch. ~keep
+    #[tracing_test::traced_test]
+    #[test]
+    fn unresolved_result_type_name_still_refuses_an_unresolvable_call_when_no_trait_bridge_identity_matches() {
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+        let call = call_named("another_mystery_call");
+
+        let result_type = unresolved_result_type_name(&call, "c", ir_functions(&functions), None);
+
+        result_type
+            .require()
+            .expect_err("an ordinary unresolvable call must still fail generation");
+        assert!(logs_contain("no real type to name"));
+    }
+
+    /// End-to-end regression for the real over-reach, through `resolve_fixture_call_info` --
+    /// the path `render_test_file` (the main e2e test-file generator, not the docs-site
+    /// snippet path) actually calls. A trait-bridge registry call whose `CallConfig` is
+    /// unresolvable against the core IR and declares no result_is_bytes/simple/json_struct must
+    /// resolve without bailing for all three registry operations. Before this fix, every one of
+    /// these classified as `Unresolvable` and turned a consumer's first regen after adding a
+    /// trait bridge into a hard generation failure. ~keep
+    #[test]
+    fn resolve_fixture_call_info_does_not_bail_for_any_trait_bridge_registry_operation() {
+        let functions = vec![function_returning(
+            "unrelated",
+            TypeRef::Named("Unrelated".to_string()),
+            Some("String"),
+        )];
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleValidator".into(),
+                register_fn: Some("register_sample_validator".into()),
+                unregister_fn: Some("unregister_sample_validator".into()),
+                clear_fn: Some("clear_sample_validators".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+
+        for identity in [
+            "register_sample_validator",
+            "unregister_sample_validator",
+            "clear_sample_validators",
+        ] {
+            let fixture = Fixture {
+                id: identity.into(),
+                call: Some(identity.into()),
+                ..Fixture::default()
+            };
+            let mut e2e = E2eConfig::default();
+            e2e.calls.insert(identity.into(), CallConfig::default());
+
+            let info = resolve_fixture_call_info(&fixture, &e2e, &config, "c", ir_functions(&functions));
+
+            info.result_type_name
+                .require()
+                .unwrap_or_else(|error| panic!("{identity} must not bail generation: {error}"));
+        }
+    }
+
+    /// The literal regression this fix exists to prevent: the removed fallback derived a
+    /// result type by PascalCasing `call.function`, which is legitimately blank for a call that
+    /// names itself only via a per-language override -- the shape every trait-bridge registry
+    /// call takes -- so it emitted a `{prefix}__free` cleanup call for a symbol that can never
+    /// exist. Pinning the ABSENCE of the double-underscore shape, not just that generation
+    /// completes, is what would actually catch a regression that reintroduced the empty
+    /// derivation. ~keep
+    #[test]
+    fn render_c_snippet_never_emits_a_double_underscore_free_for_a_trait_bridge_clear_call() {
+        let fixture = Fixture {
+            id: "clear_sample_validators".into(),
+            description: "Clear registered sample validators".into(),
+            call: Some("clear_sample_validators".into()),
+            assertions: vec![crate::e2e::fixture::Assertion {
+                assertion_type: "not_error".into(),
+                ..Default::default()
+            }],
+            ..Fixture::default()
+        };
+        let mut e2e = E2eConfig::default();
+        let mut call = CallConfig::default();
+        call.overrides.insert(
+            "c".to_string(),
+            crate::e2e::config::CallOverride {
+                function: Some("clear_sample_validators".to_string()),
+                ..crate::e2e::config::CallOverride::default()
+            },
+        );
+        e2e.calls.insert("clear_sample_validators".into(), call);
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                trait_name: "SampleValidator".into(),
+                clear_fn: Some("clear_sample_validators".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let functions = [crate::core::ir::FunctionDef {
+            name: "unrelated".into(),
+            return_type: TypeRef::Named("Unrelated".into()),
+            ..crate::core::ir::FunctionDef::default()
+        }];
+
+        let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &functions)
+            .expect("a trait-bridge clear call absent from the IR must still render");
+
+        assert!(
+            !rendered.contains("__free"),
+            "must never emit the degenerate double-underscore cleanup symbol an empty derived \
+             result type produces: {rendered}"
+        );
+        assert!(
+            rendered.contains("clear_sample_validator_free("),
+            "must derive a real cleanup symbol from the registry identity: {rendered}"
+        );
     }
 
     /// The other half of the gap this module documents: `ApiSurface::functions` holds free
@@ -2221,20 +2624,26 @@ mod result_type_resolution_tests {
         )];
 
         assert_eq!(
-            resolve_call_info(&call_named("complete"), "c", ir_functions(&functions)).result_type_name,
-            "CompletionResponse".to_string()
+            resolve_call_info(&call_named("complete"), "c", ir_functions(&functions), None)
+                .result_type_name
+                .require()
+                .expect("a call the IR names must resolve"),
+            "CompletionResponse"
         );
         assert_eq!(
-            resolve_call_info(&call_named("complete"), "c", CallIr::default()).result_type_name,
-            "Complete".to_string()
+            resolve_call_info(&call_named("complete"), "c", CallIr::default(), None)
+                .result_type_name
+                .require()
+                .expect("a no-IR caller must still render"),
+            "Complete"
         );
     }
 
     /// Task 4: an operator-set `result_type` override short-circuits BOTH the IR lookup and
-    /// `fallback_result_type_name` — so a primitive/pointer spelling there (a call override
+    /// `unresolved_result_type_name` — so a primitive/pointer spelling there (a call override
     /// typo, or copy-pasting `raw_c_result_type`'s valid values into the wrong field) reached
     /// no diagnostic at all before this, unlike the unresolvable-call case one test above,
-    /// which does warn. This is the positive case: the warning must fire.
+    /// which now fails generation outright. This is the positive case: the warning must fire.
     #[tracing_test::traced_test]
     #[test]
     fn resolve_call_info_warns_when_result_type_override_is_a_primitive_spelling() {
@@ -2249,9 +2658,14 @@ mod result_type_resolution_tests {
             },
         );
 
-        let result_type_name = resolve_call_info(&call, "c", CallIr::default()).result_type_name;
+        let result_type_name = resolve_call_info(&call, "c", CallIr::default(), None).result_type_name;
 
-        assert_eq!(result_type_name, "char*".to_string());
+        assert_eq!(
+            result_type_name
+                .require()
+                .expect("an explicit override always resolves"),
+            "char*"
+        );
         assert!(
             logs_contain("disables nested-field verification"),
             "a primitive/pointer result_type override must warn that it disables verification"
@@ -2259,7 +2673,7 @@ mod result_type_resolution_tests {
     }
 
     /// Negative control: a genuine PascalCase override is exactly what the `result_type`
-    /// field's own doc comment (and `fallback_result_type_name`'s "set `result_type` on the
+    /// field's own doc comment (and `unresolved_result_type_name`'s "set `result_type` on the
     /// call override" advice) recommend when the IR cannot model a call at all. That legitimate
     /// use must stay silent.
     #[tracing_test::traced_test]
@@ -2276,9 +2690,14 @@ mod result_type_resolution_tests {
             },
         );
 
-        let result_type_name = resolve_call_info(&call, "c", CallIr::default()).result_type_name;
+        let result_type_name = resolve_call_info(&call, "c", CallIr::default(), None).result_type_name;
 
-        assert_eq!(result_type_name, "LegacyExportResult".to_string());
+        assert_eq!(
+            result_type_name
+                .require()
+                .expect("an explicit override always resolves"),
+            "LegacyExportResult"
+        );
         assert!(
             !logs_contain("disables nested-field verification"),
             "a real PascalCase type name plugging an IR gap is the documented, intended use and \

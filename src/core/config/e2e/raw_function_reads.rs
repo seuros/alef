@@ -31,10 +31,11 @@ const KNOWN_RAW_FUNCTION_READS: &[&str] = &[
     "src/e2e/codegen/elixir/test_case.rs\t.find(|a| a.name == call_config.function.as_str())",
     "src/e2e/codegen/elixir/snippet.rs\t.find(|value| value.name == call.function)",
     "src/e2e/codegen/elixir/test_case.rs\tfunction_from_override.is_some() || !call_config.function.is_empty()",
-    // C's last-resort result-type name. Still derived from the raw base, but no longer silent:
-    // `fallback_result_type_name` warns when the IR was available and the call did not resolve,
-    // naming the `result_type` override that fixes it. The base is the right input here — a C
-    // override names a prefixed C export, which would pascal-case into a doubled-prefix type.
+    // C's last-resort result-type name. Still derived from the raw base, but no longer invented
+    // where it matters: `unresolved_result_type_name` fails generation when the IR was available
+    // and the call did not resolve, naming the `result_type` override that fixes it. The base is
+    // the right input here — a C override names a prefixed C export, which would pascal-case into
+    // a doubled-prefix type.
     "src/e2e/codegen/c.rs\tlet result_type = call.function.to_pascal_case();",
     "src/e2e/codegen/c.rs\tcall = %call.function,",
     // Pre-generation export validation. Widening it to a resolved name risks a hard `bail!` on

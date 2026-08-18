@@ -33,7 +33,7 @@ pub(super) fn render_visitor_test_file(
     e2e_config: &E2eConfig,
     _config: &ResolvedCrateConfig,
     ir: CallIr<'_>,
-) -> String {
+) -> anyhow::Result<String> {
     use crate::e2e::fixture::CallbackAction;
 
     let mut out = String::new();
@@ -73,17 +73,26 @@ pub(super) fn render_visitor_test_file(
             &fixture.tags,
             &fixture.input,
         );
-        let call_info = resolve_call_info(call_config, "c", ir);
+        // `None`: visitor fixtures are the vtable/callback-shaped trait-bridge pattern, never
+        // the register_fn/unregister_fn/clear_fn registry-operation shape
+        // `trait_bridge_derived_c_identity` classifies, so there is nothing for it to match
+        // here. ~keep
+        let call_info = resolve_call_info(call_config, "c", ir, None);
         let function_name = call_info.function_name.as_str();
         let options_type_name = call_info.options_type_name.as_str();
         let options_type_snake = options_type_name.to_snake_case();
-        let result_type_name = call_info.result_type_name.as_str();
-        let result_type_snake = result_type_name.to_snake_case();
-
         let visitor_spec = match &fixture.visitor {
             Some(v) => v,
             None => continue,
         };
+
+        // After the `continue` above, not before it: a fixture this emitter skips outright must
+        // not be able to fail generation. For the ones it does emit, the name is spelled into two
+        // symbols nothing else checks — `{prefix}_{result_snake}_to_json` and
+        // `{prefix}_{result_snake}_free` — so an unresolvable result type has to stop generation
+        // rather than name a pair of exports the header never declares. ~keep
+        let result_type_name = call_info.result_type_name.require()?;
+        let result_type_snake = result_type_name.to_snake_case();
 
         let html = fixture.input.get("html").and_then(|v| v.as_str()).unwrap_or("");
         let html_escaped = escape_c(html);
@@ -209,7 +218,7 @@ pub(super) fn render_visitor_test_file(
         }
     }
 
-    out
+    Ok(out)
 }
 
 pub(super) fn render_visitor_snippet(
@@ -222,7 +231,7 @@ pub(super) fn render_visitor_snippet(
 ) -> anyhow::Result<String> {
     let mut snippet_fixture = fixture.clone();
     snippet_fixture.assertions.clear();
-    let rendered = render_visitor_test_file(&[&snippet_fixture], header, prefix, e2e_config, config, ir);
+    let rendered = render_visitor_test_file(&[&snippet_fixture], header, prefix, e2e_config, config, ir)?;
     let function_marker = format!("void test_{}(void) {{", sanitize_ident(&fixture.id));
     let function_start = rendered
         .find(&function_marker)
@@ -659,7 +668,8 @@ mod visitor_tests {
             &e2e_config_with_c_call(),
             &config,
             CallIr::default(),
-        );
+        )
+        .expect("visitor test file renders");
 
         assert!(content.contains("KRZKrzVisitorCallbacks _callbacks"));
         assert!(content.contains("const KRZKrzContext* _ctx"));

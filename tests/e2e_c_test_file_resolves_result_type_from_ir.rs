@@ -169,20 +169,36 @@ fn should_reject_a_leaf_field_the_ir_type_does_not_have() {
     );
 }
 
-/// The negative control that proves the previous test is not vacuous: the identical fixture
-/// and identical `type_defs`, with only the IR functions withheld, generates *successfully*
-/// and emits an accessor for a field that does not exist. That is the silent failure mode —
-/// the suite builds, the assertion runs against a symbol no binding generates, and nothing at
-/// generation time says so. It is reachable only because the fabricated `Complete` matches no
-/// entry in `type_defs`, which is precisely what turns the check off.
+/// The negative control that keeps the previous test from passing for the wrong reason.
+///
+/// It used to assert the defect directly: identical fixture, identical `type_defs`, only the IR
+/// functions withheld, and generation *succeeded*, emitting `sample_complete_ghost(result)` — an
+/// accessor for a field that does not exist, against a fabricated `Complete` that matched no
+/// entry in `type_defs`, which is exactly what switched `ensure_leaf_field_exists` off.
+///
+/// That path now refuses instead of inventing a name, so the old assertion cannot stand. But the
+/// control still has a job, and it is a bigger one than before: with both cases failing, the
+/// sibling test would pass unchanged if generation had simply started refusing *everything*. So
+/// this pins that the two failures are different failures — this one names the unresolvable call
+/// and the config knob that fixes it, and says nothing about the leaf field, which is what proves
+/// the sibling's `ghost`/`CompletionResponse` diagnostic really came from the leaf-field walk. ~keep
 #[test]
-fn should_show_the_check_was_off_when_the_result_type_did_not_resolve() {
-    let content = generate(&group_asserting_field("ghost"), &[], &ir_types())
-        .expect("without a resolvable result type, the leaf check default-allows and generation succeeds");
+fn should_refuse_rather_than_default_allow_when_the_result_type_did_not_resolve() {
+    let error = generate(&group_asserting_field("ghost"), &[], &ir_types())
+        .expect_err("an unresolvable result type must fail generation rather than default-allow the leaf check");
+    let message = format!("{error:#}");
 
     assert!(
-        content.contains("sample_complete_ghost(result)"),
-        "the unresolved path must still emit the unverified accessor — if this stops being \
-         true, the control no longer demonstrates the defect:\n{content}"
+        message.contains("complete"),
+        "the diagnostic must name the call that could not be resolved: {message}"
+    );
+    assert!(
+        message.contains("result_type"),
+        "the diagnostic must name the config knob that fixes it: {message}"
+    );
+    assert!(
+        !message.contains("CompletionResponse") && !message.contains("ghost"),
+        "this failure must NOT be the leaf-field failure — if it were, the sibling test would be \
+         passing on a blanket refusal rather than on the field walk: {message}"
     );
 }
