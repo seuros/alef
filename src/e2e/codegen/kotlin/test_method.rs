@@ -132,10 +132,9 @@ pub(super) fn render_test_method(
             }
         })
         .unwrap_or_else(|| class_name.to_string());
-    let effective_result_var = &call_config.result_var;
     let function_name = effective_function_name.as_str();
     let class_name_for_call = effective_class_name.as_str();
-    let result_var = effective_result_var.as_str();
+    let result_var = call_config.effective_result_var();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let args: &[crate::e2e::config::ArgMapping] = recipe.args;
     // Resolve per-fixture options_type using per-fixture call config resolution.

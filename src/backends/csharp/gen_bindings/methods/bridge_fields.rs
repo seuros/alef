@@ -121,7 +121,15 @@ pub(super) fn gen_bridge_field_wrapper_function(
         "bridge_field_register.jinja"
     };
     out.push_str(&render(register_template, minijinja::context! { trait_pascal }));
-    out.push_str("                if (bridgeHandle == IntPtr.Zero) throw GetLastError();\n");
+    // The two register templates call different natives with different return types:
+    // `VisitorCreate` is declared `IntPtr` (`native_methods_visitor.jinja`) while
+    // `{Trait}BridgeNew` wraps `{prefix}_{bridge}_new`, which returns `AlefHandle`
+    // (`backends::ffi::trait_bridge::gen_bridge_new_free`). One sentinel for both branches is
+    // wrong for one of them, so the guard follows the branch that produced the value. ~keep
+    let bridge_zero = if is_visitor_bridge { "IntPtr.Zero" } else { "0" };
+    out.push_str(&format!(
+        "                if (bridgeHandle == {bridge_zero}) throw GetLastError();\n"
+    ));
     out.push_str("                try\n                {\n");
 
     let cs_native_name = to_csharp_name(&func.name);

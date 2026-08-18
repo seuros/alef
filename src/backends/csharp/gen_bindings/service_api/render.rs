@@ -110,9 +110,7 @@ fn call_marshalling(params: &[ParamDef], api: &ApiSurface, indent: &str) -> Call
                 result.arg_lines.push_str(&format!(",\n{indent}(int){name}"));
             }
             TypeRef::Named(type_name) if is_opaque(api, type_name) => {
-                result
-                    .arg_lines
-                    .push_str(&format!(",\n{indent}unchecked((ulong){name}.Handle.ToInt64())"));
+                result.arg_lines.push_str(&format!(",\n{indent}{name}.Handle"));
             }
             TypeRef::Named(type_name) => push_named_marshalling(&mut result, param, &name, type_name, indent),
             TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => {
@@ -124,14 +122,19 @@ fn call_marshalling(params: &[ParamDef], api: &ApiSurface, indent: &str) -> Call
     result
 }
 
+/// Marshals a `Named` record param through `{Type}FromJson` into the scalar `AlefHandle`.
+///
+/// The local is `ulong` because `{Type}FromJson` is declared `ulong` (`extern_ptr_from_json.jinja`)
+/// and `native_type` declares every non-enum `Named` service param `ulong`. Declaring the local
+/// `IntPtr` — as this did before — made the assignment, the `IntPtr.Zero` guard and the
+/// `.ToInt64()` narrowing all disagree with the signature they feed, which is the CS0034
+/// `ulong`/`nint` break. ~keep
 fn push_named_marshalling(result: &mut CallMarshalling, param: &ParamDef, name: &str, type_name: &str, indent: &str) {
     let handle = format!("{name}Handle");
     let json = format!("{name}Json");
     let from_json = format!("{}FromJson", csharp_type_name(type_name));
     let free = format!("{}Free", csharp_type_name(type_name));
-    result
-        .declarations
-        .push_str(&format!("        IntPtr {handle} = IntPtr.Zero;\n"));
+    result.declarations.push_str(&format!("        ulong {handle} = 0;\n"));
     let setup_indent = begin_named_setup(result, param, name);
     result.setup.push_str(&format!(
         "{setup_indent}var {json} = FfiJsonExtensions.ToFfiJson({name});\n"
@@ -139,9 +142,7 @@ fn push_named_marshalling(result: &mut CallMarshalling, param: &ParamDef, name: 
     result.setup.push_str(&format!(
         "{setup_indent}{handle} = NativeMethods.{from_json}({json});\n"
     ));
-    result
-        .setup
-        .push_str(&format!("{setup_indent}if ({handle} == IntPtr.Zero) {{\n"));
+    result.setup.push_str(&format!("{setup_indent}if ({handle} == 0) {{\n"));
     result
         .setup
         .push_str(&format!("{setup_indent}    throw ResolveLastError();\n"));
@@ -150,11 +151,9 @@ fn push_named_marshalling(result: &mut CallMarshalling, param: &ParamDef, name: 
         result.setup.push_str("            }\n");
     }
     result.teardown.push_str(&format!(
-        "            if ({handle} != IntPtr.Zero) NativeMethods.{free}({handle});\n"
+        "            if ({handle} != 0) NativeMethods.{free}({handle});\n"
     ));
-    result
-        .arg_lines
-        .push_str(&format!(",\n{indent}unchecked((ulong){handle}.ToInt64())"));
+    result.arg_lines.push_str(&format!(",\n{indent}{handle}"));
 }
 
 fn begin_named_setup<'a>(result: &mut CallMarshalling, param: &ParamDef, name: &str) -> &'a str {

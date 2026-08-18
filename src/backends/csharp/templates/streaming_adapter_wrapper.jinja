@@ -1,16 +1,18 @@
     public static async IAsyncEnumerable<{{ item_type }}> {{ method_name }}({{ params_decl }})
     {
 {{ setup_code }}        var iterHandle = NativeMethods.{{ start_method }}({{ native_args }});
-        if (iterHandle == IntPtr.Zero) throw GetLastError();
+        if (iterHandle == 0) throw GetLastError();
         try
         {
             while (true)
             {
-                var itemPtr = NativeMethods.{{ next_method }}(iterHandle);
-                if (itemPtr == IntPtr.Zero) break;
+                var itemHandle = NativeMethods.{{ next_method }}(iterHandle);
+                if (itemHandle == 0) break;
                 try
                 {
-                    var json = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(itemPtr);
+                    var jsonPtr = NativeMethods.{{ item_to_json }}(itemHandle);
+                    var json = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(jsonPtr);
+                    NativeMethods.FreeString(jsonPtr);
                     if (!string.IsNullOrEmpty(json))
                     {
                         var item = JsonSerializer.Deserialize<{{ item_type }}>(json, JsonOptions)!;
@@ -19,7 +21,7 @@
                 }
                 finally
                 {
-                    NativeMethods.FreeString(itemPtr);
+                    NativeMethods.{{ item_free }}(itemHandle);
                 }
             }
         }

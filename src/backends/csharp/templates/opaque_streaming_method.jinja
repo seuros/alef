@@ -15,19 +15,19 @@
     {
         var {{ request_param }}Json = JsonSerializer.Serialize({{ request_param }}, JsonSerializationOptions);
         var {{ request_param }}Handle = NativeMethods.{{ request_from_json }}({{ request_param }}Json);
-        if ({{ request_param }}Handle == IntPtr.Zero)
+        if ({{ request_param }}Handle == 0)
         {
             var ec = NativeMethods.LastErrorCode();
             var ctxPtr = NativeMethods.LastErrorContext();
             var msg = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(ctxPtr) ?? "{{ request_from_json }} failed";
             throw new {{ exception_name }}(ec, msg);
         }
-        IntPtr streamHandle;
+        ulong streamHandle;
         using (var handleLease = BorrowHandle())
         {
             streamHandle = NativeMethods.{{ start_native }}(handleLease.Handle, {{ request_param }}Handle);
         }
-        if (streamHandle == IntPtr.Zero)
+        if (streamHandle == 0)
         {
             NativeMethods.{{ request_free }}({{ request_param }}Handle);
             var ec = NativeMethods.LastErrorCode();
@@ -40,8 +40,8 @@
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var chunkPtr = NativeMethods.{{ next_native }}(streamHandle);
-                if (chunkPtr == IntPtr.Zero)
+                var chunkHandle = NativeMethods.{{ next_native }}(streamHandle);
+                if (chunkHandle == 0)
                 {
                     var ec = NativeMethods.LastErrorCode();
                     if (ec != 0)
@@ -52,10 +52,10 @@
                     }
                     yield break;
                 }
-                var jsonPtr = NativeMethods.{{ item_to_json }}(chunkPtr);
+                var jsonPtr = NativeMethods.{{ item_to_json }}(chunkHandle);
                 var json = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(jsonPtr);
                 NativeMethods.FreeString(jsonPtr);
-                NativeMethods.{{ item_free }}(chunkPtr);
+                NativeMethods.{{ item_free }}(chunkHandle);
                 var chunk = JsonSerializer.Deserialize<{{ item_type }}>(json ?? "null", JsonOptions)!;
                 yield return chunk;
                 await Task.Yield();

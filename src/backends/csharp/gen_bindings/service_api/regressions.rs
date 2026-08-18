@@ -66,10 +66,19 @@ fn all_service_calls_marshal_named_records_through_owned_ffi_handles() {
         3,
         "{output}"
     );
+    assert_eq!(output.matches("ulong configHandle = 0;").count(), 3, "{output}");
+    assert_eq!(output.matches("if (configHandle == 0) {").count(), 3, "{output}");
     assert_eq!(
-        output.matches("unchecked((ulong)configHandle.ToInt64())").count(),
+        output
+            .matches("if (configHandle != 0) NativeMethods.ServerConfigFree(configHandle);")
+            .count(),
         3,
         "{output}"
+    );
+    assert!(
+        !output.contains("IntPtr configHandle") && !output.contains("configHandle.ToInt64()"),
+        "a handle local fed to a `ulong` P/Invoke must never be declared or narrowed as a \
+         pointer:\n{output}"
     );
     assert_eq!(
         output.matches("NativeMethods.ServerConfigFree(configHandle)").count(),
@@ -101,6 +110,12 @@ fn named_service_parameters_use_canonical_scalar_pinvoke_handles() {
 
     assert!(output.contains("extern ulong demo_app_config("), "{output}");
     assert_eq!(output.matches("ulong config").count(), 3, "{output}");
+
+    // The declaration side alone is vacuous: it passed while the caller in
+    // `all_service_calls_marshal_named_records_through_owned_ffi_handles` narrowed an `IntPtr`
+    // local into these very parameters. Pin the pair together so the two sides cannot drift. ~keep
+    let service = gen_service_cs(&api, &api.services[0], "Demo", "demo");
+    assert!(service.contains("ulong configHandle = 0;"), "{service}");
 }
 
 #[test]

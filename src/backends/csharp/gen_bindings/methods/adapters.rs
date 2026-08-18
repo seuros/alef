@@ -87,7 +87,10 @@ pub(super) fn gen_adapter_wrapper(
     let cs_item_type = csharp_type_name(item_type);
     let owner_cs_name = csharp_type_name(owner_type);
 
-    let mut param_parts = vec!["IntPtr engine".to_string()];
+    // The `_start` P/Invoke takes the owner as the scalar `AlefHandle` (`ulong`) — see the
+    // `emit_streaming_pinvoke` calls in `gen_bindings::functions` — so the raw-handle overload
+    // must declare `ulong`, not a pointer. ~keep
+    let mut param_parts = vec!["ulong engine".to_string()];
     for param in &adapter.params {
         let param_name = param.name.to_lower_camel_case();
         let param_type = if param.ty.contains("::") {
@@ -138,6 +141,12 @@ pub(super) fn gen_adapter_wrapper(
     let start_method = format!("{owner_cs_name}{adapter_cs_name}Start");
     let next_method = format!("{owner_cs_name}{adapter_cs_name}Next");
     let free_method = format!("{owner_cs_name}{adapter_cs_name}Free");
+    // `_next` yields a boxed item registered as an `AlefHandle`, not a `char*`: decode it through
+    // `{Item}ToJson` / `{Item}Free` exactly as `types::opaque::gen_opaque_streaming_method` does.
+    // Marshalling it as a string pointer both mis-reads the ABI and forces an `IntPtr` sentinel on
+    // a `ulong` operand. ~keep
+    let item_to_json = format!("{cs_item_type}ToJson");
+    let item_free = format!("{cs_item_type}Free");
 
     render(
         "streaming_adapter_wrapper.jinja",
@@ -150,6 +159,8 @@ pub(super) fn gen_adapter_wrapper(
             native_args => native_args_str,
             next_method,
             free_method,
+            item_to_json,
+            item_free,
             cleanup_code,
         },
     )
