@@ -234,7 +234,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let fixture_hash = cache::hash_directory(fixtures_dir).unwrap_or_default();
                         let api = pipeline::extract(e2e_crate, config_path, false)?;
                         let ir_json = serde_json::to_string(&api)?;
-                        let cache_key = if registry { "e2e-registry" } else { "e2e" };
+                        let cache_key = e2e_stage_cache_key(registry, lang.as_deref());
                         let effective_e2e_config;
                         let e2e_ref = if registry {
                             let mut cloned = this_e2e_config.clone();
@@ -244,9 +244,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         } else {
                             this_e2e_config
                         };
-                        let stage_hash = cache::compute_stage_hash(&ir_json, cache_key, &config_toml, &fixture_hash);
-                        if cache::is_stage_cached(&e2e_crate.name, cache_key, &stage_hash) {
-                            let cached_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                        let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
+                        if cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
+                            let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             grand_count += cached_paths.len();
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
                                 &cached_paths,
@@ -319,10 +319,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             }
                             e2e_stage_error.get_or_insert(error);
                         } else {
-                            let previous_paths = cache::read_stage_paths(&e2e_crate.name, cache_key);
+                            let previous_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots, &[])?;
 
-                            cache::write_stage_hash(&e2e_crate.name, cache_key, &stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
                         }
                         grand_count += count;
                     }
@@ -643,6 +643,29 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
     }
 }
 
+/// Stage-cache key for `alef e2e generate`, fed to `cache::compute_stage_hash` as the stage name
+/// and so encoded into the stage hash as well as the manifest filename.
+///
+/// The `--lang` selection is part of the key because a scoped run only writes the languages it was
+/// asked for. Recorded under an unscoped key, that partial output is a complete stage as far as
+/// the next run can tell: an unscoped `alef e2e generate` reads the hit and regenerates nothing
+/// for any other language, leaving them stale with no diagnostic. `all` stands for "no selector
+/// given", the same spelling `alef test-apps generate` uses, and the key stays selector-shaped
+/// even when unscoped rather than collapsing to a bare `e2e` -- an entry keyed `e2e` carries no
+/// evidence of which scope wrote it, and that is precisely the ambiguity being removed.
+///
+/// Consequence, and the same one `test-apps-{selector}` already has: `all_commands`'s e2e stage
+/// still uses the bare `e2e` key (correctly -- it is unconditionally unscoped, passing `None` to
+/// `generate_e2e`), so `alef all` and `alef e2e generate` no longer warm each other's stage cache
+/// and each pays one regeneration after the other ran. ~keep
+fn e2e_stage_cache_key(registry: bool, lang: Option<&[String]>) -> String {
+    let stage = if registry { "e2e-registry" } else { "e2e" };
+    let selector = lang
+        .map(|languages| languages.join("-"))
+        .unwrap_or_else(|| "all".to_string());
+    format!("{stage}-{selector}")
+}
+
 fn write_snippet_migration_report(
     entries: &[crate::e2e::snippets::migration::MigrationEntry],
     json: bool,
@@ -661,4 +684,62 @@ fn write_snippet_migration_report(
         crate::bin_cli::output::line(format_args!("{status}\t{}", entry.path.display()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The outcome under test is the cache *decision*, taken through `cache::is_stage_cached` --
+    /// the same predicate the command branches on -- rather than a comparison of key strings. Two
+    /// keys can differ and still collide in the stage cache (they are also the stage-hash input
+    /// and the manifest filename), and it is the collision, not the string, that skips a full
+    /// regeneration; an assertion on the strings alone would pass while the defect survived. ~keep
+    #[test]
+    fn scoped_e2e_stage_cache_does_not_satisfy_a_later_full_run() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
+
+        let ir_json = r#"{"crate_name":"sample_crate"}"#;
+        let config_toml = "[e2e]\nlanguages = [\"python\", \"node\"]\n";
+        let scoped_langs = vec!["python".to_string()];
+        let scoped_key = e2e_stage_cache_key(false, Some(&scoped_langs));
+        let full_key = e2e_stage_cache_key(false, None);
+
+        let python_output = tmp.path().join("e2e/python/test_smoke.py");
+        std::fs::create_dir_all(python_output.parent().expect("output parent")).expect("create output dir");
+        std::fs::write(&python_output, "# generated\n").expect("write the scoped run's only output");
+        let scoped_hash = cache::compute_stage_hash(ir_json, &scoped_key, config_toml, &[]);
+        cache::write_stage_hash("sample-crate", &scoped_key, &scoped_hash, &[python_output])
+            .expect("record the scoped run");
+
+        assert!(
+            cache::is_stage_cached("sample-crate", &scoped_key, &scoped_hash),
+            "a repeat of the same scoped run must still hit its own cache"
+        );
+        let full_hash = cache::compute_stage_hash(ir_json, &full_key, config_toml, &[]);
+        assert!(
+            !cache::is_stage_cached("sample-crate", &full_key, &full_hash),
+            "an unscoped run must regenerate rather than inherit a --lang-scoped run's partial output"
+        );
+        assert!(
+            cache::read_stage_paths("sample-crate", &full_key).is_empty(),
+            "no unscoped stage has been generated, so the unscoped manifest must not exist"
+        );
+    }
+
+    #[test]
+    fn e2e_stage_cache_key_separates_registry_mode_and_language_selections() {
+        let python = vec!["python".to_string()];
+        let node = vec!["node".to_string()];
+
+        assert_eq!(e2e_stage_cache_key(false, None), "e2e-all");
+        assert_eq!(e2e_stage_cache_key(true, None), "e2e-registry-all");
+        assert_eq!(e2e_stage_cache_key(false, Some(&python)), "e2e-python");
+        assert_eq!(e2e_stage_cache_key(true, Some(&python)), "e2e-registry-python");
+        assert_ne!(
+            e2e_stage_cache_key(false, Some(&python)),
+            e2e_stage_cache_key(false, Some(&node))
+        );
+    }
 }

@@ -397,20 +397,59 @@ fn ownership_manifest_path(base_dir: &Path) -> PathBuf {
     base_dir.join(OWNERSHIP_MANIFEST)
 }
 
-/// Read the committed record, treating an unreadable or unparseable file as
-/// empty.
+/// The outcome of reading the committed ownership record, keeping "there is no record yet" apart
+/// from "there is a record and we could not read it".
 ///
-/// Degrading to "alef owns nothing" is the safe direction on both sides: the
-/// guard then refuses rather than clobbers, and nothing is silently claimed on
-/// the strength of a file we could not actually parse. A hard error here would
-/// instead take down every generate in a repo where someone hand-edited the
-/// manifest into invalid TOML. ~keep
+/// The two are indistinguishable to a caller handed only a `Vec`, yet they license opposite
+/// actions: the first is proof that alef has recorded no ownership, the second is proof of
+/// nothing at all. Reading and *rewriting* the record therefore diverge -- see
+/// [`read_committed_owned_paths`] and [`record_scaffold_owned_paths`] for which way each goes and
+/// why. ~keep
+enum OwnedPathsRecord {
+    /// No manifest on disk: alef has never recorded ownership under this `base_dir`.
+    Absent,
+    /// Parsed cleanly; carries every path currently recorded.
+    Present(Vec<String>),
+    /// A manifest exists but could not be read or parsed. Carries the reason, for the operator.
+    Unreadable(String),
+}
+
+fn read_owned_paths_record(base_dir: &Path) -> OwnedPathsRecord {
+    match fs::read_to_string(ownership_manifest_path(base_dir)) {
+        Ok(content) => match toml::from_str::<OwnershipManifest>(&content) {
+            Ok(manifest) => OwnedPathsRecord::Present(manifest.owned_paths),
+            Err(error) => OwnedPathsRecord::Unreadable(error.to_string()),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => OwnedPathsRecord::Absent,
+        Err(error) => OwnedPathsRecord::Unreadable(error.to_string()),
+    }
+}
+
+/// Read the committed record for *querying* ownership, treating an unreadable or unparseable file
+/// as empty.
+///
+/// Degrading to "alef owns nothing" is the safe direction for a query: the write-time guard then
+/// refuses rather than clobbers, and nothing is silently claimed on the strength of a file we
+/// could not actually parse. A hard error here would instead take down every generate in a repo
+/// where someone hand-edited the manifest into invalid TOML.
+///
+/// This is emphatically *not* the safe direction for a caller that rewrites the record from what
+/// it read back -- [`record_scaffold_owned_paths`] must refuse instead, because there the same
+/// empty `Vec` would erase every recorded path. ~keep
 fn read_committed_owned_paths(base_dir: &Path) -> Vec<String> {
-    fs::read_to_string(ownership_manifest_path(base_dir))
-        .ok()
-        .and_then(|content| toml::from_str::<OwnershipManifest>(&content).ok())
-        .map(|manifest| manifest.owned_paths)
-        .unwrap_or_default()
+    match read_owned_paths_record(base_dir) {
+        OwnedPathsRecord::Present(paths) => paths,
+        OwnedPathsRecord::Absent => Vec::new(),
+        OwnedPathsRecord::Unreadable(reason) => {
+            tracing::warn!(
+                manifest = %OWNERSHIP_MANIFEST,
+                reason = %reason,
+                "the alef ownership record could not be read; treating every path in it as unowned, \
+                 so writes to unmarkable files will be refused until it is repaired"
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
@@ -492,7 +531,26 @@ pub fn record_scaffold_owned_paths(base_dir: &Path, paths: &[&Path]) -> anyhow::
         return Ok(());
     }
     fs::create_dir_all(base_dir)?;
-    let mut recorded: std::collections::BTreeSet<String> = read_committed_owned_paths(base_dir).into_iter().collect();
+    let record = read_owned_paths_record(base_dir);
+    let is_new_manifest = matches!(record, OwnedPathsRecord::Absent);
+    let mut recorded: std::collections::BTreeSet<String> = match record {
+        OwnedPathsRecord::Present(paths) => paths.into_iter().collect(),
+        OwnedPathsRecord::Absent => std::collections::BTreeSet::new(),
+        // Refusing is the only non-destructive answer available here. The write below replaces the
+        // manifest whole, so continuing from an unparsed read would persist this batch alone and
+        // silently un-own every path already in the file -- and that record is the only thing
+        // standing between `--clean`/the orphan scan and hand-written unmarkable scaffold files
+        // (see `is_scaffold_owned_path`). Unlike the query direction there is no "assume nothing"
+        // that preserves anything: unknown ownership survives only if nobody writes. So this
+        // fails loudly and names the file, which is a state exactly one hand-edit can produce and
+        // one `git checkout` can undo. ~keep
+        OwnedPathsRecord::Unreadable(reason) => anyhow::bail!(
+            "refusing to update the alef ownership record at {}: it exists but could not be read \
+             ({reason}). Repair or restore it (`git checkout -- {OWNERSHIP_MANIFEST}`) and re-run \
+             -- rewriting it from a state alef could not read would drop every path already recorded.",
+            ownership_manifest_path(base_dir).display()
+        ),
+    };
     let mut added = false;
     for path in paths {
         added |= recorded.insert(scaffold_owned_path_key(base_dir, path));
@@ -500,7 +558,6 @@ pub fn record_scaffold_owned_paths(base_dir: &Path, paths: &[&Path]) -> anyhow::
     if !added {
         return Ok(());
     }
-    let is_new_manifest = !ownership_manifest_path(base_dir).exists();
     let ordered: Vec<String> = recorded.into_iter().collect();
     fs::write(ownership_manifest_path(base_dir), render_ownership_manifest(&ordered))?;
     if is_new_manifest {
@@ -962,16 +1019,39 @@ fn write_manifest(manifest_path: &Path, output_paths: &[PathBuf]) -> anyhow::Res
     Ok(())
 }
 
-/// Check that all files listed in a manifest exist on disk.
-/// Returns true if the manifest is missing (backwards compat with old caches)
-/// or if all listed files exist. Returns false if any file is missing.
+/// Check that all files listed in a manifest exist on disk. False if any listed file is missing,
+/// if the manifest is empty, or if the manifest could not be read at all.
+///
+/// Every failure to read is a cache **miss**, never a hit. A manifest is absent for three
+/// different reasons -- the stage has never run, the cache predates the manifest format, or the
+/// previous run died between `fs::write`ing the hash and writing the manifest ([`write_lang_hash`]
+/// and [`write_stage_hash`] are two separate writes, so an interrupt leaves exactly a matching
+/// hash with no manifest) -- and only the read itself can no longer tell them apart. The single
+/// caller spends this answer on "may I skip regenerating?", where an unknown costs one
+/// regeneration, while a wrong `true` skips the write entirely and leaves the tree permanently
+/// short of files the cache insists are present. An empty-but-readable manifest already answered
+/// `false`; an unreadable one is strictly less evidence and must not answer better. ~keep
 fn outputs_exist(manifest_path: &Path) -> bool {
     match fs::read_to_string(manifest_path) {
         Ok(content) => {
             let mut paths = content.lines().filter(|line| !line.is_empty()).peekable();
             paths.peek().is_some() && paths.all(|line| Path::new(line).exists())
         }
-        Err(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(
+                manifest = %manifest_path.display(),
+                "no output manifest recorded; treating the cache entry as a miss"
+            );
+            false
+        }
+        Err(error) => {
+            tracing::warn!(
+                manifest = %manifest_path.display(),
+                %error,
+                "output manifest exists but could not be read; treating the cache entry as a miss"
+            );
+            false
+        }
     }
 }
 
@@ -1180,6 +1260,41 @@ mod tests {
         std::fs::write(&manifest, "").expect("write empty manifest");
 
         assert!(!outputs_exist(&manifest));
+    }
+
+    /// A manifest alef cannot read is no evidence that the outputs it lists are on disk, in either
+    /// of the two ways it can fail to read: absent (what an interrupted `write_lang_hash` leaves,
+    /// since the hash and the manifest are two separate writes) or present-but-unreadable.
+    ///
+    /// Asserted on `is_lang_cached` -- the decision a caller acts on by skipping generation
+    /// entirely -- and not on a diagnostic. The defect this pins was a `true` returned while every
+    /// message about the cache was already saying the right thing, so a test that watched the
+    /// messages would have passed throughout. ~keep
+    #[test]
+    fn unreadable_output_manifest_is_a_cache_miss() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
+
+        let generated = tmp.path().join("bindings.py");
+        std::fs::write(&generated, "# generated\n").expect("write generated output");
+        write_lang_hash("sample-crate", "python", "hash-1", &[generated]).expect("write hash and manifest");
+        assert!(
+            is_lang_cached("sample-crate", "python", "hash-1"),
+            "a matching hash whose manifested outputs are all present must be a hit"
+        );
+
+        let manifest = hashes_dir("sample-crate").join("python.manifest");
+        std::fs::remove_file(&manifest).expect("remove the manifest, leaving the hash behind");
+        assert!(
+            !is_lang_cached("sample-crate", "python", "hash-1"),
+            "a hash with no manifest at all must not validate a cache hit"
+        );
+
+        std::fs::create_dir_all(&manifest).expect("put something unreadable where the manifest belongs");
+        assert!(
+            !is_lang_cached("sample-crate", "python", "hash-1"),
+            "a manifest that exists but cannot be read must not validate a cache hit either"
+        );
     }
 
     /// `write_scaffold_manifest` must round-trip through `read_scaffold_manifest`,
@@ -1713,6 +1828,40 @@ mod tests {
 
         assert!(!base.join(OWNERSHIP_MANIFEST).exists(), "no committed record yet");
         assert!(is_scaffold_owned_path(base, &base.join(relative)));
+    }
+
+    /// One bad hand-edit must cost the edit, not the record. `record_scaffold_owned_paths`
+    /// rewrites the manifest whole from what it read back, so before this was fixed an
+    /// unparseable line made the read return an empty `Vec` and the write persist only the current
+    /// batch -- silently un-owning every path recorded before it, in a committed file.
+    ///
+    /// The assertion is on the bytes on disk after the call, because that is what is destroyed.
+    /// A test on the error text alone would pass just as well against code that emitted the
+    /// message and then truncated the file anyway. ~keep
+    #[test]
+    fn malformed_ownership_record_refuses_rather_than_dropping_recorded_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        record_scaffold_owned_path(base, &base.join("packages/java/pom.xml")).expect("seed the record");
+
+        let manifest_path = base.join(OWNERSHIP_MANIFEST);
+        let seeded = std::fs::read_to_string(&manifest_path).expect("read the seeded record");
+        let corrupted = format!("{seeded}this line is not toml\n");
+        std::fs::write(&manifest_path, &corrupted).expect("hand-edit the record into invalid TOML");
+
+        let newly_scaffolded = base.join("packages/node/package.json");
+        let error = record_scaffold_owned_paths(base, &[newly_scaffolded.as_path()])
+            .expect_err("recording against an unreadable record must fail rather than rewrite it");
+
+        assert_eq!(
+            std::fs::read_to_string(&manifest_path).expect("read the record after the refusal"),
+            corrupted,
+            "the refused run must leave the record byte-identical, keeping every recorded path"
+        );
+        assert!(
+            error.to_string().contains(OWNERSHIP_MANIFEST),
+            "the failure must name the file the operator has to repair, got: {error}"
+        );
     }
 
     /// An unparseable record must read as "alef owns nothing" rather than
