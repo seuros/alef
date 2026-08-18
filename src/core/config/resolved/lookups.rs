@@ -314,12 +314,21 @@ impl ResolvedCrateConfig {
             extra_lint_paths: &[],
             project_file,
         };
-        let default = build_defaults::default_build_config(lang, &output_dir, &self.name, &ctx);
-        if let Some(explicit) = self.build_commands.get(&lang_str) {
-            default.merge_overlay(explicit)
-        } else {
-            default
+        let mut default = build_defaults::default_build_config(lang, &output_dir, &self.name, &ctx);
+        let Some(explicit) = self.build_commands.get(&lang_str) else {
+            return default;
+        };
+        // A built-in `dependency_precondition` describes what alef's *own* default command needs
+        // (`maturin develop` needs an interpreter environment, `mix compile` needs fetched deps).
+        // Once the user supplies their own build command it no longer describes anything alef
+        // knows, and keeping it would skip builds that work — `maturin build` needs no virtualenv
+        // at all. Drop it unless the override declares its own. ~keep
+        if (explicit.build.is_some() || explicit.build_release.is_some()) && explicit.dependency_precondition.is_none()
+        {
+            default.dependency_precondition = None;
+            default.dependency_remediation = None;
         }
+        default.merge_overlay(explicit)
     }
 
     /// Get the features to use for a specific language's binding crate.

@@ -7,6 +7,7 @@
 
 use crate::snippets::error::Result;
 use crate::snippets::types::{RunSummary, Snippet, SnippetStatus, ValidationResult};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub fn print_summary(summary: &RunSummary, show_code: bool) {
@@ -91,7 +92,40 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
         summary.errors,
         summary.unavailable
     );
+    if let Some(line) = unresolved_dependency_rollup(summary) {
+        println!("{line}");
+    }
     println!();
+}
+
+/// One line naming the languages whose results were reclassified as `unresolved_dependency`, or
+/// `None` when there were none.
+///
+/// The per-row reclassification landed in `ValidationResult::unresolved_dependency`, but the
+/// report still presented those rows one at a time — and when a language's package was never
+/// built, *every* snippet in it reclassifies, so the reader sees hundreds of rows with a single
+/// upstream cause and no statement of that cause anywhere. Rolling them up per language is what
+/// turns "376 typescript results" into "the typescript package was not built": the count is
+/// evidence of one environmental fact, not of 376 problems. ~keep
+fn unresolved_dependency_rollup(summary: &RunSummary) -> Option<String> {
+    if summary.unresolved_dependency == 0 {
+        return None;
+    }
+    let mut per_language: BTreeMap<String, usize> = BTreeMap::new();
+    for result in summary.results.iter().filter(|result| result.unresolved_dependency) {
+        *per_language.entry(display_language(&result.snippet)).or_default() += 1;
+    }
+    let breakdown = per_language
+        .iter()
+        .map(|(language, count)| format!("{language} {count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(format!(
+        "Unresolved dependencies: {} of {} ({breakdown}) -- these languages' packages were not built, so their \
+         snippets were never really validated. Run `alef build` before validating; the counts above measure the \
+         environment, not the snippets.",
+        summary.unresolved_dependency, summary.total
+    ))
 }
 
 /// The `  Reason: ...` line for a row whose effective level differs from what was requested, or
@@ -267,5 +301,41 @@ mod tests {
         let result = sample_result(SnippetStatus::Pass, None, None);
 
         assert_eq!(reason_line(&result), None);
+    }
+
+    fn unresolved_in(language: Language) -> ValidationResult {
+        let mut result = sample_result(SnippetStatus::Unavailable, None, Some("cannot find module"));
+        result.snippet.language = language;
+        result.unresolved_dependency = true;
+        result
+    }
+
+    /// The reader's takeaway has to be "two packages were not built", not "446 snippets are
+    /// broken" — so the rollup names the languages and says the counts describe the environment.
+    /// ~keep
+    #[test]
+    fn unresolved_dependency_rollup_names_each_language_and_its_count() {
+        let summary = RunSummary::from_results(vec![
+            unresolved_in(Language::TypeScript),
+            unresolved_in(Language::TypeScript),
+            unresolved_in(Language::Python),
+            sample_result(SnippetStatus::Fail, None, Some("syntax error")),
+        ]);
+
+        let line = unresolved_dependency_rollup(&summary).expect("rollup for reclassified results");
+
+        assert!(line.contains("Unresolved dependencies: 3 of 4"), "{line}");
+        assert!(line.contains("python 1"), "{line}");
+        assert!(line.contains("typescript 2"), "{line}");
+        assert!(line.contains("alef build"), "{line}");
+    }
+
+    /// Negative control: a clean run must not grow an extra line implying anything was
+    /// unavailable. ~keep
+    #[test]
+    fn unresolved_dependency_rollup_is_absent_when_nothing_was_reclassified() {
+        let summary = RunSummary::from_results(vec![sample_result(SnippetStatus::Pass, None, None)]);
+
+        assert_eq!(unresolved_dependency_rollup(&summary), None);
     }
 }

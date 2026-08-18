@@ -310,25 +310,32 @@ pub(crate) fn run_command_captured(cmd: &str) -> anyhow::Result<(String, String)
     Ok((stdout, stderr))
 }
 
+/// Run a precondition command and report only whether it succeeded.
+///
+/// Says nothing about what a failure means — a caller that treats a failing precondition as
+/// something other than "skip this language" (e.g. `build`'s dependency preconditions, which are
+/// actionable and fail the run) needs the verdict without the skip warning attached to it. ~keep
+pub(crate) fn precondition_passes(label: &str, cmd: &str) -> bool {
+    info!("Checking precondition for {label}: {cmd}");
+    let status = std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    matches!(status, Ok(s) if s.success())
+}
+
 /// Check a precondition command. Returns `true` if the command succeeds (or
 /// is absent), `false` if it fails (language should be skipped).
 pub(crate) fn check_precondition(lang: Language, precondition: Option<&str>) -> bool {
     let Some(cmd) = precondition else {
         return true;
     };
-    info!("Checking precondition for {lang}: {cmd}");
-    let status = std::process::Command::new("sh")
-        .args(["-c", cmd])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => true,
-        _ => {
-            warn!("Skipping {lang}: precondition failed ({cmd})");
-            false
-        }
+    if precondition_passes(&lang.to_string(), cmd) {
+        return true;
     }
+    warn!("Skipping {lang}: precondition failed ({cmd})");
+    false
 }
 
 /// Like [`check_precondition`] but keyed by a free-form label (e.g. a registry
@@ -338,19 +345,11 @@ pub(crate) fn check_precondition_named(label: &str, precondition: Option<&str>) 
     let Some(cmd) = precondition else {
         return true;
     };
-    info!("Checking precondition for {label}: {cmd}");
-    let status = std::process::Command::new("sh")
-        .args(["-c", cmd])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => true,
-        _ => {
-            warn!("Skipping {label}: precondition failed ({cmd})");
-            false
-        }
+    if precondition_passes(label, cmd) {
+        return true;
     }
+    warn!("Skipping {label}: precondition failed ({cmd})");
+    false
 }
 
 /// Run before-hook commands. Returns `Ok(())` on success, or an error if any

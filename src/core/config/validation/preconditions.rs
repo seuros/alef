@@ -77,6 +77,28 @@ pub(super) fn build_main_fields(c: &BuildCommandConfig) -> Vec<&'static str> {
     v
 }
 
+/// Reject a `dependency_precondition` that arrives without the command that satisfies it.
+///
+/// An unmet dependency precondition stops the build for that language, and the only thing that
+/// makes that better than the compile failure it replaces is being able to print what to run. A
+/// check with no remediation would reintroduce exactly the dead-end message this field exists to
+/// remove, so the pair is enforced at load time rather than discovered mid-build. ~keep
+pub(super) fn validate_build_dependency_preconditions(
+    table: &HashMap<String, BuildCommandConfig>,
+) -> Result<(), AlefError> {
+    for (lang, cfg) in table {
+        if cfg.dependency_precondition.is_some() && cfg.dependency_remediation.is_none() {
+            return Err(AlefError::Config(format!(
+                "[build_commands.{lang}] sets `dependency_precondition` without \
+                 `dependency_remediation`. A build blocked on unfetched dependencies is only \
+                 actionable if alef can print the command that fixes it -- add \
+                 `dependency_remediation = \"<command>\"`."
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn setup_main_fields(c: &SetupConfig) -> Vec<&'static str> {
     if c.install.is_some() {
         vec!["install"]

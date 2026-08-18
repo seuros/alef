@@ -245,6 +245,20 @@
           ],
           "description": "Command(s) to build in release mode."
         },
+        "dependency_precondition": {
+          "description": "Shell command that must exit 0 for the build to be attempted, checking that this project's\ndependencies were fetched. Where `precondition` asks whether the machine can build this\nlanguage at all, this asks whether the checkout is prepared — an unmet dependency\nprecondition is fixable here and now, so it fails the run instead of being skipped\nsilently. Set `dependency_remediation` alongside it with the command that fixes it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependency_remediation": {
+          "description": "The command a user runs to satisfy `dependency_precondition`, e.g.\n`cd packages/elixir && mix deps.get`. Required whenever `dependency_precondition` is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "precondition": {
           "description": "Shell command that must exit 0 for build to run; skip with warning on failure.",
           "type": [

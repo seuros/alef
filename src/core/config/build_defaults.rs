@@ -2,6 +2,38 @@ use super::extras::Language;
 use super::output::{BuildCommandConfig, StringOrVec};
 use super::tools::{LangContext, require_tool, wrap_command as wrap};
 
+/// `maturin develop`'s own environment resolution, minus its parent-directory walk: it needs
+/// `VIRTUAL_ENV`, `CONDA_PREFIX`, or a `.venv` directory, and without one it exits in tens of
+/// milliseconds — long before any compilation could have started. A build failure that fast is
+/// never a defect in generated code, so the check that would have caught it belongs here rather
+/// than in a reader's head. ~keep
+const PYTHON_ENVIRONMENT_CHECK: &str = r#"[ -n "$VIRTUAL_ENV" ] || [ -n "$CONDA_PREFIX" ] || [ -d .venv ]"#;
+
+/// The one command that creates the interpreter environment `maturin develop` installs into,
+/// phrased for whichever package manager `[tools] python_package_manager` selected.
+fn python_environment_remediation(package_manager: &str) -> String {
+    match package_manager {
+        "poetry" => "poetry install".to_string(),
+        "uv" => "uv venv".to_string(),
+        _ => "python3 -m venv .venv".to_string(),
+    }
+}
+
+/// `mix compile` refuses to run against unfetched dependencies ("the dependency is not available,
+/// run `mix deps.get`"), and `deps/` is what `mix deps.get` creates — untracked, so absent on
+/// every fresh checkout.
+///
+/// Gating on `mix.lock` instead was considered and rejected: alef does not scaffold a lockfile,
+/// so a check that only fires when one exists would pass on exactly the pristine checkout that
+/// motivated it and examine nothing. The residual cost is a dependency-free mix project, which
+/// would be skipped forever — but the mix.exs alef scaffolds always declares `rustler`,
+/// `rustler_precompiled`, `credo`, and `ex_doc` (see `scaffold::languages::elixir`), so that
+/// project cannot be one alef generated. A user who hand-writes one overrides
+/// `dependency_precondition`. ~keep
+fn mix_dependency_check(output_dir: &str) -> String {
+    format!("[ -d {output_dir}/deps ]")
+}
+
 /// Return the default build configuration for a language.
 ///
 /// The `output_dir` is the package directory where scaffolded files live
@@ -17,12 +49,16 @@ pub(crate) fn default_build_config(
     match lang {
         Language::Rust => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single("cargo build --workspace".to_string())),
             build_release: Some(StringOrVec::Single("cargo build --release --workspace".to_string())),
         },
         Language::Python => BuildCommandConfig {
             precondition: Some(require_tool("maturin")),
+            dependency_precondition: Some(PYTHON_ENVIRONMENT_CHECK.to_string()),
+            dependency_remediation: Some(python_environment_remediation(ctx.tools.python_pm())),
             before: None,
             build: Some(StringOrVec::Single(format!(
                 "maturin develop --manifest-path crates/{crate_name}-py/Cargo.toml"
@@ -33,6 +69,8 @@ pub(crate) fn default_build_config(
         },
         Language::Node => BuildCommandConfig {
             precondition: Some(require_tool("npm")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!(
                 "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node"
@@ -43,6 +81,8 @@ pub(crate) fn default_build_config(
         },
         Language::Wasm => BuildCommandConfig {
             precondition: Some(require_tool("wasm-pack")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!(
                 "wasm-pack build crates/{crate_name}-wasm --dev"
@@ -55,6 +95,8 @@ pub(crate) fn default_build_config(
             let cmd = format!("cd {output_dir} && go build ./...");
             BuildCommandConfig {
                 precondition: Some(require_tool("go")),
+                dependency_precondition: None,
+                dependency_remediation: None,
                 before: None,
                 build: Some(StringOrVec::Single(wrap(cmd.clone(), ctx.run_wrapper))),
                 build_release: Some(StringOrVec::Single(wrap(cmd, ctx.run_wrapper))),
@@ -62,12 +104,16 @@ pub(crate) fn default_build_config(
         }
         Language::Ruby => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-rb"))),
             build_release: Some(StringOrVec::Single(format!("cargo build --release -p {crate_name}-rb"))),
         },
         Language::Php => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-php"))),
             build_release: Some(StringOrVec::Single(format!(
@@ -76,6 +122,8 @@ pub(crate) fn default_build_config(
         },
         Language::Ffi => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-ffi"))),
             build_release: Some(StringOrVec::Single(format!(
@@ -96,6 +144,8 @@ pub(crate) fn default_build_config(
             };
             BuildCommandConfig {
                 precondition: Some(require_tool("mvn")),
+                dependency_precondition: None,
+                dependency_remediation: None,
                 before: None,
                 build: Some(StringOrVec::Single(wrap(build_path, ctx.run_wrapper))),
                 build_release: Some(StringOrVec::Single(wrap(release_path, ctx.run_wrapper))),
@@ -115,6 +165,8 @@ pub(crate) fn default_build_config(
             };
             BuildCommandConfig {
                 precondition: Some(require_tool("dotnet")),
+                dependency_precondition: None,
+                dependency_remediation: None,
                 before: None,
                 build: Some(StringOrVec::Single(wrap(build_path, ctx.run_wrapper))),
                 build_release: Some(StringOrVec::Single(wrap(release_path, ctx.run_wrapper))),
@@ -122,18 +174,24 @@ pub(crate) fn default_build_config(
         }
         Language::Elixir => BuildCommandConfig {
             precondition: Some(require_tool("mix")),
+            dependency_precondition: Some(mix_dependency_check(output_dir)),
+            dependency_remediation: Some(format!("cd {output_dir} && mix deps.get")),
             before: None,
             build: Some(StringOrVec::Single(format!("cd {output_dir} && mix compile"))),
             build_release: Some(StringOrVec::Single(format!("cd {output_dir} && mix compile"))),
         },
         Language::R => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-r"))),
             build_release: Some(StringOrVec::Single(format!("cargo build --release -p {crate_name}-r"))),
         },
         Language::Kotlin => BuildCommandConfig {
             precondition: Some(require_tool("gradle")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
                 format!("cd {output_dir} && gradle build"),
@@ -146,6 +204,8 @@ pub(crate) fn default_build_config(
         },
         Language::KotlinAndroid => BuildCommandConfig {
             precondition: Some(require_tool("gradle")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
                 format!("cd {output_dir} && gradle assembleDebug"),
@@ -158,6 +218,8 @@ pub(crate) fn default_build_config(
         },
         Language::Swift => BuildCommandConfig {
             precondition: Some(require_tool("swift")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
                 format!("swift build --package-path {output_dir}"),
@@ -170,6 +232,8 @@ pub(crate) fn default_build_config(
         },
         Language::Dart => BuildCommandConfig {
             precondition: Some(require_tool("dart")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
                 format!("cd {output_dir} && dart pub get"),
@@ -182,6 +246,8 @@ pub(crate) fn default_build_config(
         },
         Language::Zig => BuildCommandConfig {
             precondition: Some(require_tool("zig")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
                 format!("cd {output_dir} && zig build"),
@@ -194,6 +260,8 @@ pub(crate) fn default_build_config(
         },
         Language::Gleam => BuildCommandConfig {
             precondition: Some(require_tool("gleam")),
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
                 format!("cd {output_dir} && gleam build"),
@@ -206,12 +274,16 @@ pub(crate) fn default_build_config(
         },
         Language::C => BuildCommandConfig {
             precondition: None,
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: None,
             build_release: None,
         },
         Language::Jni => BuildCommandConfig {
             precondition: None,
+            dependency_precondition: None,
+            dependency_remediation: None,
             before: None,
             build: None,
             build_release: None,
@@ -273,6 +345,94 @@ mod tests {
                 .unwrap_or_else(|| panic!("{lang} should have a precondition"));
             assert!(pre.starts_with("command -v "));
         }
+    }
+
+    /// Every dependency check must arrive with the command that satisfies it — the whole reason
+    /// this outcome beats a bare failure is that it can tell the reader what to run. Enforced for
+    /// user config in `validation::preconditions`; enforced for alef's own defaults here. ~keep
+    #[test]
+    fn every_dependency_precondition_ships_with_its_remediation() {
+        for lang in all_languages() {
+            let c = cfg(lang, "packages/test", "my-lib");
+            assert_eq!(
+                c.dependency_precondition.is_some(),
+                c.dependency_remediation.is_some(),
+                "{lang} must declare a dependency check and its remediation together"
+            );
+        }
+    }
+
+    /// The deliberate short list, pinned so it stays deliberate. Every language left out builds
+    /// through a tool that resolves its own dependencies as part of the build (cargo, gradle,
+    /// maven, dotnet, go, swiftpm, zig, gleam, pub) — giving those a dependency precondition
+    /// would skip builds that work today, which is a worse defect than the one being fixed. ~keep
+    #[test]
+    fn only_tools_that_refuse_to_fetch_their_own_dependencies_declare_a_dependency_precondition() {
+        let gated: Vec<Language> = all_languages()
+            .into_iter()
+            .filter(|lang| cfg(*lang, "packages/test", "my-lib").dependency_precondition.is_some())
+            .collect();
+
+        assert_eq!(gated, vec![Language::Python, Language::Elixir]);
+    }
+
+    #[test]
+    fn python_dependency_precondition_matches_maturin_environment_resolution() {
+        let c = cfg(Language::Python, "packages/python", "my-lib");
+        let check = c.dependency_precondition.expect("python declares a dependency check");
+
+        assert!(check.contains("VIRTUAL_ENV"), "{check}");
+        assert!(check.contains("CONDA_PREFIX"), "{check}");
+        assert!(check.contains(".venv"), "{check}");
+        assert_eq!(c.dependency_remediation.as_deref(), Some("uv venv"));
+    }
+
+    #[test]
+    fn python_remediation_follows_the_configured_package_manager() {
+        assert_eq!(python_environment_remediation("uv"), "uv venv");
+        assert_eq!(python_environment_remediation("poetry"), "poetry install");
+        assert_eq!(python_environment_remediation("pip"), "python3 -m venv .venv");
+    }
+
+    #[test]
+    fn elixir_dependency_precondition_points_at_mix_deps_get() {
+        let c = cfg(Language::Elixir, "packages/elixir", "my-lib");
+
+        assert_eq!(
+            c.dependency_precondition.as_deref(),
+            Some("[ -d packages/elixir/deps ]")
+        );
+        assert_eq!(
+            c.dependency_remediation.as_deref(),
+            Some("cd packages/elixir && mix deps.get")
+        );
+    }
+
+    /// Runs the emitted shell string against a real directory tree rather than asserting on its
+    /// text: the check is a command, and a command that reads correctly but exits wrong would
+    /// either skip every elixir build forever or examine nothing at all. The first case here is
+    /// the pristine checkout that motivated the change — a scaffolded mix project with a mix.exs
+    /// and no fetched dependencies — and it must fail. ~keep
+    #[test]
+    fn mix_dependency_check_fails_on_a_pristine_checkout_and_passes_once_deps_are_fetched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let package = dir.path().to_str().expect("utf-8 path");
+        let passes = |dir: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", &mix_dependency_check(dir)])
+                .status()
+                .expect("check runs")
+                .success()
+        };
+        std::fs::write(dir.path().join("mix.exs"), "defmodule Sample.MixProject do\nend\n").expect("write mix.exs");
+
+        assert!(
+            !passes(package),
+            "a checked-out mix project with no deps/ has not run `mix deps.get`"
+        );
+
+        std::fs::create_dir(dir.path().join("deps")).expect("create deps");
+        assert!(passes(package), "fetched deps must let the build through");
     }
 
     #[test]
@@ -399,6 +559,36 @@ mod tests {
             release.contains("gradle build"),
             "Kotlin release should use gradle build, got: {release}"
         );
+        assert_eq!(c.precondition.as_deref(), Some("command -v gradle >/dev/null 2>&1"));
+    }
+
+    /// `KotlinAndroid`'s default here is a second, independent derivation of "the
+    /// kotlin_android build command" from `build_command_for`'s `"gradle"` arm in
+    /// `src/cli/pipeline/commands/build.rs` (`cd <settings.gradle-root, found by walking
+    /// up from the source output dir> && gradle build`). This one is reached only through
+    /// `ResolvedCrateConfig::build_command_config_for_language`
+    /// (`src/core/config/resolved/lookups.rs`) when an alef.toml declares ANY
+    /// `[crates.build_commands.kotlin_android]` overlay — even a partial one that leaves
+    /// `build`/`build_release` unset, since `BuildCommandConfig::merge_overlay` keeps this
+    /// default for whatever fields the overlay omits. It also never walks up: `output_dir`
+    /// comes from `package_dir(KotlinAndroid)`, which deliberately ignores an explicit
+    /// `[crates.output] kotlin_android` override (see
+    /// `package_dir_kotlin_ignores_source_output_override`-style tests in
+    /// `resolved/lookups.rs`) and always resolves to the fixed `"packages/kotlin-android"`.
+    ///
+    /// `assembleDebug`/`assembleRelease` and `gradle build` are both defensible commands for
+    /// an Android library module — `assemble*` is the narrower, variant-scoped AGP task,
+    /// while `build` is the umbrella task every other backend arm here defaults to — so this
+    /// pins the current, accepted divergence instead of letting the two silently drift
+    /// further apart. Changing either command, or giving this arm the same walk-up as the
+    /// `build.rs` one, is a deliberate decision that must update this test too. ~keep
+    #[test]
+    fn kotlin_android_default_diverges_intentionally_from_build_command_for_gradle_arm() {
+        let c = cfg(Language::KotlinAndroid, "packages/kotlin-android", "my-lib");
+        let build = c.build.unwrap().commands().join(" ");
+        let release = c.build_release.unwrap().commands().join(" ");
+        assert_eq!(build, "cd packages/kotlin-android && gradle assembleDebug");
+        assert_eq!(release, "cd packages/kotlin-android && gradle assembleRelease");
         assert_eq!(c.precondition.as_deref(), Some("command -v gradle >/dev/null 2>&1"));
     }
 

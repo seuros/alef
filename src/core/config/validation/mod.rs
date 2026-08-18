@@ -21,7 +21,7 @@ use super::resolved::ResolvedCrateConfig;
 use crate::core::error::AlefError;
 use preconditions::{
     build_main_fields, clean_main_fields, lint_main_fields, setup_main_fields, test_main_fields, update_main_fields,
-    validate_section, validate_tools,
+    validate_build_dependency_preconditions, validate_section, validate_tools,
 };
 
 /// Validate user-supplied pipeline overrides in a resolved per-crate config.
@@ -37,6 +37,7 @@ pub fn validate_resolved(config: &ResolvedCrateConfig) -> Result<(), AlefError> 
     validate_section("build_commands", &config.build_commands, build_main_fields, |c| {
         c.precondition.as_deref()
     })?;
+    validate_build_dependency_preconditions(&config.build_commands)?;
     validate_section("setup", &config.setup, setup_main_fields, |c| c.precondition.as_deref())?;
     validate_section("update", &config.update, update_main_fields, |c| {
         c.precondition.as_deref()
@@ -187,6 +188,64 @@ sources = ["src/lib.rs"]
         let config = resolve_first(&toml);
         let err = validate_resolved(&config).expect_err("missing precondition should error");
         assert!(format!("{err}").contains("[build_commands.python]"));
+    }
+
+    #[test]
+    fn build_dependency_precondition_without_remediation_errors() {
+        let toml = format!(
+            "{base}\n[crates.build_commands.python]\nprecondition = \"command -v maturin\"\n\
+             build = \"maturin develop\"\ndependency_precondition = \"[ -d .venv ]\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        let err = validate_resolved(&config).expect_err("dependency check without remediation should error");
+        let msg = format!("{err}");
+        assert!(msg.contains("[build_commands.python]"), "{msg}");
+        assert!(msg.contains("dependency_remediation"), "{msg}");
+    }
+
+    #[test]
+    fn build_dependency_precondition_with_remediation_is_ok() {
+        let toml = format!(
+            "{base}\n[crates.build_commands.python]\nprecondition = \"command -v maturin\"\n\
+             build = \"maturin develop\"\ndependency_precondition = \"[ -d .venv ]\"\n\
+             dependency_remediation = \"uv venv\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        validate_resolved(&config).expect("declared pair should validate");
+    }
+
+    /// A user's own build command replaces alef's, so the built-in dependency check written for
+    /// alef's command must not survive to block it — `maturin build` needs no virtualenv at
+    /// all. ~keep
+    #[test]
+    fn user_build_override_drops_the_builtin_dependency_precondition() {
+        let toml = format!(
+            "{base}\n[crates.build_commands.python]\nprecondition = \"command -v maturin\"\n\
+             build = \"maturin build --out dist\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        let effective = config.build_command_config_for_language(crate::core::config::Language::Python);
+
+        assert_eq!(effective.dependency_precondition, None);
+        assert_eq!(effective.dependency_remediation, None);
+    }
+
+    /// ...but a table that only adds a `before` hook keeps alef's default command, so it must
+    /// keep the check that describes it. ~keep
+    #[test]
+    fn a_before_only_override_keeps_the_builtin_dependency_precondition() {
+        let toml = format!(
+            "{base}\n[crates.build_commands.python]\nbefore = \"echo hi\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        let effective = config.build_command_config_for_language(crate::core::config::Language::Python);
+
+        assert!(effective.dependency_precondition.is_some());
+        assert!(effective.dependency_remediation.is_some());
     }
 
     #[test]

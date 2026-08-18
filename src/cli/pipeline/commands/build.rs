@@ -1,6 +1,8 @@
-use crate::cli::pipeline::helpers::{check_precondition, run_before, run_command, run_command_captured};
+use crate::cli::pipeline::helpers::{
+    check_precondition, precondition_passes, run_before, run_command, run_command_captured,
+};
 use crate::cli::registry;
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::{BuildCommandConfig, Language, ResolvedCrateConfig};
 use crate::core::template_versions as tv;
 use anyhow::Context as _;
 use rayon::prelude::*;
@@ -21,17 +23,33 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
     let mut rust_langs: Vec<Language> = Vec::new();
 
     // Reconciled against `dispatched_count` at the end of this function: every
-    // announced language must be accounted for as either skipped here or
-    // dispatched below. ~keep
+    // announced language must be accounted for as skipped, blocked on an unmet
+    // precondition, or dispatched below. ~keep
     let total_announced = languages.len();
     let mut skipped_count = 0_usize;
+    // Kept apart from `failures` all the way to the exit code: these languages were never
+    // compiled, so folding them in would assert something about generated code that this run
+    // never tested. ~keep
+    let mut unmet: Vec<String> = Vec::new();
 
     for &lang in languages {
         let build_cmd_cfg = config.build_command_config_for_language(lang);
-        if !check_precondition(lang, build_cmd_cfg.precondition.as_deref()) {
-            observability::skipped(lang, "precondition");
-            skipped_count += 1;
-            continue;
+        match backend_readiness(lang, &build_cmd_cfg) {
+            BackendReadiness::Ready => {}
+            BackendReadiness::ToolchainMissing => {
+                observability::skipped(lang, "required tool is not on PATH");
+                skipped_count += 1;
+                continue;
+            }
+            BackendReadiness::DependenciesUnfetched { check, remediation } => {
+                observability::unmet_precondition(
+                    lang,
+                    &format!("dependency precondition failed ({check})"),
+                    &remediation,
+                );
+                unmet.push(format!("{lang} (run `{remediation}`)"));
+                continue;
+            }
         }
         if lang == Language::Rust {
             rust_langs.push(lang);
@@ -267,9 +285,9 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
     // silently losing one after this point cannot happen without also
     // failing this assertion. ~keep
     debug_assert_eq!(
-        skipped_count + dispatched_count,
+        skipped_count + unmet.len() + dispatched_count,
         total_announced,
-        "every announced language must be either skipped or dispatched"
+        "every announced language must be skipped, blocked on a precondition, or dispatched"
     );
     // Not `dispatched_count - failures.len()`: `failures` can also include the
     // implicit FFI-crate auto-build (see `need_ffi` above), which fires as a
@@ -278,18 +296,95 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
     // that subtraction could under-report. Report what's exact instead. ~keep
     info!(
         "Backend build summary: {total_announced} announced, {skipped_count} skipped, \
-         {dispatched_count} dispatched, {} language-level failure(s)",
+         {} blocked on unmet preconditions, {dispatched_count} dispatched, {} language-level failure(s)",
+        unmet.len(),
         failures.len()
     );
 
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        anyhow::bail!(
+    build_outcome(&failures, &unmet)
+}
+
+/// Turn the two per-language buckets into this command's exit status.
+///
+/// Both buckets are fatal, and they are reported in separate sentences that never merge counts.
+/// The reasoning behind each half:
+///
+/// - Unmet preconditions are fatal because the alternative is worse. Nothing was built for those
+///   languages, so exiting 0 would let anything reading this exit code — CI, a release script,
+///   the snippet validation that links these very artifacts — proceed as though the artifacts
+///   exist. The remediation is one command in this same checkout, so failing costs the developer
+///   a single retry and buys everyone downstream a truthful signal.
+/// - They are nonetheless not `failures`: the count, the wording, and the per-language outcome all
+///   say "not built" rather than "built and broken", which is the distinction that makes
+///   "run `mix deps.get`" actionable where a bare failure was not. ~keep
+///
+/// A *missing toolchain* is deliberately absent from both buckets and stays a non-fatal skip: it
+/// is a statement about the machine, not about this checkout, and a developer without `gradle`
+/// installed must still be able to build the languages they do have. ~keep
+fn build_outcome(failures: &[String], unmet: &[String]) -> anyhow::Result<()> {
+    let mut parts = Vec::new();
+    if !failures.is_empty() {
+        parts.push(format!(
             "backend build failed for {} language(s): {}",
             failures.len(),
             failures.join("; ")
-        );
+        ));
+    }
+    if !unmet.is_empty() {
+        parts.push(format!(
+            "{} language(s) were not built because their preconditions are unmet (no build was attempted, so this \
+             is not a compile failure): {}",
+            unmet.len(),
+            unmet.join("; ")
+        ));
+    }
+    if parts.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!("{}", parts.join(" | "));
+}
+
+/// Whether a backend can be built here at all, and if not, which kind of "not" it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BackendReadiness {
+    Ready,
+    /// The tool this backend builds with is not installed on this machine. Not the checkout's
+    /// fault and not fixable from inside it — skipped, non-fatal. ~keep
+    ToolchainMissing,
+    /// The tool is here and the checkout is not prepared for it: dependencies were never fetched,
+    /// or the interpreter environment the build installs into does not exist. Fixable by
+    /// `remediation`, and fatal so that nothing downstream mistakes the missing artifact for a
+    /// built one. ~keep
+    DependenciesUnfetched {
+        check: String,
+        remediation: String,
+    },
+}
+
+/// Classify a backend before dispatching it.
+///
+/// The tool check runs first: a dependency check phrased against a missing tool's project layout
+/// would report the wrong cause. ~keep
+fn backend_readiness(lang: Language, build_cmd_cfg: &BuildCommandConfig) -> BackendReadiness {
+    if !check_precondition(lang, build_cmd_cfg.precondition.as_deref()) {
+        return BackendReadiness::ToolchainMissing;
+    }
+    let Some(check) = build_cmd_cfg.dependency_precondition.as_deref() else {
+        return BackendReadiness::Ready;
+    };
+    if precondition_passes(&lang.to_string(), check) {
+        return BackendReadiness::Ready;
+    }
+    // Config validation rejects a `dependency_precondition` without a `dependency_remediation`, so
+    // this fallback is unreachable through a loaded config — it exists so a future built-in that
+    // forgets the pair degrades into a vague message rather than a panic. ~keep
+    let remediation = build_cmd_cfg
+        .dependency_remediation
+        .clone()
+        .unwrap_or_else(|| format!("(no `dependency_remediation` declared for {lang})"));
+    BackendReadiness::DependenciesUnfetched {
+        check: check.to_string(),
+        remediation,
     }
 }
 
@@ -594,11 +689,50 @@ fn build_command_for(
         }
         "gradle" => {
             let release_property = if release { " -Prelease" } else { "" };
-            let build_dir = if crate_dir.is_empty() {
+            let source_dir = if crate_dir.is_empty() {
                 config.package_dir(lang)
             } else {
                 crate_dir.to_string()
             };
+            // `crate_dir`/`package_dir` is a *source* output path (e.g. a Kotlin
+            // package-namespace directory `.kt` files get written into) — it need not
+            // be the gradle project root gradle itself will accept. `gradle <task>`
+            // walks up from the invoked directory looking only for a settings file and
+            // treats that file's directory as the build root; a directory that is
+            // merely nested under that root but not itself a registered project is
+            // rejected ("Project directory '...' is not part of the build defined by
+            // settings file '...'") — that rejection, observed against a real consumer
+            // whose `[crates.output] kotlin_android` pointed at a deep namespace source
+            // dir, is this arm's bug. So we search for `settings.gradle.kts`/
+            // `settings.gradle` first, walking the full ancestor chain, mirroring
+            // gradle's own root-detection precedence: a settings file is authoritative
+            // over a build file, because a `build.gradle(.kts)` alone only marks *a*
+            // project (possibly a subproject with no invocable root of its own). Only
+            // if no settings file is found anywhere upward do we fall back to
+            // `build.gradle.kts`/`build.gradle` as a lower-confidence signal for a
+            // settings-less single-module project; finding neither falls back to
+            // `source_dir` unchanged, matching every other backend arm in this
+            // function (mix/mvn/dotnet) rather than walking to the filesystem root or
+            // panicking.
+            //
+            // Deliberately NOT sharing a helper with the "dotnet" arm's `scan_for_csproj`
+            // above: that is the only other precedent for this shape, so per this repo's
+            // "extract on the third repetition" convention the two stay separate — kept
+            // structurally parallel (closure + walk-up loop) instead. ~keep
+            let find_marker_dir = |start: &str, markers: &[&str]| -> Option<String> {
+                let mut p = std::path::PathBuf::from(start);
+                loop {
+                    if markers.iter().any(|marker| p.join(marker).exists()) {
+                        return Some(p.to_string_lossy().into_owned());
+                    }
+                    if !p.pop() {
+                        return None;
+                    }
+                }
+            };
+            let build_dir = find_marker_dir(&source_dir, &["settings.gradle.kts", "settings.gradle"])
+                .or_else(|| find_marker_dir(&source_dir, &["build.gradle.kts", "build.gradle"]))
+                .unwrap_or(source_dir);
             format!("cd {build_dir} && gradle build{release_property}")
         }
         "swift" => {
@@ -909,6 +1043,104 @@ fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str)
 }
 
 #[cfg(test)]
+mod readiness_tests {
+    use super::*;
+
+    /// Real shell commands, not a stubbed runner: `true`/`false` exercise the same spawn path a
+    /// `command -v` or `[ -d deps ]` precondition takes, so what the test proves is what runs. ~keep
+    fn cfg(precondition: &str, dependency_precondition: Option<&str>) -> BuildCommandConfig {
+        BuildCommandConfig {
+            precondition: Some(precondition.to_string()),
+            dependency_precondition: dependency_precondition.map(str::to_string),
+            dependency_remediation: dependency_precondition.map(|_| "cd packages/elixir && mix deps.get".to_string()),
+            before: None,
+            build: None,
+            build_release: None,
+        }
+    }
+
+    /// The defect this change exists to close: the tool is installed, the checkout is not
+    /// prepared, and that must not be reported the same way as generated code failing to
+    /// compile. ~keep
+    #[test]
+    fn should_report_unfetched_dependencies_when_the_tool_is_present_but_deps_are_not() {
+        let readiness = backend_readiness(Language::Elixir, &cfg("true", Some("false")));
+
+        assert_eq!(
+            readiness,
+            BackendReadiness::DependenciesUnfetched {
+                check: "false".to_string(),
+                remediation: "cd packages/elixir && mix deps.get".to_string(),
+            }
+        );
+    }
+
+    /// The mandatory control. A backend whose preconditions all pass is dispatched, so a build
+    /// that then fails is still a `failure` — the fix must not be able to pass by reclassifying
+    /// everything it touches. ~keep
+    #[test]
+    fn should_stay_ready_when_every_precondition_passes_so_a_real_compile_failure_still_fails() {
+        assert_eq!(
+            backend_readiness(Language::Elixir, &cfg("true", Some("true"))),
+            BackendReadiness::Ready
+        );
+        assert_eq!(
+            backend_readiness(Language::Go, &cfg("true", None)),
+            BackendReadiness::Ready
+        );
+
+        let error = build_outcome(&["go: undefined: Foo".to_string()], &[]).expect_err("compile failure is fatal");
+        let message = error.to_string();
+        assert!(message.contains("backend build failed for 1 language(s)"), "{message}");
+        assert!(!message.contains("preconditions are unmet"), "{message}");
+    }
+
+    #[test]
+    fn should_report_a_missing_tool_as_a_toolchain_skip_not_as_unfetched_dependencies() {
+        let readiness = backend_readiness(Language::Elixir, &cfg("false", Some("false")));
+
+        assert_eq!(readiness, BackendReadiness::ToolchainMissing);
+    }
+
+    /// A machine without a language's toolchain must still be able to build the rest, so this
+    /// bucket alone leaves the exit status clean. ~keep
+    #[test]
+    fn should_exit_clean_when_the_only_thing_that_happened_was_a_toolchain_skip() {
+        assert!(build_outcome(&[], &[]).is_ok());
+    }
+
+    /// Non-zero, but never described as a build failure: nothing was compiled, so the message
+    /// says what to run instead of implying the generated code is broken. Exiting 0 here is what
+    /// would let a downstream consumer treat a missing artifact as a built one. ~keep
+    #[test]
+    fn should_fail_the_run_for_unmet_preconditions_while_naming_them_separately_from_failures() {
+        let error = build_outcome(&[], &["elixir (run `cd packages/elixir && mix deps.get`)".to_string()])
+            .expect_err("unmet preconditions must not exit clean");
+        let message = error.to_string();
+
+        assert!(message.contains("1 language(s) were not built"), "{message}");
+        assert!(message.contains("not a compile failure"), "{message}");
+        assert!(message.contains("mix deps.get"), "{message}");
+        assert!(!message.contains("backend build failed"), "{message}");
+    }
+
+    /// Both buckets in one run stay countable on their own — the reader must be able to tell how
+    /// many backends were actually compiled and wrong. ~keep
+    #[test]
+    fn should_keep_failure_and_unmet_counts_separate_when_both_occur() {
+        let error = build_outcome(
+            &["go: undefined: Foo".to_string()],
+            &["elixir (run `mix deps.get`)".to_string()],
+        )
+        .expect_err("either bucket is fatal");
+        let message = error.to_string();
+
+        assert!(message.contains("backend build failed for 1 language(s)"), "{message}");
+        assert!(message.contains("1 language(s) were not built"), "{message}");
+    }
+}
+
+#[cfg(test)]
 mod build_command_tests {
     use super::*;
     use crate::core::backend::{BuildConfig, BuildDependency};
@@ -974,6 +1206,137 @@ sources = ["src/lib.rs"]
         assert_eq!(
             build_command_for(Language::Kotlin, &build_config, &config, true),
             "cd packages/kotlin && gradle build -Prelease"
+        );
+    }
+
+    /// Regression test for the real consumer failure this arm was rewritten for: an
+    /// explicit `[crates.output] kotlin_android` pointing at a deep, gradle-marker-free
+    /// namespace source directory (`.../src/main/kotlin/io/<ns>/<pkg>/android/`) used to be
+    /// `cd`-ed into verbatim, and gradle rejected it ("Project directory '...' is not part
+    /// of the build defined by settings file '...'"). The fix must walk up to the nearest
+    /// `settings.gradle.kts` and build from there instead. ~keep
+    #[test]
+    fn gradle_build_walks_up_to_settings_gradle_root_from_deep_namespace_dir() {
+        let root = tempfile::tempdir().expect("failed to create temp dir");
+        let project_root = root.path().join("packages/kotlin-android");
+        let deep_source_dir = project_root.join("src/main/kotlin/io/alpha/mylib/android");
+        std::fs::create_dir_all(&deep_source_dir).expect("failed to create deep namespace dir");
+        std::fs::write(
+            project_root.join("settings.gradle.kts"),
+            "rootProject.name = \"alpha\"\n",
+        )
+        .expect("failed to write settings.gradle.kts fixture");
+        std::fs::write(project_root.join("build.gradle.kts"), "// android library build\n")
+            .expect("failed to write build.gradle.kts fixture");
+
+        // Prove the fixture actually built the shape under test before asserting on it:
+        // both markers must exist at the project root and be absent from the deep dir.
+        assert!(project_root.join("settings.gradle.kts").is_file());
+        assert!(project_root.join("build.gradle.kts").is_file());
+        assert!(!deep_source_dir.join("settings.gradle.kts").exists());
+        assert!(!deep_source_dir.join("build.gradle.kts").exists());
+
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+            r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.alpha"
+
+[crates.output]
+kotlin_android = "{deep_source_dir}/"
+"#,
+            deep_source_dir = deep_source_dir.display(),
+        ))
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "gradle",
+            crate_suffix: "",
+            build_dep: BuildDependency::Ffi,
+            post_build: Vec::new(),
+        };
+
+        let expected_root = project_root.display().to_string();
+        assert_eq!(
+            build_command_for(Language::KotlinAndroid, &build_config, &config, false),
+            format!("cd {expected_root} && gradle build")
+        );
+        assert_eq!(
+            build_command_for(Language::KotlinAndroid, &build_config, &config, true),
+            format!("cd {expected_root} && gradle build -Prelease")
+        );
+    }
+
+    /// Boundary case: no `settings.gradle*`/`build.gradle*` exists anywhere up the ancestor
+    /// chain, so the walk-up must fall back to the original source directory unchanged
+    /// (like the mix/mvn/dotnet arms above it) instead of walking to the filesystem root or
+    /// panicking. ~keep
+    #[test]
+    fn gradle_build_falls_back_to_source_dir_when_no_marker_found() {
+        let root = tempfile::tempdir().expect("failed to create temp dir");
+        let deep_source_dir = root
+            .path()
+            .join("packages/kotlin-android/src/main/kotlin/io/alpha/mylib/android");
+        std::fs::create_dir_all(&deep_source_dir).expect("failed to create deep namespace dir");
+
+        // Prove the fixture is genuinely marker-free before asserting on the fallback.
+        assert!(deep_source_dir.is_dir());
+        for ancestor in deep_source_dir.ancestors() {
+            for marker in [
+                "settings.gradle.kts",
+                "settings.gradle",
+                "build.gradle.kts",
+                "build.gradle",
+            ] {
+                assert!(
+                    !ancestor.join(marker).exists(),
+                    "fixture must not contain {marker} under {}",
+                    ancestor.display()
+                );
+            }
+            if ancestor == root.path() {
+                break;
+            }
+        }
+
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+            r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.alpha"
+
+[crates.output]
+kotlin_android = "{deep_source_dir}/"
+"#,
+            deep_source_dir = deep_source_dir.display(),
+        ))
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "gradle",
+            crate_suffix: "",
+            build_dep: BuildDependency::Ffi,
+            post_build: Vec::new(),
+        };
+
+        // The configured output path carries a trailing separator and the fallback returns it
+        // verbatim, so the expectation must too -- `cd <dir>/` is what a real run emits. ~keep
+        let expected = deep_source_dir.display().to_string();
+        assert_eq!(
+            build_command_for(Language::KotlinAndroid, &build_config, &config, false),
+            format!("cd {expected}/ && gradle build")
         );
     }
 

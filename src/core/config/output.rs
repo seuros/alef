@@ -702,6 +702,15 @@ pub struct CleanConfig {
 pub struct BuildCommandConfig {
     /// Shell command that must exit 0 for build to run; skip with warning on failure.
     pub precondition: Option<String>,
+    /// Shell command that must exit 0 for the build to be attempted, checking that this project's
+    /// dependencies were fetched. Where `precondition` asks whether the machine can build this
+    /// language at all, this asks whether the checkout is prepared — an unmet dependency
+    /// precondition is fixable here and now, so it fails the run instead of being skipped
+    /// silently. Set `dependency_remediation` alongside it with the command that fixes it.
+    pub dependency_precondition: Option<String>,
+    /// The command a user runs to satisfy `dependency_precondition`, e.g.
+    /// `cd packages/elixir && mix deps.get`. Required whenever `dependency_precondition` is set.
+    pub dependency_remediation: Option<String>,
     /// Command(s) to run before the main build commands; aborts on failure.
     pub before: Option<StringOrVec>,
     /// Command(s) to build in debug mode.
@@ -719,6 +728,15 @@ impl BuildCommandConfig {
     pub fn merge_overlay(mut self, other: &Self) -> Self {
         if other.precondition.is_some() {
             self.precondition = other.precondition.clone();
+        }
+        // Plain field overlay. Whether a built-in dependency check *survives* a user's own build
+        // command is decided by the caller, not here — see
+        // `ResolvedCrateConfig::build_command_config_for_language`. ~keep
+        if other.dependency_precondition.is_some() {
+            self.dependency_precondition = other.dependency_precondition.clone();
+        }
+        if other.dependency_remediation.is_some() {
+            self.dependency_remediation = other.dependency_remediation.clone();
         }
         if other.before.is_some() {
             self.before = other.before.clone();
