@@ -175,8 +175,7 @@ const EXCLUDES: &[(&str, ExcludeScope)] = &[
 ///
 /// Reads two independent config tables, not one:
 ///
-/// - `[workspace.docs.snippets] dirs` — mirrors [`snippet_check_hook`]'s own read of
-///   `config.docs.snippets.dirs`: the roots snippet *validation* discovers files in.
+/// - `[workspace.docs.snippets] dirs` — the roots snippet *validation* discovers files in.
 /// - `[crates.e2e.snippets] output` — the root [`crate::e2e::snippets`] actually
 ///   *writes* generated fixture-snippet Markdown into. `docs.snippets` is a separate,
 ///   optional feature (MkDocs `--8<--` include discovery); a consumer using only
@@ -387,35 +386,6 @@ fn workspace_hook(name: &str, dir: &str, run: &str, files_glob: &str) -> String 
     )
 }
 
-fn snippet_check_hook(config: &ResolvedCrateConfig) -> Option<String> {
-    let snippets = config.docs.as_ref()?.snippets.as_ref()?;
-    if snippets.dirs.is_empty() && snippets.inline_dirs.is_empty() {
-        return None;
-    }
-
-    let mut files = vec!["alef.toml".to_string(), "fixtures/**/*.json".to_string()];
-    files.extend(
-        snippets
-            .dirs
-            .iter()
-            .map(|dir| format!("{}/**", dir.to_string_lossy().trim_end_matches('/'))),
-    );
-    files.extend(
-        snippets
-            .inline_dirs
-            .iter()
-            .map(|dir| format!("{}/**/*.{{md,mdx}}", dir.to_string_lossy().trim_end_matches('/'))),
-    );
-    let files = format!("{{{}}}", files.join(","));
-    Some(format!(
-        "\n[hooks.pre-commit.commands.alef-snippets]\n\
-         run = \"alef snippets check --strict --cache off\"\n\
-         root = \".\"\n\
-         workspace = true\n\
-         files = \"{files}\"\n"
-    ))
-}
-
 /// Generate the repo-root `poly.toml` from the configured language set.
 pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[Language]) -> Vec<GeneratedFile> {
     let has = |lang: Language| languages.contains(&lang);
@@ -617,10 +587,6 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
             "mix deps.get && mix credo --strict",
             "**/*.{ex,exs}",
         ));
-    }
-
-    if let Some(hook) = snippet_check_hook(config) {
-        out.push_str(&hook);
     }
 
     for source in &config.poly.hooks_sources {

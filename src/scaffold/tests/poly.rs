@@ -191,8 +191,14 @@ fn poly_toml_emits_workspace_lint_hooks_for_non_bundled_linters() {
     toml::from_str::<toml::Value>(c).expect("generated poly.toml must parse");
 }
 
+/// Snippet validation is a regeneration-time concern, not a pre-commit one: it compiles every
+/// snippet against built language artifacts, which costs minutes and requires a toolchain per
+/// target language that a committing developer is not guaranteed to have. `alef all` already
+/// runs it in its docs stage against the tree it just generated. A `poly` hook re-ran that whole
+/// pass on every commit touching any snippet root, so a one-line docs edit paid for a full
+/// multi-language compile. No `poly.toml` alef generates may schedule it. ~keep
 #[test]
-fn poly_toml_emits_strict_snippet_check_for_configured_roots() {
+fn poly_toml_never_schedules_snippet_validation_as_a_hook() {
     let config = test_config_with_workspace_toml(
         r#"[workspace.docs.snippets]
 dirs = ["docs/snippets"]
@@ -201,23 +207,12 @@ inline_dirs = ["docs/guides"]"#,
     let files = scaffold_poly_config(&config, &[Language::Python]);
     let content = &poly_toml(&files).content;
 
-    assert!(content.contains("[hooks.pre-commit.commands.alef-snippets]"));
-    assert!(content.contains("run = \"alef snippets check --strict --cache off\""));
-    assert!(content.contains("root = \".\""));
-    assert!(content.contains("workspace = true"));
-    assert!(content.contains("alef.toml"));
-    assert!(content.contains("fixtures/**/*.json"));
-    assert!(content.contains("docs/snippets/**"));
-    assert!(content.contains("docs/guides/**/*.{md,mdx}"));
+    assert!(!content.contains("alef-snippets"), "no snippet hook table: {content}");
+    assert!(
+        !content.contains("alef snippets check"),
+        "no snippet check command anywhere: {content}"
+    );
     toml::from_str::<toml::Value>(content).expect("generated poly.toml must parse");
-}
-
-#[test]
-fn poly_toml_omits_snippet_check_without_discovery_roots() {
-    let config = test_config_with_workspace_toml("[workspace.docs.snippets]\nstrict = true");
-    let files = scaffold_poly_config(&config, &[Language::Python]);
-
-    assert!(!poly_toml(&files).content.contains("alef-snippets"));
 }
 
 /// Regression: a consumer with no `docs/` tree at all (e.g. docs migrated into

@@ -387,6 +387,24 @@ impl FieldClassification {
             Self::Array => is_indexable(&field.ty),
         }
     }
+
+    /// Whether this classification is consistent with the ELEMENT a subscripted entry
+    /// (`open_graph[title]`, `choices[0]`) reaches on `field`.
+    ///
+    /// `Optional` clears any subscriptable container: a map key or a list index is a lookup that
+    /// can miss, which is precisely what every host binding models as an optional. `Array` has to
+    /// look one level deeper — `foo[0]` being itself indexable means `foo` is a nested
+    /// collection. ~keep
+    fn agrees_with_element_of(self, field: &crate::core::ir::FieldDef) -> bool {
+        match element_shape(&field.ty) {
+            ElementShape::NotSubscriptable => false,
+            ElementShape::Opaque => true,
+            ElementShape::Known(inner) => match self {
+                Self::Optional => true,
+                Self::Array => is_indexable(inner),
+            },
+        }
+    }
 }
 
 /// True for the IR shapes an `[0]` index is legal against.
@@ -400,6 +418,31 @@ fn is_indexable(ty: &crate::core::ir::TypeRef) -> bool {
         TypeRef::Vec(_) | TypeRef::Bytes | TypeRef::Json | TypeRef::Map(_, _) => true,
         TypeRef::Optional(inner) => is_indexable(inner),
         _ => false,
+    }
+}
+
+/// What one `[...]` subscript against `ty` lands on.
+enum ElementShape<'a> {
+    /// The subscript is legal and reaches this type.
+    Known(&'a crate::core::ir::TypeRef),
+    /// The subscript is legal but the element type is not expressible as a `TypeRef` here
+    /// (`Vec<u8>` indexes to a byte). Subscripting is not a mis-declaration, so this clears the
+    /// entry the same way `IrAbsent` does rather than manufacturing a diagnostic. ~keep
+    Opaque,
+    /// `ty` cannot be subscripted at all — the entry's path is wrong, and that IS actionable.
+    NotSubscriptable,
+}
+
+/// Resolve one `[...]` subscript against an IR type.
+fn element_shape(ty: &crate::core::ir::TypeRef) -> ElementShape<'_> {
+    use crate::core::ir::TypeRef;
+    match ty {
+        TypeRef::Vec(inner) | TypeRef::Map(_, inner) => ElementShape::Known(inner),
+        // A `serde_json::Value` subscripts to another `Value`, whatever it carries. ~keep
+        TypeRef::Json => ElementShape::Known(ty),
+        TypeRef::Bytes => ElementShape::Opaque,
+        TypeRef::Optional(inner) => element_shape(inner),
+        _ => ElementShape::NotSubscriptable,
     }
 }
 
@@ -443,15 +486,24 @@ fn ir_field_shape<'a>(leaf: &str, type_defs: &'a [crate::core::ir::TypeDef]) -> 
     }
 }
 
-/// The field name a classification entry's accessor lands on: the last dot-separated segment,
-/// with any `[0]` / `[]` / `["key"]` suffix removed.
+/// The field name a classification entry's accessor lands on, plus whether the entry reaches it
+/// through a `[0]` / `[]` / `["key"]` subscript.
 ///
 /// The renderers check the FULL prefix path at every segment against `fields_optional` /
 /// `fields_array` (see `field_access::optional_renderers::push_key_field_name`), so an entry
 /// `metadata.article.tags` is a claim about `tags` — not about `metadata` or `article`. ~keep
-fn classification_leaf(entry: &str) -> &str {
+///
+/// The subscript flag is not cosmetic: `open_graph[title]` says nothing about `open_graph`, it
+/// classifies the ELEMENT that subscript reaches. Ruling on the container with the bare-field
+/// predicate is what rejected every legal `HashMap<String, String>` key lookup as "contradicts
+/// the core IR" — the map is exactly the right home for an optional `[title]`, and exactly the
+/// wrong home for an optional bare field. ~keep
+fn classification_target(entry: &str) -> (&str, bool) {
     let last = entry.rsplit('.').next().unwrap_or(entry);
-    last.split('[').next().unwrap_or(last).trim()
+    match last.split_once('[') {
+        Some((name, _)) => (name.trim(), true),
+        None => (last.trim(), false),
+    }
 }
 
 /// The Rust spelling of an IR field's type, for quoting back in a diagnostic.
@@ -545,7 +597,7 @@ fn check_classification_table(
     let mut sorted: Vec<&String> = entries.iter().collect();
     sorted.sort_unstable();
     for entry in sorted {
-        let leaf = classification_leaf(entry);
+        let (leaf, subscripted) = classification_target(entry);
         if leaf.is_empty() {
             continue;
         }
@@ -561,20 +613,33 @@ fn check_classification_table(
                 severity: Severity::Warning,
             }),
             IrFieldShape::Known(occurrences) => {
-                if occurrences.iter().any(|field| classification.agrees_with(field)) {
+                let agrees = occurrences.iter().any(|field| {
+                    if subscripted {
+                        classification.agrees_with_element_of(field)
+                    } else {
+                        classification.agrees_with(field)
+                    }
+                });
+                if agrees {
                     continue;
                 }
                 let mut declared: Vec<String> = occurrences.iter().map(|field| describe_field_type(field)).collect();
                 declared.sort_unstable();
                 declared.dedup();
+                let effect = if subscripted {
+                    format!(
+                        "subscripts it and emits {} against the element",
+                        classification.emitted_effect()
+                    )
+                } else {
+                    format!("emits {} against it", classification.emitted_effect())
+                };
                 errors.push(ValidationError {
                     file: CONFIG_FILE_LABEL.to_string(),
                     message: format!(
                         "{config_key}.{table} entry `{entry}` contradicts the core IR: `{leaf}` is declared as \
-                         {} there, and honouring this entry emits {} against it — remove the entry or fix the \
-                         path",
+                         {} there, and honouring this entry {effect} — remove the entry or fix the path",
                         declared.join(" / "),
-                        classification.emitted_effect()
                     ),
                     severity: Severity::Error,
                 });
@@ -1176,6 +1241,11 @@ mod field_classification_tests {
                 field("tags", TypeRef::Vec(Box::new(TypeRef::String)), false),
                 field("subtitle", TypeRef::String, true),
                 field("title", TypeRef::String, false),
+                field(
+                    "open_graph",
+                    TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String)),
+                    false,
+                ),
             ],
             ..TypeDef::default()
         }]
@@ -1224,6 +1294,57 @@ mod field_classification_tests {
             errors_only(&diagnostics).is_empty(),
             "a correct fields_optional entry must not be rejected: {diagnostics:?}"
         );
+    }
+
+    /// A subscripted entry classifies the ELEMENT the subscript reaches, not the container. Every
+    /// key lookup on a `HashMap<String, String>` used to be rejected as contradicting the IR
+    /// because the subscript was stripped and the map itself was ruled on as a bare field — which
+    /// is how a correct `metadata.document.open_graph[title]` failed the whole run.
+    #[test]
+    fn optional_entry_subscripting_a_map_field_produces_no_error() {
+        let diagnostics = validate_field_classifications(
+            &config_with(&["metadata.document.open_graph[title]"], &[]),
+            &article_ir(),
+        );
+
+        assert!(
+            errors_only(&diagnostics).is_empty(),
+            "a map key lookup is legitimately optional: {diagnostics:?}"
+        );
+    }
+
+    /// Indexing a list element as optional is the same shape and must also pass.
+    #[test]
+    fn optional_entry_subscripting_a_vec_field_produces_no_error() {
+        let diagnostics = validate_field_classifications(&config_with(&["tags[0]"], &[]), &article_ir());
+
+        assert!(
+            errors_only(&diagnostics).is_empty(),
+            "a list index is legitimately optional: {diagnostics:?}"
+        );
+    }
+
+    /// Subscript-awareness must not become a blanket amnesty: a subscript against a scalar is
+    /// still a wrong path, and the diagnostic has to say the subscript is the problem.
+    #[test]
+    fn optional_entry_subscripting_a_scalar_field_is_still_an_error() {
+        let diagnostics = validate_field_classifications(&config_with(&["title[0]"], &[]), &article_ir());
+
+        let errors = errors_only(&diagnostics);
+        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
+        assert!(errors[0].message.contains("subscripts it"), "got: {}", errors[0].message);
+        assert!(errors[0].message.contains("String"), "got: {}", errors[0].message);
+    }
+
+    /// `fields_array` on a subscripted entry claims the element is itself indexable, so a
+    /// `HashMap<String, String>` value — a plain `String` — must still be rejected.
+    #[test]
+    fn array_entry_subscripting_a_map_of_scalars_is_an_error() {
+        let diagnostics = validate_field_classifications(&config_with(&[], &["open_graph[title]"]), &article_ir());
+
+        let errors = errors_only(&diagnostics);
+        assert_eq!(errors.len(), 1, "expected exactly one hard error, got: {diagnostics:?}");
+        assert!(errors[0].message.contains("fields_array"), "got: {}", errors[0].message);
     }
 
     /// `fields_array` gets the same treatment: declaring a plain `String` indexable emits `[0]`

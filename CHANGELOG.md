@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A subscripted `fields_optional` / `fields_array` entry is a claim about the element, not the container.**
+  `validate_field_classifications` stripped the `[...]` suffix and ruled on the field it was attached to, so
+  `metadata.document.open_graph[title]` — a key lookup on a `HashMap<String, String>`, optional in every host
+  binding — was reported as "contradicts the core IR" and failed the whole run. The map is precisely the right
+  home for an optional key lookup and the wrong home for an optional bare field; one predicate cannot judge both.
+  Subscripted entries now resolve one level through the container: `Optional` clears anything subscriptable,
+  `Array` requires the element itself to be indexable, and a subscript against a scalar is still an error whose
+  message says so.
+
+### Removed
+
+- **`poly.toml` no longer schedules snippet validation as a pre-commit hook.** Snippet validation compiles every
+  snippet against built language artifacts — minutes of work needing a toolchain per target language — and
+  `alef all`'s docs stage already runs it against the tree it just generated. Running it again from a git hook
+  made a one-line docs edit pay for a full multi-language compile. Regenerate to drop the
+  `[hooks.pre-commit.commands.alef-snippets]` table.
+
 ## [0.61.0] - 2026-08-18
 
 ### Added
