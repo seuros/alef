@@ -234,6 +234,9 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         type_defs,
         enums,
         false,
+        // The test-file emitter threads no `CallIr`, so every argument keeps exactly the
+        // rendering it had before the `TargetParams` seam existed. ~keep
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
     )
     // The only refusal `build_args_and_setup` can raise comes from the native-DTO literal
     // builder, which the `native_dtos = false` argument above disables — the generated test

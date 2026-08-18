@@ -68,7 +68,12 @@ pub(super) fn render_snippet_body(
         &fixture.input,
     );
     call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, fixture);
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs);
+    // The snippet path is the only Go emitter that spells typed Go literals, so it is the one
+    // that opts into the core-IR seam: `with_functions` turns `target_params` from
+    // `IrAbsent` into a real answer about what each argument's parameter is declared as. ~keep
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs)
+        .with_functions(functions);
+    let target_params = recipe.target_params(lang);
     let override_config = recipe.override_config;
     let import_alias = override_config
         .and_then(|value| value.alias.as_deref())
@@ -164,6 +169,7 @@ pub(super) fn render_snippet_body(
         type_defs,
         enums,
         true,
+        target_params,
     )?;
     let mut configured_arg_count = recipe.args.len();
     if let Some(visitor_spec) = &fixture.visitor {
@@ -1706,5 +1712,166 @@ mod tests {
             error.contains("interface"),
             "must name the emitted Go declaration: {error}"
         );
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Json-typed DTO fields, and the top-level argument arms the core-IR seam converts.
+    // ---------------------------------------------------------------------------------
+
+    /// alef #234, end to end. `go_struct_field_expression` used to drop a `TypeRef::Json`
+    /// field on its catch-all, so a published snippet compiled while omitting the schema it
+    /// exists to document. Both halves are asserted: the value reaches the literal, and the
+    /// `encoding/json` import that the `json.RawMessage` conversion needs is pulled in --
+    /// the import machinery keys on `json.` appearing in a rendered setup line, so an arm
+    /// that spelled the conversion any other way would emit uncompilable Go. ~keep
+    #[test]
+    fn snippet_emits_a_json_typed_field_and_imports_encoding_json() {
+        let body = render_request_snippet(
+            serde_json::json!({"schema": {"type": "object", "required": ["name"]}}),
+            vec![dto_field("schema", TypeRef::Json, false)],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            body.contains("request := pkg.SampleRequest{"),
+            "the snippet must be emitted at all before anything is asserted about it:\n{body}"
+        );
+        assert!(
+            // Key-sorted by serde_json's BTreeMap-backed Map, not fixture order. ~keep
+            body.contains("Schema: json.RawMessage(`{\"required\":[\"name\"],\"type\":\"object\"}`)"),
+            "the documented schema must appear in the literal:\n{body}"
+        );
+        assert!(
+            !body.contains("request := pkg.SampleRequest{}"),
+            "the only field must not be dropped, leaving an empty literal:\n{body}"
+        );
+        assert!(
+            body.contains("\"encoding/json\""),
+            "a snippet spelling `json.RawMessage` must import encoding/json:\n{body}"
+        );
+    }
+
+    /// An optional `TypeRef::Json` field is `*json.RawMessage`, so the conversion is
+    /// address-taken through the `ptr` helper -- which the snippet must then declare. ~keep
+    #[test]
+    fn snippet_emits_the_pointer_helper_for_an_optional_json_typed_field() {
+        let body = render_request_snippet(
+            serde_json::json!({"schema": {"type": "object"}}),
+            vec![dto_field("schema", TypeRef::Json, true)],
+            &[],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            body.contains("Schema: ptr(json.RawMessage(`{\"type\":\"object\"}`))"),
+            "{body}"
+        );
+        assert!(
+            body.contains("func ptr[T any](value T) *T { return &value }"),
+            "the pointer helper must be declared alongside its use:\n{body}"
+        );
+    }
+
+    fn mode_arg() -> crate::e2e::config::ArgMapping {
+        crate::e2e::config::ArgMapping {
+            name: "mode".into(),
+            field: "input.mode".into(),
+            arg_type: "string".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    fn send_function(param_type: TypeRef) -> FunctionDef {
+        FunctionDef {
+            name: "send".into(),
+            params: vec![ParamDef {
+                name: "mode".into(),
+                ty: param_type,
+                ..ParamDef::default()
+            }],
+            return_type: TypeRef::Named("SampleResponse".into()),
+            ..FunctionDef::default()
+        }
+    }
+
+    fn render_mode_snippet(enums: &[EnumDef], functions: &[FunctionDef]) -> String {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "send".into();
+        e2e.call.module = "example.com/sample".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.returns_result = true;
+        e2e.call.args = vec![mode_arg()];
+        let fixture = Fixture {
+            id: "send_mode".into(),
+            description: "Send with a mode".into(),
+            input: serde_json::json!({"mode": "careful"}),
+            ..fixture()
+        };
+        render_snippet_body(&fixture, &e2e, &ResolvedCrateConfig::default(), &[], enums, functions)
+            .expect("snippet renders")
+    }
+
+    /// The `Known` half. `build_args_and_setup`'s catch-all had no `TargetParams`, so an
+    /// argument filling a declared enum parameter was rendered as a bare fixture literal --
+    /// documentation that never names the constant a reader is supposed to use. With the IR
+    /// in scope it resolves to the binding's own constant. ~keep
+    #[test]
+    fn a_declared_enum_argument_renders_as_the_bindings_constant() {
+        let body = render_mode_snippet(&[unit_enum()], &[send_function(TypeRef::Named("SampleMode".into()))]);
+
+        assert!(
+            body.contains("pkg.Send(pkg.SampleModeCareful)"),
+            "a declared enum parameter must take the binding's constant:\n{body}"
+        );
+        assert!(
+            !body.contains("pkg.Send(`careful`)"),
+            "the bare fixture literal must not survive when the IR names the type:\n{body}"
+        );
+    }
+
+    /// The `IrAbsent` half, and the one that matters most: every generator that threads no
+    /// core IR must emit exactly what it emitted before the seam existed. A test covering
+    /// only the `Known` case would let this regress silently for every IR-less consumer. ~keep
+    #[test]
+    fn an_ir_less_argument_keeps_its_pre_seam_literal() {
+        let body = render_mode_snippet(&[unit_enum()], &[]);
+
+        assert!(
+            body.contains("pkg.Send(`careful`)"),
+            "with no functions registry there is no declared type, so the literal stands:\n{body}"
+        );
+        assert!(
+            !body.contains("SampleModeCareful"),
+            "an absent IR licenses no type claim:\n{body}"
+        );
+    }
+
+    /// A declared parameter whose type names nothing the IR knows is the third state: the
+    /// seam answers `Known`, but nothing here can prove what the name is, so the rendering is
+    /// left alone rather than guessed at with a blind `pkg.T(...)` conversion. ~keep
+    #[test]
+    fn a_declared_but_unknown_type_keeps_its_literal() {
+        let body = render_mode_snippet(&[], &[send_function(TypeRef::Named("MysteryMode".into()))]);
+
+        assert!(
+            body.contains("pkg.Send(`careful`)"),
+            "an unresolvable declared type must not be converted blindly:\n{body}"
+        );
+        assert!(!body.contains("pkg.MysteryMode("), "{body}");
+    }
+
+    /// A declared `String` parameter names no type at all, so the catch-all must keep its
+    /// literal -- the negative control that keeps the conversion scoped to named types. ~keep
+    #[test]
+    fn a_declared_string_parameter_keeps_its_literal() {
+        let body = render_mode_snippet(&[unit_enum()], &[send_function(TypeRef::String)]);
+
+        assert!(body.contains("pkg.Send(`careful`)"), "{body}");
     }
 }

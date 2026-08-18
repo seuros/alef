@@ -341,6 +341,7 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         &[],
         &[],
         false,
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
     )
     .expect("args render");
 

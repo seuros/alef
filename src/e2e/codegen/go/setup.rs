@@ -17,6 +17,64 @@ fn qualified_go_type(import_alias: &str, type_name: &str) -> String {
     }
 }
 
+/// The Go shape the binding backend emits for `type_name`, when the name is an IR enum.
+///
+/// `None` covers both "not an enum" and "not in the IR at all"; neither licenses any claim
+/// about the emitted declaration, so every caller keeps its pre-existing rendering. ~keep
+fn go_enum_shape(
+    enums: &[crate::core::ir::EnumDef],
+    type_name: &str,
+) -> Option<crate::backends::go::GoEnumRepresentation> {
+    enums
+        .iter()
+        .find(|candidate| candidate.name == type_name)
+        .map(crate::backends::go::go_enum_representation)
+}
+
+/// The zero-valued Go expression for an argument of `type_name` whose fixture supplies no value.
+///
+/// The composite literal `pkg.T{}` is only legal when the binding emits `T` as a struct (or a
+/// slice, which `type T json.RawMessage` is). Against a sealed `interface` it is `invalid
+/// composite literal type`, and against `type T string` it is the same error — both of which the
+/// unconditional `pkg.T{}` used to emit. Each arm below is the zero value of the declaration
+/// `backends::go::gen_bindings::types::enums::gen_enum_type` actually writes. ~keep
+fn go_empty_value_expression(import_alias: &str, type_name: &str, enums: &[crate::core::ir::EnumDef]) -> String {
+    match go_enum_shape(enums, type_name) {
+        Some(crate::backends::go::GoEnumRepresentation::DataInterface) => "nil".to_string(),
+        Some(
+            crate::backends::go::GoEnumRepresentation::UnitString
+            | crate::backends::go::GoEnumRepresentation::NewtypeTupleString,
+        ) => "\"\"".to_string(),
+        _ => format!("{}{{}}", qualified_go_type(import_alias, type_name)),
+    }
+}
+
+/// The `ptr[T any]` / `mustReadFile` package-level helpers a rendered literal depends on.
+///
+/// A literal can reach `package_decls` from more than one argument arm, and a helper emitted
+/// twice is a duplicate declaration in the generated file — hence the membership check rather
+/// than an unconditional push. ~keep
+fn ensure_value_helpers(package_decls: &mut Vec<String>, literal: &str) {
+    if literal.contains("ptr(")
+        && !package_decls
+            .iter()
+            .any(|declaration| declaration.starts_with("func ptr["))
+    {
+        package_decls.push("func ptr[T any](value T) *T { return &value }".to_string());
+    }
+    if literal.contains("mustReadFile(")
+        && !package_decls
+            .iter()
+            .any(|declaration| declaration.starts_with("func mustReadFile("))
+    {
+        package_decls.push(
+            crate::e2e::template_env::render("go/read_file_helper.jinja", minijinja::context! {})
+                .trim_end()
+                .to_string(),
+        );
+    }
+}
+
 /// How much of an offending fixture value [`named_field_type_mismatch`] quotes back.
 ///
 /// The value is named so an operator can find the fixture entry that produced it, but a
@@ -212,9 +270,63 @@ pub(super) fn go_struct_field_expression(
                 literal
             }
         }
+        crate::core::ir::TypeRef::Json => {
+            // The Go binding backend declares this field `json.RawMessage` (`*json.RawMessage`
+            // when the field is pointer-shaped) — see `backends::go::type_map::go_type`. Falling
+            // through to the catch-all below dropped the field from the emitted literal, so a
+            // published snippet compiled while silently omitting the very value it documents
+            // (alef #234). `json.RawMessage` has underlying type `[]byte`, which a Go untyped
+            // string constant converts to, so the raw JSON text is a legal conversion operand.
+            //
+            // The spelling is load-bearing: `snippet.rs` decides whether to import
+            // `encoding/json` by scanning its rendered setup lines for `json.`, so this
+            // expression is what pulls the import in. ~keep
+            if value.is_null() {
+                return Ok(None);
+            }
+            let literal = format!("json.RawMessage({})", go_string_literal(&value.to_string()));
+            if uses_pointer {
+                format!("ptr({literal})")
+            } else {
+                literal
+            }
+        }
         _ => return Ok(None),
     };
     Ok(Some(expression))
+}
+
+/// Lower a *top-level* argument value into an expression of the type the core IR declares for
+/// the parameter it fills, or `Ok(None)` to leave the caller's pre-IR rendering alone.
+///
+/// The top-level argument arms have no `FieldDef` to read a type off, so before the
+/// `crate::e2e::codegen::call_ir::TargetParams` seam existed every one of them rendered a bare
+/// `json_to_go` literal against whatever the parameter was declared as. This converts only the
+/// two cases the IR can actually settle — a declared IR enum, and a JSON object landing in a
+/// declared IR struct. A name the IR does not know, an opaque handle, and a scalar against a
+/// struct are all left exactly as they were: nothing here can prove what expression they want,
+/// and a wrong guess is a published snippet that does not compile. ~keep
+fn typed_named_argument_expression(
+    value: &serde_json::Value,
+    type_name: &str,
+    context: GoValueContext<'_>,
+    arg_name: &str,
+    uses_pointer: bool,
+) -> anyhow::Result<Option<String>> {
+    let is_struct = context
+        .type_defs
+        .iter()
+        .any(|definition| definition.name == type_name && !definition.is_opaque);
+    let is_enum = context.enums.iter().any(|candidate| candidate.name == type_name);
+    if !is_enum && !(is_struct && value.is_object()) {
+        return Ok(None);
+    }
+    let site = GoFieldSite {
+        owner_type: type_name,
+        field_name: arg_name,
+        pointer: "",
+    };
+    go_named_field_expression(value, type_name, context, site, uses_pointer).map(Some)
 }
 
 fn native_go_dto_literal(
@@ -355,6 +467,11 @@ impl UppercaseFirst for str {
 /// renders fixture values straight into typed Go struct literals. `render_snippet_body`'s
 /// caller turns the error into a recorded missing-snippet entry, so a refusal is a visible
 /// coverage gap rather than a published snippet that fails `go vet`. ~keep
+///
+/// `target` is what the core IR declares about the parameters these arguments fill. Only the
+/// documentation-snippet caller supplies a real one; the e2e test-file callers pass
+/// [`crate::e2e::codegen::call_ir::TargetParams::IrAbsent`], which licenses no type claim, so
+/// every rendering below falls back to exactly what it emitted before the seam existed. ~keep
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_args_and_setup(
     input: &serde_json::Value,
@@ -369,6 +486,7 @@ pub(super) fn build_args_and_setup(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     native_dtos: bool,
+    target: crate::e2e::codegen::call_ir::TargetParams<'_>,
 ) -> anyhow::Result<(Vec<String>, Vec<String>, String)> {
     let fixture_id = &fixture.id;
     use heck::ToUpperCamelCase;
@@ -381,7 +499,7 @@ pub(super) fn build_args_and_setup(
     let mut setup_lines: Vec<String> = Vec::new();
     let mut parts: Vec<String> = Vec::new();
 
-    for arg in args {
+    for (arg_index, arg) in args.iter().enumerate() {
         if arg.arg_type == "mock_url" {
             let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
             let value = input.get(field).unwrap_or(&serde_json::Value::Null);
@@ -531,11 +649,24 @@ pub(super) fn build_args_and_setup(
             enums,
             files: &docs_files,
         };
+        // The type the core IR declares for the parameter this `args` entry fills. `None` on
+        // every IR-less path (`TargetParams::IrAbsent`), which is what keeps the test-file
+        // emitters rendering exactly what they rendered before this seam was threaded in. ~keep
+        let declared_type_name = target.declared_type_name(&arg.name, arg_index);
+        // `json_object_go_type` reads only hand-authored config (`go_type`, `element_type`,
+        // `options_type`). When none of the three is set the old code fell through to a bare
+        // JSON string literal spliced against whatever the parameter really is; the IR knows
+        // that name, so it is the last resort rather than nothing. ~keep
+        let json_object_type = json_object_go_type(arg, options_type).or(declared_type_name);
+        // Spelling a typed Go literal is the native-DTO mode's business. The test-file
+        // emitters unmarshal their argument values from JSON instead, so a declared type
+        // gives them nothing to render and must not change what they emit. ~keep
+        let native_declared_type = if native_dtos { declared_type_name } else { None };
 
         if native_dtos
             && arg.arg_type == "json_object"
             && val.is_none_or(serde_json::Value::is_null)
-            && let Some(type_name) = json_object_go_type(arg, options_type)
+            && let Some(type_name) = json_object_type
             && let Some(literal) = native_go_dto_literal(
                 &serde_json::Value::Object(serde_json::Map::new()),
                 type_name,
@@ -579,8 +710,8 @@ pub(super) fn build_args_and_setup(
                 "json_object" => {
                     if options_ptr {
                         parts.push("nil".to_string());
-                    } else if let Some(opts_type) = json_object_go_type(arg, options_type) {
-                        parts.push(format!("{}{{}}", qualified_go_type(import_alias, opts_type)));
+                    } else if let Some(opts_type) = json_object_type {
+                        parts.push(go_empty_value_expression(import_alias, opts_type, enums));
                     } else {
                         parts.push("nil".to_string());
                     }
@@ -598,8 +729,8 @@ pub(super) fn build_args_and_setup(
                     "json_object" => {
                         if options_ptr {
                             "nil".to_string()
-                        } else if let Some(opts_type) = json_object_go_type(arg, options_type) {
-                            format!("{}{{}}", qualified_go_type(import_alias, opts_type))
+                        } else if let Some(opts_type) = json_object_type {
+                            go_empty_value_expression(import_alias, opts_type, enums)
                         } else {
                             "nil".to_string()
                         }
@@ -614,27 +745,10 @@ pub(super) fn build_args_and_setup(
                     let is_empty_obj = !is_array && v.is_object() && v.as_object().is_some_and(|o| o.is_empty());
                     if native_dtos
                         && !is_array
-                        && let Some(opts_type) = json_object_go_type(arg, options_type)
+                        && let Some(opts_type) = json_object_type
                         && let Some(literal) = native_go_dto_literal(v, opts_type, value_context)?
                     {
-                        if literal.contains("ptr(")
-                            && !package_decls
-                                .iter()
-                                .any(|declaration| declaration.starts_with("func ptr["))
-                        {
-                            package_decls.push("func ptr[T any](value T) *T { return &value }".to_string());
-                        }
-                        if literal.contains("mustReadFile(")
-                            && !package_decls
-                                .iter()
-                                .any(|declaration| declaration.starts_with("func mustReadFile("))
-                        {
-                            package_decls.push(
-                                crate::e2e::template_env::render("go/read_file_helper.jinja", minijinja::context! {})
-                                    .trim_end()
-                                    .to_string(),
-                            );
-                        }
+                        ensure_value_helpers(&mut package_decls, &literal);
                         setup_lines.push(format!("{} := {}", arg.name, literal.replace('\n', "\n\t")));
                         let arg_expr = if Some(opts_type) == options_type && options_ptr {
                             format!("&{}", arg.name)
@@ -647,8 +761,8 @@ pub(super) fn build_args_and_setup(
                     if is_empty_obj {
                         if options_ptr {
                             parts.push("nil".to_string());
-                        } else if let Some(opts_type) = json_object_go_type(arg, options_type) {
-                            parts.push(format!("{}{{}}", qualified_go_type(import_alias, opts_type)));
+                        } else if let Some(opts_type) = json_object_type {
+                            parts.push(go_empty_value_expression(import_alias, opts_type, enums));
                         } else {
                             parts.push("nil".to_string());
                         }
@@ -715,7 +829,7 @@ pub(super) fn build_args_and_setup(
                             ));
                         }
                         parts.push(var_name.to_string());
-                    } else if let Some(opts_type) = json_object_go_type(arg, options_type) {
+                    } else if let Some(opts_type) = json_object_type {
                         let remapped_v = if Some(opts_type) == options_type && options_ptr {
                             convert_json_for_go(v.clone())
                         } else {
@@ -724,7 +838,6 @@ pub(super) fn build_args_and_setup(
                         let json_str = serde_json::to_string(&remapped_v).unwrap_or_default();
                         let go_literal = go_string_literal(&json_str);
                         let var_name = &arg.name;
-                        let type_name = qualified_go_type(import_alias, opts_type);
                         if crate::e2e::codegen::value_contains_mock_url_placeholder(&remapped_v) {
                             let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
                             setup_lines.push(format!(
@@ -740,6 +853,24 @@ pub(super) fn build_args_and_setup(
                         } else {
                             go_literal
                         };
+                        // `encoding/json` cannot unmarshal into an interface value: `var x
+                        // pkg.T; json.Unmarshal(data, &x)` compiles for a sealed-interface `T`
+                        // and then fails at run time with `cannot unmarshal object into Go
+                        // value of type pkg.T`. The Go binding backend emits a
+                        // `Unmarshal<T>(data []byte) (T, error)` dispatcher for exactly this,
+                        // which the sibling array arm above already uses for its elements. ~keep
+                        if matches!(
+                            go_enum_shape(enums, opts_type),
+                            Some(crate::backends::go::GoEnumRepresentation::DataInterface)
+                        ) {
+                            let go_enum_name = crate::codegen::naming::go_type_name(opts_type);
+                            setup_lines.push(format!(
+                                "{var_name}, {var_name}Err := {import_alias}.Unmarshal{go_enum_name}([]byte({json_expr}))\n\tif {var_name}Err != nil {{\n\t\tt.Fatalf(\"unmarshal {go_enum_name} failed: %v\", {var_name}Err)\n\t}}"
+                            ));
+                            parts.push(var_name.to_string());
+                            continue;
+                        }
+                        let type_name = qualified_go_type(import_alias, opts_type);
                         setup_lines.push(format!(
                             "var {var_name} {type_name}\n\tif err := json.Unmarshal([]byte({json_expr}), &{var_name}); err != nil {{\n\t\tt.Fatalf(\"config parse failed: %v\", err)\n\t}}"
                         ));
@@ -755,12 +886,47 @@ pub(super) fn build_args_and_setup(
                 }
                 "string" if arg.optional => {
                     let var_name = format!("{}Val", arg.name);
-                    let go_val = json_to_go(v);
-                    setup_lines.push(format!("{var_name} := {go_val}"));
+                    // An optional parameter is emitted as `*T`, and `&{name}Val` where
+                    // `{name}Val` is bound to a bare string literal is a `*string` — correct
+                    // only when `T` really is `string`. A declared enum needs the typed
+                    // expression bound instead, so the address taken is of a value of the
+                    // parameter's own type. ~keep
+                    let typed = if let Some(type_name) = native_declared_type {
+                        typed_named_argument_expression(v, type_name, value_context, &arg.name, false)?
+                    } else {
+                        None
+                    };
+                    let go_val = typed.unwrap_or_else(|| json_to_go(v));
+                    ensure_value_helpers(&mut package_decls, &go_val);
+                    setup_lines.push(format!("{var_name} := {}", go_val.replace('\n', "\n\t")));
                     parts.push(format!("&{var_name}"));
                 }
                 _ => {
-                    parts.push(json_to_go(v));
+                    // The catch-all every non-`json_object`, non-`bytes` argument falls into.
+                    // Without a declared type it can only stringify the fixture value, which
+                    // lands a bare literal against whatever the parameter really is; with one
+                    // it renders the expression that type actually takes. ~keep
+                    let typed = if let Some(type_name) = native_declared_type {
+                        let uses_pointer = target
+                            .param_for(&arg.name, arg_index)
+                            .is_some_and(|param| param.optional);
+                        typed_named_argument_expression(v, type_name, value_context, &arg.name, uses_pointer)?
+                    } else {
+                        None
+                    };
+                    if let Some(expression) = typed {
+                        ensure_value_helpers(&mut package_decls, &expression);
+                        // A DTO literal spans lines; an argument list cannot, so it is bound to
+                        // the argument's own variable and passed by name. ~keep
+                        if expression.contains('\n') {
+                            setup_lines.push(format!("{} := {}", arg.name, expression.replace('\n', "\n\t")));
+                            parts.push(arg.name.clone());
+                        } else {
+                            parts.push(expression);
+                        }
+                    } else {
+                        parts.push(json_to_go(v));
+                    }
                 }
             },
         }
@@ -773,6 +939,84 @@ pub(super) fn build_args_and_setup(
 mod file_dto_tests {
     use super::*;
     use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    fn json_field_owner(optional: bool) -> [TypeDef; 1] {
+        [TypeDef {
+            name: "ResponseFormat".into(),
+            fields: vec![FieldDef {
+                name: "schema".into(),
+                ty: TypeRef::Json,
+                optional,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }]
+    }
+
+    fn render_response_format(value: serde_json::Value, types: &[TypeDef]) -> Option<String> {
+        native_go_dto_literal(
+            &value,
+            "ResponseFormat",
+            GoValueContext {
+                import_alias: "sample",
+                type_defs: types,
+                enums: &[],
+                files: &[],
+            },
+        )
+        .expect("no refusal")
+    }
+
+    /// alef #234: a `TypeRef::Json` field used to fall through
+    /// [`go_struct_field_expression`]'s catch-all and be dropped from the emitted literal, so
+    /// the published snippet compiled while omitting the schema it exists to document. The Go
+    /// binding declares the field `json.RawMessage`, whose underlying `[]byte` accepts the raw
+    /// JSON text as a conversion operand. ~keep
+    #[test]
+    fn renders_json_typed_field_as_a_raw_message_conversion() {
+        let types = json_field_owner(false);
+        let rendered = render_response_format(
+            serde_json::json!({"schema": {"type": "object", "required": ["name"]}}),
+            &types,
+        )
+        .expect("native DTO");
+
+        assert!(
+            // serde_json serialises a Map as a BTreeMap (the `preserve_order` feature is off), so
+            // the compact literal is key-sorted: `required` precedes `type` regardless of the order
+            // the fixture author wrote. Pinning source order here pins a spelling alef never emits. ~keep
+            rendered.contains("Schema: json.RawMessage(`{\"required\":[\"name\"],\"type\":\"object\"}`)"),
+            "the schema itself must appear in the literal, not be dropped: {rendered}"
+        );
+        assert!(
+            !rendered.contains("sample.ResponseFormat{}"),
+            "the only field must not be dropped, leaving an empty literal: {rendered}"
+        );
+    }
+
+    /// An optional `TypeRef::Json` field is emitted as `*json.RawMessage`, so its value has to
+    /// be address-taken through the generic `ptr` helper like every other pointer field. ~keep
+    #[test]
+    fn renders_optional_json_typed_field_through_the_pointer_helper() {
+        let types = json_field_owner(true);
+        let rendered =
+            render_response_format(serde_json::json!({"schema": {"type": "object"}}), &types).expect("native DTO");
+
+        assert!(
+            rendered.contains("Schema: ptr(json.RawMessage(`{\"type\":\"object\"}`))"),
+            "{rendered}"
+        );
+    }
+
+    /// A JSON `null` has no `json.RawMessage` worth spelling — the field is omitted so Go's
+    /// `nil` zero value stands in, which marshals back to `null`. ~keep
+    #[test]
+    fn omits_a_null_json_typed_field() {
+        let types = json_field_owner(false);
+        let rendered = render_response_format(serde_json::json!({"schema": null}), &types).expect("native DTO");
+
+        assert_eq!(rendered, "sample.ResponseFormat{}", "{rendered}");
+    }
 
     #[test]
     fn renders_nested_file_pointer_as_byte_read() {
@@ -922,6 +1166,157 @@ mod file_dto_tests {
 }
 
 #[cfg(test)]
+mod sealed_interface_argument_tests {
+    use super::build_args_and_setup;
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
+    use crate::e2e::codegen::call_ir::TargetParams;
+    use crate::e2e::config::ArgMapping;
+    use crate::e2e::fixture::Fixture;
+
+    /// A variant carrying a NAMED field is not a tuple variant, which is exactly
+    /// `go_enum_representation`'s condition for emitting `type SampleDoc interface { .. }`.
+    fn sealed_document_enum() -> EnumDef {
+        EnumDef {
+            name: "SampleDoc".into(),
+            rust_path: "samplelib::SampleDoc".into(),
+            variants: vec![EnumVariant {
+                name: "Url".into(),
+                fields: vec![FieldDef {
+                    name: "url".into(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                }],
+                ..EnumVariant::default()
+            }],
+            serde_rename_all: Some("snake_case".into()),
+            ..EnumDef::default()
+        }
+    }
+
+    fn document_arg() -> ArgMapping {
+        ArgMapping {
+            name: "document".into(),
+            field: "input.document".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: Some("SampleDoc".into()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    /// Renders through the e2e test-file mode (`native_dtos = false`, `TargetParams::IrAbsent`)
+    /// so nothing below depends on the core-IR seam -- these are shape decisions the emitter
+    /// can make from the enum registry it has always been handed. ~keep
+    fn render(input: serde_json::Value, enums: &[EnumDef]) -> (String, String) {
+        let fixture = Fixture {
+            id: "load_document".into(),
+            input,
+            ..Fixture::default()
+        };
+        let (_declarations, setup, args) = build_args_and_setup(
+            &fixture.input,
+            &[document_arg()],
+            "pkg",
+            None,
+            &fixture,
+            false,
+            false,
+            &std::collections::HashSet::new(),
+            &crate::core::config::ResolvedCrateConfig::default(),
+            &[],
+            enums,
+            false,
+            TargetParams::IrAbsent,
+        )
+        .expect("args render");
+        (setup.join("\n"), args)
+    }
+
+    /// `encoding/json` cannot decode into an interface value: `var d pkg.SampleDoc;
+    /// json.Unmarshal(data, &d)` compiles and then fails at RUN time. The binding backend
+    /// emits `UnmarshalSampleDoc` for exactly this, and the sibling array arm already used
+    /// it -- the scalar arm did not. ~keep
+    #[test]
+    fn a_sealed_interface_argument_is_built_by_its_unmarshal_dispatcher() {
+        let (setup, args) = render(
+            serde_json::json!({"document": {"url": "https://example.com/doc.pdf"}}),
+            &[sealed_document_enum()],
+        );
+
+        assert!(
+            setup.contains("document, documentErr := pkg.UnmarshalSampleDoc([]byte("),
+            "{setup}"
+        );
+        assert!(
+            !setup.contains("var document pkg.SampleDoc"),
+            "json.Unmarshal into an interface fails at run time:\n{setup}"
+        );
+        assert_eq!(args, "document");
+    }
+
+    /// The negative control that keeps the dispatcher scoped to interface-shaped enums: a
+    /// name the enum registry does not know keeps the `var x T; json.Unmarshal` rendering. ~keep
+    #[test]
+    fn a_struct_typed_argument_keeps_the_json_unmarshal_rendering() {
+        let (setup, args) = render(
+            serde_json::json!({"document": {"url": "https://example.com/doc.pdf"}}),
+            &[],
+        );
+
+        assert!(setup.contains("var document pkg.SampleDoc"), "{setup}");
+        assert!(!setup.contains("UnmarshalSampleDoc"), "{setup}");
+        assert_eq!(args, "document");
+    }
+
+    /// `pkg.SampleDoc{}` is `invalid composite literal type` when `SampleDoc` is an
+    /// interface; `nil` is the interface's zero value. ~keep
+    #[test]
+    fn an_absent_sealed_interface_argument_defaults_to_nil() {
+        let (_setup, args) = render(serde_json::json!({"document": null}), &[sealed_document_enum()]);
+
+        assert_eq!(args, "nil");
+    }
+
+    /// The same for an explicitly empty object, which takes a different arm. ~keep
+    #[test]
+    fn an_empty_sealed_interface_argument_defaults_to_nil() {
+        let (_setup, args) = render(serde_json::json!({"document": {}}), &[sealed_document_enum()]);
+
+        assert_eq!(args, "nil");
+    }
+
+    /// The negative control for the zero-value change: a name that is not an IR enum still
+    /// gets the composite literal, so every struct-typed argument in the corpus is untouched. ~keep
+    #[test]
+    fn an_absent_struct_typed_argument_keeps_its_composite_literal() {
+        let (_setup, args) = render(serde_json::json!({"document": null}), &[]);
+
+        assert_eq!(args, "pkg.SampleDoc{}");
+    }
+
+    /// A unit enum is `type SampleDoc string`, which also has no composite literal -- its
+    /// zero value is the empty string. ~keep
+    #[test]
+    fn an_absent_unit_enum_argument_defaults_to_the_empty_string() {
+        let unit = EnumDef {
+            name: "SampleDoc".into(),
+            rust_path: "samplelib::SampleDoc".into(),
+            variants: vec![EnumVariant {
+                name: "Url".into(),
+                ..EnumVariant::default()
+            }],
+            ..EnumDef::default()
+        };
+        let (_setup, args) = render(serde_json::json!({"document": null}), &[unit]);
+
+        assert_eq!(args, "\"\"");
+    }
+}
+
+#[cfg(test)]
 mod test_backend_fallback_tests {
     use super::build_args_and_setup;
     use crate::core::config::ResolvedCrateConfig;
@@ -971,6 +1366,7 @@ mod test_backend_fallback_tests {
                 &[],
                 &[],
                 false,
+                crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
             )
         }));
 
@@ -1012,6 +1408,7 @@ mod test_backend_fallback_tests {
                 &[],
                 &[],
                 false,
+                crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
             )
         }));
 
