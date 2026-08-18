@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Java, Kotlin and C# snippets validate in one compiler invocation per language instead of one per
+  snippet.** Java and Kotlin collapse a JVM startup per snippet into one; C# collapses a `dotnet build`
+  per snippet into one. Measured on 20 snippets: `javac` 5.44s to 0.23s, `kotlinc` ~76s to 4.86s,
+  `dotnet build` 15.7s to 1.36s against an already-warm project directory. Each snippet is given a unique
+  synthetic package/namespace so two snippets declaring the same top-level name cannot fail each other —
+  a batch is declined outright when two snippets declare the *same* explicit package, since that
+  collision is real and only the compiler can tell it apart from the synthetic case. One consequence is
+  deliberate: entry-point-ness is a project-level property in C#, so a batched project builds as a
+  library and a snippet that used to fail `CS5001` (no static `Main`) now passes.
 - **TypeScript, Python and Go snippets validate in one compiler invocation per language instead of one per
   snippet.** Only Rust batched before; every other language paid a full `tsc` / interpreter / `go build`
   startup per snippet, and all of a language's snippets were serialised behind its session lock, so the

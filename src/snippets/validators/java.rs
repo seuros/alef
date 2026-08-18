@@ -183,12 +183,7 @@ impl JavaValidator {
         Ok(command)
     }
 
-    fn batch_results(
-        units: &[JavaBatchUnit],
-        warnings_fail: bool,
-        success: bool,
-        output: &str,
-    ) -> BatchValidation {
+    fn batch_results(units: &[JavaBatchUnit], warnings_fail: bool, success: bool, output: &str) -> BatchValidation {
         let (diagnostics, mut unmatched) = Self::split_diagnostics(output);
         let mut attributed = vec![Vec::<String>::new(); units.len()];
         for diagnostic in diagnostics {
@@ -261,10 +256,17 @@ impl JavaValidator {
     }
 
     fn terminates_a_diagnostic(line: &str) -> bool {
-        DIAGNOSTIC_TERMINATORS.iter().any(|marker| line.starts_with(marker))
-            || line
-                .split_once(' ')
-                .is_some_and(|(count, rest)| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()) && rest.starts_with(|c: char| c == 'e' || c == 'w'))
+        DIAGNOSTIC_TERMINATORS.iter().any(|marker| line.starts_with(marker)) || Self::is_diagnostic_summary(line)
+    }
+
+    /// javac's trailing counts (`2 errors`, `3 warnings`), which close the last diagnostic block.
+    fn is_diagnostic_summary(line: &str) -> bool {
+        let Some((count, rest)) = line.split_once(' ') else {
+            return false;
+        };
+        !count.is_empty()
+            && count.bytes().all(|byte| byte.is_ascii_digit())
+            && (rest.starts_with("error") || rest.starts_with("warning"))
     }
 
     fn owning_units(units: &[JavaBatchUnit], path: &str) -> Vec<usize> {
@@ -309,10 +311,7 @@ impl JavaValidator {
     /// declaration is still allowed to follow.
     fn is_declaration_line(line: &str) -> bool {
         let trimmed = line.trim();
-        !trimmed.is_empty()
-            && !trimmed.starts_with("//")
-            && !trimmed.starts_with("/*")
-            && !trimmed.starts_with('*')
+        !trimmed.is_empty() && !trimmed.starts_with("//") && !trimmed.starts_with("/*") && !trimmed.starts_with('*')
     }
 
     fn validate_with_context(
@@ -652,6 +651,231 @@ mod tests {
             .join("alef-snippets/sessions")
             .join(&session.fingerprint);
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    const BATCH_TEST_TIMEOUT_SECS: u64 = 120;
+
+    /// Attribution is asserted without a toolchain so the mapping itself is pinned rather than
+    /// javac's willingness to run: a batch that blames one snippet for another's error is the one
+    /// failure mode that makes batching worse than the per-snippet path it replaces. ~keep
+    #[test]
+    fn a_javac_diagnostic_is_attributed_only_to_the_snippet_that_owns_its_file() {
+        let units = [batch_unit("sfirst"), batch_unit("ssecond"), batch_unit("sthird")];
+        let output = "/batch/ssecond/Snippet.java:5: error: cannot find symbol\nBogus value;\n^\n  symbol: class Bogus\n2 errors\n";
+
+        let results = JavaValidator::batch_results(&units, false, false, output);
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None));
+        assert_eq!(results[2], (SnippetStatus::Pass, None));
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(
+            results[1].1.as_deref(),
+            Some("/batch/ssecond/Snippet.java:5: error: cannot find symbol\nBogus value;\n^\n  symbol: class Bogus")
+        );
+    }
+
+    /// A javac run that failed with nothing attributable must fail every snippet carrying the real
+    /// output — never silently pass the batch. ~keep
+    #[test]
+    fn an_unattributable_javac_failure_fails_every_snippet_with_the_real_output() {
+        let units = [batch_unit("sfirst"), batch_unit("ssecond")];
+
+        let results = JavaValidator::batch_results(&units, false, false, "error: invalid flag: --nonsense\n");
+
+        assert_eq!(results.len(), 2);
+        for result in &results {
+            assert_eq!(result.0, SnippetStatus::Fail);
+            assert_eq!(result.1.as_deref(), Some("error: invalid flag: --nonsense"));
+        }
+    }
+
+    /// `-Werror` is only passed at `TypeCheck`, so a warning must fail its snippet there and be
+    /// ignored at `Compile` — exactly what the per-snippet path does with the same flags. ~keep
+    #[test]
+    fn a_warning_fails_its_snippet_only_when_werror_is_in_effect() {
+        let units = [batch_unit("sfirst"), batch_unit("ssecond")];
+        let output = "/batch/ssecond/Snippet.java:5: warning: [rawtypes] found raw type: List\nList raw;\n^\nerror: warnings found and -Werror specified\n1 error\n1 warning\n";
+
+        let type_check = JavaValidator::batch_results(&units, true, false, output);
+        let compile = JavaValidator::batch_results(&units, false, true, output);
+
+        assert_eq!(type_check[0].0, SnippetStatus::Pass);
+        assert_eq!(type_check[1].0, SnippetStatus::Fail);
+        assert_eq!(compile[0].0, SnippetStatus::Pass);
+        assert_eq!(compile[1].0, SnippetStatus::Pass);
+    }
+
+    #[test]
+    fn run_level_declines_batching() {
+        let first = snippet("System.out.println(\"one\");");
+        let second = snippet("System.out.println(\"two\");");
+
+        let declined = JavaValidator::validate_batch_with_context(&[&first, &second], ValidationLevel::Run, 5, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn a_batch_is_declined_when_two_snippets_share_a_declared_package() {
+        let first = snippet("package shared.fixture;\npublic final class Alpha { }");
+        let second = snippet("package shared.fixture;\npublic final class Beta { }");
+
+        let declined =
+            JavaValidator::validate_batch_with_context(&[&first, &second], ValidationLevel::Compile, 5, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn a_batch_returns_exactly_one_result_per_snippet_in_input_order() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("javac").is_err() {
+            return;
+        }
+        let snippets = [
+            snippet("System.out.println(\"first\");"),
+            snippet("System.out.println(\"second\");"),
+            snippet("System.out.println(\"third\");"),
+            snippet("System.out.println(\"fourth\");"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results =
+            JavaValidator::validate_batch_with_context(&batch, ValidationLevel::Compile, BATCH_TEST_TIMEOUT_SECS, None)
+                .expect("compile level batches")
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 4);
+        for (index, result) in results.iter().enumerate() {
+            assert_eq!(result.0, SnippetStatus::Pass, "snippet {index}: {:?}", result.1);
+        }
+    }
+
+    #[test]
+    fn a_batch_fails_only_the_broken_snippet() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("javac").is_err() {
+            return;
+        }
+        let snippets = [
+            snippet("System.out.println(\"first\");"),
+            snippet("BogusType value = new BogusType();"),
+            snippet("System.out.println(\"third\");"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results =
+            JavaValidator::validate_batch_with_context(&batch, ValidationLevel::Compile, BATCH_TEST_TIMEOUT_SECS, None)
+                .expect("compile level batches")
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None));
+        assert_eq!(results[2], (SnippetStatus::Pass, None));
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("BogusType")),
+            "the failure must name the broken snippet's own symbol: {:?}",
+            results[1].1
+        );
+    }
+
+    /// `wrap_if_fragment` names every wrapped fragment `Snippet`, and a snippet may declare its own
+    /// `Example` alongside another that does the same. Compiling them together in one package would
+    /// fail both with `duplicate class` — a failure the per-snippet path never had, which is a
+    /// regression rather than an optimization. ~keep
+    #[test]
+    fn snippets_declaring_the_same_class_name_do_not_collide_in_one_batch() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("javac").is_err() {
+            return;
+        }
+        let snippets = [
+            snippet("public final class Example { static int value() { return 1; } }"),
+            snippet("public final class Example { static int value() { return 2; } }"),
+            snippet("System.out.println(\"fragment\");"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results =
+            JavaValidator::validate_batch_with_context(&batch, ValidationLevel::Compile, BATCH_TEST_TIMEOUT_SECS, None)
+                .expect("compile level batches")
+                .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        for (index, result) in results.iter().enumerate() {
+            assert_eq!(result.0, SnippetStatus::Pass, "snippet {index}: {:?}", result.1);
+        }
+    }
+
+    /// The batch path is bound by the same hard constraint as the single-snippet path: alef's Java
+    /// backend points Maven's `<sourceDirectory>` at `${project.basedir}`, so anything the batch
+    /// writes under `working_directory` is compiled into the consumer's shipped artifact. ~keep
+    #[test]
+    fn batch_scratch_is_never_written_under_the_working_directory() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("javac").is_err() {
+            return;
+        }
+        let root = tempfile::tempdir().expect("temporary root");
+        let session = ValidationSession {
+            language: Language::Java,
+            working_directory: root.path().to_path_buf(),
+            manifest: None,
+            fingerprint: test_fingerprint(root.path()),
+            env: BTreeMap::new(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: BTreeMap::new(),
+        };
+        let snippets = [
+            snippet("System.out.println(\"first\");"),
+            snippet("System.out.println(\"second\");"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results = JavaValidator::validate_batch_with_context(
+            &batch,
+            ValidationLevel::Compile,
+            BATCH_TEST_TIMEOUT_SECS,
+            Some(&session),
+        )
+        .expect("compile level batches")
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, SnippetStatus::Pass, "{:?}", results[0].1);
+        let leaked = walkdir::WalkDir::new(root.path())
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .any(|entry| entry.file_type().is_file());
+        assert!(
+            !leaked,
+            "no batch scratch file may be written anywhere under a Java session's working_directory"
+        );
+        cleanup_external_workspace(&session);
+    }
+
+    #[test]
+    fn an_auto_assigned_package_is_inserted_after_the_leading_comment_run() {
+        let source = JavaValidator::with_package("// leading note\n\npublic class Snippet { }\n", "alef_snippet_x");
+
+        assert_eq!(
+            source,
+            "// leading note\n\npackage alef_snippet_x;\n\npublic class Snippet { }\n"
+        );
+    }
+
+    fn batch_unit(directory: &str) -> JavaBatchUnit {
+        JavaBatchUnit {
+            directory: directory.to_owned(),
+            file_name: "Snippet.java".to_owned(),
+            source: String::new(),
+        }
     }
 
     fn snippet(code: &str) -> Snippet {

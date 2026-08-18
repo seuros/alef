@@ -1,12 +1,278 @@
+use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command};
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
+/// Package prefix that isolates one batched snippet's top-level declarations from every other
+/// snippet's. Kotlin resolves top-level `fun`/`val` per *package*, across files, so two snippets
+/// each declaring `fun main()` in the same package redeclare each other — a failure the
+/// per-snippet path never had. A distinct file name is not enough; a distinct package is. ~keep
+const BATCH_PACKAGE_PREFIX: &str = "alef_snippet_";
+
+/// kotlinc diagnostic headers, as `<path>:<line>:<column>: <severity>: <message>`.
+const DIAGNOSTIC_MARKERS: [(&str, DiagnosticSeverity); 2] = [
+    (": error: ", DiagnosticSeverity::Error),
+    (": warning: ", DiagnosticSeverity::Warning),
+];
+
+/// Column-zero, path-less lines kotlinc emits about the run as a whole (`warning: unable to find
+/// kotlin-stdlib`, `error: could not find ...`). They end a diagnostic block rather than continuing
+/// it, so they are not glued onto whichever snippet reported last. ~keep
+const DIAGNOSTIC_TERMINATORS: [&str; 3] = ["error:", "warning:", "info:"];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiagnosticSeverity {
+    Error,
+    Warning,
+}
+
+struct KotlinDiagnostic {
+    path: String,
+    severity: DiagnosticSeverity,
+    text: String,
+}
+
+/// One snippet's compilation unit inside a batch. Unlike Java, Kotlin puts no constraint on a
+/// file's name or location, so the file name itself is the attribution token.
+struct KotlinBatchUnit {
+    file_name: String,
+    source: String,
+}
 
 pub struct KotlinValidator;
 
 impl KotlinValidator {
+    fn validate_batch_with_context(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        if level == ValidationLevel::Run {
+            return None;
+        }
+        let units = Self::plan_batch(snippets, level, session)?;
+        Some(Self::compile_batch(&units, level, timeout_secs, session))
+    }
+
+    /// Builds one compilation unit per snippet, or declines the batch.
+    ///
+    /// A snippet that declares its own `package` keeps it, because rewriting a declared package
+    /// would break the same-package references inside it. Two such snippets sharing a package can
+    /// genuinely redeclare each other's top-level members, so the batch is declined and the runner
+    /// falls back to one process per snippet, which cannot collide at all. ~keep
+    fn plan_batch(
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        session: Option<&ValidationSession>,
+    ) -> Option<Vec<KotlinBatchUnit>> {
+        let fingerprint = session.map(|value| value.fingerprint.as_str());
+        let mut declared_packages: HashMap<String, String> = HashMap::new();
+        let mut units = Vec::with_capacity(snippets.len());
+        for snippet in snippets {
+            let code = snippet.code.trim();
+            let identifier = ValidationCache::key(snippet, level, fingerprint);
+            let source = match Self::declared_package(code) {
+                Some(package) => {
+                    let owner = declared_packages.entry(package).or_insert_with(|| identifier.clone());
+                    if owner != &identifier {
+                        return None;
+                    }
+                    format!("{code}\n")
+                }
+                None => Self::with_package(code, &format!("{BATCH_PACKAGE_PREFIX}{identifier}")),
+            };
+            units.push(KotlinBatchUnit {
+                file_name: format!("snippet_{identifier}.kt"),
+                source,
+            });
+        }
+        Some(units)
+    }
+
+    fn compile_batch(
+        units: &[KotlinBatchUnit],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Result<BatchValidation> {
+        let dir = match session {
+            Some(value) => value.scratch_dir()?,
+            None => ScratchDir::isolated()?,
+        };
+        let mut sources = Vec::with_capacity(units.len());
+        let mut seen = HashSet::new();
+        for unit in units {
+            let path = dir.path().join(&unit.file_name);
+            std::fs::write(&path, &unit.source)?;
+            if seen.insert(unit.file_name.clone()) {
+                sources.push(path);
+            }
+        }
+        let mut command = Self::batch_command(&sources, &dir.path().join("out"), level, session)?;
+        let (success, output) = run_command(&mut command, timeout_secs)?;
+        Ok(Self::batch_results(
+            units,
+            level == ValidationLevel::TypeCheck,
+            success,
+            &output,
+        ))
+    }
+
+    fn batch_command(
+        sources: &[PathBuf],
+        classes: &Path,
+        level: ValidationLevel,
+        session: Option<&ValidationSession>,
+    ) -> Result<std::process::Command> {
+        let mut command = std::process::Command::new("kotlinc");
+        if level == ValidationLevel::TypeCheck {
+            command.arg("-Werror");
+        }
+        command.arg("-nowarn");
+        if let Some(manifest) = session.and_then(|value| value.manifest.as_ref()) {
+            let class_path = Self::class_path(manifest)?;
+            command.args(["-classpath", class_path.to_string_lossy().as_ref()]);
+        }
+        command.arg("-d").arg(classes).args(sources);
+        if let Some(value) = session {
+            value.apply(&mut command);
+        }
+        Ok(command)
+    }
+
+    fn batch_results(units: &[KotlinBatchUnit], warnings_fail: bool, success: bool, output: &str) -> BatchValidation {
+        let (diagnostics, mut unmatched) = Self::split_diagnostics(output);
+        let mut attributed = vec![Vec::<String>::new(); units.len()];
+        for diagnostic in diagnostics {
+            if diagnostic.severity == DiagnosticSeverity::Warning && !warnings_fail {
+                continue;
+            }
+            let owners = Self::owning_units(units, &diagnostic.path);
+            if owners.is_empty() {
+                unmatched.push(diagnostic.text);
+                continue;
+            }
+            for owner in owners {
+                attributed[owner].push(diagnostic.text.clone());
+            }
+        }
+        let attributed_any = attributed.iter().any(|messages| !messages.is_empty());
+        let fallback = (!success && !attributed_any).then(|| {
+            if unmatched.is_empty() {
+                "kotlinc failed without a snippet-specific diagnostic".to_string()
+            } else {
+                unmatched.join("\n")
+            }
+        });
+        attributed
+            .into_iter()
+            .map(|messages| match (messages.is_empty(), &fallback) {
+                (true, Some(message)) => (SnippetStatus::Fail, Some(message.clone())),
+                (true, None) => (SnippetStatus::Pass, None),
+                (false, _) => (SnippetStatus::Fail, Some(messages.join("\n"))),
+            })
+            .collect()
+    }
+
+    fn split_diagnostics(output: &str) -> (Vec<KotlinDiagnostic>, Vec<String>) {
+        let mut diagnostics: Vec<KotlinDiagnostic> = Vec::new();
+        let mut other = Vec::new();
+        let mut open = false;
+        for line in output.lines() {
+            if let Some((path, severity)) = Self::diagnostic_header(line) {
+                diagnostics.push(KotlinDiagnostic {
+                    path: path.to_owned(),
+                    severity,
+                    text: line.to_owned(),
+                });
+                open = true;
+            } else if DIAGNOSTIC_TERMINATORS.iter().any(|marker| line.starts_with(marker)) {
+                other.push(line.to_owned());
+                open = false;
+            } else if let Some(last) = diagnostics.last_mut().filter(|_| open) {
+                last.text.push('\n');
+                last.text.push_str(line);
+            } else {
+                other.push(line.to_owned());
+            }
+        }
+        (diagnostics, other)
+    }
+
+    /// Splits `<path>:<line>:<column>: <severity>: ...`. Both position segments are stripped and
+    /// checked, so a message body that happens to contain `: error: ` cannot be mistaken for a
+    /// header and attribute a diagnostic to a path that is not a snippet file. ~keep
+    fn diagnostic_header(line: &str) -> Option<(&str, DiagnosticSeverity)> {
+        for (marker, severity) in DIAGNOSTIC_MARKERS {
+            let Some(index) = line.find(marker) else {
+                continue;
+            };
+            let (head, column) = line[..index].rsplit_once(':')?;
+            let (path, number) = head.rsplit_once(':')?;
+            if !path.is_empty() && Self::is_position(column) && Self::is_position(number) {
+                return Some((path, severity));
+            }
+        }
+        None
+    }
+
+    fn is_position(value: &str) -> bool {
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+    }
+
+    fn owning_units(units: &[KotlinBatchUnit], path: &str) -> Vec<usize> {
+        let Some(name) = Path::new(path).file_name().and_then(std::ffi::OsStr::to_str) else {
+            return Vec::new();
+        };
+        units
+            .iter()
+            .enumerate()
+            .filter(|(_, unit)| unit.file_name == name)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    fn declared_package(code: &str) -> Option<String> {
+        code.lines().find_map(|line| {
+            let rest = line.trim().strip_prefix("package ")?;
+            Some(rest.trim().trim_end_matches(';').trim().to_owned())
+        })
+    }
+
+    fn with_package(code: &str, package: &str) -> String {
+        let lines: Vec<&str> = code.lines().collect();
+        let insertion = lines
+            .iter()
+            .position(|line| Self::is_declaration_line(line))
+            .unwrap_or(lines.len());
+        let mut rendered = String::new();
+        for line in &lines[..insertion] {
+            rendered.push_str(line);
+            rendered.push('\n');
+        }
+        rendered.push_str(&format!("package {package}\n\n"));
+        rendered.push_str(&lines[insertion..].join("\n"));
+        rendered.push('\n');
+        rendered
+    }
+
+    /// Whether a line is real code rather than part of the leading blank/comment/`@file:` run a
+    /// `package` declaration is still allowed to follow. `@file:` annotations must precede the
+    /// package declaration, so inserting above them would not compile. ~keep
+    fn is_declaration_line(line: &str) -> bool {
+        let trimmed = line.trim();
+        !trimmed.is_empty()
+            && !trimmed.starts_with("//")
+            && !trimmed.starts_with("/*")
+            && !trimmed.starts_with('*')
+            && !trimmed.starts_with("@file:")
+    }
+
     fn validate_with_context(
         snippet: &Snippet,
         level: ValidationLevel,
@@ -114,6 +380,20 @@ impl SnippetValidator for KotlinValidator {
         Self::validate_with_context(snippet, level, timeout_secs, session)
     }
 
+    fn validate_batch_in_session(
+        &self,
+        snippets: &[&Snippet],
+        level: ValidationLevel,
+        timeout_secs: u64,
+        session: Option<&ValidationSession>,
+    ) -> Option<Result<BatchValidation>> {
+        Self::validate_batch_with_context(snippets, level, timeout_secs, session)
+    }
+
+    fn supports_batching(&self) -> bool {
+        true
+    }
+
     fn max_level(&self) -> ValidationLevel {
         ValidationLevel::TypeCheck
     }
@@ -188,6 +468,183 @@ mod tests {
 
         let class_path = KotlinValidator::class_path(&manifest).expect("classpath");
         assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
+    }
+
+    /// Attribution is asserted without a toolchain so the mapping itself is pinned rather than
+    /// kotlinc's willingness to run: a batch that blames one snippet for another's error is the one
+    /// failure mode that makes batching worse than the per-snippet path it replaces. ~keep
+    #[test]
+    fn a_kotlinc_diagnostic_is_attributed_only_to_the_snippet_that_owns_its_file() {
+        let units = [
+            batch_unit("snippet_first.kt"),
+            batch_unit("snippet_second.kt"),
+            batch_unit("snippet_third.kt"),
+        ];
+        let output = "/scratch/snippet_second.kt:2:22: error: unresolved reference 'bogusValue'.\nfun main() { println(bogusValue) }\n                     ^^^^^^^^^^\n";
+
+        let results = KotlinValidator::batch_results(&units, false, false, output);
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None));
+        assert_eq!(results[2], (SnippetStatus::Pass, None));
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert_eq!(
+            results[1].1.as_deref(),
+            Some(
+                "/scratch/snippet_second.kt:2:22: error: unresolved reference 'bogusValue'.\nfun main() { println(bogusValue) }\n                     ^^^^^^^^^^"
+            )
+        );
+    }
+
+    /// A kotlinc run that failed with nothing attributable must fail every snippet carrying the
+    /// real output — never silently pass the batch. ~keep
+    #[test]
+    fn an_unattributable_kotlinc_failure_fails_every_snippet_with_the_real_output() {
+        let units = [batch_unit("snippet_first.kt"), batch_unit("snippet_second.kt")];
+
+        let results = KotlinValidator::batch_results(&units, false, false, "error: invalid argument: -nonsense\n");
+
+        assert_eq!(results.len(), 2);
+        for result in &results {
+            assert_eq!(result.0, SnippetStatus::Fail);
+            assert_eq!(result.1.as_deref(), Some("error: invalid argument: -nonsense"));
+        }
+    }
+
+    #[test]
+    fn run_level_declines_batching() {
+        let first = snippet("fun main() { println(\"one\") }");
+        let second = snippet("fun main() { println(\"two\") }");
+
+        let declined = KotlinValidator::validate_batch_with_context(&[&first, &second], ValidationLevel::Run, 5, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn a_batch_is_declined_when_two_snippets_share_a_declared_package() {
+        let first = snippet("package shared.fixture\nfun alpha() = 1");
+        let second = snippet("package shared.fixture\nfun beta() = 2");
+
+        let declined =
+            KotlinValidator::validate_batch_with_context(&[&first, &second], ValidationLevel::Compile, 5, None);
+
+        assert!(declined.is_none());
+    }
+
+    #[test]
+    fn a_batch_returns_exactly_one_result_per_snippet_in_input_order() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("kotlinc").is_err() {
+            return;
+        }
+        let snippets = [
+            snippet("fun main() { println(\"first\") }"),
+            snippet("fun main() { println(\"second\") }"),
+            snippet("fun main() { println(\"third\") }"),
+            snippet("fun main() { println(\"fourth\") }"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results = KotlinValidator::validate_batch_with_context(
+            &batch,
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("compile level batches")
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 4);
+        for (index, result) in results.iter().enumerate() {
+            assert_eq!(result.0, SnippetStatus::Pass, "snippet {index}: {:?}", result.1);
+        }
+    }
+
+    /// Every snippet here declares `fun main()`. Kotlin resolves top-level declarations per package
+    /// across files, so compiling them into one shared package would fail *all four* with a
+    /// redeclaration error the per-snippet path never had — this asserts they pass together, which
+    /// a per-snippet package is the only thing making true. ~keep
+    #[test]
+    fn a_batch_fails_only_the_broken_snippet() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("kotlinc").is_err() {
+            return;
+        }
+        let snippets = [
+            snippet("fun main() { println(\"first\") }"),
+            snippet("fun main() { println(bogusValue) }"),
+            snippet("fun main() { println(\"third\") }"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results = KotlinValidator::validate_batch_with_context(
+            &batch,
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("compile level batches")
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (SnippetStatus::Pass, None));
+        assert_eq!(results[2], (SnippetStatus::Pass, None));
+        assert_eq!(results[1].0, SnippetStatus::Fail);
+        assert!(
+            results[1]
+                .1
+                .as_deref()
+                .is_some_and(|message| message.contains("bogusValue")),
+            "the failure must name the broken snippet's own symbol: {:?}",
+            results[1].1
+        );
+    }
+
+    /// Two snippets declaring the same top-level `val` are the collision Kotlin's per-package
+    /// resolution makes possible and the per-snippet path never had. Both must pass. ~keep
+    #[test]
+    fn snippets_declaring_the_same_top_level_member_do_not_collide_in_one_batch() {
+        let _toolchain_guard = crate::snippets::validators::jvm_toolchain_test_lock();
+        if which::which("kotlinc").is_err() {
+            return;
+        }
+        let snippets = [
+            snippet("val configured: Int = 1\nfun main() { println(configured) }"),
+            snippet("val configured: Int = 2\nfun main() { println(configured) }"),
+        ];
+        let batch = snippets.iter().collect::<Vec<_>>();
+
+        let results = KotlinValidator::validate_batch_with_context(
+            &batch,
+            ValidationLevel::Compile,
+            TOOLCHAIN_TEST_TIMEOUT_SECS,
+            None,
+        )
+        .expect("compile level batches")
+        .expect("batch validation runs");
+
+        assert_eq!(results.len(), 2);
+        for (index, result) in results.iter().enumerate() {
+            assert_eq!(result.0, SnippetStatus::Pass, "snippet {index}: {:?}", result.1);
+        }
+    }
+
+    #[test]
+    fn an_auto_assigned_package_is_inserted_below_a_file_annotation() {
+        let source = KotlinValidator::with_package("@file:JvmName(\"Example\")\nfun main() { }", "alef_snippet_x");
+
+        assert_eq!(
+            source,
+            "@file:JvmName(\"Example\")\npackage alef_snippet_x\n\nfun main() { }\n"
+        );
+    }
+
+    fn batch_unit(file_name: &str) -> KotlinBatchUnit {
+        KotlinBatchUnit {
+            file_name: file_name.to_owned(),
+            source: String::new(),
+        }
     }
 
     fn snippet(code: &str) -> Snippet {

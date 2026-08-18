@@ -262,15 +262,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
         };
         match val {
             None | Some(serde_json::Value::Null) if arg.optional => {
-                // For optional json_object args, pass `undefined` so we keep argument
-                // positions intact without needing a placeholder value. The previous
-                // `{} as OptionsType` pattern broke wasm-bindgen, where the runtime
-                // `instanceof` check rejected plain object literals — wasm exposes
+                // For an absent optional arg, pass `undefined` so the arguments that follow keep
+                // their positions. The previous `{} as OptionsType` pattern broke wasm-bindgen,
+                // whose runtime `instanceof` check rejects plain object literals — wasm exposes
                 // options as opaque classes, not interfaces.
-                if arg.arg_type == "json_object"
-                    || has_later_arg_value(args, idx + 1, input)
-                    || has_later_json_object_default(args, idx + 1, input)
-                {
+                //
+                // Nothing following means nothing to hold in place: an `arg_type == "json_object"`
+                // disjunct used to force the placeholder regardless of position, so the trailing
+                // options argument — the overwhelmingly common shape — rendered as
+                // `convert(html, undefined)` against a signature that already reads `options?:`.
+                // Only a real later argument justifies it. ~keep
+                if has_later_arg_value(args, idx + 1, input) || has_later_json_object_default(args, idx + 1, input) {
                     parts.push("undefined".to_string());
                 }
             }
@@ -348,8 +350,14 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                         if v.is_object() && v.as_object().is_some_and(|o| o.is_empty()) {
                             // Empty options: pass undefined so wasm-bindgen's instanceof
                             // guard accepts the call (a `{}` cast produces a plain literal
-                            // that fails the runtime class check).
-                            parts.push("undefined".to_string());
+                            // that fails the runtime class check) -- but only when a later
+                            // argument needs the position held, exactly as the absent-value arm
+                            // above. A trailing `{}` is the same nothing an omitted argument is. ~keep
+                            if has_later_arg_value(args, idx + 1, input)
+                                || has_later_json_object_default(args, idx + 1, input)
+                            {
+                                parts.push("undefined".to_string());
+                            }
                         } else if let Some(obj) = v.as_object() {
                             if crate::e2e::codegen::value_contains_mock_url_placeholder(v) {
                                 let env_key = crate::e2e::codegen::mock_url_env_key(fixture_id);
