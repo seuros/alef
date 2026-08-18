@@ -1168,3 +1168,98 @@ fn gen_data_enum_sealed_interface_doc_lists_all_variants_with_go_casing() {
         "doc text must use the same casing as the emitted struct name (ImageURL); got:\n{out}"
     );
 }
+
+/// The classifier and the emitter must agree, because consumers outside this backend now act
+/// on the classifier's answer alone: `e2e::codegen::go::setup` refuses a fixture value whenever
+/// `accepts_string_conversion()` is false, and publishes the conversion when it is true. If a
+/// generator's emitted `type X ...` line ever stops matching `go_declaration()`, that decision
+/// silently inverts — either deleting snippets that compile or publishing ones that do not. So
+/// assert the agreement against the real emitted text rather than trusting either side. ~keep
+#[test]
+fn go_enum_representation_agrees_with_the_declaration_gen_enum_type_emits() {
+    fn variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields,
+            ..EnumVariant::default()
+        }
+    }
+    fn enum_def(name: &str, variants: Vec<EnumVariant>) -> EnumDef {
+        EnumDef {
+            name: name.to_string(),
+            rust_path: format!("samplelib::{name}"),
+            variants,
+            ..EnumDef::default()
+        }
+    }
+
+    let cases = [
+        enum_def("SampleMode", vec![variant("Fast", vec![])]),
+        enum_def(
+            "SampleLabel",
+            vec![
+                variant("Preset", vec![]),
+                variant("Custom", vec![simple_field("_0", TypeRef::String)]),
+            ],
+        ),
+        enum_def(
+            "SampleInput",
+            vec![
+                variant("Single", vec![simple_field("_0", TypeRef::String)]),
+                variant(
+                    "Multiple",
+                    vec![simple_field("_0", TypeRef::Vec(Box::new(TypeRef::String)))],
+                ),
+            ],
+        ),
+        EnumDef {
+            // A tuple-tagged union is only emitted for a serde-TAGGED enum: the marshaler
+            // unwraps `serde_tag` with `.expect`. Leaving it unset made this fixture reach a
+            // shape the emitter cannot render, which is a real latent panic (tracked
+            // separately) rather than the declaration drift this test exists to catch. ~keep
+            serde_tag: Some("kind".to_string()),
+            ..enum_def(
+                "SampleChoice",
+                vec![variant(
+                    "Explicit",
+                    vec![simple_field("_0", TypeRef::Named("SampleTarget".to_string()))],
+                )],
+            )
+        },
+        enum_def(
+            "SampleDocument",
+            vec![variant("Url", vec![simple_field("url", TypeRef::String)])],
+        ),
+    ];
+
+    let mut declarations = std::collections::BTreeSet::new();
+    let mut convertible = std::collections::BTreeSet::new();
+    for case in &cases {
+        let representation = super::enums::go_enum_representation(case);
+        declarations.insert(representation.go_declaration());
+        if representation.accepts_string_conversion() {
+            convertible.insert(representation.go_declaration());
+        }
+        let emitted = gen_enum_type(case, &[]);
+        let expected = format!("type {} {}", case.name, representation.go_declaration());
+        assert!(
+            emitted.contains(&expected),
+            "`{}` classified as {representation:?} must be emitted as `{expected}`:\n{emitted}",
+            case.name
+        );
+    }
+
+    assert_eq!(
+        declarations,
+        ["interface", "json.RawMessage", "string", "struct"]
+            .into_iter()
+            .collect(),
+        "the cases must cover every Go declaration the classifier can report, so a generator \
+         cannot be added without a case here"
+    );
+    assert_eq!(
+        convertible,
+        ["json.RawMessage", "string"].into_iter().collect(),
+        "only `string` and `json.RawMessage` underlying types accept a Go string conversion"
+    );
+}

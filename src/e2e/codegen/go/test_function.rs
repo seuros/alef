@@ -179,7 +179,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         .chain(enums.iter().map(|e| go_type_name(&e.name)))
         .collect();
     let function_name = go_free_function_name(base_function_name, &reserved_type_names);
-    let result_var = &call_config.result_var;
+    let result_var = call_config.effective_result_var();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let args = recipe.args;
 
@@ -234,7 +234,12 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         type_defs,
         enums,
         false,
-    );
+    )
+    // The only refusal `build_args_and_setup` can raise comes from the native-DTO literal
+    // builder, which the `native_dtos = false` argument above disables — the generated test
+    // suite unmarshals its values from JSON instead of spelling typed Go literals, so no
+    // value here is ever rendered against a declared Go type. Unreachable, not swallowed. ~keep
+    .expect("go test-function rendering does not use native DTO literals and cannot refuse");
 
     for decl in &package_decls {
         out.push_str(decl);

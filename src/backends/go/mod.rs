@@ -8,4 +8,6 @@ pub mod trait_bridge;
 pub mod type_map;
 
 pub use gen_bindings::GoBackend;
-pub(crate) use gen_bindings::types::needs_omitempty_pointer;
+pub(crate) use gen_bindings::types::{
+    GoEnumRepresentation, go_enum_constant_for_wire_value, go_enum_representation, needs_omitempty_pointer,
+};

@@ -341,7 +341,8 @@ fn handle_config_deserialization_uses_resolved_options_type() {
         &[],
         &[],
         false,
-    );
+    )
+    .expect("args render");
 
     let rendered = setup.join("\n");
     assert!(package_decls.is_empty());

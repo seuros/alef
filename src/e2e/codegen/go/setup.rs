@@ -2,7 +2,7 @@
 
 use crate::e2e::escape::go_string_literal;
 
-use super::json_values::{convert_json_for_go, element_type_to_go_slice, json_to_go};
+use super::json_values::{convert_json_for_go, element_type_to_go_slice, json_to_go, json_to_go_yields_string_literal};
 use super::test_backend::emit_test_backend_with_context;
 
 fn json_object_go_type<'a>(arg: &'a crate::e2e::config::ArgMapping, options_type: Option<&'a str>) -> Option<&'a str> {
@@ -17,26 +17,109 @@ fn qualified_go_type(import_alias: &str, type_name: &str) -> String {
     }
 }
 
+/// How much of an offending fixture value [`named_field_type_mismatch`] quotes back.
+///
+/// The value is named so an operator can find the fixture entry that produced it, but a
+/// fixture `input` can be arbitrarily large and a diagnostic is not a place to reprint it. ~keep
+const MAX_DIAGNOSTIC_VALUE_CHARS: usize = 80;
+
+/// Refuse a fixture value that has no expression of the target field's declared Go type.
+///
+/// Names the field, the Go type the binding declares for it, the Go declaration kind that
+/// makes the value unusable, and the value itself — everything an operator needs to decide
+/// between fixing the fixture and recording a `docs.coverage_exceptions` entry. ~keep
+fn named_field_type_mismatch(
+    owner_type: &str,
+    field_name: &str,
+    go_type: &str,
+    representation: crate::backends::go::GoEnumRepresentation,
+    rendered: &str,
+) -> anyhow::Error {
+    let quoted: String = rendered.chars().take(MAX_DIAGNOSTIC_VALUE_CHARS).collect();
+    let elided = if quoted.len() < rendered.len() { "..." } else { "" };
+    let declaration = representation.go_declaration();
+    anyhow::anyhow!(
+        "e2e go codegen: field `{field_name}` of `{owner_type}` is declared as the IR enum `{go_type}`, which the \
+         Go binding backend emits as `type {go_type} {declaration}`. The fixture value lowers to the Go \
+         expression {quoted}{elided}, and Go converts an untyped string constant only to a defined type whose \
+         underlying type is `string` or `[]byte` — `{go_type}({quoted}{elided})` is a `cannot convert` compile \
+         error. Alef will not publish a snippet that does not compile: give the fixture a value matching one of \
+         `{go_type}`'s variants, or record a `docs.coverage_exceptions` entry for go."
+    )
+}
+
+/// Lower a scalar fixture value into an expression of the Go type declared for `type_name`.
+///
+/// This is the one point where the value's JSON shape and the *declared type it lands in* are
+/// both in hand. Without the enum lookup below, every unresolved `TypeRef::Named` was rendered
+/// as the blind conversion `alias.Type(<value>)`, which happens to compile for the enums Go
+/// emits as `type X string` / `type X json.RawMessage` and cannot compile for the ones it emits
+/// as a struct or a sealed interface. A name that resolves to no IR enum is left exactly as it
+/// was: nothing here can prove what such a type is, and a false refusal deletes published
+/// documentation. ~keep
+fn go_named_scalar_expression(
+    value: &serde_json::Value,
+    type_name: &str,
+    import_alias: &str,
+    enums: &[crate::core::ir::EnumDef],
+    owner_type: &str,
+    field_name: &str,
+) -> anyhow::Result<String> {
+    let go_type = crate::codegen::naming::go_type_name(type_name);
+    let conversion = format!("{import_alias}.{go_type}({})", json_to_go(value));
+    let Some(enum_def) = enums.iter().find(|candidate| candidate.name == type_name) else {
+        return Ok(conversion);
+    };
+    if let Some(wire_value) = value.as_str()
+        && let Some(constant) = crate::backends::go::go_enum_constant_for_wire_value(enum_def, wire_value)
+    {
+        return Ok(format!("{import_alias}.{constant}"));
+    }
+    let representation = crate::backends::go::go_enum_representation(enum_def);
+    // A value that names no variant is still emitted as the conversion when the binding
+    // declares a convertible underlying type — `type X string` accepts any string, which is
+    // what validation fixtures asserting on a rejected value depend on. ~keep
+    if representation.accepts_string_conversion() && json_to_go_yields_string_literal(value) {
+        return Ok(conversion);
+    }
+    Err(named_field_type_mismatch(
+        owner_type,
+        field_name,
+        &go_type,
+        representation,
+        &json_to_go(value),
+    ))
+}
+
 fn native_go_dto_literal(
     value: &serde_json::Value,
     type_name: &str,
     import_alias: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     files: &[crate::e2e::fixture::FixtureDocsFileInput],
-) -> Option<String> {
-    native_go_dto_literal_at(value, type_name, import_alias, type_defs, files, "")
+) -> anyhow::Result<Option<String>> {
+    native_go_dto_literal_at(value, type_name, import_alias, type_defs, enums, files, "")
 }
 
+/// `Ok(None)` means "this is not a struct literal, render it some other way"; `Err` means the
+/// value has no valid expression at this field's declared type and no snippet may be published
+/// for it. Collapsing the two would turn a refusal back into the blind conversion. ~keep
 fn native_go_dto_literal_at(
     value: &serde_json::Value,
     type_name: &str,
     import_alias: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     files: &[crate::e2e::fixture::FixtureDocsFileInput],
     pointer: &str,
-) -> Option<String> {
-    let object = value.as_object()?;
-    let definition = type_defs.iter().find(|definition| definition.name == type_name)?;
+) -> anyhow::Result<Option<String>> {
+    let Some(object) = value.as_object() else {
+        return Ok(None);
+    };
+    let Some(definition) = type_defs.iter().find(|definition| definition.name == type_name) else {
+        return Ok(None);
+    };
     // Mirrors the `struct_names` set `binding_file.rs` builds for the real Go emitter (every
     // non-opaque `TypeDef`) — see the `uses_pointer` comment below for why this must agree. ~keep
     let struct_names: std::collections::HashSet<&str> = type_defs
@@ -47,7 +130,7 @@ fn native_go_dto_literal_at(
     let field_values = definition
         .fields
         .iter()
-        .filter_map(|field| {
+        .map(|field| -> anyhow::Result<Option<(String, String)>> {
             // Fixture JSON is authored in wire format (the same JSON the binding's
             // `json.Unmarshal` accepts), so it must be looked up by the field's
             // resolved wire name — not the Rust field identifier — exactly like the
@@ -58,7 +141,9 @@ fn native_go_dto_literal_at(
                 field.serde_rename.as_deref(),
                 definition.serde_rename_all.as_deref(),
             );
-            let value = object.get(&wire_name).or_else(|| object.get(&field.name))?;
+            let Some(value) = object.get(&wire_name).or_else(|| object.get(&field.name)) else {
+                return Ok(None);
+            };
             let field_pointer = format!("{pointer}/{}", field.name);
             // Mirrors `gen_struct_type`'s `use_default_pointer` exactly. It must stay exact:
             // the fixture literal is assigned to the emitted struct field, so any disagreement
@@ -74,11 +159,16 @@ fn native_go_dto_literal_at(
             let expression = if files.iter().any(|file| file.field == field_pointer)
                 && matches!(inner, crate::core::ir::TypeRef::Bytes)
             {
-                format!("mustReadFile({})", go_string_literal(value.as_str()?))
+                let Some(path) = value.as_str() else {
+                    return Ok(None);
+                };
+                format!("mustReadFile({})", go_string_literal(path))
             } else {
                 match inner {
                     crate::core::ir::TypeRef::String | crate::core::ir::TypeRef::Path => {
-                        let literal = value.as_str().map(go_string_literal)?;
+                        let Some(literal) = value.as_str().map(go_string_literal) else {
+                            return Ok(None);
+                        };
                         if uses_pointer {
                             format!("ptr({literal})")
                         } else {
@@ -86,28 +176,35 @@ fn native_go_dto_literal_at(
                         }
                     }
                     crate::core::ir::TypeRef::Bytes => {
-                        let items = value
-                            .as_array()?
-                            .iter()
-                            .filter_map(serde_json::Value::as_u64)
-                            .collect::<Vec<_>>();
+                        let Some(array) = value.as_array() else {
+                            return Ok(None);
+                        };
+                        let items = array.iter().filter_map(serde_json::Value::as_u64).collect::<Vec<_>>();
                         format!(
                             "[]byte{{{}}}",
                             items.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
                         )
                     }
                     crate::core::ir::TypeRef::Named(name) => {
-                        if let Some(nested) =
-                            native_go_dto_literal_at(value, name, import_alias, type_defs, files, &field_pointer)
-                        {
+                        if let Some(nested) = native_go_dto_literal_at(
+                            value,
+                            name,
+                            import_alias,
+                            type_defs,
+                            enums,
+                            files,
+                            &field_pointer,
+                        )? {
                             if uses_pointer { format!("&{nested}") } else { nested }
                         } else {
-                            let literal = format!(
-                                "{}.{}({})",
+                            let literal = go_named_scalar_expression(
+                                value,
+                                name,
                                 import_alias,
-                                crate::codegen::naming::go_type_name(name),
-                                json_to_go(value)
-                            );
+                                enums,
+                                &definition.name,
+                                &field.name,
+                            )?;
                             if uses_pointer {
                                 format!("ptr({literal})")
                             } else {
@@ -136,11 +233,14 @@ fn native_go_dto_literal_at(
                             literal
                         }
                     }
-                    _ => return None,
+                    _ => return Ok(None),
                 }
             };
-            Some((crate::codegen::naming::to_go_name(&field.name), expression))
+            Ok(Some((crate::codegen::naming::to_go_name(&field.name), expression)))
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
     let max_name_len = field_values
         .iter()
@@ -155,16 +255,16 @@ fn native_go_dto_literal_at(
         })
         .collect::<Vec<_>>();
     if fields.is_empty() {
-        return Some(
+        return Ok(Some(
             crate::e2e::template_env::render(
                 "go/empty_dto_literal.jinja",
                 minijinja::context! { type_name => qualified_go_type(import_alias, type_name) },
             )
             .trim_end()
             .to_string(),
-        );
+        ));
     }
-    Some(
+    Ok(Some(
         crate::e2e::template_env::render(
             "go/dto_literal.jinja",
             minijinja::context! {
@@ -173,7 +273,7 @@ fn native_go_dto_literal_at(
         )
         .trim_end()
         .to_string(),
-    )
+    ))
 }
 
 pub(super) fn resolve_handle_config_type(
@@ -204,6 +304,12 @@ impl UppercaseFirst for str {
     }
 }
 
+/// Returns `Err` when a configured value has no expression of its target's declared Go type.
+///
+/// Only reachable with `native_dtos` set (the documentation-snippet path), where the emitter
+/// renders fixture values straight into typed Go struct literals. `render_snippet_body`'s
+/// caller turns the error into a recorded missing-snippet entry, so a refusal is a visible
+/// coverage gap rather than a published snippet that fails `go vet`. ~keep
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_args_and_setup(
     input: &serde_json::Value,
@@ -218,12 +324,12 @@ pub(super) fn build_args_and_setup(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     native_dtos: bool,
-) -> (Vec<String>, Vec<String>, String) {
+) -> anyhow::Result<(Vec<String>, Vec<String>, String)> {
     let fixture_id = &fixture.id;
     use heck::ToUpperCamelCase;
 
     if args.is_empty() {
-        return (Vec::new(), Vec::new(), String::new());
+        return Ok((Vec::new(), Vec::new(), String::new()));
     }
 
     let mut package_decls: Vec<String> = Vec::new();
@@ -383,8 +489,9 @@ pub(super) fn build_args_and_setup(
                 type_name,
                 import_alias,
                 type_defs,
+                enums,
                 &fixture.docs_files_for_arg(&arg.field),
-            )
+            )?
         {
             setup_lines.push(format!("{} := {literal}", arg.name));
             parts.push(arg.name.clone());
@@ -464,8 +571,9 @@ pub(super) fn build_args_and_setup(
                             opts_type,
                             import_alias,
                             type_defs,
+                            enums,
                             &fixture.docs_files_for_arg(&arg.field),
-                        )
+                        )?
                     {
                         if literal.contains("ptr(")
                             && !package_decls
@@ -616,7 +724,7 @@ pub(super) fn build_args_and_setup(
         }
     }
 
-    (package_decls, setup_lines, parts.join(", "))
+    Ok((package_decls, setup_lines, parts.join(", ")))
 }
 
 #[cfg(test)]
@@ -644,8 +752,10 @@ mod file_dto_tests {
             "Upload",
             "sample",
             &types,
+            &[],
             &files,
         )
+        .expect("no refusal")
         .expect("native DTO");
         assert!(rendered.contains("Content: mustReadFile(`guide.pdf`)"), "{rendered}");
     }
@@ -673,7 +783,9 @@ mod file_dto_tests {
             "xberg",
             &types,
             &[],
+            &[],
         )
+        .expect("no refusal")
         .expect("native DTO");
 
         assert!(rendered.contains("MaxCharacters: ptr(uint64(300))"), "{rendered}");
@@ -703,7 +815,9 @@ mod file_dto_tests {
             "xberg",
             &types,
             &[],
+            &[],
         )
+        .expect("no refusal")
         .expect("native DTO");
 
         assert!(rendered.contains("Retry: ptr(true)"), "{rendered}");
@@ -740,7 +854,9 @@ mod file_dto_tests {
             "xberg",
             &types,
             &[],
+            &[],
         )
+        .expect("no refusal")
         .expect("native DTO");
 
         assert!(

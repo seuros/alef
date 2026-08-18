@@ -5,15 +5,67 @@ use minijinja::context;
 
 use super::helpers::{emit_type_doc, is_tuple_field};
 
-pub(in crate::backends::go::gen_bindings) fn gen_enum_type(enum_def: &EnumDef, text_types: &[String]) -> String {
+/// Which Go declaration [`gen_enum_type`] emits for an IR enum — one variant per generator.
+///
+/// Exists so consumers outside this backend can ask what a `TypeRef::Named` resolving to an
+/// `EnumDef` actually *is* in Go, instead of re-deriving the dispatch below and drifting from
+/// it. The property they need is convertibility: Go converts an untyped string constant to a
+/// defined type whose underlying type is `string` or `[]byte`, and to nothing else — so a
+/// `sample.Enum("value")` expression compiles against the first three variants and is a
+/// `cannot convert` compile error against the last three. ~keep
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GoEnumRepresentation {
+    /// `type X string` plus a const block — [`gen_unit_enum_type`].
+    UnitString,
+    /// `type X string` plus a const block covering the unit variants only —
+    /// [`gen_newtype_tuple_enum_type`].
+    NewtypeTupleString,
+    /// `type X json.RawMessage` — [`gen_passthrough_raw_message_enum`].
+    RawMessage,
+    /// `type X struct { .. }` — [`gen_adjacent_tagged_enum_type`].
+    AdjacentTaggedStruct,
+    /// `type X struct { .. }` — [`gen_tuple_tagged_union_type`].
+    TupleTaggedStruct,
+    /// `type X interface { .. }` — [`gen_data_enum_type`].
+    DataInterface,
+}
+
+impl GoEnumRepresentation {
+    /// How the emitted `type X ...` line spells the underlying type, for diagnostics.
+    pub(crate) fn go_declaration(self) -> &'static str {
+        match self {
+            Self::UnitString | Self::NewtypeTupleString => "string",
+            Self::RawMessage => "json.RawMessage",
+            Self::AdjacentTaggedStruct | Self::TupleTaggedStruct => "struct",
+            Self::DataInterface => "interface",
+        }
+    }
+
+    /// Whether `X(<Go string literal>)` is a legal conversion for this representation.
+    ///
+    /// `string` and `json.RawMessage` (underlying `[]byte`) are the only underlying types an
+    /// untyped string constant converts to; a `struct` or `interface` target is rejected by
+    /// the compiler with `cannot convert`. ~keep
+    pub(crate) fn accepts_string_conversion(self) -> bool {
+        matches!(self, Self::UnitString | Self::NewtypeTupleString | Self::RawMessage)
+    }
+
+    /// Whether the emitted declaration is followed by a const block naming the unit variants.
+    pub(crate) fn has_named_constants(self) -> bool {
+        matches!(self, Self::UnitString | Self::NewtypeTupleString)
+    }
+}
+
+/// The single place that decides an IR enum's Go shape; [`gen_enum_type`] is a match over it.
+pub(crate) fn go_enum_representation(enum_def: &EnumDef) -> GoEnumRepresentation {
     let is_data_enum = enum_def.variants.iter().any(|v| !v.fields.is_empty());
 
     if !is_data_enum {
-        return gen_unit_enum_type(enum_def);
+        return GoEnumRepresentation::UnitString;
     }
 
     if enum_def.serde_tag.is_some() && enum_def.serde_content.is_some() {
-        return gen_adjacent_tagged_enum_type(enum_def);
+        return GoEnumRepresentation::AdjacentTaggedStruct;
     }
 
     let all_data_fields_are_tuple = enum_def
@@ -21,23 +73,66 @@ pub(in crate::backends::go::gen_bindings) fn gen_enum_type(enum_def: &EnumDef, t
         .iter()
         .all(|v| v.fields.is_empty() || v.fields.iter().all(is_tuple_field));
 
-    if all_data_fields_are_tuple {
-        let any_tuple_field_is_named_struct = enum_def.variants.iter().any(|v| {
-            v.fields
-                .iter()
-                .any(|f| is_tuple_field(f) && matches!(&f.ty, TypeRef::Named(_)))
-        });
-
-        if any_tuple_field_is_named_struct {
-            gen_tuple_tagged_union_type(enum_def)
-        } else if is_passthrough_raw_message_enum(enum_def) {
-            gen_passthrough_raw_message_enum(enum_def, text_types)
-        } else {
-            gen_newtype_tuple_enum_type(enum_def)
-        }
-    } else {
-        gen_data_enum_type(enum_def)
+    if !all_data_fields_are_tuple {
+        return GoEnumRepresentation::DataInterface;
     }
+
+    let any_tuple_field_is_named_struct = enum_def.variants.iter().any(|v| {
+        v.fields
+            .iter()
+            .any(|f| is_tuple_field(f) && matches!(&f.ty, TypeRef::Named(_)))
+    });
+
+    if any_tuple_field_is_named_struct {
+        return GoEnumRepresentation::TupleTaggedStruct;
+    }
+
+    if is_passthrough_raw_message_enum(enum_def) {
+        return GoEnumRepresentation::RawMessage;
+    }
+
+    GoEnumRepresentation::NewtypeTupleString
+}
+
+/// Emit the Go declaration for the variant [`go_enum_representation`] selected.
+///
+/// Kept as a bare dispatch so the classifier holds the only copy of the branch conditions;
+/// anything that needs the emitted shape asks the classifier rather than restating it. ~keep
+pub(in crate::backends::go::gen_bindings) fn gen_enum_type(enum_def: &EnumDef, text_types: &[String]) -> String {
+    match go_enum_representation(enum_def) {
+        GoEnumRepresentation::UnitString => gen_unit_enum_type(enum_def),
+        GoEnumRepresentation::NewtypeTupleString => gen_newtype_tuple_enum_type(enum_def),
+        GoEnumRepresentation::RawMessage => gen_passthrough_raw_message_enum(enum_def, text_types),
+        GoEnumRepresentation::AdjacentTaggedStruct => gen_adjacent_tagged_enum_type(enum_def),
+        GoEnumRepresentation::TupleTaggedStruct => gen_tuple_tagged_union_type(enum_def),
+        GoEnumRepresentation::DataInterface => gen_data_enum_type(enum_def),
+    }
+}
+
+/// The qualified Go constant the binding declares for a unit variant, e.g. `sample.ModeAuto`.
+///
+/// Mirrors [`gen_unit_enum_type`]'s and [`gen_newtype_tuple_enum_type`]'s `const_name` —
+/// `go_type_name(enum) + to_go_name(variant)` — and their `wire_variant_value` lookup key,
+/// which is the value the const is initialised to and therefore the value fixture JSON
+/// carries. Only variants with no fields get a constant, so tuple/struct variants of a
+/// `NewtypeTupleString` enum correctly find nothing here. ~keep
+pub(crate) fn go_enum_constant_for_wire_value(enum_def: &EnumDef, wire_value: &str) -> Option<String> {
+    if !go_enum_representation(enum_def).has_named_constants() {
+        return None;
+    }
+    let go_enum_name = go_type_name(&enum_def.name);
+    enum_def
+        .variants
+        .iter()
+        .find(|variant| {
+            variant.fields.is_empty()
+                && crate::codegen::naming::wire_variant_value(
+                    &variant.name,
+                    variant.serde_rename.as_deref(),
+                    enum_def.serde_rename_all.as_deref(),
+                ) == wire_value
+        })
+        .map(|variant| format!("{go_enum_name}{}", to_go_name(&variant.name)))
 }
 
 fn gen_adjacent_tagged_enum_type(enum_def: &EnumDef) -> String {

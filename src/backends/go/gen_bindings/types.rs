@@ -5,6 +5,7 @@ mod mapping;
 mod structs;
 
 pub(super) use config_options::gen_config_options;
+pub(crate) use enums::{GoEnumRepresentation, go_enum_constant_for_wire_value, go_enum_representation};
 pub(super) use enums::{gen_enum_type, is_passthrough_raw_message_enum};
 pub(crate) use helpers::needs_omitempty_pointer;
 pub(super) use helpers::{

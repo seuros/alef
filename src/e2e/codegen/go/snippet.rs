@@ -164,7 +164,7 @@ pub(super) fn render_snippet_body(
         type_defs,
         enums,
         true,
-    );
+    )?;
     let mut configured_arg_count = recipe.args.len();
     if let Some(visitor_spec) = &fixture.visitor {
         // Silently dropping the visitor here published a snippet that compiles but omits
@@ -331,7 +331,7 @@ pub(super) fn render_snippet_body(
         minijinja::context! {
             imports => imports,
             package_decls => package_decls, setup_lines => setup_lines, client_setup => client_setup,
-            call_expr => call_expr, result_var => call.result_var, returns_error => returns_error,
+            call_expr => call_expr, result_var => call.effective_result_var(), returns_error => returns_error,
             returns_void => call.returns_void,
             expects_error => expects_error,
             error_type => config.error_type_name(),
@@ -1167,6 +1167,299 @@ mod tests {
         assert!(
             !body.contains(".Free()"),
             "a snippet that constructs no client must emit no release call:\n{body}"
+        );
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Enum-typed DTO field lowering.
+    //
+    // `native_go_dto_literal_at` renders every `TypeRef::Named` field it cannot resolve to a
+    // struct as the conversion `alias.Type(<value>)`. That is legal Go only when the binding
+    // declares the target with an underlying type of `string` or `[]byte`; the Go binding
+    // backend also emits enums as `struct` and as sealed `interface`, and against those the
+    // conversion is a `cannot convert` compile error. The fixtures below cover one case per
+    // emitted shape so the fix cannot pass by converting -- or by refusing -- everything.
+    // ---------------------------------------------------------------------------------
+
+    fn dto_field(name: &str, ty: TypeRef, optional: bool) -> crate::core::ir::FieldDef {
+        crate::core::ir::FieldDef {
+            name: name.into(),
+            ty,
+            optional,
+            ..crate::core::ir::FieldDef::default()
+        }
+    }
+
+    fn request_type(fields: Vec<crate::core::ir::FieldDef>) -> TypeDef {
+        TypeDef {
+            name: "SampleRequest".into(),
+            rust_path: "samplelib::SampleRequest".into(),
+            fields,
+            ..TypeDef::default()
+        }
+    }
+
+    fn variant(name: &str, fields: Vec<crate::core::ir::FieldDef>) -> crate::core::ir::EnumVariant {
+        crate::core::ir::EnumVariant {
+            name: name.into(),
+            fields,
+            ..crate::core::ir::EnumVariant::default()
+        }
+    }
+
+    fn sample_enum(name: &str, variants: Vec<crate::core::ir::EnumVariant>) -> EnumDef {
+        EnumDef {
+            name: name.into(),
+            rust_path: format!("samplelib::{name}"),
+            variants,
+            serde_rename_all: Some("snake_case".into()),
+            ..EnumDef::default()
+        }
+    }
+
+    /// `type SampleMode string` plus a const block -- `GoEnumRepresentation::UnitString`.
+    fn unit_enum() -> EnumDef {
+        sample_enum(
+            "SampleMode",
+            vec![variant("Fast", Vec::new()), variant("Careful", Vec::new())],
+        )
+    }
+
+    /// `type SampleChoice struct { .. }` -- every data field is a tuple field and one of them
+    /// is a `Named` struct, which is `gen_tuple_tagged_union_type`'s condition.
+    fn struct_shaped_enum() -> EnumDef {
+        sample_enum(
+            "SampleChoice",
+            vec![
+                variant(
+                    "Mode",
+                    vec![dto_field("_0", TypeRef::Named("SampleMode".into()), false)],
+                ),
+                variant(
+                    "Explicit",
+                    vec![dto_field("_0", TypeRef::Named("SampleTarget".into()), false)],
+                ),
+            ],
+        )
+    }
+
+    /// `type SampleDocument interface { .. }` -- a struct variant with named fields is not a
+    /// tuple enum, which is `gen_data_enum_type`'s condition.
+    fn interface_shaped_enum() -> EnumDef {
+        sample_enum(
+            "SampleDocument",
+            vec![variant("Url", vec![dto_field("url", TypeRef::String, false)])],
+        )
+    }
+
+    /// `type SampleInput json.RawMessage` -- all tuple fields, none `Named`, and one is a
+    /// `Vec`, which is `is_passthrough_raw_message_enum`'s condition.
+    fn raw_message_enum() -> EnumDef {
+        sample_enum(
+            "SampleInput",
+            vec![
+                variant("Single", vec![dto_field("_0", TypeRef::String, false)]),
+                variant(
+                    "Multiple",
+                    vec![dto_field("_0", TypeRef::Vec(Box::new(TypeRef::String)), false)],
+                ),
+            ],
+        )
+    }
+
+    fn request_arg() -> crate::e2e::config::ArgMapping {
+        crate::e2e::config::ArgMapping {
+            name: "request".into(),
+            field: "input.request".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: Some("SampleRequest".into()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }
+    }
+
+    fn request_fixture(request: serde_json::Value) -> Fixture {
+        Fixture {
+            id: "send_request".into(),
+            description: "Send a request".into(),
+            input: serde_json::json!({ "request": request }),
+            ..fixture()
+        }
+    }
+
+    fn request_e2e() -> E2eConfig {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "send".into();
+        e2e.call.module = "example.com/sample".into();
+        e2e.call.result_var = "result".into();
+        e2e.call.returns_result = true;
+        e2e.call.args = vec![request_arg()];
+        e2e
+    }
+
+    fn render_request_snippet(
+        request: serde_json::Value,
+        fields: Vec<crate::core::ir::FieldDef>,
+        enums: &[EnumDef],
+    ) -> anyhow::Result<String> {
+        render_snippet_body(
+            &request_fixture(request),
+            &request_e2e(),
+            &ResolvedCrateConfig::default(),
+            &[request_type(fields)],
+            enums,
+            &[],
+        )
+    }
+
+    /// The release-blocking half: a field declared as an IR enum must be filled with the
+    /// constant the Go binding declares for that variant. `gen_unit_enum_type` names it
+    /// `go_type_name(enum) + to_go_name(variant)` and initialises it to the variant's
+    /// `wire_variant_value` -- which is exactly the string fixture JSON carries -- so `"fast"`
+    /// resolves to `pkg.SampleModeFast`. The bare literal is doubly wrong on an optional field:
+    /// `ptr[T any](value T) *T` would infer `*string`, not `*SampleMode`. ~keep
+    #[test]
+    fn enum_typed_dto_field_lowers_to_the_binding_constant_not_a_conversion() {
+        let rendered = render_request_snippet(
+            serde_json::json!({"mode": "fast"}),
+            vec![dto_field("mode", TypeRef::Named("SampleMode".into()), true)],
+            &[unit_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Mode: ptr(pkg.SampleModeFast)"),
+            "an enum-typed field must be filled with the binding's declared constant:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("pkg.SampleMode(`fast`)"),
+            "the blind string conversion must be gone:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("ptr(`fast`)"),
+            "a bare string literal would infer *string, not *SampleMode:\n{rendered}"
+        );
+    }
+
+    /// The control that stops the fix from passing by qualifying everything: the same fixture
+    /// value, `"fast"`, against a field the core really declares as a `String`. The plain Go
+    /// string literal is the correct lowering there, so it must survive byte-for-byte. A fix
+    /// keyed on the value rather than on the field's declared type would fail here. ~keep
+    #[test]
+    fn string_typed_dto_field_still_lowers_to_a_plain_go_string_literal() {
+        let rendered = render_request_snippet(
+            serde_json::json!({"label": "fast"}),
+            vec![dto_field("label", TypeRef::String, false)],
+            &[unit_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Label: `fast`"),
+            "a string-typed field must keep its plain literal:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("SampleMode"),
+            "a string-typed field must not be qualified with an enum that merely shares its \
+             value:\n{rendered}"
+        );
+    }
+
+    /// The published defect, reduced: an untagged enum whose variants each carry one positional
+    /// field is emitted as `type X struct { .. }`, and `pkg.X("auto")` is rejected as `cannot
+    /// convert (untyped string constant) to type X`. Four of the eleven Go snippets that failed
+    /// `go vet` in the regen that surfaced this had exactly that shape. No expression of a
+    /// struct enum's type is derivable from a bare string, so the emitter must refuse: a
+    /// recorded coverage gap beats a published snippet that does not build. ~keep
+    #[test]
+    fn struct_shaped_data_enum_dto_field_is_refused_rather_than_converted() {
+        let error = match render_request_snippet(
+            serde_json::json!({"choice": "auto"}),
+            vec![dto_field("choice", TypeRef::Named("SampleChoice".into()), true)],
+            &[struct_shaped_enum(), unit_enum()],
+        ) {
+            Ok(rendered) => panic!("a struct-shaped enum must never take a string conversion:\n{rendered}"),
+            Err(error) => format!("{error:#}"),
+        };
+
+        assert!(
+            error.contains("`choice`"),
+            "must name the field it refused to fill: {error}"
+        );
+        assert!(
+            error.contains("SampleChoice"),
+            "must name the Go type the field actually has: {error}"
+        );
+        assert!(
+            error.contains("struct"),
+            "must name the Go declaration that makes the conversion illegal: {error}"
+        );
+        assert!(
+            error.contains("auto"),
+            "must quote the offending value so the operator can find the fixture entry: {error}"
+        );
+    }
+
+    /// The other seven of the eleven: an enum with struct variants is emitted as a sealed
+    /// interface, where the conversion fails for a different reason than the struct case but
+    /// fails just the same. Covered separately so a fix that only recognised `struct` would
+    /// still leave a published snippet that does not compile. ~keep
+    #[test]
+    fn interface_shaped_data_enum_dto_field_is_refused_rather_than_converted() {
+        let error = match render_request_snippet(
+            serde_json::json!({"document": {"url": "https://example.com/doc.pdf"}}),
+            vec![dto_field("document", TypeRef::Named("SampleDocument".into()), false)],
+            &[interface_shaped_enum()],
+        ) {
+            Ok(rendered) => panic!("a sealed interface must never take a string conversion:\n{rendered}"),
+            Err(error) => format!("{error:#}"),
+        };
+
+        assert!(error.contains("`document`"), "must name the field: {error}");
+        assert!(error.contains("SampleDocument"), "must name the Go type: {error}");
+        assert!(
+            error.contains("interface"),
+            "must name the Go declaration that makes the conversion illegal: {error}"
+        );
+    }
+
+    /// The control that bounds the refusal: `type SampleInput json.RawMessage` has an
+    /// underlying type of `[]byte`, which a Go string constant converts to, so the snippets
+    /// built on that shape compile today and must keep compiling. A refusal keyed on "the
+    /// value is not an object" or on "the name is an enum" would delete them. ~keep
+    #[test]
+    fn raw_message_enum_dto_field_keeps_its_conversion() {
+        let rendered = render_request_snippet(
+            serde_json::json!({"prompt": ["one", "two"]}),
+            vec![dto_field("prompt", TypeRef::Named("SampleInput".into()), false)],
+            &[raw_message_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Prompt: pkg.SampleInput(`[\"one\",\"two\"]`)"),
+            "a json.RawMessage enum must keep the conversion that already compiles:\n{rendered}"
+        );
+    }
+
+    /// The second control: a value that names no variant of a `type X string` enum still has a
+    /// legal conversion, and validation fixtures assert on exactly such rejected values. Only
+    /// the absence of a legal expression justifies a refusal -- not the absence of a match. ~keep
+    #[test]
+    fn unit_enum_value_matching_no_variant_keeps_its_conversion() {
+        let rendered = render_request_snippet(
+            serde_json::json!({"mode": "not-a-mode"}),
+            vec![dto_field("mode", TypeRef::Named("SampleMode".into()), false)],
+            &[unit_enum()],
+        )
+        .expect("snippet renders");
+
+        assert!(
+            rendered.contains("Mode: pkg.SampleMode(`not-a-mode`)"),
+            "an unmatched value must keep the conversion the binding accepts:\n{rendered}"
         );
     }
 }

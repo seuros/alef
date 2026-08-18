@@ -177,3 +177,17 @@ pub(super) fn json_to_go(value: &serde_json::Value) -> String {
         other => go_string_literal(&other.to_string()),
     }
 }
+
+/// Whether [`json_to_go`] renders `value` as a Go string literal rather than a bare
+/// numeric/boolean/`nil` expression.
+///
+/// A caller that wraps the rendered expression in a conversion needs this to know which Go
+/// conversion rule applies, and the answer is not "the JSON value is a string": arrays and
+/// objects are serialised back to JSON and emitted as string literals too. Kept adjacent to
+/// [`json_to_go`] so the two cannot drift about which arms produce a literal. ~keep
+pub(super) fn json_to_go_yields_string_literal(value: &serde_json::Value) -> bool {
+    matches!(
+        value,
+        serde_json::Value::String(_) | serde_json::Value::Array(_) | serde_json::Value::Object(_)
+    )
+}
