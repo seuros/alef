@@ -910,7 +910,8 @@ mod inert_example_refusal_tests {
         let out = render("php_control", vec![assertion("content")]);
 
         assert!(
-            out.contains("$this->assertEquals('x',"),
+            // The renderer emits a double-quoted PHP string literal. ~keep
+            out.contains("$this->assertEquals(\"x\","),
             "the renderable assertion must still be emitted, got:\n{out}"
         );
         assert!(

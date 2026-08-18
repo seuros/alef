@@ -739,6 +739,7 @@ mod inert_example_refusal_tests {
             &crate::core::config::ResolvedCrateConfig::default(),
             &[],
             &[],
+            &[],
         );
         out
     }

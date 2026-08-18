@@ -514,6 +514,7 @@ fn dropped_streaming_field_assertion_carries_the_unsupported_field_marker() {
         &config,
         &[],
         &[],
+        &[],
         Some("ChunkItem"),
     );
 
@@ -577,6 +578,7 @@ fn render_streaming_test_method_gates_non_chat_assertions_on_the_effective_resul
         &config,
         &[],
         &[],
+        &[],
         Some("ChunkItem"),
     );
 
@@ -631,6 +633,7 @@ fn render_streaming_test_method_still_skips_a_field_absent_from_the_effective_re
         "WidgetException",
         &[],
         &config,
+        &[],
         &[],
         &[],
         Some("ChunkItem"),
@@ -1018,6 +1021,8 @@ fn a_wrapped_named_parameter_is_left_to_the_existing_lowering() {
         crate::e2e::codegen::call_ir::TargetParams::Known(&params),
     );
     assert_eq!(rendered, "\"{\\\"prompt\\\":\\\"hi\\\"}\"");
+}
+
 /// Build the fixture + config pair the refusal tests share: `result_fields` names only `content`,
 /// which is what arms the availability oracle — with it empty the resolver is deliberately
 /// permissive and no field is ever rejected. ~keep
@@ -1068,6 +1073,7 @@ fn render_refusal_candidate(fixture_id: &str, assertions: Vec<Assertion>) -> Str
         &config,
         &[],
         &[],
+        &[],
     );
     out
 }
@@ -1089,8 +1095,10 @@ fn a_resolvable_assertion_keeps_a_plain_fact_and_is_never_refused() {
         }],
     );
 
+    // C# renders `not_empty` as an `Assert.True(... switch { ... })` over the boxed accessor, not
+    // as `Assert.NotEmpty`. Pinning the latter pinned a spelling this backend never emits. ~keep
     assert!(
-        out.contains("Assert.NotEmpty("),
+        out.contains("expected non-empty value"),
         "the renderable assertion must still be emitted, got:\n{out}"
     );
     assert!(
