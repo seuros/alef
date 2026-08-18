@@ -266,6 +266,16 @@ fn generate_e2e_with_extensions(
         deferred_error.get_or_insert(error);
     }
 
+    // ~keep An example every one of whose assertions funnelled into a skip marker is as inert as
+    // one with no assertions at all, and the skip summary above cannot say so: it counts markers,
+    // and a body of three markers is indistinguishable there from a body of three markers plus a
+    // real check. The backends refuse to publish those as passing tests; this is where the count
+    // becomes visible, at WARN because a refused example is coverage that is not running.
+    let inert_examples = codegen::inert_example::take_inert_examples();
+    if let Some(summary) = codegen::inert_example::inert_summary(&inert_examples) {
+        warn!("{summary}");
+    }
+
     // Let registered extensions (passed in by the caller -- see `generate_e2e`'s doc
     // comment) contribute e2e files per language. The default `Extension::emit_e2e`
     // returns empty, so consumers without an e2e extension see no change. Returned files

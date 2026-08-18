@@ -34,6 +34,7 @@ pub(crate) mod field_skip;
 pub mod gleam;
 pub mod go;
 pub mod homebrew;
+pub(crate) mod inert_example;
 pub mod java;
 mod java_mvnw;
 pub mod kotlin;
@@ -367,6 +368,26 @@ thread_local! {
 /// Drain every skip recorded on this thread since the last drain.
 pub(crate) fn take_skip_records() -> Vec<SkipRecord> {
     SKIP_LEDGER.with(|ledger| std::mem::take(&mut *ledger.borrow_mut()))
+}
+
+/// The skips recorded so far this run for one `(language, fixture)` pair, WITHOUT draining.
+///
+/// ~keep [`inert_example::inert_verdict`] needs to know whether the markers an example just
+/// produced are a consumer-fixable unresolved path or alef's own generator debt, and the ledger
+/// already carries that decision on every record. Reading it back beats re-deriving the
+/// classification from the rendered text: a second matcher over the same wordings is exactly the
+/// drift `field_skip`'s module doc describes. This peeks rather than drains because the driver's
+/// end-of-run [`take_skip_records`] owns the drain — draining here would empty the summary and
+/// disarm the strict gate.
+pub(crate) fn peek_skip_records(language: &str, fixture_id: &str) -> Vec<SkipRecord> {
+    SKIP_LEDGER.with(|ledger| {
+        ledger
+            .borrow()
+            .iter()
+            .filter(|record| record.language == language && record.fixture_id == fixture_id)
+            .cloned()
+            .collect()
+    })
 }
 
 /// The one-line residual-debt summary, or `None` when nothing was skipped.

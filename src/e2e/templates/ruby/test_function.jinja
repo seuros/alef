@@ -11,9 +11,14 @@
    - call_expr: the function call expression
    - result_var: variable to store result
    - assertions_rendered: pre-rendered assertion blocks
-   - has_usable: bool - whether there are any usable assertions (false when the
-     fixture's only assertion is `not_error`/`error`, or every field assertion
-     resolved to a skip). Drives the `expect(result).not_to be_nil` fallback below.
+   - has_usable: bool - whether the rendered `assertions_rendered` body contains a
+     line that can execute (false when the fixture's only assertion is
+     `not_error`/`error`, or every field assertion resolved to a skip comment).
+     Derived from the rendered text, never guessed from the fixture. Drives the
+     `expect(result).not_to be_nil` fallback below, and — for `returns_void` calls,
+     which bind no result to assert on — the `expect { .. }.not_to raise_error`
+     wrapper that makes "the call does not raise" a real, failable expectation
+     instead of an implicit one no runner can see.
    - returns_void: bool - whether the call returns unit (Rust `()` → Ruby nil)
    - client_factory: optional client factory expression
    - fixture_id: fixture ID (for client factory)
@@ -56,7 +61,11 @@
     {{ line }}
 {% endfor %}
 {% if returns_void %}
+{% if has_usable %}
     {{ call_expr }}
+{% else %}
+    expect { {{ call_expr }} }.not_to raise_error
+{% endif %}
 {% else %}
     {{ result_var }} = {{ call_expr }}
 {% endif %}
