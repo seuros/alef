@@ -146,6 +146,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/module_function_register.rs.jinja"),
     ),
     (
+        "cfg_attribute.rs.jinja",
+        include_str!("templates/cfg_attribute.rs.jinja"),
+    ),
+    (
         "module_class_singleton_method_register.rs.jinja",
         include_str!("templates/module_class_singleton_method_register.rs.jinja"),
     ),

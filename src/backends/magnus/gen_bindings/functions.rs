@@ -165,6 +165,100 @@ gem_name = "test_lib"
         assert!(code.contains("define_module(\"TestLib\")"), "must define the module");
     }
 
+    fn zero_arg_func(name: &str, cfg: Option<&str>) -> FunctionDef {
+        FunctionDef {
+            params: vec![],
+            cfg: cfg.map(str::to_string),
+            ..simple_func(name, false)
+        }
+    }
+
+    /// Regression for a `#[cfg(feature = "X")]`-gated top-level function reaching a binding
+    /// crate that does not declare `X`: the `fn` definition (see `prepend_cfg` in
+    /// `gen_bindings::mod`) and its `define_module_function` registration must carry the exact
+    /// same gate, or the registration names a function the gate compiled out
+    /// (`E0425 cannot find value`). Before the fix, this registration was emitted ungated
+    /// regardless of `func.cfg`.
+    #[test]
+    fn gen_module_init_gates_function_registration_to_match_its_definition() {
+        let config = make_config();
+        let gated = zero_arg_func("count_tokens", Some(r#"feature = "tokenizer""#));
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "test_lib".to_string(),
+            version: "0.1.0".to_string(),
+            types: vec![],
+            functions: vec![gated],
+            enums: vec![],
+            errors: vec![],
+            excluded_type_paths: ::std::collections::HashMap::new(),
+            excluded_trait_names: ::std::collections::HashSet::new(),
+            services: vec![],
+            handler_contracts: vec![],
+            unsupported_public_items: Vec::new(),
+        };
+        let code = gen_module_init(
+            "TestLib",
+            &api,
+            &config,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &[],
+        );
+        assert_eq!(
+            code.matches(
+                "#[cfg(feature = \"tokenizer\")]\n    module.define_module_function(\"count_tokens\", \
+                 function!(count_tokens, 0))?;"
+            )
+            .count(),
+            1,
+            "the registration must carry the identical `#[cfg(feature = \"tokenizer\")]` gate as \
+             the function definition; got:\n{code}"
+        );
+    }
+
+    /// An ungated function's registration must stay exactly as it was: no `#[cfg(...)]` line
+    /// introduced by the fix above.
+    #[test]
+    fn gen_module_init_leaves_ungated_function_registration_unchanged() {
+        let config = make_config();
+        let ungated = zero_arg_func("completion_cost", None);
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "test_lib".to_string(),
+            version: "0.1.0".to_string(),
+            types: vec![],
+            functions: vec![ungated],
+            enums: vec![],
+            errors: vec![],
+            excluded_type_paths: ::std::collections::HashMap::new(),
+            excluded_trait_names: ::std::collections::HashSet::new(),
+            services: vec![],
+            handler_contracts: vec![],
+            unsupported_public_items: Vec::new(),
+        };
+        let code = gen_module_init(
+            "TestLib",
+            &api,
+            &config,
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            &[],
+            &Default::default(),
+            &[],
+        );
+        assert!(
+            code.contains("module.define_module_function(\"completion_cost\", function!(completion_cost, 0))?;"),
+            "must still register the ungated function; got:\n{code}"
+        );
+        assert!(
+            !code.contains("#[cfg("),
+            "an ungated function must not gain a cfg gate; got:\n{code}"
+        );
+    }
+
     #[test]
     fn needs_variadic_arity_detects_optional_params() {
         let required = ParamDef {

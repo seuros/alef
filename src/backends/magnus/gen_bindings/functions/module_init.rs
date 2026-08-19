@@ -263,14 +263,30 @@ pub(in crate::backends::magnus::gen_bindings) fn gen_module_init(
         };
         let ruby_name = crate::backends::magnus::ruby_public_function_name(func);
         let function_name = crate::backends::magnus::ruby_native_function_name(func);
-        lines.push(crate::backends::magnus::template_env::render(
+        let registration = crate::backends::magnus::template_env::render(
             "module_function_register.rs.jinja",
             minijinja::context! {
                 ruby_name => ruby_name,
                 function_name => function_name.as_ref(),
                 arity => param_count,
             },
-        ));
+        );
+        // The registration must carry the same gate `prepend_cfg` already applied to the `fn`
+        // this `function!(...)` call names: `#[magnus::init]`'s body is a flat statement list
+        // (not a set of items), so `#[cfg]` on the registration statement is the only place the
+        // gate can go, exactly as the method loop above does via `method.cfg`. Without it, a
+        // definition compiled out by its own `#[cfg(feature = "X")]` leaves this line naming a
+        // function that does not exist -- a hard `E0425 cannot find value` here, not a missing
+        // Ruby method. ~keep
+        lines.push(match func.cfg.as_deref() {
+            Some(gate) if !gate.is_empty() => {
+                crate::backends::magnus::template_env::render(
+                    "cfg_attribute.rs.jinja",
+                    minijinja::context! { predicate => gate },
+                ) + &registration
+            }
+            _ => registration,
+        });
     }
 
     for bridge_cfg in &config.trait_bridges {
