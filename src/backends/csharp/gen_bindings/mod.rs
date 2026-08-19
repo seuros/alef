@@ -288,6 +288,9 @@ impl Backend for CsharpBackend {
         let base_path = PathBuf::from(&output_dir).join(namespace.replace('.', "/"));
 
         let mut files = Vec::new();
+        // ~keep Stays empty when this backend emits no visitor surface at all, which is the
+        // correct candidate set for the deferred report below.
+        let mut stale_candidates: Vec<String> = Vec::new();
 
         let exception_class_name = format!("{}Exception", to_csharp_name(&api.crate_name));
 
@@ -416,9 +419,9 @@ impl Backend for CsharpBackend {
                     visitor_bridge_cfg.map_or("<unknown>", |bridge| bridge.trait_name.as_str())
                 );
             }
-            report_unemitted_visitor_files(&base_path, &superseded_visitor_filenames());
+            stale_candidates.extend(superseded_visitor_filenames());
         } else {
-            report_unemitted_visitor_files(&base_path, &stale_visitor_filenames(config));
+            stale_candidates.extend(stale_visitor_filenames(config));
         }
 
         if !config.trait_bridges.is_empty() {
@@ -639,6 +642,11 @@ impl Backend for CsharpBackend {
             content: gen_directory_build_props(),
             generated_header: true,
         });
+
+        // ~keep Deferred to here, after every emitter has pushed: the visitor-support check must be
+        // able to see the whole run's output, or it reports files this very run wrote.
+        let emitted: std::collections::HashSet<PathBuf> = files.iter().map(|file| file.path.clone()).collect();
+        report_unemitted_visitor_files(&base_path, &stale_candidates, &emitted);
 
         Ok(files)
     }
@@ -865,6 +873,7 @@ mod tests {
         let reported = files::report_unemitted_visitor_files(
             base_path,
             &["IVisitor.cs".to_string(), "VisitorCallbacks.cs".to_string()],
+            &std::collections::HashSet::new(),
         );
 
         assert_eq!(
@@ -875,6 +884,35 @@ mod tests {
         assert!(
             base_path.join("IVisitor.cs").is_file(),
             "reporting must leave the file on disk"
+        );
+    }
+
+    /// A file this very run is emitting is not an unemitted file.
+    ///
+    /// ~keep The check was `path.is_file()` alone, evaluated before the type and enum emitters had
+    /// pushed anything. In the branch where visitor callbacks are off -- which includes a consumer
+    /// simply having no `[ffi]` section, since `unwrap_or(false)` cannot distinguish that from an
+    /// explicit `false` -- the candidates are `{context_type}.cs` and `{result_type}.cs` from
+    /// `[[trait_bridges]]`, and those emitters go on to write exactly those files. So every
+    /// generate, adopt, verify and diff on such a repo reported files the same run had emitted.
+    #[test]
+    fn a_file_this_run_emits_is_not_reported_as_unemitted() {
+        let temp = tempfile::tempdir().expect("temp output root");
+        let base_path = temp.path();
+        std::fs::write(base_path.join("NodeContext.cs"), "// emitted last run\n").expect("seed");
+        std::fs::write(base_path.join("IVisitor.cs"), "// hand written\n").expect("seed");
+
+        let emitted = std::collections::HashSet::from([base_path.join("NodeContext.cs")]);
+        let reported = files::report_unemitted_visitor_files(
+            base_path,
+            &["NodeContext.cs".to_string(), "IVisitor.cs".to_string()],
+            &emitted,
+        );
+
+        assert_eq!(
+            reported,
+            vec![base_path.join("IVisitor.cs")],
+            "a path this run is writing must be excluded; only the genuinely unemitted one remains"
         );
     }
 

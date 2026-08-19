@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.2] - 2026-08-19
+
 ### Fixed
+
+- **C# no longer reports files as unemitted that the same run emitted.** The visitor-support check
+  tested only whether a path existed on disk, and ran before the type and enum emitters had pushed
+  anything. In the branch where visitor callbacks are off — which includes a consumer having no
+  `[ffi]` section at all, since an absent section is indistinguishable from an explicit `false` —
+  the candidates are `{context_type}.cs` and `{result_type}.cs` taken from `[[trait_bridges]]`, and
+  those emitters go on to write exactly those files. Every `generate`, `adopt`, `verify` and `diff`
+  on such a repo therefore warned about files it had just written. The check now runs after
+  emission and excludes anything the run is actually writing.
 
 - **Snippet validation no longer serializes languages that have nothing to serialize.** The
   per-snippet fallback runs inside a rayon pool, but every snippet took its session's mutex and

@@ -100,14 +100,24 @@ pub(super) fn stale_visitor_filenames(config: &crate::core::config::ResolvedCrat
 /// above has already found that gate insufficient. The asymmetry decides it exactly as it did
 /// there: a file left behind costs a CS8632 warning and a line in the log naming the path; a file
 /// wrongly removed costs a consumer source file nobody reads by hand. ~keep
+///
+/// ~keep `emitted` is the set of paths this run is actually writing, and it is the difference
+/// between a true statement and a false one. The check used to be `path.is_file()` alone, run
+/// before the type and enum emitters had pushed anything: in the branch where `visitor_callbacks`
+/// is off (which includes a consumer having no `[ffi]` section at all, since `unwrap_or(false)`
+/// cannot tell that from an explicit `false`) the candidate list is `{context_type}.cs` and
+/// `{result_type}.cs` from `[[trait_bridges]]` -- and those emitters, whose skip is gated on
+/// `has_visitor_callbacks`, go on to write exactly those files. So the run emitted the files and
+/// reported them as unemitted in the same breath, on every generate, adopt, verify and diff.
 pub(super) fn report_unemitted_visitor_files(
     base_path: &std::path::Path,
     filenames: &[String],
+    emitted: &std::collections::HashSet<std::path::PathBuf>,
 ) -> Vec<std::path::PathBuf> {
     let present: Vec<std::path::PathBuf> = filenames
         .iter()
         .map(|filename| base_path.join(filename))
-        .filter(|path| path.is_file())
+        .filter(|path| path.is_file() && !emitted.contains(path))
         .collect();
     if present.is_empty() {
         return present;
