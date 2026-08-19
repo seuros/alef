@@ -76,14 +76,14 @@ mod tests {
 
     #[test]
     #[traced_test]
-    fn pin_lower_than_cli_warns_that_generation_preserves_pin() {
+    fn pin_lower_than_cli_reports_that_generation_preserves_pin() {
         let ws = workspace_with_version(Some("0.0.1"));
         assert!(check_alef_toml_version(&ws).is_ok());
         assert!(logs_contain("generation will not change the pin"));
     }
 
     #[test]
-    fn pin_higher_than_cli_warns_not_errors() {
+    fn pin_higher_than_cli_reports_and_does_not_error() {
         let ws = workspace_with_version(Some("999.0.0"));
         assert!(
             check_alef_toml_version(&ws).is_ok(),
