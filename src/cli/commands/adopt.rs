@@ -201,6 +201,15 @@ pub struct AdoptReport {
     /// in a *different* file, which the operator has to commit for the adoption to mean
     /// anything anywhere else. ~keep
     pub recorded_unstampable: Vec<PathBuf>,
+    /// Matches whose bytes are not valid UTF-8, in path order.
+    ///
+    /// Skipped rather than adopted, and reported rather than dropped. Adoption of a drifted
+    /// path is only ever taken after printing its diff, and a binary artifact has no diff to
+    /// print -- so neither adopting it nor staying silent about it is available. One such file
+    /// used to abort the entire target: a single `gradle-wrapper.jar` inside `packages/**`
+    /// ended the run with "stream did not contain valid UTF-8" before any of the hundreds of
+    /// adoptable text files beside it were stamped. ~keep
+    pub unreadable: Vec<PathBuf>,
     /// Full, untruncated diffs for every drifted candidate, in path order.
     pub diffs: Vec<AdoptDiff>,
     /// True when this was a preview; nothing on disk was touched.
@@ -403,9 +412,16 @@ pub fn render_diff(candidate: &AdoptCandidate) -> String {
     body
 }
 
+/// What [`collect_candidates`] found: the classifiable matches, plus the matches whose
+/// bytes are not text and so can be neither stamped nor diffed.
+struct CollectedCandidates {
+    candidates: Vec<AdoptCandidate>,
+    unreadable: Vec<PathBuf>,
+}
+
 /// Collect every managed output the target selects, refusing paths alef does not
 /// generate and paths that do not exist yet.
-fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<Vec<AdoptCandidate>> {
+fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<CollectedCandidates> {
     let mut matched: Vec<&ManagedOutput> = managed
         .iter()
         .filter(|output| matches_target(&options.target, &output.relative))
@@ -423,6 +439,7 @@ fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Resu
     }
 
     let mut candidates = Vec::with_capacity(matched.len());
+    let mut unreadable: Vec<PathBuf> = Vec::new();
     for output in matched {
         let full_path = options.base_dir.join(&output.relative);
         if !full_path.exists() {
@@ -430,8 +447,12 @@ fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Resu
             // pre-existing content, so an ordinary generate already writes this. ~keep
             continue;
         }
-        let existing = std::fs::read_to_string(&full_path)
-            .with_context(|| format!("failed to read existing {}", full_path.display()))?;
+        let bytes =
+            std::fs::read(&full_path).with_context(|| format!("failed to read existing {}", full_path.display()))?;
+        let Ok(existing) = String::from_utf8(bytes) else {
+            unreadable.push(output.relative.clone());
+            continue;
+        };
         candidates.push(classify(
             &full_path,
             &output.relative,
@@ -441,14 +462,14 @@ fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Resu
         ));
     }
 
-    if candidates.is_empty() {
+    if candidates.is_empty() && unreadable.is_empty() {
         bail!(
             "`{}` matches alef-managed output but nothing exists on disk yet -- \
              run `alef generate`, there is no ownership conflict to resolve",
             options.target
         );
     }
-    Ok(candidates)
+    Ok(CollectedCandidates { candidates, unreadable })
 }
 
 /// Stamp one candidate so a later run's ownership guard recognises it.
@@ -489,9 +510,10 @@ fn apply(candidate: &AdoptCandidate, report: &mut AdoptReport, to_record: &mut V
 /// without a config, an extraction pass, or a real crate — the ownership decision is
 /// the thing worth testing, and it must not be reachable only through a full pipeline.
 pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptReport> {
-    let candidates = collect_candidates(options, managed)?;
+    let CollectedCandidates { candidates, unreadable } = collect_candidates(options, managed)?;
     let mut report = AdoptReport {
         preview: !options.write,
+        unreadable,
         ..AdoptReport::default()
     };
 

@@ -146,6 +146,21 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                 };
 
+                if !report.unreadable.is_empty() {
+                    // Named, not counted, and on stdout beside the diffs: adoption of a drifted
+                    // path is only ever taken after printing its diff, and a binary artifact has
+                    // no diff to print, so this list is the whole result for these paths. ~keep
+                    crate::bin_cli::output::blank();
+                    crate::bin_cli::output::line(
+                        "NOT ADOPTED -- not text. These matches are binary, so they can carry no \
+                         provenance marker and produce no diff to review. alef leaves them alone:",
+                    );
+                    for path in &report.unreadable {
+                        crate::bin_cli::output::line(format_args!("  {}", path.display()));
+                    }
+                    crate::bin_cli::output::blank();
+                }
+
                 if !report.skipped_create_once.is_empty() {
                     // Every path, never a count, and on stdout with the drifted diffs rather
                     // than through `tracing`: this list is the command's result for these

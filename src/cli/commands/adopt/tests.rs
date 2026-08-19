@@ -843,3 +843,40 @@ fn adopt_does_not_refuse_the_snippet_coverage_ledger() {
         "the ledger must be adopted under a plain --write, no clobber flag needed"
     );
 }
+
+/// A binary match must not end the run for the text files beside it.
+///
+/// `packages/**` in a real repo sweeps up a `gradle-wrapper.jar`, and reading it as UTF-8 used
+/// to fail the whole target with "stream did not contain valid UTF-8" -- before a single one of
+/// the hundreds of adoptable text files under the same glob was stamped. The binary is still
+/// never adopted: adoption of a drifted path is only taken after printing its diff, and there is
+/// no diff to print for one. ~keep
+#[test]
+fn a_binary_match_is_reported_and_the_text_matches_beside_it_are_still_adopted() {
+    let base = tempfile::tempdir().expect("tempdir");
+    let root = base.path();
+
+    let mut outputs = managed("packages/demo/config.toml", "name = \"demo\"\n", true, root);
+    outputs.extend(managed("packages/demo/wrapper.jar", "generated", false, root));
+
+    seed(root, "packages/demo/config.toml", "name = \"demo\"\n");
+    let binary = root.join("packages/demo/wrapper.jar");
+    std::fs::write(&binary, [0xff, 0xfe, 0x00, 0x01]).expect("seed binary");
+
+    let report = run(&options(root, "packages/**", true), &outputs).expect("adopt must not abort on a binary match");
+
+    assert_eq!(
+        report.unreadable,
+        vec![PathBuf::from("packages/demo/wrapper.jar")],
+        "the binary match must be reported, not silently dropped"
+    );
+    assert_eq!(
+        std::fs::read(&binary).expect("binary still readable"),
+        vec![0xff, 0xfe, 0x00, 0x01],
+        "the binary must be left byte-identical"
+    );
+    assert!(
+        content_has_alef_marker(&std::fs::read_to_string(root.join("packages/demo/config.toml")).expect("read")),
+        "the text file under the same glob must still have been adopted"
+    );
+}

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One binary file no longer ends an `alef adopt` run.** Candidate collection read every match with
+  `read_to_string`, so a single non-text match aborted the whole target: `alef adopt 'packages/**'`
+  on a repo with a `gradle-wrapper.jar` failed with `stream did not contain valid UTF-8` before one
+  of the hundreds of adoptable text files under the same glob was stamped, and no narrower target was
+  suggested. Binary matches are now collected separately and reported under a `NOT ADOPTED -- not text`
+  heading. They are still never adopted: a drifted path is only ever adopted after its diff is printed,
+  and a binary artifact has neither a diff to review nor a syntax that could hold a provenance marker.
+
 - **C# `[DllImport]` parameters now derive their width from the same fact as the emitted C signature.**
   `marshalling::pinvoke_param_type` mapped every `TypeRef::Named` to `ulong`, but the C FFI backend
   narrows a `Named` parameter whose type is `Copy` to `i32` — cbindgen renders that `int32_t`. A `Copy`
