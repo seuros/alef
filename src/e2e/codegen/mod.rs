@@ -1117,6 +1117,7 @@ pub trait E2eCodegen: Send + Sync {
     /// nested-field verification, for one) default-allows rather than fails, so
     /// a wrong name here silently disables verification instead of breaking
     /// generation. ~keep
+    #[allow(clippy::too_many_arguments)]
     fn generate(
         &self,
         groups: &[FixtureGroup],
@@ -1143,6 +1144,7 @@ pub trait E2eCodegen: Send + Sync {
     /// cross-backend gate can be added without a per-backend edit, and the one place that
     /// turns an unrenderable assertion into an error naming the fixture it came from
     /// instead of an empty render, a stray comment, or a panic. ~keep
+    #[allow(clippy::too_many_arguments)]
     fn generate_gated(
         &self,
         groups: &[FixtureGroup],

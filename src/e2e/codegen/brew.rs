@@ -43,7 +43,10 @@ impl E2eCodegen for BrewCodegen {
         _type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
-        errors: &[crate::core::ir::ErrorDef],
+        // ~keep Unused on purpose: brew keeps its own single combined-output `grep -F` check
+        // rather than routing through `declared_error_variant::classify`, because a CLI's error
+        // text is the only observable signal it has. See that module's doc for the rationale.
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);

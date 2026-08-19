@@ -8,6 +8,7 @@ use std::fmt::Write as FmtWrite;
 
 use super::test_case::render_test_case;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_file(
     category: &str,
     fixtures: &[&Fixture],

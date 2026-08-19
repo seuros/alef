@@ -42,6 +42,7 @@ fn render_r_error_check(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_case(
     out: &mut String,
     fixture: &Fixture,
