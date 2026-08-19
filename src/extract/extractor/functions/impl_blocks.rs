@@ -239,6 +239,53 @@ pub(crate) fn extract_impl_block(
     }
 }
 
+/// The unit variant a hand-written `impl Default for SomeEnum` returns, when the body is a bare
+/// `Self::Variant` / `SomeEnum::Variant` tail expression.
+///
+/// `#[derive(Default)]` records its choice on the variant itself (`EnumVariant::is_default`), but a
+/// manual impl carries the same fact only in its body, and every consumer of `is_default` — the Go,
+/// Rustler, Dart, WASM, Kotlin, Magnus and PHP backends, plus the generated Rust mirror enum's
+/// `#[default]` marker — would otherwise fall back to the *first declared* variant or to no default
+/// at all. Both are guesses that silently disagree with the Rust core whenever the real default is
+/// declared elsewhere in the enum. Reading it here turns that guess into a fact.
+///
+/// Deliberately narrow: only a bare path to a unit variant is recognised. A tuple/struct variant, a
+/// `match`, or any computed body leaves `is_default` unset, so callers keep their existing honest
+/// fallback rather than receiving a fabricated variant. ~keep
+fn manual_default_unit_variant(item: &syn::ItemImpl) -> Option<String> {
+    let default_fn = item.items.iter().find_map(|impl_item| match impl_item {
+        syn::ImplItem::Fn(method) if method.sig.ident == "default" => Some(method),
+        _ => None,
+    })?;
+
+    let tail = match default_fn.block.stmts.last()? {
+        syn::Stmt::Expr(expr, _) => expr,
+        _ => return None,
+    };
+    let expr = match tail {
+        syn::Expr::Return(ret) => ret.expr.as_deref()?,
+        other => other,
+    };
+    let syn::Expr::Path(path_expr) = expr else {
+        return None;
+    };
+
+    let segments = &path_expr.path.segments;
+    if segments.len() != 2 {
+        return None;
+    }
+    let qualifier = segments.first()?.ident.to_string();
+    let variant = segments.last()?;
+    if !variant.arguments.is_none() {
+        return None;
+    }
+    let self_type = match &*item.self_ty {
+        syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
+        _ => None,
+    };
+    (qualifier == "Self" || Some(&qualifier) == self_type.as_ref()).then(|| variant.ident.to_string())
+}
+
 /// Extract methods from a trait impl and attach them to an existing type in the surface.
 #[allow(clippy::too_many_arguments)]
 fn extract_trait_impl_methods(
@@ -265,6 +312,14 @@ fn extract_trait_impl_methods(
             && let Some(enum_def) = surface.enums.iter_mut().find(|e| e.name == type_name)
         {
             enum_def.has_default = true;
+            if let Some(variant_name) = manual_default_unit_variant(item)
+                && let Some(variant) = enum_def
+                    .variants
+                    .iter_mut()
+                    .find(|v| v.name == variant_name && v.fields.is_empty() && !v.originally_had_data_fields)
+            {
+                variant.is_default = true;
+            }
         }
         return;
     };

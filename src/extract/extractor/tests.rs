@@ -38,6 +38,7 @@ fn extract_from_source(source: &str) -> ApiSurface {
     .unwrap();
     resolve_public_default_functions(&mut surface);
     resolve_newtypes(&mut surface);
+    resolve_enum_field_defaults(&mut surface);
     surface
 }
 

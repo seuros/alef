@@ -11,6 +11,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A struct field defaulted only through `<FieldType>::default()` now resolves to a concrete
+  value instead of forcing every generated language binding into an unconstructible `required`
+  member.** The extractor folded `SomeEnum::default()` (and `Default::default()`) to
+  `DefaultValue::Empty` regardless of the field's own type, which is correct for a primitive,
+  string, or collection field but ambiguous for an enum-typed one -- `Empty` names "the type's own
+  zero" without saying which variant that is. A new postprocess pass,
+  `extract::extractor::postprocess::resolve_enum_field_defaults`, narrows `Empty` on an
+  enum-typed field to `DefaultValue::EnumVariant` when the enum's default variant is known. To
+  make it known in the hand-written case, `impl Default for SomeEnum { fn default() -> Self {
+  Self::Variant } }` is now read directly and its variant marked `EnumVariant::is_default`;
+  previously only `#[derive(Default)]`'s `#[default]` attribute set that flag, so every consumer
+  of it (the Go, Rustler, Dart, WASM, Kotlin, Magnus and PHP backends, and the generated Rust
+  mirror enum's `#[default]` marker) silently fell back to the first declared variant or to no
+  default at all. Only a bare unit variant is narrowed: a tuple or struct variant needs
+  `TupleVariant`/`StructVariant` and a payload this pass cannot read, and emitting a bare variant
+  name for one would fabricate a value that does not compile. An enum whose default variant stays
+  unknown is left `Empty`, preserving every backend's existing honest fallback.
+
 - **Kotlin/Android snippet validation resolves a real Gradle classpath instead of guessing a
   directory layout.** `KotlinValidator::class_path` probed exactly three fixed directories
   (`build/classes/kotlin/main`, `build/classes/java/main`,

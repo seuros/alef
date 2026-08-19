@@ -34,6 +34,61 @@ pub(super) fn resolve_public_default_functions(surface: &mut ApiSurface) {
     }
 }
 
+/// Resolve a field's `Empty` typed default to the concrete enum variant it stands for, when the
+/// field's own declared type is an enum whose default is known.
+///
+/// `Empty` already asserts "the value is this field's own type's zero" (see
+/// [`DefaultValue::Empty`]) — true whether the initializer was a bare `Default::default()` or
+/// `<FieldType>::default()`, since a struct-literal field position can only be filled with a
+/// value of the field's own declared type; the two spellings name the same value. For a `Named`
+/// field whose type is an enum, "the type's zero" is one specific variant, not a value most
+/// backends have an expression for, so this pass makes it concrete: the variant carrying
+/// `EnumVariant::is_default`, set either by `#[derive(Default)]`'s `#[default]` attribute or by
+/// reading a hand-written `impl Default`'s returned variant (see
+/// `extract::extractor::functions::impl_blocks::manual_default_unit_variant`).
+///
+/// Only a *unit* variant is narrowed. `DefaultValue::EnumVariant` is documented to name a bare
+/// unit-variant path with no arguments of its own, so a tuple or struct variant would need
+/// `TupleVariant`/`StructVariant` and the payload this pass has no way to read; emitting a bare
+/// name for one would fabricate a value that does not compile.
+///
+/// An enum whose default variant is unknown is left `Empty`, exactly as before this pass runs:
+/// downstream backends already treat `Empty` on a `Named` field as "unknown" and fall back to
+/// their own honest per-language guard (e.g. C#'s `required`). This pass only narrows what was
+/// already unresolved into what most backends can render directly; it never turns a resolvable
+/// value into a guess. ~keep
+pub(super) fn resolve_enum_field_defaults(surface: &mut ApiSurface) {
+    let enum_default_variants: AHashMap<String, String> = surface
+        .enums
+        .iter()
+        .filter(|enum_def| enum_def.has_default)
+        .filter_map(|enum_def| {
+            let variant = enum_def.variants.iter().find(|variant| {
+                variant.is_default && variant.fields.is_empty() && !variant.originally_had_data_fields
+            })?;
+            Some((enum_def.name.clone(), variant.name.clone()))
+        })
+        .collect();
+
+    if enum_default_variants.is_empty() {
+        return;
+    }
+
+    for typ in &mut surface.types {
+        for field in &mut typ.fields {
+            if !matches!(&field.typed_default, Some(DefaultValue::Empty)) {
+                continue;
+            }
+            let TypeRef::Named(name) = &field.ty else {
+                continue;
+            };
+            if let Some(variant) = enum_default_variants.get(name) {
+                field.typed_default = Some(DefaultValue::EnumVariant(variant.clone()));
+            }
+        }
+    }
+}
+
 /// Returns `true` if the type is a simple leaf type (primitive, String, Bytes, Path, etc.)
 /// rather than a complex Named, collection, or Optional type.
 fn is_simple_type(ty: &TypeRef) -> bool {
