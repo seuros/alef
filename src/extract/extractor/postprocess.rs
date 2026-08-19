@@ -312,6 +312,27 @@ fn is_fully_known(value: &DefaultValue) -> bool {
     }
 }
 
+/// True when `value` is some spelling of "this type's zero" — [`DefaultValue::Empty`] itself,
+/// or a literal that happens to equal the zero of its own literal kind (`IntLiteral(0)`,
+/// `FloatLiteral(0.0)`, `BoolLiteral(false)`, `StringLiteral("")`, `DefaultValue::None`).
+///
+/// `Empty` is documented as *"the type's own zero"* (see [`DefaultValue::Empty`]), not as "no
+/// value was recorded" — but the serde reader and the `impl Default` reader fold the same zero
+/// value to different spellings. The serde reader can only ever write `Empty` for a bare
+/// `#[serde(default)]` (`extract::extractor::helpers::fields::extract_field` never produces a
+/// literal), while a hand-written `fn default() -> Self { Self { count: 0 } }` folds through
+/// `extract::extractor::defaults::expr_to_default_value` to `IntLiteral(0)`, not `Empty`. Both
+/// spellings name the same field default, so treating them as a disagreement here is the false
+/// positive this function exists to avoid: it would fire on every zero-valued field a manual
+/// `impl Default` writes out explicitly instead of leaving to the derive. ~keep
+fn denotes_type_zero(value: &DefaultValue) -> bool {
+    matches!(
+        value,
+        DefaultValue::Empty | DefaultValue::None | DefaultValue::BoolLiteral(false) | DefaultValue::IntLiteral(0)
+    ) || matches!(value, DefaultValue::StringLiteral(s) if s.is_empty())
+        || matches!(value, DefaultValue::FloatLiteral(f) if *f == 0.0)
+}
+
 /// Warn when a field's serde-reader default and its final `#[derive(Default)]`/manual
 /// `impl Default` value are both fully known and disagree (issue #153).
 ///
@@ -330,7 +351,10 @@ fn is_fully_known(value: &DefaultValue) -> bool {
 /// `has_default` write in `extract_struct`) as an assertion that the derived default *is* the
 /// field's type-zero, exactly as `Vec::new()` or `Default::default()` inside a manual `impl
 /// Default` are. Refusing to compare it would silently exempt the most common case (a struct
-/// that derives `Default` while also carrying `#[serde(default)]` fields) from this diagnostic. ~keep
+/// that derives `Default` while also carrying `#[serde(default)]` fields) from this diagnostic.
+///
+/// A structural mismatch is still not always a disagreement: see [`denotes_type_zero`] for the
+/// case where both sides name the same zero value under different `DefaultValue` spellings. ~keep
 pub(crate) fn warn_on_default_disagreement(
     rust_path: &str,
     fields: &[FieldDef],
@@ -352,7 +376,7 @@ pub(crate) fn warn_on_default_disagreement(
             );
             continue;
         }
-        if serde_default != actual_default {
+        if serde_default != actual_default && !(denotes_type_zero(serde_default) && denotes_type_zero(actual_default)) {
             tracing::warn!(
                 target: "alef::extract::defaults",
                 rust_type = rust_path,
@@ -544,5 +568,111 @@ mod default_disagreement_tests {
         warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
 
         assert!(!logs_contain("disagrees"));
+    }
+
+    /// (f) The false-positive this fix targets: a bare `#[serde(default)]` folds to `Empty`,
+    /// while a hand-written `impl Default` writing the field's zero out explicitly (`count: 0`)
+    /// folds to `IntLiteral(0)`. Both name the same Rust default, so this must not warn.
+    #[test]
+    #[traced_test]
+    fn a_zero_valued_serde_default_matching_the_rust_default_does_not_warn() {
+        let fields = vec![field("count", Some(DefaultValue::IntLiteral(0)))];
+        let defaults = serde_defaults(&[("count", DefaultValue::Empty)]);
+
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+
+        assert!(!logs_contain("disagrees"));
+    }
+
+    /// (f) Table-driven spread of the zero-equivalence fix across every `DefaultValue` spelling
+    /// of "zero" (`Empty`, `IntLiteral(0)`, `FloatLiteral(0.0)`, `BoolLiteral(false)`,
+    /// `StringLiteral("")`, `None`) in both comparison directions, plus the border cases that
+    /// must keep warning: `Empty` against a non-zero literal, two differing non-zero literals,
+    /// and `Empty` against a non-empty string.
+    #[test]
+    #[traced_test]
+    fn zero_value_equivalence_across_default_value_spellings_is_evaluated_correctly() {
+        struct Case {
+            type_name: &'static str,
+            serde_default: DefaultValue,
+            actual_default: DefaultValue,
+            should_warn: bool,
+        }
+
+        let cases = [
+            Case {
+                type_name: "case::EmptySerdeZeroIntActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::IntLiteral(0),
+                should_warn: false,
+            },
+            Case {
+                type_name: "case::EmptySerdeZeroFloatActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::FloatLiteral(0.0),
+                should_warn: false,
+            },
+            Case {
+                type_name: "case::EmptySerdeFalseActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::BoolLiteral(false),
+                should_warn: false,
+            },
+            Case {
+                type_name: "case::EmptySerdeEmptyStringActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::StringLiteral(String::new()),
+                should_warn: false,
+            },
+            Case {
+                type_name: "case::EmptySerdeNoneActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::None,
+                should_warn: false,
+            },
+            Case {
+                type_name: "case::IntZeroSerdeEmptyActual",
+                serde_default: DefaultValue::IntLiteral(0),
+                actual_default: DefaultValue::Empty,
+                should_warn: false,
+            },
+            Case {
+                // Borders the fix: `Empty` against a *non-zero* literal is a genuine
+                // disagreement, not the zero-spelling case, and must still warn.
+                type_name: "case::EmptySerdeNonZeroIntActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::IntLiteral(5),
+                should_warn: true,
+            },
+            Case {
+                // Borders the fix: two non-zero, non-`Empty` literals that genuinely differ
+                // must still warn — zero-equivalence must not swallow real disagreements.
+                type_name: "case::NonZeroIntSerdeNonZeroIntActual",
+                serde_default: DefaultValue::IntLiteral(3),
+                actual_default: DefaultValue::IntLiteral(5),
+                should_warn: true,
+            },
+            Case {
+                // Borders the fix: an empty string is a zero value, a non-empty string is not.
+                type_name: "case::EmptySerdeNonEmptyStringActual",
+                serde_default: DefaultValue::Empty,
+                actual_default: DefaultValue::StringLiteral("localhost".to_string()),
+                should_warn: true,
+            },
+        ];
+
+        for case in cases {
+            let fields = vec![field("value", Some(case.actual_default.clone()))];
+            let defaults = serde_defaults(&[("value", case.serde_default.clone())]);
+
+            warn_on_default_disagreement(case.type_name, &fields, &defaults);
+
+            let warned = logs_contain(case.type_name) && logs_contain("disagrees");
+            assert_eq!(
+                warned, case.should_warn,
+                "case {} (serde={:?}, actual={:?}) expected should_warn={} but got {}",
+                case.type_name, case.serde_default, case.actual_default, case.should_warn, warned
+            );
+        }
     }
 }
