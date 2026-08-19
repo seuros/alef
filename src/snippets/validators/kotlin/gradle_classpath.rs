@@ -124,6 +124,12 @@ mod tests {
     use crate::snippets::types::Language;
     use std::collections::BTreeMap;
 
+    /// The fixtures below are trivial shell scripts that echo a fixed line and exit, so a real
+    /// resolution takes milliseconds. The bound only exists so a genuinely hung wrapper cannot
+    /// wedge the suite; it is generous because process spawn under a fully parallel `cargo test`
+    /// run has been observed to exceed a tight bound and fail the success-path assertions. ~keep
+    const TEST_TIMEOUT_SECS: u64 = 120;
+
     fn session(working_directory: &Path, fingerprint: &str) -> ValidationSession {
         ValidationSession {
             language: Language::Kotlin,
@@ -175,7 +181,7 @@ mod tests {
         let working_directory = tempfile::tempdir().expect("working directory");
         let session = session(working_directory.path(), "no-wrapper-fixture");
 
-        let class_path = resolve_class_path(&manifest, &session, 5).expect("classpath resolves");
+        let class_path = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("classpath resolves");
 
         assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
     }
@@ -206,8 +212,8 @@ mod tests {
         let working_directory = tempfile::tempdir().expect("working directory");
         let session = session(working_directory.path(), "wrapper-fixture");
 
-        let first = resolve_class_path(&manifest, &session, 5).expect("first resolution");
-        let second = resolve_class_path(&manifest, &session, 5).expect("second resolution");
+        let first = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("first resolution");
+        let second = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("second resolution");
 
         let expected = std::env::join_paths([PathBuf::from("/fake/one.jar"), PathBuf::from("/fake/two.jar")])
             .expect("expected classpath");
@@ -236,7 +242,7 @@ mod tests {
         let working_directory = tempfile::tempdir().expect("working directory");
         let session = session(working_directory.path(), "failing-wrapper-fixture");
 
-        let class_path = resolve_class_path(&manifest, &session, 5).expect("falls back to probing");
+        let class_path = resolve_class_path(&manifest, &session, TEST_TIMEOUT_SECS).expect("falls back to probing");
 
         assert_eq!(std::env::split_paths(&class_path).collect::<Vec<_>>(), vec![classes]);
     }
