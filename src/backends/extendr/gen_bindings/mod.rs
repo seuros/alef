@@ -8,7 +8,7 @@ pub mod service_api;
 mod trait_bridge_wrappers;
 mod type_mapping;
 
-use self::cfg_registration::{always_registered, apply_r_cfg_field_policy, effective_r_cfg_features, prepend_cfg};
+use self::cfg_registration::{always_registered, apply_r_cfg_policy, effective_r_cfg_features, prepend_cfg};
 use self::trait_bridge_wrappers::{collect_trait_bridge_fn_names, collect_trait_bridge_functions};
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
@@ -46,7 +46,7 @@ impl Backend for ExtendrBackend {
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         let deduped_api = api.with_deduped_functions();
         let enabled_features = effective_r_cfg_features(&deduped_api, config);
-        let r_cfg_api = apply_r_cfg_field_policy(&deduped_api, &enabled_features);
+        let r_cfg_api = apply_r_cfg_policy(&deduped_api, &enabled_features);
         let api = &r_cfg_api;
         let core_import = config.core_import_name();
         let type_paths = build_type_path_lookup(api);

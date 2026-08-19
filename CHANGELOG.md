@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **R bindings no longer drop every feature-gated function outright.** `extendr_module!` rejects a
+  `#[cfg(...)]` on its entries ("expected mod, fn or impl"), so R cannot gate a registration the
+  way Magnus gates its `define_module_function` call. The workaround was to exclude any genuinely
+  cfg-gated function from both the registration block and the R wrapper surface — unconditionally,
+  whether or not the feature was actually enabled — so a crate with a cfg-gated function could
+  never expose it through R even in the default build, silently. The predicate is now resolved
+  before generation, exactly as the field policy beside it already did: an enabled function
+  reaches R with its gate discharged, and a disabled one is removed outright so no
+  `extendr_module!` entry or wrapper can name a symbol the crate never compiled.
+
 - **Ruby bindings no longer fail to build when a function is feature-gated.** `prepend_cfg` put
   `#[cfg(feature = "X")]` on the generated `fn`, but the registration loop in `gen_module_init`
   never read `func.cfg` and emitted the `module.define_module_function(..., function!(...))` line

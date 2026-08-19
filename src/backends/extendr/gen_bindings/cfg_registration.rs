@@ -49,13 +49,32 @@ pub(super) fn effective_r_cfg_features(api: &ApiSurface, config: &ResolvedCrateC
     crate::codegen::cfg::collect_cfg_features(api).into_iter().collect()
 }
 
-/// Apply the R backend's field cfg policy before struct, conversion, and wrapper generation.
+/// Apply the R backend's cfg policy before struct, conversion, and wrapper generation.
 ///
 /// Fields whose cfg is enabled by the R feature set are made unconditional in the generated
 /// binding surface. Disabled fields are removed from the binding DTO and marked as stripped so
 /// conversion templates keep using core defaults for the missing core slots.
-pub(super) fn apply_r_cfg_field_policy(api: &ApiSurface, enabled_features: &[String]) -> ApiSurface {
+///
+/// ~keep Functions get the same treatment, and must: `extendr_module!` rejects a `#[cfg(...)]`
+/// on its entries outright ("expected mod, fn or impl"), so R cannot gate a registration the way
+/// Magnus gates its `define_module_function` call. The previous workaround was to let
+/// [`always_registered`] drop every genuinely cfg-gated function from both the registration block
+/// and the R wrapper surface -- unconditionally, whether or not the feature was actually on. That
+/// made any crate with a cfg-gated function permanently unable to expose it through R even in the
+/// default build. Resolving the predicate here instead means an enabled function reaches R with
+/// its gate already discharged (`cfg: None`, so nothing downstream re-tests it), while a disabled
+/// one is removed outright so no `extendr_module!` entry or wrapper can name a symbol the crate
+/// did not compile.
+pub(super) fn apply_r_cfg_policy(api: &ApiSurface, enabled_features: &[String]) -> ApiSurface {
     let mut filtered = api.clone();
+    filtered.functions.retain_mut(|func| match func.cfg.as_deref() {
+        None => true,
+        Some(pred) if always_registered(Some(pred)) || cfg_condition_enabled(pred, enabled_features) => {
+            func.cfg = None;
+            true
+        }
+        Some(_) => false,
+    });
     for typ in &mut filtered.types {
         let mut stripped = false;
         let mut fields = Vec::with_capacity(typ.fields.len());
