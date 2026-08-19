@@ -49,6 +49,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unmarked copy previously reported frozen with no remedy to paste in; it now gets the real `#`
   header, the same way `Makefile`/`go.mod`/`Rakefile` already do.
 
+- **`[e2e.call(s).*.overrides.<lang>] result_type` is now validated against the core IR,
+  mirroring the `class` validation added in 0.62.2.** `result_type` names the struct/enum
+  type a call's result binds to, and — for the `c` generator specifically — the value is
+  baked verbatim into accessor/free symbols. Nothing checked it against the IR before it
+  reached the emitter, so a typo surfaced late: either as uncompilable generated C, or as a
+  wall of per-call "call did not resolve to a core IR function..." warnings once the
+  misconfigured call's return type couldn't be derived any other way, both naming
+  `result_type` as the fix. Generation now fails fast at config-validation time instead,
+  with a did-you-mean suggestion against the type/enum names the crate actually declares. A
+  `result_type` set to a primitive/pointer C spelling (`char*`, `int32_t`, ...) — a
+  different misuse, where `raw_c_result_type` or `result_is_bytes`/`result_is_simple` was
+  the field that belonged there — is now reported as its own warning rather than being
+  silently accepted or conflated with an unknown-type error.
+
 ### Changed
 
 - **Demoted `tracing::warn!` sites that fire on correct, working configurations to `info!` or
