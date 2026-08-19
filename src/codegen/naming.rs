@@ -488,6 +488,19 @@ pub fn to_node_name(name: &str) -> String {
     name.to_lower_camel_case()
 }
 
+/// Public TypeScript type name for a NAPI-RS binding's `.d.ts`, for both a type's own
+/// declaration (`export interface Foo`) and every reference to it elsewhere in the file
+/// (a field type, a param type, a return type).
+///
+/// The compiled Rust side wraps `Foo` as a `Js`-prefixed struct (`JsFoo`) and remaps it back to
+/// `Foo` at the JS boundary via `#[napi(js_name = "Foo")]`, so the `.d.ts` — which describes the
+/// JS boundary, not the Rust struct — must use the identity name everywhere. Both the emitter's
+/// declaration site and its reference site (`TypeRef::Named`) call this one function so they
+/// cannot independently decide whether to keep the `Js` prefix. ~keep
+pub fn node_type_name(name: &str) -> &str {
+    name
+}
+
 /// Convert a Rust snake_case name to Ruby snake_case convention.
 pub fn to_ruby_name(name: &str) -> String {
     name.to_snake_case()

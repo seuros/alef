@@ -405,3 +405,19 @@ fn test_csharp_type_name_three_letter_acronyms() {
     assert_eq!(csharp_type_name("Json"), "Json");
     assert_eq!(csharp_type_name("JSON"), "Json");
 }
+
+/// `node_type_name` must be the identity function: the NAPI-RS `.d.ts` emitter never applies
+/// the Rust-side `Js` wrapper prefix to a TypeScript type name, on the declaration side or the
+/// reference side. Table-driven so a future accidental prefix-adding edit fails immediately.
+#[test]
+fn node_type_name_never_adds_the_js_wrapper_prefix() {
+    let cases = [
+        ("Message", "Message"),
+        ("ChatCompletionRequest", "ChatCompletionRequest"),
+        ("StopSequence", "StopSequence"),
+        ("Js", "Js"),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(node_type_name(input), expected, "node_type_name({input:?})");
+    }
+}

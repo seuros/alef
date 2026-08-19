@@ -2,6 +2,7 @@ use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use minijinja::context;
 
 use crate::backends::napi::template_env::render;
+use crate::codegen::naming::node_type_name;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{ApiSurface, EntrypointKind, RegistrationDef, ServiceDef, TypeRef};
 
@@ -35,13 +36,13 @@ fn classify_service_imports(api: &ApiSurface, _config: &ResolvedCrateConfig) -> 
         value_imports.push(format!("{} as Native{}", service.name, service.name));
         for param in &service.constructor.params {
             if let TypeRef::Named(name) = &param.ty {
-                type_imports.push(name.clone());
+                type_imports.push(node_type_name(name).to_string());
             }
         }
         for method in &service.configurators {
             for param in &method.params {
                 if let TypeRef::Named(name) = &param.ty {
-                    type_imports.push(name.clone());
+                    type_imports.push(node_type_name(name).to_string());
                 }
             }
         }
@@ -65,7 +66,7 @@ fn classify_service_imports(api: &ApiSurface, _config: &ResolvedCrateConfig) -> 
                 }
                 for param in &variant.signature_params {
                     if let TypeRef::Named(name) = &param.ty {
-                        type_imports.push(name.clone());
+                        type_imports.push(node_type_name(name).to_string());
                     }
                 }
             }

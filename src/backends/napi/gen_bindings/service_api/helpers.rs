@@ -1,3 +1,4 @@
+use crate::codegen::naming::node_type_name;
 use crate::core::ir::{ApiSurface, HandlerContractDef, MethodDef, TypeRef};
 
 pub(super) fn typescript_type_annotation(ty: &TypeRef) -> String {
@@ -20,7 +21,7 @@ pub(super) fn typescript_type_annotation(ty: &TypeRef) -> String {
             typescript_type_annotation(v)
         ),
         TypeRef::Unit => "void".to_owned(),
-        TypeRef::Named(n) => n.clone(),
+        TypeRef::Named(n) => node_type_name(n).to_owned(),
         TypeRef::Json => "any".to_owned(),
         TypeRef::Path => "string".to_owned(),
         TypeRef::Duration => "number".to_owned(),

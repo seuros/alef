@@ -2,7 +2,7 @@
 
 use super::enums;
 use super::types::{opaque_instance_method_is_dropped, opaque_static_method_is_dropped};
-use crate::codegen::naming::{to_node_name, wire_variant_value};
+use crate::codegen::naming::{node_type_name, to_node_name, wire_variant_value};
 use crate::codegen::shared::{binding_fields, substitute_excluded_types};
 use crate::core::config::NodeCapsuleTypeConfig;
 use crate::core::hash::{self, CommentStyle};
@@ -183,15 +183,14 @@ pub(super) fn gen_dts(
 
     all_decls.dedup_by(|a, b| a.0 == b.0);
 
-    // `#[napi(js_name = "Foo")]` so NAPI-RS maps JsFoo → Foo at runtime.
-    let no_prefix: &str = "";
-    let _ = prefix;
+    // `#[napi(js_name = "Foo")]` so NAPI-RS maps JsFoo → Foo at runtime; every declared name and
+    // every reference to it below goes through `node_type_name` so the two can never diverge.
     for (_, decl) in &all_decls {
         lines.push(String::new());
         match decl {
             Decl::Class(typ) => {
                 lines.extend(format_jsdoc(&typ.doc, ""));
-                lines.push(format!("export declare class {} {{", typ.name));
+                lines.push(format!("export declare class {} {{", node_type_name(&typ.name)));
                 // `gen_opaque_struct_methods` (`types.rs`) silently drops a method that can't
                 // cross into a `#[napi]` wrapper — never registering it in the `#[napi]` impl
                 // block — for the exact reasons these two predicates check. Calling them here
@@ -212,7 +211,7 @@ pub(super) fn gen_dts(
                 });
                 for method in declared_methods {
                     let js_name = to_node_name(&method.name);
-                    let params = dts_params(&method.params, no_prefix, default_types);
+                    let params = dts_params(&method.params, default_types);
                     let streaming_key = format!("{}.{}", typ.name, method.name);
                     let ret = if let Some(item_type) = streaming_item_types.get(&streaming_key) {
                         format!("Promise<AsyncGenerator<{item_type}, void, undefined>>")
@@ -221,7 +220,6 @@ pub(super) fn gen_dts(
                             &method.return_type,
                             method.error_type.is_some(),
                             method.is_async,
-                            no_prefix,
                             capsule_types,
                         )
                     };
@@ -236,10 +234,10 @@ pub(super) fn gen_dts(
             }
             Decl::Interface(typ) => {
                 lines.extend(format_jsdoc(&typ.doc, ""));
-                lines.push(format!("export interface {} {{", typ.name));
+                lines.push(format!("export interface {} {{", node_type_name(&typ.name)));
                 for field in binding_fields(&typ.fields) {
                     let js_name = to_node_name(&field.name);
-                    let ts_ty = dts_type(&field.ty, no_prefix);
+                    let ts_ty = dts_type(&field.ty);
                     lines.extend(format_jsdoc(&field.doc, "  "));
                     let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional || typ.has_default;
                     if is_optional {
@@ -258,7 +256,7 @@ pub(super) fn gen_dts(
                     .chain(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.as_str()))
                     .collect();
                 lines.extend(format_jsdoc(&typ.doc, ""));
-                lines.push(format!("export interface {} {{", typ.name));
+                lines.push(format!("export interface {} {{", node_type_name(&typ.name)));
                 if trait_bridge_requires_plugin_name(typ, trait_bridges) {
                     lines.push("  name(): string".to_string());
                     lines.push("  version?(): string".to_string());
@@ -278,11 +276,10 @@ pub(super) fn gen_dts(
                             ..p.clone()
                         })
                         .collect();
-                    let params = dts_params(&sub_params, no_prefix, default_types);
+                    let params = dts_params(&sub_params, default_types);
                     let ret = trait_bridge_dts_return_type(
                         &substitute_excluded_types(&method.return_type, &excluded),
                         method.is_async,
-                        no_prefix,
                     );
                     lines.extend(format_jsdoc(&method.doc, "  "));
                     let optional_marker = if method.has_default_impl { "?" } else { "" };
@@ -295,6 +292,7 @@ pub(super) fn gen_dts(
                 // variant is a unit variant (`{"kind":"A"}`), so the gate must not require a
                 // data-bearing variant. (~keep)
                 let is_data_enum = e.serde_tag.is_some();
+                let ts_name = node_type_name(&e.name);
                 lines.extend(format_jsdoc(&e.doc, ""));
                 if is_data_enum && e.serde_content.is_some() {
                     // Adjacent tagging (`#[serde(tag, content)]`): each variant serializes as its
@@ -318,7 +316,7 @@ pub(super) fn gen_dts(
                             } else {
                                 to_node_name(&field.name)
                             };
-                            let ts_ty = dts_type(&field.ty, no_prefix);
+                            let ts_ty = dts_type(&field.ty);
                             if matches!(field.ty, TypeRef::Optional(_)) {
                                 obj_fields.push(format!("{js_name}?: {ts_ty}"));
                             } else {
@@ -327,20 +325,19 @@ pub(super) fn gen_dts(
                         }
                         member_lines.push(format!("  | {{ {} }}", obj_fields.join("; ")));
                     }
-                    lines.push(format!("export type {} =", e.name));
+                    lines.push(format!("export type {ts_name} ="));
                     lines.extend(member_lines);
-                    lines.push(format!("export declare const {}: {{", e.name));
+                    lines.push(format!("export declare const {ts_name}: {{"));
                     for variant in &e.variants {
                         if let Some(field) = variant.fields.first() {
                             lines.push(format!(
-                                "  {}({}: {}): {};",
+                                "  {}({}: {}): {ts_name};",
                                 variant.name,
                                 e.serde_content.as_deref().expect("adjacent content is present"),
-                                dts_type(&field.ty, no_prefix),
-                                e.name
+                                dts_type(&field.ty),
                             ));
                         } else {
-                            lines.push(format!("  readonly {}: {};", variant.name, e.name));
+                            lines.push(format!("  readonly {}: {ts_name};", variant.name));
                         }
                     }
                     lines.push("};".to_string());
@@ -368,7 +365,7 @@ pub(super) fn gen_dts(
                         let mut obj_fields: Vec<String> = vec![format!("{tag_field}: '{tag_value}'")];
                         for field in &variant.fields {
                             let js_name = enums::tagged_enum_field_js_name(variant, field);
-                            let ts_ty = dts_type(&field.ty, no_prefix);
+                            let ts_ty = dts_type(&field.ty);
                             if matches!(field.ty, TypeRef::Optional(_)) {
                                 obj_fields.push(format!("{js_name}?: {ts_ty}"));
                             } else {
@@ -377,7 +374,7 @@ pub(super) fn gen_dts(
                         }
                         member_lines.push(format!("  | {{ {} }}", obj_fields.join("; ")));
                     }
-                    lines.push(format!("export type {} =", e.name));
+                    lines.push(format!("export type {ts_name} ="));
                     lines.extend(member_lines);
                 } else if is_data_enum {
                     // Internal tagging, every variant a unit variant: `{"kind":"A"}` carries no
@@ -396,8 +393,7 @@ pub(super) fn gen_dts(
                         })
                         .collect();
                     lines.push(format!(
-                        "export type {} = {{ {tag_field}: {} }};",
-                        e.name,
+                        "export type {ts_name} = {{ {tag_field}: {} }};",
                         tag_values.join(" | ")
                     ));
                 } else if e.serde_untagged && e.variants.iter().any(|v| !v.fields.is_empty()) {
@@ -406,12 +402,12 @@ pub(super) fn gen_dts(
                     // passing the value through as opaque `serde_json::Value`
                     // (`gen_untagged_data_enum_as_value_wrapper`), so the `.d.ts` union is the only
                     // place the real per-variant shapes can be expressed. (~keep)
-                    lines.push(format!("export type {} =", e.name));
+                    lines.push(format!("export type {ts_name} ="));
                     for variant in &e.variants {
-                        lines.push(format!("  | {}", untagged_variant_dts_type(variant, no_prefix)));
+                        lines.push(format!("  | {}", untagged_variant_dts_type(variant)));
                     }
                 } else {
-                    lines.push(format!("export declare enum {} {{", e.name));
+                    lines.push(format!("export declare enum {ts_name} {{"));
                     for variant in &e.variants {
                         let value = wire_variant_value(
                             &variant.name,
@@ -426,12 +422,11 @@ pub(super) fn gen_dts(
             }
             Decl::Function(func) => {
                 let js_name = to_node_name(&func.name);
-                let params = dts_params(&func.params, no_prefix, default_types);
+                let params = dts_params(&func.params, default_types);
                 let ret = dts_return_type_capsule(
                     &func.return_type,
                     func.error_type.is_some(),
                     func.is_async,
-                    no_prefix,
                     capsule_types,
                 );
                 lines.extend(format_jsdoc(&func.doc, ""));
@@ -523,10 +518,10 @@ fn trait_bridge_requires_plugin_name(typ: &TypeDef, trait_bridges: &[crate::core
 /// (`dts_type`) — e.g. a `Doc` return becomes `Doc`, an `Option<Doc>` becomes `Doc | null` — so
 /// callers get a precise contract instead of the prior opaque `string`. `()` returns map to
 /// `void`. Async methods are wrapped in `Promise<...>`.
-fn trait_bridge_dts_return_type(return_type: &TypeRef, is_async: bool, prefix: &str) -> String {
+fn trait_bridge_dts_return_type(return_type: &TypeRef, is_async: bool) -> String {
     let base = match return_type {
         TypeRef::Unit => "void".to_string(),
-        other => dts_type(other, prefix),
+        other => dts_type(other),
     };
     if is_async { format!("Promise<{base}>") } else { base }
 }
@@ -575,7 +570,11 @@ pub(super) fn format_jsdoc(doc: &str, indent: &str) -> Vec<String> {
 }
 
 /// Map an IR `TypeRef` to its TypeScript equivalent for `.d.ts` generation.
-pub(super) fn dts_type(ty: &TypeRef, prefix: &str) -> String {
+///
+/// `TypeRef::Named` resolves through `node_type_name` — the same function every declaration
+/// site in `gen_dts` uses for the type's own name — so a reference to a type can never disagree
+/// with how that type declared itself.
+pub(super) fn dts_type(ty: &TypeRef) -> String {
     match ty {
         TypeRef::Primitive(p) => match p {
             crate::core::ir::PrimitiveType::Bool => "boolean".to_string(),
@@ -597,10 +596,10 @@ pub(super) fn dts_type(ty: &TypeRef, prefix: &str) -> String {
         TypeRef::Json => "JsonValue".to_string(),
         TypeRef::Duration => "number".to_string(),
         TypeRef::Unit => "void".to_string(),
-        TypeRef::Optional(inner) => format!("{} | null", dts_type(inner, prefix)),
-        TypeRef::Vec(inner) => format!("Array<{}>", dts_type(inner, prefix)),
-        TypeRef::Map(k, v) => format!("Record<{}, {}>", dts_type(k, prefix), dts_type(v, prefix)),
-        TypeRef::Named(name) => format!("{prefix}{name}"),
+        TypeRef::Optional(inner) => format!("{} | null", dts_type(inner)),
+        TypeRef::Vec(inner) => format!("Array<{}>", dts_type(inner)),
+        TypeRef::Map(k, v) => format!("Record<{}, {}>", dts_type(k), dts_type(v)),
+        TypeRef::Named(name) => node_type_name(name).to_string(),
     }
 }
 
@@ -608,15 +607,15 @@ pub(super) fn dts_type(ty: &TypeRef, prefix: &str) -> String {
 /// a newtype variant serializes as its inner value, a multi-field tuple variant as a TS tuple,
 /// a struct variant as its own object, and a unit variant as `null`. There is no discriminant —
 /// serde distinguishes untagged variants structurally at deserialize time. (~keep)
-fn untagged_variant_dts_type(variant: &EnumVariant, prefix: &str) -> String {
+fn untagged_variant_dts_type(variant: &EnumVariant) -> String {
     if variant.fields.is_empty() {
         return "null".to_string();
     }
     if variant.is_tuple {
         if variant.fields.len() == 1 {
-            return dts_type(&variant.fields[0].ty, prefix);
+            return dts_type(&variant.fields[0].ty);
         }
-        let elems: Vec<String> = variant.fields.iter().map(|f| dts_type(&f.ty, prefix)).collect();
+        let elems: Vec<String> = variant.fields.iter().map(|f| dts_type(&f.ty)).collect();
         return format!("[{}]", elems.join(", "));
     }
     let fields: Vec<String> = variant
@@ -624,7 +623,7 @@ fn untagged_variant_dts_type(variant: &EnumVariant, prefix: &str) -> String {
         .iter()
         .map(|field| {
             let js_name = to_node_name(&field.name);
-            let ts_ty = dts_type(&field.ty, prefix);
+            let ts_ty = dts_type(&field.ty);
             if matches!(field.ty, TypeRef::Optional(_)) {
                 format!("{js_name}?: {ts_ty}")
             } else {
@@ -636,13 +635,12 @@ fn untagged_variant_dts_type(variant: &EnumVariant, prefix: &str) -> String {
 }
 
 /// Render a list of parameters as a TypeScript parameter string for `.d.ts`.
-pub(super) fn dts_params(params: &[ParamDef], prefix: &str, default_types: &ahash::AHashSet<String>) -> String {
-    dts_params_with_order(params, prefix, true, default_types)
+pub(super) fn dts_params(params: &[ParamDef], default_types: &ahash::AHashSet<String>) -> String {
+    dts_params_with_order(params, true, default_types)
 }
 
 fn dts_params_with_order(
     params: &[ParamDef],
-    prefix: &str,
     reorder_for_typescript: bool,
     default_types: &ahash::AHashSet<String>,
 ) -> String {
@@ -651,7 +649,7 @@ fn dts_params_with_order(
         return params
             .iter()
             .enumerate()
-            .map(|(idx, p)| dts_param(p, prefix, param_is_optional(p, default_types), !has_required_after[idx]))
+            .map(|(idx, p)| dts_param(p, param_is_optional(p, default_types), !has_required_after[idx]))
             .collect::<Vec<_>>()
             .join(", ");
     }
@@ -676,14 +674,14 @@ fn dts_params_with_order(
     };
     ordered
         .iter()
-        .map(|p| dts_param(p, prefix, param_is_optional(p, default_types), true))
+        .map(|p| dts_param(p, param_is_optional(p, default_types), true))
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-fn dts_param(p: &ParamDef, prefix: &str, is_optional: bool, allow_question_optional: bool) -> String {
+fn dts_param(p: &ParamDef, is_optional: bool, allow_question_optional: bool) -> String {
     let js_name = to_node_name(&p.name);
-    let ts_ty = dts_type(&p.ty, prefix);
+    let ts_ty = dts_type(&p.ty);
     if is_optional && allow_question_optional {
         format!("{js_name}?: {ts_ty} | undefined | null")
     } else if is_optional {
@@ -722,7 +720,6 @@ pub(super) fn dts_return_type_capsule(
     ret: &TypeRef,
     _has_error: bool,
     is_async: bool,
-    prefix: &str,
     capsule_types: &HashMap<String, NodeCapsuleTypeConfig>,
 ) -> String {
     let base = match ret {
@@ -731,672 +728,13 @@ pub(super) fn dts_return_type_capsule(
             if let Some(cfg) = capsule_types.get(name.as_str()) {
                 cfg.type_name.clone()
             } else {
-                dts_type(ret, prefix)
+                dts_type(ret)
             }
         }
-        other => dts_type(other, prefix),
+        other => dts_type(other),
     };
     if is_async { format!("Promise<{base}>") } else { base }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::ir::{EnumVariant, FieldDef, ParamDef, TypeDef, TypeRef};
-
-    #[test]
-    fn format_jsdoc_escapes_embedded_block_comment_closers() {
-        let lines = format_jsdoc("Supports literal `/** example */` syntax.", "  ");
-
-        assert_eq!(lines, vec!["  /** Supports literal `/** example * /` syntax. */"]);
-    }
-
-    fn make_param(name: &str, optional: bool) -> ParamDef {
-        ParamDef {
-            name: name.to_string(),
-            ty: TypeRef::String,
-            optional,
-            default: None,
-            sanitized: false,
-            typed_default: None,
-            is_ref: false,
-            is_mut: false,
-            newtype_wrapper: None,
-            original_type: None,
-            map_is_ahash: false,
-            map_key_is_cow: false,
-            vec_inner_is_ref: false,
-            map_is_btree: false,
-            core_wrapper: crate::core::ir::CoreWrapper::None,
-        }
-    }
-
-    /// TypeScript TS1016: required parameter must not follow optional parameter.
-    /// A visitor method like `visit_code_block(ctx, lang?: Option<str>, code: str)`
-    /// must be reordered to `visit_code_block(ctx, code, lang?)` in the `.d.ts`.
-    #[test]
-    fn dts_params_reorders_required_after_optional() {
-        let params = vec![
-            make_param("ctx", false),
-            make_param("lang", true),
-            make_param("code", false),
-        ];
-        let result = dts_params(&params, "Js", &ahash::AHashSet::new());
-        let ctx_pos = result.find("ctx:").expect("ctx not found");
-        let code_pos = result.find("code:").expect("code not found");
-        let lang_pos = result.find("lang?:").expect("lang? not found");
-        assert!(ctx_pos < lang_pos, "ctx should come before lang?: {result}");
-        assert!(code_pos < lang_pos, "code should come before lang?: {result}");
-    }
-
-    /// When params are already in valid order (all required before all optional),
-    /// the output must be unchanged — no unnecessary reordering.
-    #[test]
-    fn dts_params_preserves_already_valid_order() {
-        let params = vec![
-            make_param("ctx", false),
-            make_param("code", false),
-            make_param("lang", true),
-        ];
-        let result = dts_params(&params, "Js", &ahash::AHashSet::new());
-        assert_eq!(result, "ctx: string, code: string, lang?: string | undefined | null");
-    }
-
-    /// All-required params: order must be preserved exactly.
-    #[test]
-    fn dts_params_all_required_preserves_order() {
-        let params = vec![make_param("a", false), make_param("b", false), make_param("c", false)];
-        let result = dts_params(&params, "Js", &ahash::AHashSet::new());
-        assert_eq!(result, "a: string, b: string, c: string");
-    }
-
-    #[test]
-    fn dts_params_treats_defaulted_params_as_optional() {
-        let mut params = vec![make_param("path", false), make_param("config", false)];
-        params[1].default = Some("Default::default()".to_string());
-        let result = dts_params(&params, "Js", &ahash::AHashSet::new());
-        assert_eq!(
-            result, "path: string, config?: string | undefined | null",
-            "defaulted params must be optional in generated declarations"
-        );
-    }
-
-    #[test]
-    fn trait_bridge_dts_return_type_wraps_async_methods_in_promise() {
-        assert_eq!(
-            trait_bridge_dts_return_type(&TypeRef::Named("ExtractionResult".to_string()), true, ""),
-            "Promise<ExtractionResult>"
-        );
-        assert_eq!(trait_bridge_dts_return_type(&TypeRef::Unit, true, ""), "Promise<void>");
-        assert_eq!(
-            trait_bridge_dts_return_type(&TypeRef::Named("ExtractionResult".to_string()), false, ""),
-            "ExtractionResult"
-        );
-    }
-
-    #[test]
-    fn plugin_trait_bridge_requires_name_in_typescript_interface() {
-        let typ = TypeDef {
-            name: "DocumentExtractor".to_string(),
-            rust_path: String::new(),
-            original_rust_path: String::new(),
-            fields: Vec::new(),
-            methods: Vec::new(),
-            is_opaque: false,
-            is_clone: false,
-            is_copy: false,
-            doc: String::new(),
-            cfg: None,
-            is_trait: true,
-            has_default: false,
-            has_stripped_cfg_fields: false,
-            is_return_type: false,
-            serde_rename_all: None,
-            has_serde: false,
-            serde_container_default: false,
-            super_traits: Vec::new(),
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            is_variant_wrapper: false,
-
-            has_lifetime_params: false,
-            has_private_fields: false,
-            version: Default::default(),
-        };
-        let bridges = vec![crate::core::config::TraitBridgeConfig {
-            trait_name: "DocumentExtractor".to_string(),
-            super_trait: Some("Plugin".to_string()),
-            ..Default::default()
-        }];
-        assert!(trait_bridge_requires_plugin_name(&typ, &bridges));
-    }
-
-    #[test]
-    fn adjacent_enum_dts_declares_runtime_namespace() {
-        let api = ApiSurface {
-            enums: vec![EnumDef {
-                name: "Action".to_string(),
-                serde_tag: Some("type".to_string()),
-                serde_content: Some("output".to_string()),
-                serde_rename_all: Some("snake_case".to_string()),
-                variants: vec![
-                    EnumVariant {
-                        name: "Skip".to_string(),
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "Custom".to_string(),
-                        fields: vec![FieldDef {
-                            name: "_0".to_string(),
-                            ty: TypeRef::String,
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-        assert!(dts.contains("| { type: 'custom'; output: string }"));
-        assert!(dts.contains("export declare const Action: {"));
-        assert!(dts.contains("readonly Skip: Action;"));
-        assert!(dts.contains("Custom(output: string): Action;"));
-    }
-
-    /// Internally-tagged enums whose variants are newtype wrappers around struct types must
-    /// declare a discriminated union keyed by the variant-derived field name (e.g. `system`,
-    /// `user`) — not the tuple field's synthetic `_0` name, and not the napi glue's internal
-    /// flattened `#[napi(object)]` representation. Regression test for the `0:` key bug and for
-    /// the flattening regression introduced alongside its original fix (see
-    /// `internally_tagged_struct_variants_declare_discriminated_union` for the more common
-    /// struct-variant case).
-    #[test]
-    fn internally_tagged_newtype_variants_declare_discriminated_union() {
-        let api = ApiSurface {
-            enums: vec![EnumDef {
-                name: "InternalNewtype".to_string(),
-                serde_tag: Some("role".to_string()),
-                serde_rename_all: Some("snake_case".to_string()),
-                variants: vec![
-                    EnumVariant {
-                        name: "System".to_string(),
-                        fields: vec![FieldDef {
-                            name: "_0".to_string(),
-                            ty: TypeRef::Named("SystemMessage".to_string()),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "User".to_string(),
-                        fields: vec![FieldDef {
-                            name: "_0".to_string(),
-                            ty: TypeRef::Named("UserMessage".to_string()),
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert_eq!(
-            dts.lines()
-                .skip_while(|l| *l != "export type InternalNewtype =")
-                .take(3)
-                .collect::<Vec<_>>(),
-            vec![
-                "export type InternalNewtype =",
-                "  | { role: 'system'; system: SystemMessage }",
-                "  | { role: 'user'; user: UserMessage }",
-            ],
-            "expected a discriminated union keyed by the variant-derived field name, got:\n{dts}"
-        );
-        assert!(
-            !dts.contains("0:"),
-            "must not emit the tuple field's synthetic `_0` name as a `0:` key:\n{dts}"
-        );
-        assert!(
-            !dts.contains("system?:") && !dts.contains("user?:"),
-            "a field belonging to only one variant must not be optional:\n{dts}"
-        );
-    }
-
-    /// The reported regression: an internally-tagged enum whose variants are struct variants
-    /// (e.g. `AuthConfig::Basic { username, password }`) must declare a real discriminated union
-    /// — one member per variant, each variant's own fields required — not a single flattened
-    /// object with every field made optional. Each variant serializes to its own flat object on
-    /// the wire (`{"type":"basic","username":"...","password":"..."}`), so the union is a
-    /// one-to-one match for what a caller actually receives.
-    #[test]
-    fn internally_tagged_struct_variants_declare_discriminated_union() {
-        let api = ApiSurface {
-            enums: vec![EnumDef {
-                name: "AuthConfig".to_string(),
-                serde_tag: Some("type".to_string()),
-                serde_rename_all: Some("snake_case".to_string()),
-                variants: vec![
-                    EnumVariant {
-                        name: "Basic".to_string(),
-                        fields: vec![
-                            FieldDef {
-                                name: "username".to_string(),
-                                ty: TypeRef::String,
-                                ..Default::default()
-                            },
-                            FieldDef {
-                                name: "password".to_string(),
-                                ty: TypeRef::String,
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "Bearer".to_string(),
-                        fields: vec![FieldDef {
-                            name: "token".to_string(),
-                            ty: TypeRef::String,
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert_eq!(
-            dts.lines()
-                .skip_while(|l| *l != "export type AuthConfig =")
-                .take(3)
-                .collect::<Vec<_>>(),
-            vec![
-                "export type AuthConfig =",
-                "  | { type: 'basic'; username: string; password: string }",
-                "  | { type: 'bearer'; token: string }",
-            ],
-            "expected one discriminated-union member per variant with required fields, got:\n{dts}"
-        );
-        assert!(
-            !dts.contains("username?:") && !dts.contains("password?:") && !dts.contains("token?:"),
-            "a field belonging to only one variant must not be optional:\n{dts}"
-        );
-        assert!(
-            !dts.contains("export type AuthConfig = {"),
-            "must not emit a single flattened object type:\n{dts}"
-        );
-    }
-
-    /// `#[serde(tag = "kind")] enum E { A, B }` serializes as `{"kind":"A"}` — internal tagging is
-    /// always an object, even when every variant is a unit variant. `is_data_enum` must not
-    /// require a data-bearing variant, or an all-unit internally-tagged enum wrongly falls back
-    /// to a plain string enum declaration.
-    #[test]
-    fn internally_tagged_all_unit_variants_declare_object_not_string_enum() {
-        let api = ApiSurface {
-            enums: vec![EnumDef {
-                name: "InternalAllUnit".to_string(),
-                serde_tag: Some("kind".to_string()),
-                variants: vec![
-                    EnumVariant {
-                        name: "A".to_string(),
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "B".to_string(),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert!(
-            dts.contains("export type InternalAllUnit = { kind: 'A' | 'B' };"),
-            "expected an object type matching the napi glue struct, got:\n{dts}"
-        );
-        assert!(
-            !dts.contains("export declare enum InternalAllUnit"),
-            "must not emit a plain string enum for an internally-tagged enum:\n{dts}"
-        );
-    }
-
-    /// `#[serde(untagged)]` enums serialize each variant as its own bare shape (no wrapper, no
-    /// discriminant) — a newtype variant as its inner value, a struct variant as its own object.
-    /// The napi glue already treats the whole enum as opaque `serde_json::Value`, so this is a
-    /// `.d.ts`-only fix: the union of real per-variant shapes.
-    #[test]
-    fn untagged_enum_declares_bare_union_of_variant_shapes() {
-        let api = ApiSurface {
-            enums: vec![EnumDef {
-                name: "Untagged".to_string(),
-                serde_untagged: true,
-                variants: vec![
-                    EnumVariant {
-                        name: "Single".to_string(),
-                        is_tuple: true,
-                        fields: vec![FieldDef {
-                            name: "_0".to_string(),
-                            ty: TypeRef::String,
-                            ..Default::default()
-                        }],
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "Pair".to_string(),
-                        fields: vec![
-                            FieldDef {
-                                name: "x".to_string(),
-                                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
-                                ..Default::default()
-                            },
-                            FieldDef {
-                                name: "y".to_string(),
-                                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::I32),
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert!(
-            dts.contains("export type Untagged =\n  | string\n  | { x: number; y: number }"),
-            "expected a bare union of each variant's own shape, got:\n{dts}"
-        );
-        assert!(
-            !dts.contains("export declare enum Untagged"),
-            "must not emit a plain string enum for an untagged data enum:\n{dts}"
-        );
-    }
-
-    #[test]
-    fn gen_dts_includes_service_entrypoint_bridge_functions() {
-        use crate::core::ir::{EntrypointDef, EntrypointKind, MethodDef, ReceiverKind, ServiceDef};
-        let api = ApiSurface {
-            crate_name: "test".to_string(),
-            version: "0.1.0".to_string(),
-            types: vec![],
-            functions: vec![],
-            enums: vec![],
-            errors: vec![],
-            excluded_type_paths: Default::default(),
-            excluded_trait_names: Default::default(),
-            services: vec![ServiceDef {
-                name: "App".to_string(),
-                rust_path: "test::App".to_string(),
-                constructor: MethodDef {
-                    name: "new".to_string(),
-                    params: vec![],
-                    return_type: TypeRef::Named("App".to_string()),
-                    is_async: false,
-                    is_static: false,
-                    error_type: None,
-                    receiver: Some(ReceiverKind::Owned),
-                    cfg: None,
-                    doc: String::new(),
-                    sanitized: false,
-                    trait_source: None,
-                    returns_ref: false,
-                    returns_cow: false,
-                    return_newtype_wrapper: None,
-                    has_default_impl: false,
-                    binding_excluded: false,
-                    binding_exclusion_reason: None,
-                    version: Default::default(),
-                },
-                configurators: vec![],
-                registrations: vec![],
-                entrypoints: vec![EntrypointDef {
-                    method: "into_router".to_string(),
-                    kind: EntrypointKind::Finalize,
-                    is_async: true,
-                    params: vec![],
-                    return_type: TypeRef::Unit,
-                    error_type: None,
-                    doc: String::new(),
-                }],
-                doc: String::new(),
-                cfg: None,
-            }],
-            handler_contracts: vec![],
-            unsupported_public_items: vec![],
-        };
-        let dts = gen_dts(
-            &api,
-            "",
-            &ahash::AHashSet::new(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-        assert!(
-            dts.contains("export declare function appIntoRouter"),
-            "dts should declare appIntoRouter bridge function for App.into_router"
-        );
-        assert!(
-            dts.contains("registrations: Array<[string, any[], (...args: any[]) => any]>"),
-            "service entrypoint should have registrations parameter"
-        );
-        assert!(
-            dts.contains("Promise<void>"),
-            "async into_router entrypoint should return Promise<void>"
-        );
-    }
-
-    /// Regression: `gen_opaque_struct_methods` (`types.rs`) never generates a `#[napi]` wrapper
-    /// for an opaque instance method that takes another opaque type by value — opaque types only
-    /// implement `FromNapiValue` by reference — unless an adapter overrides it. `gen_dts` used to
-    /// iterate every method with no such check, so `index.d.ts` promised a method the compiled
-    /// extension does not export.
-    #[test]
-    fn opaque_by_value_param_without_adapter_is_not_declared_in_dts() {
-        use crate::core::ir::{MethodDef, ReceiverKind};
-
-        let api = ApiSurface {
-            types: vec![
-                TypeDef {
-                    name: "Worker".to_string(),
-                    is_opaque: true,
-                    methods: vec![MethodDef {
-                        name: "process".to_string(),
-                        receiver: Some(ReceiverKind::Ref),
-                        cfg: None,
-                        params: vec![ParamDef {
-                            name: "handle".to_string(),
-                            ty: TypeRef::Named("Handle".to_string()),
-                            is_ref: false,
-                            ..Default::default()
-                        }],
-                        return_type: TypeRef::Unit,
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                },
-                TypeDef {
-                    name: "Handle".to_string(),
-                    is_opaque: true,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert!(
-            !dts.contains("process("),
-            "no #[napi] wrapper exists for an opaque-by-value param with no adapter override: {dts}"
-        );
-    }
-
-    /// Regression, static side: `gen_static_method` never registers a sanitized static method
-    /// with no adapter override either (see `opaque_static_method_is_dropped`).
-    #[test]
-    fn sanitized_static_method_without_adapter_is_not_declared_in_dts() {
-        use crate::core::ir::MethodDef;
-
-        let api = ApiSurface {
-            types: vec![TypeDef {
-                name: "Config".to_string(),
-                is_opaque: true,
-                methods: vec![MethodDef {
-                    name: "fromRaw".to_string(),
-                    receiver: None,
-                    cfg: None,
-                    is_static: true,
-                    sanitized: true,
-                    return_type: TypeRef::Named("Config".to_string()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert!(
-            !dts.contains("static fromRaw"),
-            "gen_static_method also drops a sanitized static method with no adapter override: {dts}"
-        );
-    }
-
-    /// Control for the two regressions above: a delegatable instance method and a non-sanitized
-    /// static method must still be declared, proving the new filter doesn't over-drop.
-    #[test]
-    fn delegatable_methods_are_still_declared_in_dts() {
-        use crate::core::ir::{MethodDef, ReceiverKind};
-
-        let api = ApiSurface {
-            types: vec![TypeDef {
-                name: "Worker".to_string(),
-                is_opaque: true,
-                methods: vec![
-                    MethodDef {
-                        name: "run".to_string(),
-                        receiver: Some(ReceiverKind::Ref),
-                        cfg: None,
-                        return_type: TypeRef::Unit,
-                        ..Default::default()
-                    },
-                    MethodDef {
-                        name: "create".to_string(),
-                        receiver: None,
-                        cfg: None,
-                        is_static: true,
-                        return_type: TypeRef::Named("Worker".to_string()),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let dts = gen_dts(
-            &api,
-            "",
-            &Default::default(),
-            &[],
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-
-        assert!(
-            dts.contains("run("),
-            "delegatable instance method must still be declared: {dts}"
-        );
-        assert!(
-            dts.contains("static create("),
-            "non-sanitized static method must still be declared: {dts}"
-        );
-    }
-}
+mod tests;
