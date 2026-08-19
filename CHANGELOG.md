@@ -28,7 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TupleVariant`/`StructVariant` and a payload this pass cannot read, and emitting a bare variant
   name for one would fabricate a value that does not compile. An enum whose default variant stays
   unknown is left `Empty`, preserving every backend's existing honest fallback.
-
+- **C# no longer emits a `required` member for a struct-typed field whose nested record is itself
+  fully default-constructible.** A field defaulted only by a container-level `impl Default` (no
+  per-field `#[serde(default)]`, so the sole signal is `Empty`) now reuses the existing
+  `record_is_default_constructible` walk rather than falling through to `required`. A nested
+  record that carries a `required` member of its own still correctly keeps the outer field
+  `required`. Together with the fix above this resolves a real regression: a record with several
+  enum fields and a nested-struct field, each defaulted only via `T::default()`, emitted a
+  `required` member for every one of them, making a bare `new Record()` -- exactly what alef's own
+  snippet generator emits for a type with no constructor arguments -- fail to compile with
+  `CS9035` on every generated snippet that touched the type.
 - **Kotlin/Android snippet validation resolves a real Gradle classpath instead of guessing a
   directory layout.** `KotlinValidator::class_path` probed exactly three fixed directories
   (`build/classes/kotlin/main`, `build/classes/java/main`,

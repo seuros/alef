@@ -188,7 +188,10 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 "property_required_init.jinja",
                 minijinja::context! { field_type, cs_name },
             ));
-        } else if field.default.is_some() || carries_renderable_default(field, is_complex) {
+        } else if field.default.is_some()
+            || carries_renderable_default(field, is_complex)
+            || named_struct_default_constructible(field, is_complex, types, enum_names, complex_enums, excluded_types)
+        {
             let base_type = if is_complex {
                 "JsonElement".to_string()
             } else {
@@ -751,6 +754,40 @@ fn nested_record_initializer(
         .then(|| format!("new {pascal}()"))
 }
 
+/// Whether a `Named`, non-enum field whose own `typed_default` is `Empty`/`None` resolves to a
+/// value this renderer can construct: the field's declared type has its own zero-arg
+/// constructor reachable with no `required` member of its own.
+///
+/// `carries_renderable_default` only ever answers `false` for a `Named` field (see its doc
+/// comment) because it has no per-field context to check further — it does not know whether the
+/// field's type is itself a fully default-constructible record. This is that missing check,
+/// gating the same `Empty`/`None` cases `record_is_default_constructible` already verifies for a
+/// *nested* record's own fields, so a directly-declared field gets the identical treatment
+/// instead of unconditionally falling to `required`. `Unresolved`/`TupleVariant`/`StructVariant`
+/// are excluded: those mean alef read something other than "this type's own zero", so this check
+/// must not apply to them. ~keep
+fn named_struct_default_constructible(
+    field: &crate::core::ir::FieldDef,
+    is_complex: bool,
+    types: &[TypeDef],
+    enum_names: &HashSet<String>,
+    complex_enums: &HashSet<String>,
+    excluded_types: &HashSet<String>,
+) -> bool {
+    if field.optional || is_complex || !matches!(&field.typed_default, Some(DefaultValue::Empty) | None) {
+        return false;
+    }
+    let TypeRef::Named(name) = &field.ty else {
+        return false;
+    };
+    let pascal = csharp_type_name(name);
+    if enum_names.contains(&pascal) {
+        return false;
+    }
+    let mut path = Vec::new();
+    record_is_default_constructible(&pascal, types, enum_names, complex_enums, excluded_types, &mut path)
+}
+
 /// Depth limit for the cycle walk. A record graph deeper than this is pathological, and bailing to
 /// a nullable property is the conservative answer either way. ~keep
 const MAX_NESTED_RECORD_DEPTH: usize = 16;
@@ -790,22 +827,40 @@ fn record_is_default_constructible(
                 let nested = csharp_type_name(n);
                 complex_enums.contains(&nested) || excluded_types.contains(&nested)
             });
-            if field_becomes_required_property(field, is_complex) {
+            // A field the recursive branch below is about to verify (a non-optional, non-enum
+            // nested record whose own `typed_default` is `Empty`/`None`, i.e. it reached
+            // `required` only through `field_becomes_required_property`'s bottom fallback) is
+            // not disqualified here on that fallback alone: the fallback has no way to know the
+            // nested record's own default is constructible — that is exactly what the recursive
+            // call below determines. `Unresolved`/`TupleVariant`/`StructVariant` are excluded on
+            // purpose: those mean alef read *something* other than "this type's own zero", so
+            // recursing into the field's type would verify the wrong claim. Bailing here on
+            // every such field would make the deep case unreachable rather than the shallow one
+            // this comment already covers; every other field kind keeps the original
+            // short-circuit. ~keep
+            let is_recursable_nested_record = !field.optional
+                && !is_complex
+                && matches!(&field.ty, TypeRef::Named(n) if !enum_names.contains(&csharp_type_name(n)))
+                && !matches!(
+                    &field.typed_default,
+                    Some(
+                        DefaultValue::Unresolved(_) | DefaultValue::TupleVariant(..) | DefaultValue::StructVariant(..)
+                    )
+                );
+            if field_becomes_required_property(field, is_complex) && !is_recursable_nested_record {
                 return false;
             }
             match &field.ty {
                 // Only a field that would itself construct a nested record can extend the cycle;
                 // an optional one renders `X? = null` and terminates the walk. ~keep
-                TypeRef::Named(n) if !field.optional && !is_complex && !enum_names.contains(&csharp_type_name(n)) => {
-                    record_is_default_constructible(
-                        &csharp_type_name(n),
-                        types,
-                        enum_names,
-                        complex_enums,
-                        excluded_types,
-                        path,
-                    )
-                }
+                TypeRef::Named(n) if is_recursable_nested_record => record_is_default_constructible(
+                    &csharp_type_name(n),
+                    types,
+                    enum_names,
+                    complex_enums,
+                    excluded_types,
+                    path,
+                ),
                 _ => true,
             }
         });

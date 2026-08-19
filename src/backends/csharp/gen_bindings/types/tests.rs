@@ -5,7 +5,7 @@ use crate::core::config::{BridgeBinding, TraitBridgeConfig};
 use crate::core::ir::{DefaultValue, FieldDef, PrimitiveType, TypeDef, TypeRef};
 use std::collections::HashSet;
 
-fn field(name: &str, ty: TypeRef) -> FieldDef {
+pub(super) fn field(name: &str, ty: TypeRef) -> FieldDef {
     FieldDef {
         version: Default::default(),
         name: name.to_string(),
@@ -30,11 +30,11 @@ fn field(name: &str, ty: TypeRef) -> FieldDef {
     }
 }
 
-fn record_type(fields: Vec<FieldDef>) -> TypeDef {
+pub(super) fn record_type(fields: Vec<FieldDef>) -> TypeDef {
     named_record_type("RenderOptions", fields)
 }
 
-fn named_record_type(name: &str, fields: Vec<FieldDef>) -> TypeDef {
+pub(super) fn named_record_type(name: &str, fields: Vec<FieldDef>) -> TypeDef {
     TypeDef {
         name: name.to_string(),
         rust_path: format!("demo::{name}"),
