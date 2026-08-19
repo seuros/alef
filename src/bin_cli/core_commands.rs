@@ -342,6 +342,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if report.changed_count() > 0 {
                     any_written = true;
                 }
+                // `reconcile_managed_scaffold_manifests` silently drops a manifest it cannot
+                // prove alef owns; this repair runs regardless, since a missing forwarded feature
+                // is additive-only and safe even without that proof (see `scaffold::repair`). ~keep
+                crate::scaffold::repair_missing_cfg_binding_features(&api, resolved_cfg, &languages);
                 for file in &scaffold_files {
                     let path = base_dir.join(&file.path);
                     if file.carries_alef_marker() {
@@ -500,6 +504,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, lang.as_deref())?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
+                // Runs regardless of the stage-cache check below: a manifest a prior scaffold run
+                // could not prove ownership of (see `scaffold::repair`'s doc) stays broken forever
+                // on a cache hit otherwise, since the cache records this run as complete even
+                // though that one write was refused. ~keep
+                crate::scaffold::repair_missing_cfg_binding_features(&api, resolved_cfg, &languages);
                 let ir_json = serde_json::to_string(&api)?;
                 let stage_hash = cache::compute_stage_hash(&ir_json, "scaffold", &config_toml, &[]);
                 if cache::is_stage_cached(&resolved_cfg.name, "scaffold", &stage_hash) {

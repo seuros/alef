@@ -99,4 +99,5 @@ mod licenses;
 mod marker_stamping;
 mod poly;
 mod python_node;
+mod repair;
 mod workspace_inheritance;

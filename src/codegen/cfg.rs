@@ -8,6 +8,7 @@
 
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
+use anyhow::Context as _;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -194,12 +195,92 @@ pub fn read_declared_cargo_features(manifest_path: &Path) -> Option<BTreeSet<Str
     Some(features)
 }
 
+/// Read the feature names the **core** crate itself declares, resolving its manifest via
+/// [`crate::scaffold::core_crate_manifest_path`].
+///
+/// Returns an empty set when the manifest cannot be located (no `workspace_root`, e.g. a
+/// standalone scaffold run) or cannot be read/parsed, so a caller forwarding a cfg-gated feature
+/// to the core crate can treat "cannot verify" the same as "core does not declare it": inventing
+/// a forwarding row `feature = ["<core>/<feature>"]` for a name the core crate does not have
+/// breaks `cargo` dependency resolution outright, which is worse than the compile-out this module
+/// exists to repair, so silence here must never widen what gets forwarded. ~keep
+#[must_use]
+pub fn core_crate_declared_features(config: &ResolvedCrateConfig) -> BTreeSet<String> {
+    let Some(manifest_path) = crate::scaffold::core_crate_manifest_path(config) else {
+        return BTreeSet::new();
+    };
+    read_declared_cargo_features(&manifest_path).unwrap_or_default()
+}
+
+/// Insert every name [`undeclared_cfg_features`] finds missing from `existing`'s own
+/// `[features]` table, forwarding each to `core_crate_name` the same way the sibling rows
+/// `scaffold_ruby_cargo`/`scaffold_elixir_cargo` already write do (`<feature> =
+/// ["<core_crate_name>/<feature>"]`).
+///
+/// Returns `Ok(None)` when nothing needs to change (every referenced feature is already declared,
+/// or every missing one is absent from `core_declared_features` and therefore must not be
+/// invented), so callers can distinguish "checked, no update needed" from "wrote the merge"
+/// without a further content diff.
+///
+/// Parses with `toml_edit::DocumentMut`, not the `toml` crate [`read_declared_cargo_features`]
+/// uses: `toml_edit` preserves every byte it does not touch -- comments, key order, blank lines,
+/// a hand-added `[package.metadata.*]` table -- so the only lines this can ever change are the
+/// new feature rows it inserts. A `[features]` table absent from `existing` is created; `toml_edit`
+/// appends a new table at the document's end rather than reflowing existing ones, so this never
+/// disturbs any other table's position.
+///
+/// This is `alef scaffold`'s answer to the "re-run `alef scaffold`" remedy the compile-out warning
+/// (`warn_on_undeclared_binding_cfg_features`) prescribes: the manifest this repairs is user-owned
+/// and `write_scaffold_files_report`'s ownership guard rightly refuses to blindly overwrite it, but
+/// a single additive `[features]` row cannot corrupt, reorder, or drop anything else in the file,
+/// so it is safe to apply on its own, narrower write path even when the guard would otherwise
+/// refuse the whole manifest. ~keep
+pub fn merge_missing_cfg_features(
+    existing: &str,
+    api: &ApiSurface,
+    core_crate_name: &str,
+    core_declared_features: &BTreeSet<String>,
+) -> anyhow::Result<Option<String>> {
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .context("existing manifest is not valid TOML")?;
+
+    let declared: BTreeSet<String> = doc
+        .get("features")
+        .and_then(toml_edit::Item::as_table)
+        .map(|table| table.iter().map(|(key, _)| key.to_string()).collect())
+        .unwrap_or_default();
+
+    let missing: BTreeSet<String> = undeclared_cfg_features(api, &declared)
+        .into_iter()
+        .filter(|feature| core_declared_features.contains(feature))
+        .collect();
+
+    if missing.is_empty() {
+        return Ok(None);
+    }
+
+    let features_table = doc
+        .entry("features")
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_mut()
+        .context("[features] exists in the manifest but is not a table")?;
+
+    for feature in &missing {
+        let mut forwarded = toml_edit::Array::new();
+        forwarded.push(format!("{core_crate_name}/{feature}"));
+        features_table.insert(feature, toml_edit::Item::Value(toml_edit::Value::Array(forwarded)));
+    }
+
+    Ok(Some(doc.to_string()))
+}
+
 /// Resolve a `GeneratedFile`-style path (relative to the project root) against
 /// `config.workspace_root`, falling back to the process's current directory.
 ///
-/// Mirrors the resolution `scaffold::languages::elixir::get_core_crate_features` already uses to
-/// read a sibling crate's manifest back off disk, so a caller that has a `resolve_output_dir()`
-/// result (itself already relative to the project root) can locate a file next to it on disk.
+/// Mirrors the resolution [`core_crate_declared_features`] uses to read a sibling crate's
+/// manifest back off disk, so a caller that has a `resolve_output_dir()` result (itself already
+/// relative to the project root) can locate a file next to it on disk.
 #[must_use]
 pub fn resolve_against_workspace_root(config: &ResolvedCrateConfig, relative: &Path) -> std::path::PathBuf {
     let root = config
@@ -387,472 +468,4 @@ fn parse_cfg_list(s: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, TypeDef};
-    use tracing_test::traced_test;
-
-    #[test]
-    fn combine_gates_drops_an_owner_the_member_already_requires() {
-        assert_eq!(
-            combine_gates(
-                r#"feature = "client""#,
-                r#"all(feature = "client", feature = "streaming")"#
-            ),
-            r#"all(feature = "client", feature = "streaming")"#
-        );
-    }
-
-    #[test]
-    fn combine_gates_keeps_both_operands_when_the_member_does_not_imply_the_owner() {
-        assert_eq!(
-            combine_gates(r#"feature = "client""#, r#"feature = "streaming""#),
-            r#"all(feature = "client", feature = "streaming")"#
-        );
-    }
-
-    #[test]
-    fn combine_gates_does_not_collapse_two_predicates_the_parser_cannot_read() {
-        // Both sides parse to `CfgPredicate::Other`, which compares equal without being the same
-        // condition. Collapsing here would compile the member in on a target the owner excludes.
-        assert_eq!(
-            combine_gates("target_os = \"macos\"", "target_os = \"linux\""),
-            "all(target_os = \"macos\", target_os = \"linux\")"
-        );
-    }
-
-    #[test]
-    fn combine_gates_does_not_treat_a_disjunct_as_implying_the_owner() {
-        // `any(a, b)` holding does not guarantee `a`; only conjunction licenses the drop.
-        assert_eq!(
-            combine_gates(
-                r#"feature = "client""#,
-                r#"any(feature = "client", feature = "server")"#
-            ),
-            r#"all(feature = "client", any(feature = "client", feature = "server"))"#
-        );
-    }
-
-    #[test]
-    fn collect_cfg_feature_names_simple_feature() {
-        let mut out = BTreeSet::new();
-        collect_cfg_feature_names(r#"feature = "pdf""#, &mut out);
-        assert_eq!(out, BTreeSet::from(["pdf".to_string()]));
-    }
-
-    #[test]
-    fn collect_cfg_feature_names_any_compound() {
-        let mut out = BTreeSet::new();
-        collect_cfg_feature_names(r#"any(feature = "html", feature = "xml")"#, &mut out);
-        let want: BTreeSet<String> = ["html", "xml"].into_iter().map(String::from).collect();
-        assert_eq!(out, want);
-    }
-
-    #[test]
-    fn collect_cfg_feature_names_all_compound() {
-        let mut out = BTreeSet::new();
-        collect_cfg_feature_names(
-            r#"all(feature = "layout-types", not(feature = "wasm-target"))"#,
-            &mut out,
-        );
-        let want: BTreeSet<String> = ["layout-types", "wasm-target"].into_iter().map(String::from).collect();
-        assert_eq!(out, want);
-    }
-
-    #[test]
-    fn parse_cfg_predicate_simple_feature() {
-        assert_eq!(
-            parse_cfg_predicate(r#"feature = "tokenizer""#),
-            CfgPredicate::Feature("tokenizer".to_string())
-        );
-    }
-
-    #[test]
-    fn parse_cfg_predicate_any_preserves_arms() {
-        assert_eq!(
-            parse_cfg_predicate(r#"any(feature = "native-http", feature = "wasm-http")"#),
-            CfgPredicate::Any(vec![
-                CfgPredicate::Feature("native-http".to_string()),
-                CfgPredicate::Feature("wasm-http".to_string()),
-            ])
-        );
-    }
-
-    #[test]
-    fn parse_cfg_predicate_all_preserves_arms() {
-        assert_eq!(
-            parse_cfg_predicate(r#"all(feature = "layout-types", not(feature = "wasm-target"))"#),
-            CfgPredicate::All(vec![
-                CfgPredicate::Feature("layout-types".to_string()),
-                CfgPredicate::Not(Box::new(CfgPredicate::Feature("wasm-target".to_string()))),
-            ])
-        );
-    }
-
-    #[test]
-    fn parse_cfg_predicate_not() {
-        assert_eq!(
-            parse_cfg_predicate(r#"not(feature = "wasm-target")"#),
-            CfgPredicate::Not(Box::new(CfgPredicate::Feature("wasm-target".to_string())))
-        );
-    }
-
-    #[test]
-    fn parse_cfg_predicate_unrecognised_is_other() {
-        assert_eq!(parse_cfg_predicate(r#"target_arch = "wasm32""#), CfgPredicate::Other);
-    }
-
-    #[test]
-    fn collect_cfg_feature_names_ignores_non_feature_cfg() {
-        let mut out = BTreeSet::new();
-        collect_cfg_feature_names(r#"target_arch = "wasm32""#, &mut out);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn collect_cfg_feature_names_whitespace_normalisation() {
-        let mut out = BTreeSet::new();
-        collect_cfg_feature_names(r#"any (feature = "a" , feature = "b")"#, &mut out);
-        let want: BTreeSet<String> = ["a", "b"].into_iter().map(String::from).collect();
-        assert_eq!(out, want);
-    }
-
-    #[test]
-    fn collect_cfg_features_walks_types_enums_functions() {
-        let mut out = BTreeSet::new();
-        collect_cfg_feature_names(r#"feature = "pdf""#, &mut out);
-        collect_cfg_feature_names(r#"any(feature = "html", feature = "xml")"#, &mut out);
-        collect_cfg_feature_names(
-            r#"all(feature = "layout-types", not(feature = "wasm-target"))"#,
-            &mut out,
-        );
-        collect_cfg_feature_names(r#"target_arch = "wasm32""#, &mut out);
-        let want: BTreeSet<String> = ["html", "layout-types", "pdf", "wasm-target", "xml"]
-            .into_iter()
-            .map(String::from)
-            .collect();
-        assert_eq!(out, want);
-    }
-
-    #[test]
-    fn collect_cfg_features_full_surface_walk() {
-        let api = ApiSurface {
-            types: vec![TypeDef {
-                name: "PdfDoc".to_string(),
-                rust_path: "mylib::PdfDoc".to_string(),
-                cfg: Some(r#"feature = "pdf""#.to_string()),
-                ..Default::default()
-            }],
-            enums: vec![EnumDef {
-                name: "ImageOutputFormat".to_string(),
-                variants: vec![
-                    EnumVariant {
-                        name: "Native".to_string(),
-                        cfg: None,
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "Heic".to_string(),
-                        cfg: Some(r#"feature = "heic""#.to_string()),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let features = collect_cfg_features(&api);
-        let want: BTreeSet<String> = ["heic", "pdf"].into_iter().map(String::from).collect();
-        assert_eq!(features, want);
-    }
-
-    #[test]
-    fn collect_cfg_features_includes_method_gates() {
-        // A Rust-emitting backend re-emits a gated method's `#[cfg(feature = "X")]` into its own
-        // crate, so `X` must reach that crate's `[features]` table or the build fails with
-        // `unexpected cfg condition value`. ~keep
-        use crate::core::ir::MethodDef;
-
-        let api = ApiSurface {
-            crate_name: "mylib".to_string(),
-            types: vec![TypeDef {
-                name: "Client".to_string(),
-                rust_path: "mylib::Client".to_string(),
-                methods: vec![
-                    MethodDef {
-                        name: "ping".to_string(),
-                        ..Default::default()
-                    },
-                    MethodDef {
-                        name: "stream".to_string(),
-                        cfg: Some(r#"feature = "streaming""#.to_string()),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            enums: vec![EnumDef {
-                name: "Format".to_string(),
-                rust_path: "mylib::Format".to_string(),
-                methods: vec![MethodDef {
-                    name: "from_mime".to_string(),
-                    cfg: Some(r#"all(feature = "mime", feature = "sniff")"#.to_string()),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let want: BTreeSet<String> = ["mime", "sniff", "streaming"].into_iter().map(String::from).collect();
-        assert_eq!(collect_cfg_features(&api), want);
-    }
-
-    /// A Rust-emitting backend that re-emits a gated service's constructor or configurator gate
-    /// (mirroring how it already re-emits a gated method's) needs `X` declared in the manifest for
-    /// the same `unexpected cfg condition value` reason `collect_cfg_features_includes_method_gates`
-    /// covers for methods. `ServiceDef` and its `constructor`/`configurators` `MethodDef`s were
-    /// previously not walked at all, unlike `backends::ffi::gen_bindings::helpers::cbindgen_feature_defines`,
-    /// which already reads `ServiceDef::cfg` for the FFI header's `#if` guards — this test pins the
-    /// shared helper to the same coverage. ~keep
-    #[test]
-    fn collect_cfg_features_includes_service_and_configurator_gates() {
-        use crate::core::ir::{MethodDef, ServiceDef};
-
-        let api = ApiSurface {
-            crate_name: "mylib".to_string(),
-            services: vec![ServiceDef {
-                name: "ClientConfig".to_string(),
-                rust_path: "mylib::client::ClientConfig".to_string(),
-                constructor: MethodDef {
-                    name: "new".to_string(),
-                    ..Default::default()
-                },
-                configurators: vec![
-                    MethodDef {
-                        name: "with_timeout".to_string(),
-                        ..Default::default()
-                    },
-                    MethodDef {
-                        name: "with_tower_layer".to_string(),
-                        cfg: Some(r#"feature = "tower""#.to_string()),
-                        ..Default::default()
-                    },
-                ],
-                registrations: vec![],
-                entrypoints: vec![],
-                doc: String::new(),
-                cfg: None,
-            }],
-            ..Default::default()
-        };
-
-        let want: BTreeSet<String> = ["tower".to_string()].into_iter().collect();
-        assert_eq!(collect_cfg_features(&api), want);
-    }
-
-    /// A service merged from a foreign `[[crates.source_crates]]` crate must not forward its cfg
-    /// to the host crate's `[features]` table, for the same reason a merged type/enum doesn't
-    /// (see `collect_cfg_features_excludes_external_source_crate_cfgs`) — forwarding would
-    /// reference a feature the host crate does not define.
-    #[test]
-    fn collect_cfg_features_excludes_external_source_crate_service_cfgs() {
-        use crate::core::ir::{MethodDef, ServiceDef};
-
-        let api = ApiSurface {
-            crate_name: "hostlib".to_string(),
-            services: vec![ServiceDef {
-                name: "OtherService".to_string(),
-                rust_path: "otherlib::OtherService".to_string(),
-                constructor: MethodDef::default(),
-                configurators: vec![],
-                registrations: vec![],
-                entrypoints: vec![],
-                doc: String::new(),
-                cfg: Some(r#"feature = "foreign-only""#.to_string()),
-            }],
-            ..Default::default()
-        };
-
-        assert!(
-            collect_cfg_features(&api).is_empty(),
-            "a foreign-owned service's cfg must not forward to the host crate"
-        );
-    }
-
-    #[test]
-    fn collect_cfg_features_excludes_external_source_crate_cfgs() {
-        // A type/enum merged from `[[crates.source_crates]]` carries the foreign crate's rust_path ~keep
-        // and cfg gates. Its features must NOT be forwarded to the host crate (they'd map to ~keep
-        // `<host>/<feat>` for a feature the host does not define, breaking cargo resolution). ~keep
-        let api = ApiSurface {
-            crate_name: "hostlib".to_string(),
-            types: vec![TypeDef {
-                name: "HostDoc".to_string(),
-                rust_path: "hostlib::HostDoc".to_string(),
-                cfg: Some(r#"feature = "pdf""#.to_string()),
-                ..Default::default()
-            }],
-            enums: vec![EnumDef {
-                name: "Strategy".to_string(),
-                rust_path: "otherlib::Strategy".to_string(),
-                variants: vec![
-                    EnumVariant {
-                        name: "Auto".to_string(),
-                        cfg: None,
-                        ..Default::default()
-                    },
-                    EnumVariant {
-                        name: "Advanced".to_string(),
-                        cfg: Some(r#"any(test, feature = "foreign-only")"#.to_string()),
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let features = collect_cfg_features(&api);
-        assert_eq!(
-            features,
-            BTreeSet::from(["pdf".to_string()]),
-            "host `pdf` must forward; the foreign `foreign-only` feature must not leak into host passthrough"
-        );
-    }
-
-    fn api_with_gated_functions(names_and_cfgs: &[(&str, Option<&str>)]) -> ApiSurface {
-        use crate::core::ir::FunctionDef;
-        ApiSurface {
-            crate_name: "test_lib".to_string(),
-            functions: names_and_cfgs
-                .iter()
-                .map(|(name, cfg)| FunctionDef {
-                    name: (*name).to_string(),
-                    rust_path: format!("test_lib::{name}"),
-                    cfg: cfg.map(|s| s.to_string()),
-                    ..Default::default()
-                })
-                .collect(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn undeclared_cfg_features_returns_only_missing_names() {
-        let api = api_with_gated_functions(&[
-            ("count_tokens", Some(r#"feature = "tokenizer""#)),
-            ("with_tower_layer", Some(r#"feature = "tower""#)),
-            ("completion_cost", None),
-        ]);
-        let declared: BTreeSet<String> = ["tower".to_string()].into_iter().collect();
-        assert_eq!(
-            undeclared_cfg_features(&api, &declared),
-            BTreeSet::from(["tokenizer".to_string()]),
-            "only the feature missing from `declared` should be reported"
-        );
-    }
-
-    #[test]
-    fn undeclared_cfg_features_empty_when_everything_declared() {
-        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
-        let declared: BTreeSet<String> = ["tokenizer".to_string()].into_iter().collect();
-        assert!(undeclared_cfg_features(&api, &declared).is_empty());
-    }
-
-    #[test]
-    fn read_declared_cargo_features_none_when_file_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let manifest = dir.path().join("Cargo.toml");
-        assert!(
-            read_declared_cargo_features(&manifest).is_none(),
-            "an unscaffolded crate has nothing to verify against yet"
-        );
-    }
-
-    #[test]
-    fn read_declared_cargo_features_reads_features_table() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let manifest = dir.path().join("Cargo.toml");
-        std::fs::write(
-            &manifest,
-            "[package]\nname = \"x\"\n\n[features]\ndefault = [\"native-http\"]\nnative-http = [\"core/native-http\"]\n",
-        )
-        .expect("write manifest");
-        assert_eq!(
-            read_declared_cargo_features(&manifest),
-            Some(BTreeSet::from(["default".to_string(), "native-http".to_string()]))
-        );
-    }
-
-    #[test]
-    fn read_declared_cargo_features_empty_set_when_no_features_table() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let manifest = dir.path().join("Cargo.toml");
-        std::fs::write(&manifest, "[package]\nname = \"x\"\n").expect("write manifest");
-        assert_eq!(
-            read_declared_cargo_features(&manifest),
-            Some(BTreeSet::new()),
-            "a manifest scaffolded before any cfg-gated symbol existed has no [features] table at \
-             all, which must still be distinguishable from a missing file"
-        );
-    }
-
-    /// Reproduces the liter-llm incident: the binding crate's Cargo.toml declares only the
-    /// features it had at scaffold time (`native-http`), but the generated source now references
-    /// `tokenizer` because the core crate gained a cfg-gated function since then.
-    #[traced_test]
-    #[test]
-    fn warn_on_undeclared_binding_cfg_features_warns_on_stale_manifest() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let manifest = dir.path().join("Cargo.toml");
-        std::fs::write(
-            &manifest,
-            "[package]\nname = \"x\"\n\n[features]\ndefault = [\"native-http\"]\nnative-http = [\"core/native-http\"]\n",
-        )
-        .expect("write manifest");
-        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
-
-        warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
-
-        assert!(
-            logs_contain("does not declare"),
-            "a stale manifest missing a referenced feature must produce a warning"
-        );
-    }
-
-    #[traced_test]
-    #[test]
-    fn warn_on_undeclared_binding_cfg_features_silent_when_manifest_declares_everything() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let manifest = dir.path().join("Cargo.toml");
-        std::fs::write(
-            &manifest,
-            "[package]\nname = \"x\"\n\n[features]\ndefault = [\"tokenizer\"]\ntokenizer = [\"core/tokenizer\"]\n",
-        )
-        .expect("write manifest");
-        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
-
-        warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
-
-        assert!(
-            !logs_contain("does not declare"),
-            "a fully up-to-date manifest must not warn"
-        );
-    }
-
-    #[traced_test]
-    #[test]
-    fn warn_on_undeclared_binding_cfg_features_silent_when_manifest_missing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let manifest = dir.path().join("Cargo.toml");
-        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
-
-        warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
-
-        assert!(
-            !logs_contain("does not declare"),
-            "an unscaffolded crate (no manifest on disk yet) must not warn -- there is nothing to \
-             verify against"
-        );
-    }
-}
+mod tests;

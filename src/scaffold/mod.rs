@@ -7,8 +7,11 @@ use anyhow::Context as _;
 
 mod languages;
 pub(crate) mod naming;
+mod repair;
 mod template_env;
 pub(crate) mod version_floor;
+
+pub(crate) use repair::repair_missing_cfg_binding_features;
 
 pub use languages::{
     PUBLISHED_RUNTIME_IDENTIFIERS, render_csharp_csproj, render_csharp_runtime_csproj,
@@ -607,7 +610,7 @@ pub(crate) fn core_dep_features(config: &ResolvedCrateConfig, lang: Language) ->
 /// it against `workspace_root`. Returns `None` when there is no workspace root
 /// (the binding is being scaffolded standalone) or when the path cannot be
 /// derived — both cases simply skip the `android-target` aggregate emission.
-fn core_crate_manifest_path(config: &ResolvedCrateConfig) -> Option<std::path::PathBuf> {
+pub(crate) fn core_crate_manifest_path(config: &ResolvedCrateConfig) -> Option<std::path::PathBuf> {
     let workspace_root = config.workspace_root.as_deref()?;
     let first_source = config.sources.first()?;
     let mut current = std::path::Path::new(first_source).parent();
