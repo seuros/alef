@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.61.1] - 2026-08-19
+
 ### Fixed
 
 - **Kotlin/Android snippet validation resolves a real Gradle classpath instead of guessing a
@@ -28,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Zig snippets stop rebinding a discarded value that is not a call.** The generator rewrites a
   statement-opening `_ = <call>(...)` into `const result = ...` so the snippet can show its result,
-  but the rule matched any `_ = ` discard. Every generated visitor callback opens by discarding its
+  but the rule matched any `_ =` discard. Every generated visitor callback opens by discarding its
   unused typed parameters (`_ = _ctx;`, `_ = _user_data;`, `_ = out_custom;`), and those lines
   precede any real call in a visitor body, so the first one became `const result = _ctx;` -- a bound
   value nothing reads, which Zig rejects outright as an unused local constant. A call discard is
