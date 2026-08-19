@@ -60,7 +60,10 @@ fn a_discarded_call_is_still_recognised_as_rebindable() {
             "    _ = try htmd.convert(allocator, html, null);",
             "try htmd.convert(allocator, html, null);",
         ),
-        ("_ = htmd.convert(allocator, html, null);", "htmd.convert(allocator, html, null);"),
+        (
+            "_ = htmd.convert(allocator, html, null);",
+            "htmd.convert(allocator, html, null);",
+        ),
         ("    _ = sample.count();", "sample.count();"),
     ];
     for (line, expected) in call_discards {
