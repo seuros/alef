@@ -111,6 +111,24 @@ pub trait SnippetValidator: Send + Sync {
     /// an observability gap in the batch/fallback dispatch path, not a signal about whether the
     /// validator itself ran or hung — a healthy, fully-passing language is just as silent there as
     /// a broken one. ~keep
+    /// Whether two snippets of this language may run concurrently within one validation session.
+    ///
+    /// ~keep Most validators write every file they touch into a `ScratchDir`, which
+    /// `tempfile::Builder::tempdir_in` allocates fresh per call, so they are already safe to run
+    /// side by side. TypeScript, C# and Java instead write fixed-name files (`snippet.ts` +
+    /// `tsconfig.json`, `Program.cs` + `Snippet.csproj`, `<Class>.java` + its `.class` output)
+    /// directly into the session's shared fingerprint-keyed workspace, two of them compiling with
+    /// `current_dir` set to it -- so concurrent snippets would overwrite each other's sources
+    /// mid-compile and silently validate the wrong code. Kotlin keeps its sources in scratch but
+    /// truncate-writes a fixed-path Gradle init script into the same shared workspace. Those four
+    /// were made shared by `6ee684237`, which introduced the session mutex in the same commit;
+    /// the mutex was then applied to every language, serializing validators that never needed it.
+    /// A language returning `false` here still gets its own session and caches -- only the
+    /// mutual exclusion is dropped.
+    fn requires_session_exclusivity(&self) -> bool {
+        false
+    }
+
     fn supports_batching(&self) -> bool {
         false
     }

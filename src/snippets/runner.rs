@@ -104,7 +104,15 @@ fn fail_fast_results(
         let preparation_error = session_preparation_error(snippet, sessions, session_errors);
         let session = session_for(snippet, sessions);
         let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
-        let result = validate_one(snippet, registry, config, session, lock, preparation_error);
+        let result = validate_one(
+            snippet,
+            registry,
+            config,
+            session,
+            lock,
+            preparation_error,
+            Some(&reporter),
+        );
         reporter.record(&result);
         let should_stop =
             preparation_error.is_none() && matches!(result.status, SnippetStatus::Fail | SnippetStatus::Error);
@@ -149,15 +157,7 @@ fn parallel_results(
         session_locks,
         &reporter,
     );
-    let fallback_counts = fallback_counts_by_language(snippets, &batched);
-    for (language, count) in &fallback_counts {
-        tracing::info!(
-            language = %language,
-            snippet_count = count,
-            timeout_secs = config.timeout_secs,
-            "Starting per-snippet validation"
-        );
-    }
+    let unclaimed_counts = fallback_counts_by_language(snippets, &batched);
     let started = Instant::now();
     let results = snippets
         .par_iter()
@@ -168,16 +168,23 @@ fn parallel_results(
             }
             let session = session_for(snippet, sessions);
             let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
-            let result = validate_one(snippet, registry, config, session, lock, None);
+            let result = validate_one(snippet, registry, config, session, lock, None, Some(&reporter));
             reporter.record(&result);
             result
         })
         .collect();
     let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    for (language, count) in &fallback_counts {
+    for (language, invoked) in reporter.invoked_by_language() {
+        // ~keep `resolved_without_toolchain` is the gap between what the batch pass declined to
+        // claim and what actually ran: cache hits, `skip` annotations, side-effect rejections and
+        // unavailable toolchains. Reporting it beside `snippet_count` keeps the two from being
+        // conflated again -- reading the unclaimed count *as* the validated count is what made a
+        // fully-cached language look like it was validating 521 snippets one at a time.
+        let unclaimed = unclaimed_counts.get(&language).copied().unwrap_or(invoked);
         tracing::info!(
             language = %language,
-            snippet_count = count,
+            snippet_count = invoked,
+            resolved_without_toolchain = unclaimed.saturating_sub(invoked),
             duration_ms,
             "Finished per-snippet validation"
         );
@@ -219,6 +226,10 @@ struct LanguageTally {
     completed: usize,
     failed: usize,
     unavailable: usize,
+    /// Snippets of this language that actually reached a toolchain invocation, as counted by
+    /// [`FailureReporter::record_toolchain_start`]. ~keep Distinct from `completed`, which counts
+    /// every result including the ones `validate_one` short-circuits without running anything.
+    invoked: usize,
 }
 
 /// Emits snippet failures *while* a validation pass is running.
@@ -255,6 +266,52 @@ impl FailureReporter {
             // this the events a consumer most needs to correlate would be the span-less ones. ~keep
             span: tracing::Span::current(),
         }
+    }
+
+    /// Announce, once per language, that a snippet of that language has reached an actual
+    /// toolchain invocation, and count every such invocation.
+    ///
+    /// ~keep This is called from the one place real work begins, rather than inferred beforehand
+    /// from `validate_batches` leaving an entry unclaimed. That inference was wrong: `validate_one`
+    /// short-circuits on a cache hit, a `skip` annotation, a side-effect rejection, a missing
+    /// validator and an unavailable toolchain, none of which run anything. Because
+    /// `docs::validate_snippets` runs once per crate with `changed_only`, later crates are ~100%
+    /// cache hits, so every language announced `Starting per-snippet validation snippet_count=521`
+    /// while doing nothing at all -- which read as though 13 of 14 languages had fallen out of
+    /// batching when in fact only four had. Deriving the event from the work itself cannot drift
+    /// from it the way a parallel predicate can.
+    fn record_toolchain_start(&self, language: crate::snippets::types::Language, timeout_secs: u64) {
+        let Ok(mut tallies) = self.tallies.lock() else {
+            return;
+        };
+        let tally = tallies.entry(language).or_default();
+        tally.invoked += 1;
+        let first = tally.invoked == 1;
+        drop(tallies);
+        if !first {
+            return;
+        }
+        let snippet_count = self.totals.get(&language).copied().unwrap_or(0);
+        self.span.in_scope(|| {
+            tracing::info!(
+                language = %language,
+                snippet_count = snippet_count,
+                timeout_secs = timeout_secs,
+                "Starting per-snippet validation"
+            );
+        });
+    }
+
+    /// Per-language counts of snippets that actually invoked a toolchain.
+    fn invoked_by_language(&self) -> BTreeMap<crate::snippets::types::Language, usize> {
+        let Ok(tallies) = self.tallies.lock() else {
+            return BTreeMap::new();
+        };
+        tallies
+            .iter()
+            .filter(|(_, tally)| tally.invoked > 0)
+            .map(|(language, tally)| (*language, tally.invoked))
+            .collect()
     }
 
     fn record(&self, result: &ValidationResult) {
@@ -514,6 +571,7 @@ fn validate_one(
     session: Option<&crate::snippets::session::ValidationSession>,
     session_lock: Option<&Mutex<()>>,
     session_preparation_error: Option<&str>,
+    reporter: Option<&FailureReporter>,
 ) -> ValidationResult {
     if let Some(message) = session_preparation_error {
         return result(
@@ -576,22 +634,39 @@ fn validate_one(
         );
     }
 
-    let start = Instant::now();
+    if let Some(reporter) = reporter {
+        reporter.record_toolchain_start(snippet.language, config.timeout_secs);
+    }
+
     // `timeout_secs` is a per-invocation budget here, not a group budget. This path runs one
     // toolchain process per snippet (every validator except rust's non-`Run` batch), so sharing a
     // single wall-clock deadline across the language group let the first snippet consume it and
     // left the rest reported as toolchain timeouts for commands that were never spawned. Group
     // budgeting belongs to `validate_batches`, where one process really does cover N snippets. ~keep
-    let validation = || validator.validate_in_session(snippet, effective_level, config.timeout_secs, session);
+    // ~keep `start` is taken *inside* the session lock, not before it. Taken outside, every
+    // recorded `duration_ms` on this path included time spent queueing behind other snippets of
+    // the same session, which serializes here -- zig snippets doing ~5.9s of real work were
+    // recorded at a 58s median, making the per-invocation cost look ~10x worse than it is and
+    // hiding the serialization behind it. This measures the toolchain, and only the toolchain.
+    let mut start = Instant::now();
+    let validation = |start: &mut Instant| {
+        *start = Instant::now();
+        validator.validate_in_session(snippet, effective_level, config.timeout_secs, session)
+    };
+    // ~keep Only validators that share fixed-name files inside the session workspace need the
+    // mutex; see `SnippetValidator::requires_session_exclusivity`. Taking it for everyone made
+    // this path strictly serial per session even though it runs inside a rayon pool, which is why
+    // 521 zig snippets of ~5.9s each took half an hour.
+    let session_lock = session_lock.filter(|_| validator.requires_session_exclusivity());
     let validation_result = match session_lock {
         Some(lock) => match lock.lock() {
-            Ok(_guard) => validation(),
+            Ok(_guard) => validation(&mut start),
             Err(error) => Err(crate::snippets::error::Error::Other(format!(
                 "locking {} snippet validation session: {error}",
                 snippet.language
             ))),
         },
-        None => validation(),
+        None => validation(&mut start),
     };
     let (status, message) = match validation_result {
         Ok((status, message)) => (status, message),
@@ -832,6 +907,12 @@ fn skip_message(message: &str, reason: Option<&str>) -> String {
         _ => message.to_string(),
     }
 }
+
+#[cfg(test)]
+mod no_work_logging_tests;
+
+#[cfg(test)]
+mod session_concurrency_tests;
 
 #[cfg(test)]
 mod tests {

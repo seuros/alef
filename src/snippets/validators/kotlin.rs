@@ -397,6 +397,10 @@ impl SnippetValidator for KotlinValidator {
         Self::validate_batch_with_context(snippets, level, timeout_secs, session)
     }
 
+    fn requires_session_exclusivity(&self) -> bool {
+        true
+    }
+
     fn supports_batching(&self) -> bool {
         true
     }

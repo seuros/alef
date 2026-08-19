@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snippet validation no longer serializes languages that have nothing to serialize.** The
+  per-snippet fallback runs inside a rayon pool, but every snippet took its session's mutex and
+  held it across the whole toolchain subprocess, making the pass strictly serial per session. The
+  mutex was introduced alongside the change that moved TypeScript, C# and Java onto a shared
+  fingerprint-keyed workspace with fixed filenames (`snippet.ts`, `Program.cs`, `<Class>.java`),
+  where concurrent snippets really would overwrite each other's sources mid-compile — but it was
+  applied to every language, including the majority that write only into a per-call scratch
+  directory. Validators now declare their own need via `requires_session_exclusivity`, and only
+  those four (plus Kotlin, whose Gradle init script shares the workspace) are serialized. On a
+  consumer repo this was 521 zig snippets of ~6s each running for half an hour.
+
+- **`Starting per-snippet validation` no longer announces work that never happens.** The count came
+  from the batch pass leaving an entry unclaimed, which conflates "not batched" with "will be
+  validated". `validate_one` short-circuits on a cache hit, a `skip` annotation, a side-effect
+  rejection, a missing validator and an unavailable toolchain. Because snippet validation runs once
+  per crate with `changed_only`, later passes are almost entirely cache hits, so fully-cached
+  languages reported `snippet_count=521` while doing nothing at all — making a run in which four
+  languages fell back read as thirteen. The event is now emitted from the point where a toolchain
+  is actually invoked, and the summary reports `resolved_without_toolchain` alongside it.
+
+- **Per-snippet `duration_ms` no longer includes time queued behind other snippets.** The elapsed
+  timer started before the session lock was acquired, so recorded durations were dominated by wait
+  time — zig snippets doing ~5.9s of real work were recorded at a 58s median, which disguised the
+  serialization above as per-invocation cost.
+
 - **Generated C snippets no longer call a `_from_json` constructor the FFI never exports.** For an
   argument like `Vec<String>` the element type resolves to the std type `String`, and the e2e C
   generator built a typed handle from it — emitting `<prefix>_string_from_json("[]")` and a
