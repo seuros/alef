@@ -62,21 +62,6 @@ jobs:
           available-targets: crates,cli,homebrew
           alef-version: main
 
-  validate-versions:
-    name: Validate versions
-    needs: prepare
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.checkout_ref }}
-
-      - name: Validate manifest versions
-        uses: xberg-io/actions/validate-versions@v1
-        with:
-          version: ${{ needs.prepare.outputs.version }}
-          alef-version: main
-
   check-cratesio:
     name: Check crates.io
     needs: prepare
@@ -134,11 +119,10 @@ jobs:
 
   build-cli:
     name: Build CLI (${{ matrix.label }})
-    needs: [prepare, validate-versions, check-github-release]
+    needs: [prepare, check-github-release]
     if: |
       always() &&
       needs.prepare.outputs.release_cli == 'true' &&
-      needs.validate-versions.result == 'success' &&
       (needs.check-github-release.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
     strategy:
       fail-fast: false
@@ -212,12 +196,11 @@ jobs:
 
   publish-homebrew-formula:
     name: Update Homebrew formula
-    needs: [prepare, validate-versions, check-homebrew, publish-crates]
+    needs: [prepare, check-homebrew, publish-crates]
     if: |
       always() &&
       needs.prepare.outputs.release_homebrew == 'true' &&
       needs.prepare.outputs.dry_run != 'true' &&
-      needs.validate-versions.result == 'success' &&
       (needs.check-homebrew.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true') &&
       needs.publish-crates.result != 'failure'
     runs-on: ubuntu-latest
@@ -385,11 +368,10 @@ jobs:
 
   upload-release-assets:
     name: Upload release assets
-    needs: [prepare, validate-versions, check-github-release, build-cli]
+    needs: [prepare, check-github-release, build-cli]
     if: |
       always() &&
       needs.prepare.outputs.release_cli == 'true' &&
-      needs.validate-versions.result == 'success' &&
       needs.build-cli.result == 'success' &&
       (needs.check-github-release.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
     runs-on: ubuntu-latest
@@ -425,11 +407,10 @@ jobs:
 
   publish-crates:
     name: Publish crates.io
-    needs: [prepare, validate-versions, check-cratesio]
+    needs: [prepare, check-cratesio]
     if: |
       always() &&
       needs.prepare.outputs.release_crates == 'true' &&
-      needs.validate-versions.result == 'success' &&
       (needs.check-cratesio.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
     runs-on: ubuntu-latest
     permissions:

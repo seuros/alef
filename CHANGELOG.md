@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`cargo publish` runs again.** The publish workflow gated every downstream job on a
+  `validate-versions` step that ran `alef validate versions` against alef itself. That check
+  exists to confirm a *consumer's* package manifests agree with the crate version; alef is the
+  generator — a single Rust crate with no target-language packages — so it had nothing to
+  validate, and crate resolution rejected the config outright with "crate `alef` has no target
+  languages". Because `publish-crates` required `needs.validate-versions.result == 'success'`,
+  the failed gate skipped the actual publish while the release itself still looked created. That
+  is why 0.61.0 never reached crates.io, and why the last version published there was 0.60.1.
+  The job and the fictional `[[crates]]` block in `alef.toml` that had been added to satisfy it
+  (b00e72d60) are both removed.
+
 - **The xUnit attribute on a generated C# e2e test no longer collapses onto the method
   signature.** `test_method.jinja` picks between `[Fact]` and `[Fact(Skip = "...")]` in a
   conditional; written with whitespace-trimming delimiters, that block also ate the newline after

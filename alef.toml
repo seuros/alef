@@ -1,12 +1,14 @@
+# Alef is the generator, not a consumer of itself: it emits no bindings for any target language,
+# so this file declares no crates and no languages. The single field below is the version stamp
+# `task set-version` keeps in lockstep with Cargo.toml and `ALEF_REV`.
+#
+# A `[[crates]]` block naming alef itself lived here from b00e72d60 ("add minimal [crate] section
+# to alef.toml so validate-versions works") purely to satisfy a `validate-versions` gate in the
+# publish workflow. That gate checks a *consumer's* package manifests against the crate version —
+# alef has none — and the fiction stopped working when crate resolution began rejecting an empty
+# `languages` list, which silently blocked every publish from 0.61.0 onward. The gate is gone from
+# .github/workflows/publish.yaml; do not reintroduce either half. ~keep
+crates = []
+
 [workspace]
 alef_version = "0.61.1"
-languages = []
-
-[workspace.dto]
-python = "dataclass"
-python_output = "typed-dict"
-
-[[crates]]
-name = "alef"
-sources = ["src/main.rs"]
-version_from = "Cargo.toml"
