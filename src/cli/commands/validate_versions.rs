@@ -114,6 +114,20 @@ fn status_label(check: &VersionCheck) -> &'static str {
     }
 }
 
+/// Whether a set of checks should be treated as a passing gate.
+///
+/// ~keep Zero checks is a failure, not a pass: `all()` is vacuously true on an empty vector, so a
+/// run that examined nothing used to report success. A `blocked_on_publish` check, by contrast,
+/// does NOT count against the gate. Those are lockfile entries pinning the crate at the version
+/// being released and resolved from the registry, so cargo cannot refresh them until that version
+/// exists there -- which cannot happen until this gate passes. Failing them makes the gate
+/// unsatisfiable by construction for any repo with a registry-depending test app. They are still
+/// reported (`status_label` tags them UNPUBLISHED, and the summary counts them separately); they
+/// just no longer fail a check nobody can act on.
+pub(crate) fn checks_pass(checks: &[VersionCheck]) -> bool {
+    !checks.is_empty() && checks.iter().all(|c| c.matches || c.blocked_on_publish.is_some())
+}
+
 /// One line of the trailing failure summary.
 fn failure_line(check: &VersionCheck) -> String {
     match &check.blocked_on_publish {
@@ -151,9 +165,10 @@ pub fn run(config: &ResolvedCrateConfig, workspace_root: &Path, output_json: boo
             .collect();
         // ~keep `all()` is vacuously true on an empty vector, so a run that examined
         // nothing used to report `"ok": true`. Zero checks is a failure, not a pass.
+        //
         let out = json!({
             "canonical": canonical,
-            "ok": !checks.is_empty() && checks.iter().all(|c| c.matches),
+            "ok": checks_pass(&checks),
             "checks": entries,
         });
         crate::bin_cli::output::payload(serde_json::to_string_pretty(&out)?);
@@ -924,6 +939,51 @@ python = "{python_output}"
             matches,
             blocked_on_publish: blocked_on_publish.map(str::to_string),
         }
+    }
+
+    /// The crates.io leg of a release used to be blocked by a check that could only pass after
+    /// that same release: a test app's lockfile pins the crate at the version being published and
+    /// resolves it from the registry, so cargo cannot refresh it until the version is live.
+    #[test]
+    fn a_check_blocked_on_publish_does_not_fail_the_gate() {
+        let checks = vec![
+            check("packages/ruby/Cargo.toml", Some("3.11.2"), true, None),
+            check(
+                "test_apps/rust/Cargo.lock#app",
+                Some("3.6.18"),
+                false,
+                Some("html-to-markdown-rs@3.11.2"),
+            ),
+        ];
+        assert!(
+            checks_pass(&checks),
+            "a lockfile entry unresolvable until the pending release is published must not fail the gate"
+        );
+    }
+
+    /// The other half: blocking must not become a blanket amnesty. A genuine mismatch the author
+    /// can fix right now still fails, even when a blocked check sits beside it.
+    #[test]
+    fn a_real_mismatch_still_fails_even_alongside_a_blocked_check() {
+        let checks = vec![
+            check(
+                "test_apps/rust/Cargo.lock#app",
+                Some("3.6.18"),
+                false,
+                Some("html-to-markdown-rs@3.11.2"),
+            ),
+            check("packages/ruby/Cargo.toml", Some("3.11.1"), false, None),
+        ];
+        assert!(
+            !checks_pass(&checks),
+            "an actionable mismatch must still fail the gate regardless of any blocked check"
+        );
+    }
+
+    /// A run that examined nothing verified nothing.
+    #[test]
+    fn an_empty_check_set_is_not_a_pass() {
+        assert!(!checks_pass(&[]), "zero checks is a failure, not a vacuous pass");
     }
 
     /// The three failure modes have to be distinguishable in the report body, because they call

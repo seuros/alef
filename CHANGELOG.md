@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.1] - 2026-08-19
+
+### Fixed
+
+- **`alef validate versions --json` no longer fails a release on a check that only the release can
+  satisfy.** A test app's lockfile pins the crate at the version being published and resolves it
+  from the registry, so cargo cannot refresh that entry until the version is live — which cannot
+  happen while this gate blocks the publish job. alef already recognised the situation (the check
+  is tagged `UNPUBLISHED`, and the human summary reports it as "unresolvable until the pending
+  release is published"), but the JSON `ok` field still counted it as a failure, and
+  `xberg-io/actions/validate-versions` fails on `ok != true`. The gate was therefore unsatisfiable
+  by construction for any repo with a registry-depending test app, and it blocked the crates.io leg
+  of a real release. `blocked_on_publish` checks are now excluded from `ok` while still being
+  reported; a genuine mismatch sitting beside one still fails, and an empty check set is still not
+  a pass.
+
+
 ## [0.62.0] - 2026-08-19
 
 ### Fixed
