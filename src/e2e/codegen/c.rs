@@ -1043,11 +1043,14 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, i
 mod assertions;
 mod call_patterns;
 mod docs_input;
+mod ffi_constructors;
 mod project;
 mod return_shape;
 mod runner;
 #[cfg(test)]
 mod snippet_regressions;
+#[cfg(test)]
+mod std_arg_tests;
 mod streaming;
 mod test_function;
 mod trait_bridge_snippet;

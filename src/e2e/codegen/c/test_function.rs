@@ -11,6 +11,7 @@ use std::fmt::Write as FmtWrite;
 
 use super::assertions::TargetParams;
 use super::docs_input::render_c_docs_json;
+use super::ffi_constructors::is_std_type_without_ffi_constructor;
 use super::{
     FieldConfigSources, LeafFieldCheck, build_args_string_c, c_optional_sentinel, emit_nested_accessor,
     ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, json_to_c,
@@ -1643,6 +1644,12 @@ fn build_json_object_arg_handles(
                 fixture.id, arg.name
             );
         };
+        // ~keep Skipping leaves the arg to `build_args_string_c`'s JSON-literal path, which is
+        // the wrong answer for a real DTO (hence the `element_type` backfill above) and the right
+        // one here -- see `is_std_type_without_ffi_constructor`.
+        if is_std_type_without_ffi_constructor(type_name) {
+            continue;
+        }
         let type_snake = type_name.to_snake_case();
         let handle = format!("{}_handle", sanitize_ident(&arg.name));
         out.push_str(&crate::e2e::template_env::render(

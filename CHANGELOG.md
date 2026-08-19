@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generated C snippets no longer call a `_from_json` constructor the FFI never exports.** For an
+  argument like `Vec<String>` the element type resolves to the std type `String`, and the e2e C
+  generator built a typed handle from it — emitting `<prefix>_string_from_json("[]")` and a
+  matching `<prefix>_string_free(...)`. The FFI crate exports `_from_json` / `_free` only for types
+  the crate itself defines (and, for enums, only when one is used as a pointer parameter), so
+  nothing declares those symbols and every snippet taking such an argument failed to compile with
+  "call to undeclared function". The C ABI takes the argument as a plain `const char *` JSON string
+  anyway, so std-typed arguments now skip the handle and are spliced in as a literal. Crate-defined
+  types, including enums, are unaffected.
+
 ## [0.62.1] - 2026-08-19
 
 ### Fixed
