@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Bumping the `[workspace] alef_version` pin in `alef.toml` no longer rehashes every generated
+  file.** `compute_inputs_hash` folded the entire normalized `alef.toml` into the embedded
+  `alef:hash:` line, including the `alef_version` pin — so the standard consumer upgrade workflow
+  (bump the pin) invalidated every file's hash with zero emitted-content change. The pin only
+  feeds a version-mismatch warning (`cli::version_pin::check_alef_toml_version`); nothing in
+  codegen branches on it. `alef_version` is now stripped from the canonical TOML before hashing;
+  every other `[workspace]`/`[[crates]]` key is still a real input.
+
 ## [0.62.1] - 2026-08-19
 
 ### Fixed

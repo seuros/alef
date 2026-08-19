@@ -45,7 +45,12 @@
 //! hash reflects the post-format content from the start, and a later run of
 //! the same formatter over already-formatted content is a no-op, not drift.
 //! Routine alef crate releases do not change the hash because the alef crate
-//! version (`ALEF_REV`) is not an input to `inputs_hash`.
+//! version (`ALEF_REV`) is not an input to `inputs_hash`. Separately, bumping the
+//! `[workspace] alef_version` pin inside `alef.toml` — the standard consumer upgrade step —
+//! also does not change the hash: that one key is stripped from `canonical_toml` before
+//! hashing, because nothing in codegen branches on it (see `strip_alef_version_pin`).
+//! Every other key in `alef.toml` is still a real input, so a genuine config change still
+//! rehashes.
 //!
 //! `alef verify` (`bin_cli::helpers::verify_walk` / `verify_walk_multi`)
 //! re-derives `inputs_hash` from the current `alef.toml` and Rust sources,
@@ -414,11 +419,13 @@ pub fn compute_crate_sources_hash(
 /// crate releases — only bumped for breaking codegen changes), the Rust
 /// source fingerprint, and a **canonical normalized form** of `alef.toml`
 /// (parsed and re-serialized as TOML, stripping comments, whitespace churn,
-/// key-order differences, and CRLF line endings). It does **not** include the
+/// key-order differences, CRLF line endings, and the `[workspace] alef_version`
+/// pin — see [`strip_alef_version_pin`]). It does **not** include the
 /// emitted file content, so post-generation formatter rewrites (rustfmt, ruff,
 /// rumdl-fmt, oxfmt, …) never invalidate the embedded hash. It also does
 /// **not** include the alef crate version (`ALEF_REV`), so upgrading alef
-/// between releases does not mass-invalidate client bindings.
+/// between releases — including bumping the `alef_version` pin in `alef.toml`, the
+/// standard way to record that upgrade — does not mass-invalidate client bindings.
 ///
 /// - **Generate**: compute once per run, inject into every generated file header.
 /// - **Verify**: re-derive from the current inputs, compare to the embedded line.
@@ -465,11 +472,27 @@ fn normalize_toml_bytes(bytes: &[u8]) -> String {
     }
     match toml::from_str::<toml::Value>(trimmed) {
         Ok(value) => {
+            let value = strip_alef_version_pin(value);
             let sorted = sort_toml_value(value);
             toml::to_string(&sorted).unwrap_or_default()
         }
         Err(_) => trimmed.to_string(),
     }
+}
+
+/// Remove `[workspace] alef_version` before hashing `alef.toml`.
+///
+/// The pin only feeds `cli::version_pin::check_alef_toml_version`, which logs a mismatch
+/// warning and never branches codegen — confirmed by grepping every read of
+/// `WorkspaceConfig::alef_version` in `src/`. Folding it into `inputs_hash` therefore rehashed
+/// every generated file on the standard upgrade workflow (bump the pin in `alef.toml`) even
+/// though emitted content never changed. Stripping only this one key, rather than the field's
+/// whole containing table, keeps any other future `[workspace]` key an input. ~keep
+fn strip_alef_version_pin(mut value: toml::Value) -> toml::Value {
+    if let Some(workspace) = value.get_mut("workspace").and_then(toml::Value::as_table_mut) {
+        workspace.remove("alef_version");
+    }
+    value
 }
 
 /// Recursively sort the keys of every TOML table so that key-ordering
