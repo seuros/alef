@@ -29,7 +29,8 @@ pub use generate::{
 };
 pub(crate) use generate::{
     apply_shebang_chmod, atomic_write, check_ffi_header_freshness, ensure_ffi_header_freshness,
-    ensure_generated_header, provenance_header_for_path, stamp_for_adoption,
+    ensure_generated_header, is_owned_by_ownership_record, marker_comment_style, provenance_header_for_path,
+    stamp_for_adoption,
 };
 pub use helpers::{init, run_optional};
 pub use version::sync_versions;
