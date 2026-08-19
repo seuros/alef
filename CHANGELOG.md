@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`[crates.e2e.call(s).*.overrides.<lang>] class` is now validated against the classes the
+  target backend actually emits.** For java, kotlin, kotlin_android, php, ruby, and dart — the
+  languages whose e2e generators read this field — a typo or a stale rename used to be trusted
+  blindly by the emitter, silently producing hundreds of e2e tests and snippets that call methods
+  on a class that does not exist, surfacing only as a wall of compile errors in generated code far
+  downstream. `alef e2e` (and `alef build`) now checks every `class` override against the crate's
+  facade class, every struct/enum wrapper, and every active trait bridge for that language, and
+  fails generation with the offending config key, the bad value, and the closest valid
+  candidate(s) by edit distance. The check is skipped when the caller supplies no IR (some
+  legitimate generation paths do), matching the same rule the field-classification validator uses.
+
 ## [0.62.1] - 2026-08-19
 
 ### Fixed
