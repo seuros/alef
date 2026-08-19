@@ -159,19 +159,52 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
     out
 }
 
-/// Feature names [`collect_cfg_features`] finds referenced in `api` that `declared` does not
+/// Feature names [`collect_cfg_features`] finds referenced in `api` that `present` does not
 /// contain.
+///
+/// A plain set difference, reused for two different meanings of "present": callers pass the
+/// manifest's declared `[features]` keys to find names missing a forwarding row at all, and pass
+/// the set [`features_reachable_from_default`] computes to find names that are declared but not
+/// actually turned on. ~keep
 ///
 /// A Rust-emitting backend (Magnus/Ruby, Rustler/Elixir) copies a source item's
 /// `#[cfg(feature = "X")]` verbatim into the binding crate; that gate then resolves against the
 /// *binding* crate's own `[features]` table, not the core crate's. A name this returns means the
-/// binding crate's manifest does not declare `X` as its own passthrough feature, so every
-/// definition (and, if the backend also re-emits the gate on a registration statement, every
-/// registration) behind that gate silently compiles out of the binding crate even though the core
-/// crate has `X` on.
+/// binding crate's manifest does not declare (or does not enable) `X` as its own passthrough
+/// feature, so every definition (and, if the backend also re-emits the gate on a registration
+/// statement, every registration) behind that gate silently compiles out of the binding crate
+/// even though the core crate has `X` on.
 #[must_use]
-pub fn undeclared_cfg_features(api: &ApiSurface, declared: &BTreeSet<String>) -> BTreeSet<String> {
-    collect_cfg_features(api).difference(declared).cloned().collect()
+pub fn undeclared_cfg_features(api: &ApiSurface, present: &BTreeSet<String>) -> BTreeSet<String> {
+    collect_cfg_features(api).difference(present).cloned().collect()
+}
+
+/// Feature names transitively enabled when `default` is enabled, per `members_of` -- a lookup
+/// from a feature name to the *local* (same-manifest) feature names its own value array lists.
+///
+/// Cargo enables a feature and everything its value array names, recursively; this walks that
+/// graph starting at `default`. `members_of` is expected to already have dropped any
+/// `crate/feature` forwarding target: that name lives in a different crate's feature graph, not
+/// this manifest's own, and a `#[cfg(feature = "X")]` gate in this crate's generated source can
+/// only ever be checking a name from this crate's own graph. Declaring "default" itself is never
+/// reported as enabled -- it names the entry point into the graph, not a feature a generated
+/// `#[cfg(feature = "default")]` gate could reference. A name absent from the table (queried but
+/// with no value array) simply contributes no further members, so a leaf forwarding feature such
+/// as `tokenizer = ["core/tokenizer"]` terminates the walk instead of erroring. ~keep
+fn features_reachable_from_default(members_of: impl Fn(&str) -> Vec<String>) -> BTreeSet<String> {
+    let mut enabled = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut queue = std::collections::VecDeque::from([String::from("default")]);
+    while let Some(name) = queue.pop_front() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        if name != "default" {
+            enabled.insert(name.clone());
+        }
+        queue.extend(members_of(&name));
+    }
+    enabled
 }
 
 /// Read the `[features]` table keys of the Cargo.toml at `manifest_path`.
@@ -195,6 +228,39 @@ pub fn read_declared_cargo_features(manifest_path: &Path) -> Option<BTreeSet<Str
     Some(features)
 }
 
+/// Read the feature names transitively **enabled** (not merely declared) when `default` is
+/// enabled, per the `[features]` table of the Cargo.toml at `manifest_path`.
+///
+/// This is what `alef` can prove statically from the manifest alone: it walks the local feature
+/// graph reachable from `default` via [`features_reachable_from_default`]. It cannot see a
+/// `--features` flag some external build tool (`mix`, `rake-compiler`, `cargo build
+/// --no-default-features --features X`, ...) passes at build time, nor a workspace-level feature
+/// unification pulling this crate in through another member -- none of that is visible from the
+/// manifest on disk. A feature this returns is provably on; a feature this omits might still be
+/// turned on some other way alef cannot observe, so the honest question this answers is narrower
+/// than "is this feature enabled" and reads as "is this feature enabled by default". ~keep
+///
+/// Returns `None` for the same reasons [`read_declared_cargo_features`] does (unreadable/
+/// unparseable manifest); returns `Some(<empty set>)` when the manifest has no `[features]`
+/// table, or has one with no `default` key, at all.
+#[must_use]
+pub fn read_default_enabled_cargo_features(manifest_path: &Path) -> Option<BTreeSet<String>> {
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    let manifest = toml::from_str::<toml::Value>(&content).ok()?;
+    let features_table = manifest.get("features").and_then(toml::Value::as_table);
+    Some(features_reachable_from_default(|name| {
+        features_table
+            .and_then(|table| table.get(name))
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml::Value::as_str)
+            .filter(|member| !member.contains('/'))
+            .map(str::to_owned)
+            .collect()
+    }))
+}
+
 /// Read the feature names the **core** crate itself declares, resolving its manifest via
 /// [`crate::scaffold::core_crate_manifest_path`].
 ///
@@ -213,28 +279,40 @@ pub fn core_crate_declared_features(config: &ResolvedCrateConfig) -> BTreeSet<St
 }
 
 /// Insert every name [`undeclared_cfg_features`] finds missing from `existing`'s own
-/// `[features]` table, forwarding each to `core_crate_name` the same way the sibling rows
+/// `[features]` table -- forwarding each to `core_crate_name` the same way the sibling rows
 /// `scaffold_ruby_cargo`/`scaffold_elixir_cargo` already write do (`<feature> =
-/// ["<core_crate_name>/<feature>"]`).
+/// ["<core_crate_name>/<feature>"]`) -- and, separately, every referenced name missing from
+/// `default`, appending it to that array.
 ///
-/// Returns `Ok(None)` when nothing needs to change (every referenced feature is already declared,
-/// or every missing one is absent from `core_declared_features` and therefore must not be
-/// invented), so callers can distinguish "checked, no update needed" from "wrote the merge"
-/// without a further content diff.
+/// Declaring a Cargo feature does not enable it: a forwarding row alone leaves `#[cfg(feature =
+/// "X")]` false unless something turns `X` on, and neither `mix`/`rake-compiler`/`cargo` build
+/// wrapper this repair supports passes a `--features` flag. `scaffold_ruby_cargo` and
+/// `scaffold_elixir_cargo` already put every name [`collect_cfg_features`] finds straight into
+/// `default` on a fresh scaffold (see their own `default = [...]` line); this mirrors that so a
+/// feature that is already declared but was never added to `default` -- the exact shape a
+/// manifest patched by an earlier version of this function is left in -- still gets fixed on the
+/// next repair pass, not just a brand-new feature. ~keep
+///
+/// Returns `Ok(None)` when nothing needs to change (every referenced feature is already declared
+/// and enabled by default, or every missing one is absent from `core_declared_features` and
+/// therefore must not be invented), so callers can distinguish "checked, no update needed" from
+/// "wrote the merge" without a further content diff.
 ///
 /// Parses with `toml_edit::DocumentMut`, not the `toml` crate [`read_declared_cargo_features`]
 /// uses: `toml_edit` preserves every byte it does not touch -- comments, key order, blank lines,
 /// a hand-added `[package.metadata.*]` table -- so the only lines this can ever change are the
-/// new feature rows it inserts. A `[features]` table absent from `existing` is created; `toml_edit`
-/// appends a new table at the document's end rather than reflowing existing ones, so this never
-/// disturbs any other table's position.
+/// new feature rows it inserts and the `default` array entries it appends. A `[features]` table
+/// absent from `existing` is created; `toml_edit` appends a new table at the document's end
+/// rather than reflowing existing ones, so this never disturbs any other table's position. A
+/// `default` array is created the same way if the table has none yet, and an existing one keeps
+/// every entry it already has -- only missing names are pushed onto the end.
 ///
 /// This is `alef scaffold`'s answer to the "re-run `alef scaffold`" remedy the compile-out warning
 /// (`warn_on_undeclared_binding_cfg_features`) prescribes: the manifest this repairs is user-owned
 /// and `write_scaffold_files_report`'s ownership guard rightly refuses to blindly overwrite it, but
-/// a single additive `[features]` row cannot corrupt, reorder, or drop anything else in the file,
-/// so it is safe to apply on its own, narrower write path even when the guard would otherwise
-/// refuse the whole manifest. ~keep
+/// a purely additive `[features]` change cannot corrupt, reorder, or drop anything else in the
+/// file, so it is safe to apply on its own, narrower write path even when the guard would
+/// otherwise refuse the whole manifest. ~keep
 pub fn merge_missing_cfg_features(
     existing: &str,
     api: &ApiSurface,
@@ -245,18 +323,30 @@ pub fn merge_missing_cfg_features(
         .parse::<toml_edit::DocumentMut>()
         .context("existing manifest is not valid TOML")?;
 
-    let declared: BTreeSet<String> = doc
-        .get("features")
-        .and_then(toml_edit::Item::as_table)
+    let features_table_ref = doc.get("features").and_then(toml_edit::Item::as_table);
+    let declared: BTreeSet<String> = features_table_ref
         .map(|table| table.iter().map(|(key, _)| key.to_string()).collect())
         .unwrap_or_default();
+    let enabled_by_default = features_reachable_from_default(|name| {
+        features_table_ref
+            .and_then(|table| table.get(name))
+            .and_then(toml_edit::Item::as_array)
+            .into_iter()
+            .flat_map(toml_edit::Array::iter)
+            .filter_map(toml_edit::Value::as_str)
+            .filter(|member| !member.contains('/'))
+            .map(str::to_owned)
+            .collect()
+    });
 
-    let missing: BTreeSet<String> = undeclared_cfg_features(api, &declared)
+    let referenced: BTreeSet<String> = collect_cfg_features(api)
         .into_iter()
         .filter(|feature| core_declared_features.contains(feature))
         .collect();
+    let needs_declaration: BTreeSet<String> = referenced.difference(&declared).cloned().collect();
+    let needs_default: BTreeSet<String> = referenced.difference(&enabled_by_default).cloned().collect();
 
-    if missing.is_empty() {
+    if needs_declaration.is_empty() && needs_default.is_empty() {
         return Ok(None);
     }
 
@@ -266,10 +356,28 @@ pub fn merge_missing_cfg_features(
         .as_table_mut()
         .context("[features] exists in the manifest but is not a table")?;
 
-    for feature in &missing {
+    for feature in &needs_declaration {
         let mut forwarded = toml_edit::Array::new();
         forwarded.push(format!("{core_crate_name}/{feature}"));
         features_table.insert(feature, toml_edit::Item::Value(toml_edit::Value::Array(forwarded)));
+    }
+
+    if !needs_default.is_empty() {
+        let default_array = features_table
+            .entry("default")
+            .or_insert_with(|| toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new())))
+            .as_array_mut()
+            .context("features.default exists but is not an array")?;
+        let already_listed: BTreeSet<String> = default_array
+            .iter()
+            .filter_map(toml_edit::Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        for feature in &needs_default {
+            if !already_listed.contains(feature) {
+                default_array.push(feature.clone());
+            }
+        }
     }
 
     Ok(Some(doc.to_string()))
@@ -291,8 +399,24 @@ pub fn resolve_against_workspace_root(config: &ResolvedCrateConfig, relative: &P
 }
 
 /// Warn when the binding crate's own (already-scaffolded) Cargo.toml at `manifest_path` does not
-/// declare every feature the generated Rust source for `language` references via a forwarded
-/// `#[cfg(feature = "X")]`.
+/// **enable by default** every feature the generated Rust source for `language` references via a
+/// forwarded `#[cfg(feature = "X")]`.
+///
+/// Declaring `X` in `[features]` is not the same as turning it on: `#[cfg(feature = "X")]` is
+/// still false for any binding crate build that doesn't pass `--features X`, and none of the
+/// build wrappers alef scaffolds (`mix`, `rake-compiler`, the FFI cdylib's own `cargo build`, ...)
+/// do. This checks [`read_default_enabled_cargo_features`] -- the set reachable by walking the
+/// manifest's own feature graph from `default` -- rather than merely whether `X` is a key in
+/// `[features]` at all, so a feature that is declared but never made reachable from `default`
+/// still warns instead of reading as fixed. That is a real state this repository has shipped: a
+/// prior `[features]` merge that inserted the forwarding row but not a `default` entry left the
+/// manifest declaring `X` while `cargo rustc --print cfg` still omitted it.
+///
+/// This is the most alef can prove **statically** from the manifest: it cannot see a `--features`
+/// flag an external build tool passes at build time, nor a workspace-level feature unification
+/// pulling this crate in through another member. A feature this reports missing is provably off
+/// by default; a feature this does not report might still be off if something on the build path
+/// alef cannot observe fails to pass it.
 ///
 /// `alef scaffold` writes this manifest's `[features]` table once, from
 /// [`collect_cfg_features`] evaluated at scaffold time (see `scaffold::languages::ruby` and
@@ -306,10 +430,10 @@ pub fn resolve_against_workspace_root(config: &ResolvedCrateConfig, relative: &P
 /// `scaffold::languages::elixir::get_core_crate_features`'s same permissive philosophy for the
 /// same class of file. ~keep
 pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Language, manifest_path: &Path) {
-    let Some(declared) = read_declared_cargo_features(manifest_path) else {
+    let Some(enabled_by_default) = read_default_enabled_cargo_features(manifest_path) else {
         return;
     };
-    let missing = undeclared_cfg_features(api, &declared);
+    let missing = undeclared_cfg_features(api, &enabled_by_default);
     if missing.is_empty() {
         return;
     }
@@ -318,9 +442,10 @@ pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Langu
         manifest = %manifest_path.display(),
         missing_features = ?missing,
         "generated bindings reference #[cfg(feature = \"...\")] gates this crate's own Cargo.toml \
-         does not declare; the affected definitions (and their registrations) will silently \
-         compile out of this binding even though the core crate has the feature on -- re-run \
-         `alef scaffold` to add the missing features to this crate's [features] table"
+         does not enable by default; the affected definitions (and their registrations) will \
+         silently compile out of this binding even though the core crate has the feature on -- \
+         re-run `alef scaffold` to add the missing features to this crate's [features] table and \
+         its default list"
     );
 }
 

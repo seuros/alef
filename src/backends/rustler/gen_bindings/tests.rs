@@ -596,7 +596,7 @@ fn generate_bindings_warns_when_the_scaffolded_manifest_is_missing_a_referenced_
     let _ = backend.generate_bindings(&api, &config).unwrap();
 
     assert!(
-        logs_contain("does not declare"),
+        logs_contain("does not enable by default"),
         "a stale scaffolded manifest missing a referenced feature must warn during `alef build`"
     );
 }
@@ -634,7 +634,7 @@ fn generate_bindings_stays_silent_when_the_scaffolded_manifest_declares_the_feat
     let _ = backend.generate_bindings(&api, &config).unwrap();
 
     assert!(
-        !logs_contain("does not declare"),
+        !logs_contain("does not enable by default"),
         "an up-to-date manifest must not warn"
     );
 }
