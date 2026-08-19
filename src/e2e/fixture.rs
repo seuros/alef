@@ -35,6 +35,18 @@ pub struct MockResponse {
     pub headers: BTreeMap<String, String>,
 }
 
+/// Conventional `exclude_functions` token a per-language config uses to drop the fixture
+/// engine's single visitor/trait-bridge entry point ([`Fixture::visitor`]) wholesale, for
+/// backends that cannot bridge it (e.g. a JNI target with no options-field trait-bridge
+/// support yet). `exclude_functions` normally names a real Rust function; this token is a
+/// backend-agnostic stand-in because the visitor's bridging function has no single Rust name
+/// shared across languages. Consulted everywhere a fixture using [`Fixture::visitor`] must be
+/// skipped instead of rendered against an API surface the binding does not expose — currently
+/// `e2e::codegen::kotlin_android::project` (e2e test generation) and `e2e::snippets`
+/// (docs snippet generation) — so the two never drift on which fixtures a given exclusion
+/// covers. ~keep
+pub const VISITOR_EXCLUDE_FUNCTION_NAME: &str = "visitor";
+
 /// Visitor specification for visitor pattern tests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VisitorSpec {

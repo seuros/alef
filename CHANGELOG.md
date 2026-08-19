@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snippet generation honours a language's visitor exclusion, as e2e test generation already did.**
+  A per-language `exclude_functions = ["visitor"]` drops the fixture engine's trait-bridge entry point,
+  and `e2e::codegen::kotlin_android::project` already fell back to an excluded-bindings placeholder for
+  it. The snippet generator applied no such rule, because `exclude_functions` normally names a real Rust
+  function while a visitor fixture's *call* resolves to an ordinary one (`convert`) and the visitor
+  itself attaches through an options field that has no IR function name of its own. The two generators
+  therefore disagreed about the same config, and every visitor fixture was rendered as a real snippet
+  against an API the binding never exposed -- 46 of them for one consumer, each importing a visitor
+  interface, a node-context type and a result enum that are absent from the generated package. The token
+  is now a single named constant both generators read, so they cannot drift on which fixtures an
+  exclusion covers.
+
 - **One binary file no longer ends an `alef adopt` run.** Candidate collection read every match with
   `read_to_string`, so a single non-text match aborted the whole target: `alef adopt 'packages/**'`
   on a repo with a `gradle-wrapper.jar` failed with `stream did not contain valid UTF-8` before one

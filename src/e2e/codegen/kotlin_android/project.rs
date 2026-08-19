@@ -3,7 +3,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::sanitize_filename;
-use crate::e2e::fixture::{Fixture, FixtureGroup};
+use crate::e2e::fixture::{Fixture, FixtureGroup, VISITOR_EXCLUDE_FUNCTION_NAME};
 use anyhow::Result;
 use heck::ToUpperCamelCase;
 use std::collections::HashSet;
@@ -172,10 +172,12 @@ pub(super) fn generate(
     }
     let test_base = test_base.join("e2e");
 
-    let visitor_is_excluded = config
-        .kotlin_android
-        .as_ref()
-        .is_some_and(|android| android.exclude_functions.iter().any(|name| name == "visitor"));
+    let visitor_is_excluded = config.kotlin_android.as_ref().is_some_and(|android| {
+        android
+            .exclude_functions
+            .iter()
+            .any(|name| name == VISITOR_EXCLUDE_FUNCTION_NAME)
+    });
     let excluded_visitor_fixtures: Vec<String> = groups
         .iter()
         .flat_map(|group| group.fixtures.iter())

@@ -279,7 +279,9 @@ fn generate_snippet_report_with_extensions(
             // disagreement this check exists to prevent. See
             // `function_excluded_for_language`'s doc comment for why this reuses the
             // docs generator's exclusion accessor instead of re-deriving the rule. ~keep
-            if function_excluded_for_language(fixture, language, generator.language_name(), context) {
+            if function_excluded_for_language(fixture, language, generator.language_name(), context)
+                || visitor_excluded_for_language(fixture, generator.language_name(), context)
+            {
                 continue;
             }
             let key = SnippetCoverageKey {
@@ -867,6 +869,33 @@ fn function_excluded_for_language(
     };
     let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(context.crate_config, lang);
     excluded_functions.contains(function_name.as_ref())
+}
+
+/// Whether `fixture` exercises the fixture engine's generic visitor/trait-bridge entry point
+/// ([`Fixture::visitor`]) and this language excludes it via the
+/// [`crate::e2e::fixture::VISITOR_EXCLUDE_FUNCTION_NAME`] convention.
+///
+/// `exclude_functions` normally names a real Rust function, so
+/// [`function_excluded_for_language`] cannot catch this case: a visitor fixture's *call*
+/// resolves to some ordinary function (e.g. `convert`), while the visitor itself attaches
+/// through a trait-bridge parameter or options-struct field that never has its own IR function
+/// name. `e2e::codegen::kotlin_android::project` already applies this exact rule when deciding
+/// whether to emit a fixture's Kotlin-Android e2e test or fall back to
+/// `ExcludedBindingsTest.kt`; without the matching check here, snippet generation rendered real
+/// code against a visitor API the binding never exposed for that language. ~keep
+fn visitor_excluded_for_language(
+    fixture: &Fixture,
+    generator_language_name: &str,
+    context: &SnippetRenderContext<'_>,
+) -> bool {
+    if fixture.visitor.is_none() {
+        return false;
+    }
+    let Some(DocumentationLanguage::Binding(lang)) = parse_language(generator_language_name) else {
+        return false;
+    };
+    let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(context.crate_config, lang);
+    excluded_functions.contains(crate::e2e::fixture::VISITOR_EXCLUDE_FUNCTION_NAME)
 }
 
 fn snippet_path(
@@ -2227,6 +2256,86 @@ mod tests {
         );
         assert_eq!(report.coverage.generated_paths.len(), 1);
         assert!(!report.coverage.generated_paths[0].starts_with("wasm"));
+    }
+
+    /// Sibling of `excluded_function_drops_only_the_excluding_languages_cell_from_expected`
+    /// for the visitor/trait-bridge convention: a fixture using [`Fixture::visitor`] must drop
+    /// out of `expected` for a language whose `exclude_functions` names the
+    /// [`crate::e2e::fixture::VISITOR_EXCLUDE_FUNCTION_NAME`] token, even though the fixture's
+    /// *call* resolves to an ordinary, non-excluded function -- `function_excluded_for_language`
+    /// alone cannot catch this, since it only inspects the call's function name. The same
+    /// fixture must stay expected (and generated) for a language with no such exclusion.
+    #[test]
+    fn visitor_fixture_excluded_by_visitor_token_drops_only_the_excluding_languages_cell() {
+        let mut fixture = documented_fixture();
+        fixture.visitor = Some(crate::e2e::fixture::VisitorSpec {
+            callbacks: BTreeMap::new(),
+        });
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets".into(),
+            ..SnippetConfig::default()
+        };
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "convert".into();
+        let kotlin_android_config =
+            toml::from_str::<crate::core::config::KotlinAndroidConfig>("exclude_functions = [\"visitor\"]")
+                .expect("kotlin_android config with exclude_functions parses");
+        let crate_config = ResolvedCrateConfig {
+            kotlin_android: Some(kotlin_android_config),
+            // Go's visitor snippet renderer bails without a resolvable options type (see
+            // `go::snippet::render_snippet_body`'s "needs an options type for its visitor"
+            // guard) -- this is otherwise unrelated to the exclusion under test, so a bare
+            // `options_type` is enough to let the go control cell render successfully.
+            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
+                options_type: Some("Options".into()),
+                ..Default::default()
+            }],
+            ..ResolvedCrateConfig::default()
+        };
+        let context = SnippetRenderContext {
+            e2e: &e2e,
+            crate_config: &crate_config,
+            type_defs: &[],
+            enums: &[],
+            functions: &[],
+        };
+
+        let report = generate_snippet_report_with_extensions(
+            &[fixture],
+            &["kotlin_android".into(), "go".into()],
+            &snippet_config,
+            &context,
+            &[],
+        )
+        .expect("a visitor-excluded language must not abort the run");
+
+        let kotlin_android_key = SnippetCoverageKey {
+            fixture_id: "extension_owned".into(),
+            language: "kotlin_android".into(),
+        };
+        let go_key = SnippetCoverageKey {
+            fixture_id: "extension_owned".into(),
+            language: "go".into(),
+        };
+        assert_eq!(
+            report.coverage.expected,
+            vec![go_key.clone()],
+            "kotlin_android's `exclude_functions = [\"visitor\"]` must remove the \
+             kotlin_android cell from `expected` while leaving go's untouched: {:?}",
+            report.coverage.expected
+        );
+        assert!(
+            !report.coverage.expected.contains(&kotlin_android_key),
+            "the visitor-excluded cell must not be expected for kotlin_android: {:?}",
+            report.coverage.expected
+        );
+        assert_eq!(report.coverage.generated, vec![go_key]);
+        assert!(
+            report.coverage.missing.is_empty(),
+            "a visitor-excluded cell is not a coverage gap -- it must never have been expected \
+             in the first place: {:?}",
+            report.coverage.missing
+        );
     }
 
     #[test]
