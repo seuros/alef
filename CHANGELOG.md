@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Zig snippets stop rebinding a discarded value that is not a call.** The generator rewrites a
+  statement-opening `_ = <call>(...)` into `const result = ...` so the snippet can show its result,
+  but the rule matched any `_ = ` discard. Every generated visitor callback opens by discarding its
+  unused typed parameters (`_ = _ctx;`, `_ = _user_data;`, `_ = out_custom;`), and those lines
+  precede any real call in a visitor body, so the first one became `const result = _ctx;` -- a bound
+  value nothing reads, which Zig rejects outright as an unused local constant. A call discard is
+  syntactically distinct from a bare-identifier discard, carrying a parenthesised argument list, and
+  the rule now requires one.
+
 - **Snippet generation honours a language's visitor exclusion, as e2e test generation already did.**
   A per-language `exclude_functions = ["visitor"]` drops the fixture engine's trait-bridge entry point,
   and `e2e::codegen::kotlin_android::project` already fell back to an excluded-bindings placeholder for

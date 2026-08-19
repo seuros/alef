@@ -1484,47 +1484,27 @@ mod error_value_and_error_field_tests {
     }
 }
 
-/// The remainder of a statement that opens by discarding a value, i.e. `_ = <rest>`.
+/// The remainder of a statement that opens by discarding a CALL's return value, i.e.
+/// `_ = <call>(...);`. Returns `None` for a discard that opens the statement but is not a call.
 ///
 /// Anchored at the start of the trimmed statement on purpose: `defer _ = gpa.deinit();` and
 /// `errdefer _ = ...` are discards too, and rebinding one produces `defer const x = ...`, which no
 /// Zig grammar accepts. ~keep
+///
+/// A statement-opening discard is also not always a call: every generated visitor callback
+/// unconditionally discards its unused `_ctx`, `_user_data`, and other typed parameters with
+/// `_ = _ctx;` / `_ = out_custom;`, and those lines appear before any real call in a visitor
+/// snippet's body. Rebinding the first one turns `_ = _ctx;` into `const result = _ctx;` — a
+/// bound value that nothing reads, which Zig 0.16 rejects as an unused local constant. A call
+/// discard is syntactically distinct from a bare-identifier discard: it always carries a
+/// parenthesised argument list, so requiring `(...)` before the closing `;` tells the two apart.
+/// ~keep
 fn discarded_call_statement(line: &str) -> Option<&str> {
-    line.trim_start().strip_prefix("_ = ")
+    let discarded = line.trim_start().strip_prefix("_ = ")?;
+    let is_call = discarded.contains('(') && discarded.trim_end().ends_with(");");
+    is_call.then_some(discarded)
 }
 
 #[cfg(test)]
-mod discard_rebinding_tests {
-    use super::discarded_call_statement;
-
-    /// The defect: applied per line with no guard, the rebinding also matched the allocator
-    /// teardown every Zig snippet emits, turning `defer _ = gpa.deinit();` into
-    /// `defer const result = gpa.deinit();`. That is not Zig, and it failed 54 of one consumer's
-    /// snippets on `expected block or expression`. ~keep
-    #[test]
-    fn a_deferred_discard_is_not_a_rebindable_call_statement() {
-        assert_eq!(discarded_call_statement("    defer _ = gpa.deinit();"), None);
-        assert_eq!(
-            discarded_call_statement("    errdefer _ = allocator.free(buffer);"),
-            None
-        );
-    }
-
-    #[test]
-    fn a_statement_opening_with_a_discard_yields_the_call_it_discards() {
-        assert_eq!(
-            discarded_call_statement("    _ = try htmd.convert(allocator, html, null);"),
-            Some("try htmd.convert(allocator, html, null);")
-        );
-        assert_eq!(
-            discarded_call_statement("_ = htmd.convert(allocator, html, null);"),
-            Some("htmd.convert(allocator, html, null);")
-        );
-    }
-
-    /// A discard appearing mid-statement is not a statement-opening discard and must be left alone.
-    #[test]
-    fn a_discard_that_does_not_open_the_statement_is_not_matched() {
-        assert_eq!(discarded_call_statement("    const pair = .{ _ = 1 };"), None);
-    }
-}
+#[path = "discard_rebinding_tests.rs"]
+mod discard_rebinding_tests;
