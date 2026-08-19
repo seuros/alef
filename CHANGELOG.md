@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The serde-default-disagreement warning no longer fires when both defaults are the same
+  zero value spelled differently.** A bare `#[serde(default)]` always folds to
+  `DefaultValue::Empty`, but a hand-written `impl Default` that spells the zero out explicitly
+  (`count: 0`, `enabled: false`, `label: String::new()`, `handle: None`) folds to a literal
+  instead. `warn_on_default_disagreement` compared the two spellings structurally and reported a
+  divergence that did not exist; it now treats `Empty` and its type-zero literal counterparts as
+  equal before deciding whether to warn.
+
 - **The disk-scan orphan report no longer asserts a file "was not emitted".** What it can actually
   observe is that a path is absent from the run's recorded output, and the check immediately above
   it warns that some backends record nothing beyond their Rust crate path — so non-emission is one
