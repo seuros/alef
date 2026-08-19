@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.0] - 2026-08-19
+
 ### Fixed
+
+- **e2e suites no longer contain error assertions that can never pass.** A fixture's declared
+  `error` value is either a message substring or an error variant name, and every backend rendered
+  the same message-or-type-name disjunction for both. That serves the first convention and is
+  structurally unsatisfiable for the second: the message is lowercase `#[error(...)]` prose that
+  never contains the PascalCase identifier, and the "type name" side is a generic exception class
+  the binding never differentiates per variant. Measured across two consumer repos this was the
+  single largest class of e2e failure alef generates — Go 47/162, Java 47/162, PHP 47/162, Dart
+  47/127, C# 45/162, Ruby 45/47, C 44/162, Zig 45. `declared_error_variant::classify` is now the
+  one place that decides substantiability: Go, Java and Zig can still assert a variant that
+  carries an `error_code`, and the backends that cannot emit a registered skip instead. Nothing is
+  matched fuzzily to force the type-name side to work, and unaudited backends keep their existing
+  behaviour.
 
 - **The subprocess-polling regression test no longer fails under load.** It asserted that 20
   trivial commands finish in under *half* the 1s the old unconditional 50ms-per-subprocess sleep
@@ -54,18 +69,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   struct — must use the identity name everywhere. `codegen::naming::node_type_name` is now the one
   place that decides this and the parameter is gone, so the declaration site and the reference
   site cannot drift.
-
-### Added
-
-- **`alef build` warns when a binding crate never declared a feature its generated source
-  references.** `scaffold` computes each binding crate's `[features]` table once and `alef build`
-  never revisits it, so a cfg-gated symbol added to the core crate after the last scaffold run
-  resolves against a feature the binding crate does not declare — false, unconditionally. For Ruby
-  that now surfaces as a build error; for Elixir nothing surfaces at all, because `#[rustler::nif]`
-  gates a definition and its registration atomically, so the NIF is simply absent while the
-  generated facade still advertises it. `warn_on_undeclared_binding_cfg_features` reads the
-  scaffolded `Cargo.toml` back off disk and names the missing features. A warning rather than a
-  hard error or an automatic rewrite: `Cargo.toml` is scaffold-owned and written once by design.
 
 - **Two Dart e2e regression tests no longer assert a naming convention alef deliberately
   dropped.** `b5808da3c` stopped emitting leading-underscore Dart locals — Dart privacy is
@@ -122,6 +125,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   doc-snippet path (`e2e::codegen::presentation::resolve`) is wired to the same IR data, so a
   snippet showing an optional field renders the same unwrap an assertion on it would.
 
+### Added
+
+- **`alef build` warns when a binding crate never declared a feature its generated source
+  references.** `scaffold` computes each binding crate's `[features]` table once and `alef build`
+  never revisits it, so a cfg-gated symbol added to the core crate after the last scaffold run
+  resolves against a feature the binding crate does not declare — false, unconditionally. For Ruby
+  that now surfaces as a build error; for Elixir nothing surfaces at all, because `#[rustler::nif]`
+  gates a definition and its registration atomically, so the NIF is simply absent while the
+  generated facade still advertises it. `warn_on_undeclared_binding_cfg_features` reads the
+  scaffolded `Cargo.toml` back off disk and names the missing features. A warning rather than a
+  hard error or an automatic rewrite: `Cargo.toml` is scaffold-owned and written once by design.
 
 ## [0.61.1] - 2026-08-19
 
