@@ -18,9 +18,6 @@ pub(super) fn validate_extracted_api(api: &ApiSurface, config: &ResolvedCrateCon
         .collect();
     let validation_report =
         crate::core::validation::validate_api_surface_with_bridged_traits(api, &bridged_trait_names);
-    for diagnostic in validation_report.warnings() {
-        tracing::warn!("{diagnostic}");
-    }
     let (suppressed, fatal): (Vec<_>, Vec<_>) = validation_report.errors().partition(|d| {
         !crate::core::validation::is_critical_unsuppressible(d.code)
             && config

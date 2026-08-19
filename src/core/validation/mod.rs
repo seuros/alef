@@ -169,12 +169,6 @@ impl ValidationReport {
             .filter(|diagnostic| diagnostic.severity == ValidationSeverity::Error)
     }
 
-    pub fn warnings(&self) -> impl Iterator<Item = &ValidationDiagnostic> {
-        self.diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.severity == ValidationSeverity::Warning)
-    }
-
     pub fn format_errors(&self) -> String {
         let mut message = String::from("validation failed");
         for diagnostic in self.errors() {

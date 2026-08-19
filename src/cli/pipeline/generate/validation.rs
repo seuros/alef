@@ -16,9 +16,6 @@ pub(super) fn validate_generation_api<'a>(
     let validation_report =
         crate::core::validation::validate_api_surface_with_bridged_traits(api, &bridged_trait_names);
     let language_diagnostics = language_backend_readiness_diagnostics(api, config, languages);
-    for diagnostic in validation_report.warnings() {
-        tracing::warn!("{diagnostic}");
-    }
     for diagnostic in language_diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.severity == ValidationSeverity::Warning)

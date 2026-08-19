@@ -283,18 +283,9 @@ pub fn check_signature_breakage(language: Language, crate_name: &str, base_dir: 
 
     let changes = detect_breaking_changes(&previous, current);
     let extensions = scan_extensions_for(language);
-    if !changes.is_empty() && extensions.is_empty() {
-        tracing::warn!(
-            language = %language,
-            changed = changes.len(),
-            "detected breaking signature change(s) for this language, but no consumer-file scan is \
-             wired up to attribute hand-maintained callers yet -- see `scan_extensions_for`"
-        );
-    } else {
-        for change in &changes {
-            let callers = find_hand_maintained_callers(base_dir, &change.symbol, extensions);
-            report_breaking_change(language, change, &callers);
-        }
+    for change in &changes {
+        let callers = find_hand_maintained_callers(base_dir, &change.symbol, extensions);
+        report_breaking_change(language, change, &callers);
     }
 
     if let Err(error) = write_signatures(crate_name, &stage, current) {
