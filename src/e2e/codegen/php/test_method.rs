@@ -77,18 +77,26 @@ fn render_php_refusal(markers: &str, refusal: &InertExample) -> String {
 /// only ever inspects the thrown exception's message, so matching the
 /// message-or-class-name disjunction other backends use (see
 /// `declared_error_value`'s doc comment) requires a manual try/catch instead
-/// of `expectExceptionMessageMatches`.
-fn render_error_test_body(setup_lines: &[String], call_expr: &str, declared_error: Option<&str>) -> String {
+/// of `expectExceptionMessageMatches`. Which of those two conventions applies, and whether PHP
+/// can ever satisfy the second, is decided once by `declared_error_variant::classify` — see its
+/// doc for why PHP lands on "not yet" today (one exception class for the whole extension).
+fn render_error_test_body(
+    setup_lines: &[String],
+    call_expr: &str,
+    fixture: &Fixture,
+    errors: &[crate::core::ir::ErrorDef],
+) -> String {
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
     let mut out = String::new();
-    match declared_error {
-        Some(value) => {
-            let pattern = php_pcre_literal(value);
+    match classify("php", fixture, errors) {
+        DeclaredErrorAssertion::Assert(declared) => {
+            let pattern = php_pcre_literal(declared);
             // The failure message is its own single-quoted PHP string literal, separate
             // from `pattern` (itself already a quoted `'/.../'` literal). Interpolating
             // `pattern` directly here would nest one single-quoted string inside another
             // and produce invalid PHP — escape the raw declared value for this string
             // instead of reusing the pre-quoted PCRE literal.
-            let message_value = escape_php_single(value);
+            let message_value = escape_php_single(declared);
             out.push_str("        try {\n");
             for line in setup_lines {
                 let _ = writeln!(out, "            {line}");
@@ -102,7 +110,21 @@ fn render_error_test_body(setup_lines: &[String], call_expr: &str, declared_erro
             );
             out.push_str("        }");
         }
-        None => {
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            // ~keep The call must still run inside a try/catch so the test still fails loudly if
+            // it does NOT throw — only the unsatisfiable message-or-class-name comparison is
+            // replaced, not the "the call must fail" half of the coverage.
+            out.push_str("        try {\n");
+            for line in setup_lines {
+                let _ = writeln!(out, "            {line}");
+            }
+            let _ = writeln!(out, "            {call_expr};");
+            out.push_str("            $this->fail('Expected an exception to be thrown');\n");
+            out.push_str("        } catch (\\Exception $e) {\n");
+            let _ = writeln!(out, "{}", skip_line("            ", "//", variant, &fixture.id, "php"));
+            out.push_str("        }");
+        }
+        DeclaredErrorAssertion::Undeclared => {
             out.push_str("        $this->expectException(\\Exception::class);\n");
             for line in setup_lines {
                 let _ = writeln!(out, "        {line}");
@@ -130,6 +152,7 @@ pub(super) fn render_test_method(
     adapters: &[crate::core::config::extras::AdapterConfig],
     php_lang_rename_all: &str,
     config: &ResolvedCrateConfig,
+    errors: &[crate::core::ir::ErrorDef],
     trait_bridge_imports: &mut Vec<String>,
 ) {
     // Resolve per-fixture call config: supports named calls via fixture.call field.
@@ -455,11 +478,7 @@ pub(super) fn render_test_method(
     }
 
     let error_test_body = if expects_error {
-        let mut body = render_error_test_body(
-            &setup_lines,
-            &call_expr,
-            crate::e2e::codegen::declared_error_value(fixture),
-        );
+        let mut body = render_error_test_body(&setup_lines, &call_expr, fixture, errors);
         // ~keep `render_error_test_body` ends without a trailing newline on the `None` arm, so the
         // markers have to open their own line rather than being appended to the last statement.
         let markers = crate::e2e::codegen::error_path_assertions::render(fixture, "        // ", "php");
@@ -614,13 +633,51 @@ mod vacuous_assertion_fallback_tests {
 #[cfg(test)]
 mod error_test_body_tests {
     use super::render_error_test_body;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn coded_error_def(variant_name: &str) -> ErrorDef {
+        ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: variant_name.to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
 
     #[test]
     fn no_declared_value_is_byte_identical_to_expect_exception() {
+        let fixture = Fixture {
+            id: "no_error".to_string(),
+            ..Fixture::default()
+        };
         let body = render_error_test_body(
             &["$options = new Options();".to_string()],
             "Client::create($options)",
-            None,
+            &fixture,
+            &[],
         );
         assert_eq!(
             body,
@@ -628,9 +685,12 @@ mod error_test_body_tests {
         );
     }
 
+    /// With no `errors` IR supplied, a value cannot be recognised as a known variant name, so it
+    /// renders exactly like a message-style value always did before this fix.
     #[test]
     fn declared_value_adds_message_or_class_name_check() {
-        let body = render_error_test_body(&[], "Client::create()", Some("BadRequest"));
+        let fixture = fixture_with_declared_error("BadRequest");
+        let body = render_error_test_body(&[], "Client::create()", &fixture, &[]);
         assert_eq!(
             body,
             "        try {\n            Client::create();\n            $this->fail('Expected an exception to be thrown');\n        } catch (\\Exception $e) {\n            $this->assertTrue(preg_match('/BadRequest/', $e->getMessage()) === 1 || preg_match('/BadRequest/', get_class($e)) === 1, 'expected exception message or class name to match BadRequest');\n        }"
@@ -639,7 +699,8 @@ mod error_test_body_tests {
 
     #[test]
     fn declared_value_with_regex_metacharacters_is_escaped() {
-        let body = render_error_test_body(&[], "Client::create()", Some("field.name[0]"));
+        let fixture = fixture_with_declared_error("field.name[0]");
+        let body = render_error_test_body(&[], "Client::create()", &fixture, &[]);
         assert!(
             body.contains("'/field\\\\.name\\\\[0\\\\]/'"),
             "expected escaped PCRE literal, got: {body}"
@@ -654,7 +715,8 @@ mod error_test_body_tests {
     /// (string-content assertions alone did not catch this).
     #[test]
     fn declared_value_message_argument_is_a_well_formed_php_single_quoted_literal() {
-        let body = render_error_test_body(&[], "Client::create()", Some("max_depth"));
+        let fixture = fixture_with_declared_error("max_depth");
+        let body = render_error_test_body(&[], "Client::create()", &fixture, &[]);
         let message_start = body
             .find("'expected exception message or class name to match")
             .expect("message argument must be present");
@@ -684,10 +746,29 @@ mod error_test_body_tests {
 
     #[test]
     fn declared_value_with_single_quote_is_escaped_in_message() {
-        let body = render_error_test_body(&[], "Client::create()", Some("it's bad"));
+        let fixture = fixture_with_declared_error("it's bad");
+        let body = render_error_test_body(&[], "Client::create()", &fixture, &[]);
         assert!(
             body.contains("match it\\'s bad')"),
             "expected escaped single quote in message, got: {body}"
+        );
+    }
+
+    /// The defect this fix closes: a declared value that names a real `ErrorVariant` — PHP's
+    /// generated binding has exactly one exception class for the whole extension — must render
+    /// the registered skip, not a `preg_match` comparison that can never pass.
+    #[test]
+    fn declared_value_naming_a_known_variant_renders_the_registered_skip_instead_of_an_assertion() {
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = vec![coded_error_def("Authentication")];
+        let body = render_error_test_body(&[], "Client::create()", &fixture, &errors);
+        assert_eq!(
+            body,
+            "        try {\n            Client::create();\n            $this->fail('Expected an exception to be thrown');\n        } catch (\\Exception $e) {\n            // skipped: declared error variant 'Authentication' not yet preserved as a distinct identity by this backend's generator\n        }"
+        );
+        assert!(
+            !body.contains("assertTrue(preg_match"),
+            "must not render an assertion that can never pass, got: {body}"
         );
     }
 }
@@ -750,6 +831,7 @@ mod visitor_options_type_tests {
             &[],
             "",
             &config,
+            &[],
             &mut trait_bridge_imports,
         );
     }
@@ -793,6 +875,7 @@ mod visitor_options_type_tests {
             &[],
             "",
             &config,
+            &[],
             &mut trait_bridge_imports,
         );
         out
@@ -896,6 +979,7 @@ mod inert_example_refusal_tests {
             &[],
             "",
             &config,
+            &[],
             &mut trait_bridge_imports,
         );
         out

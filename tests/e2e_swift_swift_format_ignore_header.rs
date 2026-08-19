@@ -83,7 +83,7 @@ fn render_files() -> Vec<alef::core::backend::GeneratedFile> {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![make_group("smoke_case")];
     SwiftE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds")
 }
 

@@ -1,6 +1,6 @@
 //! Gleam fixture test-case renderer.
 
-use crate::e2e::codegen::declared_error_value;
+use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
 use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{escape_gleam, sanitize_ident};
@@ -18,19 +18,30 @@ use super::assertions::render_assertion;
 /// ~keep `string.inspect/1` renders any Gleam value as text (a String reason's quoted
 /// content, or a custom error type's constructor name and fields), so a single substring
 /// check against it enforces the same message-OR-type disjunction the other language
-/// backends apply explicitly — Gleam bindings return `Result(_, String)` for some crates
-/// and a custom error enum for others, and this works for both without per-crate typing.
-fn emit_error_assertion(out: &mut String, call_expr: &str, declared_value: Option<&str>) {
-    if let Some(value) = declared_value {
-        let escaped = escape_gleam(value);
-        let _ = writeln!(out, "  let __result = {call_expr}");
-        let _ = writeln!(out, "  let assert Error(__reason) = __result");
-        let _ = writeln!(
-            out,
-            "  should.be_true(string.contains(string.inspect(__reason), \"{escaped}\"))"
-        );
-    } else {
-        let _ = writeln!(out, "  {call_expr} |> should.be_error()");
+/// backends apply explicitly — for the fixtures `declared_error_variant::classify` recognises
+/// as message-style. A value naming a real `ErrorVariant` renders the registered skip instead:
+/// every Gleam binding rides on the same Rustler NIF glue that stringifies the reason before
+/// `string.inspect/1` ever sees it, so a nominally-typed external signature never actually
+/// carries a constructor name across the boundary.
+fn emit_error_assertion(out: &mut String, call_expr: &str, fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) {
+    match classify("gleam", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => {
+            let _ = writeln!(out, "  {call_expr} |> should.be_error()");
+        }
+        DeclaredErrorAssertion::Assert(value) => {
+            let escaped = escape_gleam(value);
+            let _ = writeln!(out, "  let __result = {call_expr}");
+            let _ = writeln!(out, "  let assert Error(__reason) = __result");
+            let _ = writeln!(
+                out,
+                "  should.be_true(string.contains(string.inspect(__reason), \"{escaped}\"))"
+            );
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(out, "  let __result = {call_expr}");
+            let _ = writeln!(out, "  let assert Error(_) = __result");
+            let _ = writeln!(out, "  {}", skip_line("", "//", variant, &fixture.id, "gleam"));
+        }
     }
     let _ = writeln!(out, "}}");
 }
@@ -48,6 +59,7 @@ pub(super) fn render_test_case(
     json_object_wrapper: Option<&str>,
     ir: crate::e2e::codegen::call_ir::CallIr<'_>,
     enums: &[crate::core::ir::EnumDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     let call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -172,7 +184,7 @@ pub(super) fn render_test_case(
         };
         if expects_error {
             let call_expr = format!("{module_path}.{function_name}({full_args})");
-            emit_error_assertion(out, &call_expr, declared_error_value(fixture));
+            emit_error_assertion(out, &call_expr, fixture, errors);
             return;
         }
         let _ = writeln!(out, "  let {result_var} = {module_path}.{function_name}({full_args})");
@@ -180,7 +192,7 @@ pub(super) fn render_test_case(
     } else {
         if expects_error {
             let call_expr = format!("{module_path}.{function_name}({args_str})");
-            emit_error_assertion(out, &call_expr, declared_error_value(fixture));
+            emit_error_assertion(out, &call_expr, fixture, errors);
             return;
         }
         let _ = writeln!(out, "  let {result_var} = {module_path}.{function_name}({args_str})");

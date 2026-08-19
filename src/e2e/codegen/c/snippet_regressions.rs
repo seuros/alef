@@ -642,6 +642,7 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
         &[],
         &streaming_client_config(),
         &[],
+        &[],
         false,
         &FieldConfigSources {
             result_fields: EffectiveConfigSource::Global,
@@ -685,6 +686,7 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
         None,
         &[],
         &bytes_client_config(),
+        &[],
         &[],
         false,
         &FieldConfigSources {

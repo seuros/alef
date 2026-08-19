@@ -202,6 +202,7 @@ impl E2eCodegen for CCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -350,6 +351,7 @@ impl E2eCodegen for CCodegen {
                 config,
                 type_defs,
                 enums,
+                errors,
                 ir,
             )?;
             files.push(GeneratedFile {
@@ -1084,6 +1086,7 @@ fn render_test_file(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    errors: &[crate::core::ir::ErrorDef],
     ir: CallIr<'_>,
 ) -> anyhow::Result<String> {
     let mut out = String::new();
@@ -1195,6 +1198,7 @@ fn render_test_file(
             &call_info.extra_args,
             config,
             type_defs,
+            errors,
             false,
             &config_sources,
         )?;
@@ -1975,6 +1979,7 @@ mod snippet_tests {
                 &[],
                 &config,
                 &[],
+                &[],
                 false,
                 &FieldConfigSources {
                     result_fields: EffectiveConfigSource::Global,
@@ -2045,6 +2050,7 @@ mod snippet_tests {
                 &[],
                 &config,
                 &[],
+                &[],
                 false,
                 &FieldConfigSources {
                     result_fields: EffectiveConfigSource::Global,
@@ -2108,6 +2114,7 @@ mod snippet_tests {
             None,
             &[],
             &config,
+            &[],
             &[],
             false,
             &FieldConfigSources {
@@ -2785,6 +2792,7 @@ mod result_type_resolution_tests {
             "c",
             &resolver,
             &config,
+            &[],
             &[],
             &[],
             CallIr {

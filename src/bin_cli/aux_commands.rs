@@ -345,6 +345,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.types,
                             &api.enums,
                             &api.functions,
+                            &api.errors,
                         )?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
@@ -575,6 +576,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.types,
                             &api.enums,
                             &api.functions,
+                            &api.errors,
                         )?;
                         let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
                         let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);

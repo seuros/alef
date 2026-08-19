@@ -492,6 +492,7 @@ fn test_file_renders_env_vars_in_class_setup() {
         false,
         &[],
         &[],
+        &[],
     );
 
     // Verify env vars appear in sorted order: APPLE, BANANA, ZEBRA.
@@ -543,6 +544,7 @@ fn test_file_renders_no_env_block_when_env_empty() {
         false,
         &[],
         &[],
+        &[],
     );
 
     // No env vars means no setenv calls.
@@ -590,6 +592,7 @@ fn test_file_error_assertion_with_declared_value_checks_message_and_type() {
         &ResolvedCrateConfig::default(),
         &[],
         false,
+        &[],
         &[],
         &[],
     );
@@ -650,6 +653,7 @@ fn test_file_error_assertion_without_declared_value_is_byte_identical() {
         false,
         &[],
         &[],
+        &[],
     );
 
     assert!(!output.contains("String(describing: error)"));
@@ -694,6 +698,7 @@ fn test_file_error_assertion_escapes_declared_value_for_swift_string_literal() {
         &ResolvedCrateConfig::default(),
         &[],
         false,
+        &[],
         &[],
         &[],
     );
@@ -781,6 +786,7 @@ fn test_file_does_not_emit_existing_binding_when_no_http_fixtures() {
         false, // has_http_fixtures = false
         &[],
         &[],
+        &[],
     );
 
     // The `let _existing` binding should NOT be present when there are no HTTP fixtures.
@@ -815,6 +821,7 @@ fn test_file_emits_existing_binding_when_has_http_fixtures() {
         &ResolvedCrateConfig::default(),
         &[],
         true, // has_http_fixtures = true
+        &[],
         &[],
         &[],
     );
@@ -861,6 +868,7 @@ fn test_file_readiness_probe_requires_actual_http_response() {
         &ResolvedCrateConfig::default(),
         &[],
         true, // has_http_fixtures = true
+        &[],
         &[],
         &[],
     );
@@ -1135,6 +1143,7 @@ fn swift_equals_on_an_error_field_is_named_instead_of_dropped() {
         false,
         &[],
         &[],
+        &[],
     );
 
     // Positive first: the error block really rendered.
@@ -1190,6 +1199,7 @@ fn swift_a_lone_error_assertion_renders_no_marker() {
         &ResolvedCrateConfig::default(),
         &[],
         false,
+        &[],
         &[],
         &[],
     );

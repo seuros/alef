@@ -64,7 +64,7 @@ fn test_java_pom_native_lib_fallback_logic() {
     }];
 
     let generated = JavaCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generate failed");
 
     let pom_file = generated

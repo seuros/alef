@@ -24,7 +24,7 @@ fn render_with_type_defs(toml_src: &str, type_defs: Vec<TypeDef>, fixture: Fixtu
         fixtures: vec![fixture],
     }];
     let files = PhpCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[], &[])
         .expect("PHP codegen succeeds");
     files
         .iter()

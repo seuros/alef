@@ -196,7 +196,7 @@ fn render(fixture: Fixture) -> String {
     }];
     let type_defs = process_result_ir();
     let files = SwiftE2eCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

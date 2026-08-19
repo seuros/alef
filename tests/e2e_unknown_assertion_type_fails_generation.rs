@@ -103,7 +103,7 @@ fn fixture_group_with_assertion_type(assertion_type: &str) -> FixtureGroup {
 fn generate(codegen: &dyn E2eCodegen, assertion_type: &str) -> anyhow::Result<Vec<alef::GeneratedFile>> {
     let (resolved, e2e) = resolve();
     let groups = vec![fixture_group_with_assertion_type(assertion_type)];
-    codegen.generate_gated(&groups, &e2e, &resolved, &[], &[], &[])
+    codegen.generate_gated(&groups, &e2e, &resolved, &[], &[], &[], &[])
 }
 
 #[test]

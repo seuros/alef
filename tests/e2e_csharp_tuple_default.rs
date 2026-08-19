@@ -97,7 +97,7 @@ fn csharp_tuple_default_initializes_correctly() {
     let groups = vec![make_group()];
 
     let generated = CSharpCodegen
-        .generate(&groups, &e2e, &_resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &_resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     assert!(!generated.is_empty(), "Should generate C# test code");

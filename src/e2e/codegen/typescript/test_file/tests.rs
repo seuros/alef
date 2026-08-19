@@ -402,6 +402,7 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
         &enums,
         "Wasm",
         &config,
+        &[],
     );
 
     assert!(
@@ -775,6 +776,7 @@ fn http_only_test_file_with_json_body_emits_decompress_helper() {
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(
@@ -1037,6 +1039,10 @@ fn error_fixture(id: &str, error_value: Option<serde_json::Value>) -> Fixture {
 }
 
 fn render_error_fixture(fixture: &Fixture) -> String {
+    render_error_fixture_with_errors(fixture, &[])
+}
+
+fn render_error_fixture_with_errors(fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) -> String {
     let mut e2e_config = E2eConfig::default();
     e2e_config.call.function = "doThing".to_string();
     let config = crate::core::config::ResolvedCrateConfig::default();
@@ -1057,6 +1063,7 @@ fn render_error_fixture(fixture: &Fixture) -> String {
         &[],
         "",
         &config,
+        errors,
     )
 }
 
@@ -1103,6 +1110,48 @@ fn error_assertion_value_with_regex_metacharacters_is_escaped() {
         output.contains(r"return /field\(a\.b\)\+/.test(_message) || /field\(a\.b\)\+/.test(_name);"),
         "regex metacharacters in the declared value must be escaped so the pattern \
          matches the value literally rather than as a regex;\n{output}"
+    );
+}
+
+/// The defect this fix closes: a declared value naming a real `ErrorVariant` — every NAPI
+/// throw site is `napi::Error::new(Status::GenericFailure, e.to_string())`, generic status and
+/// name, message only — must render the registered skip, not a `toSatisfy` matcher that can
+/// never pass.
+#[test]
+fn error_assertion_with_a_known_variant_node_cannot_substantiate_is_skipped() {
+    let fixture = error_fixture("thing_fails_with_auth", Some(serde_json::json!("Authentication")));
+    let errors = vec![crate::core::ir::ErrorDef {
+        name: "ApiError".to_string(),
+        rust_path: "lib::ApiError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![crate::core::ir::ErrorVariant {
+            name: "Authentication".to_string(),
+            error_code: Some(100),
+            is_unit: true,
+            ..crate::core::ir::ErrorVariant::default()
+        }],
+        doc: String::new(),
+        methods: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }];
+    let output = render_error_fixture_with_errors(&fixture, &errors);
+
+    assert!(
+        output.contains("\t\t}).rejects.toThrow();\n"),
+        "the call must still be proven to fail (the unconditional toThrow form), got:\n{output}"
+    );
+    assert!(
+        !output.contains("toSatisfy"),
+        "must not render a matcher that can never pass, got:\n{output}"
+    );
+    assert!(
+        output.contains(
+            "\t\t// skipped: declared error variant 'Authentication' not yet preserved as a distinct identity by \
+             this backend's generator"
+        ),
+        "got:\n{output}"
     );
 }
 
@@ -1172,6 +1221,7 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(
@@ -1232,6 +1282,7 @@ fn dropped_field_assertion_is_refused_with_an_expectation_that_fails() {
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(
@@ -1292,6 +1343,7 @@ fn zero_declared_assertions_are_left_untouched() {
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(
@@ -1454,6 +1506,7 @@ fn a_resolvable_field_assertion_is_published_unchanged_and_never_refused() {
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(
@@ -1513,6 +1566,7 @@ fn a_streaming_example_whose_every_assertion_skips_is_refused_as_a_skipped_test(
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(
@@ -1578,6 +1632,7 @@ fn acknowledged_debt_on_a_non_streaming_call_keeps_its_failable_fallback() {
         &[],
         "",
         &config,
+        &[],
     );
 
     assert!(

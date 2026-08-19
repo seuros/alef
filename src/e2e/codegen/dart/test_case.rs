@@ -72,16 +72,36 @@ fn ir_typed_dart_expression(
 /// message-or-type disjunction other backends use (`declared_error_value`'s contract):
 /// config-validation fixtures name text that only appears in the message, API-error
 /// fixtures name a type prefix that only appears in the runtime type. With no declared
-/// value this returns the original `throwsA(anything)` unchanged.
-fn dart_error_matcher(declared_error: Option<&str>) -> String {
-    match declared_error {
-        Some(expected) => {
-            let escaped = escape_dart(expected);
+/// value this returns the original `throwsA(anything)` unchanged. Which of those two
+/// conventions applies, and whether Dart can ever satisfy the second, is decided once by
+/// `declared_error_variant::classify` — see its doc for why Dart lands on "never" today.
+///
+/// ~keep When the declared value names a real variant Dart cannot substantiate, this still
+/// returns a matcher expression (a Dart matcher is spliced inline into a statement, with no
+/// place of its own for a comment) — `throwsA(anything)`, same as the undeclared case, since
+/// that is still an honest "the call must fail" check. The registered skip is written into
+/// `out` as its own comment line immediately above the statement that consumes the matcher, so
+/// the skip is visible in the generated file AND counted on the shared ledger, rather than being
+/// silently downgraded to `throwsA(anything)` with no trace.
+fn dart_error_matcher(
+    out: &mut String,
+    indent: &str,
+    fixture: &Fixture,
+    errors: &[crate::core::ir::ErrorDef],
+) -> String {
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
+    match classify("dart", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => "throwsA(anything)".to_string(),
+        DeclaredErrorAssertion::Assert(declared) => {
+            let escaped = escape_dart(declared);
             format!(
                 "throwsA(predicate((e) => e.toString().contains('{escaped}') || e.runtimeType.toString().contains('{escaped}')))"
             )
         }
-        None => "throwsA(anything)".to_string(),
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(out, "{}", skip_line(indent, "//", variant, &fixture.id, "dart"));
+            "throwsA(anything)".to_string()
+        }
     }
 }
 
@@ -107,6 +127,7 @@ pub(super) struct DartTestCaseContext<'a> {
     /// `ApiSurface::functions`, supplied only by callers that have opted into type-aware
     /// argument lowering. An empty slice keeps the recipe's `IrAbsent` behaviour. ~keep
     pub(super) functions: &'a [crate::core::ir::FunctionDef],
+    pub(super) errors: &'a [crate::core::ir::ErrorDef],
     pub(super) native_typed_dtos: bool,
     /// ~keep Standalone doc snippets have no mock server behind them, so `_fixtureUrl`
     /// — a helper only the full e2e test-file emitter defines — must never be
@@ -126,6 +147,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         type_defs,
         enums,
         functions,
+        errors,
         native_typed_dtos,
         is_snippet,
     } = context;
@@ -209,7 +231,6 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     let _is_async = call_overrides.and_then(|o| o.r#async).unwrap_or(call_config.r#async);
 
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
-    let declared_error = crate::e2e::codegen::declared_error_value(fixture);
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call_config.streaming_enabled());
     // `result_is_simple = true` means the dart return is a scalar/bytes value
@@ -1066,7 +1087,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         } else {
             let _ = writeln!(out, "      return {receiver}.{function_name}({args_str});");
         }
-        let matcher = dart_error_matcher(declared_error);
+        let matcher = dart_error_matcher(out, "      ", fixture, errors);
         let _ = writeln!(out, "    }}(), {matcher});");
     } else if expects_error {
         // No setup lines, direct call — same throwsA(anything) rationale as above.
@@ -1075,7 +1096,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 let _ = writeln!(out, "    {line}");
             }
         }
-        let matcher = dart_error_matcher(declared_error);
+        let matcher = dart_error_matcher(out, "    ", fixture, errors);
         if is_streaming {
             let _ = writeln!(
                 out,
@@ -1191,6 +1212,88 @@ mod vacuous_assertion_fallback_tests {
         assert!(
             has_real_dart_assertion(body),
             "a real expect(...) line must count as asserting"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dart_error_matcher_tests {
+    use super::dart_error_matcher;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn coded_error_def(variant_name: &str) -> ErrorDef {
+        ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: variant_name.to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    #[test]
+    fn no_declared_value_renders_throws_anything_with_no_comment() {
+        let fixture = Fixture {
+            id: "no_error".to_string(),
+            ..Fixture::default()
+        };
+        let mut out = String::new();
+        let matcher = dart_error_matcher(&mut out, "    ", &fixture, &[]);
+        assert_eq!(matcher, "throwsA(anything)");
+        assert_eq!(out, "", "no declared value must leave the output buffer untouched");
+    }
+
+    /// With no `errors` IR supplied, a value cannot be recognised as a known variant name, so it
+    /// renders exactly like a message-style value always did before this fix.
+    #[test]
+    fn message_style_value_renders_the_message_or_type_predicate() {
+        let fixture = fixture_with_declared_error("BadRequest");
+        let mut out = String::new();
+        let matcher = dart_error_matcher(&mut out, "    ", &fixture, &[]);
+        assert_eq!(
+            matcher,
+            "throwsA(predicate((e) => e.toString().contains('BadRequest') || e.runtimeType.toString().contains('BadRequest')))"
+        );
+        assert_eq!(out, "");
+    }
+
+    /// The defect this fix closes: a declared value that names a real `ErrorVariant` —
+    /// flutter_rust_bridge always decodes the thrown value as a raw `String`, never a typed
+    /// exception hierarchy — must render `throwsA(anything)` (still an honest "the call must
+    /// fail" check) plus a registered skip comment, not a predicate that can never match.
+    #[test]
+    fn declared_value_naming_a_known_variant_falls_back_to_throws_anything_and_records_a_skip() {
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = vec![coded_error_def("Authentication")];
+        let mut out = String::new();
+        let matcher = dart_error_matcher(&mut out, "    ", &fixture, &errors);
+        assert_eq!(matcher, "throwsA(anything)");
+        assert_eq!(
+            out,
+            "    // skipped: declared error variant 'Authentication' not substantiated by this backend's generated \
+             error type\n"
         );
     }
 }

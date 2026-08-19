@@ -94,7 +94,7 @@ fn group_with(assertions: Vec<Assertion>) -> Vec<FixtureGroup> {
 fn method_body<C: E2eCodegen>(codegen: &C, groups: &[FixtureGroup], start_marker: &str, end_marker: &str) -> String {
     let (e2e, resolved) = build_config();
     let files = codegen
-        .generate(groups, &e2e, &resolved, &[], &[], &[])
+        .generate(groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let paths: Vec<String> = files.iter().map(|f| f.path.display().to_string()).collect();
     let (content, start) = files

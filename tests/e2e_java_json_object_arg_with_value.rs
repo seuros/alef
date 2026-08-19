@@ -114,7 +114,7 @@ fn render_java_test() -> String {
         fixtures: vec![make_extract_fixture()],
     }];
     let files = JavaCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

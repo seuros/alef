@@ -111,7 +111,7 @@ fn render_project(generator: &dyn E2eCodegen, result_var_line: &str) -> Rendered
         category: "widgets".to_string(),
         fixtures: vec![probe_fixture()],
     }];
-    match generator.generate(&groups, &e2e, &resolved, &[], &[], &[]) {
+    match generator.generate(&groups, &e2e, &resolved, &[], &[], &[], &[]) {
         Ok(files) => Rendered::Emitted(
             files
                 .iter()

@@ -605,6 +605,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.types,
                             &api.enums,
                             &api.functions,
+                            &api.errors,
                         )?;
                         let e2e_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         refusals.absorb_refusals(&e2e_report);
@@ -679,6 +680,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.types,
                             &api.enums,
                             &api.functions,
+                            &api.errors,
                         )?;
                         let test_apps_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         refusals.absorb_refusals(&test_apps_report);

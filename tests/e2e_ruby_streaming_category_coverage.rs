@@ -93,7 +93,7 @@ fn spec_file(files: &[alef::core::backend::GeneratedFile]) -> Option<String> {
 fn a_streaming_category_is_emitted_even_when_no_assertion_is_field_usable() {
     let (e2e, resolved) = build_config(true);
     let files = RubyCodegen
-        .generate(&assertionless_fixture_group_vec(), &e2e, &resolved, &[], &[], &[])
+        .generate(&assertionless_fixture_group_vec(), &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     let body = spec_file(&files).expect("stream_spec.rb must be emitted for a streaming category");
@@ -114,7 +114,7 @@ fn a_streaming_category_is_emitted_even_when_no_assertion_is_field_usable() {
 fn a_non_streaming_category_with_nothing_renderable_is_still_dropped() {
     let (e2e, resolved) = build_config(false);
     let files = RubyCodegen
-        .generate(&assertionless_fixture_group_vec(), &e2e, &resolved, &[], &[], &[])
+        .generate(&assertionless_fixture_group_vec(), &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     assert!(

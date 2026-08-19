@@ -114,7 +114,7 @@ fn no_assertions_fixture_prefixes_unused_result_var() {
     let (e2e, resolved) = build_config();
     let groups = vec![fixture_with_no_assertions()];
     let files = ElixirCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files
@@ -141,7 +141,7 @@ fn with_assertions_fixture_does_not_prefix_result_var() {
     let (e2e, resolved) = build_config();
     let groups = vec![fixture_with_assertions()];
     let files = ElixirCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files

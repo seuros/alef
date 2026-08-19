@@ -100,7 +100,7 @@ fn generate(groups: &[FixtureGroup], functions: &[FunctionDef], type_defs: &[Typ
     let config: NewAlefConfig = toml::from_str(CONFIG_TOML).expect("config parses");
     let resolved = config.clone().resolve().expect("config resolves").remove(0);
     let e2e = config.crates[0].e2e.clone().expect("e2e config present");
-    let files = CCodegen.generate(groups, &e2e, &resolved, type_defs, &[], functions)?;
+    let files = CCodegen.generate(groups, &e2e, &resolved, type_defs, &[], functions, &[])?;
     let test_file = files
         .iter()
         .find(|file| {

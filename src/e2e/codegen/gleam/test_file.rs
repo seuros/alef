@@ -20,6 +20,7 @@ pub(super) fn render_test_file(
     json_object_wrapper: Option<&str>,
     ir: crate::e2e::codegen::call_ir::CallIr<'_>,
     enums: &[crate::core::ir::EnumDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -163,9 +164,16 @@ pub(super) fn render_test_file(
                     needed_modules.insert("string");
                 }
                 "greater_than" | "less_than" | "greater_than_or_equal" | "less_than_or_equal" => {}
-                "error" if crate::e2e::codegen::declared_error_value(fixture).is_some() => {
-                    // A declared error value emits `string.inspect` + `string.contains` in
-                    // the generated test — see `emit_error_assertion` in test_case.rs.
+                "error"
+                    if matches!(
+                        crate::e2e::codegen::declared_error_variant::classify("gleam", fixture, errors),
+                        crate::e2e::codegen::declared_error_variant::DeclaredErrorAssertion::Assert(_)
+                    ) =>
+                {
+                    // Only the `Assert` verdict emits `string.inspect` + `string.contains` in the
+                    // generated test (see `emit_error_assertion` in test_case.rs); the
+                    // `Unsubstantiable` verdict renders a bare `Error(_)` match plus a `//` skip
+                    // comment and needs no extra import. ~keep
                     needed_modules.insert("string");
                 }
                 _ => {}
@@ -227,6 +235,7 @@ pub(super) fn render_test_file(
                 json_object_wrapper,
                 ir,
                 enums,
+                errors,
             );
             // ~keep Gleam's error path asserts the call returned `Error(..)` and returns, so
             // every other assertion on an error fixture — most often an `equals` against

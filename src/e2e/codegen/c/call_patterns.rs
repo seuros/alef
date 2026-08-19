@@ -403,6 +403,7 @@ pub(super) fn render_bytes_test_function(
     factory: &str,
     _client_owner_type: &str,
     expects_error: bool,
+    errors: &[crate::core::ir::ErrorDef],
     documentation_snippet: bool,
 ) {
     // cbindgen's `[export] prefix` (shouty-snake), not a bare uppercase — see
@@ -549,7 +550,7 @@ pub(super) fn render_bytes_test_function(
         // clears (`catch_ffi_panic` opens with `clear_last_error()`), so a free in between would
         // leave the epilogue comparing against a wiped buffer.
         let _ = writeln!(out, "    assert(status != 0 && \"expected call to fail\");");
-        super::test_function::emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+        super::test_function::emit_c_error_epilogue(out, prefix, fixture, errors, documentation_snippet);
         for (_, var_name) in &request_handle_vars {
             let req_snake = var_name.strip_suffix("_handle").unwrap_or(var_name);
             let _ = writeln!(out, "    {prefix}_{req_snake}_free({var_name});");

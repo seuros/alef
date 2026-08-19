@@ -73,7 +73,7 @@ fn wasm_codegen_auto_skips_fixtures_outside_static_language_set() {
     }];
 
     let files = WasmCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     let smoke = files
@@ -135,7 +135,7 @@ args = [
     }];
 
     let files = WasmCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let smoke = files
         .iter()

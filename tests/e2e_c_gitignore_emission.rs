@@ -89,7 +89,7 @@ fn c_codegen_emits_gitignore() {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![build_fixture()];
     let files = CCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("C generation succeeds");
 
     let gitignore = files

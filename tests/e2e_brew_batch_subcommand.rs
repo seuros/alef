@@ -163,7 +163,7 @@ fn brew_renders_mock_url_list_as_positional_urls() {
     let (resolved, e2e) = resolve_one(&cfg);
     let groups = vec![build_batch_scrape_fixture()];
     let files = BrewCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("Brew generation succeeds");
 
     let test_file = files
@@ -198,7 +198,7 @@ fn brew_honors_override_subcommand() {
     let (resolved, e2e) = resolve_one(&cfg);
     let groups = vec![build_batch_scrape_fixture()];
     let files = BrewCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("Brew generation succeeds");
 
     let test_file = files
@@ -220,7 +220,7 @@ fn brew_override_subcommand_works_with_tag_routing() {
     let (resolved, e2e) = resolve_one(&cfg);
     let groups = vec![build_batch_crawl_fixture()];
     let files = BrewCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("Brew generation succeeds");
 
     let test_file = files

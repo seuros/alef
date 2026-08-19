@@ -47,6 +47,7 @@ fn render_equals_fixture(value: serde_json::Value) -> String {
     let config = crate::core::config::ResolvedCrateConfig::default();
     let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
     let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    let errors: Vec<crate::core::ir::ErrorDef> = Vec::new();
 
     render_test_file(
         "describe",
@@ -60,6 +61,7 @@ fn render_equals_fixture(value: serde_json::Value) -> String {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &errors,
         },
     )
 }

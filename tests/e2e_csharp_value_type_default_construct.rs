@@ -113,7 +113,7 @@ fn csharp_value_type_default_construct_with_element_type() {
     let type_defs = vec![make_batch_config_type()];
 
     let generated = CSharpCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[], &[])
         .expect("generation succeeds");
 
     assert!(!generated.is_empty(), "Should generate C# test code");

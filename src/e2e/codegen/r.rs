@@ -33,6 +33,7 @@ impl E2eCodegen for RCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -120,6 +121,7 @@ impl E2eCodegen for RCodegen {
                 e2e_config,
                 config,
                 type_defs,
+                errors,
             );
             files.push(GeneratedFile {
                 path: output_base.join("tests").join(filename),
@@ -170,6 +172,7 @@ impl E2eCodegen for RCodegen {
             result_is_r_list,
             config,
             type_defs,
+            &[],
         );
         let body = test_case
             .lines()

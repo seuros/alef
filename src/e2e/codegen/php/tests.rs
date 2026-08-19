@@ -733,7 +733,7 @@ mod autoload_namespace_wiring_tests {
     fn composer_json_for(toml_text: &str) -> String {
         let config = resolve_config(toml_text);
         let files = PhpCodegen
-            .generate(&[], &E2eConfig::default(), &config, &[], &[], &[])
+            .generate(&[], &E2eConfig::default(), &config, &[], &[], &[], &[])
             .expect("php e2e generation must succeed");
         files
             .iter()

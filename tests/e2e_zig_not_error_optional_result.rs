@@ -81,7 +81,7 @@ fn render(fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = ZigE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

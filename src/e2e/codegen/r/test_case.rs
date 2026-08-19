@@ -1,6 +1,7 @@
 //! R e2e individual test case rendering.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::sanitize_ident;
 use crate::e2e::field_access::FieldResolver;
@@ -15,16 +16,29 @@ use super::{args, assertions, visitor};
 /// `expect_error(fn(args))` call. testthat's `expect_error(regexp=, class=)`
 /// combine with AND semantics, so they can't express the message-or-class-name
 /// disjunction other backends use (see `declared_error_value`'s doc comment);
-/// a manual `tryCatch` is required instead.
-fn render_r_error_check(function_name: &str, final_args: &str, declared_error: Option<&str>) -> String {
-    match declared_error {
-        Some(value) => {
+/// a manual `tryCatch` is required instead. A value naming a real `ErrorVariant` this
+/// backend cannot substantiate renders the registered skip instead: the R backend has no
+/// error-conversion code building a per-variant condition class at all — every failure
+/// surfaces as extendr's generic `simpleError`, so `class(e)` never carries a variant name for
+/// `grepl` to find.
+fn render_r_error_check(
+    function_name: &str,
+    final_args: &str,
+    fixture: &crate::e2e::fixture::Fixture,
+    errors: &[crate::core::ir::ErrorDef],
+) -> String {
+    match classify("r", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => format!("  expect_error({function_name}({final_args}))"),
+        DeclaredErrorAssertion::Assert(value) => {
             let pattern = crate::e2e::escape::r_regex_literal(value);
             format!(
                 "  tryCatch({{\n    {function_name}({final_args})\n    fail(\"expected an error to be thrown\")\n  }}, error = function(e) {{\n    expect_true(grepl({pattern}, conditionMessage(e)) || grepl({pattern}, paste(class(e), collapse = \" \")))\n  }})"
             )
         }
-        None => format!("  expect_error({function_name}({final_args}))"),
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let skip = skip_line("  ", "#", variant, &fixture.id, "r");
+            format!("  expect_error({function_name}({final_args}))\n{skip}")
+        }
     }
 }
 
@@ -36,6 +50,7 @@ pub(super) fn render_test_case(
     default_result_is_r_list: bool,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     let call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -154,11 +169,7 @@ pub(super) fn render_test_case(
         for line in &setup_lines {
             let _ = writeln!(out, "  {line}");
         }
-        let error_check = render_r_error_check(
-            &function_name,
-            &final_args,
-            crate::e2e::codegen::declared_error_value(fixture),
-        );
+        let error_check = render_r_error_check(&function_name, &final_args, fixture, errors);
         let _ = writeln!(out, "{error_check}");
         let _ = writeln!(out, "}})");
         return;
@@ -272,18 +283,56 @@ fn apply_vacuous_assertion_fallback(
 #[cfg(test)]
 mod render_r_error_check_tests {
     use super::render_r_error_check;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn coded_variant(name: &str) -> Vec<ErrorDef> {
+        vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: name.to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }]
+    }
 
     #[test]
     fn no_declared_value_is_byte_identical_to_bare_expect_error() {
+        let fixture = Fixture {
+            id: "no_error".to_string(),
+            ..Fixture::default()
+        };
         assert_eq!(
-            render_r_error_check("extract_bytes", "data", None),
+            render_r_error_check("extract_bytes", "data", &fixture, &[]),
             "  expect_error(extract_bytes(data))"
         );
     }
 
     #[test]
     fn declared_value_adds_message_or_class_name_check() {
-        let check = render_r_error_check("extract_bytes", "data", Some("BadRequest"));
+        let fixture = fixture_with_declared_error("BadRequest");
+        let check = render_r_error_check("extract_bytes", "data", &fixture, &[]);
         assert_eq!(
             check,
             "  tryCatch({\n    extract_bytes(data)\n    fail(\"expected an error to be thrown\")\n  }, error = function(e) {\n    expect_true(grepl(\"BadRequest\", conditionMessage(e)) || grepl(\"BadRequest\", paste(class(e), collapse = \" \")))\n  })"
@@ -292,10 +341,26 @@ mod render_r_error_check_tests {
 
     #[test]
     fn declared_value_with_regex_metacharacters_is_escaped() {
-        let check = render_r_error_check("extract_bytes", "data", Some("field.name[0]"));
+        let fixture = fixture_with_declared_error("field.name[0]");
+        let check = render_r_error_check("extract_bytes", "data", &fixture, &[]);
         assert!(
             check.contains("\"field\\\\.name\\\\[0\\\\]\""),
             "expected escaped regex literal, got: {check}"
+        );
+    }
+
+    /// The defect this fix closes: a declared value naming a real `ErrorVariant` — the R
+    /// backend has no error-conversion code at all, so `class(e)` never carries a variant's
+    /// identity — must render the registered skip, not a `grepl` check that can never pass.
+    #[test]
+    fn known_variant_r_cannot_substantiate_is_skipped() {
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = coded_variant("Authentication");
+        let check = render_r_error_check("extract_bytes", "data", &fixture, &errors);
+        assert_eq!(
+            check,
+            "  expect_error(extract_bytes(data))\n  # skipped: declared error variant 'Authentication' not yet \
+             preserved as a distinct identity by this backend's generator"
         );
     }
 }
@@ -337,7 +402,7 @@ mod vacuous_assertion_fallback_tests {
         };
 
         let mut out = String::new();
-        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[]);
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[], &[]);
 
         assert!(
             out.contains("# skipped: field 'nonexistent_field' not available on result type"),
@@ -371,7 +436,7 @@ mod vacuous_assertion_fallback_tests {
         };
 
         let mut out = String::new();
-        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[]);
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[], &[]);
 
         assert!(
             !out.contains("expect_true(!is.null(result))"),

@@ -55,6 +55,7 @@ fn node_imports_enum_values_referenced_by_typed_inputs() {
         &enums,
         "",
         &Default::default(),
+        &[],
     );
 
     let binding_import = output

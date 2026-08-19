@@ -27,6 +27,7 @@ impl E2eCodegen for RubyCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -186,6 +187,7 @@ impl E2eCodegen for RubyCodegen {
                     &config.adapters,
                     config,
                     type_defs,
+                    errors,
                 );
                 files.push(GeneratedFile {
                     path: spec_base.join(filename),

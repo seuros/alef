@@ -20,37 +20,50 @@ use super::{
 };
 
 /// Emit the C error-path epilogue every `expects_error` return site shares: the declared `error`
-/// value comparison, then a marker for each assertion this path does not render.
+/// value comparison — or, when the value names a real error variant C cannot substantiate, the
+/// registered skip instead — then a marker for each assertion this path does not render.
 ///
 /// ~keep The C ABI carries a failure as `set_last_error(alef_ffi_error_code(&e), &e.to_string())`,
 /// so `{prefix}_last_error_context()` is the failure's Display text and is the only textual
 /// evidence C has. Before this, a fixture's declared `error` value was discarded outright and the
 /// whole assertion collapsed into `assert(handle == 0)` — a check that cannot tell the expected
-/// failure from any other. Note the one half C still cannot express: the message-or-type-name
-/// disjunction `crate::e2e::codegen::declared_error_value` documents has no type-name side here,
-/// because the C ABI exposes the variant only as a numeric taxonomy code
-/// (`{prefix}_last_error_code()`), never as a string. A fixture whose value names an error variant
-/// rather than message text will now fail on C instead of passing vacuously.
-pub(super) fn emit_c_error_epilogue(out: &mut String, prefix: &str, fixture: &Fixture, documentation_snippet: bool) {
+/// failure from any other. C can never satisfy the message-or-type-name disjunction's type-name
+/// side (`declared_error_variant::classify` always answers `Unsubstantiable` for a known variant
+/// here): the C ABI exposes a variant only as a numeric taxonomy code
+/// (`{prefix}_last_error_code()`), never as a string the generated message check could compare.
+pub(super) fn emit_c_error_epilogue(
+    out: &mut String,
+    prefix: &str,
+    fixture: &Fixture,
+    errors: &[crate::core::ir::ErrorDef],
+    documentation_snippet: bool,
+) {
     // ~keep A documentation snippet is published prose, not a test: a `// skipped:` comment reads
     // as a defect in the example and a message assert turns a runnable snippet into one that can
     // abort. Snippet output therefore stays byte-identical to before this change.
     if documentation_snippet {
         return;
     }
-    if let Some(declared) = crate::e2e::codegen::declared_error_value(fixture) {
-        let expected = escape_c(declared);
-        let _ = writeln!(out, "    {{");
-        let _ = writeln!(out, "        const char* _err_message = {prefix}_last_error_context();");
-        let _ = writeln!(
-            out,
-            "        assert(_err_message != NULL && \"expected an error message\");"
-        );
-        let _ = writeln!(
-            out,
-            "        assert(strstr(_err_message, \"{expected}\") != NULL && \"error message mismatch\");"
-        );
-        let _ = writeln!(out, "    }}");
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
+    match classify("c", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => {}
+        DeclaredErrorAssertion::Assert(declared) => {
+            let expected = escape_c(declared);
+            let _ = writeln!(out, "    {{");
+            let _ = writeln!(out, "        const char* _err_message = {prefix}_last_error_context();");
+            let _ = writeln!(
+                out,
+                "        assert(_err_message != NULL && \"expected an error message\");"
+            );
+            let _ = writeln!(
+                out,
+                "        assert(strstr(_err_message, \"{expected}\") != NULL && \"error message mismatch\");"
+            );
+            let _ = writeln!(out, "    }}");
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(out, "{}", skip_line("    ", "//", variant, &fixture.id, "c"));
+        }
     }
     crate::e2e::codegen::error_path_assertions::emit(out, fixture, "    // ", "c");
 }
@@ -351,6 +364,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         &info.extra_args,
         config,
         type_defs,
+        &[],
         true,
         &config_sources,
         target_params,
@@ -409,6 +423,7 @@ pub(super) fn render_test_function(
     extra_args: &[String],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
     documentation_snippet: bool,
     config_sources: &FieldConfigSources,
 ) -> anyhow::Result<()> {
@@ -434,6 +449,7 @@ pub(super) fn render_test_function(
         extra_args,
         config,
         type_defs,
+        errors,
         documentation_snippet,
         config_sources,
         TargetParams::IrAbsent,
@@ -468,6 +484,7 @@ pub(super) fn render_test_function_impl(
     extra_args: &[String],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
     documentation_snippet: bool,
     config_sources: &FieldConfigSources,
     // What the core IR says about the target's parameters, for the status-code and legacy
@@ -609,7 +626,7 @@ pub(super) fn render_test_function_impl(
         let _ = writeln!(out, "    int32_t {result_var} = {function_name}({args_str});");
         if expects_error {
             let _ = writeln!(out, "    assert({result_var} != 0 && \"expected call to fail\");");
-            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+            emit_c_error_epilogue(out, prefix, fixture, errors, documentation_snippet);
         } else {
             let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to succeed\");");
         }
@@ -701,6 +718,7 @@ pub(super) fn render_test_function_impl(
             factory,
             &client_owner_type,
             expects_error,
+            errors,
             documentation_snippet,
         );
         return Ok(());
@@ -887,7 +905,7 @@ pub(super) fn render_test_function_impl(
             // call clears (`catch_ffi_panic` starts with `clear_last_error()`), so any `_free` in
             // between would leave the epilogue reading a wiped — and freed — buffer.
             let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
-            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+            emit_c_error_epilogue(out, prefix, fixture, errors, documentation_snippet);
             for (_, var_name) in &request_handle_vars {
                 let req_snake = var_name.strip_suffix("_handle").unwrap_or(var_name);
                 let _ = writeln!(out, "    {prefix}_{req_snake}_free({var_name});");
@@ -1110,7 +1128,7 @@ pub(super) fn render_test_function_impl(
                     );
                 }
             }
-            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+            emit_c_error_epilogue(out, prefix, fixture, errors, documentation_snippet);
             let _ = writeln!(out, "}}");
             return Ok(());
         }
@@ -1346,7 +1364,7 @@ pub(super) fn render_test_function_impl(
             // ~keep Cleanup moves after the epilogue: see `emit_c_error_epilogue` — the borrowed
             // `last_error_context()` buffer does not survive the next FFI call.
             let _ = writeln!(out, "    assert({result_var} == NULL && \"expected call to fail\");");
-            emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+            emit_c_error_epilogue(out, prefix, fixture, errors, documentation_snippet);
             render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         } else {
             render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
@@ -1373,7 +1391,7 @@ pub(super) fn render_test_function_impl(
         // ~keep Cleanup moves after the epilogue: see `emit_c_error_epilogue` — the borrowed
         // `last_error_context()` buffer does not survive the next FFI call.
         let _ = writeln!(out, "    assert({result_var} == 0 && \"expected call to fail\");");
-        emit_c_error_epilogue(out, prefix, fixture, documentation_snippet);
+        emit_c_error_epilogue(out, prefix, fixture, errors, documentation_snippet);
         render_typed_arg_cleanup(out, prefix, &typed_arg_cleanup);
         let _ = writeln!(out, "}}");
         return Ok(());
@@ -1651,6 +1669,91 @@ fn render_typed_arg_cleanup(out: &mut String, prefix: &str, handles: &[(String, 
             "c/typed_handle_free.jinja",
             minijinja::context! { prefix => prefix, type_snake => type_snake, handle => handle },
         ));
+    }
+}
+
+#[cfg(test)]
+mod declared_error_variant_tests {
+    use super::emit_c_error_epilogue;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn error_def_with(variant_name: &str, error_code: Option<u32>) -> Vec<ErrorDef> {
+        vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: variant_name.to_string(),
+                error_code,
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }]
+    }
+
+    /// A message-style value (not a known variant name) is unaffected by this fix.
+    #[test]
+    fn message_style_value_still_asserts() {
+        let mut out = String::new();
+        let fixture = fixture_with_declared_error("rate limit");
+
+        emit_c_error_epilogue(&mut out, "sample", &fixture, &[], false);
+
+        assert!(out.contains("strstr(_err_message, \"rate limit\")"), "got: {out}");
+    }
+
+    /// The defect this fix closes: C can NEVER substantiate a known variant, even a CODED one —
+    /// the C ABI exposes the variant only as a numeric taxonomy code, never as a string the
+    /// generated message check could compare. Must render the registered skip, not an assertion
+    /// that can never pass.
+    #[test]
+    fn known_variant_renders_the_skip_even_when_coded() {
+        let mut out = String::new();
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = error_def_with("Authentication", Some(100));
+
+        emit_c_error_epilogue(&mut out, "sample", &fixture, &errors, false);
+
+        assert_eq!(
+            out,
+            "    // skipped: declared error variant 'Authentication' not substantiated by this backend's \
+             generated error type\n"
+        );
+        assert!(!out.contains("strstr"), "must not render an assertion, got: {out}");
+    }
+
+    /// A documentation snippet renders nothing regardless of substantiability — published prose
+    /// must never carry an aborting assertion or a `// skipped:` comment that reads as a defect.
+    #[test]
+    fn documentation_snippet_renders_nothing_for_an_unsubstantiable_variant() {
+        let mut out = String::new();
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = error_def_with("Authentication", Some(100));
+
+        emit_c_error_epilogue(&mut out, "sample", &fixture, &errors, true);
+
+        assert_eq!(
+            out, "",
+            "documentation snippets must stay byte-identical to before this fix"
+        );
     }
 }
 

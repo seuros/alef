@@ -11,33 +11,45 @@ use super::assertions::render_assertion;
 use super::client;
 use super::setup::build_args_and_setup;
 use super::visitors::visitor_struct_name;
+use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
 
-/// Emit the message-or-type-name check for a fixture's declared `error` assertion value.
+/// Emit the message-or-type-name check for a fixture's declared `error` assertion value — or,
+/// when the declared value names a real error variant Go cannot substantiate, the registered
+/// skip instead of an assertion that can never pass.
 ///
-/// No-op when `declared` is `None`, leaving the `expects_error` branch's output unchanged
-/// from before this check existed.
+/// No-op when nothing is declared, leaving the `expects_error` branch's output unchanged from
+/// before this check existed.
 ///
 /// ~keep Mirrors the Rust/Python backends' disjunction (see
 /// `crate::e2e::codegen::declared_error_value`): fixture authors name either a message
 /// substring (config-validation fixtures) or a type-name prefix (API-error fixtures) in
 /// the assertion's value, never both conventions at once. Checking `err.Error()` OR
-/// `fmt.Sprintf("%T", err)` lets this single code path serve both.
-fn emit_declared_error_value_assertion(out: &mut String, declared: Option<&str>) {
-    let Some(declared) = declared else {
-        return;
-    };
-    let expected = go_string_literal(declared);
-    let _ = writeln!(out, "\tif err != nil {{");
-    let _ = writeln!(
-        out,
-        "\t\tif !strings.Contains(err.Error(), {expected}) && !strings.Contains(fmt.Sprintf(\"%T\", err), {expected}) {{"
-    );
-    let _ = writeln!(
-        out,
-        "\t\t\tt.Errorf(\"expected error to match %s, got message=%q type=%T\", {expected}, err.Error(), err)"
-    );
-    let _ = writeln!(out, "\t\t}}");
-    let _ = writeln!(out, "\t}}");
+/// `fmt.Sprintf("%T", err)` lets this single code path serve both. Whether Go can satisfy the
+/// second convention for a given variant is decided once by `declared_error_variant::classify`
+/// — Go dispatches to a variant-named error only when `#[alef(error_code = N)]` is declared.
+fn emit_declared_error_value_assertion(out: &mut String, fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) {
+    match classify("go", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => {}
+        DeclaredErrorAssertion::Assert(declared) => {
+            let expected = go_string_literal(declared);
+            let _ = writeln!(out, "\tif err != nil {{");
+            let _ = writeln!(
+                out,
+                "\t\tif !strings.Contains(err.Error(), {expected}) && !strings.Contains(fmt.Sprintf(\"%T\", err), \
+                 {expected}) {{"
+            );
+            let _ = writeln!(
+                out,
+                "\t\t\tt.Errorf(\"expected error to match %s, got message=%q type=%T\", {expected}, err.Error(), \
+                 err)"
+            );
+            let _ = writeln!(out, "\t\t}}");
+            let _ = writeln!(out, "\t}}");
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(out, "{}", skip_line("\t", "//", variant, &fixture.id, "go"));
+        }
+    }
 }
 
 /// Map a trait name to its Clear* function name.
@@ -117,6 +129,7 @@ pub(super) struct GoTestFunctionContext<'a> {
     pub(super) config: &'a crate::core::config::ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
+    pub(super) errors: &'a [crate::core::ir::ErrorDef],
 }
 
 pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context: GoTestFunctionContext<'_>) {
@@ -128,6 +141,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         config,
         type_defs,
         enums,
+        errors,
     } = context;
     let fn_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -376,7 +390,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         let _ = writeln!(out, "\tif err == nil {{");
         let _ = writeln!(out, "\t\tt.Errorf(\"expected an error, but call succeeded\")");
         let _ = writeln!(out, "\t}}");
-        emit_declared_error_value_assertion(out, crate::e2e::codegen::declared_error_value(fixture));
+        emit_declared_error_value_assertion(out, fixture, errors);
         crate::e2e::codegen::error_path_assertions::emit(out, fixture, "\t// ", "go");
         emit_trait_bridge_cleanup(out, fixture, base_function_name, import_alias);
         let _ = writeln!(out, "}}");
@@ -983,12 +997,46 @@ impl client::TestClientRenderer for GoTestClientRenderer {
 #[cfg(test)]
 mod declared_error_value_tests {
     use super::emit_declared_error_value_assertion;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn error_def_with(variant_name: &str, error_code: Option<u32>) -> Vec<ErrorDef> {
+        vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: variant_name.to_string(),
+                error_code,
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }]
+    }
 
     #[test]
     fn declared_value_emits_message_or_type_check() {
         let mut out = String::new();
+        let fixture = fixture_with_declared_error("SomeExpectedError");
 
-        emit_declared_error_value_assertion(&mut out, Some("SomeExpectedError"));
+        emit_declared_error_value_assertion(&mut out, &fixture, &[]);
 
         assert_eq!(
             out,
@@ -1003,8 +1051,9 @@ mod declared_error_value_tests {
     #[test]
     fn no_declared_value_emits_nothing() {
         let mut out = String::new();
+        let fixture = Fixture::default();
 
-        emit_declared_error_value_assertion(&mut out, None);
+        emit_declared_error_value_assertion(&mut out, &fixture, &[]);
 
         assert_eq!(out, "", "no declared error value must leave output unchanged");
         assert!(!out.contains("strings."), "must not reference strings package");
@@ -1014,12 +1063,47 @@ mod declared_error_value_tests {
     #[test]
     fn declared_value_is_escaped_for_go_string_literal() {
         let mut out = String::new();
+        let fixture = fixture_with_declared_error("contains \"quotes\" and a backtick `");
 
-        emit_declared_error_value_assertion(&mut out, Some("contains \"quotes\" and a backtick `"));
+        emit_declared_error_value_assertion(&mut out, &fixture, &[]);
 
         assert!(
             out.contains("\"contains \\\"quotes\\\" and a backtick `\""),
             "expected escaped double-quoted literal, got: {out}"
+        );
+    }
+
+    /// A CODED known variant still asserts.
+    #[test]
+    fn coded_known_variant_still_asserts() {
+        let mut out = String::new();
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = error_def_with("Authentication", Some(100));
+
+        emit_declared_error_value_assertion(&mut out, &fixture, &errors);
+
+        assert!(out.contains("strings.Contains(err.Error()"), "got: {out}");
+        assert!(out.contains("`Authentication`"), "got: {out}");
+    }
+
+    /// The defect this fix closes: a declared value naming a real `ErrorVariant` with no
+    /// `error_code` must render the registered skip, not an assertion that can never pass.
+    #[test]
+    fn uncoded_known_variant_renders_the_skip() {
+        let mut out = String::new();
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = error_def_with("Authentication", None);
+
+        emit_declared_error_value_assertion(&mut out, &fixture, &errors);
+
+        assert_eq!(
+            out,
+            "\t// skipped: declared error variant 'Authentication' not substantiated by this backend's generated \
+             error type\n"
+        );
+        assert!(
+            !out.contains("strings.Contains"),
+            "must not render an assertion, got: {out}"
         );
     }
 }

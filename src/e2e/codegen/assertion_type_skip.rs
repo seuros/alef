@@ -120,6 +120,30 @@ assertion_type_skip_variants! {
         "assertion type ",
         " has no renderable value for streaming field ",
     ),
+    /// ~keep Emitted by `declared_error_variant::skip_line` for a fixture's declared `error`
+    /// value that names a real `ErrorVariant` a backend's generated binding cannot
+    /// differentiate from any other variant of the same error type, where the reason is a true
+    /// ABI/toolchain property (`c`'s numeric-only error surface; `dart`'s third-party
+    /// flutter_rust_bridge decode step; an uncoded `go`/`java`/`zig` variant, since carrying a
+    /// stable ABI taxonomy code is a property of the crate's declared error shape). See
+    /// `declared_error_variant::substantiates_variant_identity` for the per-backend evidence.
+    /// `LanguageLimitation`, not `AuthoringGap`: no fixture edit changes any of this, the same
+    /// axis `NotAvailableInCFfi` already occupies.
+    DeclaredErrorVariantNotSubstantiated: LanguageLimitation => (
+        "declared error variant ",
+        " not substantiated by this backend's generated error type",
+    ),
+    /// ~keep The `GeneratorGap` sibling of [`Self::DeclaredErrorVariantNotSubstantiated`]: the
+    /// backend's own runtime supports distinct per-variant error identities (a class, an atom, a
+    /// condition) — `php`, `csharp`, `swift`, `ruby`, `elixir`, `gleam`, `r` and `typescript` all
+    /// do — but alef's generator for that backend does not build one yet. Fixable in a future
+    /// alef release, not a permanent limit, so it is counted separately from
+    /// [`Self::DeclaredErrorVariantNotSubstantiated`] the same way every other `GeneratorGap`
+    /// here is kept apart from a `LanguageLimitation`.
+    DeclaredErrorVariantNotYetPreservedByGenerator: GeneratorGap => (
+        "declared error variant ",
+        " not yet preserved as a distinct identity by this backend's generator",
+    ),
 }
 
 /// The `skipped:` line for a streaming assertion whose *type* this backend's streaming renderer
@@ -166,6 +190,16 @@ pub(crate) fn streaming_assertion_value_skip_line(
 }
 
 impl AssertionTypeSkip {
+    /// The rendered marker body for `token`, to be written after a backend's own
+    /// `<comment-open> skipped: ` prefix. Mirrors `field_skip::FieldSkip::message`. Only correct
+    /// for a variant whose `Shape` wraps a single quoted token (`before` + `'token'` + `after`,
+    /// with no quote characters embedded in either half) — the multi-token variants above
+    /// (`UnsupportedTraversalAssertion` and friends) keep rendering by hand at their call sites.
+    pub(crate) fn message(self, token: &str) -> String {
+        let Shape { before, after } = self.shape();
+        format!("{before}'{token}'{after}")
+    }
+
     /// The token — an assertion type, except for
     /// [`AssertionTypeSkip::UnsupportedAssertionTypeOnSyntheticField`] where the field name is
     /// the only thing the wording names — plus the variant that named it.
@@ -305,6 +339,55 @@ mod tests {
     fn streaming_wording_captures_the_assertion_type() {
         let line = "        // skipped: assertion type 'count_min' on field 'chunks' not yet supported for streaming";
         assert_eq!(AssertionTypeSkip::extract(line), Some("count_min"));
+    }
+
+    #[test]
+    fn declared_error_variant_wording_round_trips_through_message() {
+        let rendered = AssertionTypeSkip::DeclaredErrorVariantNotSubstantiated.message("Authentication");
+        assert_eq!(
+            rendered,
+            "declared error variant 'Authentication' not substantiated by this backend's generated error type"
+        );
+        let line = format!("    // skipped: {rendered}");
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&line),
+            Some((
+                "Authentication",
+                AssertionTypeSkip::DeclaredErrorVariantNotSubstantiated
+            )),
+            "got: {line}"
+        );
+    }
+
+    #[test]
+    fn declared_error_variant_generator_gap_wording_round_trips_through_message() {
+        let rendered = AssertionTypeSkip::DeclaredErrorVariantNotYetPreservedByGenerator.message("BadRequest");
+        assert_eq!(
+            rendered,
+            "declared error variant 'BadRequest' not yet preserved as a distinct identity by this backend's \
+             generator"
+        );
+        let line = format!("    # skipped: {rendered}");
+        assert_eq!(
+            AssertionTypeSkip::extract_classified(&line),
+            Some((
+                "BadRequest",
+                AssertionTypeSkip::DeclaredErrorVariantNotYetPreservedByGenerator
+            )),
+            "got: {line}"
+        );
+    }
+
+    /// The two declared-error-variant wordings must stay distinguishable, mirroring
+    /// `the_two_streaming_helpers_do_not_match_each_other`.
+    #[test]
+    fn the_two_declared_error_variant_wordings_do_not_match_each_other() {
+        let limitation = AssertionTypeSkip::DeclaredErrorVariantNotSubstantiated.message("X");
+        let gap = AssertionTypeSkip::DeclaredErrorVariantNotYetPreservedByGenerator.message("X");
+        assert_ne!(
+            AssertionTypeSkip::extract_classified(&format!("// skipped: {limitation}")).map(|(_, v)| v),
+            AssertionTypeSkip::extract_classified(&format!("// skipped: {gap}")).map(|(_, v)| v),
+        );
     }
 
     #[test]

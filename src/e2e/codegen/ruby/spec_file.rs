@@ -20,6 +20,7 @@ pub(super) fn render_spec_file(
     adapters: &[crate::core::config::extras::AdapterConfig],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     // Resolve client_factory from ruby override.
     let client_factory = e2e_config
@@ -207,6 +208,7 @@ pub(super) fn render_spec_file(
                         adapter_req_type_owned.as_deref(),
                         config,
                         type_defs,
+                        errors,
                     )
                 };
                 // ~keep Ruby's error path renders one `expect { .. }.to raise_error(..)` and

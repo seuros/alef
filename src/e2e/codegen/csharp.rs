@@ -40,21 +40,33 @@ fn find_default_options_literal(args_str: &str, opts_type: &str) -> Option<usize
 }
 
 /// Render the xUnit assertion that checks a declared `error` fixture value against
-/// either the thrown exception's message or its type name.
+/// either the thrown exception's message or its type name — or, when the declared value
+/// names a real error variant this backend's binding cannot substantiate, the registered
+/// skip instead of an assertion that can never pass.
 ///
 /// ~keep Mirrors the Rust/Python/Go/Java backends' disjunction (see
 /// `crate::e2e::codegen::declared_error_value`): fixture authors name either a message
 /// substring (config-validation fixtures) or a type-name prefix (API-error fixtures) in
 /// the assertion's value, never both conventions at once. Checking `.Message` OR
 /// `.GetType().Name` lets this single code path serve both, without narrowing the
-/// existing fixed `exception_class` the test already asserts is thrown.
-fn declared_error_value_check(declared: Option<&str>) -> Option<String> {
-    let declared = declared?;
-    let escaped = escape_csharp(declared);
-    Some(format!(
-        "        Assert.True(thrown.Message != null && thrown.Message.Contains(\"{escaped}\") \
+/// existing fixed `exception_class` the test already asserts is thrown. Which of those two
+/// conventions applies, and whether C# can ever satisfy the second, is decided once by
+/// `declared_error_variant::classify` — see its doc for why C# lands on "never" today.
+fn declared_error_value_check(fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) -> Option<String> {
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
+    match classify("csharp", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => None,
+        DeclaredErrorAssertion::Assert(declared) => {
+            let escaped = escape_csharp(declared);
+            Some(format!(
+                "        Assert.True(thrown.Message != null && thrown.Message.Contains(\"{escaped}\") \
 || thrown.GetType().Name.Contains(\"{escaped}\"), \"expected error to match: {escaped}\");"
-    ))
+            ))
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            Some(skip_line("        ", "//", variant, &fixture.id, "csharp"))
+        }
+    }
 }
 
 pub struct CSharpCodegen;
@@ -68,6 +80,7 @@ impl E2eCodegen for CSharpCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -272,6 +285,7 @@ impl E2eCodegen for CSharpCodegen {
                 type_defs,
                 enums,
                 functions,
+                errors,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),
@@ -338,6 +352,7 @@ fn render_test_file(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     // Collect using imports
     let mut using_imports = String::new();
@@ -385,6 +400,7 @@ fn render_test_file(
             type_defs,
             enums,
             functions,
+            errors,
         );
         if i + 1 < fixtures.len() {
             fixtures_body.push('\n');
@@ -442,6 +458,7 @@ fn render_test_method(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -950,7 +967,7 @@ fn render_test_method(
         }
     }
 
-    let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
+    let declared_error_check = declared_error_value_check(fixture, errors);
     // ~keep The `expects_error` branch of `csharp/test_method.jinja` renders the throws-assertion
     // and nothing else, so every other assertion on an error fixture — most often an `equals`
     // against `error.status_code` — used to leave no trace at all in the generated test.

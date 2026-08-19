@@ -89,6 +89,7 @@ pub(super) fn render_with_ir(
         type_defs,
         enums,
         functions,
+        &[],
     );
     let body_line_count = method.lines().count().saturating_sub(3);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
@@ -395,6 +396,7 @@ mod tests {
             &crate::e2e::field_access::SwiftFirstClassMap::default(),
             "Sample",
             &ResolvedCrateConfig::default(),
+            &[],
             &[],
             &[],
             &[],

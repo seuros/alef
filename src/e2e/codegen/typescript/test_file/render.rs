@@ -47,6 +47,7 @@ pub fn render_test_file(
     enums: &[EnumDef],
     wasm_type_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     // `lang` is used for wasm visitor arg placement and override routing
     let (needs_cache_isolation, has_configure) = detect_cache_isolation_needs(fixtures, e2e_config);
@@ -112,6 +113,7 @@ pub fn render_test_file(
                 wasm_type_prefix,
                 config,
                 &mut referenced_enums,
+                errors,
             );
         }
         if index + 1 < fixtures.len() {

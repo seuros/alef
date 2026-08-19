@@ -193,7 +193,7 @@ fn generate_all_content(codegen: &dyn E2eCodegen) -> String {
     let (resolved, e2e) = resolve(&cfg);
     let groups = vec![build_fixture_with_trailing_newline_equals()];
     let files = codegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .unwrap_or_else(|error| panic!("{} generation failed: {error:#}", codegen.language_name()));
     files
         .iter()

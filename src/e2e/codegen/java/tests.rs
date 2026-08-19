@@ -232,6 +232,7 @@ fn test_java_env_entries_empty_produces_no_init_env() {
         &[],
         &[],
         &[],
+        &[],
         false,
     );
 
@@ -276,6 +277,7 @@ fn test_java_env_entries_renders_sorted_system_properties() {
         true,
         &[],
         &ResolvedCrateConfig::default(),
+        &[],
         &[],
         &[],
         &[],

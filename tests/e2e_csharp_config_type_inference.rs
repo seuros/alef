@@ -98,7 +98,7 @@ fn csharp_config_type_inference_direct_match() {
     let groups = vec![make_group()];
 
     let generated = CSharpCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     assert!(!generated.is_empty(), "Should generate C# test code");

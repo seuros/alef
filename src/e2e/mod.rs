@@ -113,12 +113,16 @@ pub fn generate_e2e(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
     crate::with_extensions(|extensions| {
-        generate_e2e_with_extensions(config, e2e_config, languages, type_defs, enums, functions, extensions)
+        generate_e2e_with_extensions(
+            config, e2e_config, languages, type_defs, enums, functions, errors, extensions,
+        )
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_e2e_with_extensions(
     config: &ResolvedCrateConfig,
     e2e_config: &E2eConfig,
@@ -126,6 +130,7 @@ fn generate_e2e_with_extensions(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
     extensions: &[Box<dyn crate::Extension>],
 ) -> Result<(Vec<GeneratedFile>, Option<anyhow::Error>)> {
     let fixtures_dir = Path::new(&e2e_config.fixtures);
@@ -242,8 +247,16 @@ fn generate_e2e_with_extensions(
 
     let generators = codegen::generators_for(&resolved_languages);
 
-    let (mut all_files, generator_failures) =
-        run_generators(&generators, &groups, e2e_config, config, type_defs, enums, functions);
+    let (mut all_files, generator_failures) = run_generators(
+        &generators,
+        &groups,
+        e2e_config,
+        config,
+        type_defs,
+        enums,
+        functions,
+        errors,
+    );
 
     // A backend's codegen failure no longer turns this function into an `Err`: it travels
     // out alongside `all_files` in this slot instead, so the caller can still write every
@@ -392,6 +405,7 @@ fn generate_e2e_with_extensions(
 /// reported at `WARN` immediately (this repo's level contract: degraded, but the run
 /// continues) with the backend's own diagnostic verbatim, and the caller still sees a
 /// hard `Err` once every backend that could run has. ~keep
+#[allow(clippy::too_many_arguments)]
 fn run_generators(
     generators: &[Box<dyn codegen::E2eCodegen>],
     groups: &[fixture::FixtureGroup],
@@ -400,11 +414,12 @@ fn run_generators(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> (Vec<GeneratedFile>, Vec<String>) {
     let mut all_files = Vec::new();
     let mut failures = Vec::new();
     for generator in generators {
-        match generator.generate_gated(groups, e2e_config, config, type_defs, enums, functions) {
+        match generator.generate_gated(groups, e2e_config, config, type_defs, enums, functions, errors) {
             Ok(files) => {
                 info!("  [{}] generated {} file(s)", generator.language_name(), files.len());
                 all_files.extend(files);
@@ -720,9 +735,16 @@ mod tests {
             ..E2eConfig::default()
         };
 
-        let (_files, deferred_error) =
-            generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[])
-                .expect("generate empty E2E suite");
+        let (_files, deferred_error) = generate_e2e(
+            &ResolvedCrateConfig::default(),
+            &e2e_config,
+            Some(&[]),
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .expect("generate empty E2E suite");
 
         assert!(
             deferred_error.is_none(),
@@ -764,8 +786,9 @@ mod tests {
             ..E2eConfig::default()
         };
 
-        let (_files, deferred_error) = generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, None, &[], &[], &[])
-            .expect("the files that did render must still be returned alongside a deferred failure");
+        let (_files, deferred_error) =
+            generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, None, &[], &[], &[], &[])
+                .expect("the files that did render must still be returned alongside a deferred failure");
 
         let error = deferred_error.expect("an unresolvable field with no `skip` must fail strict mode by default");
         assert!(
@@ -785,6 +808,7 @@ mod tests {
             _type_defs: &[crate::core::ir::TypeDef],
             _enums: &[crate::core::ir::EnumDef],
             _functions: &[crate::core::ir::FunctionDef],
+            _errors: &[crate::core::ir::ErrorDef],
         ) -> Result<Vec<GeneratedFile>> {
             anyhow::bail!("simulated leaf-field resolution failure")
         }
@@ -805,6 +829,7 @@ mod tests {
             _type_defs: &[crate::core::ir::TypeDef],
             _enums: &[crate::core::ir::EnumDef],
             _functions: &[crate::core::ir::FunctionDef],
+            _errors: &[crate::core::ir::ErrorDef],
         ) -> Result<Vec<GeneratedFile>> {
             Ok(vec![GeneratedFile {
                 path: std::path::PathBuf::from("ok/output.txt"),
@@ -832,6 +857,7 @@ mod tests {
             &[],
             &E2eConfig::default(),
             &ResolvedCrateConfig::default(),
+            &[],
             &[],
             &[],
             &[],
@@ -899,7 +925,7 @@ mod tests {
         let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FailingExtension)];
 
         let (files, deferred_error) =
-            generate_e2e_with_extensions(&config, &e2e_config, None, &[], &[], &[], &extensions)
+            generate_e2e_with_extensions(&config, &e2e_config, None, &[], &[], &[], &[], &extensions)
                 .expect("an extension failure must defer through the `Option` slot, not propagate as a hard `Err`");
 
         let error = deferred_error.expect("the extension's failure must still be reported, not silently dropped");

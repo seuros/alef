@@ -380,14 +380,29 @@ fn test_csharp_facade_class_name_is_computed_correctly() {
     assert_eq!(with_converter, "SampleProcessorConverter");
 }
 
-#[test]
-fn declared_error_value_check_returns_none_without_a_declared_value() {
-    assert_eq!(super::declared_error_value_check(None), None);
+fn fixture_with_declared_error(value: &str) -> Fixture {
+    let mut fixture = make_fixture_with_input("declares_error", serde_json::json!({}));
+    fixture.assertions = vec![Assertion {
+        assertion_type: "error".to_string(),
+        value: Some(serde_json::Value::String(value.to_string())),
+        ..Assertion::default()
+    }];
+    fixture
 }
 
 #[test]
+fn declared_error_value_check_returns_none_without_a_declared_value() {
+    let fixture = make_fixture_with_input("no_error", serde_json::json!({}));
+    assert_eq!(super::declared_error_value_check(&fixture, &[]), None);
+}
+
+/// With no `errors` IR supplied — as every one of these hand-built fixtures has — a value
+/// cannot be recognised as a known variant name, so it renders exactly like a message-style
+/// value always did before this fix.
+#[test]
 fn declared_error_value_check_asserts_message_or_type_name() {
-    let check = super::declared_error_value_check(Some("BadRequest")).expect("expected a rendered check");
+    let fixture = fixture_with_declared_error("BadRequest");
+    let check = super::declared_error_value_check(&fixture, &[]).expect("expected a rendered check");
     assert!(
         check.contains("thrown.Message != null && thrown.Message.Contains(\"BadRequest\")"),
         "got: {check}"
@@ -400,10 +415,48 @@ fn declared_error_value_check_asserts_message_or_type_name() {
 
 #[test]
 fn declared_error_value_check_escapes_quotes_and_backslashes() {
-    let check = super::declared_error_value_check(Some("bad \"field\" \\ value")).expect("expected a rendered check");
+    let fixture = fixture_with_declared_error("bad \"field\" \\ value");
+    let check = super::declared_error_value_check(&fixture, &[]).expect("expected a rendered check");
     assert!(
         check.contains("bad \\\"field\\\" \\\\ value"),
         "expected escaped literal, got: {check}"
+    );
+}
+
+/// The defect this fix closes: a declared value that names a real `ErrorVariant` — C#'s
+/// generated binding never differentiates one from another for an ordinary business-call
+/// failure — must render the registered skip, not an assertion that can never pass.
+#[test]
+fn declared_error_value_check_skips_a_known_variant_c_sharp_cannot_substantiate() {
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+
+    let fixture = fixture_with_declared_error("Authentication");
+    let errors = vec![ErrorDef {
+        name: "ApiError".to_string(),
+        rust_path: "lib::ApiError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![ErrorVariant {
+            name: "Authentication".to_string(),
+            error_code: Some(100),
+            is_unit: true,
+            ..ErrorVariant::default()
+        }],
+        doc: String::new(),
+        methods: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }];
+
+    let check = super::declared_error_value_check(&fixture, &errors).expect("expected a rendered skip");
+    assert_eq!(
+        check,
+        "        // skipped: declared error variant 'Authentication' not yet preserved as a distinct identity by \
+         this backend's generator"
+    );
+    assert!(
+        !check.contains("Assert.True"),
+        "must not render an assertion that can never pass, got: {check}"
     );
 }
 
@@ -462,6 +515,7 @@ fn dropped_field_assertion_carries_the_marker_in_the_rendered_test_method() {
         &HashMap::new(),
         &[],
         &config,
+        &[],
         &[],
         &[],
         &[],
@@ -711,6 +765,7 @@ fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emi
         &[],
         &[],
         &[],
+        &[],
     );
 }
 
@@ -763,6 +818,7 @@ fn render_csharp_error_method(extra: Vec<Assertion>) -> String {
         &HashMap::new(),
         &[],
         &config,
+        &[],
         &[],
         &[],
         &[],
@@ -1071,6 +1127,7 @@ pub(super) fn render_refusal_candidate(fixture_id: &str, assertions: Vec<Asserti
         &HashMap::new(),
         &[],
         &config,
+        &[],
         &[],
         &[],
         &[],

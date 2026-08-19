@@ -602,6 +602,7 @@ mod error_path_marker_tests {
             &[],
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
         )
     }
 

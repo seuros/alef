@@ -88,8 +88,15 @@ pub(super) fn regenerate_test_apps_after_sync(
     // sweeps orphans against a previous run (unlike the `alef all` / `alef e2e generate`
     // callers), so there is no premature-success or stale-cache hazard to gate -- writing
     // what succeeded and re-raising the failure afterward is sufficient. ~keep
-    let (generated, generator_error) =
-        crate::e2e::generate_e2e(&fresh_config, e2e_ref, None, &api.types, &api.enums, &api.functions)?;
+    let (generated, generator_error) = crate::e2e::generate_e2e(
+        &fresh_config,
+        e2e_ref,
+        None,
+        &api.types,
+        &api.enums,
+        &api.functions,
+        &api.errors,
+    )?;
     if generated.is_empty() {
         if let Some(error) = generator_error {
             return Err(error);

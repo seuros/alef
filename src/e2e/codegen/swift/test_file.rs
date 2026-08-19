@@ -26,6 +26,7 @@ pub(super) fn render_test_file(
     has_http_fixtures: bool,
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     // Detect whether any fixture in this group uses a file_path or bytes arg — if so
     // the test class chdir's to <repo>/test_documents at setUp time so the
@@ -273,6 +274,7 @@ pub(super) fn render_test_file(
                 type_defs,
                 enums,
                 functions,
+                errors,
             );
         }
         let _ = writeln!(out);

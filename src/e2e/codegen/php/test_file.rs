@@ -25,6 +25,7 @@ pub(super) fn render_test_file(
     adapters: &[crate::core::config::extras::AdapterConfig],
     php_lang_rename_all: String,
     config: &ResolvedCrateConfig,
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     let header = hash::header(CommentStyle::DoubleSlash);
 
@@ -114,6 +115,7 @@ pub(super) fn render_test_file(
                 adapters,
                 &php_lang_rename_all,
                 config,
+                errors,
                 &mut trait_bridge_imports,
             );
         }

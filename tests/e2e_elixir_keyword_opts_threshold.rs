@@ -95,7 +95,7 @@ fn single_optional_config_emits_positional() {
     });
     let groups = vec![fixture_with_input(input)];
     let files = ElixirCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files
@@ -133,7 +133,7 @@ fn two_optional_params_emit_keyword() {
     });
     let groups = vec![fixture_with_input(input)];
     let files = ElixirCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
 
     let test_file = files

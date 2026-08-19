@@ -37,6 +37,7 @@ impl E2eCodegen for WasmCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -392,6 +393,7 @@ impl E2eCodegen for WasmCodegen {
                 enums,
                 &wasm_type_prefix,
                 config,
+                &[],
             );
 
             // A category can survive the `active.is_empty()` guard above yet still render

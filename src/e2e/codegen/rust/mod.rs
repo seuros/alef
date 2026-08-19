@@ -42,6 +42,7 @@ impl E2eCodegen for RustE2eCodegen {
         _type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let mut files = Vec::new();
         let output_base = PathBuf::from(e2e_config.effective_output()).join("rust");

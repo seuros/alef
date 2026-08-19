@@ -43,6 +43,7 @@ impl E2eCodegen for GleamE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let ir = crate::e2e::codegen::call_ir::CallIr { functions, type_defs };
         let lang = self.language_name();
@@ -167,6 +168,7 @@ impl E2eCodegen for GleamE2eCodegen {
                 json_object_wrapper,
                 ir,
                 enums,
+                errors,
             );
             files.push(GeneratedFile {
                 path: output_base.join("test").join(filename),

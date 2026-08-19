@@ -245,6 +245,7 @@ fn dart_emit_setenv_forces_overwrite_and_checks_return_code() {
         &type_defs,
         &enums,
         &[],
+        &[],
     );
 
     // Verify that the generated setenv call uses overwrite=1 (third argument).
@@ -311,6 +312,7 @@ fn dart_error_assertion_with_declared_value_checks_message_and_type() {
         &[],
         &[],
         &[],
+        &[],
     );
 
     assert!(
@@ -357,6 +359,7 @@ fn dart_error_assertion_without_declared_value_is_byte_identical() {
         &[],
         &[],
         &[],
+        &[],
     );
 
     assert!(output.contains("throwsA(anything)"));
@@ -395,6 +398,7 @@ fn dart_error_assertion_escapes_declared_value_for_dart_string_literal() {
         &dart_first_class_map,
         &[],
         &config,
+        &[],
         &[],
         &[],
         &[],
@@ -443,6 +447,7 @@ fn dart_test_file_emits_wrapper_for_call_config_trait_argument() {
         &[],
         &config,
         &type_defs,
+        &[],
         &[],
         &[],
     );
@@ -527,6 +532,7 @@ fn dart_equals_on_an_error_field_is_named_instead_of_dropped() {
         &[],
         &[],
         &[],
+        &[],
     );
 
     // Positive first: the error block really rendered.
@@ -574,6 +580,7 @@ fn dart_a_lone_error_assertion_renders_no_marker() {
         &dart_first_class_map,
         &[],
         &config,
+        &[],
         &[],
         &[],
         &[],
@@ -626,6 +633,7 @@ fn render_dart_enum_arg_fixture(
         &[],
         enums,
         functions,
+        &[],
     )
 }
 

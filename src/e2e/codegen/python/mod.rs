@@ -36,6 +36,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
         _type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let mut files = Vec::new();
         let output_base = PathBuf::from(e2e_config.effective_output()).join("python");
@@ -1169,7 +1170,7 @@ result_var = "result"
         let e2e = cfg.crates[0].e2e.clone().unwrap();
         let resolved = cfg.resolve().unwrap().remove(0);
         let codegen = PythonE2eCodegen;
-        let files = codegen.generate(&[], &e2e, &resolved, &[], &[], &[]).unwrap();
+        let files = codegen.generate(&[], &e2e, &resolved, &[], &[], &[], &[]).unwrap();
         // conftest.py, tests/__init__.py, pyproject.toml
         // (NO root __init__.py — would shadow the published `demo_client` package
         // during `uv sync`'s editable install of the e2e project.)

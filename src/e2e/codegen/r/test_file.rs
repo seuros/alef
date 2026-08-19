@@ -16,6 +16,7 @@ pub(super) fn render_test_file(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::Hash));
@@ -31,6 +32,7 @@ pub(super) fn render_test_file(
             result_is_r_list,
             config,
             type_defs,
+            errors,
         );
         // ~keep R's error path renders `expect_error(...)` and returns, so every other assertion
         // on an error fixture — most often an `equals` against `error.status_code` — leaves no
@@ -60,9 +62,14 @@ mod error_path_marker_tests {
     use crate::e2e::config::E2eConfig;
     use crate::e2e::fixture::{Assertion, Fixture};
 
-    fn render(extra: Vec<Assertion>) -> String {
+    fn render_with_errors(
+        extra: Vec<Assertion>,
+        declared_value: Option<&str>,
+        errors: &[crate::core::ir::ErrorDef],
+    ) -> String {
         let mut assertions = vec![Assertion {
             assertion_type: "error".into(),
+            value: declared_value.map(|v| serde_json::Value::String(v.to_string())),
             ..Assertion::default()
         }];
         assertions.extend(extra);
@@ -83,7 +90,12 @@ mod error_path_marker_tests {
             &e2e_config,
             &ResolvedCrateConfig::default(),
             &[],
+            errors,
         )
+    }
+
+    fn render(extra: Vec<Assertion>) -> String {
+        render_with_errors(extra, None, &[])
     }
 
     /// R's error path renders `expect_error(...)` and returns, so every other assertion on the
@@ -118,5 +130,45 @@ mod error_path_marker_tests {
 
         assert!(out.contains("expect_error("), "the error block must render:\n{out}");
         assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+    }
+
+    /// The defect this fix closes, driven through the real per-fixture-file rendering entry
+    /// point: a declared value naming a real `ErrorVariant` — the R backend has no
+    /// error-conversion code at all — must render the registered skip, not a `grepl` check that
+    /// can never pass.
+    #[test]
+    fn r_skips_a_known_variant_it_cannot_substantiate() {
+        use crate::core::ir::{ErrorDef, ErrorVariant};
+
+        let errors = vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: "Authentication".to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }];
+        let out = render_with_errors(Vec::new(), Some("Authentication"), &errors);
+
+        assert!(out.contains("expect_error("), "the error block must render:\n{out}");
+        assert!(
+            out.contains(
+                "# skipped: declared error variant 'Authentication' not yet preserved as a distinct identity by \
+                 this backend's generator"
+            ),
+            "got:\n{out}"
+        );
+        assert!(
+            !out.contains("tryCatch"),
+            "must not render a check that can never pass, got:\n{out}"
+        );
     }
 }

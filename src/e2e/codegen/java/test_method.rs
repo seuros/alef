@@ -34,21 +34,33 @@ fn render_java_refusal(markers: &str, refusal: &inert_example::InertExample) -> 
     inert_example::refusal_body(markers, &statement)
 }
 
-/// Render the JUnit assertion that checks a declared `error` fixture value against
-/// either the thrown exception's message or its simple class name.
+/// Render the JUnit assertion that checks a declared `error` fixture value against either
+/// the thrown exception's message or its simple class name — or, when the declared value
+/// names a real error variant this backend's binding cannot substantiate, the registered
+/// skip instead of an assertion that can never pass.
 ///
 /// ~keep Mirrors the Rust/Python/Go backends' disjunction (see
 /// `crate::e2e::codegen::declared_error_value`): fixture authors name either a message
 /// substring (config-validation fixtures) or a type-name prefix (API-error fixtures) in
 /// the assertion's value, never both conventions at once. Checking `getMessage()` OR
-/// the exception's simple class name lets this single code path serve both.
-fn declared_error_value_check(declared: Option<&str>) -> Option<String> {
-    let declared = declared?;
-    let escaped = escape_java(declared);
-    Some(format!(
-        "        assertTrue(thrown.getMessage() != null && thrown.getMessage().contains(\"{escaped}\") \
+/// the exception's simple class name lets this single code path serve both. Which of those
+/// two conventions applies, and whether Java can ever satisfy the second, is decided once by
+/// `declared_error_variant::classify`.
+fn declared_error_value_check(fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) -> Option<String> {
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
+    match classify("java", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => None,
+        DeclaredErrorAssertion::Assert(declared) => {
+            let escaped = escape_java(declared);
+            Some(format!(
+                "        assertTrue(thrown.getMessage() != null && thrown.getMessage().contains(\"{escaped}\") \
 || thrown.getClass().getSimpleName().contains(\"{escaped}\"), \"expected error to match: {escaped}\");"
-    ))
+            ))
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            Some(skip_line("        ", "//", variant, &fixture.id, "java"))
+        }
+    }
 }
 
 fn ensure_assertion_line_ending(assertions: &mut String) {
@@ -75,6 +87,7 @@ pub(super) fn render_test_method(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     // Delegate HTTP fixtures to the HTTP-specific renderer.
     if let Some(http) = &fixture.http {
@@ -496,7 +509,7 @@ pub(super) fn render_test_method(
         String::new()
     };
 
-    let declared_error_check = declared_error_value_check(crate::e2e::codegen::declared_error_value(fixture));
+    let declared_error_check = declared_error_value_check(fixture, errors);
     // ~keep The `expects_error` branch of `java/test_method.jinja` renders the assertThrows and
     // nothing else, so every other assertion on an error fixture — most often an `equals` against
     // `error.status_code` — used to leave no trace at all in the generated test.
@@ -528,15 +541,52 @@ pub(super) fn render_test_method(
 #[cfg(test)]
 mod declared_error_value_check_tests {
     use super::declared_error_value_check;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
 
-    #[test]
-    fn no_declared_value_produces_no_check() {
-        assert_eq!(declared_error_value_check(None), None);
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn error_def_with(variant_name: &str, error_code: Option<u32>) -> Vec<ErrorDef> {
+        vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: variant_name.to_string(),
+                error_code,
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }]
     }
 
     #[test]
+    fn no_declared_value_produces_no_check() {
+        let fixture = Fixture::default();
+        assert_eq!(declared_error_value_check(&fixture, &[]), None);
+    }
+
+    /// No `errors` IR supplied: a value cannot be recognised as a known variant name, so it
+    /// renders exactly like a message-style value always did before this fix.
+    #[test]
     fn declared_value_checks_message_or_class_name() {
-        let check = declared_error_value_check(Some("BadRequest")).expect("expected a rendered check");
+        let fixture = fixture_with_declared_error("BadRequest");
+        let check = declared_error_value_check(&fixture, &[]).expect("expected a rendered check");
         assert!(
             check.contains("thrown.getMessage() != null && thrown.getMessage().contains(\"BadRequest\")"),
             "got: {check}"
@@ -549,10 +599,40 @@ mod declared_error_value_check_tests {
 
     #[test]
     fn declared_value_with_quotes_and_backslashes_is_escaped() {
-        let check = declared_error_value_check(Some("bad \"field\" \\ value")).expect("expected a rendered check");
+        let fixture = fixture_with_declared_error("bad \"field\" \\ value");
+        let check = declared_error_value_check(&fixture, &[]).expect("expected a rendered check");
         assert!(
             check.contains("bad \\\"field\\\" \\\\ value"),
             "expected escaped literal, got: {check}"
+        );
+    }
+
+    /// Java IS substantiable when the variant declared `#[alef(error_code = N)]`: the assertion
+    /// still renders as before.
+    #[test]
+    fn a_coded_known_variant_still_asserts() {
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = error_def_with("Authentication", Some(100));
+        let check = declared_error_value_check(&fixture, &errors).expect("expected a rendered check");
+        assert!(check.contains("assertTrue("), "got: {check}");
+        assert!(check.contains("\"Authentication\""), "got: {check}");
+    }
+
+    /// The defect this fix closes: a declared value naming a real `ErrorVariant` with no
+    /// `error_code` must render the registered skip, not an assertion that can never pass.
+    #[test]
+    fn an_uncoded_known_variant_renders_the_skip() {
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = error_def_with("Authentication", None);
+        let check = declared_error_value_check(&fixture, &errors).expect("expected a rendered skip");
+        assert_eq!(
+            check,
+            "        // skipped: declared error variant 'Authentication' not substantiated by this backend's \
+             generated error type"
+        );
+        assert!(
+            !check.contains("assertTrue"),
+            "must not render an assertion, got: {check}"
         );
     }
 }
@@ -653,6 +733,7 @@ mod dropped_field_marker_tests {
             &type_defs,
             &[],
             &[],
+            &[],
         );
 
         assert!(
@@ -661,7 +742,7 @@ mod dropped_field_marker_tests {
         );
     }
 
-    fn render_java_error_method(extra: Vec<Assertion>) -> String {
+    fn render_java_error_method(extra: Vec<Assertion>, errors: &[crate::core::ir::ErrorDef]) -> String {
         let mut fixture = make_fixture("rate_limited", "content");
         fixture.assertions = vec![Assertion {
             assertion_type: "error".to_string(),
@@ -702,6 +783,7 @@ mod dropped_field_marker_tests {
             // typed-argument seam must leave untouched. ~keep
             &[],
             &[],
+            errors,
         );
         out
     }
@@ -710,11 +792,14 @@ mod dropped_field_marker_tests {
     /// assertion on the fixture used to leave no trace in the generated test at all.
     #[test]
     fn java_equals_on_an_error_field_is_named_instead_of_dropped() {
-        let out = render_java_error_method(vec![Assertion {
-            assertion_type: "equals".to_string(),
-            field: Some("error.status_code".to_string()),
-            ..Default::default()
-        }]);
+        let out = render_java_error_method(
+            vec![Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("error.status_code".to_string()),
+                ..Default::default()
+            }],
+            &[],
+        );
 
         // Positive first: the error block really rendered.
         assert!(
@@ -738,13 +823,89 @@ mod dropped_field_marker_tests {
     /// Negative control: a lone `error` assertion must leave the generated method marker-free.
     #[test]
     fn java_a_lone_error_assertion_renders_no_marker() {
-        let out = render_java_error_method(Vec::new());
+        let out = render_java_error_method(Vec::new(), &[]);
 
         assert!(
             out.contains("assertThrows(Exception.class, () -> {"),
             "the error block must render:\n{out}"
         );
         assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+    }
+
+    /// End-to-end proof through the real `render_test_method` entry point: a fixture whose
+    /// declared `error` value names a real, UNCODED `ErrorVariant` used to render an
+    /// `assertTrue(...)` that can never pass (the measured consumer defect). It must now render
+    /// the registered skip instead.
+    #[test]
+    fn declared_variant_with_no_error_code_renders_the_skip_end_to_end() {
+        use crate::core::ir::{ErrorDef, ErrorVariant};
+
+        let mut fixture = make_fixture("auth_fails", "content");
+        fixture.assertions = vec![Assertion {
+            assertion_type: "error".to_string(),
+            value: Some(serde_json::Value::String("Authentication".to_string())),
+            ..Default::default()
+        }];
+        let e2e_config = E2eConfig {
+            call: CallConfig {
+                function: "process".to_string(),
+                module: "MyLib".to_string(),
+                result_var: "result".to_string(),
+                returns_result: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let errors = vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: "Authentication".to_string(),
+                error_code: None,
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }];
+
+        let mut out = String::new();
+        render_test_method(
+            &mut out,
+            &fixture,
+            "SampleClass",
+            "",
+            "",
+            &[],
+            None,
+            false,
+            &e2e_config,
+            &std::collections::HashMap::new(),
+            false,
+            &[],
+            &config,
+            &[],
+            &[],
+            &[],
+            &errors,
+        );
+
+        assert!(
+            out.contains(
+                "// skipped: declared error variant 'Authentication' not substantiated by this backend's \
+                 generated error type"
+            ),
+            "got:\n{out}"
+        );
+        assert!(
+            !out.contains("assertTrue(thrown.getMessage()"),
+            "must not render an assertion that can never pass, got:\n{out}"
+        );
     }
 }
 
@@ -800,6 +961,7 @@ mod inert_example_refusal_tests {
             false,
             &[],
             &crate::core::config::ResolvedCrateConfig::default(),
+            &[],
             &[],
             &[],
             &[],

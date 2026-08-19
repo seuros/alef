@@ -1,7 +1,7 @@
 //! Elixir ordinary function-call e2e test rendering.
 
 use crate::core::config::ResolvedCrateConfig;
-use crate::e2e::codegen::declared_error_value;
+use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{escape_elixir, sanitize_ident};
 use crate::e2e::field_access::FieldResolver;
@@ -20,14 +20,31 @@ use super::visitor::build_elixir_visitor;
 /// or struct). `inspect/1` renders a String reason as its quoted message text
 /// and an atom/struct reason as its type/variant name, so a single substring
 /// check enforces the same message-OR-type disjunction the other language
-/// backends apply explicitly (see `declared_error_value` in codegen/mod.rs).
-fn emit_error_assertion(out: &mut String, indent: &str, call_expr: &str, declared_value: Option<&str>) {
-    if let Some(value) = declared_value {
-        let escaped = escape_elixir(value);
-        let _ = writeln!(out, "{indent}assert {{:error, __reason}} = {call_expr}");
-        let _ = writeln!(out, "{indent}assert String.contains?(inspect(__reason), \"{escaped}\")");
-    } else {
-        let _ = writeln!(out, "{indent}assert {{:error, _}} = {call_expr}");
+/// backends apply explicitly (see `declared_error_value` in codegen/mod.rs) —
+/// for the fixtures `declared_error_variant::classify` recognises as message-style. A value
+/// naming a real `ErrorVariant` renders the registered skip instead: the NIF boundary
+/// collapses every reason to a String via `.map_err(|e| e.to_string())`, so `inspect/1` never
+/// actually sees an atom or struct to report a variant's identity through.
+fn emit_error_assertion(
+    out: &mut String,
+    indent: &str,
+    call_expr: &str,
+    fixture: &Fixture,
+    errors: &[crate::core::ir::ErrorDef],
+) {
+    match classify("elixir", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => {
+            let _ = writeln!(out, "{indent}assert {{:error, _}} = {call_expr}");
+        }
+        DeclaredErrorAssertion::Assert(value) => {
+            let escaped = escape_elixir(value);
+            let _ = writeln!(out, "{indent}assert {{:error, __reason}} = {call_expr}");
+            let _ = writeln!(out, "{indent}assert String.contains?(inspect(__reason), \"{escaped}\")");
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(out, "{indent}assert {{:error, __reason}} = {call_expr}");
+            let _ = writeln!(out, "{indent}{}", skip_line("", "#", variant, &fixture.id, "elixir"));
+        }
     }
 }
 
@@ -49,6 +66,7 @@ pub(super) fn render_test_case(
     enums: &[crate::core::ir::EnumDef],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     let test_name = sanitize_ident(&fixture.id);
     let test_label = fixture.id.replace('"', "\\\"");
@@ -340,7 +358,6 @@ pub(super) fn render_test_case(
     // called) — see the elixir-only `skip` on a consumer's `validation_ssrf_*` fixtures,
     // which documents this exact bug and is meant to be lifted once this is fixed.
     if validation_creation_failure {
-        let declared_value = declared_error_value(fixture);
         let handle_arg_name = resolved_args.iter().find(|a| a.arg_type == "handle").map(|a| &a.name);
         let create_line_idx = handle_arg_name.and_then(|name| {
             let prefix = format!("{{:ok, {name}}}");
@@ -357,14 +374,20 @@ pub(super) fn render_test_case(
 
             let _ = writeln!(out, "      case {rhs} do");
             let _ = writeln!(out, "        {{:error, __reason}} ->");
-            if let Some(value) = declared_value {
-                let escaped = escape_elixir(value);
-                let _ = writeln!(
-                    out,
-                    "          assert String.contains?(inspect(__reason), \"{escaped}\")"
-                );
-            } else {
-                let _ = writeln!(out, "          :ok");
+            match classify("elixir", fixture, errors) {
+                DeclaredErrorAssertion::Undeclared => {
+                    let _ = writeln!(out, "          :ok");
+                }
+                DeclaredErrorAssertion::Assert(value) => {
+                    let escaped = escape_elixir(value);
+                    let _ = writeln!(
+                        out,
+                        "          assert String.contains?(inspect(__reason), \"{escaped}\")"
+                    );
+                }
+                DeclaredErrorAssertion::Unsubstantiable(variant) => {
+                    let _ = writeln!(out, "          {}", skip_line("", "#", variant, &fixture.id, "elixir"));
+                }
             }
             let _ = writeln!(out, "        {{:ok, {bound_var}}} ->");
             for line in &cleaned_setup_lines[idx + 1..] {
@@ -375,7 +398,7 @@ pub(super) fn render_test_case(
             } else {
                 format!("{module_path}.{function_name}({effective_args})")
             };
-            emit_error_assertion(out, "          ", &call_invocation, declared_value);
+            emit_error_assertion(out, "          ", &call_invocation, fixture, errors);
             let _ = writeln!(out, "      end");
         } else {
             for line in &cleaned_setup_lines {
@@ -386,7 +409,7 @@ pub(super) fn render_test_case(
             } else {
                 format!("{module_path}.{function_name}({effective_args})")
             };
-            emit_error_assertion(out, "      ", &call_invocation, declared_value);
+            emit_error_assertion(out, "      ", &call_invocation, fixture, errors);
         }
 
         if needs_api_key_skip {
@@ -427,7 +450,7 @@ pub(super) fn render_test_case(
         } else {
             format!("{module_path}.{function_name}({effective_args})")
         };
-        emit_error_assertion(out, "      ", &call_invocation, declared_error_value(fixture));
+        emit_error_assertion(out, "      ", &call_invocation, fixture, errors);
         if needs_api_key_skip {
             let _ = writeln!(out, "      end");
         }
@@ -738,6 +761,7 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            &[],
         );
 
         assert!(
@@ -787,6 +811,7 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            &[],
         );
 
         assert!(
@@ -839,6 +864,7 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            &[],
         );
 
         assert!(

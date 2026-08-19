@@ -18,14 +18,22 @@ pub(super) struct GoTestFileContext<'a> {
     pub(super) config: &'a crate::core::config::ResolvedCrateConfig,
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
+    pub(super) errors: &'a [crate::core::ir::ErrorDef],
 }
 
-/// Whether a fixture's `error` assertion declares a value, meaning the generated
-/// `expects_error` branch will emit `fmt.Sprintf` and therefore requires the `fmt`
-/// import — independent of the pre-existing visitor `CustomTemplate` heuristic.
-fn fixture_needs_fmt_for_declared_error_value(fixture: &Fixture) -> bool {
-    fixture.assertions.iter().any(|a| a.assertion_type == "error")
-        && crate::e2e::codegen::declared_error_value(fixture).is_some()
+/// Whether a fixture's `error` assertion declares a value THAT WILL RENDER AS AN ASSERTION,
+/// meaning the generated `expects_error` branch will emit `fmt.Sprintf` and therefore requires
+/// the `fmt` import — independent of the pre-existing visitor `CustomTemplate` heuristic.
+///
+/// ~keep Must consult `classify`, not just "a value is declared": a value naming an
+/// unsubstantiable variant now renders `declared_error_variant::skip_line`'s bare `//` comment
+/// instead of `fmt.Sprintf`, so importing `fmt` for that fixture alone would be unused and Go
+/// rejects unused imports at compile time.
+fn fixture_needs_fmt_for_declared_error_value(fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) -> bool {
+    matches!(
+        crate::e2e::codegen::declared_error_variant::classify("go", fixture, errors),
+        crate::e2e::codegen::declared_error_variant::DeclaredErrorAssertion::Assert(_)
+    )
 }
 
 pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: GoTestFileContext<'_>) -> String {
@@ -38,6 +46,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         config,
         type_defs,
         enums,
+        errors,
     } = context;
     let mut out = String::new();
     let emits_executable_test =
@@ -167,7 +176,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 }
             })
         })
-    }) || fixtures.iter().any(|f| fixture_needs_fmt_for_declared_error_value(f))
+    }) || fixtures.iter().any(|f| fixture_needs_fmt_for_declared_error_value(f, errors))
         // Bracket-wildcard traversal assertions stringify each element with
         // `fmt.Sprintf("%v", …)`; without this the `needs_fmt` conjunction below would
         // veto the import even though the body references the package. ~keep
@@ -254,6 +263,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 config,
                 type_defs,
                 enums,
+                errors,
             },
         );
         if i + 1 < fixtures.len() {
@@ -354,14 +364,14 @@ mod fmt_import_tests {
     fn declared_error_value_requires_fmt_import() {
         let fixture = error_fixture(Some(serde_json::Value::String("SomeExpectedError".to_string())));
 
-        assert!(fixture_needs_fmt_for_declared_error_value(&fixture));
+        assert!(fixture_needs_fmt_for_declared_error_value(&fixture, &[]));
     }
 
     #[test]
     fn undeclared_error_value_does_not_require_fmt_import() {
         let fixture = error_fixture(None);
 
-        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture));
+        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture, &[]));
     }
 
     #[test]
@@ -369,6 +379,60 @@ mod fmt_import_tests {
         let mut fixture = error_fixture(Some(serde_json::Value::String("SomeExpectedError".to_string())));
         fixture.assertions[0].assertion_type = "contains".to_string();
 
-        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture));
+        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture, &[]));
+    }
+
+    /// The defect this fix closes: a fixture whose declared value names a real `ErrorVariant`
+    /// with no `#[alef(error_code = N)]` now renders `declared_error_variant::skip_line`'s bare
+    /// `//` comment, not `fmt.Sprintf` — so it must NOT pull in the `fmt` import either.
+    #[test]
+    fn uncoded_known_variant_does_not_require_fmt_import() {
+        use crate::core::ir::{ErrorDef, ErrorVariant};
+
+        let fixture = error_fixture(Some(serde_json::Value::String("Authentication".to_string())));
+        let errors = vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: "Authentication".to_string(),
+                error_code: None,
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }];
+
+        assert!(!fixture_needs_fmt_for_declared_error_value(&fixture, &errors));
+    }
+
+    /// A CODED known variant still renders the `fmt`-using assertion.
+    #[test]
+    fn coded_known_variant_still_requires_fmt_import() {
+        use crate::core::ir::{ErrorDef, ErrorVariant};
+
+        let fixture = error_fixture(Some(serde_json::Value::String("Authentication".to_string())));
+        let errors = vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: "Authentication".to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }];
+
+        assert!(fixture_needs_fmt_for_declared_error_value(&fixture, &errors));
     }
 }

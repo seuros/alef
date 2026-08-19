@@ -45,6 +45,7 @@ impl E2eCodegen for SwiftE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         // Emit under `<output>/swift_e2e/` so the consumer's SwiftPM identity
@@ -204,6 +205,7 @@ impl E2eCodegen for SwiftE2eCodegen {
                 has_http_fixtures,
                 enums,
                 functions,
+                errors,
             );
             files.push(GeneratedFile {
                 path: tests_base

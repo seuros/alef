@@ -109,7 +109,7 @@ fn render(toml: &str, f: Fixture) -> String {
     let e2e = cfg.crates[0].e2e.clone().expect("e2e config present");
     let groups = vec![group(f)];
     let files = GleamE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

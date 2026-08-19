@@ -66,7 +66,7 @@ fn test_java_mvnw_wrapper_files_emitted() {
     }];
 
     let generated = JavaCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generate failed");
 
     assert!(

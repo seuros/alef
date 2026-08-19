@@ -30,6 +30,7 @@ pub mod client_factory;
 pub mod csharp;
 pub mod dart;
 mod dart_visitors;
+pub(crate) mod declared_error_variant;
 pub mod elixir;
 pub(crate) mod error_path_assertions;
 pub(crate) mod field_skip;
@@ -1124,6 +1125,7 @@ pub trait E2eCodegen: Send + Sync {
         type_defs: &[TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>>;
 
     /// The assertion `type` values this backend can render.
@@ -1149,6 +1151,7 @@ pub trait E2eCodegen: Send + Sync {
         type_defs: &[TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         assertion_types::ensure_supported_assertion_types(
             groups,
@@ -1156,7 +1159,7 @@ pub trait E2eCodegen: Send + Sync {
             self.language_name(),
             &self.supported_assertion_types(),
         )?;
-        self.generate(groups, e2e_config, config, type_defs, enums, functions)
+        self.generate(groups, e2e_config, config, type_defs, enums, functions, errors)
     }
 
     /// Render the target-language source inside a generated documentation snippet.

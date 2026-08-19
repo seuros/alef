@@ -67,6 +67,7 @@ pub(super) fn render_snippet_body_with_ir(
             type_defs,
             enums,
             functions,
+            errors: &[],
             native_typed_dtos: true,
             is_snippet: true,
         },

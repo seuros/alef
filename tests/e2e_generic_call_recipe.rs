@@ -92,7 +92,7 @@ fn rust_uses_call_level_options_type_for_json_object_annotation() {
     let groups = vec![fixture()];
     let type_defs = sample_settings_type();
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[], &[])
         .expect("generation succeeds");
     let content = files
         .iter()
@@ -117,7 +117,7 @@ fn dart_materializes_absent_optional_config_from_type_default() {
     let groups = vec![fixture()];
     let type_defs = sample_settings_type();
     let files = DartE2eCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[], &[])
         .expect("generation succeeds");
     let content = files
         .iter()

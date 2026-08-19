@@ -21,12 +21,16 @@ use super::values::{escape_swift, resolve_streaming_adapter, swift_call_result_t
 /// ~keep When the fixture declares an expected error value, the check must match either
 /// the caught error's description or its dynamic type name — never message-only — per the
 /// shared contract in `declared_error_value`. With no declared value, output is byte-identical
-/// to the old unconditional `// success` stub so untouched fixtures never see a diff.
-fn render_error_catch_block(out: &mut String, declared_error: Option<&str>) {
+/// to the old unconditional `// success` stub so untouched fixtures never see a diff. Which of
+/// those two conventions applies, and whether Swift can ever satisfy the second, is decided once
+/// by `declared_error_variant::classify` — see its doc for why Swift lands on "not yet" today
+/// (swift-bridge's per-variant enum is never constructed for a real business-call failure).
+fn render_error_catch_block(out: &mut String, fixture: &Fixture, errors: &[crate::core::ir::ErrorDef]) {
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
     let _ = writeln!(out, "        }} catch {{");
-    match declared_error {
-        Some(expected) => {
-            let escaped = escape_swift(expected);
+    match classify("swift", fixture, errors) {
+        DeclaredErrorAssertion::Assert(declared) => {
+            let escaped = escape_swift(declared);
             let _ = writeln!(out, "            let _errorMessage = String(describing: error)");
             let _ = writeln!(out, "            let _errorType = String(describing: type(of: error))");
             let _ = writeln!(
@@ -34,7 +38,14 @@ fn render_error_catch_block(out: &mut String, declared_error: Option<&str>) {
                 "            XCTAssertTrue(_errorMessage.contains(\"{escaped}\") || _errorType.contains(\"{escaped}\"), \"expected error to mention \\\"{escaped}\\\", got message: \\(_errorMessage), type: \\(_errorType)\")"
             );
         }
-        None => {
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(
+                out,
+                "{}",
+                skip_line("            ", "//", variant, &fixture.id, "swift")
+            );
+        }
+        DeclaredErrorAssertion::Undeclared => {
             let _ = writeln!(out, "            // success");
         }
     }
@@ -61,6 +72,7 @@ pub(super) fn render_test_method(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     // Resolve per-fixture call config.
     let call_config = e2e_config.resolve_call_for_fixture(
@@ -129,7 +141,6 @@ pub(super) fn render_test_method(
     let method_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
     let expects_error = fixture.assertions.iter().any(|a| a.assertion_type == "error");
-    let declared_error = crate::e2e::codegen::declared_error_value(fixture);
     let is_async = call_overrides.and_then(|o| o.r#async).unwrap_or(call_config.r#async);
 
     // Streaming detection (call-level `streaming` opt-out is honored).
@@ -388,7 +399,7 @@ pub(super) fn render_test_method(
             }
             let _ = writeln!(out, "            _ = {call_expr}");
             let _ = writeln!(out, "            XCTFail(\"expected to throw\")");
-            render_error_catch_block(out, declared_error);
+            render_error_catch_block(out, fixture, errors);
         } else {
             // Synchronous: emit setup outside (it's expected to succeed) and
             // wrap only the throwing call in XCTAssertThrowsError. If setup
@@ -405,7 +416,7 @@ pub(super) fn render_test_method(
             }
             let _ = writeln!(out, "            _ = {call_expr}");
             let _ = writeln!(out, "            XCTFail(\"expected to throw\")");
-            render_error_catch_block(out, declared_error);
+            render_error_catch_block(out, fixture, errors);
         }
         crate::e2e::codegen::error_path_assertions::emit(out, fixture, "        // ", "swift");
         let _ = writeln!(out, "    }}");
@@ -687,6 +698,88 @@ fn is_assertion_field_swift_excluded(
 }
 
 #[cfg(test)]
+mod error_catch_block_tests {
+    use super::render_error_catch_block;
+    use crate::core::ir::{ErrorDef, ErrorVariant};
+    use crate::e2e::fixture::{Assertion, Fixture};
+
+    fn fixture_with_declared_error(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "error".to_string(),
+                value: Some(serde_json::Value::String(value.to_string())),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        }
+    }
+
+    fn coded_error_def(variant_name: &str) -> ErrorDef {
+        ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: variant_name.to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    #[test]
+    fn no_declared_value_renders_the_success_stub() {
+        let fixture = Fixture {
+            id: "no_error".to_string(),
+            ..Fixture::default()
+        };
+        let mut out = String::new();
+        render_error_catch_block(&mut out, &fixture, &[]);
+        assert_eq!(out, "        } catch {\n            // success\n        }\n");
+    }
+
+    /// With no `errors` IR supplied, a value cannot be recognised as a known variant name, so it
+    /// renders exactly like a message-style value always did before this fix.
+    #[test]
+    fn message_style_value_renders_the_message_or_type_assertion() {
+        let fixture = fixture_with_declared_error("BadRequest");
+        let mut out = String::new();
+        render_error_catch_block(&mut out, &fixture, &[]);
+        assert!(
+            out.contains("_errorMessage.contains(\"BadRequest\") || _errorType.contains(\"BadRequest\")"),
+            "got: {out}"
+        );
+    }
+
+    /// The defect this fix closes: a declared value that names a real `ErrorVariant` —
+    /// swift-bridge's per-variant enum is never constructed for a real business-call failure —
+    /// must render the registered skip, not an `XCTAssertTrue` that can never pass.
+    #[test]
+    fn declared_value_naming_a_known_variant_renders_the_registered_skip() {
+        let fixture = fixture_with_declared_error("Authentication");
+        let errors = vec![coded_error_def("Authentication")];
+        let mut out = String::new();
+        render_error_catch_block(&mut out, &fixture, &errors);
+        assert_eq!(
+            out,
+            "        } catch {\n            // skipped: declared error variant 'Authentication' not yet preserved \
+             as a distinct identity by this backend's generator\n        }\n"
+        );
+        assert!(
+            !out.contains("XCTAssertTrue"),
+            "must not render an assertion that can never pass, got: {out}"
+        );
+    }
+}
+
+#[cfg(test)]
 mod inert_example_refusal_tests {
     use super::render_test_method;
     use crate::e2e::codegen::inert_example::take_inert_examples;
@@ -738,6 +831,7 @@ mod inert_example_refusal_tests {
             &SwiftFirstClassMap::default(),
             "SampleModule",
             &crate::core::config::ResolvedCrateConfig::default(),
+            &[],
             &[],
             &[],
             &[],

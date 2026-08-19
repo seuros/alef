@@ -43,6 +43,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     wasm_type_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
     referenced_enums: &mut std::collections::BTreeSet<String>,
+    errors: &[crate::core::ir::ErrorDef],
 ) {
     let mut call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -203,14 +204,34 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
 
     // A declared error value is matched against EITHER the thrown error's message
     // OR its `name`/type — the same disjunction the Rust and Python generators use
-    // (see `crate::e2e::codegen::declared_error_value` doc comment). Building a
-    // regex literal from the raw value would let regex metacharacters in the
-    // fixture's declared string (e.g. `.`, `(`, `)`) change what the pattern
-    // matches, so the value is escaped to match itself literally.
-    let error_value_regex = expects_error
-        .then(|| crate::e2e::codegen::declared_error_value(fixture))
-        .flatten()
-        .map(|value| format!("/{}/", escape_js_regex_literal(value)));
+    // (see `crate::e2e::codegen::declared_error_value` doc comment) — for the fixtures
+    // `declared_error_variant::classify` recognises as message-style. Building a regex literal
+    // from the raw value would let regex metacharacters in the fixture's declared string (e.g.
+    // `.`, `(`, `)`) change what the pattern matches, so the value is escaped to match itself
+    // literally. A value naming a real `ErrorVariant` this backend cannot substantiate renders
+    // the registered skip instead (`error_skip_line`, spliced verbatim by the template): every
+    // NAPI throw site is `napi::Error::new(Status::GenericFailure, e.to_string())` — generic
+    // status, generic `.name`, message only.
+    let (error_value_regex, error_skip_line) = if expects_error {
+        match crate::e2e::codegen::declared_error_variant::classify(lang, fixture, errors) {
+            crate::e2e::codegen::declared_error_variant::DeclaredErrorAssertion::Undeclared => (None, None),
+            crate::e2e::codegen::declared_error_variant::DeclaredErrorAssertion::Assert(value) => {
+                (Some(format!("/{}/", escape_js_regex_literal(value))), None)
+            }
+            crate::e2e::codegen::declared_error_variant::DeclaredErrorAssertion::Unsubstantiable(variant) => (
+                None,
+                Some(crate::e2e::codegen::declared_error_variant::skip_line(
+                    "\t\t",
+                    "//",
+                    variant,
+                    &fixture.id,
+                    lang,
+                )),
+            ),
+        }
+    } else {
+        (None, None)
+    };
 
     // Build client setup
     let has_mock = fixture.mock_response.is_some() || fixture.http.is_some();
@@ -418,6 +439,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         expects_error => expects_error,
         unrenderable_error_assertions => unrenderable_error_assertions.trim_end(),
         error_value_regex => error_value_regex,
+        error_skip_line => error_skip_line,
         is_streaming_error_call => is_streaming_error_call,
         lang => lang,
         skip_reason => skip_reason,

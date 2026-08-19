@@ -101,6 +101,7 @@ impl E2eCodegen for ZigE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -465,6 +466,7 @@ impl E2eCodegen for ZigE2eCodegen {
                 &ffi_prefix,
                 config,
                 type_defs,
+                errors,
             );
             files.push(GeneratedFile {
                 path: output_base.join("src").join(filename),

@@ -113,7 +113,7 @@ fn render_once() -> String {
     let (e2e, resolved) = build_config();
     let groups = vec![build_fixture_group()];
     let files = PhpCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("PHP codegen succeeds");
     let test_file = files
         .iter()

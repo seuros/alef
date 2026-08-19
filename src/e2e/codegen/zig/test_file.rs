@@ -6,36 +6,60 @@ use super::*;
 use crate::core::hash::{self, CommentStyle};
 
 /// Close the error arm of the `if (call) |_| {..} else |_| {..}` shape and, when the fixture
-/// declares an `error` value, actually compare it.
+/// declares an `error` value this backend can substantiate, actually compare it — or, when the
+/// value names a real variant Zig cannot substantiate, emit the registered skip instead of an
+/// assertion that can never pass.
 ///
 /// ~keep Zig sits on the same C ABI as the `c` backend, which reports a failure as
 /// `set_last_error(alef_ffi_error_code(&e), &e.to_string())` — a Display message plus a numeric
 /// taxonomy code. The generated binding exposes the message as `_last_error()` and dispatches the
-/// code to a declared error-set member, so `@errorName` yields the variant name. Together they
-/// reproduce the message-or-type-name disjunction `crate::e2e::codegen::declared_error_value`
-/// documents. Before this, the declared value was discarded and every valued `error` assertion was
+/// code to a declared error-set member ONLY for variants that declared `#[alef(error_code = N)]`
+/// (`declared_error_variant::classify` decides this once); an uncoded variant collapses to
+/// `error.UnknownFfiError`, which `@errorName` can never match against a real variant's name.
+/// Before this, the declared value was discarded and every valued `error` assertion was
 /// weakened to a bare "the call failed" check that could not tell one failure from another.
-fn emit_declared_error_value_assertion(out: &mut String, declared: Option<&str>, module_name: &str, for_docs: bool) {
+fn emit_declared_error_value_assertion(
+    out: &mut String,
+    fixture: &Fixture,
+    errors: &[crate::core::ir::ErrorDef],
+    module_name: &str,
+    for_docs: bool,
+) {
     // ~keep A documentation snippet is a `main`, not a `test`: `testing` is never bound in
     // `zig/snippet_body.jinja`, so `try testing.expect(..)` would not compile there, and the
     // snippet emitter rewrites the literal `else |_| {}` arm into a printing one. Snippet output
     // therefore stays byte-identical to before this change.
-    let Some(declared) = declared.filter(|_| !for_docs) else {
+    if for_docs {
         let _ = writeln!(out, "    }} else |_| {{}}");
         return;
-    };
-    let expected = escape_zig(declared);
-    let _ = writeln!(out, "    }} else |_err| {{");
-    let _ = writeln!(out, "        const _err_name = @errorName(_err);");
-    let _ = writeln!(
-        out,
-        "        const _err_message: []const u8 = {module_name}._last_error() orelse \"\";"
-    );
-    let _ = writeln!(
-        out,
-        "        try testing.expect(std.mem.indexOf(u8, _err_message, \"{expected}\") != null or std.mem.indexOf(u8, _err_name, \"{expected}\") != null);"
-    );
-    let _ = writeln!(out, "    }}");
+    }
+    use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
+    match classify("zig", fixture, errors) {
+        DeclaredErrorAssertion::Undeclared => {
+            let _ = writeln!(out, "    }} else |_| {{}}");
+        }
+        DeclaredErrorAssertion::Assert(declared) => {
+            let expected = escape_zig(declared);
+            let _ = writeln!(out, "    }} else |_err| {{");
+            let _ = writeln!(out, "        const _err_name = @errorName(_err);");
+            let _ = writeln!(
+                out,
+                "        const _err_message: []const u8 = {module_name}._last_error() orelse \"\";"
+            );
+            let _ = writeln!(
+                out,
+                "        try testing.expect(std.mem.indexOf(u8, _err_message, \"{expected}\") != null or \
+                 std.mem.indexOf(u8, _err_name, \"{expected}\") != null);"
+            );
+            let _ = writeln!(out, "    }}");
+        }
+        DeclaredErrorAssertion::Unsubstantiable(variant) => {
+            let _ = writeln!(out, "    }} else |_err| {{");
+            let _ = writeln!(out, "        _ = _err;");
+            let _ = writeln!(out, "{}", skip_line("        ", "//", variant, &fixture.id, "zig"));
+            let _ = writeln!(out, "    }}");
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -50,6 +74,7 @@ pub(super) fn render_test_file(
     ffi_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -95,6 +120,7 @@ pub(super) fn render_test_file(
                 ffi_prefix,
                 config,
                 type_defs,
+                errors,
                 true,
                 false,
             );
@@ -148,6 +174,7 @@ fn render_test_fn(
     ffi_prefix: &str,
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
     wrap_as_test: bool,
     for_docs: bool,
 ) {
@@ -425,12 +452,7 @@ fn render_test_fn(
         // call has already failed the test by succeeding.
         let _ = writeln!(out, "    if ({call_prefix}.{function_name}({args_str})) |_| {{");
         let _ = writeln!(out, "        return error.TestUnexpectedResult;");
-        emit_declared_error_value_assertion(
-            out,
-            crate::e2e::codegen::declared_error_value(fixture),
-            module_name,
-            for_docs,
-        );
+        emit_declared_error_value_assertion(out, fixture, errors, module_name, for_docs);
         if !for_docs {
             crate::e2e::codegen::error_path_assertions::emit(out, fixture, "    // ", "zig");
         }
@@ -702,6 +724,7 @@ pub(super) fn render_snippet_body(
         ffi_prefix,
         config,
         type_defs,
+        &[],
         false,
         true,
     );
@@ -917,6 +940,7 @@ mod snippet_tests {
             "sample",
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
         );
 
         assert!(
@@ -1063,6 +1087,7 @@ mod snippet_tests {
             "sample",
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
         );
 
         assert!(!rendered.contains("suppress_abort"), "{rendered}");
@@ -1185,6 +1210,7 @@ mod snippet_tests {
             "sample",
             &config,
             &[],
+            &[],
         );
 
         assert!(rendered.contains("sample.c.sample_client_stream_records_start(_client._handle, _req_handle)"));
@@ -1264,6 +1290,7 @@ mod snippet_tests {
             "sample",
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
         );
 
         assert!(rendered.contains("const testing = std.testing;"), "{rendered}");
@@ -1305,6 +1332,7 @@ mod expects_error_fails_on_unexpected_success_tests {
             "sample",
             "sample",
             &ResolvedCrateConfig::default(),
+            &[],
             &[],
         );
 
@@ -1357,6 +1385,7 @@ mod expects_error_fails_on_unexpected_success_tests {
             "sample",
             &ResolvedCrateConfig::default(),
             &[],
+            &[],
         );
 
         assert!(
@@ -1396,6 +1425,13 @@ mod error_value_and_error_field_tests {
     }
 
     fn render(assertions: Vec<crate::e2e::fixture::Assertion>) -> String {
+        render_with_errors(assertions, &[])
+    }
+
+    fn render_with_errors(
+        assertions: Vec<crate::e2e::fixture::Assertion>,
+        errors: &[crate::core::ir::ErrorDef],
+    ) -> String {
         let fixture = Fixture {
             id: "invalid_input".into(),
             description: "Rejects invalid input".into(),
@@ -1416,7 +1452,27 @@ mod error_value_and_error_field_tests {
             "sample",
             &ResolvedCrateConfig::default(),
             &[],
+            errors,
         )
+    }
+
+    fn error_def_with(variant_name: &str, error_code: Option<u32>) -> Vec<crate::core::ir::ErrorDef> {
+        vec![crate::core::ir::ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![crate::core::ir::ErrorVariant {
+                name: variant_name.to_string(),
+                error_code,
+                is_unit: true,
+                ..crate::core::ir::ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }]
     }
 
     /// The defect: a declared `error` value was discarded, leaving `} else |_| {}` — a check that
@@ -1456,6 +1512,48 @@ mod error_value_and_error_field_tests {
         assert!(rendered.contains("if (sample.parse()) |_| {"), "{rendered}");
         assert!(rendered.contains("} else |_| {}"), "{rendered}");
         assert!(!rendered.contains("_last_error()"), "{rendered}");
+    }
+
+    /// A CODED known variant still asserts, exactly as `a_declared_error_value_is_compared_
+    /// against_message_and_error_name` proves for the no-IR case above.
+    #[test]
+    fn a_coded_known_variant_still_asserts() {
+        let rendered = render_with_errors(
+            vec![assertion("error", None, Some("Authentication"))],
+            &error_def_with("Authentication", Some(100)),
+        );
+
+        assert!(
+            rendered.contains("std.mem.indexOf(u8, _err_name, \"Authentication\") != null"),
+            "{rendered}"
+        );
+    }
+
+    /// The defect this fix closes: a declared value naming a real `ErrorVariant` with no
+    /// `error_code` must render the registered skip inside the error arm, not an
+    /// `@errorName`/message comparison that can never pass.
+    #[test]
+    fn an_uncoded_known_variant_renders_the_skip() {
+        let rendered = render_with_errors(
+            vec![assertion("error", None, Some("Authentication"))],
+            &error_def_with("Authentication", None),
+        );
+
+        assert!(
+            rendered.contains(
+                "// skipped: declared error variant 'Authentication' not substantiated by this backend's \
+                 generated error type"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("@errorName"),
+            "must not compare @errorName, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("_last_error() orelse"),
+            "must not bind the FFI message, got:\n{rendered}"
+        );
     }
 
     #[test]

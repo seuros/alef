@@ -260,7 +260,7 @@ fn tagged_enum_array_emits_rustler_tuples() {
     let enums = build_test_enums();
 
     let files = ElixirCodegen
-        .generate(&groups, &e2e, &resolved, &[], &enums, &[])
+        .generate(&groups, &e2e, &resolved, &[], &enums, &[], &[])
         .expect("generation succeeds");
 
     let test_file = files

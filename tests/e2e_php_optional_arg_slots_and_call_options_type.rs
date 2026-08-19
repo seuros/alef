@@ -28,7 +28,7 @@ fn render(toml_src: &str, fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = PhpCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("PHP codegen succeeds");
     files
         .iter()

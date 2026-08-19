@@ -102,7 +102,7 @@ fn render_java_smoke(fixture_id: &str) -> String {
         fixtures: vec![make_smoke_fixture(fixture_id)],
     }];
     let files = JavaCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

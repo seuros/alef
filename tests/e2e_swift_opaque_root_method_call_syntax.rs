@@ -166,7 +166,7 @@ fn render_no_result_type(fixture: Fixture) -> String {
         fixtures: vec![fixture],
     }];
     let files = SwiftE2eCodegen
-        .generate(&groups, &e2e, &resolved, &opaque_result_ir(), &[], &[])
+        .generate(&groups, &e2e, &resolved, &opaque_result_ir(), &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

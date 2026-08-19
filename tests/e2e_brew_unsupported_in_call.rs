@@ -105,7 +105,7 @@ fn brew_emits_skip_comment_for_unsupported_in_call() {
     let (resolved, e2e) = resolve_one(&cfg);
     let groups = vec![build_interact_fixture()];
     let files = BrewCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("Brew generation succeeds");
 
     let test_file = files

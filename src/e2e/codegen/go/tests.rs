@@ -105,6 +105,7 @@ fn test_go_method_name_uses_go_casing() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -157,6 +158,7 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
     let clean_len = out.len();
@@ -180,6 +182,7 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -233,6 +236,7 @@ fn declared_not_error_only_fixture_on_a_simple_errorless_call_still_gets_a_real_
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -280,6 +284,7 @@ fn zero_declared_assertions_on_a_simple_errorless_call_still_discards_the_result
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -405,6 +410,7 @@ fn test_streaming_fixture_emits_collect_snippet() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -486,6 +492,7 @@ fn test_streaming_with_client_factory_and_json_arg() {
             config: &crate::core::config::ResolvedCrateConfig::default(),
             type_defs: &[],
             enums: &[],
+            errors: &[],
         },
     );
 
@@ -575,6 +582,7 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -670,6 +678,7 @@ fn test_result_is_simple_contains_binds_result_and_emits_imports() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -866,6 +875,7 @@ fn test_go_plain_optional_string_uses_string_deref_not_text_accessor() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
     // Plain optional string: must use `string(*field_expr)`, NOT `.Text()`.
@@ -948,6 +958,7 @@ fn test_go_display_as_text_optional_uses_text_accessor_not_string_deref() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
     // display_as_text field: must use `.Text()`, NOT `string(*field_expr)`.
@@ -1263,6 +1274,7 @@ fn render_indexed_assertion_function(assertions: Vec<Assertion>) -> String {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
     out
@@ -1444,6 +1456,7 @@ fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emi
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 }
@@ -1492,6 +1505,7 @@ fn go_equals_on_an_error_field_is_named_instead_of_dropped() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 
@@ -1548,6 +1562,7 @@ fn go_a_lone_error_assertion_renders_no_marker() {
             config: &config,
             type_defs: &type_defs,
             enums: &enums,
+            errors: &[],
         },
     );
 

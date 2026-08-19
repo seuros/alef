@@ -772,7 +772,15 @@ fn drive_pipeline(root: &Path, config_path: &Path, resolved: &ResolvedCrateConfi
     let (e2e_files, e2e_generator_error) = stage!(
         run,
         "e2e-codegen",
-        alef::e2e::generate_e2e(resolved, &e2e_config, None, &api.types, &api.enums, &api.functions,)
+        alef::e2e::generate_e2e(
+            resolved,
+            &e2e_config,
+            None,
+            &api.types,
+            &api.enums,
+            &api.functions,
+            &api.errors,
+        )
     );
     run.e2e_paths = e2e_files.iter().map(|file| file.path.clone()).collect();
     let e2e_written = stage!(

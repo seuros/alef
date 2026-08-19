@@ -28,6 +28,7 @@ pub(super) fn render_test_file(
     enums: &[crate::core::ir::EnumDef],
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::Hash));
@@ -209,6 +210,7 @@ pub(super) fn render_test_file(
                 enums,
                 config,
                 type_defs,
+                errors,
             );
             // ~keep Elixir's error path asserts `{:error, _}` and returns, so every other
             // assertion on an error fixture — most often an `equals` against `error.status_code`
@@ -234,9 +236,14 @@ mod error_path_marker_tests {
     use crate::e2e::fixture::{Assertion, Fixture};
     use std::collections::{HashMap, HashSet};
 
-    fn render(extra: Vec<Assertion>) -> String {
+    fn render_with_errors(
+        extra: Vec<Assertion>,
+        declared_value: Option<&str>,
+        errors: &[crate::core::ir::ErrorDef],
+    ) -> String {
         let mut assertions = vec![Assertion {
             assertion_type: "error".into(),
+            value: declared_value.map(|v| serde_json::Value::String(v.to_string())),
             ..Assertion::default()
         }];
         assertions.extend(extra);
@@ -268,7 +275,12 @@ mod error_path_marker_tests {
             &[],
             &ResolvedCrateConfig::default(),
             &[],
+            errors,
         )
+    }
+
+    fn render(extra: Vec<Assertion>) -> String {
+        render_with_errors(extra, None, &[])
     }
 
     /// Elixir's error path asserts `{:error, _}` and returns, so every other assertion on the
@@ -309,5 +321,49 @@ mod error_path_marker_tests {
             "the error block must render:\n{out}"
         );
         assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+    }
+
+    /// The defect this fix closes, driven through the real per-fixture-file rendering entry
+    /// point: a declared value naming a real `ErrorVariant` — the NIF boundary collapses every
+    /// reason to a String via `.map_err(|e| e.to_string())`, so `inspect/1` never sees an atom
+    /// or struct to report a variant's identity through — must render the registered skip, not
+    /// a `String.contains?` check that can never pass.
+    #[test]
+    fn elixir_skips_a_known_variant_it_cannot_substantiate() {
+        use crate::core::ir::{ErrorDef, ErrorVariant};
+
+        let errors = vec![ErrorDef {
+            name: "ApiError".to_string(),
+            rust_path: "lib::ApiError".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![ErrorVariant {
+                name: "Authentication".to_string(),
+                error_code: Some(100),
+                is_unit: true,
+                ..ErrorVariant::default()
+            }],
+            doc: String::new(),
+            methods: vec![],
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }];
+        let out = render_with_errors(Vec::new(), Some("Authentication"), &errors);
+
+        assert!(
+            out.contains("assert {:error, __reason} ="),
+            "the call must still be proven to fail, got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "# skipped: declared error variant 'Authentication' not yet preserved as a distinct identity by \
+                 this backend's generator"
+            ),
+            "got:\n{out}"
+        );
+        assert!(
+            !out.contains("String.contains?"),
+            "must not render a check that can never pass, got:\n{out}"
+        );
     }
 }

@@ -120,7 +120,7 @@ fn rust_codegen_emits_real_call_for_function_fixture_without_http_or_mock() {
     let (e2e, resolved) = build_config_with_default_call();
     let groups = vec![build_function_call_fixture("function_call_fixture")];
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()
@@ -211,7 +211,7 @@ result_is_simple = true
         }],
     }];
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()
@@ -305,7 +305,7 @@ result_is_simple = true
         }],
     }];
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()
@@ -397,7 +397,7 @@ result_is_simple = true
         }],
     }];
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()
@@ -420,7 +420,7 @@ fn rust_codegen_imports_function_for_non_mock_call_fixture() {
     let (e2e, resolved) = build_config_with_default_call();
     let groups = vec![build_function_call_fixture("call_fixture")];
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()
@@ -439,7 +439,7 @@ fn rust_codegen_still_stubs_when_no_callable_function_configured() {
     let (e2e, resolved) = build_config_without_function();
     let groups = vec![build_function_call_fixture("schema_only_fixture")];
     let files = RustE2eCodegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()
@@ -525,7 +525,7 @@ function = "process"
     };
 
     let files = RustE2eCodegen
-        .generate(&[group], &e2e, &resolved, &[], &[], &[])
+        .generate(&[group], &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds");
     let test_file = files
         .iter()

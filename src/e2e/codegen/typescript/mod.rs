@@ -34,6 +34,7 @@ impl E2eCodegen for TypeScriptCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let output_base = PathBuf::from(e2e_config.effective_output()).join(self.language_name());
         let tests_base = output_base.join("tests");
@@ -263,6 +264,7 @@ impl E2eCodegen for TypeScriptCodegen {
                 enums,
                 "",
                 config,
+                errors,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),
@@ -632,7 +634,7 @@ result_var = "result"
         e2e.dep_mode = crate::e2e::config::DependencyMode::Registry;
         let resolved = cfg.resolve().unwrap().remove(0);
         let codegen = TypeScriptCodegen;
-        let files = codegen.generate(&[], &e2e, &resolved, &[], &[], &[]).unwrap();
+        let files = codegen.generate(&[], &e2e, &resolved, &[], &[], &[], &[]).unwrap();
         // package.json, tsconfig.json, vitest.config.ts, pnpm-workspace.yaml
         assert!(files.len() >= 3, "got {} files", files.len());
 
@@ -690,7 +692,7 @@ result_var = "result"
         assert_eq!(e2e.dep_mode, crate::e2e::config::DependencyMode::Local);
         let resolved = cfg.resolve().unwrap().remove(0);
         let codegen = TypeScriptCodegen;
-        let files = codegen.generate(&[], &e2e, &resolved, &[], &[], &[]).unwrap();
+        let files = codegen.generate(&[], &e2e, &resolved, &[], &[], &[], &[]).unwrap();
 
         // In Local mode, pnpm-workspace.yaml must NOT be emitted. The root
         // workspace will handle e2e/node naturally, and workspace:* deps will

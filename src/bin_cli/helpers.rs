@@ -840,9 +840,16 @@ pub(crate) fn collect_managed_surface(
         let Some(e2e_config) = &config.e2e else {
             return Ok((Vec::new(), Vec::new()));
         };
-        let (files, generator_error) =
-            crate::e2e::generate_e2e(config, e2e_config, None, &api.types, &api.enums, &api.functions)
-                .context("failed to render the e2e stage of alef's managed output")?;
+        let (files, generator_error) = crate::e2e::generate_e2e(
+            config,
+            e2e_config,
+            None,
+            &api.types,
+            &api.enums,
+            &api.functions,
+            &api.errors,
+        )
+        .context("failed to render the e2e stage of alef's managed output")?;
         Ok(stage_failure_for("e2e", generator_error, files))
     });
     let e2e_registry_stage: Stage<'_> = Box::new(|| {
@@ -851,9 +858,16 @@ pub(crate) fn collect_managed_surface(
         };
         let mut registry_config = e2e_config.clone();
         registry_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-        let (files, generator_error) =
-            crate::e2e::generate_e2e(config, &registry_config, None, &api.types, &api.enums, &api.functions)
-                .context("failed to render the registry-mode test-app stage of alef's managed output")?;
+        let (files, generator_error) = crate::e2e::generate_e2e(
+            config,
+            &registry_config,
+            None,
+            &api.types,
+            &api.enums,
+            &api.functions,
+            &api.errors,
+        )
+        .context("failed to render the registry-mode test-app stage of alef's managed output")?;
         Ok(stage_failure_for("test-apps (registry mode)", generator_error, files))
     });
     let readme_stage: Stage<'_> = Box::new(|| {

@@ -119,7 +119,7 @@ fn generate(codegen: &dyn E2eCodegen, language: &str) -> Vec<alef::core::backend
     let (e2e, resolved) = config_for(language);
     let groups = groups_with(vec![make_http_fixture("ping_ok")]);
     codegen
-        .generate(&groups, &e2e, &resolved, &[], &[], &[])
+        .generate(&groups, &e2e, &resolved, &[], &[], &[], &[])
         .expect("generation succeeds")
 }
 

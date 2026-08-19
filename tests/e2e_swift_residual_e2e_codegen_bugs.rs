@@ -151,7 +151,7 @@ fn render_with_config(config_toml: &str, fixture: Fixture, type_defs: Vec<TypeDe
         fixtures: vec![fixture],
     }];
     let files = SwiftE2eCodegen
-        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[])
+        .generate(&groups, &e2e, &resolved, &type_defs, &[], &[], &[])
         .expect("generation succeeds");
     files
         .iter()

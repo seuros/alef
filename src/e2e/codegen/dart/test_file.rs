@@ -20,6 +20,7 @@ pub(super) fn render_test_file(
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -586,6 +587,7 @@ pub(super) fn render_test_file(
                 type_defs,
                 enums,
                 functions,
+                errors,
                 native_typed_dtos: false,
                 is_snippet: false,
             },

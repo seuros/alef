@@ -102,7 +102,7 @@ fn trait_bridge_tests_are_async_and_await_calls() {
 
     let codegen = TypeScriptCodegen;
     let generated = codegen
-        .generate(&fixtures, &e2e_config, &resolved_config, &[], &[], &[])
+        .generate(&fixtures, &e2e_config, &resolved_config, &[], &[], &[], &[])
         .expect("generates without error");
 
     let test_file = generated

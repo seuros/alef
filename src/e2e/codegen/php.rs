@@ -30,6 +30,7 @@ impl E2eCodegen for PhpCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -256,6 +257,7 @@ impl E2eCodegen for PhpCodegen {
                 &config.adapters,
                 php_lang_rename_all,
                 config,
+                errors,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),

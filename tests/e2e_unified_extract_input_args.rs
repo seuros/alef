@@ -92,7 +92,7 @@ fn group() -> Vec<FixtureGroup> {
 fn dart_unified_extract_single_fixture_emits_input_arg() {
     let (e2e, resolved) = config();
     let files = DartE2eCodegen
-        .generate(&group(), &e2e, &resolved, &[], &[], &[])
+        .generate(&group(), &e2e, &resolved, &[], &[], &[], &[])
         .expect("dart e2e generation succeeds");
     let content = &files
         .iter()
@@ -118,7 +118,7 @@ fn dart_unified_extract_single_fixture_emits_input_arg() {
 fn swift_unified_extract_single_fixture_emits_input_json() {
     let (e2e, resolved) = config();
     let files = SwiftE2eCodegen
-        .generate(&group(), &e2e, &resolved, &[], &[], &[])
+        .generate(&group(), &e2e, &resolved, &[], &[], &[], &[])
         .expect("swift e2e generation succeeds");
     let content = &files
         .iter()
@@ -144,7 +144,7 @@ fn swift_unified_extract_single_fixture_emits_input_json() {
 fn r_unified_extract_single_fixture_emits_input_arg() {
     let (e2e, resolved) = config();
     let files = RCodegen
-        .generate(&group(), &e2e, &resolved, &[], &[], &[])
+        .generate(&group(), &e2e, &resolved, &[], &[], &[], &[])
         .expect("R e2e generation succeeds");
     let content = &files
         .iter()

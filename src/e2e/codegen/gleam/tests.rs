@@ -413,6 +413,7 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
         None,
         crate::e2e::codegen::call_ir::CallIr::default(),
         &[],
+        &[],
     );
     let clean_len = out.len();
 
@@ -439,6 +440,7 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
         None,
         crate::e2e::codegen::call_ir::CallIr::default(),
         &[],
+        &[],
     );
 
     assert!(
@@ -456,9 +458,14 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
 /// Gleam's error path emits `should.be_error()` and returns, so every other assertion on the
 /// fixture used to leave no trace in the generated module at all. The marker is emitted by
 /// `test_file.rs`, so this drives the file-level renderer rather than `render_test_case`.
-fn render_gleam_error_file(extra: Vec<Assertion>) -> String {
+fn render_gleam_error_file_with_declared_value(
+    extra: Vec<Assertion>,
+    declared_value: Option<&str>,
+    errors: &[crate::core::ir::ErrorDef],
+) -> String {
     let mut assertions = vec![Assertion {
         assertion_type: "error".to_string(),
+        value: declared_value.map(|v| serde_json::Value::String(v.to_string())),
         ..Default::default()
     }];
     assertions.extend(extra);
@@ -493,7 +500,12 @@ fn render_gleam_error_file(extra: Vec<Assertion>) -> String {
         // builder must behave exactly as it did before the seam existed. ~keep
         crate::e2e::codegen::call_ir::CallIr::default(),
         &[],
+        errors,
     )
+}
+
+fn render_gleam_error_file(extra: Vec<Assertion>) -> String {
+    render_gleam_error_file_with_declared_value(extra, None, &[])
 }
 
 #[test]
@@ -532,4 +544,74 @@ fn gleam_a_lone_error_assertion_renders_no_marker() {
         "the error block must render:\n{out}"
     );
     assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
+}
+
+fn coded_authentication_variant() -> Vec<crate::core::ir::ErrorDef> {
+    vec![crate::core::ir::ErrorDef {
+        name: "ApiError".to_string(),
+        rust_path: "lib::ApiError".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![crate::core::ir::ErrorVariant {
+            name: "Authentication".to_string(),
+            error_code: Some(100),
+            is_unit: true,
+            ..crate::core::ir::ErrorVariant::default()
+        }],
+        doc: String::new(),
+        methods: vec![],
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }]
+}
+
+/// A message-style declared value (not a known variant name) keeps rendering the existing
+/// `string.inspect`/`string.contains` comparison unchanged — proves the fix does not regress
+/// config-validation fixtures.
+#[test]
+fn gleam_message_style_declared_value_still_asserts() {
+    let errors = coded_authentication_variant();
+    let out = render_gleam_error_file_with_declared_value(Vec::new(), Some("size"), &errors);
+
+    assert!(
+        out.contains("should.be_true(string.contains(string.inspect(__reason), \"size\"))"),
+        "got:\n{out}"
+    );
+    assert!(out.contains("import gleam/string"), "got:\n{out}");
+}
+
+/// The defect this fix closes: a declared value that names a real `ErrorVariant` — every Gleam
+/// binding rides on the same Rustler NIF glue that stringifies the reason, so no constructor
+/// name ever survives to `string.inspect` — must render the registered skip, not a comparison
+/// that can never pass. The `import gleam/string` line must also disappear: nothing in the
+/// `Unsubstantiable` rendering path needs it, and importing an unused module fails `gleam build`.
+#[test]
+fn gleam_skips_a_known_variant_it_cannot_substantiate() {
+    let errors = coded_authentication_variant();
+    let out = render_gleam_error_file_with_declared_value(Vec::new(), Some("Authentication"), &errors);
+
+    assert!(
+        out.contains("let assert Error(_) = __result"),
+        "the call must still be proven to fail, got:\n{out}"
+    );
+    assert!(
+        out.contains(
+            "// skipped: declared error variant 'Authentication' not yet preserved as a distinct identity by \
+             this backend's generator"
+        ),
+        "got:\n{out}"
+    );
+    assert!(
+        !out.contains("string.contains(string.inspect"),
+        "must not render a comparison that can never pass, got:\n{out}"
+    );
+    assert!(
+        !out.contains("import gleam/string"),
+        "the Unsubstantiable path needs no gleam/string import, got:\n{out}"
+    );
+
+    let records = crate::e2e::codegen::take_skip_records();
+    assert_eq!(records.len(), 1, "got: {records:?}");
+    assert_eq!(records[0].language, "gleam");
+    assert_eq!(records[0].fixture_id, "rate_limited");
 }
