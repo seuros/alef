@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anyway, so std-typed arguments now skip the handle and are spliced in as a literal. Crate-defined
   types, including enums, are unaffected.
 
+### Removed
+
+- **Dropped the wall-clock companion to the subprocess-backoff test.** It timed 20 trivial commands
+  and asserted the amortised cost stayed below the fixed interval the backoff removed, but bare
+  process-spawn overhead on a loaded machine exceeds that bound, so it failed on load rather than
+  on regression at two successive thresholds. The sibling test asserts the poll schedule directly
+  and covers the same property without depending on machine load.
+
 ## [0.62.1] - 2026-08-19
 
 ### Fixed
