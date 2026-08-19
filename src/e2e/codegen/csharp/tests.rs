@@ -1026,7 +1026,7 @@ fn a_wrapped_named_parameter_is_left_to_the_existing_lowering() {
 /// Build the fixture + config pair the refusal tests share: `result_fields` names only `content`,
 /// which is what arms the availability oracle — with it empty the resolver is deliberately
 /// permissive and no field is ever rejected. ~keep
-fn render_refusal_candidate(fixture_id: &str, assertions: Vec<Assertion>) -> String {
+pub(super) fn render_refusal_candidate(fixture_id: &str, assertions: Vec<Assertion>) -> String {
     let fixture = Fixture {
         id: fixture_id.into(),
         description: "Widget smoke".into(),

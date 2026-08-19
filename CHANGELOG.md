@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The xUnit attribute on a generated C# e2e test no longer collapses onto the method
+  signature.** `test_method.jinja` picks between `[Fact]` and `[Fact(Skip = "...")]` in a
+  conditional; written with whitespace-trimming delimiters, that block also ate the newline after
+  the attribute, emitting `[Fact]    public void Test_X()`. The result still compiled, so nothing
+  failed -- every generated C# e2e suite simply carried the mangled line. Regression from 0.61.0,
+  now pinned by tests that assert the attribute occupies its own line in both branches.
 - **A struct field defaulted only through `<FieldType>::default()` now resolves to a concrete
   value instead of forcing every generated language binding into an unconstructible `required`
   member.** The extractor folded `SomeEnum::default()` (and `Default::default()`) to

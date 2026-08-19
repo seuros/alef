@@ -1122,4 +1122,6 @@ mod stubs;
 pub use stubs::emit_test_backend;
 
 #[cfg(test)]
+mod fact_attribute_layout_tests;
+#[cfg(test)]
 mod tests;

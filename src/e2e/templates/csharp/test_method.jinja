@@ -79,9 +79,9 @@
 {%- else %}
 {%- if refusal_skip_reason %}
     [Fact(Skip = "{{ refusal_skip_reason }}")]
-{%- else %}
+{% else %}
     [Fact]
-{%- endif %}
+{% endif %}
     public {{ return_type }} Test_{{ method_name }}()
     {
         // {{ description }}
