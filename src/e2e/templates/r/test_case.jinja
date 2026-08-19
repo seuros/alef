@@ -1,13 +1,15 @@
 test_that("{{ test_name }}: {{ description }}", {
-{%- for line in setup_lines %}
+{% for line in setup_lines %}
   {{ line }}
-{%- endfor %}
-{%- if expects_error %}
+{% endfor %}
+{% if expects_error %}
 {{ error_check }}
-{%- else %}
-  {% if result_is_simple %}{{ result_var }} <- {{ function_name }}({{ final_args }})
-  {%- else %}{{ result_var }} <- jsonlite::fromJSON({{ function_name }}({{ final_args }}), simplifyVector = FALSE)
-  {%- endif %}
+{% else %}
+{% if result_is_simple %}
+  {{ result_var }} <- {{ function_name }}({{ final_args }})
+{% else %}
+  {{ result_var }} <- jsonlite::fromJSON({{ function_name }}({{ final_args }}), simplifyVector = FALSE)
+{% endif %}
 {{ assertions_rendered }}
-{%- endif %}
+{% endif %}
 })

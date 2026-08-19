@@ -5,11 +5,11 @@
    - description: fixture description
    - skip_reason: optional skip reason (if test is skipped)
 #}
-{%- if skip_reason %}
+{% if skip_reason %}
     [Fact(Skip = "{{ skip_reason }}")]
-{%- else %}
+{% else %}
     [Fact]
-{%- endif %}
+{% endif %}
     public async Task Test_{{ fn_name }}()
     {
         // {{ description }}

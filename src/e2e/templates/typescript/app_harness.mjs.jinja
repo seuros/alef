@@ -8,13 +8,13 @@
  */
 
 {% if import_style == "named" %}
-{% for import_name in imports -%}
+{% for import_name in imports %}
 import { {{ app_class }}, {{ server_config_factory_import }}, {{ method_enum }}, {{ route_builder_class }}, CorsConfig, CompressionConfig, ApiKeyAuthConfig, JwtAuthConfig, BearerAuthConfig } from '{{ import_name }}';
-{% endfor -%}
+{% endfor %}
 {% else %}
-{% for import_name in imports -%}
+{% for import_name in imports %}
 import _pkg from '{{ import_name }}';
-{% endfor -%}
+{% endfor %}
 const { {{ app_class }}, {{ server_config_factory_import }}, {{ method_enum }}, {{ route_builder_class }}, CorsConfig, CompressionConfig, ApiKeyAuthConfig, JwtAuthConfig, BearerAuthConfig } = _pkg;
 {% endif %}
 
@@ -22,11 +22,11 @@ const { {{ app_class }}, {{ server_config_factory_import }}, {{ method_enum }}, 
 const _FIXTURES = {{fixtures_json}};
 
 // Create and configure the app
-{% if constructor_method == ".new()" -%}
+{% if constructor_method == ".new()" %}
 const app = {{ app_class }}.new();
-{% else -%}
+{% else %}
 const app = new {{ app_class }}();
-{% endif -%}
+{% endif %}
 
 // Map HTTP method name to the corresponding Method enum value
 const methodMap = {
@@ -84,11 +84,11 @@ for (const [fixtureId, fixture] of Object.entries(_FIXTURES)) {
   const fullRoute = `/fixtures/${fixtureId}${route}`;
 
   // Build RouteBuilder and register the route
-  {% if route_builder_constructor_method == ".new" -%}
+  {% if route_builder_constructor_method == ".new" %}
   let builder = {{ route_builder_class }}.new(methodEnum, fullRoute);
-  {%- else -%}
+  {% else %}
   let builder = new {{ route_builder_class }}(methodEnum, fullRoute);
-  {%- endif %}
+  {% endif %}
 
   // Wire handler middleware through to the RouteBuilder.
   // Each entry in `middleware` is a {name: config} pair. The dispatch table
@@ -121,11 +121,11 @@ for (const [fixtureId, fixture] of Object.entries(_FIXTURES)) {
   // If the fixture has CORS middleware configured, register an OPTIONS preflight handler
   if (handler.middleware && handler.middleware.cors) {
     const corsConfig = handler.middleware.cors;
-    {% if route_builder_constructor_method == ".new" -%}
+    {% if route_builder_constructor_method == ".new" %}
     const optionsBuilder = {{ route_builder_class }}.new({{ method_enum }}.Options, fullRoute);
-    {%- else -%}
+    {% else %}
     const optionsBuilder = new {{ route_builder_class }}({{ method_enum }}.Options, fullRoute);
-    {%- endif %}
+    {% endif %}
 
     // Build a CORS preflight handler
     const corsHandlerFn = (request) => {

@@ -1122,6 +1122,8 @@ mod stubs;
 pub use stubs::emit_test_backend;
 
 #[cfg(test)]
+mod assertion_indentation_layout_tests;
+#[cfg(test)]
 mod fact_attribute_layout_tests;
 #[cfg(test)]
 mod tests;

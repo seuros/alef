@@ -1,4 +1,4 @@
-{#- PHP HTTP test method header
+{# PHP HTTP test method header
 
    Context variables:
    - fn_name: sanitized function name (snake_case)
@@ -8,6 +8,6 @@
     /** {{ description }} */
     public function test_{{ fn_name }}(): void
     {
-{%- if skip_reason %}
+{% if skip_reason %}
         $this->markTestSkipped('{{ skip_reason }}');
-{%- endif %}
+{% endif %}

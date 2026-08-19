@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Whitespace-control tags no longer eat the indentation of generated e2e code.** The e2e
+  template environment already sets `trim_blocks` and `lstrip_blocks`, so a plain `{% %}` tag
+  strips exactly the one newline that separates it from its content. An explicit `-` on top of
+  that strips *all* whitespace to the next non-whitespace character, which deletes the emitted
+  statement's own indentation and, on a `{% for %}`/`{% endfor %}` pair, the newline between
+  iterations. Two of the results were not cosmetic: `python/app_harness.py.jinja` glued an
+  assignment onto the preceding comment line, so `_config` was never defined and the next
+  statement raised `NameError`; and `r/test_case.jinja` concatenated setup lines into
+  unparseable R (`x <- 1res <- foo(1, 2)`). `csharp/http_test_open.jinja` and
+  `java/http_test_open.jinja` also turned out to be a second path that collapsed `[Fact]`/`@Test`
+  onto the method signature, distinct from the `test_method.jinja` path fixed in 0.61.1. Redundant
+  `-` modifiers are removed across the csharp, java, php, ruby, typescript, swift, go, r, python
+  and elixir templates, with layout tests pinning the exact emitted indentation for the C# and
+  Java assertion templates.
+
 - **Generated e2e assertions now read a field's optionality from the IR instead of a
   hand-maintained config table.** `FieldResolver`'s `optional_fields` was populated only from
   the consumer's `[crates.e2e] fields_optional` list in `alef.toml`, never from `FieldDef.optional`

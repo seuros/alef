@@ -1,4 +1,4 @@
-{#- TypeScript test case (it() block) template
+{# TypeScript test case (it() block) template
 
    Context variables:
    - test_name: sanitized test name
@@ -24,15 +24,15 @@
    - bridge_cleanup: optional string for async trait bridge dispose() calls
    - unrenderable_error_assertions: skip markers for error-path assertions this backend cannot render
 #}
-{%- if skip_reason %}
+{% if skip_reason %}
 	it.skip("{{ test_name }}: {{ description }}", () => {
 		// {{ skip_reason }}
 	});
-{%- elif refusal_body %}
+{% elif refusal_body %}
 	it.skip("{{ test_name }}: {{ description }}", () => {
 {{ refusal_body }}
 	});
-{%- elif expects_error %}
+{% elif expects_error %}
 	it("{{ test_name }}: {{ description }}", async () => {
 {% if client_setup %}
 		{{ client_setup }}
@@ -70,7 +70,7 @@
 {{ unrenderable_error_assertions }}
 {% endif %}
 	}, {{ timeout_ms }});
-{%- else %}
+{% else %}
 	it("{{ test_name }}: {{ description }}", {{ async_kw }}() => {
 {% if client_setup %}
 		{{ client_setup }}
@@ -87,8 +87,8 @@
 		{{ collect_snippet }}
 {% endif %}
 {{ assertions_body }}
-{%- if bridge_cleanup %}
+{% if bridge_cleanup %}
 		{{ bridge_cleanup }}
-{%- endif %}
+{% endif %}
 	}, {{ timeout_ms }});
-{%- endif %}
+{% endif %}

@@ -1,4 +1,4 @@
-{#- TypeScript synthetic field assertion template
+{# TypeScript synthetic field assertion template
 
    Context variables:
    - assertion_type: assertion type ("is_true", "is_false", "count_equals", etc.)
@@ -9,8 +9,8 @@
    - js_val: JavaScript formatted value string
    - n: numeric value
 #}
-{%- if assertion_type == "is_true" or assertion_type == "is_false" %}
-{%- if assertion_type == "is_true" %}
+{% if assertion_type == "is_true" or assertion_type == "is_false" %}
+{% if assertion_type == "is_true" %}
     expect({{ pred }}).toBe(true);
 {% else %}
     expect({{ pred }}).toBe(false);

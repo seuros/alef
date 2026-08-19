@@ -55,9 +55,9 @@ public class HarnessMain {
             // Fixtures are stored as individual JSON files in src/test/resources/fixtures/
             // to avoid exceeding Java's 65KB string literal limit.
             List<String> fixtureIds = Arrays.asList(
-{%- for fixture_id in fixture_ids %}
+{% for fixture_id in fixture_ids %}
                 "{{ fixture_id }}"{{ "," if not loop.last else "" }}
-{%- endfor %}
+{% endfor %}
             );
 
             for (String fixtureId : fixtureIds) {

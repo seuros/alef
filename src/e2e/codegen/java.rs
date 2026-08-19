@@ -365,4 +365,6 @@ mod visitor;
 pub use stubs::emit_test_backend;
 
 #[cfg(test)]
+mod assertion_indentation_layout_tests;
+#[cfg(test)]
 mod tests;

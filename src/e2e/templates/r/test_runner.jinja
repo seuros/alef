@@ -1,9 +1,9 @@
 library(testthat)
-{%- if dep_mode_is_local %}
+{% if dep_mode_is_local %}
 devtools::load_all("{{ pkg_path }}")
-{%- else %}
+{% else %}
 # Package loaded via library() from CRAN install.
-{%- endif %}
+{% endif %}
 
 testthat::set_max_fails(Inf)
 .script_dir <- tryCatch(dirname(normalizePath(sys.frame(1)$ofile)), error = function(e) getwd())

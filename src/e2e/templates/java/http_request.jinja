@@ -12,14 +12,14 @@
         java.net.URI uri = java.net.URI.create(baseUrl + "{{ path }}");
         var builder = java.net.http.HttpRequest.newBuilder(uri)
             .method("{{ method }}", {{ body_publisher }});
-{%- if content_type %}
+{% if content_type %}
         builder = builder.header("Content-Type", "{{ content_type }}");
-{%- endif %}
-{%- for header_line in headers_lines %}
+{% endif %}
+{% for header_line in headers_lines %}
         {{ header_line }}
-{%- endfor %}
-{%- if cookies_line %}
+{% endfor %}
+{% if cookies_line %}
         {{ cookies_line }}
-{%- endif %}
+{% endif %}
         var {{ response_var }} = java.net.http.HttpClient.newHttpClient()
             .send(builder.build(), java.net.http.HttpResponse.BodyHandlers.ofString());

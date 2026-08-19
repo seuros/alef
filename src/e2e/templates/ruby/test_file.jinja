@@ -1,4 +1,4 @@
-{#- Ruby test_file template (spec file)
+{# Ruby test_file template (spec file)
 
    Context variables:
    - category: fixture category (used in describe block)
@@ -10,12 +10,12 @@
 #}
 {{ header }}# frozen_string_literal: true
 
-{% for req in requires -%}
+{% for req in requires %}
 require '{{ req }}'
 {% endfor %}
 
 RSpec.describe '{{ category }}' do
-{%- if has_array_contains %}
+{% if has_array_contains %}
 
   def alef_e2e_item_texts(item)
     return [item.to_s] if item.is_a?(String) || item.is_a?(Symbol) || item.is_a?(Numeric)
@@ -23,13 +23,13 @@ RSpec.describe '{{ category }}' do
       item.respond_to?(attr) ? item.send(attr).to_s : nil
     end + [item.to_s]
   end
-{%- endif %}
-{%- if has_http %}
+{% endif %}
+{% if has_http %}
 
   let(:mock_server_url) { ENV.fetch('MOCK_SERVER_URL', 'http://localhost:8080') }
-{%- endif %}
-{%- for example in examples %}
+{% endif %}
+{% for example in examples %}
 
 {{ example }}
-{%- endfor %}
+{% endfor %}
 end

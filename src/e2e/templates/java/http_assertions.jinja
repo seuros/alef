@@ -8,24 +8,24 @@
    - partial_body: optional partial body assertions (list of field assertions)
    - validation_errors: optional validation error messages to check
 #}
-{%- if status_code %}
+{% if status_code %}
         assertEquals({{ status_code }}, {{ response_var }}.statusCode(), "status code mismatch");
-{%- endif %}
-{%- for header in headers %}
+{% endif %}
+{% for header in headers %}
         {{ header.assertion_code }}
-{%- endfor %}
-{%- if body_assertion %}
+{% endfor %}
+{% if body_assertion %}
         {{ body_assertion }}
-{%- endif %}
-{%- if partial_body %}
+{% endif %}
+{% if partial_body %}
         var partialJson = MAPPER.readTree({{ response_var }}.body());
-{%- for field in partial_body %}
+{% for field in partial_body %}
         {{ field.assertion_code }}
-{%- endfor %}
-{%- endif %}
-{%- if validation_errors %}
+{% endfor %}
+{% endif %}
+{% if validation_errors %}
         var veBody = {{ response_var }}.body();
-{%- for error in validation_errors %}
+{% for error in validation_errors %}
         {{ error.assertion_code }}
-{%- endfor %}
-{%- endif %}
+{% endfor %}
+{% endif %}

@@ -22,9 +22,9 @@ import FoundationNetworking
 // The fixtures dict contains per-fixture data with handler route, method, body_schema, etc.
 // Split JSON across multiple raw string literals (safe delimiters computed in Rust).
 let _FIXTURES_JSON: String = [
-{%- for chunk in fixtures_json_chunks %}
+{% for chunk in fixtures_json_chunks %}
     {{ chunk }},
-{%- endfor %}
+{% endfor %}
 ].joined()
 
 guard let _fixturesData = _FIXTURES_JSON.data(using: .utf8),

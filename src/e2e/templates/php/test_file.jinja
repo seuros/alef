@@ -1,4 +1,4 @@
-{#- PHP test file template for PHPUnit
+{# PHP test file template for PHPUnit
 
    Context variables:
    - header: file header comment
@@ -23,14 +23,14 @@ use {{ namespace }}\{{ class_name }};
 {% for use_stmt in imports_use %}
 {{ use_stmt }}
 {% endfor %}
-{%- if has_http_tests %}
+{% if has_http_tests %}
 use GuzzleHttp\Client;
-{%- endif %}
+{% endif %}
 
 /** E2e tests for category: {{ category }}. */
 final class {{ test_class }} extends TestCase
 {
-{%- if has_http_tests %}
+{% if has_http_tests %}
     private Client $httpClient;
 
     protected function setUp(): void
@@ -39,7 +39,7 @@ final class {{ test_class }} extends TestCase
         $baseUrl = (string)(getenv('MOCK_SERVER_URL') ?: 'http://localhost:8080');
         $this->httpClient = new Client(['base_uri' => $baseUrl, 'http_errors' => false, 'decode_content' => false, 'allow_redirects' => false]);
     }
-{%- endif %}
+{% endif %}
 
 {{ fixtures_body }}
 }

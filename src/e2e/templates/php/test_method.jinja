@@ -1,4 +1,4 @@
-{#- PHP test method template for PHPUnit
+{# PHP test method template for PHPUnit
 
    Context variables:
    - method_name: method name (snake_case)
@@ -22,16 +22,16 @@
 {% if client_factory %}
         {{ client_factory }}
 {% endif %}
-{%- if expects_error %}
+{% if expects_error %}
 {{ error_test_body }}
-{%- elif skip_test %}
-{%- for line in setup_lines %}
+{% elif skip_test %}
+{% for line in setup_lines %}
         {{ line }}
 {% endfor %}
         ${{ result_var }} = {{ call_expr }};
         $this->assertNotNull(${{ result_var }});
-{%- else %}
-{%- for line in setup_lines %}
+{% else %}
+{% for line in setup_lines %}
         {{ line }}
 {% endfor %}
         ${{ result_var }} = {{ call_expr }};

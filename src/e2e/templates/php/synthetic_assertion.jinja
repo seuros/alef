@@ -1,4 +1,4 @@
-{#- PHP synthetic field assertion template.
+{# PHP synthetic field assertion template.
    Domain-shaped synthetic assertion kinds are rendered only after fixture or
    call config enables the matching assertion recipe.
    Context variables:
@@ -11,8 +11,8 @@
    - expr: expression to evaluate (for embedding_dimensions)
    - php_val: PHP formatted value string
 #}
-{%- if assertion_kind == "chunks_content" %}
-{%- if assertion_type == "is_true" %}
+{% if assertion_kind == "chunks_content" %}
+{% if assertion_type == "is_true" %}
         $this->assertTrue({{ pred }});
 {% elif assertion_type == "is_false" %}
         $this->assertFalse({{ pred }});
@@ -20,7 +20,7 @@
         // skipped: unsupported assertion type on synthetic field '{{ field_name }}'
 {% endif %}
 {% elif assertion_kind == "chunks_embeddings" %}
-{%- if assertion_type == "is_true" %}
+{% if assertion_type == "is_true" %}
         $this->assertTrue({{ pred }});
 {% elif assertion_type == "is_false" %}
         $this->assertFalse({{ pred }});
@@ -28,7 +28,7 @@
         // skipped: unsupported assertion type on synthetic field '{{ field_name }}'
 {% endif %}
 {% elif assertion_kind == "embeddings" %}
-{%- if assertion_type == "count_equals" %}
+{% if assertion_type == "count_equals" %}
         $this->assertCount({{ php_val }}, ${{ result_var }});
 {% elif assertion_type == "count_min" %}
         $this->assertGreaterThanOrEqual({{ php_val }}, count(${{ result_var }}));
@@ -40,7 +40,7 @@
         // skipped: unsupported assertion type on synthetic field 'embeddings'
 {% endif %}
 {% elif assertion_kind == "embedding_dimensions" %}
-{%- if assertion_type == "equals" %}
+{% if assertion_type == "equals" %}
         $this->assertEquals({{ php_val }}, {{ expr }});
 {% elif assertion_type == "greater_than" %}
         $this->assertGreaterThan({{ php_val }}, {{ expr }});
@@ -48,7 +48,7 @@
         // skipped: unsupported assertion type on synthetic field 'embedding_dimensions'
 {% endif %}
 {% elif assertion_kind == "embeddings_valid" or assertion_kind == "embeddings_finite" or assertion_kind == "embeddings_non_zero" or assertion_kind == "embeddings_normalized" %}
-{%- if assertion_type == "is_true" %}
+{% if assertion_type == "is_true" %}
         $this->assertTrue({{ pred }});
 {% elif assertion_type == "is_false" %}
         $this->assertFalse({{ pred }});

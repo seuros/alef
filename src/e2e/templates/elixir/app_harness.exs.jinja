@@ -27,7 +27,7 @@
 Code.ensure_loaded!({{ app_class }})
 Code.ensure_loaded!({{ route_builder_class }})
 Code.ensure_loaded!({{ method_enum_class }})
-{% if not skip_app_config -%}
+{% if not skip_app_config %}
 Code.ensure_loaded!({{ server_config_class }})
 {% endif %}
 
@@ -40,7 +40,7 @@ fixtures_json = {{ fixtures_json }}
 alias {{ app_class }}
 alias {{ route_builder_class }}
 alias {{ method_enum_class }}
-{% if not skip_app_config -%}
+{% if not skip_app_config %}
 alias {{ server_config_class }}
 {% endif %}
 
@@ -106,7 +106,7 @@ config = struct({{ server_config_class }}, %{
 })
 
 app = {{ app_class }}.config(app, config)
-{%- endif %}
+{% endif %}
 
 IO.puts("Harness listening on {{ host }}:{{ port }}")
 

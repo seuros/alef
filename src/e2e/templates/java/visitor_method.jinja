@@ -1,15 +1,15 @@
     @Override public {{ result_type }} {{ camel_method }}({{ params }}) {
-{%- if unsupported_diagnostic %}
+{% if unsupported_diagnostic %}
         throw new UnsupportedOperationException("{{ unsupported_diagnostic }}");
-{%- elif action_type == "skip" %}
+{% elif action_type == "skip" %}
         return new {{ result_type }}.Skip();
-{%- elif action_type == "continue" %}
+{% elif action_type == "continue" %}
         return new {{ result_type }}.Continue();
-{%- elif action_type == "preserve_html" %}
+{% elif action_type == "preserve_html" %}
         return new {{ result_type }}.PreserveHtml();
-{%- elif action_type == "custom_literal" %}
+{% elif action_type == "custom_literal" %}
         return new {{ result_type }}.Custom("{{ action_value }}");
-{%- elif action_type == "custom_formatted" %}
+{% elif action_type == "custom_formatted" %}
         return new {{ result_type }}.Custom(String.format("{{ action_value }}", {{ format_args|join(", ") }}));
-{%- endif %}
+{% endif %}
     }
