@@ -163,6 +163,28 @@ pub(crate) fn marker_comment_style(path: &Path) -> Option<hash::CommentStyle> {
     }
 }
 
+/// Every source of durable, committed evidence that alef owns `path`, for the formats
+/// [`marker_comment_style`] answers `None` for -- the ownership fallback both write guards
+/// and [`crate::bin_cli::helpers::find_missing_and_frozen_generated_files`]'s frozen-file
+/// check must consult identically.
+///
+/// A single predicate on purpose. `write_files_report` and
+/// `super::scaffold::write_scaffold_files_report` each used to inline their own copy of
+/// this OR-chain, and the two had already drifted once -- the derived-output disjunct
+/// (`is_alef_derived_output`) landed on this writer's copy only, and the snippet-ledger
+/// disjuncts (`is_snippet_coverage_manifest_path`, `is_ledger_owned_snippet_path`) landed
+/// on the scaffold writer's copy only. `alef verify`'s frozen-file report combines output
+/// from every generation stage (`collect_managed_surface`) without knowing which writer
+/// would eventually place a given path, so it needs the full union regardless -- and
+/// unifying all three callers onto it closes the drift for good rather than adding a
+/// fourth, independently-maintained copy. ~keep
+pub(crate) fn is_owned_by_ownership_record(base_dir: &Path, path: &Path) -> bool {
+    crate::cli::cache::is_scaffold_owned_path(base_dir, path)
+        || crate::cli::cache::is_alef_derived_output(path)
+        || crate::e2e::snippets::is_snippet_coverage_manifest_path(path)
+        || crate::e2e::snippets::ownership::is_ledger_owned_snippet_path(base_dir, path)
+}
+
 /// How alef renders a provenance marker into a given file, or `None` when the
 /// format genuinely has no comment syntax (`.json`) or alef must not write one
 /// (lockfiles, which their own tool rewrites wholesale).
@@ -215,6 +237,13 @@ pub(super) enum MarkerSyntax {
 /// - `Makevars`, `Makevars.in`, `Makevars.win.in` — R's per-package make fragments,
 ///   read by make, so `#` line comments apply. Matched on file name: `Path::extension`
 ///   yields `in` for `Makevars.in`, which is far too generic to key on.
+/// - `.clang-format` — YAML (clang-format's config grammar), so `#` line comments apply, as
+///   in `.yaml`/`.yml`. Matched on file *name*: a dotfile with exactly one leading dot and no
+///   further dot reports `Path::extension() == None` (the same rule that makes `.gitignore`
+///   extensionless), so the `.yaml`/`.yml` arm of [`marker_comment_style`] never sees it.
+///   Scaffolded `generated_header: true` (`scaffold/languages/poly.rs`) for every FFI target,
+///   so it was silently unstamped the same way `Rakefile`/`Makevars*` were before those were
+///   listed here, and for the same reason: nothing before this entry reported the mismatch.
 ///
 /// `Rakefile` and `Makevars*` are emitted `generated_header: true` (`scaffold/languages/ruby.rs`,
 /// `scaffold/languages/r.rs`), so before they were listed here `ensure_generated_header` was
@@ -261,6 +290,7 @@ pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
         Some("Rakefile" | "Makevars" | "Makevars.in" | "Makevars.win.in") => {
             return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash));
         }
+        Some(".clang-format") => return Some(MarkerSyntax::Comment(hash::CommentStyle::Hash)),
         _ => {}
     }
     // Case-folded, unlike the ownership predicate above. An extension's case is a spelling
@@ -574,15 +604,13 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
                     // ownership record is the fallback only for extensions that truly
                     // cannot carry a marker in any form.
                     let has_marker = hash::content_has_alef_marker(&existing);
-                    // Kept deliberately identical to `scaffold.rs`'s guard: these are two copies of
-                    // one predicate on two write rails, and they have already drifted once -- the
-                    // derived-output disjunct landed on the scaffold rail only, so the next
-                    // unmarkable generated artifact emitted through this rail would have been
-                    // refused forever for want of a record only a blocked write could create. ~keep
-                    let owned = has_marker
-                        || (!is_markable
-                            && (crate::cli::cache::is_scaffold_owned_path(base_dir, full_path)
-                                || crate::cli::cache::is_alef_derived_output(full_path)));
+                    // Delegates the unmarkable fallback to `is_owned_by_ownership_record` rather
+                    // than inlining its own OR-chain: this guard and `scaffold.rs`'s guard used to
+                    // carry two independently hand-maintained copies of "which committed record
+                    // proves ownership", and they had already drifted once -- see that function's
+                    // doc for the incident. One shared predicate is now the only place this list
+                    // can grow. ~keep
+                    let owned = has_marker || (!is_markable && is_owned_by_ownership_record(base_dir, full_path));
                     if !owned {
                         // Distinguishes "nothing here even tried" from "something here tried and
                         // got the spelling wrong" -- see `hash::near_miss_marker`'s doc. Kept
@@ -783,279 +811,4 @@ fn log_disk_scan_only_restamps(
 }
 
 #[cfg(test)]
-mod marker_syntax_tests {
-    use super::{
-        MarkerSyntax, ensure_generated_header, marker_comment_style, marker_header_syntax, provenance_header_for_path,
-    };
-    use crate::core::hash;
-    use std::path::Path;
-
-    const HASH: &str = "0ce4d753fdb4854e44358639dcbaebee3449a4afa142dbc4f0a72aa72c214648";
-
-    const HASH_HEADER: &str = "# This file is auto-generated by alef — DO NOT EDIT.\n\
-# To regenerate: alef generate\n\
-# To verify freshness: alef verify\n";
-    const SLASH_HEADER: &str = "// This file is auto-generated by alef — DO NOT EDIT.\n\
-// To regenerate: alef generate\n\
-// To verify freshness: alef verify\n";
-    const HTML_HEADER: &str = "<!-- This file is auto-generated by alef — DO NOT EDIT. -->\n\
-<!-- To regenerate: alef generate -->\n\
-<!-- To verify freshness: alef verify -->\n";
-
-    /// Emit a header, then run the exact stamping pass `finalize_hashes` runs, and
-    /// return both stages so a test can assert bytes at each.
-    fn emit_and_stamp(path: &str, body: &str) -> (String, String) {
-        let stamped = ensure_generated_header(Path::new(path), body);
-        let hashed = hash::inject_hash_line(&stamped, HASH);
-        (stamped, hashed)
-    }
-
-    /// The full read-side contract every newly markable type must satisfy: the
-    /// marker is findable, the hash injected next to it round-trips out again, and
-    /// stripping the hash line reproduces the pre-stamp bytes exactly.
-    fn assert_read_side_agrees(stamped: &str, hashed: &str) {
-        assert!(
-            hash::content_has_alef_marker(stamped),
-            "content_has_alef_marker must find the emitted marker in:\n{stamped}"
-        );
-        assert_eq!(
-            hash::extract_hash(hashed),
-            Some(HASH.to_owned()),
-            "extract_hash must recover the injected hash from:\n{hashed}"
-        );
-        assert_eq!(
-            hash::strip_hash_line(hashed),
-            stamped,
-            "strip_hash_line must reproduce the pre-stamp bytes exactly"
-        );
-    }
-
-    #[test]
-    fn should_stamp_cmake_config_with_hash_comment() {
-        let (stamped, hashed) = emit_and_stamp("crates/foo-ffi/cmake/foo-ffi-config.cmake", "if(TARGET foo::foo)\n");
-        assert_eq!(stamped, format!("{HASH_HEADER}\nif(TARGET foo::foo)\n"));
-        assert_eq!(
-            hashed,
-            format!(
-                "# This file is auto-generated by alef — DO NOT EDIT.\n\
-# alef:hash:{HASH}\n\
-# To regenerate: alef generate\n\
-# To verify freshness: alef verify\n\
-\n\
-if(TARGET foo::foo)\n"
-            )
-        );
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    /// The load-bearing position case: XML 1.0 §2.8 forbids anything, comments
-    /// included, before the `<?xml ...?>` declaration, so the marker lands on line
-    /// 1 rather than line 0 — and every read-side function has to tolerate that.
-    #[test]
-    fn should_stamp_xml_after_the_declaration_never_before_it() {
-        let (stamped, hashed) = emit_and_stamp(
-            "test_apps/php/phpunit.xml",
-            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<phpunit/>\n",
-        );
-        assert_eq!(
-            stamped,
-            format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{HTML_HEADER}\n<phpunit/>\n")
-        );
-        assert_eq!(
-            stamped.lines().next(),
-            Some("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"),
-            "the XML declaration must remain the very first bytes of the document"
-        );
-        assert_eq!(
-            stamped.lines().nth(1),
-            Some("<!-- This file is auto-generated by alef — DO NOT EDIT. -->"),
-            "the marker belongs on line 1, immediately after the declaration"
-        );
-        assert_eq!(
-            hashed,
-            format!(
-                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-<!-- This file is auto-generated by alef — DO NOT EDIT. -->\n\
-<!-- alef:hash:{HASH} -->\n\
-<!-- To regenerate: alef generate -->\n\
-<!-- To verify freshness: alef verify -->\n\
-\n\
-<phpunit/>\n"
-            )
-        );
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    /// A declaration that is the whole first line without a trailing newline still
-    /// must not get a comment pushed in front of it.
-    #[test]
-    fn should_stamp_xml_whose_declaration_has_no_trailing_newline() {
-        let (stamped, hashed) = emit_and_stamp("packages/java/pom.xml", "<?xml version=\"1.0\"?><project/>\n");
-        assert_eq!(stamped, format!("<?xml version=\"1.0\"?>\n{HTML_HEADER}\n<project/>\n"));
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    #[test]
-    fn should_stamp_csproj_without_declaration_at_line_zero() {
-        let (stamped, hashed) = emit_and_stamp(
-            "e2e/csharp/Foo.E2eTests.csproj",
-            "<Project Sdk=\"Microsoft.NET.Sdk\">\n</Project>\n",
-        );
-        assert_eq!(
-            stamped,
-            format!("{HTML_HEADER}\n<Project Sdk=\"Microsoft.NET.Sdk\">\n</Project>\n")
-        );
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    #[test]
-    fn should_stamp_makefile_with_hash_comment() {
-        let (stamped, hashed) = emit_and_stamp("e2e/c/Makefile", "all:\n\t$(CC) main.c\n");
-        assert_eq!(stamped, format!("{HASH_HEADER}\nall:\n\t$(CC) main.c\n"));
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    #[test]
-    fn should_stamp_gemspec_with_ruby_hash_comment() {
-        let (stamped, hashed) = emit_and_stamp("packages/ruby/foo.gemspec", "Gem::Specification.new do |s|\nend\n");
-        assert_eq!(stamped, format!("{HASH_HEADER}\nGem::Specification.new do |s|\nend\n"));
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    #[test]
-    fn should_stamp_go_mod_with_double_slash_comment() {
-        let (stamped, hashed) = emit_and_stamp("e2e/go/go.mod", "module example.com/e2e\n\ngo 1.24\n");
-        assert_eq!(stamped, format!("{SLASH_HEADER}\nmodule example.com/e2e\n\ngo 1.24\n"));
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    #[test]
-    fn should_stamp_zon_with_zig_double_slash_comment() {
-        let (stamped, hashed) = emit_and_stamp("packages/zig/build.zig.zon", ".{\n    .name = \"foo\",\n}\n");
-        assert_eq!(stamped, format!("{SLASH_HEADER}\n.{{\n    .name = \"foo\",\n}}\n"));
-        assert_read_side_agrees(&stamped, &hashed);
-    }
-
-    #[test]
-    fn should_leave_json_untouched_because_it_has_no_comment_syntax() {
-        let body = "{\n  \"name\": \"foo\"\n}\n";
-        assert_eq!(
-            ensure_generated_header(Path::new("packages/node/package.json"), body),
-            body
-        );
-        assert_eq!(marker_header_syntax(Path::new("packages/node/package.json")), None);
-    }
-
-    /// Lockfiles are rewritten wholesale by their own package manager, which would
-    /// drop an alef marker on the next resolve, so alef never stamps one.
-    #[test]
-    fn should_leave_lockfiles_untouched() {
-        let body = "# This file is automatically @generated by Cargo.\nversion = 4\n";
-        assert_eq!(ensure_generated_header(Path::new("Cargo.lock"), body), body);
-        assert_eq!(marker_header_syntax(Path::new("e2e/php/composer.lock")), None);
-    }
-
-    /// `alef verify`'s frozen-file remedy relies on this returning the exact
-    /// bytes `ensure_generated_header` would prepend, not a paraphrase --
-    /// `should_preserve_existing_markable_extension_behaviour` already pins the
-    /// comment-style rendering itself, so this only needs to confirm the two
-    /// stay wired together for a comment-style and an HTML-style path each.
-    #[test]
-    fn provenance_header_for_path_matches_what_ensure_generated_header_would_prepend() {
-        assert_eq!(
-            provenance_header_for_path(Path::new("src/lib.rs")),
-            Some(SLASH_HEADER.to_owned())
-        );
-        assert_eq!(
-            provenance_header_for_path(Path::new("packages/java/pom.xml")),
-            Some(HTML_HEADER.to_owned())
-        );
-    }
-
-    /// Mirrors `should_leave_json_untouched_because_it_has_no_comment_syntax`:
-    /// a format with no comment syntax has no marker line to hand back either.
-    #[test]
-    fn provenance_header_for_path_returns_none_for_an_unmarkable_extension() {
-        assert_eq!(
-            provenance_header_for_path(Path::new("packages/node/package.json")),
-            None
-        );
-    }
-
-    /// The emit table must stay strictly wider than the ownership table: every
-    /// newly markable type has to keep proving ownership through the `.alef/`
-    /// record, or every such file already on disk without a marker is frozen
-    /// forever (the guard refuses the write, so the marker never lands).
-    #[test]
-    fn should_not_promote_newly_emitted_types_onto_the_ownership_table() {
-        for path in [
-            "crates/foo-ffi/cmake/foo-ffi-config.cmake",
-            "test_apps/php/phpunit.xml",
-            "e2e/csharp/Foo.E2eTests.csproj",
-            "e2e/c/Makefile",
-            "packages/ruby/foo.gemspec",
-            "e2e/go/go.mod",
-            "packages/zig/build.zig.zon",
-        ] {
-            assert!(
-                marker_header_syntax(Path::new(path)).is_some(),
-                "{path} must be stamped with a marker"
-            );
-            assert_eq!(
-                marker_comment_style(Path::new(path)),
-                None,
-                "{path} must stay off the ownership table until markers have propagated \
-                 to consumer repos, otherwise existing unmarked copies freeze permanently"
-            );
-        }
-    }
-
-    /// Existing markable extensions must keep their exact previous behaviour: the
-    /// emit table delegates to the ownership table first, so nothing about `.rs`,
-    /// `.py`, `.h` or the `<?php` / shebang prefix handling may shift.
-    #[test]
-    fn should_preserve_existing_markable_extension_behaviour() {
-        assert_eq!(
-            marker_header_syntax(Path::new("src/lib.rs")),
-            Some(MarkerSyntax::Comment(hash::CommentStyle::DoubleSlash))
-        );
-        assert_eq!(
-            marker_header_syntax(Path::new("foo.h")),
-            Some(MarkerSyntax::Comment(hash::CommentStyle::Block))
-        );
-        let (stamped, hashed) = emit_and_stamp("scripts/run.sh", "#!/usr/bin/env bash\nset -e\n");
-        assert_eq!(stamped, format!("#!/usr/bin/env bash\n{HASH_HEADER}\nset -e\n"));
-        assert_read_side_agrees(&stamped, &hashed);
-
-        let (php_stamped, php_hashed) = emit_and_stamp("src/Foo.php", "<?php\nclass Foo {}\n");
-        assert_eq!(php_stamped, format!("<?php\n{SLASH_HEADER}\nclass Foo {{}}\n"));
-        assert_read_side_agrees(&php_stamped, &php_hashed);
-    }
-
-    /// Content that already self-marks (README/docs pages via
-    /// `docs::render::with_html_header`) must not gain a second header now that
-    /// `.md`-style HTML markers are also emittable from this side.
-    #[test]
-    fn should_not_double_stamp_content_that_already_carries_a_marker() {
-        let already = format!("{HTML_HEADER}\n<project/>\n");
-        assert_eq!(
-            ensure_generated_header(Path::new("packages/java/pom.xml"), &already),
-            already
-        );
-    }
-
-    /// The generalized stamp channel has to survive the line-1 marker position too,
-    /// since `extract_stamp` scans for the marker before it starts matching keys.
-    #[test]
-    fn should_round_trip_a_generic_stamp_through_an_xml_declaration_prologue() {
-        let stamped = ensure_generated_header(
-            Path::new("test_apps/php/phpunit.xml"),
-            "<?xml version=\"1.0\"?>\n<phpunit/>\n",
-        );
-        let with_stamp = hash::inject_stamp_line(&stamped, hash::HANDLE_ABI_STAMP_KEY, "2");
-        assert_eq!(
-            hash::extract_stamp(&with_stamp, hash::HANDLE_ABI_STAMP_KEY),
-            Some("2".to_owned())
-        );
-    }
-}
+mod marker_syntax_tests;

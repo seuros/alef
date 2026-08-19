@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`alef verify` no longer reports a file as frozen once alef has durable proof it owns it.**
+  The write guards in `write_files_report`/`write_scaffold_files_report` treat a marker-less file
+  as owned when either it carries the provenance marker or — for formats with no comment syntax
+  at all — the committed `.alef-ownership.toml` record says so. `alef verify`'s frozen-file report
+  only ever checked the marker, so a file `alef adopt` had just recorded, or one a
+  delete-and-regenerate had just rewritten and recorded, kept being reported "frozen" forever, even
+  though the write guard would happily accept it. Both write guards and the report now share one
+  `is_owned_by_ownership_record` predicate instead of three independently drifting copies.
+
+- **`.clang-format` can now carry a provenance marker.** It is YAML underneath (`#` line comments),
+  scaffolded `generated_header: true` for every FFI target, but was missing from
+  `marker_header_syntax`'s file-name table — an oversight, not a deliberate exclusion like
+  `DESCRIPTION`'s (which stays off the table on purpose; see that entry's doc). A pre-existing,
+  unmarked copy previously reported frozen with no remedy to paste in; it now gets the real `#`
+  header, the same way `Makefile`/`go.mod`/`Rakefile` already do.
+
 ## [0.62.2] - 2026-08-19
 
 ### Fixed

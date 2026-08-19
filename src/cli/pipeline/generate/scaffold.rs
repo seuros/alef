@@ -340,11 +340,11 @@ pub fn write_scaffold_files_report(
                 // overwrite the same recorded paths while being willing to delete them is
                 // incoherent. The snapshot is taken before generation, so this run's own
                 // intentions can never widen it. ~keep
-                let owned = has_marker
-                    || (!is_markable
-                        && (crate::cli::cache::is_scaffold_owned_path(base_dir, &full_path)
-                            || crate::e2e::snippets::is_snippet_coverage_manifest_path(&full_path)
-                            || crate::e2e::snippets::ownership::is_ledger_owned_snippet_path(base_dir, &full_path)));
+                //
+                // Delegates to `write::is_owned_by_ownership_record` rather than inlining its own
+                // copy of the OR-chain -- see that function's doc for the drift this closes. ~keep
+                let owned =
+                    has_marker || (!is_markable && super::write::is_owned_by_ownership_record(base_dir, &full_path));
                 if !owned {
                     // Distinguishes "nothing here even tried" from "something here tried and got
                     // the spelling wrong" -- see `hash::near_miss_marker`'s doc. Kept deliberately

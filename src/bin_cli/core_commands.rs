@@ -1018,7 +1018,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         match &frozen.remedy {
                             Some(remedy) => crate::bin_cli::output::line(format_args!("    add marker: {remedy}")),
                             None => crate::bin_cli::output::line(
-                                "    this format has no comment syntax to carry a marker -- adopt or delete it",
+                                "    this format has no comment syntax to carry a marker, so alef proves ownership \
+                                 through the committed .alef-ownership.toml record instead -- run `alef adopt \
+                                 <path>` to record it there, or delete the file so the next `alef generate` writes \
+                                 and records it directly",
                             ),
                         }
                     }
