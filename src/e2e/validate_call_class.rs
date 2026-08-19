@@ -37,6 +37,41 @@ fn naming_language_for(lang: &str) -> Option<Language> {
         .map(|(_, language)| *language)
 }
 
+/// Run [`validate_call_class_overrides`], log every diagnostic, and turn any
+/// `Severity::Error` into a generation-aborting error naming every offending config key.
+///
+/// Kept here rather than inlined at the `generate_e2e` call site for the same reason
+/// `validate_call_result_type::enforce_call_result_type_overrides` is: `src/e2e/mod.rs`
+/// sits right at this repo's 1,000-line file cap, and this log-filter-bail glue is
+/// boilerplate this module owns anyway.
+pub fn enforce_call_class_overrides(
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    languages: &[String],
+) -> anyhow::Result<()> {
+    let diagnostics = validate_call_class_overrides(e2e_config, config, type_defs, enums, languages);
+    for diag in &diagnostics {
+        tracing::warn!("{}: {}", diag.file, diag.message);
+    }
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|diag| diag.severity == Severity::Error)
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "e2e call class override validation failed: {}",
+        errors
+            .iter()
+            .map(|diag| format!("{}: {}", diag.file, diag.message))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
+}
+
 /// Validate every `class` override in `e2e_config` (the default `[e2e.call]` and every
 /// named `[e2e.calls.*]`) against the set of host-language class names the target
 /// backend will actually emit for this crate.
@@ -174,7 +209,12 @@ fn simple_class_name(raw: &str) -> &str {
 }
 
 /// Up to two candidates closest to `value` by Levenshtein edit distance, ascending.
-fn closest_candidates(value: &str, candidates: &[String]) -> Vec<String> {
+///
+/// `pub(crate)`, not private: `validate_call_result_type` reuses this exact ranking rather
+/// than duplicating it, since a second override-value validator wanting the same
+/// did-you-mean behavior doesn't justify a whole new shared module for two functions used
+/// by exactly two callers.
+pub(crate) fn closest_candidates(value: &str, candidates: &[String]) -> Vec<String> {
     let mut scored: Vec<(usize, &String)> = candidates
         .iter()
         .map(|candidate| (levenshtein_distance(value, candidate), candidate))

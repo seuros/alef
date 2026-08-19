@@ -26,7 +26,7 @@ pub struct CCodegen;
 /// Returns true when `t` is a primitive C scalar type (uint64_t, int32_t, double,
 /// etc.) that should be emitted as a typed local variable rather than a heap
 /// `char*` accessor result.
-fn is_primitive_c_type(t: &str) -> bool {
+pub(crate) fn is_primitive_c_type(t: &str) -> bool {
     matches!(
         t,
         "uint8_t"

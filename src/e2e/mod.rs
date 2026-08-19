@@ -16,6 +16,7 @@ pub mod snippets;
 pub mod template_env;
 pub mod validate;
 pub mod validate_call_class;
+pub mod validate_call_result_type;
 
 use crate::core::backend::GeneratedFile;
 use crate::core::config::e2e::DependencyMode;
@@ -219,29 +220,13 @@ fn generate_e2e_with_extensions(
         );
     }
 
-    // `class` override validation runs for the same reason: an unresolvable value is
-    // trusted blindly by every consuming generator today, and the mismatch used to
-    // surface only as a wall of "cannot find symbol" compile errors in generated code
-    // far downstream, with nothing pointing back at the config line that caused it.
-    let class_override_diagnostics =
-        validate_call_class::validate_call_class_overrides(e2e_config, config, type_defs, enums, &resolved_languages);
-    for diag in &class_override_diagnostics {
-        warn!("{}: {}", diag.file, diag.message);
-    }
-    let class_override_errors: Vec<_> = class_override_diagnostics
-        .iter()
-        .filter(|diag| diag.severity == Severity::Error)
-        .collect();
-    if !class_override_errors.is_empty() {
-        bail!(
-            "e2e call class override validation failed: {}",
-            class_override_errors
-                .iter()
-                .map(|diag| format!("{}: {}", diag.file, diag.message))
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    // `class` and `result_type` override validation run for the same reason: an
+    // unresolvable value is trusted blindly by every consuming generator today, and the
+    // mismatch used to surface only as a wall of compile errors, or of "cannot find
+    // symbol" / "call did not resolve" warnings, deep in generated code -- never at
+    // config time. See each function's own doc comment for the failure it replaces.
+    validate_call_class::enforce_call_class_overrides(e2e_config, config, type_defs, enums, &resolved_languages)?;
+    validate_call_result_type::enforce_call_result_type_overrides(e2e_config, type_defs, enums, &resolved_languages)?;
 
     let all_groups = group_fixtures(&fixtures);
 
