@@ -740,7 +740,9 @@ fn run_publish_hooks(lang: Language, lang_config: &PublishLanguageConfig) -> Res
             .status()
             .with_context(|| format!("running precondition for {lang}: {precondition}"))?;
         if !status.success() {
-            warn!("Skipping {lang}: precondition failed ({precondition})");
+            // A precondition is the user's own declared skip switch; a working-as-designed skip
+            // is not a warning. ~keep
+            info!("Skipping {lang}: precondition failed ({precondition})");
             return Ok(false);
         }
     }

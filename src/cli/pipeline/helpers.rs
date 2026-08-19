@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::core::config::Language;
 use crate::core::config::output::StringOrVec;
 use anyhow::Context as _;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Run a shell command, logging and failing on non-zero exit.
 pub(crate) fn run_command(cmd: &str) -> anyhow::Result<()> {
@@ -19,20 +19,24 @@ pub(crate) fn run_command(cmd: &str) -> anyhow::Result<()> {
 /// absent or the command fails. Used for optional ecosystem-specific lockfile
 /// refresh commands (pnpm, cargo, composer, mix) that may not be installed.
 ///
-/// Logs a warning and returns gracefully if the binary cannot be found or the
-/// command exits with a non-zero status. This allows lockfile refresh to be
-/// best-effort in environments where not all language ecosystems are installed.
+/// Logs and returns gracefully if the binary cannot be found or the command exits
+/// with a non-zero status. This allows lockfile refresh to be best-effort in
+/// environments where not all language ecosystems are installed.
 pub fn run_optional(bin: &str, args: &[&str]) {
     let cmd = format!("{} {}", bin, args.join(" "));
     info!("Running (optional): {cmd}");
     match std::process::Command::new(bin).args(args).status() {
         Ok(status) => {
             if !status.success() {
-                warn!("Optional command failed with exit code {:?}: {cmd}", status.code());
+                // The command is declared optional; a non-zero exit here is not a problem the
+                // caller needs to see at warning level. ~keep
+                info!("Optional command failed with exit code {:?}: {cmd}", status.code());
             }
         }
         Err(e) => {
-            warn!("Optional command not found or failed to execute: {cmd} ({})", e);
+            // The command is declared optional; a missing binary here is not a problem the
+            // caller needs to see at warning level. ~keep
+            info!("Optional command not found or failed to execute: {cmd} ({})", e);
         }
     }
 }
@@ -334,7 +338,9 @@ pub(crate) fn check_precondition(lang: Language, precondition: Option<&str>) -> 
     if precondition_passes(&lang.to_string(), cmd) {
         return true;
     }
-    warn!("Skipping {lang}: precondition failed ({cmd})");
+    // A precondition is the user's own declared skip switch; a working-as-designed skip is not
+    // a warning. ~keep
+    info!("Skipping {lang}: precondition failed ({cmd})");
     false
 }
 
@@ -348,7 +354,9 @@ pub(crate) fn check_precondition_named(label: &str, precondition: Option<&str>) 
     if precondition_passes(label, cmd) {
         return true;
     }
-    warn!("Skipping {label}: precondition failed ({cmd})");
+    // A precondition is the user's own declared skip switch; a working-as-designed skip is not
+    // a warning. ~keep
+    info!("Skipping {label}: precondition failed ({cmd})");
     false
 }
 

@@ -719,7 +719,9 @@ pub(crate) fn migrate_node_package_json_service_export(base_dir: &Path, relative
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing crates/*-node/package.json: exposed the ./service subpath export"
     );

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Demoted `tracing::warn!` sites that fire on correct, working configurations to `info!` or
+  `debug!`.** A triage of the 229 `warn!` call sites in `alef` found a set that were not
+  reporting problems: an `[e2e]` block being detected (advice, not a defect), the CLI running
+  newer or older than a project's pinned `alef_version` (expected after every release until a
+  consumer bumps the pin), suppressed validation diagnostics re-printed despite
+  `suppress_validation_codes` (now `debug!`, since re-warning defeats the consumer's own
+  setting), a `precondition` skip (the consumer's own declared skip switch), an optional command
+  failing or missing (the command is declared optional), the eleven "repaired pre-existing
+  `<file>`" self-heal announcements (all fire only after the repair already succeeded), and the
+  Swift artifactbundle build/checksum steps on hosts without Xcode. These no longer drown the
+  warnings that matter in `generate`/`adopt`/`verify`/`diff` output.
+
 ## [0.62.2] - 2026-08-19
 
 ### Fixed

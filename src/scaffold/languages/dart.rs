@@ -514,7 +514,9 @@ pub(crate) fn migrate_dart_placeholder_test(
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing test/*_test.dart: replaced the vacuous 1 + 1 == 2 placeholder \
          with a real assertion against the generated API"
@@ -572,7 +574,9 @@ pub(crate) fn migrate_dart_pubignore(base_dir: &Path, relative_path: &Path, repl
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing packages/dart/.pubignore: stopped excluding native FFI \
          libraries (lib/src/native/, *.so/*.dylib/*.dll) from the published package"

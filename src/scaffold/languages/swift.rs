@@ -569,7 +569,9 @@ pub(crate) fn migrate_swift_placeholder_test(
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing Tests/*Tests.swift: replaced the vacuous XCTAssertTrue(true) \
          placeholder with a real assertion against the generated API"

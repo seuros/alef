@@ -411,7 +411,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
 
                 if resolved_cfg.e2e.is_some() {
-                    tracing::warn!("[e2e] block detected — run 'alef e2e generate' to regenerate e2e test suites");
+                    // An [e2e] block is a correct, intentional configuration; this is advice on
+                    // the next command to run, not a problem with the current one. ~keep
+                    tracing::info!("[e2e] block detected — run 'alef e2e generate' to regenerate e2e test suites");
                 }
 
                 grand_total_generated += generated_paths.len();

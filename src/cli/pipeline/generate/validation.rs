@@ -46,7 +46,9 @@ pub(super) fn validate_generation_api<'a>(
                 .iter()
                 .any(|code| code == &diagnostic.code.to_string())
     }) {
-        tracing::warn!("[suppressed] {diagnostic}");
+        // The consumer explicitly opted into suppress_validation_codes for this diagnostic;
+        // re-printing it at warn level defeats their own declared setting. ~keep
+        tracing::debug!("[suppressed] {diagnostic}");
     }
     if !fatal.is_empty() || !fatal_language_diagnostics.is_empty() {
         let formatted = fatal

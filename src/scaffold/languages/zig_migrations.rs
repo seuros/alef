@@ -94,7 +94,9 @@ pub(crate) fn migrate_zig_build_ffi_include_default(base_dir: &Path, generated: 
 
     let repaired = format!("{}{expected}{}", &content[..span.start], &content[span.end..]);
     replace_in_place(&path, &repaired)?;
-    tracing::warn!(
+    // Fires only after the replace_in_place above already succeeded: a completed self-heal, not
+    // an outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         previous = existing,
         corrected = expected,
@@ -151,7 +153,9 @@ pub(crate) fn migrate_build_zig_test_target(base_dir: &Path) -> anyhow::Result<b
     }
 
     replace_in_place(&path, &migrated)?;
-    tracing::warn!(
+    // Fires only after the replace_in_place above already succeeded: a completed self-heal, not
+    // an outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing build.zig: test_module now points at test/<module>_test.zig \
          instead of the generated src/<module>.zig (zero test blocks)"
@@ -237,7 +241,9 @@ pub(crate) fn migrate_zig_example(base_dir: &Path, relative_path: &Path, replace
     }
 
     replace_in_place(&path, replacement)?;
-    tracing::warn!(
+    // Fires only after the replace_in_place above already succeeded: a completed self-heal, not
+    // an outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing packages/zig/examples/example.zig: replaced the pre-Zig-0.16 \
          example (std.heap.GeneralPurposeAllocator/std.io.getStdOut) with the \

@@ -468,7 +468,9 @@ pub(crate) fn migrate_php_composer_phpunit_constraint(base_dir: &Path, relative_
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing composer.json: widened the phpunit/phpunit constraint to span \
          every major supporting the declared PHP floor"
