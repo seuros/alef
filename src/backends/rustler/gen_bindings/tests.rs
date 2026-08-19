@@ -557,7 +557,7 @@ nif_features = ["foo", "bar"]
     assert!(nif_features.contains(&"bar".to_string()), "should contain bar");
 }
 
-/// End-to-end reproduction of the liter-llm incident, Elixir side: `#[rustler::nif]`
+/// End-to-end reproduction of the silent-NIF failure, Elixir side: `#[rustler::nif]`
 /// auto-registers, so there is no separate registration statement to desync from a `#[cfg]`-gated
 /// definition (unlike Ruby) -- but that also means an undeclared feature never fails the build.
 /// The NIF just silently does not exist while `packages/elixir/native/{nif}/Cargo.toml` (stale,

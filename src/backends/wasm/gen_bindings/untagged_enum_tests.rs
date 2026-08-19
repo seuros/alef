@@ -59,9 +59,9 @@ sources = ["src/lib.rs"]
     cfg.resolve().unwrap().remove(0)
 }
 
-/// `enum EmbeddingInput { Single(String), Multiple(Vec<String>) }` with `#[serde(untagged)]`,
-/// as extracted from `liter-llm`'s `types/embedding.rs`. Covers both a single-payload variant
-/// and a `Vec`-payload variant in one enum, matching what the task requires.
+/// `enum EmbeddingInput { Single(String), Multiple(Vec<String>) }` with `#[serde(untagged)]`.
+/// Covers both a scalar-payload variant and a `Vec`-payload variant in one enum, which is the
+/// shape that used to collapse to a bare discriminant.
 fn embedding_input_enum() -> EnumDef {
     EnumDef {
         name: "EmbeddingInput".to_string(),
