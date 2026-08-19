@@ -7,6 +7,8 @@ use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+mod gradle_classpath;
+
 /// Package prefix that isolates one batched snippet's top-level declarations from every other
 /// snippet's. Kotlin resolves top-level `fun`/`val` per *package*, across files, so two snippets
 /// each declaring `fun main()` in the same package redeclare each other — a failure the
@@ -113,7 +115,7 @@ impl KotlinValidator {
                 sources.push(path);
             }
         }
-        let mut command = Self::batch_command(&sources, &dir.path().join("out"), level, session)?;
+        let mut command = Self::batch_command(&sources, &dir.path().join("out"), level, timeout_secs, session)?;
         let (success, output) = run_command(&mut command, timeout_secs)?;
         Ok(Self::batch_results(
             units,
@@ -127,6 +129,7 @@ impl KotlinValidator {
         sources: &[PathBuf],
         classes: &Path,
         level: ValidationLevel,
+        timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<std::process::Command> {
         let mut command = std::process::Command::new("kotlinc");
@@ -134,8 +137,10 @@ impl KotlinValidator {
             command.arg("-Werror");
         }
         command.arg("-nowarn");
-        if let Some(manifest) = session.and_then(|value| value.manifest.as_ref()) {
-            let class_path = Self::class_path(manifest)?;
+        if let Some(session) = session
+            && let Some(manifest) = session.manifest.as_deref()
+        {
+            let class_path = gradle_classpath::resolve_class_path(manifest, session, timeout_secs)?;
             command.args(["-classpath", class_path.to_string_lossy().as_ref()]);
         }
         command.arg("-d").arg(classes).args(sources);
@@ -294,8 +299,10 @@ impl KotlinValidator {
         } else {
             command.arg("-nowarn");
         }
-        if let Some(manifest) = session.and_then(|value| value.manifest.as_ref()) {
-            let class_path = Self::class_path(manifest)?;
+        if let Some(session) = session
+            && let Some(manifest) = session.manifest.as_deref()
+        {
+            let class_path = gradle_classpath::resolve_class_path(manifest, session, timeout_secs)?;
             command.args(["-classpath", class_path.to_string_lossy().as_ref()]);
         }
         command

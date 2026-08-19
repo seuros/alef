@@ -1,0 +1,33 @@
+// Registered by alef, one time, via `--init-script`. Not part of the consumer's build; alef never
+// writes this file into the consumer's tree.
+//
+// Prints every `compile*Kotlin` task's resolved classpath and its own destination directory, one
+// entry per line as `ALEF_CLASSPATH_ENTRY:<absolute path>`. Matched by task name rather than by
+// Kotlin Gradle plugin type, so this needs no Kotlin/AGP classes on the init-script classpath and
+// covers both the plain `kotlin("jvm")` plugin and every Android build variant alike.
+allprojects { proj ->
+    proj.tasks.register("alefPrintClasspath") {
+        doLast {
+            def entries = new LinkedHashSet<String>()
+            proj.tasks.matching { it.name ==~ /(?i)compile.*Kotlin/ }.each { compileTask ->
+                try {
+                    if (compileTask.hasProperty('destinationDirectory')) {
+                        entries << compileTask.destinationDirectory.get().asFile.absolutePath
+                    }
+                } catch (Exception ignored) {
+                    // Best-effort: a task that does not expose this property contributes nothing.
+                }
+                try {
+                    def classpath = compileTask.hasProperty('libraries') ? compileTask.libraries
+                        : (compileTask.hasProperty('classpath') ? compileTask.classpath : null)
+                    if (classpath != null) {
+                        classpath.files.each { entries << it.absolutePath }
+                    }
+                } catch (Exception ignored) {
+                    // Best-effort: a task that does not expose either property contributes nothing.
+                }
+            }
+            entries.each { println "ALEF_CLASSPATH_ENTRY:" + it }
+        }
+    }
+}

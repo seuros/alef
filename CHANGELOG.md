@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Kotlin/Android snippet validation resolves a real Gradle classpath instead of guessing a
+  directory layout.** `KotlinValidator::class_path` probed exactly three fixed directories
+  (`build/classes/kotlin/main`, `build/classes/java/main`,
+  `build/intermediates/javac/debug/classes`) plus `build/libs/*.jar`, falling back to the project
+  root when none existed. AGP's actual compiled-output path is variant- and version-dependent (AGP
+  9.x lands classes at `build/intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes`,
+  matching none of the three probes), and directory probing can never see a project's *dependency*
+  classpath at all -- so every snippet touching a dependency-typed symbol (kotlinx-coroutines,
+  Jackson DTOs, ...) failed with `unresolved reference`, and the fallback-to-root path made every
+  other snippet fail too. A Gradle manifest (`build.gradle.kts` / `build.gradle`) with a `gradlew`
+  wrapper is now resolved by asking Gradle itself, via a `--init-script` that matches every
+  `compile*Kotlin` task by name and prints its destination directory and resolved classpath --
+  no consumer build-file change required. The resolution is cached per manifest for the process
+  lifetime, since batch validation calls it once per batch and a Gradle invocation costs whole
+  seconds even warm. A Gradle invocation that fails still falls back to the original directory
+  probing rather than failing the session outright.
+
 - **Zig snippets stop rebinding a discarded value that is not a call.** The generator rewrites a
   statement-opening `_ = <call>(...)` into `const result = ...` so the snippet can show its result,
   but the rule matched any `_ = ` discard. Every generated visitor callback opens by discarding its
