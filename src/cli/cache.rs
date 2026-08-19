@@ -1369,6 +1369,94 @@ mod tests {
         );
     }
 
+    /// Table-driven coverage of `is_stage_cached` -- the single choke point every generation
+    /// stage (scaffold, readme, docs, e2e, test-apps) calls to decide "up to date" versus
+    /// "regenerate". A hit requires both a matching input hash and every manifested output path
+    /// still present on disk; either failing alone is a miss.
+    ///
+    /// The empty-recorded-paths row is deliberately a miss, not a hit. `outputs_exist` (shared by
+    /// `is_stage_cached` and `is_lang_cached`) treats zero recorded paths as zero evidence of
+    /// surviving output, so a stage that recorded nothing never satisfies the cache. Treating it
+    /// as a hit instead would mean a stage that fails to record its own outputs -- necessarily a
+    /// bug, since every writer here calls `write_stage_hash` with the paths it just wrote --
+    /// silently disables output verification for that stage forever, which is the deleted-output
+    /// bug this test file exists to catch, just triggered a different way. ~keep
+    #[test]
+    fn a_deleted_recorded_output_downgrades_a_cache_hit_to_a_miss() {
+        struct Scenario {
+            name: &'static str,
+            stage: &'static str,
+            recorded_outputs: &'static [&'static str],
+            delete_output: Option<&'static str>,
+            query_hash: &'static str,
+            expect_hit: bool,
+        }
+
+        let scenarios = [
+            Scenario {
+                name: "matching hash with every recorded output present is a hit",
+                stage: "hit",
+                recorded_outputs: &["a.rs", "b.rs"],
+                delete_output: None,
+                query_hash: "hash-1",
+                expect_hit: true,
+            },
+            Scenario {
+                name: "matching hash with one recorded output deleted is a miss",
+                stage: "deleted-output",
+                recorded_outputs: &["a.rs", "b.rs"],
+                delete_output: Some("b.rs"),
+                query_hash: "hash-1",
+                expect_hit: false,
+            },
+            Scenario {
+                name: "non-matching input hash is a miss regardless of outputs",
+                stage: "stale-hash",
+                recorded_outputs: &["a.rs"],
+                delete_output: None,
+                query_hash: "hash-2",
+                expect_hit: false,
+            },
+            Scenario {
+                name: "empty recorded paths is a miss, not an automatic hit",
+                stage: "empty",
+                recorded_outputs: &[],
+                delete_output: None,
+                query_hash: "hash-1",
+                expect_hit: false,
+            },
+        ];
+
+        for scenario in scenarios {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
+
+            let outputs: Vec<PathBuf> = scenario
+                .recorded_outputs
+                .iter()
+                .map(|name| {
+                    let path = tmp.path().join(name);
+                    std::fs::write(&path, "// generated\n").expect("write generated output");
+                    path
+                })
+                .collect();
+            write_stage_hash("sample-crate", scenario.stage, "hash-1", &outputs)
+                .expect("write stage hash and manifest");
+
+            if let Some(to_delete) = scenario.delete_output {
+                std::fs::remove_file(tmp.path().join(to_delete)).expect("delete recorded output");
+            }
+
+            assert_eq!(
+                is_stage_cached("sample-crate", scenario.stage, scenario.query_hash),
+                scenario.expect_hit,
+                "scenario `{}` expected hit={}",
+                scenario.name,
+                scenario.expect_hit
+            );
+        }
+    }
+
     /// `write_scaffold_manifest` must round-trip through `read_scaffold_manifest`,
     /// sorted and deduplicated like every other manifest. This is the durable
     /// record `sweep_manifest_orphans`'s unmarkable-manifest route depends on to
