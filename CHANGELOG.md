@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The disk-scan orphan report no longer asserts a file "was not emitted".** What it can actually
+  observe is that a path is absent from the run's recorded output, and the check immediately above
+  it warns that some backends record nothing beyond their Rust crate path — so non-emission is one
+  of four explanations, not a fact. The report now says what it knows.
+
 - **e2e fixture diagnostics are logged at the severity they carry.** Both arms of the severity
   match emitted `warn!`, so a diagnostic that aborts the run two statements later was
   indistinguishable in the log from one that changes nothing; field-classification errors were

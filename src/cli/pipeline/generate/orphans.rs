@@ -494,16 +494,22 @@ fn path_is_alef_owned(path: &Path) -> bool {
 /// -- can separate "dropped" from "failed to emit", and that record does not exist yet. Until it
 /// does, this surface reports and a human decides. ~keep
 fn report_disk_scan_candidates(root: &Path, candidates: &[PathBuf]) {
+    // ~keep The claim is "absent from this run's recorded output", not "was not emitted". Those
+    // differ: `keep` is the backends' own bookkeeping, and the check two screens up warns that
+    // some backends record nothing but their Rust crate path. Asserting non-emission from a gap in
+    // that record is the same false inference the C# visitor-file report used to make -- there it
+    // named files the very same run had written. The body already lists non-emission as only one
+    // of three explanations; the headline should not assert the one it cannot distinguish.
     tracing::warn!(
-        "{} alef-marked, git-tracked file(s) under {} were not emitted by this run. These are NOT \
-         deleted: absence from a run's output does not prove a file is an orphan (the emitter may \
-         have stopped emitting it, failed to emit it, or emit it only when absent). Review each and \
-         remove by hand if genuinely stale:",
+        "{} alef-marked, git-tracked file(s) under {} are not in this run's recorded output. These \
+         are NOT deleted: a file missing from that record is not proven an orphan (the emitter may \
+         have stopped emitting it, failed to emit it, emit it only when absent, or simply not \
+         recorded it). Review each and remove by hand if genuinely stale:",
         candidates.len(),
         root.display()
     );
     for path in candidates {
-        tracing::warn!("  unemitted alef-marked file: {}", path.display());
+        tracing::warn!("  unrecorded alef-marked file: {}", path.display());
     }
 }
 
