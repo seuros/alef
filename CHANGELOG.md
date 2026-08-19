@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ruby bindings no longer fail to build when a function is feature-gated.** `prepend_cfg` put
+  `#[cfg(feature = "X")]` on the generated `fn`, but the registration loop in `gen_module_init`
+  never read `func.cfg` and emitted the `module.define_module_function(..., function!(...))` line
+  unconditionally. With the feature off the definition compiles out while the registration still
+  names it, so the binding crate fails with `E0425` — a broken build, not a missing Ruby method.
+  `#[magnus::init]`'s body is a flat statement list, so the attribute on the registration
+  statement is the only place the gate can go; the method loop directly above already did this
+  via `method.cfg`.
+
+- **`#[serde(untagged)]` data enums no longer lose their payload in WASM bindings.** `gen_enum`
+  special-cased internally-tagged data enums only. An untagged one has no serde tag, so it fell
+  through to the fieldless path and was emitted as a bare discriminant enum with every variant's
+  payload replaced by `Default::default()`; the containing struct's setter then took that
+  fieldless enum, so no JS caller could supply the string or array the variant actually carries.
+  These now bridge to `JsValue` through `serde_wasm_bindgen` — the mechanism this backend already
+  used for internally-tagged data-enum fields — so wasm-bindgen emits `any` for the property and
+  the `.d.ts` and the runtime setter agree by construction. NAPI already gated on the same
+  `EnumDef::serde_untagged` flag. Affects `EmbeddingInput`, `ModerationInput`, `StopSequence` and
+  `ToolChoice` in `liter-llm`.
+
+- **The NAPI `.d.ts` can no longer contradict itself about a type's name.** `dts_type` and its
+  siblings each took a `prefix: &str` that all eleven-plus call sites had to remember to pass as
+  `""`; passing the real prefix at any one of them emits `Array<JsMessage>` against a type
+  declared as `Message`. NAPI-RS wraps `Foo` as `JsFoo` in Rust and maps it back via
+  `#[napi(js_name = "Foo")]`, so the `.d.ts` — which describes the JS boundary, not the Rust
+  struct — must use the identity name everywhere. `codegen::naming::node_type_name` is now the one
+  place that decides this and the parameter is gone, so the declaration site and the reference
+  site cannot drift.
+
+### Added
+
+- **`alef build` warns when a binding crate never declared a feature its generated source
+  references.** `scaffold` computes each binding crate's `[features]` table once and `alef build`
+  never revisits it, so a cfg-gated symbol added to the core crate after the last scaffold run
+  resolves against a feature the binding crate does not declare — false, unconditionally. For Ruby
+  that now surfaces as a build error; for Elixir nothing surfaces at all, because `#[rustler::nif]`
+  gates a definition and its registration atomically, so the NIF is simply absent while the
+  generated facade still advertises it. `warn_on_undeclared_binding_cfg_features` reads the
+  scaffolded `Cargo.toml` back off disk and names the missing features. A warning rather than a
+  hard error or an automatic rewrite: `Cargo.toml` is scaffold-owned and written once by design.
+
 - **Two Dart e2e regression tests no longer assert a naming convention alef deliberately
   dropped.** `b5808da3c` stopped emitting leading-underscore Dart locals — Dart privacy is
   library-scoped, so the prefix carried no meaning and only tripped
