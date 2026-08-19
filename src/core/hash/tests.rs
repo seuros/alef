@@ -485,10 +485,21 @@ fn file_hash_changes_when_content_changes() {
     assert_ne!(h_a, h_b);
 }
 
+/// ~keep This asserted only that the digest was 64 hex chars, so it passed no matter what
+/// `compute_file_hash` folded in -- it could never have failed and gave false confidence that
+/// the pin was already excluded, which it was not. The real independence claim is now proved by
+/// `inputs_hash_alef_version_pin_table`; what is left here is the domain-separator check the
+/// length assertion was actually standing in for.
 #[test]
-fn file_hash_independent_of_alef_version() {
-    let h = compute_file_hash("sources_hash", "fn a() {}\n");
+fn file_hash_is_domain_separated_from_a_bare_blake3_digest() {
+    let content = "fn a() {}\n";
+    let h = compute_file_hash("sources_hash", content);
     assert_eq!(h.len(), 64, "blake3 hex output is 64 chars");
+    assert_ne!(
+        h,
+        blake3::hash(content.as_bytes()).to_hex().to_string(),
+        "file hash must fold in the inputs hash, not digest the content alone"
+    );
 }
 
 #[test]
@@ -575,6 +586,56 @@ fn inputs_hash_stable_independent_of_alef_rev() {
 fn inputs_hash_tolerates_empty_alef_toml() {
     let h = compute_inputs_hash("some_sources_hash", b"");
     assert_eq!(h.len(), 64);
+}
+
+/// Table-driven cases proving `alef_version` is excluded from `inputs_hash` while every other
+/// `[workspace]` key still participates. `expect_equal = true` means the two configs must hash
+/// identically; `false` means they must differ.
+#[test]
+fn inputs_hash_alef_version_pin_table() {
+    struct Case {
+        name: &'static str,
+        toml_a: &'static [u8],
+        toml_b: &'static [u8],
+        expect_equal: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "alef_version bump alone does not change the hash",
+            toml_a: b"[workspace]\nalef_version = \"0.61.0\"\nlanguages = [\"python\"]\n",
+            toml_b: b"[workspace]\nalef_version = \"0.61.1\"\nlanguages = [\"python\"]\n",
+            expect_equal: true,
+        },
+        Case {
+            name: "adding an alef_version pin where none existed does not change the hash",
+            toml_a: b"[workspace]\nlanguages = [\"python\"]\n",
+            toml_b: b"[workspace]\nalef_version = \"0.61.1\"\nlanguages = [\"python\"]\n",
+            expect_equal: true,
+        },
+        Case {
+            name: "a real workspace key change still changes the hash (control)",
+            toml_a: b"[workspace]\nalef_version = \"0.61.0\"\nlanguages = [\"python\"]\n",
+            toml_b: b"[workspace]\nalef_version = \"0.61.0\"\nlanguages = [\"ruby\"]\n",
+            expect_equal: false,
+        },
+        Case {
+            name: "changing alef_version together with a real key still changes the hash",
+            toml_a: b"[workspace]\nalef_version = \"0.61.0\"\nlanguages = [\"python\"]\n",
+            toml_b: b"[workspace]\nalef_version = \"0.61.1\"\nlanguages = [\"ruby\"]\n",
+            expect_equal: false,
+        },
+    ];
+
+    for case in cases {
+        let h1 = compute_inputs_hash("sources_pin_table", case.toml_a);
+        let h2 = compute_inputs_hash("sources_pin_table", case.toml_b);
+        if case.expect_equal {
+            assert_eq!(h1, h2, "case `{}` expected equal hashes", case.name);
+        } else {
+            assert_ne!(h1, h2, "case `{}` expected different hashes", case.name);
+        }
+    }
 }
 
 #[test]
