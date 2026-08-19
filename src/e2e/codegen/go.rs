@@ -918,4 +918,6 @@ use test_file::{GoTestFileContext, render_test_file};
 use test_function::fixture_has_go_callable;
 
 #[cfg(test)]
+mod import_pruning_tests;
+#[cfg(test)]
 mod tests;

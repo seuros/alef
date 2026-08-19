@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated Go e2e files no longer carry an unused `strings` (or `os`) import.** Go rejects an
+  unused import outright, so `tree-sitter-language-pack`, `liter-llm` (6 files) and `crawlberg`
+  (3 files) all had e2e suites that could not compile. Both flags are fixture-level heuristics —
+  "some assertion is of a kind that might want this package" — and deliberately a superset, since
+  an assertion can be skipped, degraded to a stub, or rendered without ever naming the package.
+  They were OR-ed with the rendered body rather than narrowed by it, so the heuristic alone forced
+  the import; they now match how `needs_fmt` and `needs_pkg` on the adjacent lines already
+  authorise themselves against the body they actually produced.
+
 - **Whitespace-control tags no longer eat the indentation of generated e2e code.** The e2e
   template environment already sets `trim_blocks` and `lstrip_blocks`, so a plain `{% %}` tag
   strips exactly the one newline that separates it from its content. An explicit `-` on top of

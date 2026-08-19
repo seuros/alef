@@ -262,8 +262,14 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
     }
 
     let needs_assert = body.contains("assert.");
-    let needs_os = needs_os || body.contains("os.");
-    let needs_strings = needs_strings || body.contains("strings.");
+    // ~keep Both flags above are fixture-level heuristics ("some assertion is of a kind that
+    // might want this package"), deliberately a superset: an assertion can be skipped, degraded
+    // to a stub, or rendered without ever naming the package. Go rejects an unused import, so
+    // the rendered body is the only sound authority — `||` let the heuristic alone force the
+    // import and emitted `"strings" imported and not used`. Matches how needs_fmt/needs_pkg
+    // below already narrow their own heuristics.
+    let needs_os = needs_os && body.contains("os.");
+    let needs_strings = needs_strings && body.contains("strings.");
     let needs_pkg = needs_pkg && body.contains(&format!("{import_alias}."));
     // Even when a fixture *could* need fmt (a CustomTemplate), it might be
     // emitted as a panic stub instead. Require the body to actually reference
