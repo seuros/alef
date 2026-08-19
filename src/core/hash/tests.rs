@@ -485,10 +485,21 @@ fn file_hash_changes_when_content_changes() {
     assert_ne!(h_a, h_b);
 }
 
+/// ~keep This asserted only that the digest was 64 hex chars, so it passed no matter what
+/// `compute_file_hash` folded in -- it could never have failed and gave false confidence that
+/// the pin was already excluded, which it was not. The real independence claim is now proved by
+/// `inputs_hash_alef_version_pin_table`; what is left here is the domain-separator check the
+/// length assertion was actually standing in for.
 #[test]
-fn file_hash_independent_of_alef_version() {
-    let h = compute_file_hash("sources_hash", "fn a() {}\n");
+fn file_hash_is_domain_separated_from_a_bare_blake3_digest() {
+    let content = "fn a() {}\n";
+    let h = compute_file_hash("sources_hash", content);
     assert_eq!(h.len(), 64, "blake3 hex output is 64 chars");
+    assert_ne!(
+        h,
+        blake3::hash(content.as_bytes()).to_hex().to_string(),
+        "file hash must fold in the inputs hash, not digest the content alone"
+    );
 }
 
 #[test]
