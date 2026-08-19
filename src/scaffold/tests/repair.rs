@@ -107,6 +107,13 @@ fn repair_adds_missing_features_to_both_ruby_and_elixir_manifests() {
             "{}: tower must be forwarded, got:\n{content}",
             manifest.display()
         );
+        assert!(
+            content.contains(r#"default = ["native-http", "tokenizer", "tower"]"#),
+            "{}: declaring a feature is not enough -- it must also be enabled by default, or \
+             #[cfg(feature = \"...\")] stays false and the compile-out this repair exists to fix \
+             recurs silently, got:\n{content}",
+            manifest.display()
+        );
         for preserved in [
             r#"native-http = ["sample-core/native-http"]"#,
             r#"opendal-cache = ["sample-core/opendal-cache"]"#,

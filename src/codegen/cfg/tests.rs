@@ -412,7 +412,7 @@ fn read_declared_cargo_features_empty_set_when_no_features_table() {
 /// `tokenizer` because the core crate gained a cfg-gated function since then.
 #[traced_test]
 #[test]
-fn warn_on_undeclared_binding_cfg_features_warns_on_stale_manifest() {
+fn warn_on_undeclared_binding_cfg_features_warns_when_feature_is_undeclared() {
     let dir = tempfile::tempdir().expect("tempdir");
     let manifest = dir.path().join("Cargo.toml");
     std::fs::write(
@@ -425,8 +425,35 @@ fn warn_on_undeclared_binding_cfg_features_warns_on_stale_manifest() {
     warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
 
     assert!(
-        logs_contain("does not declare"),
+        logs_contain("does not enable by default"),
         "a stale manifest missing a referenced feature must produce a warning"
+    );
+}
+
+/// Reproduces the actual liter-llm-style incident this fix targets: an earlier repair pass (or a
+/// hand-edit) added the forwarding row (`tokenizer = ["core/tokenizer"]`) but never added
+/// `tokenizer` to `default`. A manifest in exactly this shape must still warn -- declaring a
+/// feature is not the same as turning it on -- which is the whole reason the check now keys on
+/// [`read_default_enabled_cargo_features`] instead of [`read_declared_cargo_features`].
+#[traced_test]
+#[test]
+fn warn_on_undeclared_binding_cfg_features_warns_when_declared_but_not_in_default() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("Cargo.toml");
+    std::fs::write(
+        &manifest,
+        "[package]\nname = \"x\"\n\n[features]\ndefault = [\"native-http\"]\n\
+         native-http = [\"core/native-http\"]\ntokenizer = [\"core/tokenizer\"]\n",
+    )
+    .expect("write manifest");
+    let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
+
+    warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
+
+    assert!(
+        logs_contain("does not enable by default"),
+        "a feature that is declared but unreachable from `default` must still warn -- \
+         `cargo rustc --print cfg` proves it is not actually on"
     );
 }
 
@@ -445,7 +472,7 @@ fn warn_on_undeclared_binding_cfg_features_silent_when_manifest_declares_everyth
     warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
 
     assert!(
-        !logs_contain("does not declare"),
+        !logs_contain("does not enable by default"),
         "a fully up-to-date manifest must not warn"
     );
 }
@@ -460,7 +487,7 @@ fn warn_on_undeclared_binding_cfg_features_silent_when_manifest_missing() {
     warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
 
     assert!(
-        !logs_contain("does not declare"),
+        !logs_contain("does not enable by default"),
         "an unscaffolded crate (no manifest on disk yet) must not warn -- there is nothing to \
          verify against"
     );
@@ -494,7 +521,10 @@ fn merge_missing_cfg_features_table() {
                        [dependencies]\nserde = \"1\"\n",
             gated_functions: &[("count_tokens", Some(r#"feature = "tokenizer""#))],
             core_declared_features: &["native-http", "tokenizer"],
-            expect_contains: &[r#"tokenizer = ["core/tokenizer"]"#],
+            expect_contains: &[
+                r#"tokenizer = ["core/tokenizer"]"#,
+                r#"default = ["native-http", "tokenizer"]"#,
+            ],
             expect_preserved: &[
                 r#"native-http = ["core/native-http"]"#,
                 "[dependencies]",
@@ -503,7 +533,7 @@ fn merge_missing_cfg_features_table() {
             expect_none: false,
         },
         MergeCase {
-            name: "a manifest already declaring the feature is left unchanged",
+            name: "a manifest already declaring and defaulting the feature is left unchanged",
             existing: "[package]\nname = \"x\"\n\n[features]\n\
                        default = [\"tokenizer\"]\n\
                        tokenizer = [\"core/tokenizer\"]\n",
@@ -514,16 +544,35 @@ fn merge_missing_cfg_features_table() {
             expect_none: true,
         },
         MergeCase {
-            name: "a manifest with no [features] table at all gets one created",
+            name: "a feature declared but excluded from default is added to default, not redeclared",
+            existing: "[package]\nname = \"x\"\n\n[features]\n\
+                       default = [\"native-http\"]\n\
+                       native-http = [\"core/native-http\"]\n\
+                       tokenizer = [\"core/tokenizer\"]\n",
+            gated_functions: &[("count_tokens", Some(r#"feature = "tokenizer""#))],
+            core_declared_features: &["native-http", "tokenizer"],
+            expect_contains: &[r#"default = ["native-http", "tokenizer"]"#],
+            expect_preserved: &[
+                r#"tokenizer = ["core/tokenizer"]"#,
+                r#"native-http = ["core/native-http"]"#,
+            ],
+            expect_none: false,
+        },
+        MergeCase {
+            name: "a manifest with no [features] table at all gets one created, feature enabled by default",
             existing: "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[dependencies]\nserde = \"1\"\n",
             gated_functions: &[("count_tokens", Some(r#"feature = "tokenizer""#))],
             core_declared_features: &["tokenizer"],
-            expect_contains: &["[features]", r#"tokenizer = ["core/tokenizer"]"#],
+            expect_contains: &[
+                "[features]",
+                r#"tokenizer = ["core/tokenizer"]"#,
+                r#"default = ["tokenizer"]"#,
+            ],
             expect_preserved: &["[dependencies]", "serde = \"1\""],
             expect_none: false,
         },
         MergeCase {
-            name: "a gated feature the core crate does not declare is never invented",
+            name: "a gated feature the core crate does not declare is never invented or defaulted",
             existing: "[package]\nname = \"x\"\n\n[features]\ndefault = []\n",
             gated_functions: &[("count_tokens", Some(r#"feature = "tokenizer""#))],
             core_declared_features: &[],
@@ -597,7 +646,9 @@ fn merge_missing_cfg_features_preserves_untouched_lines_verbatim() {
         .expect("merge must succeed")
         .expect("a missing feature must produce a patch");
 
-    for line in existing.lines() {
+    // The `default` line is the one deliberate exception: enabling the backfilled feature is the
+    // point of this merge, so its own value array is expected to change. ~keep
+    for line in existing.lines().filter(|line| !line.starts_with("default = ")) {
         assert!(
             patched.contains(line),
             "line `{line}` from the original manifest did not survive the merge verbatim, got:\n{patched}"
@@ -605,7 +656,11 @@ fn merge_missing_cfg_features_preserves_untouched_lines_verbatim() {
     }
     assert!(
         patched.contains(r#"tokenizer = ["core/tokenizer"]"#),
-        "the missing feature must still be inserted, got:\n{patched}"
+        "the missing feature must still be declared, got:\n{patched}"
+    );
+    assert!(
+        patched.contains(r#"default = ["native-http", "tokenizer"]"#),
+        "the backfilled feature must also be enabled by default, not merely declared, got:\n{patched}"
     );
 }
 

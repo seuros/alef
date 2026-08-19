@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A backfilled cfg-forwarded feature is now also enabled by default, not just declared.**
+  Declaring `<feature> = ["<core-crate>/<feature>"]` in the Ruby/Elixir native manifest's
+  `[features]` table does not turn the feature on -- `#[cfg(feature = "X")]` stayed false, and
+  the affected definitions kept silently compiling out, even after the previous repair pass added
+  the forwarding row, because nothing added `X` to `default` and no build wrapper alef scaffolds
+  passes `--features`. `merge_missing_cfg_features` now also appends any referenced feature
+  missing from `default` (whether newly declared or already declared but never defaulted),
+  mirroring what `scaffold_ruby_cargo`/`scaffold_elixir_cargo` already write on a fresh scaffold.
+  `warn_on_undeclared_binding_cfg_features` now keys on `read_default_enabled_cargo_features`
+  (reachable from `default`) instead of mere declaration, so a feature that is declared but not
+  defaulted still warns instead of reading as fixed.
+
 - **`alef scaffold` now actually adds a cfg-forwarded feature the compile-out warning names,
   instead of leaving the prescribed remedy a no-op.** The Ruby (Magnus) and Elixir (Rustler)
   native manifests are `generated_header: true`, so a full regen already includes every feature
