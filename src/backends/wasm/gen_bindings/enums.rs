@@ -1,6 +1,7 @@
 //! WASM enum code generation.
 
-use crate::core::ir::{EnumDef, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeRef};
+use ahash::AHashSet;
 
 use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::naming::{to_node_name, wire_variant_value};
@@ -13,6 +14,42 @@ use super::functions::emit_rustdoc;
 /// all variant fields (each made optional) — analogous to the NAPI tagged-enum-as-object path.
 pub(super) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
     enum_def.serde_tag.is_some() && enum_def.variants.iter().any(|v| !v.fields.is_empty())
+}
+
+/// True if this enum is a serde-untagged data enum (`#[serde(untagged)]` with at least one
+/// variant carrying fields), e.g. `enum EmbeddingInput { Single(String), Multiple(Vec<String>) }`.
+///
+/// Unlike `is_tagged_data_enum`, there is no tag to key a struct-with-discriminator
+/// representation on — the wire shape *is* whichever variant's payload serialized bare. A
+/// fieldless `#[wasm_bindgen]` C-style enum cannot carry that payload either, so `gen_enum` is
+/// never called for these: `mod.rs` redirects every field of this type straight to `JsValue`
+/// (via `type_overrides`) and bridges it through `serde_wasm_bindgen` at the field site, the same
+/// mechanism already used for `is_tagged_data_enum` fields. ~keep
+pub(super) fn is_untagged_data_enum(enum_def: &EnumDef) -> bool {
+    enum_def.serde_untagged && enum_def.variants.iter().any(|v| !v.fields.is_empty())
+}
+
+/// Detect every [`is_untagged_data_enum`] in `api` and default its `type_overrides` entry to
+/// `JsValue`, mirroring how `mod.rs` already redirects `untagged_union_text_types` to `String`.
+/// `or_insert_with` leaves an explicit consumer `type_overrides` entry untouched. The returned
+/// names also drive the field-level `JsValue`/`serde_wasm_bindgen` bridging in `types.rs` and
+/// `crate::codegen::conversions`, via `mod.rs`'s `jsvalue_bridged_enum_names`. ~keep
+pub(super) fn register_untagged_data_enum_overrides(
+    api: &ApiSurface,
+    type_overrides: &mut std::collections::HashMap<String, String>,
+) -> AHashSet<String> {
+    let names: AHashSet<String> = api
+        .enums
+        .iter()
+        .filter(|e| is_untagged_data_enum(e))
+        .map(|e| e.name.clone())
+        .collect();
+    for name in &names {
+        type_overrides
+            .entry(name.clone())
+            .or_insert_with(|| "JsValue".to_string());
+    }
+    names
 }
 
 /// Escape a Rust reserved keyword by prepending the raw-identifier prefix.

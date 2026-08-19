@@ -352,6 +352,8 @@ impl Backend for WasmBackend {
                 .entry(name.clone())
                 .or_insert_with(|| "String".to_string());
         }
+        // See `enums::register_untagged_data_enum_overrides` for why. ~keep
+        let untagged_data_enum_names = enums::register_untagged_data_enum_overrides(api, &mut type_overrides);
         let env_shims = wasm_config.map(|c| c.env_shims.clone()).unwrap_or_default();
         let prefix = config.wasm_type_prefix();
 
@@ -614,17 +616,21 @@ impl Backend for WasmBackend {
             builder.add_item("pub mod service;");
         }
 
-        let tagged_data_enum_names: AHashSet<String> = api
+        // Names whose fields are stored as `JsValue` and bridged through `serde_wasm_bindgen`,
+        // for both `gen_struct` below and `wasm_conv_config`. ~keep
+        let jsvalue_bridged_enum_names: AHashSet<String> = api
             .enums
             .iter()
-            .filter(|e| !exclude_types.contains(&e.name) && enums::is_tagged_data_enum(e))
+            .filter(|e| {
+                !exclude_types.contains(&e.name) && (enums::is_tagged_data_enum(e) || enums::is_untagged_data_enum(e))
+            })
             .map(|e| e.name.clone())
             .collect();
 
         let methods_enums: Vec<_> = api
             .enums
             .iter()
-            .filter(|e| !text_field_enum_names.contains(&e.name))
+            .filter(|e| !text_field_enum_names.contains(&e.name) && !untagged_data_enum_names.contains(&e.name))
             .cloned()
             .collect();
 
@@ -676,7 +682,7 @@ impl Backend for WasmBackend {
                     &exclude_types,
                     &core_import,
                     &prefix,
-                    &tagged_data_enum_names,
+                    &jsvalue_bridged_enum_names,
                     &source_remaps_borrowed,
                     is_core_to_binding_convertible,
                 );
@@ -699,7 +705,8 @@ impl Backend for WasmBackend {
         }
 
         for enum_def in &api.enums {
-            if !exclude_types.contains(&enum_def.name) {
+            // No `Wasm{Enum}` type for an untagged data enum — see `register_untagged_data_enum_overrides`. ~keep
+            if !exclude_types.contains(&enum_def.name) && !enums::is_untagged_data_enum(enum_def) {
                 builder.add_item(&gen_enum(enum_def, &prefix));
             }
         }
@@ -866,10 +873,10 @@ impl Backend for WasmBackend {
                 Some(&opaque_names_set)
             },
             trait_bridge_arc_wrapper_field_names: &trait_bridge_arc_wrapper_field_names,
-            tagged_data_enum_names: if tagged_data_enum_names.is_empty() {
+            tagged_data_enum_names: if jsvalue_bridged_enum_names.is_empty() {
                 None
             } else {
-                Some(&tagged_data_enum_names)
+                Some(&jsvalue_bridged_enum_names)
             },
             text_field_enum_names: if text_field_enum_names.is_empty() {
                 None
@@ -914,7 +921,9 @@ impl Backend for WasmBackend {
         }
         for e in &api.enums {
             if !exclude_types.contains(&e.name) {
-                if enums::is_tagged_data_enum(e) {
+                if enums::is_untagged_data_enum(e) {
+                    // No `Wasm{Enum}` type to write a `From` impl against; see the `gen_enum` skip above. ~keep
+                } else if enums::is_tagged_data_enum(e) {
                     if input_types.contains(&e.name) {
                         builder.add_item(&enums::gen_tagged_enum_binding_to_core(e, &core_import, &prefix));
                     }
@@ -1093,3 +1102,5 @@ fn forward_trait_bridge_builder_fields(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod untagged_enum_tests;
