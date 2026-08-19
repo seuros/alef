@@ -233,8 +233,10 @@ mod tests {
 
     fn make_e2e_config(class: &str, lang: &str) -> E2eConfig {
         let mut call = CallConfig::default();
-        let mut override_config = CallOverride::default();
-        override_config.class = Some(class.to_string());
+        let override_config = CallOverride {
+            class: Some(class.to_string()),
+            ..CallOverride::default()
+        };
         call.overrides.insert(lang.to_string(), override_config);
         E2eConfig {
             call,
@@ -372,8 +374,10 @@ mod tests {
         let type_defs = vec![make_type("DocumentApi")];
         let mut e2e_config = E2eConfig::default();
         let mut call = CallConfig::default();
-        let mut override_config = CallOverride::default();
-        override_config.class = Some("NotARealClass".to_string());
+        let override_config = CallOverride {
+            class: Some("NotARealClass".to_string()),
+            ..CallOverride::default()
+        };
         call.overrides.insert("java".to_string(), override_config);
         e2e_config.calls.insert("summarize".to_string(), call);
 

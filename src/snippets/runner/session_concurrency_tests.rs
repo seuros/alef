@@ -138,8 +138,7 @@ fn peak_concurrency(exclusive: bool) -> usize {
 
     let summary = run_validation(&[snippet(), snippet()], &registry, &config).expect("validation completes");
     assert_eq!(summary.passed, PAIR);
-    let peak = state.0.lock().expect("rendezvous").peak;
-    peak
+    state.0.lock().expect("rendezvous").peak
 }
 
 /// A validator that writes only into its own per-call scratch directory must not be serialized by
