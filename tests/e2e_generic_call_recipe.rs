@@ -127,11 +127,11 @@ fn dart_materializes_absent_optional_config_from_type_default() {
         .clone();
 
     assert!(
-        content.contains("final _settings = await createSampleSettingsFromJson(json: '{}');"),
+        content.contains("final settings = await createSampleSettingsFromJson(json: '{}');"),
         "Dart must materialize default config from configured options_type + TypeDef.has_default. Rendered:\n{content}"
     );
     assert!(
-        content.contains("processSample(settings: _settings)"),
+        content.contains("processSample(settings: settings)"),
         "Dart call must pass the materialized settings arg. Rendered:\n{content}"
     );
 }

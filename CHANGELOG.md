@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two Dart e2e regression tests no longer assert a naming convention alef deliberately
+  dropped.** `b5808da3c` stopped emitting leading-underscore Dart locals — Dart privacy is
+  library-scoped, so the prefix carried no meaning and only tripped
+  `no_leading_underscores_for_local_identifiers`, failing 188 of 207 published snippets under the
+  `dart analyze --fatal-infos` that alef itself runs. That commit updated
+  `e2e_dart_client_factory.rs` but missed `e2e_generic_call_recipe.rs` and
+  `e2e_unified_extract_input_args.rs`, which kept expecting `_settings`/`_input`/`_config`. The
+  generator was right and the expectations were stale; both now assert the lint-clean names. The
+  same test file also carried a real consumer project name through its fixture config and all
+  three language assertions, which `project-agnostic-codegen` forbids — renamed to a neutral
+  fixture identity.
+
 - **Generated Go e2e files no longer carry an unused `strings` (or `os`) import.** Go rejects an
   unused import outright, so `tree-sitter-language-pack`, `liter-llm` (6 files) and `crawlberg`
   (3 files) all had e2e suites that could not compile. Both flags are fixture-level heuristics —

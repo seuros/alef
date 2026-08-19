@@ -10,11 +10,11 @@ const TOML: &str = r#"
 languages = ["dart", "swift", "r"]
 
 [[crates]]
-name = "xberg"
+name = "sample_extract"
 sources = ["src/lib.rs"]
 
 [crates.dart]
-pubspec_name = "xberg"
+pubspec_name = "sample_extract"
 
 [crates.e2e]
 fixtures = "fixtures"
@@ -22,7 +22,7 @@ output = "e2e"
 
 [crates.e2e.call]
 function = "extract"
-module = "xberg"
+module = "sample_extract"
 result_var = "result"
 async = true
 args = [
@@ -42,10 +42,10 @@ function = "extract"
 options_type = "ExtractionConfig"
 
 [crates.e2e.packages.swift]
-name = "Xberg"
+name = "SampleExtract"
 
 [crates.e2e.packages.r]
-name = "xberg"
+name = "sample_extract"
 "#;
 
 fn config() -> (alef::e2e::config::E2eConfig, alef::core::config::ResolvedCrateConfig) {
@@ -101,15 +101,15 @@ fn dart_unified_extract_single_fixture_emits_input_arg() {
         .content;
 
     assert!(
-        content.contains("final _input = await createExtractInputFromJson(json:"),
+        content.contains("final input = await createExtractInputFromJson(json:"),
         "Dart must materialize the ExtractInput fixture JSON. Generated:\n{content}"
     );
     assert!(
-        content.contains("XbergBridge.extract(_input"),
+        content.contains("SampleExtractBridge.extract(input"),
         "Dart extract call must pass input. Generated:\n{content}"
     );
     assert!(
-        !content.contains("XbergBridge.extract(config: _config)"),
+        !content.contains("SampleExtractBridge.extract(config: config)"),
         "Dart extract call must not omit input. Generated:\n{content}"
     );
 }
@@ -127,7 +127,7 @@ fn swift_unified_extract_single_fixture_emits_input_json() {
         .content;
 
     assert!(
-        content.contains("let result = try await Xberg.extract(\"{"),
+        content.contains("let result = try await SampleExtract.extract(\"{"),
         "Swift extract call must pass fixture input JSON. Generated:\n{content}"
     );
     assert!(
@@ -135,7 +135,7 @@ fn swift_unified_extract_single_fixture_emits_input_json() {
         "Swift input JSON must contain the fixture ExtractInput fields. Generated:\n{content}"
     );
     assert!(
-        !content.contains("Xberg.extract([],"),
+        !content.contains("SampleExtract.extract([],"),
         "Swift extract call must not default input to an empty array. Generated:\n{content}"
     );
 }
