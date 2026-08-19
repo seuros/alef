@@ -305,7 +305,9 @@ pub(crate) fn migrate_java_checkstyle_line_length(base_dir: &Path, relative_path
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing packages/java/checkstyle.xml: raised LineLength max to 200 \
          to accommodate alef-emitted FFM call shims"

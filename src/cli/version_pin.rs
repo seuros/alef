@@ -30,13 +30,16 @@ pub fn check_alef_toml_version(workspace: &WorkspaceConfig) -> Result<()> {
 
     match cli_v.cmp(&pin_v) {
         std::cmp::Ordering::Greater => {
-            tracing::warn!(
+            // The pin drifting behind the running CLI is expected after every alef release
+            // until a consumer bumps it; nothing here is actionable. ~keep
+            tracing::info!(
                 "Running alef {cli} is newer than the pinned alef_version {pin} in alef.toml; \
                  generation will not change the pin"
             );
         }
         std::cmp::Ordering::Less => {
-            tracing::warn!(
+            // Same as the newer-CLI branch above: an unbumped pin is expected, not actionable. ~keep
+            tracing::info!(
                 "Running alef {cli} is older than the pinned alef_version {pin} in alef.toml; \
                  generation will not change the pin"
             );

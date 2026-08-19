@@ -894,7 +894,9 @@ pub(crate) fn migrate_wasm_cargo_config_allow_multiple_definition(base_dir: &std
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing .cargo/config.toml: added -C link-arg=--allow-multiple-definition \
          to the wasm32-unknown-unknown rustflags"

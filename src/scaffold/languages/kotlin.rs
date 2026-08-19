@@ -384,7 +384,9 @@ pub(crate) fn migrate_kotlin_build_gradle(base_dir: &Path) -> anyhow::Result<boo
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing packages/kotlin/build.gradle.kts: dropped the stale root \
          kotlin srcDir(\".\") and/or added the missing mavenPublishing trailing comma"

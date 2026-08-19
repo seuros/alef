@@ -116,7 +116,9 @@ pub(super) fn precompute_swift_checksum(config: &ResolvedCrateConfig) -> anyhow:
             match run_command_captured(&build_cmd) {
                 Ok(_) => {}
                 Err(e) => {
-                    warn!(
+                    // Fires on every non-macOS host and every pre-release repo without Xcode; a
+                    // correct setup lacking Apple tooling cannot avoid this. ~keep
+                    info!(
                         "Swift artifactbundle build failed (missing Xcode / Apple targets?): {e}\n\
                          Re-run with --skip-swift-checksum to skip this step."
                     );
@@ -132,7 +134,9 @@ pub(super) fn precompute_swift_checksum(config: &ResolvedCrateConfig) -> anyhow:
             }) {
                 Some(p) => p,
                 None => {
-                    warn!(
+                    // Downstream of the artifactbundle build above; a correct setup without Xcode
+                    // / Apple targets reaches this on every non-macOS host. ~keep
+                    info!(
                         "No .zip found in `dist/swift-artifactbundle/` after build — \
                          skipping checksum substitution."
                     );
@@ -153,7 +157,9 @@ pub(super) fn precompute_swift_checksum(config: &ResolvedCrateConfig) -> anyhow:
     };
 
     if checksum.is_empty() {
-        warn!("Computed empty checksum — skipping substitution");
+        // Downstream of the artifactbundle build above; a correct setup without Xcode / Apple
+        // targets reaches this on every non-macOS host. ~keep
+        info!("Computed empty checksum — skipping substitution");
         return Ok(None);
     }
 

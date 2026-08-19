@@ -174,7 +174,9 @@ pub(crate) fn migrate_wasm_package_json_exports(base_dir: &Path, relative_path: 
         .persist(&path)
         .map_err(|error| error.error)
         .with_context(|| format!("failed to replace {}", path.display()))?;
-    tracing::warn!(
+    // Fires only after the replace above already succeeded: a completed self-heal, not an
+    // outstanding problem. ~keep
+    tracing::info!(
         path = %path.display(),
         "repaired pre-existing crates/*-wasm/package.json: inserted the missing \"exports\" map"
     );

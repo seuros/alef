@@ -29,7 +29,9 @@ pub(super) fn validate_extracted_api(api: &ApiSurface, config: &ResolvedCrateCon
                 .any(|code| code == &d.code.to_string())
     });
     for diagnostic in suppressed {
-        tracing::warn!("[suppressed] {diagnostic}");
+        // The consumer explicitly opted into suppress_validation_codes for this diagnostic;
+        // re-printing it at warn level defeats their own declared setting. ~keep
+        tracing::debug!("[suppressed] {diagnostic}");
     }
     if !fatal.is_empty() {
         let formatted = fatal
