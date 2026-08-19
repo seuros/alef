@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The subprocess-polling regression test no longer fails under load.** It asserted that 20
+  trivial commands finish in under *half* the 1s the old unconditional 50ms-per-subprocess sleep
+  cost. That sleep ran before the first `try_wait` regardless of command speed, so any amortised
+  cost below 50ms/command already proves it is gone on any machine at any load; the extra halving
+  proved nothing and instead measured process-spawn overhead, which legitimately reaches 25ms+ per
+  command on a loaded machine and failed the suite at 509ms and 527ms against a 500ms bound.
+
 - **R bindings no longer drop every feature-gated function outright.** `extendr_module!` rejects a
   `#[cfg(...)]` on its entries ("expected mod, fn or impl"), so R cannot gate a registration the
   way Magnus gates its `define_module_function` call. The workaround was to exclude any genuinely

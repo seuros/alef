@@ -455,11 +455,21 @@ mod tests {
         }
 
         let elapsed = started.elapsed();
-        let old_floor = Duration::from_millis(50) * TRIVIAL_COMMAND_RUNS;
+        // ~keep The bound is the old *unconditional* per-command sleep, not a fraction of it. That
+        // sleep ran before the first `try_wait` regardless of how fast the command was, so the old
+        // implementation could not finish these runs in under `old_floor` on any machine at any
+        // load -- which makes an amortised cost below 50ms/command a machine-independent proof
+        // that the fixed interval is gone. Asserting a fraction of the floor instead (this was
+        // `< old_floor / 2`) proved nothing extra and turned the test into a measurement of
+        // process-spawn overhead, which on a loaded machine legitimately reaches 25ms+/command and
+        // failed the suite at 509ms and 527ms against a 500ms bound. The one assumption left is
+        // that spawning `sh` stays under 50ms/command, which those same numbers clear by 2x.
+        let per_command = elapsed / TRIVIAL_COMMAND_RUNS;
+        let old_fixed_interval = Duration::from_millis(50);
         assert!(
-            elapsed < old_floor / 2,
-            "{TRIVIAL_COMMAND_RUNS} trivial commands took {elapsed:?}, at least half the {old_floor:?} the fixed \
-             50ms poll interval alone used to cost"
+            per_command < old_fixed_interval,
+            "{TRIVIAL_COMMAND_RUNS} trivial commands took {elapsed:?} ({per_command:?} each), which is not below \
+             the {old_fixed_interval:?} every subprocess used to sleep before its first try_wait"
         );
     }
 
