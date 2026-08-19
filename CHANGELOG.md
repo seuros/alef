@@ -39,6 +39,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Swift artifactbundle build/checksum steps on hosts without Xcode. These no longer drown the
   warnings that matter in `generate`/`adopt`/`verify`/`diff` output.
 
+### Removed
+
+- **Removed three provably-unreachable code paths.** `check_signature_breakage`'s "no
+  consumer-file scan is wired up" warning could never fire: every backend except Zig defaults
+  `public_function_signatures` to empty, so the baseline comparison always short-circuits before
+  reaching it for those languages, and Zig always has a non-empty `scan_extensions_for` entry, so
+  its changes always take the attributed-caller branch instead. `ValidationReport::warnings()` was
+  always empty because every diagnostic pushed into a `ValidationReport` is built with
+  `ValidationDiagnostic::error`; the pipeline's own warning diagnostics travel through a separate
+  `language_diagnostics` vec. Removed the dead `warnings()` method and its two always-empty
+  iteration sites. The C# backend's `callback_specs_from_trait` (and its private
+  `snake_to_lower_camel` helper and `CallbackSpec`/`ExtraParam` types) was only ever called from
+  its own `#[cfg(test)]` module; removed the function, its helper types, and the test that only
+  exercised it.
+
 ## [0.62.2] - 2026-08-19
 
 ### Fixed
