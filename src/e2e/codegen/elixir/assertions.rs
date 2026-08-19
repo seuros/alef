@@ -540,10 +540,30 @@ pub(super) fn render_assertion(
             }
         }
         "is_true" => {
-            let _ = writeln!(out, "      assert {field_expr} == true");
+            let field_is_optional = assertion
+                .field
+                .as_ref()
+                .is_some_and(|f| !f.is_empty() && field_resolver.is_optional(f));
+            if field_is_optional {
+                // Optional field: "is_true" means "present" -- `== true` never matches a
+                // present non-boolean value (e.g. a map), so it always fails even when the
+                // field is present. `refute is_nil(...)` is the interpretation that holds
+                // for any value, matching the Rust `.is_some()` convention. ~keep
+                let _ = writeln!(out, "      refute is_nil({field_expr})");
+            } else {
+                let _ = writeln!(out, "      assert {field_expr} == true");
+            }
         }
         "is_false" => {
-            let _ = writeln!(out, "      assert {field_expr} == false");
+            let field_is_optional = assertion
+                .field
+                .as_ref()
+                .is_some_and(|f| !f.is_empty() && field_resolver.is_optional(f));
+            if field_is_optional {
+                let _ = writeln!(out, "      assert is_nil({field_expr})");
+            } else {
+                let _ = writeln!(out, "      assert {field_expr} == false");
+            }
         }
         "method_result" => {
             if let Some(method_name) = &assertion.method {
@@ -752,7 +772,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("data".to_string()),
@@ -825,7 +845,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("internal_diagnostics".to_string()),

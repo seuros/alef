@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Generated e2e assertions now read a field's optionality from the IR instead of a
+  hand-maintained config table.** `FieldResolver`'s `optional_fields` was populated only from
+  the consumer's `[crates.e2e] fields_optional` list in `alef.toml`, never from `FieldDef.optional`
+  — which extraction already sets correctly, and which every language backend already consults to
+  wrap the field in that language's optional type. A consumer that declared no `fields_optional`
+  therefore got assertions that dereference an `Option` directly: `assert!(result.data, "expected
+  true")` against `pub data: Option<DataNode>` does not compile, and the equivalent in twelve other
+  backends either fails to compile or is silently false at runtime. `FieldResolver::ir_field_sets`
+  now also derives an optional-field set and `with_ir_fields` merges it into the config-declared
+  one, so `fields_optional` remains an override for what the IR cannot see rather than the only
+  source of truth. Derivation is deliberately unanimous — a bare field name counts as optional only
+  when *every* type declaring it marks it `Option<T>` — because a false positive here emits code
+  that does not compile, whereas a false negative merely reproduces the previous behaviour.
+  Alongside it, `is_true`/`is_false` now mean "present"/"absent" for an optional field in rust, go,
+  java, python, kotlin, kotlin_android, dart, swift, php, ruby, elixir, typescript and zig, matching
+  the convention the Rust backend already used; csharp and c were already correct. The shared
+  doc-snippet path (`e2e::codegen::presentation::resolve`) is wired to the same IR data, so a
+  snippet showing an optional field renders the same unwrap an assertion on it would.
+
+
 ## [0.61.1] - 2026-08-19
 
 ### Fixed

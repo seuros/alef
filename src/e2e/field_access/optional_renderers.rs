@@ -632,12 +632,23 @@ pub(super) fn render_php(segments: &[PathSegment], result_var: &str) -> String {
 /// segment. When `root_type` is unset the renderer falls back to the legacy bare-name
 /// union, which is unsafe but preserves backwards compatibility for callers that have
 /// not wired type resolution.
-pub(super) fn render_php_with_getters(segments: &[PathSegment], result_var: &str, getter_map: &PhpGetterMap) -> String {
+pub(super) fn render_php_with_getters(
+    segments: &[PathSegment],
+    result_var: &str,
+    getter_map: &PhpGetterMap,
+    optional_fields: &HashSet<String>,
+) -> String {
     let mut out = result_var.to_string();
     let mut current_type: Option<String> = getter_map.root_type.clone();
+    let mut path_so_far = String::new();
+    // Sticky, same convention as `render_php`: once any segment in the chain is optional,
+    // every following access must null-safe-navigate off it.
+    let mut prev_was_nullable = false;
     for seg in segments {
+        let arrow = if prev_was_nullable { "?->" } else { "->" };
         match seg {
             PathSegment::Field(f) => {
+                push_key_field_name(&mut path_so_far, seg);
                 let camel = f.to_lower_camel_case();
                 if getter_map.needs_getter(current_type.as_deref(), f.as_str()) {
                     // Non-scalar field: ext-php-rs emits a `get{CamelCase}()` method.
@@ -645,42 +656,49 @@ pub(super) fn render_php_with_getters(segments: &[PathSegment], result_var: &str
                     // PHP property name, but the Rust method ident is `get_{camelCase}`,
                     // so the PHP call is `->get{CamelCase}()`.
                     let getter = format!("get{}", camel.as_str()[..1].to_uppercase() + &camel[1..]);
-                    out.push_str("->");
+                    out.push_str(arrow);
                     out.push_str(&getter);
                     out.push_str("()");
                 } else {
-                    out.push_str("->");
+                    out.push_str(arrow);
                     out.push_str(&camel);
                 }
                 current_type = getter_map.advance(current_type.as_deref(), f.as_str());
+                prev_was_nullable = prev_was_nullable || optional_fields.contains(&path_so_far);
             }
             PathSegment::ArrayField { name, index } => {
+                push_key_field_name(&mut path_so_far, seg);
                 let camel = name.to_lower_camel_case();
                 if getter_map.needs_getter(current_type.as_deref(), name.as_str()) {
                     let getter = format!("get{}", camel.as_str()[..1].to_uppercase() + &camel[1..]);
-                    out.push_str("->");
+                    out.push_str(arrow);
                     out.push_str(&getter);
                     out.push_str("()");
                 } else {
-                    out.push_str("->");
+                    out.push_str(arrow);
                     out.push_str(&camel);
                 }
                 out.push_str(&format!("[{index}]"));
                 current_type = getter_map.advance(current_type.as_deref(), name.as_str());
+                push_key_index_suffix(&mut path_so_far, seg);
+                prev_was_nullable = prev_was_nullable || optional_fields.contains(&path_so_far);
             }
             PathSegment::MapAccess { field, key } => {
+                push_key_field_name(&mut path_so_far, seg);
                 let camel = field.to_lower_camel_case();
                 if getter_map.needs_getter(current_type.as_deref(), field.as_str()) {
                     let getter = format!("get{}", camel.as_str()[..1].to_uppercase() + &camel[1..]);
-                    out.push_str("->");
+                    out.push_str(arrow);
                     out.push_str(&getter);
                     out.push_str("()");
                 } else {
-                    out.push_str("->");
+                    out.push_str(arrow);
                     out.push_str(&camel);
                 }
                 out.push_str(&format!("[\"{key}\"]"));
                 current_type = getter_map.advance(current_type.as_deref(), field.as_str());
+                push_key_index_suffix(&mut path_so_far, seg);
+                prev_was_nullable = prev_was_nullable || optional_fields.contains(&path_so_far);
             }
             PathSegment::Length => {
                 let current = std::mem::take(&mut out);

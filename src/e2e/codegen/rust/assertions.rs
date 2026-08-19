@@ -973,7 +973,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = make_assertion("equals", Some("data"), Some(serde_json::json!("hello")));
         let mut out = String::new();
         render_assertion(
@@ -1012,7 +1012,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = make_assertion("equals", Some("internal_diagnostics"), Some(serde_json::json!("hello")));
         let mut out = String::new();
         render_assertion(

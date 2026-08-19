@@ -166,7 +166,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
         // the *original* `fixture`) drops straight to the same bare `api_key="test-key"` shape the
         // substitution just below already targets. ~keep
         call_fixture.env = None;
-        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python");
+        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python", type_defs);
         let call = e2e_config.resolve_call_for_fixture(
             call_fixture.call.as_deref(),
             &call_fixture.id,

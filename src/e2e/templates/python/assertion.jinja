@@ -81,9 +81,20 @@
 {% elif assertion_type == "count_equals" %}
     assert len({{ field_access }}) == {{ n }}  # noqa: S101
 {% elif assertion_type == "is_true" %}
+{% if field_is_optional %}
+{# `is_true` on an Optional field means "present" -- `is True` fails for any non-bool #}
+{# value (a struct, a string, a list), which is the wrong check for `Option<T>` where T #}
+{# is not bool. `is not None` is the interpretation that holds for any T. #}
+    assert {{ field_access }} is not None  # noqa: S101
+{% else %}
     assert {{ field_access }} is True  # noqa: S101
+{% endif %}
 {% elif assertion_type == "is_false" %}
+{% if field_is_optional %}
+    assert {{ field_access }} is None  # noqa: S101
+{% else %}
     assert not {{ field_access }}  # noqa: S101
+{% endif %}
 {% elif assertion_type == "method_result" %}
 {% if check == "equals" %}
 {% if is_boolean_val %}

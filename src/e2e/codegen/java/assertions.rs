@@ -459,7 +459,11 @@ pub(super) fn render_assertion(
                     // be a type mismatch — Optional<String>.orElse("") is the only safe form).
                     if field_is_enum {
                         match assertion.assertion_type.as_str() {
-                            "not_empty" | "is_empty" => optional_expr,
+                            // `is_true`/`is_false` on an Optional field mean "present"/"absent" --
+                            // matching not_empty/is_empty, the raw Optional is returned so the
+                            // template's presence switch (not a `.map(...).orElse(...)` string
+                            // coercion, which produced a non-boolean `assertTrue` argument) decides.
+                            "not_empty" | "is_empty" | "is_true" | "is_false" => optional_expr,
                             _ => {
                                 // `field_is_enum` already excludes sealed-interface types
                                 // (is_sealed_display_field), so any remaining enum type
@@ -472,14 +476,20 @@ pub(super) fn render_assertion(
                         // to get the textual representation instead of `Objects::toString`
                         // which would return the class name.
                         match assertion.assertion_type.as_str() {
-                            "not_empty" | "is_empty" => optional_expr,
+                            // `is_true`/`is_false` on an Optional field mean "present"/"absent" --
+                            // matching not_empty/is_empty, the raw Optional is returned so the
+                            // template's presence switch (not a `.map(...).orElse(...)` string
+                            // coercion, which produced a non-boolean `assertTrue` argument) decides.
+                            "not_empty" | "is_empty" | "is_true" | "is_false" => optional_expr,
                             _ => format!("{optional_expr}.map(v -> v.text()).orElse(\"\")"),
                         }
                     } else {
                         match assertion.assertion_type.as_str() {
-                            // For not_empty / is_empty on Optional fields, return the raw Optional
-                            // so the assertion arms can call isPresent()/isEmpty().
-                            "not_empty" | "is_empty" => optional_expr,
+                            // `not_empty`/`is_empty`/`is_true`/`is_false` on an Optional field all
+                            // return the raw Optional so the template's presence switch decides --
+                            // for is_true/is_false this replaces a `.map(...).orElse(...)` string
+                            // coercion that produced a non-boolean `assertTrue` argument.
+                            "not_empty" | "is_empty" | "is_true" | "is_false" => optional_expr,
                             // For size/count assertions on Optional<List<T>> fields, use List.of() fallback.
                             "count_min" | "count_equals" => {
                                 format!("{optional_expr}.orElse(java.util.List.of())")
@@ -921,6 +931,83 @@ mod tests {
         out
     }
 
+    fn render_with_optional(assertion: &Assertion, optional_field: &str) -> String {
+        let optional: HashSet<String> = [optional_field.to_string()].into_iter().collect();
+        let resolver = make_resolver(optional, HashSet::new());
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "Result",
+            &resolver,
+            false,
+            false,
+            false,
+            false,
+            None,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            &HashSet::new(),
+        );
+        out
+    }
+
+    fn is_true_assertion(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some(field.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// `Option<DataNode>` presence: before the fix this fell through to the generic
+    /// `.map(Objects::toString).orElse("")` string-coercion arm, so `assertTrue` received
+    /// a `String` argument -- a compile error, since `assertTrue` requires `boolean`.
+    #[test]
+    fn is_true_on_optional_struct_field_checks_presence() {
+        let out = render_with_optional(&is_true_assertion("data"), "data");
+        assert_eq!(
+            out,
+            "        assertTrue(java.util.Optional.ofNullable(result.data()).isPresent(), \"expected true (present)\");\n"
+        );
+    }
+
+    #[test]
+    fn is_false_on_optional_struct_field_checks_absence() {
+        let out = render_with_optional(
+            &Assertion {
+                assertion_type: "is_false".to_string(),
+                field: Some("data".to_string()),
+                ..Default::default()
+            },
+            "data",
+        );
+        assert_eq!(
+            out,
+            "        assertTrue(java.util.Optional.ofNullable(result.data()).isEmpty(), \"expected false (absent)\");\n"
+        );
+    }
+
+    /// A follow-on member access through the same optional field must still compile: the
+    /// leaf (`equals` on `data.kind`) is unaffected by the `is_true` fix, so it continues to
+    /// route through the existing `Optional.ofNullable(...).map(Objects::toString).orElse("")`
+    /// coercion rather than needing an unwrap of its own -- Java's binding returns `@Nullable`
+    /// types, not `Optional<T>`, so `result.data().kind()` already compiles regardless of
+    /// nullability. ~keep
+    #[test]
+    fn equals_on_nested_field_through_optional_parent_is_unchanged() {
+        let out = render_with_optional(&make_equals_assertion("data.kind", "KeyValue"), "data");
+        assert!(out.contains("result.data().kind()"), "got: {out}");
+    }
+
+    #[test]
+    fn is_true_on_non_optional_field_is_unchanged() {
+        let out = render_bare(&is_true_assertion("active"));
+        assert_eq!(out, "        assertTrue(result.active(), \"expected true\");\n");
+    }
+
     #[test]
     fn wildcard_contains_scans_every_element_not_just_index_zero() {
         let out = render_bare(&make_contains_assertion("links[].link_type", "external"));
@@ -1001,7 +1088,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = make_equals_assertion("data", "hello");
         let mut out = String::new();
         render_assertion(
@@ -1040,7 +1127,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = make_equals_assertion("internal_diagnostics", "hello");
         let mut out = String::new();
         render_assertion(

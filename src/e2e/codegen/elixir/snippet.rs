@@ -93,7 +93,7 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs);
     Ok(crate::e2e::template_env::render(
         "elixir/snippet_body.jinja",
         minijinja::context! {

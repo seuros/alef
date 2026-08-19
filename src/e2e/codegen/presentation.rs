@@ -14,7 +14,16 @@ pub(crate) struct PresentationOperation {
     pub(crate) destructure_item: String,
 }
 
-pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str) -> Vec<PresentationOperation> {
+/// `type_defs` feeds the same IR-derived optional-field detection every e2e assertion
+/// resolver uses (see `FieldResolver::ir_field_sets`/`with_ir_fields`) so a docs snippet
+/// that shows an `Option<T>` field renders the same unwrap/null-check an assertion on
+/// that field would, instead of a bare (potentially non-compiling) access. ~keep
+pub(crate) fn resolve(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    language: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> Vec<PresentationOperation> {
     if fixture.docs.is_none() {
         return Vec::new();
     }
@@ -25,13 +34,15 @@ pub(crate) fn resolve(fixture: &Fixture, e2e_config: &E2eConfig, language: &str)
         &fixture.tags,
         &fixture.input,
     );
+    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let resolver = FieldResolver::new(
         e2e_config.effective_fields(call),
         e2e_config.effective_fields_optional(call),
         e2e_config.effective_result_fields(call),
         e2e_config.effective_fields_array(call),
         e2e_config.effective_fields_method_calls(call),
-    );
+    )
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     resolve_with(fixture, e2e_config, language, &resolver)
 }
 
@@ -303,8 +314,8 @@ mod tests {
                 is_async => false, presentation => operations },
             )
         };
-        let displayed = render(resolve(&display_fixture, &config, "rust"));
-        let debugged = render(resolve(&debug_fixture, &config, "rust"));
+        let displayed = render(resolve(&display_fixture, &config, "rust", &[]));
+        let debugged = render(resolve(&debug_fixture, &config, "rust", &[]));
 
         assert!(displayed.contains("println!(\"{}\", result.text);"), "{displayed}");
         assert!(debugged.contains("println!(\"{:?}\", result.text);"), "{debugged}");
@@ -314,8 +325,8 @@ mod tests {
     fn presentation_templates_emit_idiomatic_python_rust_and_typescript() {
         let fixture = fixture();
         let config = config();
-        let python = resolve(&fixture, &config, "python");
-        let rust = resolve(&fixture, &config, "rust");
+        let python = resolve(&fixture, &config, "python", &[]);
+        let rust = resolve(&fixture, &config, "rust", &[]);
         let mut typescript_fixture = fixture.clone();
         typescript_fixture
             .docs
@@ -329,7 +340,7 @@ mod tests {
             display: true,
             optional: true,
         }];
-        let typescript = resolve(&typescript_fixture, &config, "node");
+        let typescript = resolve(&typescript_fixture, &config, "node", &[]);
 
         let python_output = crate::e2e::template_env::render(
             "python/snippet_body.py.jinja",
@@ -406,7 +417,7 @@ mod tests {
         let mut stale_config = config();
         stale_config.fields_optional = ["results[0].elements".to_string()].into_iter().collect();
 
-        let operations = resolve(&stale_fixture, &stale_config, "node");
+        let operations = resolve(&stale_fixture, &stale_config, "node", &[]);
         let iterate = operations.first().expect("one iterate operation");
         assert!(
             iterate.optional,
@@ -423,6 +434,55 @@ mod tests {
         assert!(
             typescript_output.contains("for (const element of first?.elements ?? [])"),
             "{typescript_output}"
+        );
+    }
+
+    /// A docs snippet that shows a field reached through an `Option<T>` in a non-leaf
+    /// position must unwrap, even when the consumer's `alef.toml` never lists that field
+    /// under `fields_optional` -- the IR alone (`FieldDef.optional`) must be enough. This
+    /// is the snippet-surface half of the same bug the e2e assertion resolver had: passing
+    /// real `type_defs` changes the rendered accessor, and `&[]` (no IR) reproduces the old
+    /// (broken) behavior -- proving the merge in `resolve` actually takes effect rather
+    /// than every new-parameter call site silently passing an empty set. ~keep
+    #[test]
+    fn resolve_show_unwraps_ir_only_optional_field_in_non_leaf_position() {
+        use crate::core::ir::{FieldDef, TypeDef};
+
+        let mut show_fixture = fixture();
+        show_fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![FixtureDocsOperation::Show {
+            path: "data.kind".into(),
+            display: false,
+        }];
+        // No `fields_optional` entry for `data` anywhere in this config -- optionality
+        // must come entirely from the IR passed to `resolve`.
+        let config = config();
+        assert!(!config.fields_optional.contains("data"));
+
+        let process_result = TypeDef {
+            name: "ProcessResult".to_string(),
+            fields: vec![FieldDef {
+                name: "data".to_string(),
+                optional: true,
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        };
+
+        let without_ir = resolve(&show_fixture, &config, "rust", &[]);
+        let with_ir = resolve(&show_fixture, &config, "rust", &[process_result]);
+
+        assert_eq!(
+            without_ir[0].expression, "result.data.kind",
+            "with no IR in scope, resolve falls back to the pre-fix (non-compiling) accessor"
+        );
+        assert_eq!(
+            with_ir[0].expression, "result.data.as_ref().unwrap().kind",
+            "with IR in scope, resolve must unwrap the Option before the nested field access"
         );
     }
 }

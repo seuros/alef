@@ -153,7 +153,9 @@ fn render_wildcard_json_assertion(
     }
 
     let element_expr = json_path_expr_with("_wce", element_sub_path, Unwrap::Error);
-    let body = render_json_assertion_template(assertion, &element_expr, is_length_access);
+    // Wildcard loop elements are `Vec<T>` items, not the `Option<T>` field itself, so the
+    // per-element assertion has no leaf-optionality of its own to consult here.
+    let body = render_json_assertion_template(assertion, &element_expr, is_length_access, false);
     // An assertion type the template has no branch for renders to nothing. The
     // nested function would then never use `_wce`, which Zig rejects as an unused
     // parameter, so this must stay a skip rather than an empty loop. ~keep
@@ -565,6 +567,7 @@ pub(super) fn render_json_assertion(
     } else {
         json_path_expr(result_var, field_path_for_expr)
     };
+    let field_is_optional = !field_path_for_expr.is_empty() && field_resolver.is_optional(field_path_for_expr);
 
     // Special-case `metadata.format` equals-string: `FormatMetadata` is an
     // internally-tagged enum serialized as a JSON object (`{"format_type": "image",
@@ -638,6 +641,7 @@ pub(super) fn render_json_assertion(
         assertion,
         &field_expr,
         is_length_access,
+        field_is_optional,
     ));
 }
 
@@ -645,7 +649,12 @@ pub(super) fn render_json_assertion(
 ///
 /// Split out of `render_json_assertion` so the wildcard path can render the very
 /// same assertion against a loop element instead of against the result root. ~keep
-fn render_json_assertion_template(assertion: &Assertion, field_expr: &str, is_length_access: bool) -> String {
+fn render_json_assertion_template(
+    assertion: &Assertion,
+    field_expr: &str,
+    is_length_access: bool,
+    field_is_optional: bool,
+) -> String {
     // Compute context variables for the template.
     let zig_val = match &assertion.value {
         Some(serde_json::Value::String(s)) => format!("\"{}\"", escape_zig(s)),
@@ -705,6 +714,7 @@ fn render_json_assertion_template(assertion: &Assertion, field_expr: &str, is_le
         minijinja::context! {
             assertion_type => assertion.assertion_type.as_str(),
             field_expr => field_expr,
+            field_is_optional => field_is_optional,
             is_length_access => is_length_access,
             zig_val => zig_val,
             is_string_val => is_string_val,
@@ -1068,10 +1078,24 @@ pub(super) fn render_assertion(
             }
         }
         "is_true" => {
-            let _ = writeln!(out, "    try testing.expect({field_expr});");
+            if let Some(optional_expr) = field_expr.strip_suffix(".?") {
+                // `?T`: "is_true" means "present" -- `field_expr` here already force-unwraps
+                // with `.?` (a runtime panic on `null`, before the value is even
+                // compared), and even past that, `testing.expect` requires a `bool` so a
+                // struct T does not compile. `!= null` on the un-force-unwrapped optional
+                // is the interpretation that holds for any T, matching the Rust `.is_some()`
+                // convention for this assertion type. ~keep
+                let _ = writeln!(out, "    try testing.expect({optional_expr} != null);");
+            } else {
+                let _ = writeln!(out, "    try testing.expect({field_expr});");
+            }
         }
         "is_false" => {
-            let _ = writeln!(out, "    try testing.expect(!{field_expr});");
+            if let Some(optional_expr) = field_expr.strip_suffix(".?") {
+                let _ = writeln!(out, "    try testing.expect({optional_expr} == null);");
+            } else {
+                let _ = writeln!(out, "    try testing.expect(!{field_expr});");
+            }
         }
         "not_error" => {
             // Already handled by the call succeeding.

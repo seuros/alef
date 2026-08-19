@@ -819,21 +819,31 @@ pub(super) fn render_assertion(
                 }
             }
         }
-        "is_true" => {
-            let assert_expr = if accessor_is_optional {
-                format!("({field_expr} ?? false)")
+        "is_true" | "is_false" => {
+            // `accessor_is_optional` only catches an intermediate `?.` in the chain -- a
+            // field that is ITSELF the optional leaf (e.g. `data` in `data.kind`, with no
+            // further segment to safe-navigate past) leaves `field_expr` as `result.data()`
+            // with no `?.` anywhere, so that check alone misses it. Consult the resolver
+            // directly for the leaf's own optionality too. ~keep
+            let leaf_is_optional = assertion
+                .field
+                .as_deref()
+                .is_some_and(|f| field_resolver.is_optional(field_resolver.resolve(f)));
+            if accessor_is_optional || leaf_is_optional {
+                // `T?`: "is_true"/"is_false" mean "present"/"absent" -- `?? false` only
+                // type-checks when T is `Bool` and for any other T (e.g. `DataNode?`) it is a
+                // compile error. `!= nil` is the interpretation that holds for any T,
+                // matching the Rust `.is_some()` convention for this assertion type.
+                if assertion.assertion_type == "is_true" {
+                    let _ = writeln!(out, "        XCTAssertNotNil({field_expr})");
+                } else {
+                    let _ = writeln!(out, "        XCTAssertNil({field_expr})");
+                }
+            } else if assertion.assertion_type == "is_true" {
+                let _ = writeln!(out, "        XCTAssertTrue({field_expr})");
             } else {
-                field_expr.clone()
-            };
-            let _ = writeln!(out, "        XCTAssertTrue({assert_expr})");
-        }
-        "is_false" => {
-            let assert_expr = if accessor_is_optional {
-                format!("({field_expr} ?? true)")
-            } else {
-                field_expr.clone()
-            };
-            let _ = writeln!(out, "        XCTAssertFalse({assert_expr})");
+                let _ = writeln!(out, "        XCTAssertFalse({field_expr})");
+            }
         }
         "matches_regex" => {
             if let Some(expected) = &assertion.value {

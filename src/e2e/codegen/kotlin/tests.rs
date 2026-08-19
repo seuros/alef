@@ -36,7 +36,7 @@ fn kotlin_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
         &HashSet::new(),
         &HashSet::new(),
     )
-    .with_ir_fields(reachable, HashSet::new());
+    .with_ir_fields(reachable, HashSet::new(), HashSet::new());
     let assertion = Assertion {
         skip: None,
         assertion_type: "equals".to_string(),
@@ -83,7 +83,7 @@ fn kotlin_ir_excluded_field_present_in_result_fields_is_still_skipped() {
         &HashSet::new(),
         &HashSet::new(),
     )
-    .with_ir_fields(HashSet::new(), excluded);
+    .with_ir_fields(HashSet::new(), excluded, HashSet::new());
     let assertion = Assertion {
         skip: None,
         assertion_type: "equals".to_string(),

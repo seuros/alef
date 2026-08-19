@@ -44,7 +44,7 @@ pub(super) fn render_test_case(
         &fixture.tags,
         &fixture.input,
     );
-    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
+    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -52,7 +52,7 @@ pub(super) fn render_test_case(
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     // Resolve `function` via the R override when present. The default
     // `call_config.function` can be empty (e.g. trait-bridge calls like

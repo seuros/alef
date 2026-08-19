@@ -148,7 +148,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             .with_functions(functions);
     let target_params = call_recipe.target_params(lang);
     // Build per-call field resolver using the effective field sets for this call.
-    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
+    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_dart_first_class(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -160,7 +160,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_dart_root_type(super::dart_call_result_type(call_config).or_else(|| dart_first_class_map.root_type.clone()))
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields_base = e2e_config.effective_fields_enum(call_config);
 

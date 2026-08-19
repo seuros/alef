@@ -117,9 +117,21 @@
     try testing.expect({{ field_expr }}.integer <= {{ n_as_i64 }});
 {% endif %}
 {% elif assertion_type == "is_true" %}
+{% if field_is_optional %}
+{# `is_true` on an Option<T> field means "present" -- `.bool` unconditionally accesses the #}
+{# union's bool variant, which is an "access of inactive union field" panic at runtime when #}
+{# the JSON value at this path is actually an object/array/string (T != bool). `!= .null` is #}
+{# the interpretation that holds for any T, matching the Rust `.is_some()` convention. #}
+    try testing.expect({{ field_expr }} != .null);
+{% else %}
     try testing.expect({{ field_expr }}.bool);
+{% endif %}
 {% elif assertion_type == "is_false" %}
+{% if field_is_optional %}
+    try testing.expect({{ field_expr }} == .null);
+{% else %}
     try testing.expect(!{{ field_expr }}.bool);
+{% endif %}
 {% elif assertion_type == "starts_with" %}
     try testing.expect(std.mem.startsWith(u8, {{ field_expr }}.string, {{ zig_val }}));
 {% elif assertion_type == "ends_with" %}

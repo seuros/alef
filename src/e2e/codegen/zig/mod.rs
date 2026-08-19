@@ -75,6 +75,8 @@ mod assertions;
 mod build;
 mod hash;
 mod http;
+#[cfg(test)]
+mod is_true_tests;
 mod stubs;
 mod test_file;
 mod visitor;

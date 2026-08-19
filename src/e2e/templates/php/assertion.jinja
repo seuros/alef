@@ -85,9 +85,21 @@
 {% elif assertion_type == "count_equals" %}
     $this->assertCount({{ n }}, {{ field_expr }});
 {% elif assertion_type == "is_true" %}
+{% if field_is_optional %}
+{# `is_true` on an optional field means "present" -- `field_expr` here is already wrapped #}
+{# `(accessor ?? null)`, and PHPUnit's `assertTrue` throws a TypeError at runtime unless #}
+{# the argument is actually a bool, which a present non-bool value (e.g. an object) is #}
+{# not. `!== null` is the interpretation that holds for any T. #}
+    $this->assertTrue({{ field_expr }} !== null);
+{% else %}
     $this->assertTrue({{ field_expr }});
+{% endif %}
 {% elif assertion_type == "is_false" %}
+{% if field_is_optional %}
+    $this->assertTrue({{ field_expr }} === null);
+{% else %}
     $this->assertFalse({{ field_expr }});
+{% endif %}
 {% elif assertion_type == "method_result" %}
 {% if check == "equals" %}
 {% if is_bool_val %}

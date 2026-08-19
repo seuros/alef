@@ -85,7 +85,7 @@ pub fn render_test_function(
     // Per-call field resolver: overrides the file-level resolver when this call
     // declares its own result_fields / fields / fields_optional / fields_array /
     // fields_method_calls.
-    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
+    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_error_aliases(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -96,7 +96,7 @@ pub fn render_test_function(
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let function_name = resolve_function_name_for_call(call_config);
     let function_name_snake = function_name.to_snake_case();

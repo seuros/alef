@@ -2,6 +2,8 @@
 
 mod assertions;
 pub(crate) mod config;
+#[cfg(test)]
+mod is_true_tests;
 mod json;
 pub(crate) mod test_file;
 mod visitors;

@@ -683,6 +683,7 @@ fn render_standard_assertion(
                 minijinja::context! {
                     assertion_type => assertion_type,
                     field_expr => field_expr,
+                    field_is_optional => field_is_optional,
                 },
             );
             out.push_str(&rendered);
@@ -693,6 +694,7 @@ fn render_standard_assertion(
                 minijinja::context! {
                     assertion_type => assertion_type,
                     field_expr => field_expr,
+                    field_is_optional => field_is_optional,
                 },
             );
             out.push_str(&rendered);
@@ -1007,7 +1009,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = make_assertion("equals", Some("data"), Some(serde_json::Value::String("hello".into())));
         let mut out = String::new();
         render_assertion(
@@ -1040,7 +1042,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = make_assertion(
             "equals",
             Some("internal_diagnostics"),

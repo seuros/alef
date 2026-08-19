@@ -1906,7 +1906,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("data".to_string()),
@@ -1944,7 +1944,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("internal_diagnostics".to_string()),
@@ -1980,7 +1980,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("status".to_string()),
@@ -2022,7 +2022,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("status".to_string()),

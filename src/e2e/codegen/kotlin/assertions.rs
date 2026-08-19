@@ -740,10 +740,30 @@ pub(super) fn render_assertion(
             }
         }
         "is_true" => {
-            let _ = writeln!(out, "        assertTrue({field_expr} == true, \"expected true\")");
+            if field_is_optional {
+                // `T?`: "is_true" means "present" -- `field_expr == true` never type-errors
+                // in Kotlin (`==` is Any?-to-Any? structural equality) but it also never
+                // matches a non-Boolean nullable (e.g. `DataNode?`), so the assertion always
+                // fails at runtime even when the field is present. `!= null` is the
+                // interpretation that holds for any T, matching the Rust `.is_some()`
+                // convention for this assertion type. ~keep
+                let _ = writeln!(
+                    out,
+                    "        assertTrue({field_expr} != null, \"expected true (non-null)\")"
+                );
+            } else {
+                let _ = writeln!(out, "        assertTrue({field_expr} == true, \"expected true\")");
+            }
         }
         "is_false" => {
-            let _ = writeln!(out, "        assertTrue({field_expr} == false, \"expected false\")");
+            if field_is_optional {
+                let _ = writeln!(
+                    out,
+                    "        assertTrue({field_expr} == null, \"expected false (null)\")"
+                );
+            } else {
+                let _ = writeln!(out, "        assertTrue({field_expr} == false, \"expected false\")");
+            }
         }
         "matches_regex" => {
             if let Some(expected) = &assertion.value {
@@ -818,6 +838,115 @@ mod strict_field_availability_marker_tests {
             false,
         );
         assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
+    }
+}
+
+#[cfg(test)]
+mod is_true_optional_field_tests {
+    use super::render_assertion;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render(assertion: &Assertion, optional_field: &str, kotlin_android_style: bool) -> String {
+        let optional: HashSet<String> = [optional_field.to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "SampleClient",
+            &resolver,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            kotlin_android_style,
+        );
+        out
+    }
+
+    fn is_true_assertion(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        }
+    }
+
+    /// `Option<DataNode>` presence on the Kotlin (JVM) target: before the fix this rendered
+    /// `assertTrue(result.data() == true, ...)`, which compiles (`==` is Any?-to-Any?
+    /// structural equality) but is always false for a present non-Boolean nullable.
+    #[test]
+    fn kotlin_is_true_on_optional_struct_field_checks_presence() {
+        let out = render(&is_true_assertion("data"), "data", false);
+        assert_eq!(
+            out,
+            "        assertTrue(result.data() != null, \"expected true (non-null)\")\n"
+        );
+    }
+
+    /// Same fixture, kotlin_android target: properties (no `()`), same nullability fix.
+    #[test]
+    fn kotlin_android_is_true_on_optional_struct_field_checks_presence() {
+        let out = render(&is_true_assertion("data"), "data", true);
+        assert_eq!(
+            out,
+            "        assertTrue(result.data != null, \"expected true (non-null)\")\n"
+        );
+    }
+
+    #[test]
+    fn kotlin_android_is_false_on_optional_struct_field_checks_absence() {
+        let out = render(
+            &Assertion {
+                assertion_type: "is_false".to_string(),
+                field: Some("data".to_string()),
+                ..Assertion::default()
+            },
+            "data",
+            true,
+        );
+        assert_eq!(
+            out,
+            "        assertTrue(result.data == null, \"expected false (null)\")\n"
+        );
+    }
+
+    #[test]
+    fn kotlin_android_is_true_on_non_optional_field_is_unchanged() {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &is_true_assertion("active"),
+            "result",
+            "SampleClient",
+            &resolver,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            true,
+        );
+        assert_eq!(out, "        assertTrue(result.active == true, \"expected true\")\n");
     }
 }
 

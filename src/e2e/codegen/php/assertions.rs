@@ -442,11 +442,17 @@ pub(super) fn render_assertion(
         return;
     }
 
+    let field_is_optional = assertion
+        .field
+        .as_ref()
+        .is_some_and(|f| !f.is_empty() && field_resolver.is_optional(f));
+
     let rendered = crate::e2e::template_env::render(
         "php/assertion.jinja",
         minijinja::context! {
             assertion_type => assertion_type,
             field_expr => field_expr,
+            field_is_optional => field_is_optional,
             php_val => php_val,
             has_php_val => has_php_val,
             field_is_array => field_is_array,
@@ -507,6 +513,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap, HashSet};
 
     use super::*;
+    use crate::e2e::field_access::PhpGetterMap;
 
     fn empty_resolver() -> FieldResolver {
         FieldResolver::new(
@@ -516,6 +523,103 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
+    }
+
+    /// `data`'s Rust type is `Option<DataNode>` -- a non-scalar struct, which ext-php-rs
+    /// exposes only through a `#[php(getter)]` method, not a plain property. Build the same
+    /// shape of `PhpGetterMap` alef's own codegen would derive from the IR, using the
+    /// "owner type unknown" bare-name-union fallback (`needs_getter`'s legacy path) so the
+    /// test doesn't have to also wire a full type graph.
+    fn optional_getter_resolver(field: &str) -> FieldResolver {
+        let optional: HashSet<String> = [field.to_string()].into_iter().collect();
+        let getter_map = PhpGetterMap {
+            getters: HashMap::from([("ProcessResult".to_string(), HashSet::from([field.to_string()]))]),
+            ..PhpGetterMap::default()
+        };
+        FieldResolver::new_with_php_getters(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            getter_map,
+        )
+    }
+
+    fn is_true_assertion(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        }
+    }
+
+    fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            resolver,
+            false,
+            false,
+            &BTreeMap::new(),
+            false,
+        );
+        out
+    }
+
+    /// `Option<DataNode>` presence: before the fix `field_expr` was unconditionally wrapped
+    /// `($result->getData() ?? null)` for every assertion type on an optional field, and
+    /// `is_true` passed that straight to `assertTrue`, which PHPUnit's declared `bool`
+    /// parameter type rejects at runtime for a present non-bool value.
+    #[test]
+    fn is_true_on_optional_struct_field_checks_presence() {
+        let out = render(&optional_getter_resolver("data"), &is_true_assertion("data"));
+        assert_eq!(
+            out,
+            "            $this->assertTrue(($result->getData() ?? null) !== null);\n"
+        );
+    }
+
+    #[test]
+    fn is_false_on_optional_struct_field_checks_absence() {
+        let out = render(
+            &optional_getter_resolver("data"),
+            &Assertion {
+                assertion_type: "is_false".to_string(),
+                field: Some("data".to_string()),
+                ..Assertion::default()
+            },
+        );
+        assert_eq!(
+            out,
+            "            $this->assertTrue(($result->getData() ?? null) === null);\n"
+        );
+    }
+
+    /// A follow-on member access through the same optional field must null-safe navigate:
+    /// before the fix `render_php_with_getters` never consulted `optional_fields`, so a
+    /// nested path emitted `$result->getData()->kind` with no `?->`.
+    #[test]
+    fn equals_on_nested_field_through_optional_parent_null_safe_navigates() {
+        let out = render(
+            &optional_getter_resolver("data"),
+            &Assertion {
+                assertion_type: "equals".to_string(),
+                field: Some("data.kind".to_string()),
+                value: Some(serde_json::json!("KeyValue")),
+                ..Assertion::default()
+            },
+        );
+        assert!(out.contains("$result->getData()?->kind"), "got: {out}");
+    }
+
+    #[test]
+    fn is_true_on_non_optional_field_is_unchanged() {
+        let out = render(&empty_resolver(), &is_true_assertion("active"));
+        assert_eq!(out, "            $this->assertTrue($result->active);\n");
     }
 
     /// IR-oracle wiring regression (alef task #64): a field that is IR-reachable
@@ -534,7 +638,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("data".to_string()),
@@ -572,7 +676,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("internal_diagnostics".to_string()),

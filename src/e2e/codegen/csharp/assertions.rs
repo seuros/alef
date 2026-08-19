@@ -1010,7 +1010,7 @@ mod ir_oracle_wiring_tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = make_assertion("data", "hello");
         let mut out = String::new();
         render_assertion(
@@ -1047,7 +1047,7 @@ mod ir_oracle_wiring_tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = make_assertion("internal_diagnostics", "hello");
         let mut out = String::new();
         render_assertion(

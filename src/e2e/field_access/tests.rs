@@ -852,7 +852,7 @@ fn is_valid_for_result_ir_reachable_field_overrides_missing_result_fields_entry(
         &HashSet::new(),
         &HashSet::new(),
     )
-    .with_ir_fields(reachable, HashSet::new());
+    .with_ir_fields(reachable, HashSet::new(), HashSet::new());
     assert!(
         r.is_valid_for_result("data"),
         "data is IR-reachable (a real, non-excluded struct field), so a missing result_fields entry must not hide it"
@@ -883,7 +883,7 @@ fn is_valid_for_result_ir_excluded_field_overrides_stale_result_fields_entry() {
         &HashSet::new(),
         &HashSet::new(),
     )
-    .with_ir_fields(HashSet::new(), excluded);
+    .with_ir_fields(HashSet::new(), excluded, HashSet::new());
     assert!(
         !r.is_valid_for_result("internal_diagnostics"),
         "internal_diagnostics is IR-known-excluded (no getter emitted in any binding), so result_fields listing it \
@@ -914,7 +914,7 @@ fn is_valid_for_result_ir_reachable_field_survives_serde_skip_without_exclusion_
         &HashSet::new(),
         &HashSet::new(),
     )
-    .with_ir_fields(reachable, HashSet::new());
+    .with_ir_fields(reachable, HashSet::new(), HashSet::new());
     assert!(
         r.is_valid_for_result("symbols"),
         "symbols carries #[serde(skip)] but no exclusion marker, so it is IR-reachable and a missing \
@@ -937,7 +937,7 @@ fn is_valid_for_result_falls_back_to_result_fields_for_names_ir_never_saw() {
         &HashSet::new(),
         &HashSet::new(),
     )
-    .with_ir_fields(reachable, HashSet::new());
+    .with_ir_fields(reachable, HashSet::new(), HashSet::new());
     assert!(
         r.is_valid_for_result("browser_used"),
         "browser_used is unknown to the IR but listed in result_fields, so the config-only fallback must still accept it"
@@ -976,7 +976,7 @@ fn ir_field_sets_classifies_reachable_and_excluded_fields() {
         ..TypeDef::default()
     };
 
-    let (reachable, excluded) = FieldResolver::ir_field_sets(&[type_def]);
+    let (reachable, excluded, _optional) = FieldResolver::ir_field_sets(&[type_def]);
     assert!(reachable.contains("data"));
     assert!(excluded.contains("internal_diagnostics"));
     assert!(
@@ -1013,9 +1013,149 @@ fn ir_field_sets_reachable_on_any_type_wins_over_excluded_on_another() {
         ..TypeDef::default()
     };
 
-    let (reachable, excluded) = FieldResolver::ir_field_sets(&[excluded_on_a, reachable_on_b]);
+    let (reachable, excluded, _optional) = FieldResolver::ir_field_sets(&[excluded_on_a, reachable_on_b]);
     assert!(reachable.contains("shared"));
     assert!(!excluded.contains("shared"));
+}
+
+/// `ir_field_sets` must derive optionality straight from `FieldDef.optional` so an
+/// `Option<T>` field is detected even when no `fields_optional` config entry names it —
+/// this is the regression covered by `field_resolver_marks_ir_optional_field_optional_without_config`.
+#[test]
+fn ir_field_sets_marks_a_field_optional_when_every_declaration_is_option() {
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    let type_def = TypeDef {
+        name: "ProcessResult".to_string(),
+        fields: vec![FieldDef {
+            name: "data".to_string(),
+            optional: true,
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    };
+
+    let (_reachable, _excluded, optional) = FieldResolver::ir_field_sets(&[type_def]);
+    assert!(optional.contains("data"));
+}
+
+/// A field name declared `Option<T>` on one type but required (non-`Option`) on another
+/// must NOT be reported optional: [`FieldResolver::ir_field_sets`] can't pin a bare field
+/// name to the one exact result type in play, and marking it optional here changes the
+/// shape of emitted code (`.as_ref().unwrap()`, `!`, …) — a wrong guess is a compile
+/// error in the caller's generated test, not a merely-imprecise assertion. ~keep
+#[test]
+fn ir_field_sets_refuses_to_guess_when_the_same_name_disagrees_across_types() {
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    let optional_on_a = TypeDef {
+        name: "A".to_string(),
+        fields: vec![FieldDef {
+            name: "value".to_string(),
+            optional: true,
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    };
+    let required_on_b = TypeDef {
+        name: "B".to_string(),
+        fields: vec![FieldDef {
+            name: "value".to_string(),
+            optional: false,
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    };
+
+    let (_reachable, _excluded, optional) = FieldResolver::ir_field_sets(&[optional_on_a, required_on_b]);
+    assert!(!optional.contains("value"));
+}
+
+/// The bug this test guards: a consumer `alef.toml` with no `fields_optional` entry for
+/// `data` (i.e. `FieldResolver::new` gets an empty `optional` set) must still resolve
+/// `is_optional("data")` to `true` once IR data proves the field is `Option<T>`, because
+/// `with_ir_fields` merges `ir_field_sets`'s optional set into `optional_fields` instead
+/// of requiring the consumer to redeclare what the Rust source already says. ~keep
+#[test]
+fn field_resolver_marks_ir_optional_field_optional_without_config() {
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(
+        HashSet::new(),
+        HashSet::new(),
+        ["data".to_string()].into_iter().collect(),
+    );
+    assert!(r.is_optional("data"));
+}
+
+/// Companion to the above: a field the IR does NOT mark optional must stay non-optional
+/// after `with_ir_fields` -- the merge must not accidentally widen unrelated fields.
+#[test]
+fn field_resolver_leaves_non_ir_optional_fields_alone() {
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(
+        HashSet::new(),
+        HashSet::new(),
+        ["data".to_string()].into_iter().collect(),
+    );
+    assert!(!r.is_optional("total_lines"));
+}
+
+/// End-to-end through the Rust accessor: once `data` is IR-derived optional, a dotted
+/// path that passes through it in a NON-LEAF position (`data.kind`) must unwrap before
+/// the nested field access, matching the shape `render_rust_with_optionals` already
+/// produces for a config-declared optional field.
+#[test]
+fn accessor_rust_unwraps_ir_optional_field_in_non_leaf_position() {
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(
+        HashSet::new(),
+        HashSet::new(),
+        ["data".to_string()].into_iter().collect(),
+    );
+    assert_eq!(
+        r.accessor("data.kind", "rust", "result"),
+        "result.data.as_ref().unwrap().kind"
+    );
+}
+
+/// A dotted path with no `Option` anywhere in the chain must render unchanged after the
+/// IR-optional merge -- `metrics.total_lines` is neither config-declared nor IR-optional.
+#[test]
+fn accessor_rust_non_optional_dotted_path_is_unaffected_by_ir_merge() {
+    let r = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(
+        HashSet::new(),
+        HashSet::new(),
+        ["data".to_string()].into_iter().collect(),
+    );
+    assert_eq!(
+        r.accessor("metrics.total_lines", "rust", "result"),
+        "result.metrics.total_lines"
+    );
 }
 
 /// Accessor for `browser.browser_used` should produce the stripped path

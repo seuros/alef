@@ -194,7 +194,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             error_type => error_type_name.clone(),
             thrown_value_is_opaque => lang == "wasm",
             returns_void => call.returns_void,
-            presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang),
+            presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs),
         },
     )
 }

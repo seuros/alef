@@ -339,7 +339,7 @@ pub(super) fn render_snippet_body(
         .map(|(path, alias)| minijinja::context! { path => path, alias => alias })
         .collect::<Vec<_>>();
 
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs);
     Ok(crate::e2e::template_env::render(
         "go/snippet_body.jinja",
         minijinja::context! {

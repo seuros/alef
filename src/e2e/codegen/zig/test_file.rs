@@ -159,7 +159,7 @@ fn render_test_fn(
         &fixture.tags,
         &fixture.input,
     );
-    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
+    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -167,7 +167,7 @@ fn render_test_fn(
         e2e_config.effective_fields_array(call_config),
         e2e_config.effective_fields_method_calls(call_config),
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
     let lang = "zig";
@@ -740,7 +740,7 @@ pub(super) fn render_snippet_body(
     // fixtures keep the whole-payload print below. ~keep
     let binds_typed_result = !expects_error && !call.returns_void && !body.contains("const _result_json =");
     let presentation = if binds_typed_result {
-        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig")
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig", type_defs)
     } else {
         Vec::new()
     };

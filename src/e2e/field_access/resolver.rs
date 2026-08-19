@@ -213,9 +213,20 @@ impl FieldResolver {
     /// `result_fields` config only gets the final say on field names the IR has never
     /// heard of (virtual namespace prefixes, synthetic/derived assertion fields, and the
     /// like) — see that method's doc comment for why config alone cannot be trusted.
-    pub fn with_ir_fields(mut self, reachable: HashSet<String>, excluded: HashSet<String>) -> Self {
+    ///
+    /// `optional` (also from [`Self::ir_field_sets`]) is merged into the config-declared
+    /// `fields_optional` set rather than replacing it, so an `Option<T>` field is detected
+    /// even when a consumer's `alef.toml` never lists it under `fields_optional` at all —
+    /// see [`Self::ir_field_sets`] for why this merge is safe to do unconditionally. ~keep
+    pub fn with_ir_fields(
+        mut self,
+        reachable: HashSet<String>,
+        excluded: HashSet<String>,
+        optional: HashSet<String>,
+    ) -> Self {
         self.ir_reachable_fields = reachable;
         self.ir_known_excluded_fields = excluded;
+        self.optional_fields.extend(optional);
         self.warn_on_result_fields_contradicting_ir();
         self
     }
@@ -244,7 +255,7 @@ impl FieldResolver {
         }
     }
 
-    /// Compute the reachable/excluded field-name sets from a crate's IR type
+    /// Compute the reachable/excluded/optional field-name sets from a crate's IR type
     /// definitions, for use with [`Self::with_ir_fields`].
     ///
     /// A field name is "reachable" if it is present, and not `binding_excluded`, on ANY
@@ -255,9 +266,21 @@ impl FieldResolver {
     /// other type — reachable-on-any-type wins, since a bare field name can't be pinned to
     /// one exact result type here (callers only reach for this data when they can't
     /// already do that resolution themselves). ~keep
-    pub fn ir_field_sets(type_defs: &[crate::core::ir::TypeDef]) -> (HashSet<String>, HashSet<String>) {
+    ///
+    /// A field name is "optional" only when EVERY declaration of it across `type_defs` is
+    /// `Option<T>` (unanimous, not "any type wins" like `reachable`/`excluded` above). The
+    /// direction has to flip here: `optional_fields` membership changes what code an
+    /// accessor emits (`.as_ref().unwrap()` in Rust, `!` in C#, …), so a false positive is a
+    /// compile error in a caller's generated test, while a false negative merely reproduces
+    /// today's behavior (the field falls back to requiring an explicit `fields_optional`
+    /// entry, exactly as before this method existed). ~keep
+    pub fn ir_field_sets(
+        type_defs: &[crate::core::ir::TypeDef],
+    ) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
         let mut reachable = HashSet::new();
         let mut excluded = HashSet::new();
+        // Name -> (seen as Option<T> somewhere, seen as non-Option somewhere).
+        let mut optionality: HashMap<String, (bool, bool)> = HashMap::new();
         for type_def in type_defs {
             for field in &type_def.fields {
                 if field.binding_excluded {
@@ -265,10 +288,20 @@ impl FieldResolver {
                 } else {
                     reachable.insert(field.name.clone());
                 }
+                let seen = optionality.entry(field.name.clone()).or_insert((false, false));
+                if field.optional {
+                    seen.0 = true;
+                } else {
+                    seen.1 = true;
+                }
             }
         }
         excluded.retain(|f| !reachable.contains(f));
-        (reachable, excluded)
+        let optional = optionality
+            .into_iter()
+            .filter_map(|(name, (seen_optional, seen_required))| (seen_optional && !seen_required).then_some(name))
+            .collect();
+        (reachable, excluded, optional)
     }
 
     /// Returns `true` when `fixture_field` (or its resolved alias, or a
@@ -731,7 +764,7 @@ impl FieldResolver {
             ),
             "dart" => render_dart_with_optionals(&segments, result_var, &self.optional_fields),
             "php" if !self.php_getter_map.is_empty() => {
-                render_php_with_getters(&segments, result_var, &self.php_getter_map)
+                render_php_with_getters(&segments, result_var, &self.php_getter_map, &self.optional_fields)
             }
             _ => render_accessor(&segments, language, result_var),
         }

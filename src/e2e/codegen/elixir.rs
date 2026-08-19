@@ -253,4 +253,6 @@ mod visitor;
 pub use stubs::emit_test_backend;
 
 #[cfg(test)]
+mod is_true_tests;
+#[cfg(test)]
 mod tests;

@@ -187,7 +187,7 @@ impl E2eCodegen for RCodegen {
         let presentation = if call.returns_void || expects_error {
             Vec::new()
         } else {
-            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r")
+            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r", type_defs)
         };
         let body = if call.returns_void || expects_error || !presentation.is_empty() {
             body

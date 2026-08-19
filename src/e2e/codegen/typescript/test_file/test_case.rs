@@ -54,7 +54,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // Fallback: if the resolved call has required args missing from input,
     // try to find a better-matching call from the named calls.
     call_config = crate::e2e::codegen::select_best_matching_call(call_config, e2e_config, fixture);
-    let (ir_reachable_fields, ir_known_excluded_fields) = FieldResolver::ir_field_sets(type_defs);
+    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -62,7 +62,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
     let function_name = resolve_node_function_name(call_config);

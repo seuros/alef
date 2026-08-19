@@ -71,9 +71,22 @@
 {% elif assertion_type == "count_equals" %}
     expect({{ field_expr }}.length).to eq({{ check_n }})
 {% elif assertion_type == "is_true" %}
+{% if field_is_optional %}
+{# `is_true` on an optional field means "present" -- `be true` is RSpec's identity #}
+{# matcher (`equal?(true)`) and never matches a present non-boolean value (e.g. a #}
+{# struct), so it fails even when the field is present. `be_truthy` after a nil check #}
+{# would still reject a legitimately falsy-but-present scalar, so check presence #}
+{# directly instead. #}
+    expect({{ field_expr }}).not_to be_nil
+{% else %}
     expect({{ field_expr }}).to be true
+{% endif %}
 {% elif assertion_type == "is_false" %}
+{% if field_is_optional %}
+    expect({{ field_expr }}).to be_nil
+{% else %}
     expect({{ field_expr }}).to be false
+{% endif %}
 {% elif assertion_type == "method_result" %}
 {% if check == "equals" %}
 {% if is_boolean_check %}

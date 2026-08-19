@@ -480,10 +480,31 @@ pub(super) fn render_assertion_dart(
             }
         }
         "is_true" => {
-            let _ = writeln!(out, "    expect({field_accessor}, isTrue);");
+            let is_optional = assertion.field.as_ref().is_some_and(|f| {
+                let resolved = field_resolver.resolve(f);
+                field_resolver.is_optional(f) || field_resolver.is_optional(resolved)
+            });
+            if is_optional {
+                // `T?`: "is_true" means "present" -- `isTrue` requires the value to be the
+                // literal `bool` `true`, which does not type-check for e.g. `DataNode?` and
+                // is simply always false for any other present, non-bool value. `isNotNull`
+                // is the interpretation that holds for any T, matching the Rust `.is_some()`
+                // convention for this assertion type. ~keep
+                let _ = writeln!(out, "    expect({field_accessor}, isNotNull);");
+            } else {
+                let _ = writeln!(out, "    expect({field_accessor}, isTrue);");
+            }
         }
         "is_false" => {
-            let _ = writeln!(out, "    expect({field_accessor}, isFalse);");
+            let is_optional = assertion.field.as_ref().is_some_and(|f| {
+                let resolved = field_resolver.resolve(f);
+                field_resolver.is_optional(f) || field_resolver.is_optional(resolved)
+            });
+            if is_optional {
+                let _ = writeln!(out, "    expect({field_accessor}, isNull);");
+            } else {
+                let _ = writeln!(out, "    expect({field_accessor}, isFalse);");
+            }
         }
         "greater_than" => {
             if let Some(val) = &assertion.value {
@@ -883,5 +904,73 @@ mod wildcard_tests {
         );
         assert!(!out.contains("skipped"), "got: {out}");
         assert!(out.contains("result.assets.any((e) => e.assetCategory"), "got: {out}");
+    }
+}
+
+#[cfg(test)]
+mod is_true_optional_field_tests {
+    use super::render_assertion_dart;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn optional_resolver(field: &str) -> FieldResolver {
+        let optional: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
+        let mut out = String::new();
+        render_assertion_dart(&mut out, assertion, "result", false, resolver, &HashSet::new());
+        out
+    }
+
+    fn is_true_assertion(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        }
+    }
+
+    /// `Option<DataNode>` (FRB v2 maps this to `DataNode?`) presence: before the fix this
+    /// rendered `expect(result.data, isTrue)`, which requires the value to literally be the
+    /// bool `true` -- never the case for a present `DataNode?`.
+    #[test]
+    fn is_true_on_optional_struct_field_checks_presence() {
+        let out = render(&optional_resolver("data"), &is_true_assertion("data"));
+        assert_eq!(out, "    expect(result.data, isNotNull);\n");
+    }
+
+    #[test]
+    fn is_false_on_optional_struct_field_checks_absence() {
+        let out = render(
+            &optional_resolver("data"),
+            &Assertion {
+                assertion_type: "is_false".to_string(),
+                field: Some("data".to_string()),
+                ..Assertion::default()
+            },
+        );
+        assert_eq!(out, "    expect(result.data, isNull);\n");
+    }
+
+    #[test]
+    fn is_true_on_non_optional_field_is_unchanged() {
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let out = render(&resolver, &is_true_assertion("active"));
+        assert_eq!(out, "    expect(result.active, isTrue);\n");
     }
 }

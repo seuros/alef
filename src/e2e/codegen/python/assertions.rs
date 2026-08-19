@@ -505,6 +505,7 @@ fn render_standard_assertion(
                 minijinja::context! {
                     assertion_type => "is_true",
                     field_access => field_access,
+                    field_is_optional => field_is_optional,
                 },
             );
             out.push_str(&rendered);
@@ -515,6 +516,7 @@ fn render_standard_assertion(
                 minijinja::context! {
                     assertion_type => "is_false",
                     field_access => field_access,
+                    field_is_optional => field_is_optional,
                 },
             );
             out.push_str(&rendered);
@@ -730,6 +732,71 @@ mod tests {
             false,
         );
         out
+    }
+
+    fn resolver_with_optional_field(field: &str) -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::from([field.to_string()]),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    fn render_field_assertion(resolver: &FieldResolver, assertion: &Assertion) -> String {
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            resolver,
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+        );
+        out
+    }
+
+    /// `Option<DataNode>` presence: before the fix this rendered `assert result.data is
+    /// True`, which is never true for a present non-bool object (Python's `is` compares
+    /// identity, and no struct instance is ever the singleton `True`).
+    #[test]
+    fn is_true_on_optional_struct_field_checks_presence() {
+        let out = render_field_assertion(
+            &resolver_with_optional_field("data"),
+            &make_assertion("is_true", Some("data"), None),
+        );
+        assert_eq!(out, "    assert result.data is not None  # noqa: S101\n");
+    }
+
+    #[test]
+    fn is_false_on_optional_struct_field_checks_absence() {
+        let out = render_field_assertion(
+            &resolver_with_optional_field("data"),
+            &make_assertion("is_false", Some("data"), None),
+        );
+        assert_eq!(out, "    assert result.data is None  # noqa: S101\n");
+    }
+
+    /// A follow-on member access through the optional field: Python's dynamic typing means
+    /// `result.data.kind` needs no unwrap ceremony at the codegen level (unlike Rust/Java/
+    /// Kotlin) -- it only needs `is_true`'s presence check (above) to be correct so the
+    /// assertion the fixture actually declares runs before this one, rather than always
+    /// failing first regardless of whether `data` is present.
+    #[test]
+    fn equals_on_nested_field_through_optional_parent_is_unchanged() {
+        let out = render_field_assertion(
+            &resolver_with_optional_field("data"),
+            &make_assertion("equals", Some("data.kind"), Some(serde_json::json!("KeyValue"))),
+        );
+        assert!(out.contains("result.data.kind"), "got: {out}");
+    }
+
+    #[test]
+    fn is_true_on_non_optional_field_is_unchanged() {
+        let out = render_field_assertion(&empty_resolver(), &make_assertion("is_true", Some("active"), None));
+        assert_eq!(out, "    assert result.active is True  # noqa: S101\n");
     }
 
     #[test]

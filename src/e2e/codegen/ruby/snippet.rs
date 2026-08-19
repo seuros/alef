@@ -80,7 +80,7 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang);
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
     let body = crate::e2e::template_env::render(
         "ruby/snippet_body.jinja",

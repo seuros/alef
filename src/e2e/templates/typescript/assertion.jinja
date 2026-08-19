@@ -108,9 +108,21 @@
 {% elif assertion_type == "count_equals" %}
     expect({{ field_expr }}.length).toBe({{ n }});
 {% elif assertion_type == "is_true" %}
+{% if field_is_optional %}
+{# `is_true` on an optional field means "present" -- `toBe(true)` requires strict boolean #}
+{# identity and never matches a present non-boolean value (e.g. an object), so it fails at #}
+{# runtime even when the field is present. `?? null` normalises `undefined` to `null` so a #}
+{# single `not.toBeNull()` check holds for any T. #}
+    expect({{ field_expr }} ?? null).not.toBeNull();
+{% else %}
     expect({{ field_expr }}).toBe(true);
+{% endif %}
 {% elif assertion_type == "is_false" %}
+{% if field_is_optional %}
+    expect({{ field_expr }} ?? null).toBeNull();
+{% else %}
     expect({{ field_expr }}).toBe(false);
+{% endif %}
 {% elif assertion_type == "method_result" %}
 {% if check == "equals" %}
     expect({{ call_expr }}).toBe({{ check_js_val }});

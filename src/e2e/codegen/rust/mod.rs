@@ -229,7 +229,7 @@ impl E2eCodegen for RustE2eCodegen {
                 )
             })
             .collect::<Vec<_>>();
-        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust");
+        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs);
         let call = e2e_config.resolve_call_for_fixture(
             call_fixture.call.as_deref(),
             &call_fixture.id,

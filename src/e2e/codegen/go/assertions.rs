@@ -813,18 +813,19 @@ pub(super) fn render_assertion(
         }
         "is_true" => {
             if is_optional {
-                let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-                let _ = writeln!(out_ref, "\t\tassert.True(t, *{field_expr}, \"expected true\")");
-                let _ = writeln!(out_ref, "\t}}");
+                // `*T`/`[]T`: "is_true" means "present" -- dereferencing to compare against a
+                // bool only type-checks when T is bool, and for a struct field (e.g.
+                // `Option<DataNode>`) it does not compile at all. `assert.NotNil` is the
+                // interpretation that holds for any T, matching the Rust backend's
+                // `.is_some()` convention for the same assertion type. ~keep
+                let _ = writeln!(out_ref, "\tassert.NotNil(t, {field_expr}, \"expected true (non-nil)\")");
             } else {
                 let _ = writeln!(out_ref, "\tassert.True(t, {field_expr}, \"expected true\")");
             }
         }
         "is_false" => {
             if is_optional {
-                let _ = writeln!(out_ref, "\tif {field_expr} != nil {{");
-                let _ = writeln!(out_ref, "\t\tassert.False(t, *{field_expr}, \"expected false\")");
-                let _ = writeln!(out_ref, "\t}}");
+                let _ = writeln!(out_ref, "\tassert.Nil(t, {field_expr}, \"expected false (nil)\")");
             } else {
                 let _ = writeln!(out_ref, "\tassert.False(t, {field_expr}, \"expected false\")");
             }
@@ -1218,6 +1219,69 @@ mod tests {
         out
     }
 
+    /// Render `assertion` against a resolver where `optional_field` is the one field
+    /// declared `Option<T>` -- used to cover the Go `*T` (Option<struct>) presence-check
+    /// regression: `is_true` used to unconditionally deref (`*result.Data`), which
+    /// requires `T = bool` and does not compile for `Option<DataNode>`.
+    fn render_with_optional_field(assertion: &Assertion, optional_field: &str) -> String {
+        let optional: HashSet<String> = [optional_field.to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            assertion,
+            "result",
+            "pkg",
+            &resolver,
+            &HashMap::new(),
+            &HashSet::new(),
+            false,
+            false,
+            false,
+            None,
+        );
+        out
+    }
+
+    fn is_true_assertion(field: &str) -> Assertion {
+        Assertion {
+            assertion_type: "is_true".to_string(),
+            field: Some(field.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn is_true_on_optional_struct_field_checks_presence_not_a_bool_deref() {
+        let out = render_with_optional_field(&is_true_assertion("data"), "data");
+        assert_eq!(out, "\tassert.NotNil(t, result.Data, \"expected true (non-nil)\")\n");
+    }
+
+    #[test]
+    fn is_false_on_optional_struct_field_checks_absence() {
+        let out = render_with_optional_field(
+            &Assertion {
+                assertion_type: "is_false".to_string(),
+                field: Some("data".to_string()),
+                ..Default::default()
+            },
+            "data",
+        );
+        assert_eq!(out, "\tassert.Nil(t, result.Data, \"expected false (nil)\")\n");
+    }
+
+    #[test]
+    fn is_true_on_non_optional_field_is_unchanged() {
+        let out = render_bare(&is_true_assertion("active"));
+        assert_eq!(out, "\tassert.True(t, result.Active, \"expected true\")\n");
+    }
+
     /// Run the shared field funnel over a rendered body and return its verdicts, so a test can
     /// assert what the gate DECIDED rather than only what the text says. ~keep
     fn field_verdicts(body: &str, language: &str) -> Vec<crate::e2e::codegen::SkipVerdict> {
@@ -1414,7 +1478,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = make_assertion("data", "hello");
         let mut out = String::new();
         render_assertion(
@@ -1450,7 +1514,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = make_assertion("internal_diagnostics", "hello");
         let mut out = String::new();
         render_assertion(

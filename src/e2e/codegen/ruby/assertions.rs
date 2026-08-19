@@ -608,21 +608,31 @@ pub(super) fn render_assertion(
             }
         }
         "is_true" => {
+            let field_is_optional = assertion
+                .field
+                .as_ref()
+                .is_some_and(|f| !f.is_empty() && field_resolver.is_optional(f));
             let rendered = crate::e2e::template_env::render(
                 "ruby/assertion.jinja",
                 minijinja::context! {
                     assertion_type => "is_true",
                     field_expr => field_expr.clone(),
+                    field_is_optional => field_is_optional,
                 },
             );
             out.push_str(&rendered);
         }
         "is_false" => {
+            let field_is_optional = assertion
+                .field
+                .as_ref()
+                .is_some_and(|f| !f.is_empty() && field_resolver.is_optional(f));
             let rendered = crate::e2e::template_env::render(
                 "ruby/assertion.jinja",
                 minijinja::context! {
                     assertion_type => "is_false",
                     field_expr => field_expr.clone(),
+                    field_is_optional => field_is_optional,
                 },
             );
             out.push_str(&rendered);
@@ -817,7 +827,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(reachable, HashSet::new());
+        .with_ir_fields(reachable, HashSet::new(), HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("data".to_string()),
@@ -855,7 +865,7 @@ mod tests {
             &HashSet::new(),
             &HashSet::new(),
         )
-        .with_ir_fields(HashSet::new(), excluded);
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
         let assertion = Assertion {
             assertion_type: "equals".to_string(),
             field: Some("internal_diagnostics".to_string()),

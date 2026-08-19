@@ -98,7 +98,7 @@ pub(super) fn render_snippet_body_with_ir(
     // emit `Uint8List`, which requires `dart:typed_data` — mirrors `has_batch_byte_items` in
     // the full e2e test-file emitter (test_file.rs).
     let needs_typed_data = stub_classes.contains("Uint8List");
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "dart");
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "dart", type_defs);
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
         minijinja::context! {
