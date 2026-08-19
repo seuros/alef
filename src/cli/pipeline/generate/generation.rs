@@ -17,6 +17,26 @@ use tracing::{debug, info};
 /// 3.4s). Callers that actually write the generated files to disk (`alef generate`,
 /// `alef all`, `alef init`) must pass `true` so the cache stays authoritative for
 /// subsequent runs. ~keep
+
+/// The requested languages whose bindings are generated against the FFI crate while the crate does
+/// not configure one.
+///
+/// ~keep `configured` is the crate's declared language set; `requested` is what this run was asked
+/// to generate. The check used to test `requested` for FFI, but that is the `--lang`-filtered set,
+/// so every deliberate single-language regen (`alef generate --lang csharp`) warned that FFI was
+/// missing even when the FFI crate was configured, generated and committed. The condition the
+/// message describes is a property of the configuration, not of one invocation's scope.
+fn languages_missing_ffi(configured: &[Language], requested: &[Language]) -> Vec<Language> {
+    if configured.contains(&Language::Ffi) {
+        return Vec::new();
+    }
+    requested
+        .iter()
+        .copied()
+        .filter(|lang| matches!(lang, Language::Go | Language::Java | Language::Csharp))
+        .collect()
+}
+
 pub fn generate(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -34,14 +54,11 @@ pub fn generate(
     // for a `languages` list that omits `"ffi"`. ~keep
     api.validate_error_taxonomy()?;
 
-    let has_ffi = languages.contains(&Language::Ffi);
-    for &lang in languages {
-        if (lang == Language::Go || lang == Language::Java || lang == Language::Csharp) && !has_ffi {
-            tracing::warn!(
-                "Language {:?} requires FFI to be in the languages list for proper code generation",
-                lang
-            );
-        }
+    for lang in languages_missing_ffi(&config.languages, languages) {
+        tracing::warn!(
+            "Language {:?} requires FFI to be in the languages list for proper code generation",
+            lang
+        );
     }
 
     let ir_json = serde_json::to_string(api)?;
@@ -306,6 +323,53 @@ pub fn generate_public_api(
 mod tests {
     use super::*;
     use crate::core::extension::{Extension, ExtensionConfig};
+
+    /// A `--lang`-filtered run must not be reported as a missing-FFI configuration.
+    #[test]
+    fn languages_missing_ffi_table() {
+        let go_java_csharp = [Language::Go, Language::Java, Language::Csharp];
+        struct Case {
+            name: &'static str,
+            configured: Vec<Language>,
+            requested: Vec<Language>,
+            expected: Vec<Language>,
+        }
+        let cases = [
+            Case {
+                name: "a single-language regen of a crate that configures ffi warns about nothing",
+                configured: vec![Language::Ffi, Language::Csharp, Language::Go],
+                requested: vec![Language::Csharp],
+                expected: Vec::new(),
+            },
+            Case {
+                name: "a crate that configures no ffi still warns for every ffi-dependent language",
+                configured: go_java_csharp.to_vec(),
+                requested: go_java_csharp.to_vec(),
+                expected: go_java_csharp.to_vec(),
+            },
+            Case {
+                name: "languages that do not bind through ffi are never reported",
+                configured: vec![Language::Python, Language::Ruby],
+                requested: vec![Language::Python, Language::Ruby],
+                expected: Vec::new(),
+            },
+            Case {
+                name: "a full regen of a crate that configures ffi warns about nothing",
+                configured: vec![Language::Ffi, Language::Go],
+                requested: vec![Language::Ffi, Language::Go],
+                expected: Vec::new(),
+            },
+        ];
+
+        for case in cases {
+            assert_eq!(
+                languages_missing_ffi(&case.configured, &case.requested),
+                case.expected,
+                "case `{}`",
+                case.name
+            );
+        }
+    }
 
     struct AdditionsExtension;
     impl Extension for AdditionsExtension {

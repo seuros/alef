@@ -24,7 +24,7 @@ use anyhow::{Context, Result, bail};
 use config::E2eConfig;
 use fixture::{group_fixtures, load_fixtures};
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use validate::Severity;
 
 /// Map the top-level `[languages]` list (the scaffolded bindings) to the
@@ -174,8 +174,11 @@ fn generate_e2e_with_extensions(
     // generate for.
     let diagnostics = validate::validate_fixtures_semantic(&fixtures, e2e_config, &resolved_languages);
     for diag in &diagnostics {
+        // ~keep Both arms used to emit `warn!`, so a diagnostic that aborts the run two statements
+        // later was indistinguishable in the log from one that changes nothing. The severity the
+        // validator computed is the whole point of carrying it this far.
         match diag.severity {
-            Severity::Error => warn!("{}: {}", diag.file, diag.message),
+            Severity::Error => error!("{}: {}", diag.file, diag.message),
             Severity::Warning => warn!("{}: {}", diag.file, diag.message),
         }
     }
@@ -202,7 +205,10 @@ fn generate_e2e_with_extensions(
     // a debugging session in the wrong tree. ~keep
     let classification_diagnostics = validate::validate_field_classifications(e2e_config, type_defs);
     for diag in &classification_diagnostics {
-        warn!("{}: {}", diag.file, diag.message);
+        match diag.severity {
+            Severity::Error => error!("{}: {}", diag.file, diag.message),
+            Severity::Warning => warn!("{}: {}", diag.file, diag.message),
+        }
     }
     let classification_errors: Vec<_> = classification_diagnostics
         .iter()

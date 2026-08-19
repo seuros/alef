@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **e2e fixture diagnostics are logged at the severity they carry.** Both arms of the severity
+  match emitted `warn!`, so a diagnostic that aborts the run two statements later was
+  indistinguishable in the log from one that changes nothing; field-classification errors were
+  likewise logged as warnings immediately before bailing. Errors now log at error level.
+
+- **The "requires FFI" warning no longer fires on a deliberate single-language regen.** It tested
+  the `--lang`-filtered language list for an FFI entry, so `alef generate --lang csharp` warned
+  that FFI was missing even when the FFI crate was configured, generated and committed. The
+  condition it describes is a property of the crate's configured languages, not of one
+  invocation's scope, and is now checked against those.
+
 ## [0.62.2] - 2026-08-19
 
 ### Fixed
