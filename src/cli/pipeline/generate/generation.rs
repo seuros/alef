@@ -17,26 +17,6 @@ use tracing::{debug, info};
 /// 3.4s). Callers that actually write the generated files to disk (`alef generate`,
 /// `alef all`, `alef init`) must pass `true` so the cache stays authoritative for
 /// subsequent runs. ~keep
-
-/// The requested languages whose bindings are generated against the FFI crate while the crate does
-/// not configure one.
-///
-/// ~keep `configured` is the crate's declared language set; `requested` is what this run was asked
-/// to generate. The check used to test `requested` for FFI, but that is the `--lang`-filtered set,
-/// so every deliberate single-language regen (`alef generate --lang csharp`) warned that FFI was
-/// missing even when the FFI crate was configured, generated and committed. The condition the
-/// message describes is a property of the configuration, not of one invocation's scope.
-fn languages_missing_ffi(configured: &[Language], requested: &[Language]) -> Vec<Language> {
-    if configured.contains(&Language::Ffi) {
-        return Vec::new();
-    }
-    requested
-        .iter()
-        .copied()
-        .filter(|lang| matches!(lang, Language::Go | Language::Java | Language::Csharp))
-        .collect()
-}
-
 pub fn generate(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -317,6 +297,25 @@ pub fn generate_public_api(
         .filter(|(_, files)| !files.is_empty())
         .collect();
     Ok(results)
+}
+
+/// The requested languages whose bindings are generated against the FFI crate while the crate does
+/// not configure one.
+///
+/// ~keep `configured` is the crate's declared language set; `requested` is what this run was asked
+/// to generate. The check used to test `requested` for FFI, but that is the `--lang`-filtered set,
+/// so every deliberate single-language regen (`alef generate --lang csharp`) warned that FFI was
+/// missing even when the FFI crate was configured, generated and committed. The condition the
+/// message describes is a property of the configuration, not of one invocation's scope.
+fn languages_missing_ffi(configured: &[Language], requested: &[Language]) -> Vec<Language> {
+    if configured.contains(&Language::Ffi) {
+        return Vec::new();
+    }
+    requested
+        .iter()
+        .copied()
+        .filter(|lang| matches!(lang, Language::Go | Language::Java | Language::Csharp))
+        .collect()
 }
 
 #[cfg(test)]
