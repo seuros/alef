@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`alef scaffold` now actually adds a cfg-forwarded feature the compile-out warning names,
+  instead of leaving the prescribed remedy a no-op.** The Ruby (Magnus) and Elixir (Rustler)
+  native manifests are `generated_header: true`, so a full regen already includes every feature
+  `collect_cfg_features` finds — but once the manifest exists on disk,
+  `write_scaffold_files_report`'s ownership guard only overwrites it wholesale when it can prove
+  alef authored the existing bytes, and a manifest predating the marker scheme (or one whose
+  marker a hand-edit or formatter moved past the guard's scan window) is refused forever, so
+  "re-run `alef scaffold`" never converged. `alef scaffold` and `alef generate` now also run a
+  narrower, always-safe repair: it inserts only the missing `<feature> =
+  ["<core-crate>/<feature>"]` row(s) into the manifest's `[features]` table (creating the table
+  if absent) via `toml_edit`, which cannot reorder, reformat, or drop anything else already in
+  the file, and never invents a row for a feature the core crate itself does not declare.
+
 ## [0.62.3] - 2026-08-19
 
 ### Fixed
