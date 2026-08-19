@@ -9,6 +9,23 @@ use crate::{
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+/// The path (relative to the project root) of the Ruby native crate's Cargo.toml.
+///
+/// Single source of truth for where `scaffold_ruby_cargo` writes that manifest, so a caller
+/// wanting to read it back (e.g. `MagnusBackend::generate_bindings`, cross-checking the manifest
+/// against `codegen::cfg::collect_cfg_features`) does not have to re-derive the formula from an
+/// unrelated path such as `alef build`'s own `lib.rs` output directory -- which a `[crates.output]
+/// ruby = "..."` override can point somewhere this formula's `native/` segment does not appear
+/// under at all. ~keep
+pub(crate) fn ruby_native_manifest_path(config: &ResolvedCrateConfig) -> PathBuf {
+    let core_crate_dir = config.core_crate_dir();
+    let pkg_dir = config.package_dir(Language::Ruby);
+    PathBuf::from(format!(
+        "{pkg_dir}/ext/{}_rb/native/Cargo.toml",
+        core_crate_dir.replace('-', "_")
+    ))
+}
+
 pub(crate) fn scaffold_ruby_cargo(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -143,10 +160,7 @@ crate-type = ["cdylib"]
     );
 
     Ok(vec![GeneratedFile {
-        path: PathBuf::from(format!(
-            "{pkg_dir}/ext/{}_rb/native/Cargo.toml",
-            core_crate_dir.replace('-', "_")
-        )),
+        path: ruby_native_manifest_path(config),
         content,
         generated_header: true,
     }])

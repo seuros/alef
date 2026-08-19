@@ -536,6 +536,22 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         "packages/elixir/native/{name}_nif/src/",
     );
 
+    // A `[crates.output] elixir = "..."` override can point `output_dir` (this `lib.rs`'s own
+    // destination) somewhere `scaffold_elixir_cargo`'s `nif_name` segment never appears under, so
+    // the manifest path is read from `scaffold::elixir_native_crate_dir` -- the same formula that
+    // actually wrote it -- rather than derived from `output_dir`. Elixir has no analogue of
+    // Ruby's gated registration statement (`#[rustler::nif]` auto-registers, so a definition
+    // compiled out by its own `#[cfg]` simply has nothing left to register) -- an undeclared
+    // feature here does not fail the build, it silently drops the NIF at runtime while the
+    // generated `.ex` facade and docs keep advertising it. This warning is the only place that
+    // gets surfaced. ~keep
+    let native_manifest_dir = crate::scaffold::elixir_native_crate_dir(config);
+    let manifest_path = crate::codegen::cfg::resolve_against_workspace_root(
+        config,
+        &PathBuf::from(native_manifest_dir).join("Cargo.toml"),
+    );
+    crate::codegen::cfg::warn_on_undeclared_binding_cfg_features(api, Language::Elixir, &manifest_path);
+
     Ok(vec![GeneratedFile {
         path: PathBuf::from(&output_dir).join("lib.rs"),
         content,

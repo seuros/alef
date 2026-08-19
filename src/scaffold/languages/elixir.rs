@@ -9,6 +9,22 @@ use crate::{
 use heck::{ToPascalCase, ToSnakeCase};
 use std::path::PathBuf;
 
+/// The Elixir native crate's directory (relative to the project root), e.g.
+/// `packages/elixir/native/my_lib_nif`.
+///
+/// Single source of truth for that formula: `scaffold_elixir_cargo` writes the crate's
+/// Cargo.toml here, and a caller wanting to read that manifest back (e.g.
+/// `RustlerBackend::generate_bindings`, cross-checking it against
+/// `codegen::cfg::collect_cfg_features`) must derive the exact same path rather than
+/// re-deriving it from an unrelated path such as `alef build`'s own `lib.rs` output directory --
+/// which a `[crates.output] elixir = "..."` override can point somewhere this formula's `nif_name`
+/// segment does not appear under at all. ~keep
+pub(crate) fn elixir_native_crate_dir(config: &ResolvedCrateConfig) -> String {
+    let nif_name = format!("{}_nif", config.elixir_app_name());
+    let pkg_dir = config.package_dir(Language::Elixir);
+    format!("{pkg_dir}/native/{nif_name}")
+}
+
 pub(crate) fn scaffold_elixir_cargo(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -18,8 +34,7 @@ pub(crate) fn scaffold_elixir_cargo(
     let nif_name = format!("{app_name}_nif");
     let version = &api.version;
     let core_crate_dir = config.core_crate_dir();
-    let pkg_dir = config.package_dir(Language::Elixir);
-    let native_crate_dir = format!("{pkg_dir}/native/{nif_name}");
+    let native_crate_dir = elixir_native_crate_dir(config);
     let ws = detect_workspace_inheritance_for_crate(config.workspace_root.as_deref(), &native_crate_dir);
     let pkg_header = cargo_package_header(&nif_name, version, "2024", &meta, &ws);
 

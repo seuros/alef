@@ -9,6 +9,7 @@
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 /// Extract every `feature = "X"` name referenced by a cfg expression.
 ///
@@ -155,6 +156,91 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
         }
     }
     out
+}
+
+/// Feature names [`collect_cfg_features`] finds referenced in `api` that `declared` does not
+/// contain.
+///
+/// A Rust-emitting backend (Magnus/Ruby, Rustler/Elixir) copies a source item's
+/// `#[cfg(feature = "X")]` verbatim into the binding crate; that gate then resolves against the
+/// *binding* crate's own `[features]` table, not the core crate's. A name this returns means the
+/// binding crate's manifest does not declare `X` as its own passthrough feature, so every
+/// definition (and, if the backend also re-emits the gate on a registration statement, every
+/// registration) behind that gate silently compiles out of the binding crate even though the core
+/// crate has `X` on.
+#[must_use]
+pub fn undeclared_cfg_features(api: &ApiSurface, declared: &BTreeSet<String>) -> BTreeSet<String> {
+    collect_cfg_features(api).difference(declared).cloned().collect()
+}
+
+/// Read the `[features]` table keys of the Cargo.toml at `manifest_path`.
+///
+/// Returns `None` when the file cannot be read or parsed as TOML -- e.g. the binding crate has
+/// not been scaffolded yet -- so callers can tell "nothing to check" apart from "checked and the
+/// table is empty". Returns `Some(<empty set>)` when the file parses but declares no `[features]`
+/// table at all, which is the exact shape a manifest has before its first cfg-gated symbol ever
+/// existed.
+#[must_use]
+pub fn read_declared_cargo_features(manifest_path: &Path) -> Option<BTreeSet<String>> {
+    let content = std::fs::read_to_string(manifest_path).ok()?;
+    // `toml` 1.x's `FromStr for Value` parses a bare value, not a document; use `from_str` or
+    // every real Cargo.toml silently yields `None` here. ~keep
+    let manifest = toml::from_str::<toml::Value>(&content).ok()?;
+    let features = manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .map(|table| table.keys().cloned().collect())
+        .unwrap_or_default();
+    Some(features)
+}
+
+/// Resolve a `GeneratedFile`-style path (relative to the project root) against
+/// `config.workspace_root`, falling back to the process's current directory.
+///
+/// Mirrors the resolution `scaffold::languages::elixir::get_core_crate_features` already uses to
+/// read a sibling crate's manifest back off disk, so a caller that has a `resolve_output_dir()`
+/// result (itself already relative to the project root) can locate a file next to it on disk.
+#[must_use]
+pub fn resolve_against_workspace_root(config: &ResolvedCrateConfig, relative: &Path) -> std::path::PathBuf {
+    let root = config
+        .workspace_root
+        .clone()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    root.join(relative)
+}
+
+/// Warn when the binding crate's own (already-scaffolded) Cargo.toml at `manifest_path` does not
+/// declare every feature the generated Rust source for `language` references via a forwarded
+/// `#[cfg(feature = "X")]`.
+///
+/// `alef scaffold` writes this manifest's `[features]` table once, from
+/// [`collect_cfg_features`] evaluated at scaffold time (see `scaffold::languages::ruby` and
+/// `scaffold::languages::elixir`); `alef build` does not regenerate it. A cfg-gated item added to
+/// the core crate after that scaffold run is therefore referenced by the next `alef build`'s
+/// generated source without the manifest ever being told about it -- the exact condition that
+/// turned a compiling Ruby extension into one that fails with `E0425: cannot find value`, and an
+/// Elixir NIF into one whose function silently returns `:nif_not_loaded` at runtime while the
+/// generated docs and type stubs keep advertising it. This is a best-effort, read-only check: a
+/// missing or unparseable manifest is treated as "nothing to verify yet", not an error, mirroring
+/// `scaffold::languages::elixir::get_core_crate_features`'s same permissive philosophy for the
+/// same class of file. ~keep
+pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Language, manifest_path: &Path) {
+    let Some(declared) = read_declared_cargo_features(manifest_path) else {
+        return;
+    };
+    let missing = undeclared_cfg_features(api, &declared);
+    if missing.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        language = %language,
+        manifest = %manifest_path.display(),
+        missing_features = ?missing,
+        "generated bindings reference #[cfg(feature = \"...\")] gates this crate's own Cargo.toml \
+         does not declare; the affected definitions (and their registrations) will silently \
+         compile out of this binding even though the core crate has the feature on -- re-run \
+         `alef scaffold` to add the missing features to this crate's [features] table"
+    );
 }
 
 /// Warn when a single-surface binding language's configured feature set (used to decide which
@@ -304,6 +390,7 @@ fn parse_cfg_list(s: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, TypeDef};
+    use tracing_test::traced_test;
 
     #[test]
     fn combine_gates_drops_an_owner_the_member_already_requires() {
@@ -630,6 +717,142 @@ mod tests {
             features,
             BTreeSet::from(["pdf".to_string()]),
             "host `pdf` must forward; the foreign `foreign-only` feature must not leak into host passthrough"
+        );
+    }
+
+    fn api_with_gated_functions(names_and_cfgs: &[(&str, Option<&str>)]) -> ApiSurface {
+        use crate::core::ir::FunctionDef;
+        ApiSurface {
+            crate_name: "test_lib".to_string(),
+            functions: names_and_cfgs
+                .iter()
+                .map(|(name, cfg)| FunctionDef {
+                    name: (*name).to_string(),
+                    rust_path: format!("test_lib::{name}"),
+                    cfg: cfg.map(|s| s.to_string()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn undeclared_cfg_features_returns_only_missing_names() {
+        let api = api_with_gated_functions(&[
+            ("count_tokens", Some(r#"feature = "tokenizer""#)),
+            ("with_tower_layer", Some(r#"feature = "tower""#)),
+            ("completion_cost", None),
+        ]);
+        let declared: BTreeSet<String> = ["tower".to_string()].into_iter().collect();
+        assert_eq!(
+            undeclared_cfg_features(&api, &declared),
+            BTreeSet::from(["tokenizer".to_string()]),
+            "only the feature missing from `declared` should be reported"
+        );
+    }
+
+    #[test]
+    fn undeclared_cfg_features_empty_when_everything_declared() {
+        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
+        let declared: BTreeSet<String> = ["tokenizer".to_string()].into_iter().collect();
+        assert!(undeclared_cfg_features(&api, &declared).is_empty());
+    }
+
+    #[test]
+    fn read_declared_cargo_features_none_when_file_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        assert!(
+            read_declared_cargo_features(&manifest).is_none(),
+            "an unscaffolded crate has nothing to verify against yet"
+        );
+    }
+
+    #[test]
+    fn read_declared_cargo_features_reads_features_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"x\"\n\n[features]\ndefault = [\"native-http\"]\nnative-http = [\"core/native-http\"]\n",
+        )
+        .expect("write manifest");
+        assert_eq!(
+            read_declared_cargo_features(&manifest),
+            Some(BTreeSet::from(["default".to_string(), "native-http".to_string()]))
+        );
+    }
+
+    #[test]
+    fn read_declared_cargo_features_empty_set_when_no_features_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        std::fs::write(&manifest, "[package]\nname = \"x\"\n").expect("write manifest");
+        assert_eq!(
+            read_declared_cargo_features(&manifest),
+            Some(BTreeSet::new()),
+            "a manifest scaffolded before any cfg-gated symbol existed has no [features] table at \
+             all, which must still be distinguishable from a missing file"
+        );
+    }
+
+    /// Reproduces the liter-llm incident: the binding crate's Cargo.toml declares only the
+    /// features it had at scaffold time (`native-http`), but the generated source now references
+    /// `tokenizer` because the core crate gained a cfg-gated function since then.
+    #[traced_test]
+    #[test]
+    fn warn_on_undeclared_binding_cfg_features_warns_on_stale_manifest() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"x\"\n\n[features]\ndefault = [\"native-http\"]\nnative-http = [\"core/native-http\"]\n",
+        )
+        .expect("write manifest");
+        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
+
+        warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
+
+        assert!(
+            logs_contain("does not declare"),
+            "a stale manifest missing a referenced feature must produce a warning"
+        );
+    }
+
+    #[traced_test]
+    #[test]
+    fn warn_on_undeclared_binding_cfg_features_silent_when_manifest_declares_everything() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"x\"\n\n[features]\ndefault = [\"tokenizer\"]\ntokenizer = [\"core/tokenizer\"]\n",
+        )
+        .expect("write manifest");
+        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
+
+        warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
+
+        assert!(
+            !logs_contain("does not declare"),
+            "a fully up-to-date manifest must not warn"
+        );
+    }
+
+    #[traced_test]
+    #[test]
+    fn warn_on_undeclared_binding_cfg_features_silent_when_manifest_missing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let manifest = dir.path().join("Cargo.toml");
+        let api = api_with_gated_functions(&[("count_tokens", Some(r#"feature = "tokenizer""#))]);
+
+        warn_on_undeclared_binding_cfg_features(&api, Language::Ruby, &manifest);
+
+        assert!(
+            !logs_contain("does not declare"),
+            "an unscaffolded crate (no manifest on disk yet) must not warn -- there is nothing to \
+             verify against"
         );
     }
 }

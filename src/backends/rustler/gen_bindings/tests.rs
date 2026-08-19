@@ -3,6 +3,7 @@ use crate::core::backend::Backend;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::new_config::NewAlefConfig;
 use crate::core::ir::ApiSurface;
+use tracing_test::traced_test;
 
 mod config_marshalling_fixtures;
 mod config_marshalling_tests;
@@ -554,4 +555,86 @@ nif_features = ["foo", "bar"]
     assert_eq!(nif_features.len(), 2, "should have 2 custom features");
     assert!(nif_features.contains(&"foo".to_string()), "should contain foo");
     assert!(nif_features.contains(&"bar".to_string()), "should contain bar");
+}
+
+/// End-to-end reproduction of the liter-llm incident, Elixir side: `#[rustler::nif]`
+/// auto-registers, so there is no separate registration statement to desync from a `#[cfg]`-gated
+/// definition (unlike Ruby) -- but that also means an undeclared feature never fails the build.
+/// The NIF just silently does not exist while `packages/elixir/native/{nif}/Cargo.toml` (stale,
+/// as it legitimately goes once a core crate gains a cfg-gated item after the last scaffold run)
+/// never declares the feature. `alef build` must surface that with a warning.
+#[traced_test]
+#[test]
+fn generate_bindings_warns_when_the_scaffolded_manifest_is_missing_a_referenced_feature() {
+    let backend = RustlerBackend;
+    let mut config = test_config();
+    let workspace = tempfile::tempdir().expect("tempdir");
+    config.workspace_root = Some(workspace.path().to_path_buf());
+
+    // Same formula `RustlerBackend::generate_bindings` itself reads the manifest back from, so
+    // this test does not depend on guessing the scaffold's directory layout.
+    let manifest_path = workspace
+        .path()
+        .join(crate::scaffold::elixir_native_crate_dir(&config))
+        .join("Cargo.toml");
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest has a parent dir"))
+        .expect("create native crate dir");
+    std::fs::write(
+        &manifest_path,
+        "[package]\nname = \"my_lib_nif\"\n\n[features]\ndefault = []\n",
+    )
+    .expect("write stale manifest");
+
+    let mut api = test_api();
+    api.functions.push(crate::core::ir::FunctionDef {
+        name: "count_tokens".to_string(),
+        rust_path: "my_lib::count_tokens".to_string(),
+        cfg: Some(r#"feature = "tokenizer""#.to_string()),
+        ..Default::default()
+    });
+
+    let _ = backend.generate_bindings(&api, &config).unwrap();
+
+    assert!(
+        logs_contain("does not declare"),
+        "a stale scaffolded manifest missing a referenced feature must warn during `alef build`"
+    );
+}
+
+/// The same manifest, but declaring `tokenizer` -- the normal, up-to-date case -- must stay
+/// silent.
+#[traced_test]
+#[test]
+fn generate_bindings_stays_silent_when_the_scaffolded_manifest_declares_the_feature() {
+    let backend = RustlerBackend;
+    let mut config = test_config();
+    let workspace = tempfile::tempdir().expect("tempdir");
+    config.workspace_root = Some(workspace.path().to_path_buf());
+
+    let manifest_path = workspace
+        .path()
+        .join(crate::scaffold::elixir_native_crate_dir(&config))
+        .join("Cargo.toml");
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest has a parent dir"))
+        .expect("create native crate dir");
+    std::fs::write(
+        &manifest_path,
+        "[package]\nname = \"my_lib_nif\"\n\n[features]\ndefault = [\"tokenizer\"]\ntokenizer = [\"my-lib/tokenizer\"]\n",
+    )
+    .expect("write up-to-date manifest");
+
+    let mut api = test_api();
+    api.functions.push(crate::core::ir::FunctionDef {
+        name: "count_tokens".to_string(),
+        rust_path: "my_lib::count_tokens".to_string(),
+        cfg: Some(r#"feature = "tokenizer""#.to_string()),
+        ..Default::default()
+    });
+
+    let _ = backend.generate_bindings(&api, &config).unwrap();
+
+    assert!(
+        !logs_contain("does not declare"),
+        "an up-to-date manifest must not warn"
+    );
 }

@@ -558,6 +558,14 @@ impl Backend for MagnusBackend {
             "packages/ruby/ext/{name}_rb/native/src/",
         );
 
+        // A `[crates.output] ruby = "..."` override can point `output_dir` (this `lib.rs`'s own
+        // destination) somewhere `scaffold_ruby_cargo`'s `native/` segment never appears under, so
+        // the manifest path is read from `scaffold::ruby_native_manifest_path` -- the same formula
+        // that actually wrote it -- rather than derived from `output_dir`. ~keep
+        let native_manifest_path = crate::scaffold::ruby_native_manifest_path(config);
+        let manifest_path = crate::codegen::cfg::resolve_against_workspace_root(config, &native_manifest_path);
+        crate::codegen::cfg::warn_on_undeclared_binding_cfg_features(api, Language::Ruby, &manifest_path);
+
         Ok(vec![GeneratedFile {
             path: PathBuf::from(&output_dir).join("lib.rs"),
             content,

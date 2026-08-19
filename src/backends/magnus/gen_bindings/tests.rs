@@ -2,6 +2,7 @@ use super::*;
 use crate::core::backend::Backend;
 use crate::core::config::new_config::NewAlefConfig;
 use crate::core::ir::*;
+use tracing_test::traced_test;
 
 fn resolved_one(toml: &str) -> ResolvedCrateConfig {
     let cfg: NewAlefConfig = toml::from_str(toml).unwrap();
@@ -303,5 +304,84 @@ fn gen_struct_methods_skips_method_wrapper_when_field_accessor_already_emitted()
     assert_eq!(
         registrations, 1,
         "`providers` must be registered exactly once, found {registrations} in:\n{content}"
+    );
+}
+
+/// End-to-end reproduction of the liter-llm incident through the real `generate_bindings` entry
+/// point: a `#[cfg(feature = "tokenizer")]`-gated function reaches the generated `lib.rs`, but the
+/// scaffolded `native/Cargo.toml` on disk (deliberately stale here, as `alef scaffold` output
+/// legitimately goes once a core crate gains a cfg-gated item after the last scaffold run) never
+/// declares `tokenizer`. `alef build` must surface that with a warning instead of staying silent.
+#[traced_test]
+#[test]
+fn generate_bindings_warns_when_the_scaffolded_manifest_is_missing_a_referenced_feature() {
+    let backend = MagnusBackend;
+    let mut config = make_config();
+    let workspace = tempfile::tempdir().expect("tempdir");
+    config.workspace_root = Some(workspace.path().to_path_buf());
+
+    // Same formula `MagnusBackend::generate_bindings` itself reads the manifest back from, so
+    // this test does not depend on guessing the scaffold's directory layout.
+    let manifest_path = workspace
+        .path()
+        .join(crate::scaffold::ruby_native_manifest_path(&config));
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest has a parent dir"))
+        .expect("create native crate dir");
+    std::fs::write(
+        &manifest_path,
+        "[package]\nname = \"test_lib_rb\"\n\n[features]\ndefault = []\n",
+    )
+    .expect("write stale manifest");
+
+    let mut api = make_api_surface();
+    api.functions.push(FunctionDef {
+        name: "count_tokens".to_string(),
+        rust_path: "test_lib::count_tokens".to_string(),
+        cfg: Some(r#"feature = "tokenizer""#.to_string()),
+        ..Default::default()
+    });
+
+    let _ = backend.generate_bindings(&api, &config).unwrap();
+
+    assert!(
+        logs_contain("does not declare"),
+        "a stale scaffolded manifest missing a referenced feature must warn during `alef build`"
+    );
+}
+
+/// The same manifest, but declaring `tokenizer` -- the normal, up-to-date case -- must stay
+/// silent.
+#[traced_test]
+#[test]
+fn generate_bindings_stays_silent_when_the_scaffolded_manifest_declares_the_feature() {
+    let backend = MagnusBackend;
+    let mut config = make_config();
+    let workspace = tempfile::tempdir().expect("tempdir");
+    config.workspace_root = Some(workspace.path().to_path_buf());
+
+    let manifest_path = workspace
+        .path()
+        .join(crate::scaffold::ruby_native_manifest_path(&config));
+    std::fs::create_dir_all(manifest_path.parent().expect("manifest has a parent dir"))
+        .expect("create native crate dir");
+    std::fs::write(
+        &manifest_path,
+        "[package]\nname = \"test_lib_rb\"\n\n[features]\ndefault = [\"tokenizer\"]\ntokenizer = [\"test-lib/tokenizer\"]\n",
+    )
+    .expect("write up-to-date manifest");
+
+    let mut api = make_api_surface();
+    api.functions.push(FunctionDef {
+        name: "count_tokens".to_string(),
+        rust_path: "test_lib::count_tokens".to_string(),
+        cfg: Some(r#"feature = "tokenizer""#.to_string()),
+        ..Default::default()
+    });
+
+    let _ = backend.generate_bindings(&api, &config).unwrap();
+
+    assert!(
+        !logs_contain("does not declare"),
+        "an up-to-date manifest must not warn"
     );
 }
