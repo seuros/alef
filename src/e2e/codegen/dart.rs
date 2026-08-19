@@ -197,6 +197,8 @@ pub use stubs::emit_test_backend;
 pub(super) use values::escape_dart;
 
 #[cfg(test)]
+mod local_naming_tests;
+#[cfg(test)]
 mod tests;
 
 /// Returns `None` when no override sets `result_type`; the renderer then falls

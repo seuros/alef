@@ -1036,7 +1036,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                 .any(|a| a.arg_type == "mock_url");
             let mock_url_setup = if !has_mock_url {
                 // No explicit mock_url arg — derive the URL inline.
-                Some(format!(r#"final _mockUrl = _fixtureUrl("{fixture_id}");"#))
+                Some(format!(r#"final mockUrl = _fixtureUrl("{fixture_id}");"#))
             } else {
                 None
             };
@@ -1048,9 +1048,9 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
                     .iter()
                     .find(|a| a.arg_type == "mock_url")
                     .map(|a| a.name.clone())
-                    .unwrap_or_else(|| "_mockUrl".to_string())
+                    .unwrap_or_else(|| "mockUrl".to_string())
             } else {
-                "_mockUrl".to_string()
+                "mockUrl".to_string()
             };
             let create_line =
                 format!("final client = await {receiver_class}.{factory}('test-key', baseUrl: {url_expr});");

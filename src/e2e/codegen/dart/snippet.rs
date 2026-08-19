@@ -231,8 +231,8 @@ mod tests {
 
     // Regression test: 188 of 190 Dart doc snippets failed `dart analyze` with
     // "The function '_fixtureUrl' isn't defined." A `client_factory` call (e.g.
-    // `createClient`) makes `render_test_case` emit `final _mockUrl = _fixtureUrl(...)`
-    // plus a `baseUrl: _mockUrl` argument — `_fixtureUrl` is only ever defined by the
+    // `createClient`) makes `render_test_case` emit `final mockUrl = _fixtureUrl(...)`
+    // plus a `baseUrl: mockUrl` argument — `_fixtureUrl` is only ever defined by the
     // full e2e test-file emitter, never by the standalone snippet emitter. The snippet
     // must strip the mock-URL harness entirely, matching the PHP/Ruby/Go/TypeScript
     // emitters, which all construct their client without a baseUrl override.
