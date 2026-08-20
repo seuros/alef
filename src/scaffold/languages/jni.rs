@@ -78,7 +78,6 @@ fn render_jni_target_blocks(
 /// the umbrella crate uses `core_crate_dir` (the directory) while the JNI
 /// crate's own directory follows `jni_crate_base`.
 pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-    let core_crate_dir = config.core_crate_dir();
     let jni_crate_name = format!("{}-jni", config.jni_crate_base());
     let jni_lib_name = config.jni_lib_name();
 
