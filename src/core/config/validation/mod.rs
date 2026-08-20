@@ -21,7 +21,7 @@ use super::resolved::ResolvedCrateConfig;
 use crate::core::error::AlefError;
 use preconditions::{
     build_main_fields, clean_main_fields, lint_main_fields, setup_main_fields, test_main_fields, update_main_fields,
-    validate_build_dependency_preconditions, validate_section, validate_tools,
+    validate_build_dependency_preconditions, validate_section, validate_test_e2e_precondition, validate_tools,
 };
 
 /// Validate user-supplied pipeline overrides in a resolved per-crate config.
@@ -34,6 +34,7 @@ pub fn validate_resolved(config: &ResolvedCrateConfig) -> Result<(), AlefError> 
     validate_package_metadata(config)?;
     validate_section("lint", &config.lint, lint_main_fields, |c| c.precondition.as_deref())?;
     validate_section("test", &config.test, test_main_fields, |c| c.precondition.as_deref())?;
+    validate_test_e2e_precondition(&config.test)?;
     validate_section("build_commands", &config.build_commands, build_main_fields, |c| {
         c.precondition.as_deref()
     })?;
@@ -176,7 +177,32 @@ sources = ["src/lib.rs"]
             base = base_config()
         );
         let config = resolve_first(&toml);
-        validate_resolved(&config).expect_err("e2e without precondition should error");
+        let err = validate_resolved(&config).expect_err("e2e without precondition or e2e_precondition should error");
+        let msg = format!("{err}");
+        assert!(msg.contains("[test.python]"), "{msg}");
+        assert!(msg.contains("e2e_precondition"), "{msg}");
+    }
+
+    #[test]
+    fn test_override_with_only_e2e_and_e2e_precondition_is_ok() {
+        let toml = format!(
+            "{base}\n[crates.test.python]\ne2e_precondition = \"command -v uv\"\ne2e = \"pytest tests/e2e\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        validate_resolved(&config).expect("e2e with e2e_precondition alone should validate");
+    }
+
+    #[test]
+    fn test_override_with_e2e_and_command_needs_only_top_level_precondition() {
+        let toml = format!(
+            "{base}\n[crates.test.python]\nprecondition = \"command -v pytest\"\ncommand = \"pytest\"\ne2e = \
+             \"pytest tests/e2e\"\n",
+            base = base_config()
+        );
+        let config = resolve_first(&toml);
+        validate_resolved(&config)
+            .expect("a top-level precondition still satisfies both command and e2e when no e2e_precondition is set");
     }
 
     #[test]

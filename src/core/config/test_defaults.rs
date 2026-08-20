@@ -42,6 +42,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -66,6 +67,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -80,6 +82,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -94,6 +97,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -105,6 +109,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -125,6 +130,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(wrap(cmd_path, ctx.run_wrapper))),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(wrap(cov_path, ctx.run_wrapper))),
             }
         }
@@ -145,6 +151,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(wrap(cmd_path, ctx.run_wrapper))),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(wrap(cov_path, ctx.run_wrapper))),
             }
         }
@@ -156,6 +163,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -173,6 +181,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd)),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cov)),
             }
         }
@@ -181,6 +190,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
             before: None,
             command: Some(StringOrVec::Single("cargo test --workspace".to_string())),
             e2e: None,
+            e2e_precondition: None,
             coverage: Some(StringOrVec::Single(
                 "cargo llvm-cov --workspace --lcov --output-path coverage.lcov".to_string(),
             )),
@@ -190,6 +200,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
             before: None,
             command: None,
             e2e: None,
+            e2e_precondition: None,
             coverage: None,
         },
         Language::C => TestConfig {
@@ -197,6 +208,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
             before: None,
             command: None,
             e2e: None,
+            e2e_precondition: None,
             coverage: None,
         },
         Language::Kotlin | Language::KotlinAndroid => {
@@ -206,6 +218,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd.clone())),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cmd)),
             }
         }
@@ -216,6 +229,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd.clone())),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cmd)),
             }
         }
@@ -230,6 +244,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd.clone())),
                 e2e: Some(StringOrVec::Single(e2e_cmd)),
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cmd)),
             }
         }
@@ -240,6 +255,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd.clone())),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cmd)),
             }
         }
@@ -250,6 +266,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
                 before: None,
                 command: Some(StringOrVec::Single(cmd.clone())),
                 e2e: None,
+                e2e_precondition: None,
                 coverage: Some(StringOrVec::Single(cmd)),
             }
         }
@@ -258,6 +275,7 @@ pub(crate) fn default_test_config(lang: Language, output_dir: &str, ctx: &LangCo
             before: None,
             command: None,
             e2e: None,
+            e2e_precondition: None,
             coverage: None,
         },
     }

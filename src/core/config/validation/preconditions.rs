@@ -52,18 +52,43 @@ pub(super) fn lint_main_fields(c: &LintConfig) -> Vec<&'static str> {
     v
 }
 
+/// Main fields gated by the block's top-level `precondition`.
+///
+/// `e2e` is deliberately excluded: it has its own `e2e_precondition` gate, checked separately by
+/// [`validate_test_e2e_precondition`], so a block that sets only `e2e` is not forced to declare a
+/// top-level `precondition` written for tooling `e2e` may not need.
 pub(super) fn test_main_fields(c: &TestConfig) -> Vec<&'static str> {
     let mut v = Vec::new();
     if c.command.is_some() {
         v.push("command");
     }
-    if c.e2e.is_some() {
-        v.push("e2e");
-    }
     if c.coverage.is_some() {
         v.push("coverage");
     }
     v
+}
+
+/// Reject a `[test.<lang>]` block that sets `e2e` without either `precondition` or
+/// `e2e_precondition`.
+///
+/// Custom `e2e` commands are opaque to alef -- only the user knows what tooling they need. One of
+/// the two precondition fields must degrade the run gracefully when that tooling is missing.
+/// `e2e_precondition` exists precisely so this requirement does not force a block with no
+/// `command` (only `before` + `e2e`, a common shape) into writing a `precondition` for tooling
+/// the e2e command does not actually use.
+pub(super) fn validate_test_e2e_precondition(table: &HashMap<String, TestConfig>) -> Result<(), AlefError> {
+    for (lang, cfg) in table {
+        if cfg.e2e.is_some() && cfg.precondition.is_none() && cfg.e2e_precondition.is_none() {
+            return Err(AlefError::Config(format!(
+                "[test.{lang}] sets `e2e` without `precondition` or `e2e_precondition`. Custom e2e \
+                 commands must declare a precondition so the step degrades gracefully when the tool \
+                 is missing. Prefer `e2e_precondition`, scoped to what the `e2e` command itself \
+                 needs -- use a POSIX check such as \
+                 `e2e_precondition = \"command -v <tool> >/dev/null 2>&1\"`."
+            )));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn build_main_fields(c: &BuildCommandConfig) -> Vec<&'static str> {

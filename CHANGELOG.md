@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`[crates.test.<lang>].e2e_precondition`** lets a block scope the `e2e` tooling gate
+  separately from the block's main `precondition`. A block with only `before` + `e2e` (no
+  `command`) previously had to satisfy validation by writing a `precondition` for whatever
+  `command`/`before` needed, and `alef test --e2e` then gated `e2e` on that same, often
+  unrelated, check.
+
+### Fixed
+
+- **`alef test --lang <X> --e2e` no longer skips the e2e suite on a precondition written for
+  the block's `command`, not for `e2e`.** `e2e` is now gated by the new `e2e_precondition` when
+  set; when unset, `e2e` runs ungated instead of inheriting the main `precondition` (which was
+  authored for a different command and could name tooling `e2e` never uses, e.g. a linter). The
+  main `precondition` still gates `command`/`coverage` exactly as before. `before` is unchanged
+  and still runs ahead of `e2e`, since it commonly builds the native library the e2e suite loads.
+
 ## [0.62.4] - 2026-08-20
 
 ### Fixed

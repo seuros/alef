@@ -651,14 +651,24 @@ pub struct TestAppRunConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TestConfig {
-    /// Shell command that must exit 0 for test to run; skip with warning on failure.
+    /// Shell command that must exit 0 for the `command`/`coverage` phase to run; skip with
+    /// warning on failure. Written for what `command`/`before` need -- it does not gate `e2e`.
     pub precondition: Option<String>,
-    /// Command(s) to run before the main test commands; aborts on failure.
+    /// Command(s) to run before the main test commands; aborts on failure. Also runs ahead of
+    /// `e2e` (e.g. building the native library the e2e suite loads), since `before` commonly
+    /// sets up state both phases depend on.
     pub before: Option<StringOrVec>,
     /// Command to run unit/integration tests for this language.
     pub command: Option<StringOrVec>,
     /// Command to run e2e tests for this language.
     pub e2e: Option<StringOrVec>,
+    /// Shell command that must exit 0 for the `e2e` phase to run; skip with warning on failure.
+    /// Scopes the e2e tooling check separately from `precondition`, which is written for
+    /// `command`/`before` and is often unrelated to what `e2e` needs (e.g. a linter required by
+    /// `command` but not by the e2e suite). When unset, `e2e` runs without a precondition gate
+    /// rather than inheriting `precondition` -- see `check_e2e_precondition` in
+    /// `cli::pipeline::commands::test` for the rationale.
+    pub e2e_precondition: Option<String>,
     /// Command to run tests with coverage for this language.
     pub coverage: Option<StringOrVec>,
 }
