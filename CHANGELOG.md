@@ -476,6 +476,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the relative path from the binding crate's actual root to `core_crate_root` (a root-flat
   layout resolves to the project root itself; a workspace layout to its `crates/` sibling),
   so both shapes get the correct `..` depth instead of one hard-coded assumption.
+- **`is_tool_available` no longer reports every formatter absent on Windows.** It shelled out
+  to `Command::new("which")`, but `which` is not a Windows command -- the spawn itself fails
+  there, and `unwrap_or(false)` silently reported every tool missing regardless of whether it
+  was actually on `PATH`, skipping formatting for the whole run. It now resolves via the
+  `which` crate's own cross-platform `PATH` walk instead of an external `which`/`where`
+  binary.
 
 - **Zig e2e's opaque-handle accessor path can now emit a real method call.**
   `render_zig_with_optionals` could only ever produce `.field` for a `method_calls` path,

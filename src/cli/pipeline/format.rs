@@ -686,12 +686,21 @@ fn run_residual(step: &ResidualStep, lang_str: &str) {
 }
 
 /// Check if a tool is available on PATH.
+///
+/// Resolves via the `which` crate's own PATH walk rather than shelling out to a `which`
+/// binary: `which` is not a Windows command, so spawning it there fails outright and
+/// [`Result::unwrap_or`] silently reports every tool absent -- a check that "passes" while
+/// examining nothing, and formatting gets skipped for the whole run.
 pub(crate) fn is_tool_available(tool: &str) -> bool {
-    Command::new("which")
-        .arg(tool)
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    is_tool_available_on(tool, std::env::var_os("PATH"))
+}
+
+/// Testable seam for [`is_tool_available`]: resolves `tool` against an explicit `PATH`
+/// value instead of the process environment, so a test can prove resolution works from
+/// PATH-walking alone -- without a `which`/`where` executable anywhere on that PATH, the
+/// exact condition Windows can't satisfy.
+fn is_tool_available_on(tool: &str, path_var: Option<std::ffi::OsString>) -> bool {
+    which::which_in(tool, path_var, std::env::current_dir().unwrap_or_default()).is_ok()
 }
 
 /// Run a formatter command with arguments in a specific directory.

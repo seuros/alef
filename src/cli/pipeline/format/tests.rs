@@ -736,3 +736,34 @@ fn format_generated_full_regen_routes_through_convergence_loop() {
         );
     }
 }
+
+/// `is_tool_available` must resolve a real executable purely by walking `PATH` -- with no
+/// `which`/`where` binary anywhere on that PATH. The old implementation shelled out to
+/// `Command::new("which")`; on a PATH like this one (no `which` binary present, mirroring
+/// every Windows PATH), that spawn itself fails and `unwrap_or(false)` reports the tool
+/// absent -- indistinguishable from a tool that is genuinely missing. Asserting only that a
+/// known-present tool like `cargo` is found would not catch this: the old code passed that
+/// check fine on any platform that happens to ship a `which` binary. This test controls for
+/// that by removing `which` from the probe's reach entirely and using a fabricated
+/// executable, so a regression to the old shell-out shape fails it regardless of host OS.
+#[cfg(unix)]
+#[test]
+fn is_tool_available_resolves_from_path_alone_without_a_which_binary() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fake_tool = dir.path().join("alef-probe-fixture-tool");
+    std::fs::write(&fake_tool, b"#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&fake_tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let isolated_path = dir.path().as_os_str().to_os_string();
+
+    assert!(
+        is_tool_available_on("alef-probe-fixture-tool", Some(isolated_path.clone())),
+        "a real, executable file on PATH must be found even with no `which` binary anywhere \
+         on that PATH"
+    );
+    assert!(
+        !is_tool_available_on("alef-probe-fixture-tool-that-does-not-exist", Some(isolated_path)),
+        "a tool genuinely absent from PATH must still be reported absent, not found by accident"
+    );
+}
