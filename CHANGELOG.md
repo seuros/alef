@@ -262,6 +262,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handed it to accessors typed `Option<String>`, so the binding crate failed to compile with
   `E0308`. The text opt-in is the more specific signal and now wins on every surface.
 
+- **The swift backend no longer emits an unresolvable `From<String>` conversion for
+  fieldless enum parameters, and no longer borrows owned `String` parameters it passes
+  through.** A method or function taking a plain fieldless enum by value (e.g. `fn
+  analyze(&self, input: String, mode: Mode)`) produced `<toolkit::Mode as
+  ::std::convert::From<String>>::from(mode)` — a trait alef never emits an impl for, and
+  cannot legally emit for a foreign type in the swift crate (an orphan impl, E0117) — plus
+  `&input` where the core method takes `input` by value. Both were compile errors
+  (E0277, E0308) in every swift binding for a crate exposing a fieldless enum as a
+  parameter, an entirely ordinary shape. Fixed by generating a local free function per
+  enum (mirroring the `ffi` backend's `i32`-discriminant `from_i32` helpers, which have
+  the same shape without the orphan-impl problem) that matches the wire string back to
+  the enum's variants, and by only borrowing `String` parameters the core signature
+  actually takes by reference.
 - **`jni` no longer hard-fails generation when `[crates.kotlin_android]` is unconfigured.**
   Every downstream accessor (`jni_kotlin_package`, `jni_excluded_functions`,
   `jni_excluded_types`, `jni_capsule_types`) already tolerated its absence, falling back to

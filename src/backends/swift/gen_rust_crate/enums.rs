@@ -3,6 +3,7 @@
 //! Only unit variants are exposed in the bridge enum. Data variants are
 //! absorbed by a catch-all `Unknown` variant when present.
 
+use crate::backends::swift::gen_rust_crate::type_bridge::enum_from_string_fn_name;
 use crate::codegen::generators::type_paths::resolve_type_path;
 use crate::core::ir::EnumDef;
 use std::collections::HashMap;
@@ -96,6 +97,29 @@ pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &H
         minijinja::context! {
             enum_name => &en.name,
             variants => variants,
+        },
+    ));
+
+    let mut from_string_variants = String::new();
+    for variant in &en.variants {
+        let serde_name = serde_variant_wire_name(variant, en.serde_rename_all.as_deref());
+        from_string_variants.push_str(&crate::backends::swift::template_env::render(
+            "rust_enum_from_string_variant.rs.jinja",
+            minijinja::context! {
+                variant_name => &variant.name,
+                serde_name => &serde_name,
+                source_path => &source_path,
+            },
+        ));
+    }
+
+    out.push_str(&crate::backends::swift::template_env::render(
+        "rust_enum_from_string_impl.rs.jinja",
+        minijinja::context! {
+            fn_name => enum_from_string_fn_name(&en.name),
+            enum_name => &en.name,
+            source_path => &source_path,
+            variants => from_string_variants,
         },
     ));
 

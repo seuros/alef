@@ -8,8 +8,8 @@
 //!   - for async fns, blocks on a current-thread Tokio runtime
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_type_enum_aware_ref, bridge_type_with_handles, needs_json_bridge, needs_json_bridge_with_handles,
-    swift_bridge_rust_type,
+    bridge_type_enum_aware_ref, bridge_type_with_handles, enum_from_string_fn_name, needs_json_bridge,
+    needs_json_bridge_with_handles, swift_bridge_rust_type,
 };
 use crate::backends::swift::naming::swift_rust_shim_ident as swift_ident;
 use crate::core::ir::{FunctionDef, TypeRef};
@@ -139,10 +139,10 @@ pub(crate) fn swift_call_arg(
     if let TypeRef::Named(n) = &p.ty
         && unit_enum_names.contains(n.as_str())
     {
-        let native_ty = source_type(n);
-        let from_expr = format!("<{native_ty} as ::std::convert::From<String>>::from({name})");
+        let fn_name = enum_from_string_fn_name(n);
+        let from_expr = format!("{fn_name}(&{name})");
         if p.optional {
-            return format!("{name}.map(|s| <{native_ty} as ::std::convert::From<String>>::from(s))");
+            return format!("{name}.map(|s| {fn_name}(&s))");
         }
         return from_expr;
     }
@@ -151,10 +151,8 @@ pub(crate) fn swift_call_arg(
         && let TypeRef::Named(n) = inner.as_ref()
     {
         if unit_enum_names.contains(n.as_str()) {
-            let native_ty = source_type(n);
-            let map_expr = format!(
-                "values.into_iter().map(|s| <{native_ty} as ::std::convert::From<String>>::from(s)).collect::<Vec<_>>()"
-            );
+            let fn_name = enum_from_string_fn_name(n);
+            let map_expr = format!("values.into_iter().map(|s| {fn_name}(&s)).collect::<Vec<_>>()");
             let converted = if p.optional {
                 format!("{name}.map(|values| {map_expr})")
             } else {
@@ -637,8 +635,12 @@ mod tests {
         };
         let shim = emit_function_shim(&f, &context);
         assert!(shim.contains("actions: Vec<String>"));
-        assert!(shim.contains("From<String>"));
-        assert!(shim.contains("sample_crawler::PageAction"));
+        assert!(
+            shim.contains(&enum_from_string_fn_name("PageAction")),
+            "expected a call into the reverse-conversion helper, not a From<String> impl (which \
+             would be an orphan impl on the consumer's own enum type), got:\n{shim}"
+        );
+        assert!(!shim.contains("From<String>"));
         assert!(!shim.contains(".0"));
     }
 
@@ -663,8 +665,12 @@ mod tests {
         };
         let shim = emit_function_shim(&f, &context);
         assert!(shim.contains("action: String"));
-        assert!(shim.contains("From<String>"));
-        assert!(shim.contains("sample_crawler::PageAction"));
+        assert!(
+            shim.contains(&enum_from_string_fn_name("PageAction")),
+            "expected a call into the reverse-conversion helper, not a From<String> impl (which \
+             would be an orphan impl on the consumer's own enum type), got:\n{shim}"
+        );
+        assert!(!shim.contains("From<String>"));
         assert!(!shim.contains("unimplemented!"));
     }
 

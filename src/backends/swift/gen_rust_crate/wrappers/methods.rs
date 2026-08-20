@@ -8,7 +8,8 @@
 //! Enum wrappers live in `enums.rs`.
 
 use crate::backends::swift::gen_rust_crate::type_bridge::{
-    bridge_type_enum_aware_ref, needs_json_bridge, needs_json_bridge_with_handles, swift_bridge_rust_type,
+    bridge_type_enum_aware_ref, enum_from_string_fn_name, needs_json_bridge, needs_json_bridge_with_handles,
+    swift_bridge_rust_type,
 };
 use crate::core::ir::{ReceiverKind, TypeDef, TypeRef};
 use crate::core::keywords::swift_ident;
@@ -23,7 +24,7 @@ use std::collections::{HashMap, HashSet};
 pub(crate) fn emit_type_method_shims(
     ty: &TypeDef,
     _source_crate: &str,
-    type_paths: &HashMap<String, String>,
+    _type_paths: &HashMap<String, String>,
     handle_returned_types: &std::collections::HashSet<String>,
     unit_enum_names: &HashSet<&str>,
 ) -> String {
@@ -112,46 +113,25 @@ pub(crate) fn emit_type_method_shims(
                     && let TypeRef::Named(n) = vec_inner.as_ref()
                     && unit_enum_names.contains(n.as_str())
                 {
-                    let source_enum_ty = type_paths
-                        .get(n.as_str())
-                        .map(|p| p.replace('-', "_"))
-                        .unwrap_or_else(|| n.clone());
-                    let map_expr = format!(
-                        concat!(
-                            "{name}.into_iter().map(|s| ",
-                            "<{source_enum_ty} as ::std::convert::From<String>>::from(s))",
-                            ".collect::<Vec<_>>()"
-                        ),
-                        name = name,
-                        source_enum_ty = source_enum_ty,
-                    );
+                    let fn_name = enum_from_string_fn_name(n);
+                    let map_expr = format!("{name}.into_iter().map(|s| {fn_name}(&s)).collect::<Vec<_>>()");
                     if p.is_ref {
                         return format!("&{map_expr}");
                     }
                     if p.optional {
-                        let opt_map = format!(
-                            concat!(
-                                "{name}.map(|values| values.into_iter().map(|s| ",
-                                "<{source_enum_ty} as ::std::convert::From<String>>::from(s))",
-                                ".collect::<Vec<_>>())"
-                            ),
-                            name = name,
-                            source_enum_ty = source_enum_ty,
+                        return format!(
+                            "{name}.map(|values| values.into_iter().map(|s| {fn_name}(&s)).collect::<Vec<_>>())"
                         );
-                        return opt_map;
                     }
                     return map_expr;
                 }
                 if let TypeRef::Named(n) = &p.ty
                     && unit_enum_names.contains(n.as_str())
                 {
-                    let source_enum_ty = type_paths
-                        .get(n.as_str())
-                        .map(|p| p.replace('-', "_"))
-                        .unwrap_or_else(|| n.clone());
-                    let from_expr = format!("<{source_enum_ty} as ::std::convert::From<String>>::from({name})");
+                    let fn_name = enum_from_string_fn_name(n);
+                    let from_expr = format!("{fn_name}(&{name})");
                     if p.optional {
-                        return format!("{name}.map(|s| <{source_enum_ty} as ::std::convert::From<String>>::from(s))");
+                        return format!("{name}.map(|s| {fn_name}(&s))");
                     }
                     if p.is_ref {
                         return format!("&{from_expr}");
@@ -173,7 +153,7 @@ pub(crate) fn emit_type_method_shims(
                     TypeRef::Named(n) if p.is_ref && unit_enum_names.contains(n.as_str()) => format!("&{name}"),
                     TypeRef::Named(n) if !unit_enum_names.contains(n.as_str()) => format!("{name}.0"),
                     TypeRef::Named(n) if unit_enum_names.contains(n.as_str()) => name,
-                    TypeRef::String => format!("&{name}"),
+                    TypeRef::String if p.is_ref => format!("&{name}"),
                     TypeRef::Path if p.optional && p.is_ref => {
                         format!("{name}.as_ref().map(::std::path::Path::new)")
                     }

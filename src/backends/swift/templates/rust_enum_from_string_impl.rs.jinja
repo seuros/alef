@@ -1,0 +1,6 @@
+#[allow(dead_code)]
+fn {{ fn_name }}(value: &str) -> {{ source_path }} {
+    match value {
+{{ variants }}        _ => panic!("unknown {{ enum_name }} variant: {}", value),
+    }
+}

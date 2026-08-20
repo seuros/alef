@@ -5,6 +5,7 @@
 //! side effects used across all other submodules.
 
 use crate::core::ir::{ApiSurface, PrimitiveType, TypeRef};
+use heck::ToSnakeCase;
 use std::collections::HashSet;
 
 /// Compute the set of api type names that are directly returned as opaque handles.
@@ -178,6 +179,21 @@ pub(crate) fn bridge_type_enum_aware_ref(ty: &TypeRef, enum_names: &HashSet<&str
         }
         _ => bridge_type(ty),
     }
+}
+
+/// Name of the private Rust helper that reconstructs a fieldless enum from the wire string
+/// swift-bridge hands it (see `enums::emit_enum_wrapper`, which defines the function this
+/// name points at).
+///
+/// Fieldless enums cross the swift-bridge boundary as `String` (their bridge type is declared
+/// `type {Enum};` — opaque, not a swift-bridge "shared enum" — so `bridge_type_enum_aware_ref`
+/// substitutes `String` for it). The obvious reverse conversion, `impl From<String> for
+/// toolkit::Mode`, cannot be emitted: both `From` and the consumer's enum type are foreign to
+/// this crate, so it is an orphan impl (E0117). A local free function that matches on the wire
+/// string and constructs the foreign enum's variants directly has no such restriction — the
+/// same reasoning the `ffi` backend already applies to its `i32`-discriminant helpers. ~keep
+pub(crate) fn enum_from_string_fn_name(enum_name: &str) -> String {
+    format!("__alef_{}_from_swift_string", enum_name.to_snake_case())
 }
 
 /// Returns `true` when the field type is an enum-typed `Named` reference.
