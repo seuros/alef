@@ -33,6 +33,18 @@ pub mod npm {
     // renovate: datasource=npm depName=@types/node
     pub const TYPES_NODE: &str = "^26.0.0";
 
+    /// Filename `napi build` writes its own auto-derived type declarations to.
+    ///
+    /// Must never be `index.d.ts`: alef's node backend hand-derives its own
+    /// `index.d.ts` (unions, doc comments, the `alef:hash:` provenance line) into the
+    /// crate directory, and `napi build`'s `--dts` output defaults to the crate's
+    /// `package.json` `"types"` field, which is also `index.d.ts`. Left unpinned, every
+    /// `napi build` invocation — the default node build step, `alef publish`, and the
+    /// scaffolded `npm run build` — silently overwrites alef's canonical type
+    /// declarations with napi-rs's own, discarding the provenance header alef relies on
+    /// to detect staleness.
+    pub const NAPI_AUTO_DTS_FILENAME: &str = "index.native.d.ts";
+
     // renovate: datasource=npm depName=rollup
     pub const ROLLUP: &str = "^4.53.3";
 

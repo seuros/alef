@@ -439,10 +439,11 @@ fn build_command_for(
         }
         "napi" => {
             format!(
-                "npx --yes -p @napi-rs/cli@{} napi build --platform --manifest-path {}/Cargo.toml -o {}{}",
+                "npx --yes -p @napi-rs/cli@{} napi build --platform --manifest-path {}/Cargo.toml -o {} --dts {}{}",
                 tv::npm::NAPI_RS_CLI_CRATE,
                 crate_dir,
                 crate_dir,
+                tv::npm::NAPI_AUTO_DTS_FILENAME,
                 release_flag
             )
         }
@@ -1175,6 +1176,53 @@ sources = ["src/lib.rs"]
         assert!(
             !command.contains(" -q"),
             "C# build must not use dotnet query mode shorthand: {command}"
+        );
+    }
+
+    /// Regression test: `napi build`'s own `--dts` output defaults to the crate's
+    /// `package.json` `"types"` field, which is `index.d.ts` — the exact file alef's node
+    /// backend writes its own hand-derived type declarations (unions, doc comments, the
+    /// `alef:hash:` provenance line) to. Every `napi build` invocation this arm emits — the
+    /// default node build step every consumer without a `[build_commands.node]` override
+    /// runs — used to leave `--dts` unset, so a routine `alef build` (or the scaffolded
+    /// `npm run build`, which shares this same command shape) silently clobbered alef's
+    /// canonical `index.d.ts` with napi-rs's own auto-derived one, discarding the
+    /// provenance header `alef verify` relies on to detect staleness. ~keep
+    #[test]
+    fn napi_build_command_never_lets_napi_rs_overwrite_alefs_index_d_ts() {
+        let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+        )
+        .unwrap();
+        let config = alef_cfg.resolve().unwrap().remove(0);
+        let build_config = BuildConfig {
+            tool: "napi",
+            crate_suffix: "-node",
+            build_dep: BuildDependency::None,
+            post_build: Vec::new(),
+        };
+
+        let command = build_command_for(Language::Node, &build_config, &config, false);
+
+        assert!(
+            command.contains(&format!(
+                "--dts {}",
+                crate::core::template_versions::npm::NAPI_AUTO_DTS_FILENAME
+            )),
+            "napi build must redirect its own auto-derived .d.ts away from alef's \
+             index.d.ts: {command}"
+        );
+        assert!(
+            !command.contains("--dts index.d.ts"),
+            "napi build must never be told to write its own type declarations over alef's \
+             canonical index.d.ts: {command}"
         );
     }
 

@@ -597,7 +597,7 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     ]
   }},
   "scripts": {{
-    "build": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi build --platform --release",
+    "build": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi build --platform --dts {napi_dts} --release",
     "artifacts": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi artifacts",
     "prepublishOnly": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi prepublish -t npm --skip-optional-publish"
   }},
@@ -621,6 +621,7 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         optional_dependencies = optional_dependencies,
         targets = targets,
         napi_rs_cli_crate = tv::npm::NAPI_RS_CLI_CRATE,
+        napi_dts = tv::npm::NAPI_AUTO_DTS_FILENAME,
         node_engine = tv::npm::NODE_ENGINE,
         entrypoint = entrypoint,
     );

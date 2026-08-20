@@ -21,6 +21,7 @@ pub use validate::validate;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::extras::Language;
 use crate::core::config::publish::{PublishLanguageConfig, VendorMode};
+use crate::core::template_versions as tv;
 use anyhow::{Context, Result};
 use platform::RustTarget;
 use std::path::{Path, PathBuf};
@@ -255,9 +256,10 @@ fn build_command_for_lang(
         Language::Node => {
             let pkg = crate_name_from_output(config, Language::Node).unwrap_or_else(|| format!("{crate_name}-node"));
             let napi_target = target.map(|t| format!(" --target {}", t.triple)).unwrap_or_default();
+            let dts = tv::npm::NAPI_AUTO_DTS_FILENAME;
             format!(
                 "napi build --manifest-path crates/{pkg}/Cargo.toml \
-                 -o crates/{pkg} --platform --release{napi_target}"
+                 -o crates/{pkg} --platform --dts {dts} --release{napi_target}"
             )
         }
         Language::Wasm => {

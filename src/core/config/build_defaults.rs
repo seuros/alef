@@ -1,6 +1,7 @@
 use super::extras::Language;
 use super::output::{BuildCommandConfig, StringOrVec};
 use super::tools::{LangContext, require_tool, wrap_command as wrap};
+use crate::core::template_versions as tv;
 
 /// `maturin develop`'s own environment resolution, minus its parent-directory walk: it needs
 /// `VIRTUAL_ENV`, `CONDA_PREFIX`, or a `.venv` directory, and without one it exits in tens of
@@ -73,10 +74,12 @@ pub(crate) fn default_build_config(
             dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(format!(
-                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node"
+                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --dts {}",
+                tv::npm::NAPI_AUTO_DTS_FILENAME
             ))),
             build_release: Some(StringOrVec::Single(format!(
-                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --release"
+                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --dts {} --release",
+                tv::npm::NAPI_AUTO_DTS_FILENAME
             ))),
         },
         Language::Wasm => BuildCommandConfig {

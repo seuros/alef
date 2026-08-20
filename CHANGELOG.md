@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`napi build` no longer overwrites the `index.d.ts` alef generates.** napi-rs writes its own
+  auto-derived type declarations to whatever the crate's `package.json` `"types"` field names,
+  which is `index.d.ts` — the exact file alef's node backend hand-derives, complete with union
+  types, doc comments and the `alef:hash:` provenance line. Every `napi build` therefore replaced
+  alef's canonical declarations with napi-rs's own and stripped the provenance header `alef
+  verify` relies on to detect staleness, leaving a `.d.ts` full of dangling `Js*` references and
+  duplicate identifiers. All four invocation sites — the default `[build_commands.node]` entry,
+  `alef build`'s own command construction, `alef publish`, and the scaffolded `npm run build` —
+  now pin `--dts index.native.d.ts`.
+
 - **`csharp` e2e no longer emits a raw string comparison against an enum-typed result field.**
   The generator decided enum-ness purely from hand-maintained `[e2e.call.overrides.csharp]
   enum_fields` config, so a consumer that never declared the entry got
