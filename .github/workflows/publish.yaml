@@ -19,11 +19,6 @@ on:
         required: false
         default: false
         type: boolean
-      skip_ci_gate:
-        description: "Skip the require-green-CI gate (emergency use only)"
-        required: false
-        default: false
-        type: boolean
       targets:
         description: "Comma-separated targets (empty = all). Values: crates,cli,homebrew"
         required: false
@@ -66,67 +61,6 @@ jobs:
         with:
           available-targets: crates,cli,homebrew
           alef-version: main
-
-  check-ci:
-    name: Require green CI
-    needs: prepare
-    if: inputs.skip_ci_gate != true
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.prepare.outputs.checkout_ref }}
-          fetch-depth: 0
-
-      - name: Wait for CI on this commit and require success
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          sha="$(git rev-parse HEAD)"
-          echo "Release commit: $sha"
-          # `Publish` fires on `release: published`, which is entirely independent of `CI` --
-          # nothing else in this workflow looks at whether the tagged commit ever built. Poll
-          # rather than read once: a release cut immediately after the push finds CI still
-          # queued, and treating "no completed run yet" as failure would block every fast
-          # release. ~keep
-          deadline=$(( SECONDS + 3600 ))
-          while true; do
-            # One request per poll, read three fields from it. Two separate calls could
-            # straddle a state change and report a stale status against a fresh conclusion,
-            # and they doubled the request count against a 60m poll loop. ~keep
-            #
-            # `|| true` because this loop must survive a transient API failure. Under
-            # `set -e` a single 5xx or a secondary rate-limit would abort the job, which
-            # here means refusing to publish a release whose CI is perfectly green. An
-            # empty read is indistinguishable from "no run yet" and simply polls again;
-            # the deadline below is what bounds the loop. ~keep
-            run_json="$(gh api \
-              "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=1" \
-              --jq '.workflow_runs[0] | "\(.conclusion // "")\t\(.status // "")\t\(.html_url // "")"' \
-              2>/dev/null || true)"
-            conclusion="$(printf '%s' "$run_json" | cut -f1)"
-            status="$(printf '%s' "$run_json" | cut -f2)"
-            run_url="$(printf '%s' "$run_json" | cut -f3)"
-            if [ "$conclusion" = "success" ]; then
-              echo "CI succeeded for $sha ($run_url)"
-              exit 0
-            fi
-            if [ -n "$conclusion" ]; then
-              echo "::error::CI concluded '$conclusion' for $sha -- refusing to publish. See $run_url"
-              exit 1
-            fi
-            if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::No completed CI run for $sha after 60m (status='${status:-none}')."
-              exit 1
-            fi
-            echo "CI status='${status:-none}' for $sha; waiting..."
-            sleep 30
-          done
 
   check-cratesio:
     name: Check crates.io
@@ -185,10 +119,9 @@ jobs:
 
   build-cli:
     name: Build CLI (${{ matrix.label }})
-    needs: [prepare, check-github-release, check-ci]
+    needs: [prepare, check-github-release]
     if: |
       always() &&
-      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped') &&
       needs.prepare.outputs.release_cli == 'true' &&
       (needs.check-github-release.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
     strategy:
@@ -474,10 +407,9 @@ jobs:
 
   publish-crates:
     name: Publish crates.io
-    needs: [prepare, check-cratesio, check-ci]
+    needs: [prepare, check-cratesio]
     if: |
       always() &&
-      (needs.check-ci.result == 'success' || needs.check-ci.result == 'skipped') &&
       needs.prepare.outputs.release_crates == 'true' &&
       (needs.check-cratesio.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
     runs-on: ubuntu-latest

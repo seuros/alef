@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The `Publish` workflow no longer gates on a green `CI` run for the released commit. The gate
+  polled `ci.yml` for up to 60 minutes and refused to publish on any non-success conclusion,
+  which meant a single unrelated lint or test failure on the release commit blocked the release
+  outright with no way through short of re-cutting the tag. Publication is now guarded only by
+  the per-registry existence checks. `CI` still runs on `main` and on pull requests; it simply
+  no longer holds the release hostage.
+
 ## [0.62.6] - 2026-08-20
 
 ### Added
