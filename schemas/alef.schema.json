@@ -6991,7 +6991,7 @@
               "type": "null"
             }
           ],
-          "description": "Command(s) to run before the main test commands; aborts on failure."
+          "description": "Command(s) to run before the main test commands; aborts on failure. Also runs ahead of\n`e2e` (e.g. building the native library the e2e suite loads), since `before` commonly\nsets up state both phases depend on."
         },
         "command": {
           "anyOf": [
@@ -7026,8 +7026,15 @@
           ],
           "description": "Command to run e2e tests for this language."
         },
+        "e2e_precondition": {
+          "description": "Shell command that must exit 0 for the `e2e` phase to run; skip with warning on failure.\nScopes the e2e tooling check separately from `precondition`, which is written for\n`command`/`before` and is often unrelated to what `e2e` needs (e.g. a linter required by\n`command` but not by the e2e suite). When unset, `e2e` runs without a precondition gate\nrather than inheriting `precondition` -- see `check_e2e_precondition` in\n`cli::pipeline::commands::test` for the rationale.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "precondition": {
-          "description": "Shell command that must exit 0 for test to run; skip with warning on failure.",
+          "description": "Shell command that must exit 0 for the `command`/`coverage` phase to run; skip with\nwarning on failure. Written for what `command`/`before` need -- it does not gate `e2e`.",
           "type": [
             "string",
             "null"
