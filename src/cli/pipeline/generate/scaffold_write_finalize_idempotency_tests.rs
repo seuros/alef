@@ -33,7 +33,7 @@ fn write_then_finalize_is_idempotent_across_two_full_runs() {
 
     // Run 1: bootstrap. Body write, then hash finalize -- mirrors
     // `TestAppsAction::Generate`'s `write_scaffold_files_report` + `finalize_hashes` pair.
-    let first_write = write_scaffold_files_report(&[file.clone()], base, true).expect("first write");
+    let first_write = write_scaffold_files_report(std::slice::from_ref(&file), base, true).expect("first write");
     assert_eq!(first_write.changed_count(), 1, "sanity: run 1 must create the file");
 
     let mut paths: HashSet<PathBuf> = HashSet::new();
@@ -45,7 +45,7 @@ fn write_then_finalize_is_idempotent_across_two_full_runs() {
 
     // Run 2: identical generated content, identical inputs, no cache -- exactly what a
     // second clean-tree `alef test-apps generate` invocation produces.
-    let second_write = write_scaffold_files_report(&[file], base, true).expect("second write");
+    let second_write = write_scaffold_files_report(std::slice::from_ref(&file), base, true).expect("second write");
     assert_eq!(
         second_write.changed_count(),
         0,
