@@ -98,7 +98,10 @@ pub(crate) fn scaffold_jni(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
-    let rel_path = format!("../{core_crate_dir}");
+    // Same derivation as the manifest's own location, rather than assuming the core crate is a
+    // `crates/` sibling: in a root-flat tree `../{core_crate_dir}` names a directory the emitted
+    // tree does not contain, and cargo fails to read it before compiling anything. ~keep
+    let rel_path = config.core_crate_dep_path(std::path::Path::new(&format!("crates/{jni_crate_name}")));
 
     let mut dep_lines: Vec<String> = vec![
         crate::scaffold::render_workspace_dep_or(config, "async-trait", &format!("\"{}\"", tv::cargo::ASYNC_TRAIT)),
@@ -257,6 +260,15 @@ namespace = "dev.sample_crate.demo"
         assert!(
             !cargo_toml.contains(".workspace = true"),
             "no [package] field may claim workspace inheritance when no workspace is reachable; got:\n{cargo_toml}"
+        );
+        // The same tree shape breaks the core dependency for the same reason: `../{core}` names
+        // a `crates/<core>` sibling that a root-flat tree does not have, so cargo could not read
+        // the manifest it points at. ~keep
+        let expected = config.core_crate_dep_path(std::path::Path::new("crates/demo-llm-jni"));
+        assert_eq!(expected, "../..", "sanity: root-flat core crate sits two levels up");
+        assert!(
+            cargo_toml.contains(&format!(r#"path = "{expected}""#)),
+            "the core dep path must be derived from the emitted layout; got:\n{cargo_toml}"
         );
     }
 

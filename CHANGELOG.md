@@ -31,7 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rejected the manifest outright ("error inheriting `edition` from workspace root manifest") and
   every downstream command over the JNI crate failed before compiling anything. It now routes
   through `detect_workspace_inheritance_for_crate` and `cargo_package_header`, as the FFI,
-  Python, PHP, and Ruby scaffolders already did.
+  Python, PHP, and Ruby scaffolders already did. Its core dependency path is likewise derived
+  from the emitted layout rather than a hard-coded `../{core_crate_dir}`.
 - **The wasm binding crate's core dependency path is derived from the layout the manifest is
   written into**, instead of a hard-coded `../{core_crate_dir}` that only resolves when the core
   crate is a `crates/` sibling. For a root-flat core crate the manifest pointed at a
