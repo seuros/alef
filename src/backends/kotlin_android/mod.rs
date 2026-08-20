@@ -534,4 +534,57 @@ features = ["mobile"]
             "disabled feature API must be omitted: {kotlin}"
         );
     }
+
+    /// `generate_bindings` used to abort the whole process — `gen_build_gradle::emit`
+    /// panicked rather than returning an error — whenever `[crates.package_metadata]` /
+    /// `[crates.scaffold]` omitted `repository` or `license`. Those fields only feed the
+    /// published POM's optional URL/SCM/license sections, so a plain `alef generate` for a
+    /// crate that had not configured Maven Central metadata yet should still succeed. ~keep
+    #[test]
+    fn generate_bindings_succeeds_without_package_metadata() {
+        use crate::core::config::NewAlefConfig;
+
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+
+[crates.jni]
+"#,
+        )
+        .expect("fixture config parses");
+        let config = raw.resolve().expect("fixture config resolves").remove(0);
+        assert!(
+            config.package_metadata.is_none() && config.scaffold.is_none(),
+            "fixture must not configure repository/license"
+        );
+
+        let api = ApiSurface::default();
+        let files = KotlinAndroidBackend
+            .generate_bindings(&api, &config)
+            .expect("kotlin_android generation must not require repository/license metadata");
+
+        let gradle = files
+            .iter()
+            .find(|file| file.path.ends_with("build.gradle.kts"))
+            .expect("build.gradle.kts must still be emitted");
+        assert!(
+            !gradle.content.contains("scm {"),
+            "an unconfigured repository must omit the scm block rather than invent one:\n{}",
+            gradle.content
+        );
+        assert!(
+            !gradle.content.contains("licenses {"),
+            "an unconfigured license must omit the licenses block rather than invent one:\n{}",
+            gradle.content
+        );
+    }
 }

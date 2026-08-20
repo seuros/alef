@@ -74,35 +74,74 @@ pub fn emit(config: &ResolvedCrateConfig) -> String {
 
     let meta = scaffold_meta(config);
 
-    let repo_url = meta.repository.as_deref().unwrap_or_else(|| {
-        panic!("Kotlin Android scaffold requires package metadata repository; set package_metadata.repository or scaffold.repository")
-    });
-    let repo_path = repo_url
-        .strip_prefix("https://github.com/")
-        .or_else(|| repo_url.strip_prefix("http://github.com/"))
-        .unwrap_or(repo_url.trim_start_matches("https://"));
+    // `build.gradle.kts` is regenerated on every `alef generate`, unlike the
+    // sibling `java`/`kotlin`/`r`/`gleam` scaffolders (which bail once, at
+    // `alef scaffold` time, when publish metadata is missing). Panicking here
+    // aborted every plain `generate` for a crate that hadn't configured Maven
+    // Central metadata yet. Repository and license only feed the POM's
+    // publishing block, so — matching the "must not invent repository
+    // metadata" convention the C#, WASM and npm scaffolders already follow —
+    // generation now degrades gracefully: the corresponding POM section is
+    // omitted and a warning names the missing config. ~keep
+    if meta.repository.is_none() {
+        tracing::warn!(
+            crate_name = %config.name,
+            "kotlin_android build.gradle.kts has no package metadata repository configured; \
+             set package_metadata.repository or scaffold.repository to populate the published \
+             POM's project URL and SCM block. Generating without them."
+        );
+    }
+    if meta.license.is_none() {
+        tracing::warn!(
+            crate_name = %config.name,
+            "kotlin_android build.gradle.kts has no package metadata license configured; \
+             set package_metadata.license or scaffold.license to populate the published POM's \
+             license block. Generating without it."
+        );
+    }
 
-    let license = meta.license.as_deref().unwrap_or_else(|| {
-        panic!("Kotlin Android scaffold requires package metadata license; set package_metadata.license or scaffold.license")
+    let repo_url = meta.repository.as_deref();
+    let repo_path = repo_url.map(|repo_url| {
+        repo_url
+            .strip_prefix("https://github.com/")
+            .or_else(|| repo_url.strip_prefix("http://github.com/"))
+            .unwrap_or(repo_url.trim_start_matches("https://"))
+            .to_string()
     });
-    let license_url = match license {
+
+    let license = meta.license.as_deref();
+    let license_url = license.map(|license| match license {
         "Elastic-2.0" => "https://www.elastic.co/licensing/elastic-license",
         "MIT" => "https://opensource.org/licenses/MIT",
         "Apache-2.0" => "https://www.apache.org/licenses/LICENSE-2.0",
         _ => "",
-    };
+    });
 
-    let licenses_block = if license_url.is_empty() {
-        format!(
-            "licenses {{\n            license {{\n                name.set(\"{}\")\n            }}\n        }}",
-            xml_escape(license)
-        )
-    } else {
-        format!(
+    let licenses_block = match (license, license_url) {
+        (Some(license), Some(url)) if !url.is_empty() => format!(
             "licenses {{\n            license {{\n                name.set(\"{}\")\n                url.set(\"{}\")\n            }}\n        }}",
             xml_escape(license),
-            xml_escape(license_url)
-        )
+            xml_escape(url)
+        ),
+        (Some(license), _) => format!(
+            "licenses {{\n            license {{\n                name.set(\"{}\")\n            }}\n        }}",
+            xml_escape(license)
+        ),
+        (None, _) => String::new(),
+    };
+
+    let project_url_line = repo_url
+        .map(|url| format!("url.set(\"{}\")\n        ", xml_escape(url)))
+        .unwrap_or_default();
+
+    let scm_block = match (repo_url, repo_path.as_deref()) {
+        (Some(url), Some(path)) => format!(
+            "\n        scm {{\n            url.set(\"{}\")\n            connection.set(\"scm:git:git://github.com/{}.git\")\n            developerConnection.set(\"scm:git:ssh://git@github.com:{}.git\")\n        }}",
+            xml_escape(url),
+            path,
+            path
+        ),
+        _ => String::new(),
     };
 
     let developers_block = if meta.authors.is_empty() {
@@ -341,21 +380,11 @@ mavenPublishing {{
     pom {{
         name.set("{artifact_id}")
         description.set("{}")
-        url.set("{}")
-        {licenses_block}{developers_block}
-        scm {{
-            url.set("{}")
-            connection.set("scm:git:git://github.com/{}.git")
-            developerConnection.set("scm:git:ssh://git@github.com:{}.git")
-        }}
+        {project_url_line}{licenses_block}{developers_block}{scm_block}
     }}
 }}
 "#,
         xml_escape(&meta.description),
-        xml_escape(repo_url),
-        xml_escape(repo_url),
-        repo_path,
-        repo_path,
     )
 }
 

@@ -267,6 +267,10 @@ pub fn summarize(input: String) -> Result<Report, String> {
 
 const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
 
+// `java` and `elixir` scaffolders bail `alef generate` outright when repository/license/
+// authors are unset (`scaffold::languages::java`, `scaffold::languages::elixir`), and both
+// are gate languages, so this metadata is required for `alef generate` to succeed over the
+// fixture at all -- not merely to exercise a "configured" code path. ~keep
 const FIXTURE_ALEF_TOML: &str = r#"
 [workspace]
 alef_version = "__ALEF_VERSION__"
@@ -279,6 +283,11 @@ version_from = "Cargo.toml"
 
 [crates.generate]
 public_api = true
+
+[crates.package_metadata]
+repository = "https://github.com/example/toolkit"
+license = "MIT"
+authors = ["Example Author <author@example.invalid>"]
 "#;
 
 // ---------------------------------------------------------------------------

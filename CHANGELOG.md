@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiling under settings no real generated project uses — and passed only on macOS, where
   libSystem is linked implicitly.
 
+- **`kotlin_android` no longer aborts the whole `alef generate` process when
+  `package_metadata.repository`/`.license` are unset.** `gen_build_gradle::emit` called
+  `panic!` for each, which is unrecoverable and — unlike every sibling scaffolder (`java`,
+  `kotlin`, `r`, `gleam`, which return a clean `anyhow` error from `alef scaffold`, a one-time
+  step) — fires on *every* `alef generate`, since `build.gradle.kts` is rebuilt on every run.
+  Repository and license only feed the published POM's optional URL/SCM/license sections, so
+  generation now degrades gracefully — matching the "must not invent repository metadata"
+  convention the C#, WASM and npm scaffolders already follow — by omitting those sections and
+  logging a `tracing::warn!` naming the missing config, rather than crashing the process. The
+  generated-output downstream gate's fixture also gained the `package_metadata` the `java` and
+  `elixir` backends require to complete `generate` at all, which this panic had always masked.
+
 - **`alef e2e generate`'s formatter tests no longer assert the behaviour the formatter stopped
   having.** Deferring a missing `poly`/`mix` executable instead of aborting (non-`--strict` mode)
   left three `e2e::format` tests still asserting `is_err()` in their toolchain-absent branch, so
