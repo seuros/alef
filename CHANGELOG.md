@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   compiling under settings no real generated project uses — and passed only on macOS, where
   libSystem is linked implicitly.
 
+- **C e2e codegen no longer misrenders an undeclared enum-typed leaf field as `char*`.**
+  `emit_nested_accessor`'s leaf arm defaulted to `char* {local} = {accessor}(...)` for any
+  field not explicitly listed in `[crates.e2e.fields_c_types]`, which is only correct when the
+  FFI accessor genuinely returns a C string. For a field whose Rust type is a real registered
+  enum (e.g. `DataNode.kind: DataNodeKind`, as shipped in
+  `tree-sitter-language-pack/e2e/c/test_data_extraction.c`), the accessor instead returns an
+  opaque `AlefHandle` requiring a further `_to_string()` call — a mismatch gcc rejects as
+  "incompatible integer to pointer conversion", failing the C FFI e2e build with no diagnostic
+  from `alef e2e generate` itself. A new `enum_fields_c_types_from_ir` pass derives the missing
+  `fields_c_types` entry directly from the IR struct definition before `render_test_file` builds
+  its effective field-type map, so an enum-typed leaf renders correctly with zero operator
+  configuration.
 - **`kotlin_android` no longer aborts the whole `alef generate` process when
   `package_metadata.repository`/`.license` are unset.** `gen_build_gradle::emit` called
   `panic!` for each, which is unrecoverable and — unlike every sibling scaffolder (`java`,

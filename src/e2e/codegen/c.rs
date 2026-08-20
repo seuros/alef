@@ -1043,6 +1043,7 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, i
 mod assertions;
 mod call_patterns;
 mod docs_input;
+mod enum_field_inference;
 mod ffi_constructors;
 mod project;
 mod return_shape;
@@ -1067,6 +1068,7 @@ use assertions::{
 #[cfg(test)]
 use assertions::EffectiveConfigSource;
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
+use enum_field_inference::enum_fields_c_types_from_ir;
 use project::{render_download_script, render_gitignore, render_makefile};
 use runner::{render_main_c, render_test_runner_header};
 use streaming::{
@@ -1104,6 +1106,16 @@ fn render_test_file(
     let _ = writeln!(out, "#include \"{header}\"");
     let _ = writeln!(out, "#include \"test_runner.h\"");
     let _ = writeln!(out);
+
+    // Extend the operator-declared `fields_c_types` with entries the IR itself proves are
+    // enum-typed, before any per-fixture derivation runs. Neither input varies per fixture
+    // (`type_defs`/`enums` are the whole crate's IR), so this is computed once. Config always
+    // wins: `or_insert` never overwrites an operator's own declaration, including one that
+    // deliberately names a different accessor shape (e.g. `"skip"` or `"char*"`). ~keep
+    let mut effective_fields_c_types = e2e_config.fields_c_types.clone();
+    for (key, type_name) in enum_fields_c_types_from_ir(type_defs, enums) {
+        effective_fields_c_types.entry(key).or_insert(type_name);
+    }
 
     for (i, fixture) in fixtures.iter().enumerate() {
         // Visitor fixtures are filtered out before render_test_file is called.
@@ -1146,8 +1158,10 @@ fn render_test_file(
         // instead of silently falling through to the opaque-handle arm (which emits
         // `strcmp()` against a `uint64_t` handle). This only ever ADDS field names: an
         // explicit config entry the IR check doesn't independently confirm (e.g. a
-        // synthetic field with no `fields_c_types` entry) still passes through untouched. ~keep
-        effective_fields_enum.extend(enum_fields_from_ir(&e2e_config.fields_c_types, enums));
+        // synthetic field with no `fields_c_types` entry) still passes through untouched.
+        // Reads `effective_fields_c_types`, not the raw config map, so a field the IR-derived
+        // pass above declared (no config entry at all) is also recognized as enum-shaped here. ~keep
+        effective_fields_enum.extend(enum_fields_from_ir(&effective_fields_c_types, enums));
 
         // Per-call field resolver: overrides the top-level resolver when this call
         // declares its own result_fields / fields / fields_optional / fields_array.
@@ -1187,7 +1201,7 @@ fn render_test_file(
             result_var,
             &call_info.args,
             field_resolver,
-            &e2e_config.fields_c_types,
+            &effective_fields_c_types,
             &effective_fields_enum,
             &call_info.result_type_name,
             &call_info.options_type_name,
