@@ -686,7 +686,7 @@ fn run_residual(step: &ResidualStep, lang_str: &str) {
 }
 
 /// Check if a tool is available on PATH.
-fn is_tool_available(tool: &str) -> bool {
+pub(crate) fn is_tool_available(tool: &str) -> bool {
     Command::new("which")
         .arg(tool)
         .output()
