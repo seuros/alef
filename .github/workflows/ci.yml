@@ -67,6 +67,22 @@ jobs:
         with:
           install-llvm-cov: "false"
           cache-key-prefix: ci-test
+      # Several `#[test]`s compile alef's own generated output with the real per-language
+      # toolchain rather than mocking it (that is the point of them), so those toolchains
+      # have to actually be on PATH here, not just in the `generated-output-gate` job.
+      # `poly` is deliberately not installed in this job: the tests that exercise it
+      # already tolerate its absence (see `e2e::format::format_language`'s non-`--strict`
+      # deferral), so it is not required for this job to pass, only for the
+      # `generated-output-gate` job's lanes, which install it themselves.
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          # Matches `template_versions::toolchain::JAVA_JVM_TARGET`: alef's generated Java
+          # service bindings use the `java.lang.foreign` FFM API, stable only from JDK 22.
+          java-version: "25"
+      - uses: xberg-io/actions/setup-maven@v1
+      - uses: xberg-io/actions/setup-zig@v1
       - name: Run tests
         run: cargo test --workspace
 
