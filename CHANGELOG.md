@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The scaffolded Maven `attach-javadocs` execution no longer fails for any consumer that has
+  Java tests.** The pom sets `<sourcepath>${project.basedir}</sourcepath>` because alef emits a
+  flat source layout with no `src/main/java/`, but that also pointed javadoc at `src/test/java/`,
+  whose JUnit/AssertJ imports are test-scoped and absent from the javadoc classpath. Combined with
+  the `failOnWarning` the same pom sets, `mvn package` died with hundreds of
+  `package org.junit.jupiter.api does not exist` errors. maven-source-plugin already restricted
+  itself to the publishable subtrees for the same underlying reason; javadoc was the one plugin
+  left unrestricted, and it now carries the matching `<sourceFileIncludes>`.
+
 ## [0.62.4] - 2026-08-20
 
 ### Fixed

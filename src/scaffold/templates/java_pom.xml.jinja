@@ -204,6 +204,16 @@
                          creation, which Sonatype Central rejected as
                          "Javadocs must be provided but not found in entries". -->
                     <sourcepath>${project.basedir}</sourcepath>
+                    <!-- ...but a basedir sourcepath also sweeps in `src/test/java/`,
+                         whose test-scoped imports (JUnit, AssertJ) are not on the
+                         javadoc classpath. With failOnWarning above, that turns any
+                         consumer with Java tests into a hard `attach-javadocs`
+                         failure. Restrict to the same subtrees maven-source-plugin
+                         uses, so only publishable API sources are documented. ~keep -->
+                    <sourceFileIncludes>
+                        <sourceFileInclude>{{ source_root }}/**/*.java</sourceFileInclude>
+                        <sourceFileInclude>src/main/java/**/*.java</sourceFileInclude>
+                    </sourceFileIncludes>
                 </configuration>
                 <executions>
                     <execution>

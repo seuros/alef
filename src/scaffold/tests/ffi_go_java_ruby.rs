@@ -1070,6 +1070,46 @@ fn test_scaffold_java_checkstyle_plugin_excludes_alef_scratch_directory() {
     );
 }
 
+/// Regression: `<sourcepath>${project.basedir}</sourcepath>` makes javadoc walk the WHOLE
+/// project, including `src/test/java/`. Test sources import JUnit/AssertJ, which are
+/// test-scoped and therefore absent from the javadoc classpath, so with the `failOnWarning`
+/// this pom also sets, `attach-javadocs` fails outright for any consumer that has Java tests
+/// (observed as a `maven-javadoc-plugin:jar (attach-javadocs)` failure over
+/// `packages/java/src/test/java/**`). maven-source-plugin already restricts itself the same
+/// way for the same reason; javadoc was the one plugin left unrestricted. ~keep
+#[test]
+fn test_scaffold_java_javadoc_plugin_documents_only_publishable_sources() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
+    let files = language_files(&all_files);
+    let pom = files.iter().find(|f| f.path.ends_with("pom.xml")).unwrap();
+    let javadoc_section = pom
+        .content
+        .split("<artifactId>maven-javadoc-plugin</artifactId>")
+        .nth(1)
+        .and_then(|section| section.split("</plugin>").next())
+        .expect("pom.xml must configure maven-javadoc-plugin");
+    assert!(
+        javadoc_section.contains("<sourceFileIncludes>"),
+        "javadoc plugin must restrict which sources it documents, or a basedir sourcepath \
+         sweeps in src/test/java and fails the build; block:\n{javadoc_section}"
+    );
+    let includes = javadoc_section
+        .split("<sourceFileIncludes>")
+        .nth(1)
+        .and_then(|block| block.split("</sourceFileIncludes>").next())
+        .expect("the <sourceFileIncludes> block must be well-formed");
+    assert!(
+        !includes.contains("src/test/java"),
+        "javadoc must never be pointed at test sources; includes:\n{includes}"
+    );
+    assert!(
+        includes.contains("<sourceFileInclude>src/main/java/**/*.java</sourceFileInclude>"),
+        "the conventional src/main/java overlay must stay documented; includes:\n{includes}"
+    );
+}
+
 /// Bite test: builds the scaffolded pom/checkstyle config in a real temp Maven project and
 /// runs `mvn -o validate` (the phase checkstyle is bound to). A genuine violation in a "real"
 /// binding source must still fail the build; the same violation shape planted under
