@@ -646,6 +646,16 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             generated_header: false,
         },
     ];
+    files.push(GeneratedFile {
+        // `--dts index.native.d.ts` points napi-rs's auto-derived declarations away from
+        // `index.d.ts`, which alef owns. The redirect target is a pure build artifact: it is
+        // absent from `files` so npm never receives it, no `types`/`exports` entry names it,
+        // and nothing imports it. Without this, every `npm run build` drops an untracked file
+        // into the consumer's tree. ~keep
+        path: PathBuf::from(format!("crates/{crate_dir}-node/.gitignore")),
+        content: format!("{}\n", tv::npm::NAPI_AUTO_DTS_FILENAME),
+        generated_header: false,
+    });
     if has_service_api {
         files.push(GeneratedFile {
             path: PathBuf::from(format!("crates/{crate_dir}-node/index-wrapper.cjs")),

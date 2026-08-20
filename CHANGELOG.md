@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The node scaffold now gitignores the declarations `napi build` generates.** Pointing
+  napi-rs's `--dts` at `index.native.d.ts` stopped it clobbering alef's own `index.d.ts`, but
+  left the redirect target untracked, so every `npm run build` dropped a new file into the
+  consumer's tree. That file is a pure build artifact — absent from `package.json` `files` so
+  npm never receives it, named by no `types` or `exports` entry, and imported by nothing — so
+  the scaffolded crate now ships a `.gitignore` for it, following the same per-language pattern
+  the dart, gleam, kotlin, swift, wasm and zig scaffolders already use.
+
 - **Snippet validation no longer strips the environment every Windows toolchain needs.** Each
   validator subprocess has its environment cleared and rebuilt from an allowlist, and that
   allowlist was Unix-shaped: it kept `SYSTEMROOT` and `WINDIR` but dropped `USERPROFILE`,

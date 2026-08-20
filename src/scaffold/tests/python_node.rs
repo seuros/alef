@@ -50,7 +50,7 @@ fn test_scaffold_node() {
     let api = test_api();
     let all_files = scaffold(&api, &config, &[Language::Node]).unwrap();
     let files = language_files(&all_files);
-    assert_eq!(files.len(), 11);
+    assert_eq!(files.len(), 12);
     assert_eq!(files[0].path, PathBuf::from("crates/my-lib-node/package.json"));
     assert!(files[0].content.contains("napi"));
     assert_eq!(files[1].path, PathBuf::from("crates/my-lib-node/index.js"));
@@ -65,6 +65,42 @@ fn test_scaffold_node() {
         .find(|f| f.path == Path::new("crates/my-lib-node/Cargo.toml"))
         .expect("node Cargo.toml must be emitted");
     assert!(cargo.content.contains("napi-derive"));
+}
+
+/// `napi build --dts index.native.d.ts` writes napi-rs's auto-derived declarations beside
+/// alef's own `index.d.ts` on every build. That redirect target is never published (it is
+/// absent from `files`), nothing imports it, and no `types`/`exports` entry names it -- so
+/// leaving it untracked means each build dirties the consumer's tree with a file no one
+/// consumes. Asserted by path rather than index so adding a scaffold file cannot silently
+/// move what this checks. ~keep
+#[test]
+fn node_scaffold_gitignores_the_napi_generated_declarations() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Node]).unwrap();
+    let files = language_files(&all_files);
+
+    let gitignore = files
+        .iter()
+        .find(|f| f.path == Path::new("crates/my-lib-node/.gitignore"))
+        .expect("node scaffold must emit a .gitignore");
+    assert!(
+        gitignore
+            .content
+            .lines()
+            .any(|line| line.trim() == crate::core::template_versions::npm::NAPI_AUTO_DTS_FILENAME),
+        "the napi --dts redirect target must be ignored, got:\n{}",
+        gitignore.content
+    );
+    assert!(
+        !gitignore.content.lines().any(|line| line.trim() == "index.d.ts"),
+        "alef's own index.d.ts is committed output and must NOT be ignored, got:\n{}",
+        gitignore.content
+    );
+    assert!(
+        !gitignore.generated_header,
+        ".gitignore is scaffolded once and user-owned after; it must not carry a DO NOT EDIT header"
+    );
 }
 
 #[test]
