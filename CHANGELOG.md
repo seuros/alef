@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`src/e2e/mod.rs` and `src/bin_cli/helpers.rs` shed their newest additions into
+  `e2e::inert_report` and `bin_cli::helpers::post_build`.** Both files were at or over this
+  repo's 1,000-line cap; the split is behavior-preserving (no logic changed, only moved) and
+  keeps the warning-naming and post-build-isolation fixes above from growing an
+  already-over-limit file further.
+
 - **The emitted FFI crate's crate-level `#![allow(...)]` list is narrower.** Every allow was
   audited by removing it, regenerating an emitted tree, and running
   `cargo clippy --all-targets -- -D warnings` over it (see `tests/generated_output_downstream_gate.rs`

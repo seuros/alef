@@ -11,6 +11,7 @@ pub mod escape;
 pub mod field_access;
 pub mod fixture;
 pub mod format;
+mod inert_report;
 pub mod scaffold;
 pub mod snippets;
 pub mod template_env;
@@ -313,7 +314,7 @@ fn generate_e2e_with_extensions(
     // carries. Naming them here means the WARN output alone is enough to go fix (or triage) the
     // right fixture. ~keep
     let inert_examples = codegen::inert_example::take_inert_examples();
-    report_inert_examples(&inert_examples);
+    inert_report::report_inert_examples(&inert_examples);
     if let Some(summary) = codegen::inert_example::inert_summary(&inert_examples) {
         warn!("{summary}");
     }
@@ -541,19 +542,6 @@ pub fn verify_fresh_snippet_coverage(
     Ok(())
 }
 
-/// Name each refused example individually, before [`codegen::inert_example::inert_summary`]'s
-/// aggregate line.
-///
-/// ~keep Split out of [`generate_e2e_with_extensions`] so the naming can be exercised on its
-/// own: the aggregate count alone ("9 example(s) across 3 language(s)... 4 that rendered
-/// nothing at all") gave an operator nothing to act on without re-running at `-vv` and
-/// grepping generated files for the same `reason()` text this just prints directly.
-fn report_inert_examples(examples: &[codegen::inert_example::InertExample]) {
-    for example in examples {
-        warn!("[{}] {}", example.language, example.reason());
-    }
-}
-
 fn report_snippet_coverage(coverage: &snippets::SnippetCoverageLedger) {
     for missing in &coverage.missing {
         warn!(
@@ -650,56 +638,6 @@ mod tests {
         };
 
         ensure_snippet_coverage_complete(&coverage).expect("documented exception is intentional");
-    }
-
-    /// The aggregate `inert_summary` line ("N example(s) across M language(s)... X that
-    /// rendered nothing at all") named no fixture and no language, so an operator hitting it
-    /// had to re-run at `-vv` and grep generated files for the marker text to find out WHICH
-    /// example was refused. `report_inert_examples` must put both on the log line directly. ~keep
-    #[test]
-    #[tracing_test::traced_test]
-    fn report_inert_examples_names_language_and_fixture() {
-        let examples = vec![codegen::inert_example::InertExample {
-            language: "ruby".to_owned(),
-            fixture_id: "streaming_chunked_response".to_owned(),
-            markers: 0,
-            cause: codegen::inert_example::InertCause::RenderedNothing,
-        }];
-
-        report_inert_examples(&examples);
-
-        assert!(logs_contain("ruby"), "the affected language must be named in the log");
-        assert!(
-            logs_contain("streaming_chunked_response"),
-            "the affected fixture must be named in the log"
-        );
-    }
-
-    /// Two refusals for two different languages must both surface — a summary that only
-    /// counted "2 across 2 languages" collapsed exactly this case into a number nobody could
-    /// act on without re-deriving which two. ~keep
-    #[test]
-    #[tracing_test::traced_test]
-    fn report_inert_examples_names_every_refusal_not_just_the_first() {
-        let examples = vec![
-            codegen::inert_example::InertExample {
-                language: "python".to_owned(),
-                fixture_id: "first_fixture".to_owned(),
-                markers: 0,
-                cause: codegen::inert_example::InertCause::RenderedNothing,
-            },
-            codegen::inert_example::InertExample {
-                language: "go".to_owned(),
-                fixture_id: "second_fixture".to_owned(),
-                markers: 2,
-                cause: codegen::inert_example::InertCause::AwaitedOrLimited,
-            },
-        ];
-
-        report_inert_examples(&examples);
-
-        assert!(logs_contain("first_fixture"));
-        assert!(logs_contain("second_fixture"));
     }
 
     fn key(fixture_id: &str, language: &str) -> snippets::SnippetCoverageKey {
