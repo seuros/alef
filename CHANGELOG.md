@@ -332,6 +332,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter is now underscore-prefixed when there are no typed error variants to
   downcast against.
 
+- **Ruby e2e assertions now classify enum-typed result fields from the IR, not only from
+  hand-maintained config.** `render_assertion` read enum-ness solely from the effective
+  `fields_enum` config (plus a per-call `enum_fields` override), so a consumer that never
+  declared either got `field_is_enum = false` for a genuine `DataNodeKind` enum field. Ruby
+  already applies `.to_s` unconditionally for string-valued `equals` comparisons, so
+  misclassification is masked for that common shape — but a bare-enum "simple" result
+  (`result_is_simple = true`, no struct field to traverse) relied on `field_is_enum` alone for
+  its `.to_s` coercion, and the classification gap meant it silently compared the Magnus
+  `Symbol` against the fixture's wire `String`. Ruby now also consults the same IR-derived
+  classification the rust/csharp/gleam/swift/dart e2e generators use, anchored at the call's
+  declared Rust return type; a related gap where `result_is_simple` bypassed `field_is_enum`
+  entirely (dropping the coercion for a correctly-classified bare-enum result) is fixed
+  alongside it. An explicit config entry still wins.
 - **Elixir e2e assertions now classify enum-typed result fields from the IR, not only from
   hand-maintained config.** `render_assertion` read enum-ness solely from the effective
   `fields_enum` config (plus a per-call `enum_fields` override), so a consumer that never

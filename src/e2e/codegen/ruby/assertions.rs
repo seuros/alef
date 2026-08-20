@@ -368,19 +368,34 @@ pub(super) fn render_assertion(
     // override `[crates.e2e.calls.<x>.overrides.<lang>] enum_fields = { ... }` —
     // project config that already labels e.g. `status = "BatchStatus"` for the
     // Java/C#/Python sides should apply here too without a Ruby-only duplicate.
+    // `fields_enum`/`per_call_enum_fields` carry the hand-maintained config. When neither
+    // names the field, fall back to the IR-derived classification (`with_ir_enum_map`,
+    // anchored at the call's declared Rust return type via `resolve_declared_result_type`) so
+    // a consumer that never configured either still gets a correct classification instead of
+    // the dynamically-typed default of comparing the raw Magnus `Symbol` against the fixture's
+    // wire `String` — `:key_value == "key_value"` silently evaluates to `false` rather than
+    // failing to compile. This is purely additive. ~keep
     let field_is_enum = assertion.field.as_deref().filter(|f| !f.is_empty()).is_some_and(|f| {
         let resolved = field_resolver.resolve(f);
         fields_enum.contains(f)
             || fields_enum.contains(resolved)
             || per_call_enum_fields.contains_key(f)
             || per_call_enum_fields.contains_key(resolved)
+            || field_resolver.is_enum(f)
     });
     // ~keep String coercion only, never whitespace normalization: coercing a numeric or bool
     // simple result turns `0` into `"0"` and the `eq(0)` Integer comparison fails, so `.to_s`
     // is folded in only when the expected value is a string. The equals arm adds the `.to_s`
     // for that case, so the raw expression is kept here.
+    //
+    // `result_is_simple` must still defer to `field_is_enum`: a call whose entire return value
+    // IS the enum (bare `Status`, asserted via `field: None`/`"content"`) needs the same `.to_s`
+    // coercion a struct-nested enum field gets. Dropping `field_is_enum` from this branch made
+    // a correctly IR-classified bare-enum result LOSE its `.to_s` (the "equals" arm's own
+    // `!field_is_enum` guard then also declined to add one, since it now believed no coercion
+    // was needed), silently comparing a Magnus `Symbol` against the fixture's wire `String`. ~keep
     let expected_is_string = assertion.value.as_ref().is_some_and(|v| v.is_string());
-    let stripped_field_expr = if result_is_simple && expected_is_string {
+    let stripped_field_expr = if result_is_simple && expected_is_string && !field_is_enum {
         field_expr.clone()
     } else if field_is_enum {
         format!("{field_expr}.to_s")
