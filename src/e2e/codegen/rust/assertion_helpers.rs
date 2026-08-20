@@ -101,6 +101,17 @@ pub(super) fn render_equals_assertion(
     }
 }
 
+/// Whether a wildcard-traversed array element (`links[].link_type`) is enum-typed.
+///
+/// Checked against both spellings: `elem_part` (e.g. `"link_type"`) is what a hand-written
+/// `fields_enum` config entry names, while `field` (e.g. `"links[].link_type"`) is what the
+/// IR-derived check in `FieldResolver::is_enum` needs — its IR fallback walks the whole path
+/// from the call's root type, and that walk only sees the array traversal segment when given
+/// the un-split original path. ~keep
+pub(super) fn wildcard_elem_is_enum(field_resolver: &FieldResolver, elem_part: &str, field: &str) -> bool {
+    field_resolver.is_enum(elem_part) || field_resolver.is_enum(field)
+}
+
 pub(super) fn render_not_empty_assertion(
     out: &mut String,
     assertion: &Assertion,

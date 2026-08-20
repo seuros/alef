@@ -39,9 +39,9 @@ impl E2eCodegen for RustE2eCodegen {
         groups: &[FixtureGroup],
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
-        _type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let mut files = Vec::new();
@@ -173,7 +173,9 @@ impl E2eCodegen for RustE2eCodegen {
                 &fixtures,
                 e2e_config,
                 config,
-                _type_defs,
+                type_defs,
+                enums,
+                functions,
                 &dep_name,
                 needs_mock_server,
                 // The executable suite ignores every fixture's docs client: its own
@@ -198,7 +200,7 @@ impl E2eCodegen for RustE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
         let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
         let mut call_fixture = fixture.docs_call_fixture();
@@ -208,12 +210,19 @@ impl E2eCodegen for RustE2eCodegen {
             .any(|assertion| assertion.assertion_type == "error");
         call_fixture.assertions.clear();
         call_fixture.mock_response = None;
+        // This trait method carries no `functions: &[FunctionDef]` parameter (the free-function
+        // registry), so a snippet whose call names a free function rather than an IR type's
+        // method resolves no root type for IR-derived enum classification here — it still
+        // falls back to the hand-maintained `fields_enum` config, exactly as before this
+        // parameter existed. Method-based calls (`type_defs` alone) resolve fine.
         let test_file = render_test_file(
             &fixture.resolved_category(),
             &[&call_fixture],
             e2e_config,
             config,
             type_defs,
+            enums,
+            &[],
             &dep_name,
             call_fixture.needs_mock_server(),
             fixture.docs_client(),

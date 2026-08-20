@@ -1,3 +1,4 @@
+use super::ir_enum::{build_ir_enum_map, is_enum_path};
 use super::optional_renderers::{
     render_csharp_with_optionals, render_dart_with_optionals, render_java_with_optionals,
     render_kotlin_android_with_optionals, render_kotlin_with_optionals, render_php_with_getters,
@@ -5,7 +6,9 @@ use super::optional_renderers::{
 };
 use super::parse::{normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices};
 use super::renderers::{render_accessor, render_swift_with_first_class_map};
-use super::types::{DartFirstClassMap, FieldResolver, PathSegment, PhpGetterMap, StringyField, SwiftFirstClassMap};
+use super::types::{
+    DartFirstClassMap, FieldResolver, IrEnumMap, PathSegment, PhpGetterMap, StringyField, SwiftFirstClassMap,
+};
 use std::collections::{HashMap, HashSet};
 
 impl FieldResolver {
@@ -33,6 +36,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            ir_enum_map: IrEnumMap::default(),
         }
     }
 
@@ -63,6 +67,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            ir_enum_map: IrEnumMap::default(),
         }
     }
 
@@ -103,6 +108,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            ir_enum_map: IrEnumMap::default(),
         }
     }
 
@@ -149,6 +155,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            ir_enum_map: IrEnumMap::default(),
         }
     }
 
@@ -179,6 +186,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            ir_enum_map: IrEnumMap::default(),
         }
     }
 
@@ -203,6 +211,29 @@ impl FieldResolver {
 
     pub fn with_enum_fields(mut self, fields: HashSet<String>) -> Self {
         self.enum_fields = fields;
+        self
+    }
+
+    /// Compute the IR-derived enum-field classification for [`Self::with_ir_enum_map`],
+    /// mirroring [`Self::ir_field_sets`]'s "compute once from the crate's IR" shape. The
+    /// returned map has no `root_type` set yet — `with_ir_enum_map` anchors it to the
+    /// specific call being rendered.
+    pub fn ir_enum_fields(type_defs: &[crate::core::ir::TypeDef], enums: &[crate::core::ir::EnumDef]) -> IrEnumMap {
+        build_ir_enum_map(type_defs, enums)
+    }
+
+    /// Attach IR-derived enum classification to this resolver, anchored at `root_type` — the
+    /// IR type name backing the current call's result variable, if resolved (e.g. via the
+    /// call's declared Rust return type, unwrapped through `Option`/`Vec`).
+    ///
+    /// `map` should come from [`Self::ir_enum_fields`], computed once per crate IR and reused
+    /// across calls; only `root_type` varies per call. `is_enum` consults this AFTER the
+    /// hand-maintained `fields_enum` config, so an explicit config entry always wins and this
+    /// only rescues fields the config never mentioned — the same precedence `with_ir_fields`
+    /// already established for `result_fields`. ~keep
+    pub fn with_ir_enum_map(mut self, mut map: IrEnumMap, root_type: Option<String>) -> Self {
+        map.root_type = root_type;
+        self.ir_enum_map = map;
         self
     }
 
@@ -605,8 +636,17 @@ impl FieldResolver {
         de_indexed != path && json_scalar_fields.contains(de_indexed.as_str())
     }
 
+    /// Check whether `field` is enum-typed: an explicit `fields_enum` config entry (exact or
+    /// alias-resolved) always wins, and — when the config is silent — the IR-derived
+    /// classification (`with_ir_enum_map`) gets the final say. See `ir_enum` module docs for
+    /// why the IR check has to walk the whole path rather than matching on the leaf name
+    /// alone.
     pub fn is_enum(&self, field: &str) -> bool {
-        self.enum_fields.contains(field) || self.enum_fields.contains(self.resolve(field))
+        let resolved = self.resolve(field);
+        if self.enum_fields.contains(field) || self.enum_fields.contains(resolved) {
+            return true;
+        }
+        is_enum_path(&self.ir_enum_map, resolved)
     }
 
     /// Check if a field name is the root of a collection type (i.e., the field

@@ -97,6 +97,8 @@ fn fields_array_binding_emitted_before_count_min_assertion_for_non_streaming_fix
         &e2e_config,
         &test_config,
         &[],
+        &[],
+        &[],
         "my_crate",
         None,
         None,
@@ -193,6 +195,8 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
         &e2e_config,
         &test_config,
         &[],
+        &[],
+        &[],
         "my_crate",
         None,
         None,
@@ -202,6 +206,130 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
     assert!(
         out.contains("field 'nonexistent_field' not available on result type"),
         "got:\n{out}"
+    );
+}
+
+/// End-to-end regression test for the `fields_enum` defect: with NO `fields_enum` entry
+/// configured anywhere in `alef.toml`, an `equals` assertion on an enum-typed field must
+/// still stringify via `Debug` (`format!("{:?}", ...)`), not `.to_string()` — the latter is a
+/// compile error for any enum that does not implement `Display`. The IR alone (a function
+/// returning `DataNode`, whose `kind` field is the real enum `DataNodeKind`) must be enough.
+///
+/// A sibling type `PlainNode` also declares a field named `kind`, but as a plain `String` —
+/// proving the fix is keyed by the field's actual declared type on `DataNode`, not by the
+/// bare name `"kind"` (which appears on both types with different meanings).
+#[test]
+fn enum_typed_field_stringifies_via_debug_with_no_fields_enum_config_at_all() {
+    use crate::core::ir::{EnumDef, FieldDef, FunctionDef, TypeDef, TypeRef};
+    use crate::e2e::config::CallConfig;
+    use crate::e2e::fixture::{Assertion, Fixture};
+    use std::collections::HashSet;
+
+    let call = CallConfig {
+        function: "get_node".to_string(),
+        module: "my_crate".to_string(),
+        result_var: "result".to_string(),
+        result_fields: HashSet::from(["kind".to_string()]),
+        returns_result: false,
+        ..Default::default()
+    };
+    // `fields_enum` is deliberately left empty everywhere in this config — the defect this
+    // test guards against is exactly "no fields_enum entry anywhere".
+    let e2e_config = crate::e2e::config::E2eConfig {
+        call,
+        ..Default::default()
+    };
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "get_node_kind".to_string(),
+        description: "get_node returns a DataNode whose kind is an enum".to_string(),
+        tags: Vec::new(),
+        skip: None,
+        env: None,
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::Value::Null,
+        mock_response: None,
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+        assertions: vec![Assertion {
+            skip: None,
+            assertion_type: "equals".to_string(),
+            field: Some("kind".to_string()),
+            value: Some(serde_json::Value::String("Foo".to_string())),
+            values: None,
+            method: None,
+            check: None,
+            args: None,
+            return_type: None,
+        }],
+        source: String::new(),
+        http: None,
+        asyncapi: None,
+        websocket: None,
+        preserve_input_urls: false,
+        category: None,
+    };
+
+    let functions = vec![FunctionDef {
+        name: "get_node".to_string(),
+        return_type: TypeRef::Named("DataNode".to_string()),
+        ..Default::default()
+    }];
+    let type_defs = vec![
+        TypeDef {
+            name: "DataNode".to_string(),
+            fields: vec![FieldDef {
+                name: "kind".to_string(),
+                ty: TypeRef::Named("DataNodeKind".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        TypeDef {
+            name: "PlainNode".to_string(),
+            fields: vec![FieldDef {
+                name: "kind".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    ];
+    let enums = vec![EnumDef {
+        name: "DataNodeKind".to_string(),
+        ..Default::default()
+    }];
+
+    let mut out = String::new();
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        "[workspace]\nlanguages = [\"rust\"]\n[[crates]]\nname = \"my_crate\"\nsources = [\"src/lib.rs\"]\n",
+    )
+    .unwrap();
+    let test_config = cfg.resolve().unwrap().remove(0);
+    render_test_function(
+        &mut out,
+        &fixture,
+        &e2e_config,
+        &test_config,
+        &type_defs,
+        &enums,
+        &functions,
+        "my_crate",
+        None,
+        None,
+        false,
+    );
+
+    assert!(
+        out.contains("format!(\"{:?}\", "),
+        "expected enum field to stringify via Debug; got:\n{out}"
+    );
+    assert!(
+        !out.contains(".kind.to_string()"),
+        "must not emit .to_string() for a field the IR proves is an enum; got:\n{out}"
     );
 }
 
@@ -258,6 +386,8 @@ fn unregistered_test_backend_trait_fails_loudly_instead_of_falling_back() {
         &fixture,
         &e2e_config,
         &test_config,
+        &[],
+        &[],
         &[],
         "my_crate",
         None,
@@ -350,6 +480,8 @@ fn result_is_simple_count_assertion_binds_to_result_variable() {
         &e2e_config,
         &test_config,
         &[],
+        &[],
+        &[],
         "my_crate",
         None,
         None,
@@ -441,6 +573,8 @@ fn handle_config_import_uses_resolved_options_type() {
         &e2e_config,
         &test_config,
         &[],
+        &[],
+        &[],
         "my_crate",
         false,
         None,
@@ -521,6 +655,8 @@ mod client_factory_construction {
             fixture,
             config,
             &crate_config(),
+            &[],
+            &[],
             &[],
             "my_crate",
             Some("create_client"),

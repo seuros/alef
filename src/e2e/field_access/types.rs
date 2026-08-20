@@ -58,6 +58,36 @@ pub struct FieldResolver {
     /// (e.g. a virtual namespace prefix or a synthetic/derived assertion field), so
     /// `result_fields` only gets the final say on names the IR is silent on.
     pub(super) ir_known_excluded_fields: HashSet<String>,
+    /// IR-derived enum-field classification (`crate_type -> field -> {is-enum, next type}`),
+    /// anchored at the call's declared result type. Populated via `with_ir_enum_map`; empty
+    /// when a codegen call site hasn't wired IR data in, in which case `is_enum` falls back
+    /// entirely to the hand-maintained `fields_enum` config. See [`IrEnumMap`] for why this
+    /// is keyed by `(type, field)` rather than by bare field name.
+    pub(super) ir_enum_map: IrEnumMap,
+}
+
+/// IR-derived enum-field classification, keyed by owner type so a field named `kind` that is
+/// `String` on one struct and an enum on another is never conflated. Mirrors `PhpGetterMap`
+/// and `SwiftFirstClassMap`'s per-type shape.
+///
+/// * `field_types[type_name][field_name]` — the IR-resolved named type (after unwrapping
+///   `Option`/`Vec`; `Box<T>` fields already carry the unboxed named type in the IR, so no
+///   separate unwrap is needed for them) that `field_name` traverses into, when that type is
+///   another struct the path can keep walking through. Used to advance the type cursor one
+///   path segment at a time, e.g. `choices[0].finish_reason` walks `choices` into its element
+///   type before checking `finish_reason` there.
+/// * `enum_fields[type_name]` — field names on `type_name` whose declared type (after the
+///   same unwrapping) names a real `EnumDef` this crate declares.
+/// * `root_type` — the IR type name backing the call's result variable, resolved from the
+///   crate's own function/method signatures (not a hand-configured override). `None` when the
+///   call's declared return type could not be resolved, in which case IR-derived enum
+///   classification answers `false` for every path (the same safe default an unconfigured
+///   `fields_enum` entry already has).
+#[derive(Debug, Clone, Default)]
+pub struct IrEnumMap {
+    pub field_types: HashMap<String, HashMap<String, String>>,
+    pub enum_fields: HashMap<String, HashSet<String>>,
+    pub root_type: Option<String>,
 }
 
 /// Per-type PHP getter classification + chain-resolution metadata.
