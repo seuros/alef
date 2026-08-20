@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef e2e generate` no longer rejects an `overrides.<lang>.class` that names a class the
+  backend really emits.** The validator built its candidate set by PascalCasing the crate name,
+  which is not what any of the six class-consuming backends actually name their crate facade:
+  `kotlin_android` and the `java` public facade strip a trailing `Rs`, `php` derives from
+  `[crates.php] extension_name`, `ruby` emits both a crate-name native module and a
+  `[crates.ruby] gem_name` wrapper module, and `dart` appends `Bridge` to `[crates.dart]
+  lib_name`. A correct config therefore failed validation with `Severity::Error`, refusing all
+  regeneration. Each language now calls the exact function its own codegen uses, so a rename on
+  either side breaks a test instead of silently drifting, and a backend whose facade cannot be
+  derived downgrades to a warning rather than claiming an override is wrong on the strength of a
+  candidate set known to be incomplete.
+- **`alef extract` no longer warns that a bare `#[serde(default)]` disagrees with a manual
+  `impl Default` that names the field type's `#[default]` enum variant.** Both spell the field's
+  type-zero; only the literal spelling was recognised, so every enum-typed field carrying both
+  produced a spurious `defaults disagree` warning. An enum whose `#[default]` variant is not
+  known at that point is treated as "cannot prove agreement" rather than "agrees", so the
+  diagnostic still fires on a genuine mismatch.
+
 - **The two committed records no longer ping-pong against `poly fmt`.** `.alef-ownership.toml`
   and `.alef-toml-merge-provenance.toml` wrote every array one element per line, but the format
   gate consumers commit through collapses an array whose inline form fits 120 columns. Since both
