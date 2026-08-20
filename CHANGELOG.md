@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.6] - 2026-08-20
+
 ### Added
 
 - **The WASM backend gives `#[serde(untagged)]` data enums a real structural TypeScript type**
@@ -520,8 +522,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other finding), and excludes both unmarked user-owned files and known create-once seeds
   (`rust-toolchain.toml`, the wasm-only `.cargo/config.toml`) that a scaffold stage only emits
   once, when absent.
-
-### Fixed
 
 - **`alef verify`'s in-memory regeneration pass no longer skips a language whose output happens
   to already be cache-fresh**, which previously dropped every one of that language's
