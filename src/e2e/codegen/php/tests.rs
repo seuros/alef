@@ -761,7 +761,7 @@ namespace = "WidgetToolkit"
 "#,
         );
         assert!(
-            content.contains(r#""WidgetToolkit\\": "../../packages/php/src/""#),
+            content.contains(r#""WidgetToolkit\\": "../../crates/widget-toolkit-php/src/""#),
             "composer.json must map the configured namespace verbatim, got:\n{content}"
         );
         assert!(
@@ -785,7 +785,7 @@ sources = []
 "#,
         );
         assert!(
-            content.contains(r#""Widget\\Toolkit\\": "../../packages/php/src/""#),
+            content.contains(r#""Widget\\Toolkit\\": "../../crates/widget-toolkit-php/src/""#),
             "composer.json must fall back to the extension-derived namespace, got:\n{content}"
         );
     }
@@ -801,10 +801,11 @@ mod default_pkg_path_tests {
         cfg.resolve().expect("resolve").remove(0)
     }
 
-    /// Unconfigured `[crates.output] php` keeps the historical `packages/php` default,
-    /// unchanged from before the 0.51 co-location option existed.
+    /// Unconfigured `[crates.output] php` resolves through `OutputTemplate::resolve`'s
+    /// default to the co-located `crates/<pkg>-php` crate root -- the same root the
+    /// scaffolder writes `crates/<pkg>-php/Cargo.toml` into.
     #[test]
-    fn defaults_to_historical_packages_php_when_output_unconfigured() {
+    fn defaults_to_the_co_located_binding_crate_when_output_unconfigured() {
         let config = resolve_config(
             r#"
 [workspace]
@@ -814,7 +815,7 @@ name = "my-lib"
 sources = []
 "#,
         );
-        assert_eq!(default_php_pkg_path(&config), "../../packages/php");
+        assert_eq!(default_php_pkg_path(&config), "../../crates/my-lib-php");
     }
 
     /// `[crates.output] php = "crates/<pkg>-php/src/"` (the 0.51 co-located layout) must

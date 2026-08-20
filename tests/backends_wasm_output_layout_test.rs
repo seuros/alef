@@ -106,14 +106,16 @@ fn a_src_suffixed_output_path_keeps_its_existing_layout() {
     assert_eq!(find(&files, "lib.rs"), Path::new("crates/toolkit-wasm/src/lib.rs"));
 }
 
-/// The default, unconfigured case — the one the generated-output gate exercises and the
-/// one that emitted `packages/Cargo.toml`.
+/// The default, unconfigured case — the one the generated-output gate exercises. The default
+/// crate root is `crates/{crate}-wasm`, the same root `OutputTemplate::resolve` now names for
+/// every language with a dedicated binding crate, and the same root the scaffolder writes
+/// `crates/{crate}-wasm/package.json` into.
 #[test]
 fn an_unconfigured_crate_emits_its_manifest_inside_its_own_package_directory() {
     let files = WasmBackend
         .generate_bindings(&api(), &config_with_output(None))
         .expect("wasm generation");
 
-    assert_eq!(find(&files, "Cargo.toml"), Path::new("packages/wasm/Cargo.toml"));
-    assert_eq!(find(&files, "lib.rs"), Path::new("packages/wasm/src/lib.rs"));
+    assert_eq!(find(&files, "Cargo.toml"), Path::new("crates/toolkit-wasm/Cargo.toml"));
+    assert_eq!(find(&files, "lib.rs"), Path::new("crates/toolkit-wasm/src/lib.rs"));
 }

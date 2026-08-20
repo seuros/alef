@@ -71,6 +71,29 @@ pub fn resolve_output_dir(config_path: Option<&PathBuf>, crate_name: &str, defau
         .unwrap_or_else(|| default.replace("{name}", crate_name))
 }
 
+/// The `crates/{crate}-<suffix>` root every scaffolder already writes a manifest for, and
+/// the same root the PyO3/NAPI/PHP/FFI/wasm-bindgen emitters fall back to when no output
+/// path is configured. Returns `None` for languages with no dedicated binding crate of
+/// their own, whose default binding surface lives under `packages/` instead.
+///
+/// `OutputTemplate::resolve` (what `alef generate` writes sources under) and
+/// `ResolvedCrateConfig::package_dir`'s no-override formula (what the scaffolder and build
+/// commands assume) both call this, so the same crate cannot get two different default
+/// homes from two different code paths — which is exactly how the scaffolder's
+/// `crates/{crate}-ffi` manifest and `generate`'s `packages/ffi` sources ended up
+/// disagreeing on a stock scaffold. ~keep
+pub(crate) fn default_binding_crate_root(crate_name: &str, lang: &str) -> Option<String> {
+    let suffix = match lang {
+        "python" => "py",
+        "node" => "node",
+        "php" => "php",
+        "ffi" => "ffi",
+        "wasm" => "wasm",
+        _ => return None,
+    };
+    Some(format!("crates/{crate_name}-{suffix}"))
+}
+
 /// The crate root and generated-source directory implied by one binding output path.
 ///
 /// `[crates.output]` entries and [`OutputTemplate`](super::output::OutputTemplate) defaults

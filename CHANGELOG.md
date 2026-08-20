@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A project that configures no `[crates.output]` for Python, Node, PHP, FFI, or wasm no
+  longer scaffolds a manifest cargo cannot build.** The scaffolders write each of those
+  languages' `Cargo.toml` at `crates/{crate}-<suffix>`, but `OutputTemplate::resolve`'s
+  unconfigured single-crate default was `packages/{lang}` -- so `alef generate` wrote the
+  matching `lib.rs` under `packages/ffi/src/` while the scaffolded manifest at
+  `crates/{crate}-ffi/Cargo.toml` declared a library at `crates/{crate}-ffi/src/lib.rs`,
+  and cargo failed with "can't find library `<crate>_ffi`, rename file to `src/lib.rs` or
+  specify lib.path" on the very first sibling crate that depended on it. The default now
+  resolves to `crates/{crate}-<suffix>/src` for these five languages, via one
+  `default_binding_crate_root` formula shared by `OutputTemplate::resolve` and
+  `package_dir`'s Node/Wasm no-override formula, so a scaffolded manifest and the sources
+  `alef generate` writes for it can no longer name two different crate roots.
 
 - **Java no longer drops every lifetime-parameterized type (e.g. `NodeContext<'a>`) from
   generation.** A lifetime parameter alone is not a reason a type can't cross the JNI boundary —

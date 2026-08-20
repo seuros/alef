@@ -1,5 +1,32 @@
-use super::{OutputLayout, resolve_output_layout};
+use super::{OutputLayout, default_binding_crate_root, resolve_output_layout};
 use std::path::PathBuf;
+
+/// The one formula every scaffolder's hard-coded `crates/{crate}-<suffix>` manifest path,
+/// `OutputTemplate::resolve`'s single-crate default, and `package_dir`'s no-override
+/// formula for Node/Wasm must all agree on. Table-driven so a language added to one side
+/// without the other shows up here as a wrong answer instead of a silent gap.
+#[test]
+fn default_binding_crate_root_matches_every_scaffolder_suffix() {
+    let cases: &[(&str, Option<&str>)] = &[
+        ("python", Some("crates/toolkit-py")),
+        ("node", Some("crates/toolkit-node")),
+        ("php", Some("crates/toolkit-php")),
+        ("ffi", Some("crates/toolkit-ffi")),
+        ("wasm", Some("crates/toolkit-wasm")),
+        ("ruby", None),
+        ("elixir", None),
+        ("go", None),
+        ("swift", None),
+    ];
+
+    for (lang, expected) in cases {
+        assert_eq!(
+            default_binding_crate_root("toolkit", lang),
+            expected.map(str::to_string),
+            "default_binding_crate_root(\"toolkit\", {lang:?})"
+        );
+    }
+}
 
 /// Every shape a resolved binding output path takes in the wild, and the crate root and
 /// source directory each one implies.

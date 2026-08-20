@@ -4329,7 +4329,7 @@
     },
     "OutputTemplate": {
       "additionalProperties": false,
-      "description": "Per-language output path templates for multi-crate workspaces.\n\nEach entry is a path string that may contain `{crate}` and `{lang}` placeholders.\nResolved by [`OutputTemplate::resolve`] to produce a concrete path for one\n`(crate, language)` pair.\n\nDefaults (when a language entry is absent and no per-crate explicit override is set):\n- Single-crate workspaces resolve to `packages/{lang}/`.\n- Multi-crate workspaces resolve to `packages/{lang}/{crate}/`.\n\nPer-crate explicit paths in [`OutputConfig`] always win over a workspace template.",
+      "description": "Per-language output path templates for multi-crate workspaces.\n\nEach entry is a path string that may contain `{crate}` and `{lang}` placeholders.\nResolved by [`OutputTemplate::resolve`] to produce a concrete path for one\n`(crate, language)` pair.\n\nDefaults (when a language entry is absent and no per-crate explicit override is set):\n- Single-crate workspaces resolve to `crates/{crate}-<suffix>/src` for languages with a\n  dedicated binding crate (Python, Node, PHP, FFI, wasm), else `packages/{lang}/`.\n- Multi-crate workspaces resolve to `packages/{lang}/{crate}/`.\n\nPer-crate explicit paths in [`OutputConfig`] always win over a workspace template.",
       "properties": {
         "csharp": {
           "type": [

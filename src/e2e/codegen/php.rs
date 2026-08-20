@@ -288,19 +288,16 @@ impl E2eCodegen for PhpCodegen {
 /// Default `path` for the local PHP composer dependency when
 /// `[crates.e2e.packages.php].path` is unset.
 ///
-/// Derived from [`ResolvedCrateConfig::package_dir`] for [`Language::Php`], which
-/// follows `[crates.output] php` when configured — since 0.51 that co-locates the
-/// generated userland classes with the PHP binding crate at `crates/<pkg>-php/src/`
-/// instead of the historical `packages/php/` — or falls back to the historical
-/// `packages/php` default when unconfigured.
+/// Derived from [`ResolvedCrateConfig::package_dir`] for [`Language::Php`], which follows
+/// `[crates.output] php` when configured, or, unconfigured, resolves through
+/// `OutputTemplate::resolve`'s default to `crates/<pkg>-php/src` — the co-located layout
+/// that places the generated userland classes beside the PHP binding crate, matching
+/// where the scaffolder writes `crates/<pkg>-php/Cargo.toml`.
 ///
 /// `php_autoload_section` (in `project.rs`) always appends its own `/src/` suffix to
-/// this path to build the PSR-4 mapping, mirroring the historical split layout
-/// (`packages/php/composer.json` + `packages/php/src/*.php`). When the resolved
-/// package directory is co-located and already ends in `/src` (the
-/// `crates/<pkg>-php/src/` shape), that trailing segment is stripped here so the
-/// re-appended `/src/` lands back on the real directory instead of doubling up into a
-/// nonexistent `.../src/src/`. ~keep
+/// this path to build the PSR-4 mapping, so the trailing `/src` this function's default
+/// already resolves to is stripped here first, or the re-appended `/src/` would double up
+/// into a nonexistent `.../src/src/`. ~keep
 fn default_php_pkg_path(config: &ResolvedCrateConfig) -> String {
     let pkg_dir = config.package_dir(Language::Php);
     let trimmed = pkg_dir.trim_end_matches('/');

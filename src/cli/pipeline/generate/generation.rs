@@ -766,14 +766,14 @@ module_name = "test_lib"
             "generate_public_api must still be the one emitting the python package tree"
         );
 
-        // The binding crate's own source resolves under `packages/python` for this fixture, not
-        // under `crates/<name>-py/src`. The distinction is only about where this config puts the
-        // crate; the property under test is that the manifest holds exactly ONE path -- the
-        // generate_bindings output -- while the four public-api files above are unrecorded. ~keep
+        // The binding crate's own source resolves under `crates/test-lib-py/src` for this
+        // fixture. The exact location is incidental; the property under test is that the
+        // manifest holds exactly ONE path -- the generate_bindings output -- while the four
+        // public-api files above are unrecorded. ~keep
         let manifest = cache::read_lang_manifest("test-lib", "python");
         assert_eq!(
             manifest,
-            vec![base_dir.join("packages/python/lib.rs")],
+            vec![base_dir.join("crates/test-lib-py/src/lib.rs")],
             "on the unfixed `alef all` sequence, `<lang>.manifest` must hold only \
              generate_bindings' own path -- the four public-api files above are unrecorded"
         );
@@ -818,7 +818,7 @@ module_name = "test_lib"
         let mut manifest = cache::read_lang_manifest("test-lib", "python");
         manifest.sort();
         let mut expected = vec![
-            base_dir.join("packages/python/lib.rs"),
+            base_dir.join("crates/test-lib-py/src/lib.rs"),
             base_dir.join("packages/python/test_lib/options.py"),
             base_dir.join("packages/python/test_lib/api.py"),
             base_dir.join("packages/python/test_lib/exceptions.py"),

@@ -772,7 +772,8 @@ fn default_setup_timeout() -> u64 {
 /// `(crate, language)` pair.
 ///
 /// Defaults (when a language entry is absent and no per-crate explicit override is set):
-/// - Single-crate workspaces resolve to `packages/{lang}/`.
+/// - Single-crate workspaces resolve to `crates/{crate}-<suffix>/src` for languages with a
+///   dedicated binding crate (Python, Node, PHP, FFI, wasm), else `packages/{lang}/`.
 /// - Multi-crate workspaces resolve to `packages/{lang}/{crate}/`.
 ///
 /// Per-crate explicit paths in [`OutputConfig`] always win over a workspace template.
@@ -804,10 +805,10 @@ impl OutputTemplate {
     /// Resolution order (highest priority first):
     /// 1. Per-language template entry on `self`, if set, with `{crate}` and `{lang}`
     ///    placeholders substituted.
-    /// 2. Default fallback: `packages/{lang}/{crate}/` if `multi_crate`, else
-    ///    language-specific historical defaults (`packages/python`, `packages/node`,
-    ///    `packages/ruby`, `packages/php`, `packages/elixir`) or `packages/{lang}` for
-    ///    languages without a historical default.
+    /// 2. Default fallback: `packages/{lang}/{crate}/` if `multi_crate`, else, for
+    ///    languages with a dedicated binding crate (see
+    ///    [`default_binding_crate_root`](super::resolve_helpers::default_binding_crate_root)),
+    ///    `crates/{crate}-<suffix>/src`; `packages/{lang}` for every other language.
     ///
     /// # Panics
     ///
@@ -822,15 +823,10 @@ impl OutputTemplate {
             PathBuf::from(template.replace("{crate}", crate_name).replace("{lang}", lang))
         } else if multi_crate {
             PathBuf::from(format!("packages/{lang}/{crate_name}"))
+        } else if let Some(root) = super::resolve_helpers::default_binding_crate_root(crate_name, lang) {
+            PathBuf::from(format!("{root}/src"))
         } else {
-            match lang {
-                "python" => PathBuf::from("packages/python"),
-                "node" => PathBuf::from("packages/node"),
-                "ruby" => PathBuf::from("packages/ruby"),
-                "php" => PathBuf::from("packages/php"),
-                "elixir" => PathBuf::from("packages/elixir"),
-                other => PathBuf::from(format!("packages/{other}")),
-            }
+            PathBuf::from(format!("packages/{lang}"))
         };
 
         validate_output_path(&path);

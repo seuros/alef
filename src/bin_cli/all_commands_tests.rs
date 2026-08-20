@@ -875,7 +875,7 @@ fn all_writes_the_full_cross_phase_union_into_the_language_manifest() {
     manifest.sort();
 
     let mut expected = vec![
-        root.join("packages/python/lib.rs"),
+        root.join("crates/test-lib-py/src/lib.rs"),
         root.join("packages/python/test_lib/test_lib.pyi"),
         root.join("packages/python/test_lib/options.py"),
         root.join("packages/python/test_lib/api.py"),

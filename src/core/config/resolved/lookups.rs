@@ -7,6 +7,7 @@ use crate::core::config::extras::{AdapterConfig, Language};
 use crate::core::config::output::{
     BuildCommandConfig, CleanConfig, LintConfig, SetupConfig, TestAppRunConfig, TestConfig, UpdateConfig,
 };
+use crate::core::config::resolve_helpers::default_binding_crate_root;
 use crate::core::config::tools::LangContext;
 use crate::core::config::{
     build_defaults, clean_defaults, lint_defaults, setup_defaults, test_apps_run_defaults, test_defaults,
@@ -62,18 +63,25 @@ impl ResolvedCrateConfig {
 
         match lang {
             Language::Python => "packages/python".to_string(),
+            // The no-override formula is `default_binding_crate_root`, the same function
+            // `OutputTemplate::resolve` uses for `alef generate`'s default source directory, so
+            // this and the tree `generate` writes cannot name two different crate roots. ~keep
             Language::Node => self
                 .node
                 .as_ref()
                 .and_then(|c| c.crate_dir.as_ref())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("crates/{}-node", self.name)),
+                .unwrap_or_else(|| {
+                    default_binding_crate_root(&self.name, "node").expect("node has a default binding crate root")
+                }),
             Language::Wasm => self
                 .wasm
                 .as_ref()
                 .and_then(|c| c.crate_dir.as_ref())
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("crates/{}-wasm", self.name)),
+                .unwrap_or_else(|| {
+                    default_binding_crate_root(&self.name, "wasm").expect("wasm has a default binding crate root")
+                }),
             Language::Ruby => "packages/ruby".to_string(),
             Language::Php => "packages/php".to_string(),
             Language::Elixir => "packages/elixir".to_string(),

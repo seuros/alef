@@ -231,7 +231,12 @@ fn validate_php_reports_root_psr4_mismatch() {
     std::fs::write(root.join("packages/php/composer.json"), composer).unwrap();
     std::fs::write(root.join("composer.json"), composer).unwrap();
 
-    let config = validate_config_for(root, "php", "");
+    // `validate_php_manifests` checks the split layout (a package-local composer.json
+    // nested under `pkg_dir`, distinct from the root one), so the package directory is
+    // forced to `packages/php` here via an explicit `[crates.output]` entry rather than
+    // relying on the default -- which, since this crate targets php, resolves to the
+    // co-located `crates/my-lib-php/src`. ~keep
+    let config = validate_config_for(root, "php", "[crates.output]\nphp = \"packages/php\"\n");
     let issues = validate(&config, &[Language::Php]).unwrap();
 
     assert!(

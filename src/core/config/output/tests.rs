@@ -539,24 +539,37 @@ fn output_template_falls_back_to_multi_crate_default() {
     );
 }
 
+/// Languages with a dedicated binding crate resolve to `crates/{crate}-<suffix>/src` on a
+/// single-crate workspace with no configured output -- the same root the scaffolder
+/// writes a manifest for and, for wasm, the same root `WasmBackend::generate_bindings`
+/// writes its own `Cargo.toml` into. Languages with no such crate keep the historical
+/// `packages/{lang}` default.
 #[test]
-fn output_template_falls_back_to_single_crate_historical_default() {
+fn output_template_falls_back_to_single_crate_binding_crate_default() {
     let tmpl = OutputTemplate::default();
     assert_eq!(
         tmpl.resolve("sample_router", "python", false),
-        PathBuf::from("packages/python")
+        PathBuf::from("crates/sample_router-py/src")
     );
     assert_eq!(
         tmpl.resolve("sample_router", "node", false),
-        PathBuf::from("packages/node")
+        PathBuf::from("crates/sample_router-node/src")
+    );
+    assert_eq!(
+        tmpl.resolve("sample_router", "php", false),
+        PathBuf::from("crates/sample_router-php/src")
+    );
+    assert_eq!(
+        tmpl.resolve("sample_router", "ffi", false),
+        PathBuf::from("crates/sample_router-ffi/src")
+    );
+    assert_eq!(
+        tmpl.resolve("sample_router", "wasm", false),
+        PathBuf::from("crates/sample_router-wasm/src")
     );
     assert_eq!(
         tmpl.resolve("sample_router", "ruby", false),
         PathBuf::from("packages/ruby")
-    );
-    assert_eq!(
-        tmpl.resolve("sample_router", "php", false),
-        PathBuf::from("packages/php")
     );
     assert_eq!(
         tmpl.resolve("sample_router", "elixir", false),
@@ -621,5 +634,5 @@ fn resolve_rejects_template_that_produces_parent_dir() {
 fn resolve_accepts_normal_crate_name() {
     let tmpl = OutputTemplate::default();
     let path = tmpl.resolve("my-lib", "python", false);
-    assert_eq!(path, PathBuf::from("packages/python"));
+    assert_eq!(path, PathBuf::from("crates/my-lib-py/src"));
 }

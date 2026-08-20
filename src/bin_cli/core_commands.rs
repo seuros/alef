@@ -1276,7 +1276,7 @@ output = "packages/python/test_lib"
     /// `alef diff` is documented as "without writing", so it must never be able to move that
     /// number. Before this fix, `Commands::Diff` called `pipeline::generate` with
     /// `write_cache: true`, so its internal `write_lang_hash` unconditionally overwrote
-    /// `<lang>.manifest` with just the bindings phase's own file (`packages/python/lib.rs`),
+    /// `<lang>.manifest` with just the bindings phase's own file (`crates/test-lib-py/src/lib.rs`),
     /// regressing the manifest `alef generate` had just built from 6 entries back down to 1 --
     /// the exact ratio measured on the real consumer tree. This is the mandatory control: the
     /// backend already recorded correctly (via `alef generate`) before `alef diff` ran, and its
@@ -1309,7 +1309,7 @@ output = "packages/python/test_lib"
         let mut before = cache::read_lang_manifest("test-lib", "python");
         before.sort();
         let mut expected = vec![
-            root.join("packages/python/lib.rs"),
+            root.join("crates/test-lib-py/src/lib.rs"),
             root.join("packages/python/test_lib/test_lib.pyi"),
             root.join("packages/python/test_lib/options.py"),
             root.join("packages/python/test_lib/api.py"),
