@@ -332,6 +332,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter is now underscore-prefixed when there are no typed error variants to
   downcast against.
 
+- **Elixir e2e assertions now classify enum-typed result fields from the IR, not only from
+  hand-maintained config.** `render_assertion` read enum-ness solely from the effective
+  `fields_enum` config (plus a per-call `enum_fields` override), so a consumer that never
+  declared either got a bare `assert result.kind == "key_value"` for a genuine `DataNodeKind`
+  enum field. The NIF binding serializes that field as an atom (`:key_value`), and Elixir does
+  not fail to compile on `:key_value == "key_value"` — it silently evaluates to `false`, so the
+  test asserts the wrong thing instead of refusing to build. Elixir now also consults the same
+  IR-derived classification the rust/csharp/gleam/swift/dart e2e generators use, anchored at
+  the call's declared Rust return type. An explicit config entry still wins.
 - **Python e2e assertions now classify enum-typed result fields from the IR, not only from
   hand-maintained config.** `render_assertion` read enum-ness solely from the effective
   `fields_enum` config (plus a per-call `assert_enum_fields` override and an accessor-shape

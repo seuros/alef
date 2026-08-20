@@ -347,12 +347,20 @@ pub(super) fn render_assertion(
     };
 
     let is_numeric = is_numeric_expr(&field_expr);
+    // `fields_enum`/`per_call_enum_fields` carry the hand-maintained config. When neither
+    // names the field, fall back to the IR-derived classification (`with_ir_enum_map`,
+    // anchored at the call's declared Rust return type via `resolve_declared_result_type`) so
+    // a consumer that never configured either still gets a correct classification instead of
+    // the dynamically-typed default `to_string`-less comparison, which asserts the NIF's atom
+    // (`:key_value`) against the fixture's wire string (`"key_value"`) and silently evaluates
+    // to `false` rather than failing to compile. This is purely additive. ~keep
     let field_is_enum = assertion.field.as_deref().filter(|f| !f.is_empty()).is_some_and(|f| {
         let resolved = field_resolver.resolve(f);
         fields_enum.contains(f)
             || fields_enum.contains(resolved)
             || per_call_enum_fields.contains_key(f)
             || per_call_enum_fields.contains_key(resolved)
+            || field_resolver.is_enum(f)
     });
     let field_is_format_metadata = assertion
         .field
