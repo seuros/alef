@@ -35,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the tool directly with the working directory set by the OS, which also fixes the same
   failure on any platform when the output path contains a space.
 
+- **`alef test-apps generate`'s write path now has an idempotency regression test.** It writes
+  through `write_scaffold_files_report` + `finalize_hashes`, not `write_files_report`, and only
+  the latter was covered. The reported 153-file `alef:hash:`-only rewrite was traced to consumer
+  bindings last stamped before `strip_alef_version_pin` (fixed in 0.62.2) and converges in one
+  run; a second clean-tree run against a real consumer wrote zero files.
+
 - **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
   the napi and extendr backends actually look up, instead of a nested
   `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads

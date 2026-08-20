@@ -7,6 +7,8 @@ mod normalization;
 mod orphans;
 mod scaffold;
 #[cfg(test)]
+mod scaffold_write_finalize_idempotency_tests;
+#[cfg(test)]
 mod tests;
 mod validation;
 mod write;
