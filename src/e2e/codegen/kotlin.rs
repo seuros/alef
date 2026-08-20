@@ -28,6 +28,8 @@ mod values;
 mod visitor;
 
 #[cfg(test)]
+mod enum_field_classification_tests;
+#[cfg(test)]
 mod tests;
 
 pub use stubs::emit_test_backend;

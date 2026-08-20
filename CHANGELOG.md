@@ -331,6 +331,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no registered error types got a body that never reads `error` at all. The
   parameter is now underscore-prefixed when there are no typed error variants to
   downcast against.
+
+- **Kotlin e2e assertions now classify enum-typed result fields from the IR, not only from
+  hand-maintained config.** `render_assertion` read enum-ness solely from the effective
+  `fields_enum` config (itself merged with a per-call `type_enum_fields` auto-detect that
+  needed a `result_type` override to anchor), so a consumer that never declared either got
+  `assertEquals("key_value", result.kind())` for a genuine `DataNodeKind` enum field. The
+  JVM binding wraps that field in a Java enum exposing `.getValue()`, so the comparison does
+  not compile. Kotlin now also consults the same IR-derived classification the rust/csharp/
+  gleam/swift/dart e2e generators use, anchored at the call's declared Rust return type. An
+  explicit config entry still wins.
 - **`jni` no longer hard-fails generation when `[crates.kotlin_android]` is unconfigured.**
   Every downstream accessor (`jni_kotlin_package`, `jni_excluded_functions`,
   `jni_excluded_types`, `jni_capsule_types`) already tolerated its absence, falling back to

@@ -238,11 +238,16 @@ pub(super) fn render_assertion(
         return;
     }
 
-    // Determine if this field is an enum type.
-    let field_is_enum = assertion
-        .field
-        .as_deref()
-        .is_some_and(|f| enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)));
+    // Determine if this field is an enum type. `enum_fields` carries the effective
+    // hand-maintained config (merged with the call-level `type_enum_fields` auto-detect in
+    // test_method.rs, which itself requires a `result_type` override to anchor). When neither
+    // names the field, `field_resolver.is_enum` falls back to the IR-derived classification
+    // (`with_ir_enum_map`, anchored at the call's declared Rust return type via
+    // `resolve_declared_result_type`) so a consumer that never configured either still gets a
+    // correct classification. This is purely additive — it only turns a `false` into `true`. ~keep
+    let field_is_enum = assertion.field.as_deref().is_some_and(|f| {
+        enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)) || field_resolver.is_enum(f)
+    });
 
     // Determine if this field's resolved type is an untyped JSON scalar (Kotlin
     // `Any?`, from Rust `Option<serde_json::Value>`) rather than `Option<String>`.
