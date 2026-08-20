@@ -9,7 +9,7 @@ use crate::e2e::fixture::Assertion;
 
 use super::assertion_helpers::{
     render_count_equals_assertion, render_count_min_assertion, render_equals_assertion, render_gte_assertion,
-    render_is_empty_assertion, render_method_result_assertion, render_not_empty_assertion,
+    render_is_empty_assertion, render_method_result_assertion, render_not_empty_assertion, wildcard_elem_is_enum,
 };
 use super::assertion_synthetic::{
     numeric_literal, render_chunks_have_content, render_chunks_have_embeddings, render_chunks_have_heading_context,
@@ -789,7 +789,7 @@ fn render_rust_wildcard_assertion(
     // safe assumption (the non-wildcard containment predicate already relies on it below).
     // `{elem_accessor}.to_string()` would fail to compile for an enum that only derives
     // `Debug`, so stringify via Debug instead whenever the traversed leaf is an enum. ~keep
-    let elem_is_enum = field_resolver.is_enum(elem_part);
+    let elem_is_enum = wildcard_elem_is_enum(field_resolver, elem_part, field);
     let elem_stringified = if elem_is_enum {
         format!("format!(\"{{:?}}\", {elem_accessor})")
     } else {

@@ -4,14 +4,21 @@
 //! actual API struct paths (e.g., "metadata.document.title") and generates
 //! language-specific accessor expressions.
 
+mod ir_enum;
 mod optional_renderers;
 mod parse;
 mod renderers;
 mod resolver;
 mod types;
 
-pub use types::{DartFirstClassMap, FieldResolver, PhpGetterMap, StringyField, StringyFieldKind, SwiftFirstClassMap};
+pub use types::{
+    DartFirstClassMap, FieldResolver, IrEnumMap, PhpGetterMap, StringyField, StringyFieldKind, SwiftFirstClassMap,
+};
 
 #[cfg(test)]
 #[path = "field_access/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "field_access/ir_enum_tests.rs"]
+mod ir_enum_tests;

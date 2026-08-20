@@ -101,6 +101,24 @@ pub(crate) fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {
     }
 }
 
+/// Resolve a call's declared Rust result type from the core IR — the free function of that
+/// name if there is one, otherwise the method of that name declared on an IR type — unwrapped
+/// through `Option`/`Vec` via [`named_type`].
+///
+/// This is a language-agnostic fact about the Rust core (what type the call's `Ok`/return
+/// value actually is), not a per-language `result_type` override: unlike the `c`/`csharp`/
+/// `java`/`kotlin`/`go`/`php` override surface `crate::e2e::validate_call_result_type`
+/// documents, no config authoring is required for this to resolve, and every backend asks the
+/// same question about the same Rust signature. Used to anchor `FieldResolver`'s IR-derived
+/// enum classification (`IrEnumMap::root_type`) at the exact struct/enum a call returns,
+/// which a purely name-keyed answer cannot do when a field name means different things on
+/// different types (see `crate::e2e::field_access::ir_enum`'s module doc). ~keep
+pub(crate) fn resolve_declared_result_type(call: &CallConfig, lang: &str, ir: CallIr<'_>) -> Option<String> {
+    let lookup_name = call.core_lookup_name(lang)?;
+    let signature = ir.signature(&lookup_name)?;
+    named_type(signature.return_type).map(str::to_string)
+}
+
 /// What the emitter knows about the *target* function's declared parameters.
 ///
 /// An empty `args` list is ambiguous between "this call genuinely takes zero arguments" and

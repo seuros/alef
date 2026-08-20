@@ -8,6 +8,7 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 
+use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::codegen::rust::args::{
     emit_rust_visitor_method, render_rust_arg, resolve_handle_config_type, resolve_visitor_trait,
 };
@@ -32,6 +33,8 @@ pub fn render_test_function(
     e2e_config: &E2eConfig,
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
     dep_name: &str,
     client_factory: Option<&str>,
     docs_client: Option<&crate::e2e::fixture::FixtureDocsClient>,
@@ -86,6 +89,12 @@ pub fn render_test_function(
     // declares its own result_fields / fields / fields_optional / fields_array /
     // fields_method_calls.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    // The call's declared Rust result type, resolved from the IR itself (not a hand-configured
+    // override) — anchors the IR-derived enum classification below at the exact struct/enum
+    // this call returns, so a field name that means different things on different types (e.g.
+    // `kind: String` on one struct, `kind: SomeEnum` on another) is never conflated. ~keep
+    let call_ir = CallIr { functions, type_defs };
+    let call_root_type = resolve_declared_result_type(call_config, "rust", call_ir);
     let call_field_resolver = FieldResolver::new_with_error_aliases(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -96,6 +105,7 @@ pub fn render_test_function(
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let function_name = resolve_function_name_for_call(call_config);

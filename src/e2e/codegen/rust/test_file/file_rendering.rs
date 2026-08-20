@@ -16,6 +16,8 @@ pub fn render_test_file(
     e2e_config: &E2eConfig,
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
     dep_name: &str,
     needs_mock_server: bool,
     // `docs_client` carries the override for the single fixture being rendered as a
@@ -119,6 +121,8 @@ pub fn render_test_file(
             e2e_config,
             config,
             type_defs,
+            enums,
+            functions,
             dep_name,
             client_factory,
             docs_client,

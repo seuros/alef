@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **E2e enum-field detection is now derived from the IR, not only from a hand-written
+  `alef.toml` `fields_enum` list.** `E2eConfig::effective_fields_enum` returned purely
+  author-declared sets, so a consumer that never enumerated its enum fields got `false` for
+  every one of them, and the Rust generator emitted `<field>.to_string()` for an enum-typed
+  field -- a compile error (`E0599: doesn't implement std::fmt::Display`) for any enum that
+  only derives `Debug`. `FieldResolver::is_enum` now falls back to a new IR-derived
+  classification (`FieldResolver::ir_enum_fields` / `with_ir_enum_map`, in the new
+  `e2e::field_access::ir_enum` module) that walks a field path from the call's declared Rust
+  result type -- resolved from the crate's own function/method signatures, not a
+  per-language override -- through `Option`/`Vec`/`Box`-wrapped and array-traversed
+  (`links[].link_type`, `choices[0].finish_reason`) paths to the exact struct that owns the
+  leaf field, and checks whether its declared type is a real IR enum. The classification is
+  keyed by `(owner type, field name)`, so a field name that means different things on
+  different types (`kind: String` on one struct, `kind: SomeEnum` on another) is never
+  conflated. An explicit `fields_enum` config entry still wins over the IR when both apply.
+
 ## [0.62.4] - 2026-08-20
 
 ### Fixed
