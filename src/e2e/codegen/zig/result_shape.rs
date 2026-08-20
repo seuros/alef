@@ -19,17 +19,13 @@ use crate::core::ir::TypeDef;
 use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::config::CallConfig;
 
-/// Names of IR types the Zig backend serializes across the FFI boundary as JSON (`[]u8`),
-/// mirroring `zig_struct_names` in `src/backends/zig/gen_bindings/mod.rs` — the exact predicate
-/// the Zig backend itself uses to decide `[]u8` vs. a real typed struct for a `Named` return.
-/// Kept independent rather than shared: the backend's version reads an `ApiSurface`, while e2e
-/// codegen only ever has the IR's `type_defs` slice. ~keep
+/// Names of IR types the Zig backend serializes across the FFI boundary as JSON (`[]u8`).
+///
+/// Delegates to the backend's own `zig_struct_names` rather than restating its predicate: the
+/// whole defect this module fixes was the generator and the backend answering this question
+/// separately, so a second copy here would leave exactly the drift that caused it. ~keep
 pub(super) fn json_struct_type_names(type_defs: &[TypeDef]) -> HashSet<String> {
-    type_defs
-        .iter()
-        .filter(|t| !t.is_trait && !t.is_opaque && t.has_serde)
-        .map(|t| t.name.clone())
-        .collect()
+    crate::backends::zig::gen_bindings::zig_struct_names(type_defs)
 }
 
 /// Whether the call's declared Rust return type (per the core IR, unwrapped through

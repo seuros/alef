@@ -43,8 +43,14 @@ fn signature_references_excluded(
 /// Names of types the Zig wrapper renders as a serde struct (JSON-encoded across the
 /// wrapper boundary). Shared by `generate_bindings` and `public_function_signatures` so
 /// both agree on which `Named` types the emitted signature treats as opaque-JSON. ~keep
-fn zig_struct_names(api: &ApiSurface) -> std::collections::HashSet<String> {
-    api.types
+///
+/// Takes a slice rather than an `ApiSurface` so the Zig e2e generator can ask the same
+/// question: it only ever holds `type_defs`, and when it answered independently the two
+/// disagreed for any plain function returning a serde struct — the generator emitted
+/// `result.<field>` against what the backend had already decided was a `[]u8`. One
+/// predicate, one answer. ~keep
+pub(crate) fn zig_struct_names(type_defs: &[crate::core::ir::TypeDef]) -> std::collections::HashSet<String> {
+    type_defs
         .iter()
         .filter(|t| !t.is_trait && !t.is_opaque && t.has_serde)
         .map(|t| t.name.clone())
@@ -281,7 +287,7 @@ impl Backend for ZigBackend {
         for en in &api.enums {
             top_level_names.insert(en.name.clone());
         }
-        let struct_names = zig_struct_names(&api);
+        let struct_names = zig_struct_names(&api.types);
         let enum_names: std::collections::HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
         let opaque_creator_map = zig_opaque_creator_map(&api);
 
@@ -406,7 +412,7 @@ impl Backend for ZigBackend {
         let api = api.with_cfg_filtered_deep(&enabled_features);
 
         let declared_errors: Vec<String> = api.errors.iter().map(|e| e.name.clone()).collect();
-        let struct_names = zig_struct_names(&api);
+        let struct_names = zig_struct_names(&api.types);
         let opaque_creator_map = zig_opaque_creator_map(&api);
         let trait_bridge_fn_names = zig_trait_bridge_fn_names(&api, config);
         let zig_capsule_types: std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig> =
