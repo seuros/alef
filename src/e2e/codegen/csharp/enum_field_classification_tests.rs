@@ -175,7 +175,7 @@ fn e2e_config_for(call: &str, function: &str, extra: impl FnOnce(&mut CallConfig
 }
 
 /// Table-driven: does the rendered assertion take the enum-comparison branch
-/// (`JsonNamingPolicy.SnakeCaseLower`) or the naive literal-vs-object branch?
+/// (`System.Text.Json.JsonSerializer.Serialize`) or the naive literal-vs-object branch?
 ///
 /// `call` doubles as the Rust function name in every case here — `table_ir()`'s
 /// [`FunctionDef`]s and `e2e_config_for`'s named calls are both keyed on it.
@@ -210,13 +210,47 @@ fn enum_field_classification_table() {
         let e2e_config = e2e_config_for(case.call, case.call, |_| {});
         let fixture = fixture_calling(case.call);
         let out = render(&fixture, &e2e_config, &type_defs, &enums, &functions);
-        let took_enum_branch = out.contains("JsonNamingPolicy.SnakeCaseLower");
+        let took_enum_branch = out.contains("System.Text.Json.JsonSerializer.Serialize");
         assert_eq!(
             took_enum_branch, case.expect_enum_branch,
             "{}: expected enum branch = {}, got:\n{out}",
             case.name, case.expect_enum_branch
         );
     }
+}
+
+/// Regression: the enum-equals assertion must compare the fixture's wire literal
+/// (`"KeyValue"`) directly against the real serialized wire string
+/// (`System.Text.Json.JsonSerializer.Serialize(...).Trim('"')`), with no lowercasing
+/// applied to either side. A previous version lowercased the expected literal
+/// (`"KeyValue"` -> `"keyvalue"`) and ran the actual value through
+/// `JsonNamingPolicy.SnakeCaseLower.ConvertName(...)` (`"KeyValue"` -> `"key_value"`) --
+/// two different, mutually-inconsistent transforms that only agreed by coincidence for
+/// enums whose wire values already were snake_case. `DataNodeKind` (modeled by
+/// `data_node_kind_enum()`, no `serde_rename_all`) never matched, so the compiling
+/// assertion failed at runtime on every run. ~keep
+#[test]
+fn enum_equals_assertion_compares_the_real_wire_value_unmodified() {
+    let (type_defs, enums, functions) = table_ir();
+    let e2e_config = e2e_config_for("process", "process", |_| {});
+    let fixture = fixture_calling("process");
+    let out = render(&fixture, &e2e_config, &type_defs, &enums, &functions);
+    assert!(
+        out.contains(r#"Assert.Equal("KeyValue", "#),
+        "expected the fixture's wire literal verbatim (no lowercasing), got:\n{out}"
+    );
+    assert!(
+        !out.contains("\"keyvalue\""),
+        "must not lowercase the expected literal into a value the real wire format never produces, got:\n{out}"
+    );
+    assert!(
+        !out.contains("JsonNamingPolicy"),
+        "must not guess a naming-policy transform; it must serialize through the enum's own converter, got:\n{out}"
+    );
+    assert!(
+        out.contains("System.Text.Json.JsonSerializer.Serialize(result.Kind).Trim('\"')"),
+        "expected the actual value serialized through the enum's own JsonConverter, got:\n{out}"
+    );
 }
 
 /// An explicit `fields_enum` config entry keeps working unchanged (config wins, same as
@@ -238,7 +272,7 @@ fn an_explicit_fields_enum_config_entry_still_classifies_as_enum() {
     let fixture = fixture_calling("other");
     let out = render(&fixture, &e2e_config, &type_defs, &enums, &functions);
     assert!(
-        out.contains("JsonNamingPolicy.SnakeCaseLower"),
+        out.contains("System.Text.Json.JsonSerializer.Serialize"),
         "explicit fields_enum config must still classify the field as enum, got:\n{out}"
     );
 }
@@ -257,7 +291,7 @@ fn a_forced_streaming_call_still_routes_to_the_streaming_branch_unaffected_by_en
     let fixture = fixture_calling("process");
     let out = render(&fixture, &e2e_config, &type_defs, &enums, &functions);
     assert!(
-        !out.contains("JsonNamingPolicy.SnakeCaseLower") && !out.contains("result.Kind"),
+        !out.contains("System.Text.Json.JsonSerializer.Serialize") && !out.contains("result.Kind"),
         "a forced-streaming call must not emit the non-streaming field-assertion path, got:\n{out}"
     );
 }

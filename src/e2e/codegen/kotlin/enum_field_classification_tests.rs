@@ -216,3 +216,61 @@ fn an_explicit_fields_enum_config_entry_still_classifies_as_enum() {
         "explicit fields_enum config must still classify the field as enum, got:\n{out}"
     );
 }
+
+/// Regression: kotlin_android's enum-field equals assertion must stringify through
+/// `.toWire()`, not `.name.lowercase()`. `.name.lowercase()` assumes every wire value is
+/// the Kotlin constant name lowercased with underscores (`IN_PROGRESS` -> `"in_progress"`),
+/// which only holds for enums whose Rust source has `#[serde(rename_all = "snake_case")]`.
+/// `DataNodeKind` (modeled by `data_node_kind_enum()`, no `rename_all`) serializes verbatim
+/// (`KeyValue`, not `key_value`); its Kotlin constant `KEY_VALUE` lowercases to `"keyvalue"`,
+/// never matching a fixture written against the real wire value. `.toWire()` is generated
+/// per-variant from the same mapping the `@JsonProperty` annotation commits to, so it is
+/// correct unconditionally.
+#[test]
+fn kotlin_android_enum_equals_assertion_uses_to_wire_not_name_lowercase() {
+    let (type_defs, enums, functions) = table_ir();
+    let e2e_config = e2e_config_for("process", |_| {});
+    let fixture = Fixture {
+        id: "kind_smoke".to_string(),
+        description: "Kind field smoke".to_string(),
+        call: Some("process".to_string()),
+        assertions: vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("kind".to_string()),
+            value: Some(serde_json::Value::String("KeyValue".to_string())),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    let mut out = String::new();
+    render_test_method(
+        &mut out,
+        &fixture,
+        "Facade",
+        "",
+        "",
+        &[],
+        None,
+        false,
+        &e2e_config,
+        &std::collections::HashMap::new(),
+        true,
+        &ResolvedCrateConfig::default(),
+        &type_defs,
+        &enums,
+        &functions,
+    )
+    .expect("render_test_method succeeds");
+    assert!(
+        out.contains(".toWire()"),
+        "expected .toWire() for a kotlin_android enum field, got:\n{out}"
+    );
+    assert!(
+        out.contains("\"KeyValue\""),
+        "expected the fixture's wire literal verbatim (no case transform), got:\n{out}"
+    );
+    assert!(
+        !out.contains(".lowercase()"),
+        "kotlin_android enum equals assertions must not guess a case transform, got:\n{out}"
+    );
+}

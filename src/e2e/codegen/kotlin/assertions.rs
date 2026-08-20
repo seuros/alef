@@ -441,14 +441,15 @@ pub(super) fn render_assertion(
     //   variant when the field is nullable), mirroring the Java codegen pattern
     //   `Optional.ofNullable(...).map(v -> v.getValue()).orElse("")`.
     //
-    // - kotlin_android mode: Enums are plain Kotlin `enum class` values with no
-    //   `.getValue()` method. Serialize to the lowercase wire string via
-    //   `.name.lowercase()`, which maps `FinishReason.STOP` → `"stop"` and
-    //   `FinishReason.TOOL_CALLS` → `"tool_calls"`, matching the JSON wire values.
+    // - kotlin_android mode: every fieldless `enum class` carries a `fun toWire(): String`
+    //   returning the exact `wire_variant_value` per constant, the same string `@JsonValue`
+    //   serializes. A prior `.name.lowercase()` wrongly assumed every wire value is the
+    //   Kotlin constant name lowercased (`IN_PROGRESS` -> `"in_progress"`); that fails for
+    //   `DataNodeKind` (no `rename_all`): `KEY_VALUE` -> `"keyvalue"`, not `"KeyValue"`. ~keep
     let string_expr = if kotlin_android_style {
         match (field_is_enum, field_is_optional) {
-            (true, true) => format!("{field_expr}?.name?.lowercase().orEmpty()"),
-            (true, false) => format!("{field_expr}.name.lowercase()"),
+            (true, true) => format!("{field_expr}?.toWire().orEmpty()"),
+            (true, false) => format!("{field_expr}.toWire()"),
             (false, _) => string_field_expr.clone(),
         }
     } else {

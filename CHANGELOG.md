@@ -125,6 +125,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant; these e2e generators had their own copy of the dependency list and never picked
   it up.
 
+- **The C# and kotlin_android e2e generators' enum-field `equals`/`contains` assertions now
+  compare against the enum's real serialized wire value instead of guessing a snake_case
+  transform.** Both derived the expected/actual pair from a naming-policy heuristic that
+  assumed every enum's wire value is the lowercased, underscore-separated form of its host
+  constant name (C#: `JsonNamingPolicy.SnakeCaseLower` on both the literal and the runtime
+  value; kotlin_android: `.name.lowercase()`) -- correct only for enums whose Rust source
+  carries `#[serde(rename_all = "snake_case")]`. An enum with no `rename_all`, whose unit
+  variants serialize verbatim (e.g. `DataNodeKind`, `KeyValue`/`Element`/`Sequence`), was
+  compared as `"keyvalue"` against `"key_value"` (C#) or `"KeyValue"` against `"keyvalue"`
+  (kotlin_android) and failed every such assertion at runtime. C# now serializes the actual
+  value through `System.Text.Json.JsonSerializer.Serialize`, which picks up the enum's own
+  always-generated `[JsonConverter(typeof(<Enum>JsonConverter))]` and reproduces the exact
+  wire string for any rename policy. kotlin_android now calls the enum's always-generated
+  `fun toWire(): String`, built from the same `wire_variant_value` mapping the
+  `@JsonProperty` annotations commit to.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`

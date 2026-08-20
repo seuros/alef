@@ -482,18 +482,19 @@ pub(super) fn render_assertion(
     match assertion.assertion_type.as_str() {
         "equals" => {
             if let Some(expected) = &assertion.value {
-                // Enum field equality bypasses the template (which would emit `.Trim()`,
-                // a string-only API). Compare the snake-cased ToString() against the
-                // expected value to match the wire JSON form (`InProgress` → `in_progress`,
-                // `ContentFilter` → `content_filter`, etc.). `JsonNamingPolicy.SnakeCaseLower`
-                // is the same policy used by the global JsonStringEnumConverter, so the
-                // assertion compares against exactly what serde would emit.
+                // Enum field equality bypasses the template (which would emit `.Trim()`, a
+                // string-only API). `gen_enum` always attaches a type-level `[JsonConverter]`
+                // with an exact per-variant wire mapping, so `JsonSerializer.Serialize`
+                // reproduces the real wire string under any rename policy -- unlike a
+                // previous version that guessed via `JsonNamingPolicy.SnakeCaseLower` on both
+                // sides and disagreed with itself whenever the wire value wasn't snake_case
+                // (e.g. `DataNodeKind`, which has no `rename_all`). ~keep
                 if field_is_enum && expected.is_string() {
-                    let s_lower = expected.as_str().map(|s| s.to_lowercase()).unwrap_or_default();
+                    let expected_wire = expected.as_str().unwrap_or_default();
                     let _ = writeln!(
                         out,
-                        "        Assert.Equal(\"{}\", {field_expr} == null ? null : JsonNamingPolicy.SnakeCaseLower.ConvertName({field_expr}.ToString()!));",
-                        escape_csharp(&s_lower)
+                        "        Assert.Equal(\"{}\", {field_expr} == null ? null : System.Text.Json.JsonSerializer.Serialize({field_expr}).Trim('\"'));",
+                        escape_csharp(expected_wire)
                     );
                     return;
                 }
