@@ -551,11 +551,21 @@ pub(super) fn render_test_case(
 
     // If the result variable is never referenced in assertions or streaming operations,
     // prefix it with _ to avoid "unused variable" warnings in mix compile --warnings-as-errors.
-    let actual_result_var = if fixture.assertions.is_empty() && !is_streaming {
-        format!("_{result_var}")
-    } else {
-        result_var.to_string()
-    };
+    // A `returns_void` call whose only assertions are `not_error` is the same case: rustler
+    // encodes a Rust `()` success payload as `nil`, so `render_assertion`'s `not_error` arm
+    // renders nothing for it (asserting non-nil there would fail every successful call) —
+    // the `{:ok, result} = call(...)` match above is already the real check. `result` would
+    // otherwise be bound and never referenced. ~keep
+    let all_not_error = fixture
+        .assertions
+        .iter()
+        .all(|assertion| assertion.assertion_type == "not_error");
+    let actual_result_var =
+        if !is_streaming && (fixture.assertions.is_empty() || (call_config.returns_void && all_not_error)) {
+            format!("_{result_var}")
+        } else {
+            result_var.to_string()
+        };
 
     // Render function call: omit args entirely if effective_args is empty (no-arg functions).
     // This prevents emitting `func(nil)` which causes FunctionClauseError on nil-free function signatures.
@@ -595,6 +605,7 @@ pub(super) fn render_test_case(
             resolved_enum_fields_ref,
             result_is_simple,
             is_streaming,
+            call_config.returns_void,
         );
     }
     // A fixture that declared at least one assertion but every one of them resolved
@@ -613,6 +624,7 @@ pub(super) fn render_test_case(
         is_streaming,
         chunks_var,
         &result_var,
+        call_config.returns_void,
     );
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &assertions_body,
@@ -648,12 +660,20 @@ fn apply_vacuous_assertion_fallback(
     is_streaming: bool,
     chunks_var: &str,
     result_var: &str,
+    returns_void: bool,
 ) {
     let has_real_assertion = assertions_body.lines().any(|line| {
         let trimmed = line.trim();
         !trimmed.is_empty() && !trimmed.starts_with('#')
     });
     if !has_declared_assertions || has_real_assertion {
+        return;
+    }
+    // ~keep A void call's binding is `nil` on success (rustler encodes Rust `()` that way), so
+    // `refute is_nil(...)` would fail every successful call, not just an unsuccessful one — the
+    // `{:ok, result} = call(...)` match this fallback's caller already emitted is the real check
+    // for a void call. See `render_assertion`'s `not_error` arm for the identical reasoning.
+    if returns_void {
         return;
     }
     let fallback_var = if is_streaming { chunks_var } else { result_var };
@@ -883,6 +903,90 @@ mod dropped_field_marker_tests {
         assert!(
             !out.contains("refute is_nil(result)"),
             "a fixture with zero declared assertions must stay vacuous, got:\n{out}"
+        );
+    }
+
+    /// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+    /// fixture whose only assertion was `not_error` still bound `{:ok, result} = call(...)` and
+    /// then asserted `refute is_nil(result)` — but rustler encodes a Rust `()` success payload
+    /// as `nil`, so that assertion FAILED every successful call, not just an unsuccessful one.
+    /// The `{:ok, result} = call(...)` match itself is already the real check (an `{:error, _}`
+    /// return raises `MatchError`), so the fix underscore-prefixes the unused binding and emits
+    /// no `refute is_nil` line.
+    #[test]
+    fn void_not_error_fixture_binds_underscored_and_emits_no_failing_assertion() {
+        let fixture = Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: "prefetch_languages".to_string(),
+            category: None,
+            description: "test".to_string(),
+            tags: vec![],
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            call: None,
+            input: serde_json::Value::Null,
+            mock_response: None,
+            source: String::new(),
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+            assertions: vec![Assertion {
+                assertion_type: "not_error".to_string(),
+                ..Default::default()
+            }],
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+        };
+        let call = CallConfig {
+            function: "prefetch_languages".to_string(),
+            module: "MyLib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            returns_void: true,
+            ..Default::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let mut out = String::new();
+        render_test_case(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            "",
+            "",
+            "",
+            &[],
+            None,
+            None,
+            &HashMap::new(),
+            None,
+            &HashSet::new(),
+            &[],
+            &[],
+            &config,
+            &type_defs,
+            &[],
+            &[],
+        );
+
+        assert!(
+            !out.contains("refute is_nil"),
+            "a void call's result is always nil; asserting non-nil would fail every successful \
+             call, got:\n{out}"
+        );
+        assert!(
+            out.contains("{:ok, _result} ="),
+            "the unused binding must be underscore-prefixed to avoid an unused-variable warning, \
+             got:\n{out}"
         );
     }
 }

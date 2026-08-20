@@ -1,0 +1,5 @@
+        do {
+            _ = {{ call_expr }}
+        } catch {
+            XCTFail("expected call not to throw: \(error)")
+        }

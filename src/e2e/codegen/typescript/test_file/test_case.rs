@@ -299,6 +299,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
             &effective_result_enum_fields,
             lang,
             is_streaming,
+            call_config.returns_void,
         );
     }
 
@@ -319,12 +320,23 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // `assertions_body` — the `rejects` assertion IS the expectation there.
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, lang, &fixture.id, &fixture.assertions);
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, lang, &fixture.id);
-    let verdict = if expects_error {
+    let declares_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+    // A `returns_void` call binds no usable `result`, so a fixture whose only assertion is
+    // `not_error` has nothing to assert on the way non-void calls do. `test_function.jinja`
+    // wraps `call_expr` itself in `expect(...).resolves.not.toThrow()` instead, so the check is
+    // a real, visible assertion rather than a bare `await call_expr;` relying only on an
+    // unhandled rejection to fail the test. ~keep
+    let void_not_error = call_config.returns_void && declares_not_error;
+    // ~keep `void_not_error` is excluded here for the same reason `expects_error` is: its real
+    // assertion is rendered by the call-wrapping branch in `test_function.jinja`, not spliced
+    // into `assertions_body` — `inert_verdict` only sees `assertions_body` and would otherwise
+    // misread a correctly-empty body as vacuous and refuse it, discarding the real check that
+    // already exists one branch over.
+    let verdict = if expects_error || void_not_error {
         None
     } else {
         inert_example::inert_verdict(&assertions_body, lang, &fixture.id, &fixture.assertions)
     };
-    let declares_not_error = fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
     // ~keep An unresolved field path is the consumer's to fix, so it stays a running `it(..)` and
     // gets an expectation that FAILS and names the fixture. A non-streaming example still has an
     // honest, FAILABLE fallback for every other cause — `expect(result).toBeDefined()`, which a
@@ -365,6 +377,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
             is_streaming,
             result_var,
             declares_not_error,
+            call_config.returns_void,
         ),
     }
 
@@ -432,6 +445,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         setup_lines => setup_lines,
         call_expr => call_expr,
         has_usable_assertion => has_usable_assertion || is_streaming,
+        void_not_error => void_not_error,
         result_var => ts_result_var,
         await_kw => await_kw,
         collect_snippet => collect_snippet,
@@ -465,6 +479,7 @@ fn apply_vacuous_assertion_fallback(
     is_streaming: bool,
     result_var: &str,
     streaming_drive_is_the_check: bool,
+    returns_void: bool,
 ) {
     let has_real_assertion = assertions_body
         .lines()
@@ -481,6 +496,12 @@ fn apply_vacuous_assertion_fallback(
         if streaming_drive_is_the_check {
             assertions_body.push_str("    expect(chunks).toBeDefined();\n");
         }
+    } else if returns_void {
+        // ~keep A void call's binding return is napi-rs's mapping of Rust `()` to JS
+        // `undefined`, so `expect(result).toBeDefined()` would fail every successful call, not
+        // just an unsuccessful one. `render_test_case`'s `void_not_error` flag already wraps the
+        // call itself in `expect(...).resolves.not.toThrow()` when `not_error` is declared;
+        // there is nothing else to assert here for the void case.
     } else {
         assertions_body.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
     }
@@ -500,4 +521,116 @@ fn is_slow_grammar(input: &serde_json::Value) -> bool {
     const SLOW_GRAMMARS: &[&str] = &["earthfile", "perl", "vb"];
 
     language.is_some_and(|lang| SLOW_GRAMMARS.contains(&lang))
+}
+
+#[cfg(test)]
+mod void_not_error_tests {
+    use super::*;
+    use crate::e2e::config::CallConfig;
+    use crate::e2e::fixture::Assertion;
+
+    /// Regression coverage for the void `not_error` defect: before this fix, a fixture whose
+    /// only assertion was `not_error` on a `returns_void` call rendered `expect(result)
+    /// .toBeDefined()` — but napi-rs maps a void call's `Ok(())` to JS `undefined`, so that
+    /// assertion FAILED every successful call, not just an unsuccessful one. Worse than the
+    /// vacuous body it replaced.
+    fn void_fixture(id: &str, assertions: Vec<Assertion>) -> Fixture {
+        Fixture {
+            docs: None,
+            requirements: Vec::new(),
+            id: id.to_string(),
+            category: None,
+            description: "test".to_string(),
+            tags: vec![],
+            skip: None,
+            env: None,
+            setup: Vec::new(),
+            call: None,
+            input: serde_json::Value::Null,
+            mock_response: None,
+            source: String::new(),
+            http: None,
+            asyncapi: None,
+            websocket: None,
+            preserve_input_urls: false,
+            assertions,
+            visitor: None,
+            args: vec![],
+            assertion_recipes: vec![],
+        }
+    }
+
+    fn render_void_call(assertions: Vec<Assertion>) -> String {
+        let fixture = void_fixture("prefetch_languages", assertions);
+        let call = CallConfig {
+            function: "prefetchLanguages".to_string(),
+            module: "myLib".to_string(),
+            result_var: "result".to_string(),
+            returns_void: true,
+            ..Default::default()
+        };
+        let e2e_config = E2eConfig {
+            call,
+            ..Default::default()
+        };
+        let config = crate::core::config::ResolvedCrateConfig::default();
+        let type_defs: Vec<TypeDef> = Vec::new();
+        let enums: Vec<EnumDef> = Vec::new();
+        let errors: Vec<crate::core::ir::ErrorDef> = Vec::new();
+        let mut referenced_enums = std::collections::BTreeSet::new();
+
+        let mut out = String::new();
+        render_test_case(
+            &mut out,
+            &fixture,
+            None,
+            None,
+            &e2e_config,
+            "node",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+            &type_defs,
+            &enums,
+            "",
+            &config,
+            &mut referenced_enums,
+            &errors,
+        );
+        out
+    }
+
+    /// The regression this test exists for: before the fix, a void `not_error`-only fixture
+    /// rendered `const result = await prefetchLanguages(); expect(result).toBeDefined();`
+    /// — an assertion that fails on every successful call, since a void call resolves `undefined`.
+    #[test]
+    fn void_not_error_wraps_the_call_in_resolves_not_to_throw() {
+        let out = render_void_call(vec![Assertion {
+            assertion_type: "not_error".to_string(),
+            ..Default::default()
+        }]);
+
+        assert!(
+            out.contains("await expect(prefetchLanguages()).resolves.not.toThrow();"),
+            "expected the void call wrapped in expect(...).resolves.not.toThrow(), got:\n{out}"
+        );
+        assert!(
+            !out.contains("toBeDefined()"),
+            "must not assert toBeDefined() on a void call's always-undefined result, got:\n{out}"
+        );
+    }
+
+    /// A void fixture with no `not_error` assertion at all must keep emitting a bare call —
+    /// wrapping every void call regardless of what it asserts would be a different, unrequested
+    /// behavior change.
+    #[test]
+    fn void_call_without_not_error_stays_a_bare_statement() {
+        let out = render_void_call(vec![]);
+
+        assert!(
+            out.contains("prefetchLanguages();"),
+            "expected a bare call statement, got:\n{out}"
+        );
+        assert!(!out.contains("resolves.not.toThrow"), "got:\n{out}");
+    }
 }

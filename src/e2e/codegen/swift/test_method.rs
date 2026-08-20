@@ -473,12 +473,31 @@ pub(super) fn render_test_method(
         }
     }
 
+    // A `returns_void` call binds no `result_var`, so `not_error` has nothing to assert a
+    // value against the way non-void calls do. Wrap the call itself in `XCTAssertNoThrow`
+    // (sync) or a do/catch that fails the test on a caught error (async, since XCTest has no
+    // async-aware `XCTAssertNoThrow` overload — mirrors the do/catch this file already uses
+    // for `expects_error`'s async branch, just inverted) instead of leaving `not_error`
+    // vacuous. Computed up front so both the assertion loop below (which must not also emit
+    // the "no result to assert on" skip comment for this specific assertion) and the
+    // call-emission decision further down agree on it. ~keep
+    let void_not_error = call_config.returns_void
+        && fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "not_error");
+
     // Add assertions to buffer.
     let mut void_skip_comment_emitted = false;
     for assertion in &fixture.assertions {
         // Skip assertions for Void-returning functions (they don't produce a result to assert on).
         // Only emit this comment once (not per assertion).
         if call_config.returns_void {
+            if assertion.assertion_type == "not_error" {
+                // Handled after this loop: the call itself gets wrapped in a real assertion
+                // instead (see `void_not_error` above), so nothing is skipped here.
+                continue;
+            }
             if !void_skip_comment_emitted {
                 let _ = writeln!(
                     body_buffer,
@@ -544,6 +563,24 @@ pub(super) fn render_test_method(
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(&body_buffer, "swift", &fixture.id, &fixture.assertions);
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&body_buffer, "swift", &fixture.id);
+    // A `not_error`-only void fixture gets its assertion here, before `inert_verdict` below —
+    // rather than as the bare call emitted at the call-emission site further down — so that a
+    // real executable line is already in `body_buffer` by the time `inert_verdict` looks for
+    // one. Before this, `body_buffer` held only the "no result to assert on" skip comment for
+    // every void fixture, `inert_verdict` saw no executable line, and substituted an
+    // unconditional `try XCTSkipIf(true, ...)` in its place — the fixture's test method never
+    // ran the check it declared, it silently skipped itself instead. ~keep
+    if void_not_error {
+        let template = if is_async {
+            "swift/void_not_error_async.jinja"
+        } else {
+            "swift/void_not_error_sync.jinja"
+        };
+        body_buffer.push_str(&crate::e2e::template_env::render(
+            template,
+            minijinja::context! { call_expr => call_expr },
+        ));
+    }
     // ~keep Read here, but applied only after the call-emission decision below, so the
     // `let result =` vs `_ =` choice is still made from the assertions that actually rendered.
     // Swift has no formatter that objects to a body which runs a real stream and then ends on a
@@ -551,7 +588,9 @@ pub(super) fn render_test_method(
     let refusal = inert_example::inert_verdict(&body_buffer, "swift", &fixture.id, &fixture.assertions);
 
     // Decide how to emit the call based on return type and whether result is referenced.
-    // - void returns: emit bare call
+    // - void returns with a `not_error` assertion: the call already went into `body_buffer`
+    //   above, wrapped in a real assertion — emit nothing more here.
+    // - void returns otherwise: emit bare call
     // - non-void with result referenced: bind with `let result = `
     // - non-void without result referenced: discard with `_ = `
     //
@@ -563,7 +602,9 @@ pub(super) fn render_test_method(
     // while `not_error` rendered no assertion at all — the bound result was
     // never referenced anywhere, an unused-but-harmless variable standing in
     // for what should have been a real assertion. ~keep
-    if call_config.returns_void {
+    if void_not_error {
+        // Already emitted into `body_buffer` above.
+    } else if call_config.returns_void {
         let _ = writeln!(out, "        {call_expr}");
     } else if body_buffer.contains(result_var) {
         let _ = writeln!(out, "        let {result_var} = {call_expr}");

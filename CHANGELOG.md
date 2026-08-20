@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `not_error` assertion on a call that returns void no longer renders a test body that
+  asserts nothing.** This is the void half of the vacuous-`not_error` defect whose non-void half
+  was closed in `dc8f5ff75`: with no result value to assert on, nine backends either rendered an
+  empty body, a comment, or — worse — an assertion that could never pass. A void `not_error` now
+  asserts what it actually means, that the call does not fail, using each framework's own idiom:
+  `XCTAssertNoThrow` / do-catch-`XCTFail` (Swift, sync/async), `assertDoesNotThrow` (Java, JUnit
+  5), `Record.Exception` / `Record.ExceptionAsync` + `Assert.Null` (C#, since xUnit has no
+  `Assert.DoesNotThrow`), `expectLater(…, completes)` (Dart), `expect(…).resolves.not.toThrow()`
+  (TypeScript, and WASM through the same renderer), and `expect_no_error(…)` (R).
+
+  Three backends were emitting an assertion that *fails on every successful void call*, because
+  each binding maps Rust `()` to that language's null: `assertNotNull($result)` in PHP, `assert
+  result is not None` in Python, and `refute is_nil(result)` in Elixir. Those are replaced by a
+  check the success path can pass — PHP asserts the call did not throw, Python emits the bare
+  (already non-vacuous, since an uncaught exception fails a pytest test) call statement, and
+  Elixir relies on the `{:ok, result} = call(…)` match it already emits, underscore-prefixing the
+  now-unused binding so `mix compile --warnings-as-errors` stays green.
+
+  Go, Gleam, Rust, Zig, and Ruby were audited and left unchanged: each already emits a real,
+  visible check at the call site for void calls — `if err != nil { t.Fatalf(…) }`, `should.be_ok()`
+  plus `let assert Ok(…)`, `.expect("call failed")`, Zig's `try`, and `expect { … }.not_to
+  raise_error` respectively — so a wrapper there would be redundant, not missing.
+
 ### Changed
 
 - The `Publish` workflow no longer gates on a green `CI` run for the released commit. The gate

@@ -8,6 +8,9 @@
    - setup_lines: array of setup statement strings
    - call_expr: function call expression
    - has_usable_assertion: bool
+   - void_not_error: bool — returns_void call whose only meaningful check is `not_error`;
+     wraps call_expr in expect(...).resolves.not.toThrow() so the check is a real, visible
+     assertion instead of a bare, unbound call statement
    - result_var: result variable name
    - await_kw: "await " (or empty string)
    - assertions_body: string containing all rendered assertions
@@ -84,7 +87,9 @@
 {% for line in setup_lines %}
 		{{ line }}
 {% endfor %}
-{% if has_usable_assertion %}
+{% if void_not_error %}
+		await expect({{ call_expr }}).resolves.not.toThrow();
+{% elif has_usable_assertion %}
 		const {{ result_var }} = {{ await_kw }}{{ call_expr }};
 {% else %}
 		{{ await_kw }}{{ call_expr }};

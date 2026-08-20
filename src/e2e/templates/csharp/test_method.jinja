@@ -15,6 +15,9 @@
    - declared_error_check: string containing the rendered declared-value assertion, or empty
    - client_factory_setup: client factory setup code (or empty string)
    - has_usable_assertion: bool - whether there's a result to assert on
+   - void_not_error: bool - a returns_void call whose only meaningful check is `not_error`;
+       wraps the call in Record.Exception/Record.ExceptionAsync and asserts it is null,
+       since xUnit has no Assert.DoesNotThrow
    - result_var: result variable name
    - assertions_body: string containing all rendered assertions
    - refusal_skip_reason: optional string — when non-empty the fixture declared assertions and
@@ -115,6 +118,13 @@
 {% elif has_usable_assertion %}
         var {{ result_var }} = {{ async_kw }}{{ call_target }}.{{ call_expr }};
 {{ assertions_body }}
+{% elif void_not_error %}
+{% if return_type == "async Task" %}
+        var exception = await Record.ExceptionAsync(async () => await {{ call_target }}.{{ call_expr }});
+{% else %}
+        var exception = Record.Exception(() => {{ call_target }}.{{ call_expr }});
+{% endif %}
+        Assert.Null(exception);
 {% else %}
         {{ async_kw }}{{ call_target }}.{{ call_expr }};
 {% endif %}

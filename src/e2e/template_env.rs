@@ -10,6 +10,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/swift/not_empty_assertion.swift.jinja"),
     ),
     (
+        "swift/void_not_error_sync.jinja",
+        include_str!("templates/swift/void_not_error_sync.jinja"),
+    ),
+    (
+        "swift/void_not_error_async.jinja",
+        include_str!("templates/swift/void_not_error_async.jinja"),
+    ),
+    (
         "kotlin_android/excluded_fixtures.kt.jinja",
         include_str!("templates/kotlin_android/excluded_fixtures.kt.jinja"),
     ),
@@ -511,6 +519,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "dart/http_snippet.jinja",
         include_str!("templates/dart/http_snippet.jinja"),
+    ),
+    (
+        "dart/void_not_error_call.jinja",
+        include_str!("templates/dart/void_not_error_call.jinja"),
     ),
     (
         "swift/app_harness.swift.jinja",

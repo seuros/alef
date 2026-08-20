@@ -429,11 +429,21 @@ pub(super) fn render_test_method(
     }
     crate::e2e::codegen::fail_on_unavailable_field_markers(&assertions_body, "java", &fixture.id, &fixture.assertions);
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "java", &fixture.id);
+    // A `returns_void` call binds no `result_var`, so a fixture whose only assertion is
+    // `not_error` has nothing to assert on the way non-void calls do. Wrap the call itself
+    // in `assertDoesNotThrow` instead, so the check is a real, visible assertion rather than
+    // a bare statement relying only on `throws_clause` to fail the test on an uncaught
+    // exception. ~keep
+    let void_not_error = call_config.returns_void && fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
     // ~keep `expects_error` is excluded because `test_method.jinja` does not splice
     // `assertions_body` into that branch at all — the assertThrows IS the expectation, and the
     // dropped assertions beside it are already surfaced by `error_path_assertions::render` below.
-    // Refusing there would replace a real check with a skip.
-    let verdict = if expects_error {
+    // Refusing there would replace a real check with a skip. `void_not_error` is excluded for the
+    // same reason: its real assertion is `assertDoesNotThrow(() -> call_expr)` wrapped around the
+    // call itself below, not anything spliced into `assertions_body` — `inert_verdict` only sees
+    // `assertions_body` and would otherwise misread a correctly-empty body as vacuous and replace
+    // it with a skip, discarding the real check that already exists one line down.
+    let verdict = if expects_error || void_not_error {
         None
     } else {
         inert_example::inert_verdict(&assertions_body, "java", &fixture.id, &fixture.assertions)
@@ -536,6 +546,7 @@ pub(super) fn render_test_method(
             call_expr => call_expr,
             result_var => result_var,
             returns_void => call_config.returns_void,
+            void_not_error => void_not_error,
             collect_snippet => collect_snippet,
             assertions_body => assertions_body,
             teardown_block => teardown_block,

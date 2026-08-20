@@ -20,6 +20,7 @@ pub(super) fn render_assertion(
     result_enum_fields: &std::collections::HashMap<String, String>,
     lang: &str,
     is_streaming: bool,
+    returns_void: bool,
 ) {
     // An uncaught throw already fails the test, but the caller (`test_case.rs`)
     // only ever used a separate `has_usable_assertion` predicate to decide
@@ -32,7 +33,13 @@ pub(super) fn render_assertion(
     // literal name every streaming-virtual-field accessor in this file
     // already hardcodes) rather than the raw, undrained stream. ~keep
     if assertion.assertion_type == "not_error" {
-        if is_streaming {
+        if returns_void {
+            // A `returns_void` call's binding return is napi-rs's mapping of Rust `()` to JS
+            // `undefined`, so `expect(result).toBeDefined()` would fail every successful call,
+            // not just an unsuccessful one. There is no result to assert on; `test_case.rs`'s
+            // `void_not_error` flag wraps `call_expr` itself in
+            // `expect(callExpr()).resolves.not.toThrow()` instead, so nothing renders here.
+        } else if is_streaming {
             out.push_str("    expect(chunks).toBeDefined();\n");
         } else {
             out.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
@@ -1021,6 +1028,7 @@ mod tests {
             &HashMap::new(),
             "typescript",
             false,
+            false,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -1058,6 +1066,7 @@ mod tests {
             &HashMap::new(),
             "typescript",
             false,
+            false,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -1082,6 +1091,7 @@ mod tests {
                 true,
                 &HashMap::new(),
                 lang,
+                false,
                 false,
             );
             assert!(
@@ -1112,6 +1122,7 @@ mod tests {
                     true,
                     &HashMap::new(),
                     lang,
+                    false,
                     false,
                 );
                 out
@@ -1145,6 +1156,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "node",
             false,
+            false,
         );
         assert!(out.contains(".length"), "got: {out}");
     }
@@ -1163,6 +1175,7 @@ mod tests {
             &HashMap::new(),
             "node",
             true,
+            false,
         );
         assert!(!out.contains("toBeTruthy"), "got: {out}");
         assert!(out.contains("expect(_v.length).toBeGreaterThan(0);"), "got: {out}");
@@ -1183,6 +1196,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "node",
             false,
+            false,
         );
         assert!(!out.contains(".trim()"), "equals must not trim either side; got: {out}");
     }
@@ -1200,6 +1214,7 @@ mod tests {
             false,
             &std::collections::HashMap::new(),
             "node",
+            false,
             false,
         );
         assert!(out.contains("(result ?? \"\").length"), "got: {out}");
@@ -1222,6 +1237,7 @@ mod tests {
             false,
             &std::collections::HashMap::new(),
             "node",
+            false,
             false,
         );
         assert!(out.contains("_alefE2eItemTexts(item)"), "got: {out}");
@@ -1253,6 +1269,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "node",
             false,
+            false,
         );
         assert_eq!(out, "    expect(result).toBeDefined();\n");
     }
@@ -1271,6 +1288,7 @@ mod tests {
             &std::collections::HashMap::new(),
             "node",
             true,
+            false,
         );
         assert_eq!(out, "    expect(chunks).toBeDefined();\n");
     }
@@ -1305,6 +1323,7 @@ mod wildcard_tests {
             false,
             &HashMap::new(),
             "typescript",
+            false,
             false,
         );
         out

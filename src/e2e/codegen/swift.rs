@@ -268,3 +268,5 @@ mod enum_field_classification_tests;
 mod is_true_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod void_not_error_call_tests;
