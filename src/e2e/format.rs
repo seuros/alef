@@ -341,10 +341,19 @@ const GO_MOD_TIDY_STEP: &str = "go mod tidy";
 /// Log any deferred resolution steps.
 ///
 /// For standalone stage commands, which have no later pipeline phase to report
-/// from the way `alef all` does. ~keep
+/// from the way `alef all` does.
+///
+/// ~keep The prefix stays reason-agnostic on purpose: `DeferredFormatting`'s own `reason`
+/// field (rendered by its `Display` impl below) is the only place that knows WHY a step
+/// was deferred, and there are two distinct whys — [`UNPUBLISHED_VERSION_REASON`] (registry
+/// mode resolving a version this run itself produces) and [`MISSING_TOOLCHAIN_REASON`] (the
+/// formatter's executable is absent, unrelated to publishing). A prefix that hard-coded
+/// "until the pinned version is published" was correct for the first and actively false for
+/// the second — the exact shape a CI job without `mix`/`go` on PATH hits on every run,
+/// pointing operators at "wait for a release" instead of "install the toolchain".
 pub fn warn_deferred(deferred: &[DeferredFormatting]) {
     for entry in deferred {
-        warn!("deferred until the pinned version is published: {entry}");
+        warn!("formatting step deferred: {entry}");
     }
 }
 

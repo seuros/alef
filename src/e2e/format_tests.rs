@@ -239,6 +239,52 @@ fn deferred_entry_renders_language_step_and_reason() {
     assert!(rendered.contains("not published yet"), "got: {rendered}");
 }
 
+/// `warn_deferred`'s own prefix used to hard-code "deferred until the pinned version is
+/// published" for every entry, which is only true of [`UNPUBLISHED_VERSION_REASON`]. A
+/// [`MISSING_TOOLCHAIN_REASON`] entry — the shape a CI job without `mix`/`go` on PATH hits on
+/// every run (see the `html-to-markdown` `e2e-freshness` job) — got the same false claim,
+/// pointing an operator at "wait for a release" when the fix is "install the toolchain". The
+/// prefix must stay reason-agnostic and let each entry's own `reason` field say why. ~keep
+#[test]
+#[tracing_test::traced_test]
+fn warn_deferred_does_not_claim_an_unpublished_version_for_a_missing_toolchain() {
+    let entry = DeferredFormatting {
+        language: "elixir".to_owned(),
+        step: "mix format".to_owned(),
+        reason: MISSING_TOOLCHAIN_REASON.to_owned(),
+    };
+
+    warn_deferred(std::slice::from_ref(&entry));
+
+    assert!(
+        !logs_contain("deferred until the pinned version is published"),
+        "a missing-toolchain defer must not be blamed on an unpublished version"
+    );
+    assert!(
+        logs_contain("executable is not installed on this machine"),
+        "the actual reason must still reach the log"
+    );
+}
+
+/// The registry-mode counterpart: an unpublished-version defer keeps its own reason legible
+/// too, so this test is not just proving the toolchain case by omission.
+#[test]
+#[tracing_test::traced_test]
+fn warn_deferred_reports_an_unpublished_version_reason_verbatim() {
+    let entry = DeferredFormatting {
+        language: "go".to_owned(),
+        step: GO_MOD_TIDY_STEP.to_owned(),
+        reason: UNPUBLISHED_VERSION_REASON.to_owned(),
+    };
+
+    warn_deferred(std::slice::from_ref(&entry));
+
+    assert!(
+        logs_contain("not published yet"),
+        "the unpublished-version reason must still reach the log"
+    );
+}
+
 /// The default path shells out to `poly fmt --fix`. With poly installed it must
 /// actually reformat the file; without it, non-strict mode must defer rather than
 /// abort instead of the old behaviour of aborting regardless of `strict` -- a

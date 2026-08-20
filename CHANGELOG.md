@@ -149,6 +149,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`[language] alef rendered no runnable expectation for fixture ...`) before the aggregate
   line, via the new `e2e::report_inert_examples`.
 
+- **`alef e2e generate`'s deferred-formatter warning no longer blames a missing toolchain on an
+  unpublished version.** `warn_deferred` hard-coded the prefix "deferred until the pinned
+  version is published" for every deferred step, but that is only true of the registry-mode
+  dependency-resolution case (`UNPUBLISHED_VERSION_REASON`); a step deferred because its
+  executable is simply absent (`MISSING_TOOLCHAIN_REASON` -- the shape a CI job without
+  `mix`/`go` on `PATH` hits on every run) got the same false claim, pointing the operator at
+  "wait for a release" instead of "install the toolchain". The prefix is now reason-agnostic
+  and lets each entry's own `reason` field say why.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`
