@@ -738,7 +738,7 @@ mod tests {
         // process-global cwd via `set_current_dir` into tempdirs that are then dropped,
         // and a JVM launched with a deleted cwd dies in `SystemModuleFinders` before it
         // ever reads the source. ~keep
-        let output = std::process::Command::new("kotlinc")
+        let output = crate::core::tool_command("kotlinc")
             .arg(&source_path)
             .arg("-d")
             .arg(directory.path().join("assertions.jar"))

@@ -1,3 +1,4 @@
+use crate::core::tool_command;
 use crate::snippets::cache::ValidationCache;
 use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
@@ -132,7 +133,7 @@ impl KotlinValidator {
         timeout_secs: u64,
         session: Option<&ValidationSession>,
     ) -> Result<std::process::Command> {
-        let mut command = std::process::Command::new("kotlinc");
+        let mut command = tool_command("kotlinc");
         if level == ValidationLevel::TypeCheck {
             command.arg("-Werror");
         }
@@ -290,7 +291,7 @@ impl KotlinValidator {
         };
         let file = dir.path().join("snippet.kt");
         std::fs::write(&file, snippet.code.trim())?;
-        let mut command = std::process::Command::new("kotlinc");
+        let mut command = tool_command("kotlinc");
         if level == ValidationLevel::TypeCheck {
             command.arg("-Werror");
         }

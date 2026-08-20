@@ -12,6 +12,7 @@ pub mod keep_marker;
 pub mod keywords;
 pub mod template_env;
 pub mod template_versions;
+pub mod toolchain;
 pub mod validation;
 pub mod version;
 
@@ -21,3 +22,4 @@ pub use error::AlefError;
 pub use extension::{Extension, ExtensionConfig};
 pub use ir::ApiSurface;
 pub use template_env::TemplateEnv;
+pub use toolchain::tool_command;

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Kotlin snippet validation no longer reports a toolchain it cannot launch.**
+  `KotlinValidator::is_available` answers with `which::which("kotlinc")`, which searches the whole
+  of `PATHEXT`, while spawning went through `Command::new("kotlinc")`, which on Windows only ever
+  appends `.exe`. Kotlin ships as `kotlinc.bat` there, so availability reported yes and every
+  batch then failed with `spawn failed: program not found` -- the two halves disagreeing about the
+  same tool. Toolchain spawns now go through `core::tool_command`, which hands `Command` the
+  resolved path so std routes the batch shim through `cmd.exe`.
+
 - **The node scaffold now gitignores the declarations `napi build` generates.** Pointing
   napi-rs's `--dts` at `index.native.d.ts` stopped it clobbering alef's own `index.d.ts`, but
   left the redirect target untracked, so every `npm run build` dropped a new file into the
