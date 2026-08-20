@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.4] - 2026-08-20
+
 ### Fixed
 
 - **The Rust e2e generator no longer emits `.to_string()` on enum-typed fields, which does
