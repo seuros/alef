@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
+  the napi and extendr backends actually look up, instead of a nested
+  `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads
+  `obj.get_named_property(variant.wire_name)` and `visitor_method.jinja` (extendr) reads
+  `val.dollar(variant.wire_name)` — both flat lookups keyed by the variant's wire name. The
+  TypeScript e2e template and the real R generator (`e2e::codegen::r::visitor`, not the dead
+  `e2e/templates/r/visitor_method.jinja`) instead emitted a nested envelope that satisfies
+  neither lookup, so every custom visitor callback result was silently dropped to the default
+  action in generated TypeScript and R e2e suites.
 - **A project that configures no `[crates.output]` for Python, Node, PHP, FFI, or wasm no
   longer scaffolds a manifest cargo cannot build.** The scaffolders write each of those
   languages' `Cargo.toml` at `crates/{crate}-<suffix>`, but `OutputTemplate::resolve`'s

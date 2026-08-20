@@ -105,6 +105,9 @@ pub(super) fn emit_typescript_visitor_method(out: &mut String, method_name: &str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::visitor_result::required_visitor_result_metadata;
+    use crate::core::config::TraitBridgeConfig;
+    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeRef};
     use crate::e2e::fixture::CallbackAction;
 
     #[test]
@@ -136,9 +139,95 @@ mod tests {
             out.contains("visitCodeBlock(ctx: any, code: any, lang: any)"),
             "got: {out}"
         );
+        assert!(out.contains(r#"return { custom: "replacement" };"#), "got: {out}");
+    }
+
+    /// `VisitResult` IR shape mirroring the consumer convention for visitor trait bridges:
+    /// unit `Skip`/`Continue`/`PreserveHtml` variants plus a single-`String`-field `Custom`
+    /// payload variant, with `#[serde(rename_all = "snake_case")]` on the enum — the
+    /// convention the napi backend relies on to build lowercase wire names.
+    fn visit_result_enum() -> EnumDef {
+        EnumDef {
+            name: "VisitResult".to_string(),
+            rust_path: "sample_markdown_rs::visitor::VisitResult".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Continue".to_string(),
+                    is_default: true,
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Skip".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "PreserveHtml".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Custom".to_string(),
+                    fields: vec![FieldDef {
+                        name: "0".to_string(),
+                        ty: TypeRef::String,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            has_serde: true,
+            serde_rename_all: Some("snake_case".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn visitor_bridge_cfg() -> TraitBridgeConfig {
+        TraitBridgeConfig {
+            trait_name: "HtmlVisitor".to_string(),
+            result_type: Some("VisitResult".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Pins the e2e template's emitted TypeScript object key to the flat key that
+    /// `visitor_result::required_visitor_result_metadata` computes — the exact function the
+    /// napi backend's `gen_visitor_bridge` calls to build its
+    /// `obj.get_named_property(prop_name)` lookup. Deriving the expected key from that shared
+    /// function, rather than hardcoding it here, means the e2e template and the real binding
+    /// can't silently re-diverge: a nested `{ type: "custom", output: ... }` envelope satisfies
+    /// neither `get_named_property("custom")` nor any other flat lookup, so the previous shape
+    /// looked self-consistent while never being deliverable to the napi backend.
+    #[test]
+    fn typescript_visitor_custom_payload_key_matches_napi_wire_name() {
+        let api = ApiSurface {
+            enums: vec![visit_result_enum()],
+            ..Default::default()
+        };
+        let metadata = required_visitor_result_metadata(&api, &visitor_bridge_cfg())
+            .expect("VisitResult metadata should resolve for a well-formed visitor result enum");
+        let custom_wire = metadata
+            .string_payload_variants
+            .first()
+            .expect("expected one string-payload variant (Custom)")
+            .wire_name
+            .clone();
+
+        let mut out = String::new();
+        emit_typescript_visitor_method(
+            &mut out,
+            "visit_text",
+            &CallbackAction::Custom {
+                output: "replacement".to_string(),
+            },
+        );
+
+        let expected_key = format!("{{ {custom_wire}: ");
         assert!(
-            out.contains(r#"return { type: "custom", output: "replacement" };"#),
-            "got: {out}"
+            out.contains(&expected_key),
+            "expected napi-matching key {expected_key:?} in rendered TypeScript:\n{out}"
+        );
+        assert!(
+            !out.contains("type:") && !out.contains("output:"),
+            "TypeScript visitor payload must not emit the dead nested `type`/`output` envelope:\n{out}"
         );
     }
 }

@@ -78,11 +78,7 @@ fn emit_r_visitor_method(out: &mut String, method_name: &str, action: &CallbackA
         }
         CallbackAction::Custom { output } => {
             let escaped = escape_r(output);
-            let _ = writeln!(
-                out,
-                "      list(type = \"{}\", output = \"{escaped}\")",
-                action.wire_name()
-            );
+            let _ = writeln!(out, "      list({} = \"{escaped}\")", action.wire_name());
         }
         CallbackAction::CustomTemplate { template, return_form } => {
             let r_expr = r_template_to_paste0(template);
@@ -91,7 +87,7 @@ fn emit_r_visitor_method(out: &mut String, method_name: &str, action: &CallbackA
                     let _ = writeln!(out, "      {r_expr}");
                 }
                 TemplateReturnForm::Dict => {
-                    let _ = writeln!(out, "      list(type = \"{}\", output = {r_expr})", action.wire_name());
+                    let _ = writeln!(out, "      list({} = {r_expr})", action.wire_name());
                 }
             }
         }
@@ -102,6 +98,9 @@ fn emit_r_visitor_method(out: &mut String, method_name: &str, action: &CallbackA
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codegen::visitor_result::required_visitor_result_metadata;
+    use crate::core::config::TraitBridgeConfig;
+    use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeRef};
 
     #[test]
     fn visitor_actions_use_canonical_wire_shape() {
@@ -117,6 +116,95 @@ mod tests {
                 output: "replacement".to_string(),
             },
         );
-        assert!(custom.contains(r#"list(type = "custom", output = "replacement")"#));
+        assert!(custom.contains(r#"list(custom = "replacement")"#));
+    }
+
+    /// `VisitResult` IR shape mirroring the consumer convention for visitor trait bridges:
+    /// unit `Skip`/`Continue`/`PreserveHtml` variants plus a single-`String`-field `Custom`
+    /// payload variant, with `#[serde(rename_all = "snake_case")]` on the enum — the
+    /// convention the extendr backend relies on to build lowercase wire names.
+    fn visit_result_enum() -> EnumDef {
+        EnumDef {
+            name: "VisitResult".to_string(),
+            rust_path: "sample_markdown_rs::visitor::VisitResult".to_string(),
+            variants: vec![
+                EnumVariant {
+                    name: "Continue".to_string(),
+                    is_default: true,
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Skip".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "PreserveHtml".to_string(),
+                    ..Default::default()
+                },
+                EnumVariant {
+                    name: "Custom".to_string(),
+                    fields: vec![FieldDef {
+                        name: "0".to_string(),
+                        ty: TypeRef::String,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            ],
+            has_serde: true,
+            serde_rename_all: Some("snake_case".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn visitor_bridge_cfg() -> TraitBridgeConfig {
+        TraitBridgeConfig {
+            trait_name: "HtmlVisitor".to_string(),
+            result_type: Some("VisitResult".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Pins the e2e generator's emitted R literal to the flat key that
+    /// `visitor_result::required_visitor_result_metadata` computes — the exact function the
+    /// extendr backend's `gen_visitor_bridge` calls to build its `val.dollar(...)` lookup.
+    /// Deriving the expected key from that shared function, rather than hardcoding it here,
+    /// means the e2e generator and the real binding can't silently re-diverge: a nested
+    /// `list(type = ..., output = ...)` envelope satisfies neither `val.dollar("custom")` nor
+    /// any other flat lookup, so the previous shape looked self-consistent while never being
+    /// deliverable to the extendr backend.
+    #[test]
+    fn r_visitor_custom_payload_key_matches_extendr_wire_name() {
+        let api = ApiSurface {
+            enums: vec![visit_result_enum()],
+            ..Default::default()
+        };
+        let metadata = required_visitor_result_metadata(&api, &visitor_bridge_cfg())
+            .expect("VisitResult metadata should resolve for a well-formed visitor result enum");
+        let custom_wire = metadata
+            .string_payload_variants
+            .first()
+            .expect("expected one string-payload variant (Custom)")
+            .wire_name
+            .clone();
+
+        let mut out = String::new();
+        emit_r_visitor_method(
+            &mut out,
+            "visit_text",
+            &CallbackAction::Custom {
+                output: "replacement".to_string(),
+            },
+        );
+
+        let expected_key = format!("list({custom_wire} = ");
+        assert!(
+            out.contains(&expected_key),
+            "expected extendr-matching key {expected_key:?} in rendered R:\n{out}"
+        );
+        assert!(
+            !out.contains("type ="),
+            "R visitor payload must not emit the dead nested `type`/`output` envelope:\n{out}"
+        );
     }
 }
