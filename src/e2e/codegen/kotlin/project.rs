@@ -37,12 +37,22 @@ pub(crate) fn render_build_gradle(
             let jar_name = pkg_name.rsplit(':').next().unwrap_or(pkg_name).replace('-', "_");
             let jna = maven::JNA;
             let jackson = maven::JACKSON_E2E;
+            // jackson-annotations dropped patch-version releases after 2.19.x (2.20, 2.21,
+            // 2.22, ... -- no third component), unlike jackson-databind/datatype-jdk8/
+            // module-kotlin, which still publish `major.minor.patch`. `JACKSON_E2E` tracks
+            // the latter scheme; using it for jackson-annotations resolves a coordinate
+            // (e.g. `2.22.2`) that was never published, and every Local-mode Gradle
+            // dependency resolution fails before Kotlin compilation starts. `scaffold::
+            // languages::kotlin` (the real package build.gradle.kts generator) already gets
+            // this right via the dedicated `JACKSON_ANNOTATIONS` constant; this e2e path had
+            // its own copy of the dependency list and never picked it up. ~keep
+            let jackson_annotations = maven::JACKSON_ANNOTATIONS;
             let jspecify = maven::JSPECIFY;
             let coroutines = maven::KOTLINX_COROUTINES_CORE;
             format!(
                 r#"    testImplementation(files("../../packages/kotlin/build/libs/{jar_name}-{pkg_version}.jar"))
     testImplementation("net.java.dev.jna:jna:{jna}")
-    testImplementation("com.fasterxml.jackson.core:jackson-annotations:{jackson}")
+    testImplementation("com.fasterxml.jackson.core:jackson-annotations:{jackson_annotations}")
     testImplementation("com.fasterxml.jackson.core:jackson-databind:{jackson}")
     testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:{jackson}")
     testImplementation("org.jspecify:jspecify:{jspecify}")
@@ -330,4 +340,42 @@ pub(super) fn render_sut_server_setup_kt(kotlin_pkg_id: &str) -> String {
     let _ = writeln!(out, "}}");
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_build_gradle;
+
+    /// Regression: local-mode build.gradle.kts must pin jackson-annotations to
+    /// `JACKSON_ANNOTATIONS`, not the `JACKSON_E2E` version used for
+    /// jackson-databind/jackson-datatype-jdk8. jackson-annotations stopped publishing
+    /// patch-version releases after 2.19.x (2.20, 2.21, 2.22, ... with no third
+    /// component); reusing `JACKSON_E2E`'s `major.minor.patch` value resolves a
+    /// coordinate that was never published on Maven Central, so Gradle fails to
+    /// resolve the test classpath before Kotlin compilation even starts.
+    #[test]
+    fn local_dep_pins_jackson_annotations_to_its_own_version_scheme() {
+        let out = render_build_gradle(
+            "sample_router",
+            "dev.sample_router",
+            "0.15.6-rc.3",
+            crate::e2e::config::DependencyMode::Local,
+            false,
+        );
+        let annotations_line = out
+            .lines()
+            .find(|line| line.contains("jackson-annotations"))
+            .expect("jackson-annotations dependency line must be emitted");
+        assert!(
+            annotations_line.contains(&format!(
+                "jackson-annotations:{}\"",
+                crate::core::template_versions::maven::JACKSON_ANNOTATIONS
+            )),
+            "jackson-annotations must use JACKSON_ANNOTATIONS's version scheme, got:\n{annotations_line}"
+        );
+        assert!(
+            !annotations_line.contains(crate::core::template_versions::maven::JACKSON_E2E),
+            "jackson-annotations must not reuse JACKSON_E2E's patch-versioned scheme, got:\n{annotations_line}"
+        );
+    }
 }

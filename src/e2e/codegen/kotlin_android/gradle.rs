@@ -18,6 +18,7 @@ pub(super) fn render_build_gradle_kotlin_android(
     jni_lib_name: &str,
     jni_crate_path: &str,
     e2e_env: &std::collections::HashMap<String, String>,
+    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
 ) -> String {
     // Forward `[crates.e2e.env]` vars into the Gradle test worker's *process*
     // environment via `environment(...)`. The worker is a forked JVM, and the
@@ -54,6 +55,17 @@ pub(super) fn render_build_gradle_kotlin_android(
     };
     let junit = maven::JUNIT;
     let jackson = maven::JACKSON_E2E;
+    // jackson-annotations dropped patch-version releases after 2.19.x (2.20, 2.21, 2.22,
+    // ... -- no third component), unlike jackson-databind/datatype-jdk8/module-kotlin, which
+    // still publish `major.minor.patch`. `JACKSON_E2E` tracks the latter scheme; reusing it
+    // for jackson-annotations resolves a coordinate (e.g. `2.22.2`) that was never published,
+    // so `:generateDebugUnitTestStubRFile` (or any task needing the test classpath resolved)
+    // fails with "Could not find com.fasterxml.jackson.core:jackson-annotations:2.22.2"
+    // before Kotlin compilation ever starts. `scaffold::languages::kotlin` (the real package
+    // build.gradle.kts generator) already gets this right via the dedicated
+    // `JACKSON_ANNOTATIONS` constant; this e2e path had its own copy of the dependency list
+    // and never picked it up. ~keep
+    let jackson_annotations = maven::JACKSON_ANNOTATIONS;
     // E2E tests run on the host JVM (not Android), so pick a target that
     // matches the JUnit Jupiter baseline (5.x → JVM 11, 6.x → JVM 17). The
     // Android library itself still ships at ANDROID_JVM_TARGET for runtime
@@ -336,10 +348,38 @@ tasks.matching {{ it.name.startsWith("processDebug") || it.name.startsWith("proc
         )
     };
 
+    // Local mode compiles `packages/kotlin-android`'s wrapper sources directly into this
+    // test project's `test` sourceSet (see `source_sets_block` above), so any capsule-type
+    // host package those sources import (e.g. `io.github.treesitter.ktreesitter.Language`
+    // for a `[crates.kotlin_android.capsule_types.Language]` passthrough) must be on this
+    // project's own test classpath too -- `render_build_gradle_kotlin_android` had no
+    // capsule awareness at all, so the copied sources referenced a package this file never
+    // declared and every local-mode e2e build failed with "Unresolved reference 'github'"
+    // (or whatever the host package's top segment is) before a single test ran. Registry
+    // mode does not need this: the published AAR declares its capsule dependency as `api`
+    // (see `backends::kotlin_android::gen_build_gradle`), so it already resolves
+    // transitively through the `implementation(mavenCoordinate)` dependency below. ~keep
+    let capsule_test_deps: String = {
+        let mut deps: Vec<(String, String)> = if dep_mode == crate::e2e::config::DependencyMode::Local {
+            capsule_types
+                .values()
+                .filter(|cap| !cap.package.is_empty())
+                .map(|cap| (cap.package.clone(), cap.package_version.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        deps.sort();
+        deps.dedup();
+        deps.iter()
+            .map(|(coord, ver)| format!("\n    testImplementation(\"{coord}:{ver}\")"))
+            .collect()
+    };
+
     // Test dependencies are always needed for host-JVM tests (both Local and Registry modes).
     let test_deps = format!(
         r#"    // Jackson for JSON assertion helpers
-    testImplementation("com.fasterxml.jackson.core:jackson-annotations:{jackson}")
+    testImplementation("com.fasterxml.jackson.core:jackson-annotations:{jackson_annotations}")
     testImplementation("com.fasterxml.jackson.core:jackson-databind:{jackson}")
     testImplementation("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:{jackson}")
 
@@ -363,7 +403,7 @@ tasks.matching {{ it.name.startsWith("processDebug") || it.name.startsWith("proc
     testImplementation(kotlin("test"))
 
     // JNA for loading the native library from java.library.path
-    testImplementation("net.java.dev.jna:jna:{jna}")
+    testImplementation("net.java.dev.jna:jna:{jna}"){capsule_test_deps}
 "#
     );
 
@@ -522,10 +562,47 @@ mod tests {
             "demo_client_jni",
             "../../crates/demo-client-jni",
             &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         );
         assert!(
             output.contains("jackson-module-kotlin"),
             "build.gradle.kts must depend on jackson-module-kotlin, got:\n{output}"
+        );
+    }
+
+    /// Regression: build.gradle.kts must pin jackson-annotations to
+    /// `JACKSON_ANNOTATIONS`, not the `JACKSON_E2E` version used for
+    /// jackson-databind/jackson-datatype-jdk8/jackson-module-kotlin.
+    /// jackson-annotations stopped publishing patch-version releases after 2.19.x
+    /// (2.20, 2.21, 2.22, ... with no third component); reusing `JACKSON_E2E`'s
+    /// `major.minor.patch` value resolves a coordinate that was never published on
+    /// Maven Central, so `:generateDebugUnitTestStubRFile` (and every other task
+    /// needing the test classpath resolved) fails before Kotlin compilation starts.
+    #[test]
+    fn build_gradle_kotlin_android_pins_jackson_annotations_to_its_own_version_scheme() {
+        let output = render_build_gradle_kotlin_android(
+            "dev.sample_crate.samplellm.android",
+            "dev.sample_crate:demo-client-android:1.0.0",
+            crate::e2e::config::DependencyMode::Local,
+            "demo_client_jni",
+            "../../crates/demo-client-jni",
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        let annotations_line = output
+            .lines()
+            .find(|line| line.contains("jackson-annotations"))
+            .expect("jackson-annotations dependency line must be emitted");
+        assert!(
+            annotations_line.contains(&format!(
+                "jackson-annotations:{}\"",
+                crate::core::template_versions::maven::JACKSON_ANNOTATIONS
+            )),
+            "jackson-annotations must use JACKSON_ANNOTATIONS's version scheme, got:\n{annotations_line}"
+        );
+        assert!(
+            !annotations_line.contains(crate::core::template_versions::maven::JACKSON_E2E),
+            "jackson-annotations must not reuse JACKSON_E2E's patch-versioned scheme, got:\n{annotations_line}"
         );
     }
 
@@ -548,6 +625,7 @@ mod tests {
                 "sample_crate_jni",
                 "../../crates/sample_crate-jni",
                 &env,
+                &std::collections::HashMap::new(),
             );
             assert!(
                 output.contains(r#"environment("MY_SERVICE_ALLOW_PRIVATE_NETWORK", "true")"#),
@@ -576,6 +654,7 @@ mod tests {
                 "sample_crate_jni",
                 "../../crates/sample_crate-jni",
                 &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
             );
             assert!(
                 output.contains(r#"testImplementation("org.junit.platform:junit-platform-launcher:"#),
@@ -586,6 +665,76 @@ mod tests {
                 "build.gradle.kts ({dep_mode:?}) must call useJUnitPlatform(), got:\n{output}"
             );
         }
+    }
+
+    /// Regression: local-mode build.gradle.kts must declare a `testImplementation` for
+    /// every `[crates.kotlin_android.capsule_types]` host package. Local mode compiles
+    /// `packages/kotlin-android`'s wrapper sources directly into this project's `test`
+    /// sourceSet (see `source_sets_block`), and those sources import the capsule's
+    /// `host_type` (e.g. `io.github.treesitter.ktreesitter.Language`) whenever a function
+    /// or method returns that capsule type. Without this dependency the Kotlin compiler
+    /// fails with "Unresolved reference 'github'" (or whatever the host package's top
+    /// segment is) on every local-mode e2e build, before a single test runs.
+    #[test]
+    fn build_gradle_kotlin_android_local_mode_declares_capsule_test_dependency() {
+        let mut capsule_types = std::collections::HashMap::new();
+        capsule_types.insert(
+            "Language".to_string(),
+            crate::core::config::HostCapsuleTypeConfig {
+                host_type: "io.github.treesitter.ktreesitter.Language".to_string(),
+                package: "io.github.tree-sitter:ktreesitter".to_string(),
+                package_version: "0.25.0".to_string(),
+                construct_expr: "io.github.treesitter.ktreesitter.Language({ptr})".to_string(),
+                ..Default::default()
+            },
+        );
+        let output = render_build_gradle_kotlin_android(
+            "dev.sample_crate",
+            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            crate::e2e::config::DependencyMode::Local,
+            "sample_crate_jni",
+            "../../crates/sample_crate-jni",
+            &std::collections::HashMap::new(),
+            &capsule_types,
+        );
+        assert!(
+            output.contains(r#"testImplementation("io.github.tree-sitter:ktreesitter:0.25.0")"#),
+            "local-mode build.gradle.kts must declare a testImplementation for the capsule host package, got:\n{output}"
+        );
+    }
+
+    /// Regression: registry-mode build.gradle.kts must NOT declare a `testImplementation`
+    /// for capsule host packages -- the published AAR declares its capsule dependency as
+    /// `api` (see `backends::kotlin_android::gen_build_gradle`), so it already resolves
+    /// transitively through the `implementation(mavenCoordinate)` dependency. Duplicating
+    /// it here would be redundant, not a compile blocker, but it would mask a real
+    /// regression in the AAR's own `api` dependency if this test also passed.
+    #[test]
+    fn build_gradle_kotlin_android_registry_mode_omits_capsule_test_dependency() {
+        let mut capsule_types = std::collections::HashMap::new();
+        capsule_types.insert(
+            "Language".to_string(),
+            crate::core::config::HostCapsuleTypeConfig {
+                host_type: "io.github.treesitter.ktreesitter.Language".to_string(),
+                package: "io.github.tree-sitter:ktreesitter".to_string(),
+                package_version: "0.25.0".to_string(),
+                construct_expr: "io.github.treesitter.ktreesitter.Language({ptr})".to_string(),
+                ..Default::default()
+            },
+        );
+        let output = render_build_gradle_kotlin_android(
+            "dev.sample_crate",
+            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            crate::e2e::config::DependencyMode::Registry,
+            "sample_crate_jni",
+            "../../crates/sample_crate-jni",
+            &std::collections::HashMap::new(),
+            &capsule_types,
+        );
+        assert!(
+            !output.contains("io.github.tree-sitter:ktreesitter"),
+            "registry-mode build.gradle.kts must not duplicate the capsule host package testImplementation, got:\n{output}"
+        );
     }
 
     /// Regression: registry-mode build.gradle.kts must emit the full Maven
@@ -602,6 +751,7 @@ mod tests {
             crate::e2e::config::DependencyMode::Registry,
             "sample_crate_jni",
             "../../crates/sample_crate-jni",
+            &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
         );
         assert!(
@@ -672,6 +822,7 @@ mod tests {
             "sample_crate_jni",
             "../../crates/sample_crate-jni",
             &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         );
         assert!(
             output.contains("verifyAarPublished"),
@@ -709,6 +860,7 @@ mod tests {
                 "sample_crate_jni",
                 "../../crates/sample_crate-jni",
                 &std::collections::HashMap::new(),
+                &std::collections::HashMap::new(),
             );
             assert!(
                 output.contains("jvmToolchain(17)"),
@@ -727,6 +879,7 @@ mod tests {
             crate::e2e::config::DependencyMode::Local,
             "demo_client_jni",
             "../../crates/demo-client-jni",
+            &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
         );
         assert!(
@@ -750,6 +903,7 @@ mod tests {
                 dep_mode,
                 "sample_crate_jni",
                 "../../crates/sample_crate-jni",
+                &std::collections::HashMap::new(),
                 &std::collections::HashMap::new(),
             );
 
@@ -783,6 +937,7 @@ mod tests {
             "sample_crate_jni",
             "../../crates/sample_crate-jni",
             &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
         );
 
         assert!(
@@ -805,6 +960,7 @@ mod tests {
             crate::e2e::config::DependencyMode::Registry,
             "sample_crate_jni",
             "../../crates/sample_crate-jni",
+            &std::collections::HashMap::new(),
             &std::collections::HashMap::new(),
         );
 

@@ -104,6 +104,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `swift/assertions.rs` from growing past the file-size cap) with the same
   `bare_result_is_option` guard.
 
+- **kotlin_android's local-mode e2e `build.gradle.kts` now declares a `testImplementation`
+  for every `[crates.kotlin_android.capsule_types]` host package.** Local mode compiles
+  `packages/kotlin-android`'s wrapper sources directly into the e2e project's own `test`
+  sourceSet, and those sources import the capsule's `host_type` (e.g.
+  `io.github.treesitter.ktreesitter.Language`) whenever a function or method returns it --
+  but `render_build_gradle_kotlin_android` had no capsule awareness at all, so every
+  local-mode e2e build failed to compile with `Unresolved reference 'github'` (or whatever
+  the host package's top segment is) before a single test ran.
+
+- **kotlin_android's and plain kotlin's local-mode e2e `build.gradle.kts` now pin
+  jackson-annotations to its own version scheme instead of `JACKSON_E2E`'s.**
+  jackson-annotations stopped publishing patch-version releases after 2.19.x (`2.20`,
+  `2.21`, `2.22`, ... with no third component), unlike jackson-databind /
+  jackson-datatype-jdk8 / jackson-module-kotlin, which still publish `major.minor.patch`.
+  Reusing `JACKSON_E2E`'s value for jackson-annotations resolved a coordinate (e.g.
+  `2.22.2`) that was never published on Maven Central, so Gradle failed to resolve the test
+  classpath before Kotlin compilation ever started. `scaffold::languages::kotlin` (the real
+  package `build.gradle.kts` generator) already used the dedicated `JACKSON_ANNOTATIONS`
+  constant; these e2e generators had their own copy of the dependency list and never picked
+  it up.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`

@@ -154,6 +154,11 @@ pub(super) fn generate(
     // Generate build.gradle.kts for the host JVM project.
     let jni_lib_name = config.jni_lib_name();
     let jni_crate_path = config.jni_crate_path();
+    let capsule_types = config
+        .kotlin_android
+        .as_ref()
+        .map(|android| android.capsule_types.clone())
+        .unwrap_or_default();
     files.push(GeneratedFile {
         path: output_base.join("build.gradle.kts"),
         content: render_build_gradle_kotlin_android(
@@ -163,6 +168,7 @@ pub(super) fn generate(
             &jni_lib_name,
             &jni_crate_path,
             &e2e_config.env,
+            &capsule_types,
         ),
         generated_header: false,
     });
