@@ -332,6 +332,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter is now underscore-prefixed when there are no typed error variants to
   downcast against.
 
+- **Java e2e's `json_object` arg builder now classifies enum-typed fields from the IR, not
+  only from hand-maintained config.** `java_builder_expression` decided whether a field is
+  enum-typed purely from the hand-maintained `enum_fields` config — a flat, type-unaware set
+  of camelCase field names — so a consumer whose `alef.toml` never listed a field emitted
+  `.withStyle("fenced")`: a `String` literal passed to a builder method whose parameter type is
+  a Java enum, which does not compile. `java_builder_expression` now also consults the
+  IR-derived classification (`FieldResolver::ir_enum_fields`, keyed by owner type), anchored at
+  the exact struct the JSON object maps to — a builder expression has no "declared Rust return
+  type" the way a result-field assertion does, so it anchors on the type name it is already
+  building rather than on `resolve_declared_result_type`. An explicit config entry still wins.
 - **Ruby e2e assertions now classify enum-typed result fields from the IR, not only from
   hand-maintained config.** `render_assertion` read enum-ness solely from the effective
   `fields_enum` config (plus a per-call `enum_fields` override), so a consumer that never

@@ -1,5 +1,24 @@
 use crate::e2e::escape::escape_java;
+use crate::e2e::field_access::IrEnumMap;
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
+
+/// True when the IR knows `field_name` (the raw, snake_case fixture key) is an enum-typed
+/// field on `type_name` — the exact struct the current JSON object maps to (an `Options`
+/// type, or a nested config record within one).
+///
+/// `java_builder_expression` anchors by `type_name` directly rather than by field name alone,
+/// so a same-named field on an unrelated type is never misclassified — the same invariant the
+/// rust/csharp/gleam/swift/dart/kotlin/python/elixir/ruby e2e generators keep for result
+/// fields, applied here to argument-builder fields instead (there is no "declared Rust return
+/// type" to anchor against for an argument; `type_name` already names the exact type being
+/// built). Purely additive: callers check the hand-maintained `enum_fields` config FIRST, so
+/// an explicit config entry still wins. ~keep
+fn is_ir_enum_field(ir_enum_map: &IrEnumMap, type_name: &str, field_name: &str) -> bool {
+    ir_enum_map
+        .enum_fields
+        .get(type_name)
+        .is_some_and(|fields| fields.contains(field_name))
+}
 
 /// Check if a type name is a numeric type hint (f32, float, etc.) vs. a complex type name.
 pub(super) fn is_numeric_type_hint(ty: &str) -> bool {
@@ -85,8 +104,7 @@ pub(super) fn java_builder_expression(
     nested_types: &std::collections::HashMap<String, String>,
     nested_types_optional: bool,
     path_fields: &[String],
-    type_defs: &[crate::core::ir::TypeDef],
-    enums: &[crate::core::ir::EnumDef],
+    ir_enum_map: &IrEnumMap,
 ) -> String {
     let mut expr = format!("{}.builder()", type_name);
     for (key, val) in obj {
@@ -96,9 +114,14 @@ pub(super) fn java_builder_expression(
 
         let java_val = match val {
             serde_json::Value::String(s) => {
-                // Check if this field is an enum type by checking enum_fields.
-                // Infer enum type name from camelCase field name by converting to UpperCamelCase.
-                if enum_fields.contains(&camel_key) {
+                // Check if this field is an enum type by checking enum_fields. When the
+                // hand-maintained config is silent, fall back to the IR-derived classification
+                // (anchored at `type_name`, the exact struct this object maps to) so a
+                // consumer that never configured `enum_fields` still gets `EnumType.Variant`
+                // instead of a quoted String literal passed to a builder method whose
+                // parameter type is a Java enum — a CS1503-shaped compile error the field's
+                // declared type can't satisfy. ~keep
+                if enum_fields.contains(&camel_key) || is_ir_enum_field(ir_enum_map, type_name, key) {
                     // Enum field: infer type name from field name (e.g., "codeBlockStyle" -> "CodeBlockStyle")
                     let enum_type_name = camel_key.to_upper_camel_case();
                     let variant_name = s.to_upper_camel_case();
@@ -157,8 +180,7 @@ pub(super) fn java_builder_expression(
                     nested_types,
                     nested_types_optional,
                     &[],
-                    type_defs,
-                    enums,
+                    ir_enum_map,
                 );
                 // Top-level config builders usually declare nested record fields as
                 // `Optional<T>`. Calls with non-optional nested config builders can opt

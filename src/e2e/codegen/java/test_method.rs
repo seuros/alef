@@ -210,6 +210,11 @@ pub(super) fn render_test_method(
             && crate::e2e::codegen::recipe::json_object_constructor_type(arg, effective_options_type, val).is_some()
     });
 
+    // IR-derived enum classification for `java_builder_expression`'s json_object args, keyed
+    // by owner type so a field name that means different things on different structs is never
+    // conflated. Computed once here and reused across every arg's builder expression below. ~keep
+    let ir_enum_map = FieldResolver::ir_enum_fields(type_defs, enums);
+
     // Emit builder expressions for json_object args.
     let mut builder_expressions = String::new();
     if needs_deser {
@@ -260,8 +265,7 @@ pub(super) fn render_test_method(
                             nested_types,
                             nested_types_optional,
                             path_fields,
-                            type_defs,
-                            enums,
+                            &ir_enum_map,
                         );
                         let var_name = &arg.name;
                         builder_expressions.push_str(&format!("        var {} = {};\n", var_name, builder_expr));
