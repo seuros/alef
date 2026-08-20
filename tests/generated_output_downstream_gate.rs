@@ -197,12 +197,17 @@ const GATE_LANGUAGES: &[GateLanguage] = &[
     },
 ];
 
+/// The `languages = [...]` value for the fixture's `alef.toml`, already wrapped.
+///
+/// Emitted one-per-line because the inline form is far past poly's TOML width and the poly lane
+/// then reports the fixture's own `alef.toml` as unformatted alef output. The gate exists to
+/// judge what alef emits; it must not fail on the input the test itself writes. ~keep
 fn fixture_language_list() -> String {
     let names: Vec<String> = GATE_LANGUAGES
         .iter()
-        .map(|language| format!("\"{}\"", language.name))
+        .map(|language| format!("  \"{}\",", language.name))
         .collect();
-    names.join(", ")
+    format!("\n{}\n", names.join("\n"))
 }
 
 fn clippy_lane_languages() -> Vec<&'static str> {
@@ -462,7 +467,9 @@ enum Sabotage {
 
 fn write_fixture_workspace(root: &Path) {
     std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
-    std::fs::write(root.join("src/lib.rs"), FIXTURE_SOURCE).expect("write fixture source");
+    // `trim_start`: the raw literal opens with a newline, which poly reports as a reformat of
+    // the fixture's own source rather than of anything alef produced. ~keep
+    std::fs::write(root.join("src/lib.rs"), FIXTURE_SOURCE.trim_start()).expect("write fixture source");
     std::fs::write(root.join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
     let config = FIXTURE_ALEF_TOML
         .replace("__ALEF_VERSION__", env!("CARGO_PKG_VERSION"))
