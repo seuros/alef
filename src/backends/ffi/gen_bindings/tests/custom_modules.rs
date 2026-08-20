@@ -12,6 +12,9 @@ fn write_module_file(src_dir: &std::path::Path, module: &str) {
     std::fs::write(src_dir.join(format!("{module}.rs")), "// hand-written FFI module\n").expect("write module file");
 }
 
+/// The output path is interpolated as a TOML *literal* string (single quotes). A Windows
+/// tempdir is `C:\Users\RUNNER~1\...`, and inside a TOML basic string `\U` starts a unicode
+/// escape -- the config failed to parse at all rather than exercising custom modules. ~keep
 fn config_with_custom_modules(src_dir: &std::path::Path, modules: &[&str]) -> crate::core::config::ResolvedCrateConfig {
     let module_list = modules
         .iter()
@@ -28,7 +31,7 @@ name = "my-lib"
 sources = ["src/lib.rs"]
 
 [crates.output]
-ffi = "{src_dir}"
+ffi = '{src_dir}'
 
 [crates.custom_modules]
 ffi = [{module_list}]
@@ -173,6 +176,23 @@ fn custom_module_missing_file_fails_generation_with_checked_paths() {
     assert!(
         message.contains(&nested.display().to_string()),
         "error must name the checked nested-file path: {message}"
+    );
+}
+
+/// The fixture builder must survive a Windows output path. `C:\\Users\\RUNNER~1\\...` inside a
+/// TOML *basic* string parses `\\U` as a unicode escape and fails the whole document ("too few
+/// unicode value digits"), which is how all four tests above died on the Windows runner while
+/// passing everywhere else. Asserting the path survives round-trip proves the literal-string
+/// quoting, not merely that some config parsed. ~keep
+#[test]
+fn a_windows_shaped_output_path_survives_the_toml_fixture() {
+    let windows_path = std::path::Path::new(r"C:\Users\RUNNER~1\AppData\Local\Temp\.tmpQr7Fqg");
+
+    let config = config_with_custom_modules(windows_path, &["cancellation"]);
+
+    assert_eq!(
+        config.output_for("ffi").map(|p| p.to_string_lossy().into_owned()),
+        Some(windows_path.to_string_lossy().into_owned())
     );
 }
 

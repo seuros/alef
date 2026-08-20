@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Windows test suite no longer fails on its own fixtures' path quoting.** Six tests built
+  an `alef.toml` fixture by interpolating a `tempfile` directory into a TOML *basic* string. A
+  Windows tempdir is `C:\Users\RUNNER~1\...`, where `\U` opens a unicode escape, so `toml`
+  rejected the whole document ("too few unicode value digits") and the FFI custom-module and
+  kotlin-android gradle walk-up tests died before reaching what they assert. The fixtures now use
+  TOML literal strings, which take no escapes at all.
+
 - **The Zig runtime-file-IO compile check now links libc, the way every generated `build.zig`
   does.** The check compiled its snippet with `zig build-exe -fno-emit-bin` and no `-lc`, while
   the emitted body allocates through `std.heap.c_allocator` and every generated Zig project sets

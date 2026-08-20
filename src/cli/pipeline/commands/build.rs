@@ -1297,7 +1297,7 @@ sources = ["src/lib.rs"]
 package = "dev.alpha"
 
 [crates.output]
-kotlin_android = "{deep_source_dir}/"
+kotlin_android = '{deep_source_dir}/'
 "#,
             deep_source_dir = deep_source_dir.display(),
         ))
@@ -1366,7 +1366,7 @@ sources = ["src/lib.rs"]
 package = "dev.alpha"
 
 [crates.output]
-kotlin_android = "{deep_source_dir}/"
+kotlin_android = '{deep_source_dir}/'
 "#,
             deep_source_dir = deep_source_dir.display(),
         ))
