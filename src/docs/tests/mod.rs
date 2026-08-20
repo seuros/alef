@@ -48,3 +48,4 @@ mod markdown_quality;
 mod shared_docs;
 mod strict_attribution;
 mod strict_bail_order;
+mod wasm_untagged_enum_docs;

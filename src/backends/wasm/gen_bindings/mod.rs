@@ -7,6 +7,7 @@ pub mod functions;
 pub mod methods;
 pub mod service_api;
 mod ts_union;
+pub(crate) use ts_union::docs_ts_type_for_untagged_enum;
 pub mod types;
 
 mod cargo;
@@ -348,15 +349,7 @@ impl Backend for WasmBackend {
 
         let wasm_config = config.wasm.as_ref();
         let mut exclude_functions = wasm_config.map(|c| c.exclude_functions.clone()).unwrap_or_default();
-        let mut exclude_types = wasm_config.map(|c| c.exclude_types.clone()).unwrap_or_default();
-        // Simple newtype opaques (no generics in the path) DO wrap as `#[wasm_bindgen]` classes
-        exclude_types.extend(
-            config
-                .opaque_types
-                .iter()
-                .filter(|(_, path)| path.contains('<'))
-                .map(|(name, _)| name.clone()),
-        );
+        let mut exclude_types = ts_union::wasm_exclude_types(config);
         let text_field_enum_names: AHashSet<String> = config.untagged_union_text_types.iter().cloned().collect();
         let mut type_overrides = wasm_config.map(|c| c.type_overrides.clone()).unwrap_or_default();
         for name in &text_field_enum_names {
@@ -542,12 +535,7 @@ impl Backend for WasmBackend {
             builder.add_item(&gen_env_shims(&env_shims));
         }
 
-        let opaque_types: AHashSet<String> = api
-            .types
-            .iter()
-            .filter(|t| t.is_opaque && !exclude_types.contains(&t.name))
-            .map(|t| t.name.clone())
-            .collect();
+        let opaque_types: AHashSet<String> = ts_union::wasm_opaque_type_names(api, &exclude_types);
         let mutex_types: AHashSet<String> = api
             .types
             .iter()

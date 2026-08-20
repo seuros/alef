@@ -102,6 +102,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   manifest now records every path `pipeline::scaffold` returned, not only the marked subset —
   presence is a weaker claim than ownership, and it's exactly what a create-once file's
   absence should invalidate.
+
+- **The generated WASM API reference no longer documents `#[serde(untagged)]` data enums as a
+  fixed set of named, referenceable values.** `render_enum` rendered the same `| Value |
+  Description |` table for every enum regardless of language or lowering, but the WASM backend
+  never calls `enums::gen_enum` for a payload-carrying untagged enum -- there is no `Wasm{Enum}`
+  class or member a JS/TS caller could reference by name, only the structural TypeScript union
+  `ts_union.rs` emits. The docs page now calls a new `docs_ts_type_for_untagged_enum` (exposed
+  from the WASM backend) to embed that SAME computed union text for WASM specifically, instead of
+  restating a description of it that could drift; every other language's docs are unaffected.
 - **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
   the napi and extendr backends actually look up, instead of a nested
   `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads

@@ -95,7 +95,7 @@ pub(super) fn generate_lang_doc(
     if !enums_to_doc.is_empty() {
         out.push_str("### Enums\n\n");
         for en in &enums_to_doc {
-            out.push_str(&render_enum(en, lang, ffi_prefix));
+            out.push_str(&render_enum(en, lang, config, api, ffi_prefix));
             out.push_str("\n---\n\n");
         }
     }

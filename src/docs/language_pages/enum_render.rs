@@ -1,15 +1,53 @@
 use crate::codegen::shared::binding_fields;
-use crate::core::config::Language;
-use crate::core::ir::EnumDef;
+use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::ir::{ApiSurface, EnumDef};
 use crate::docs::descriptions::generate_enum_variant_description;
 use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use crate::docs::formatting::escape_table_cell;
-use crate::docs::naming::{enum_variant_name, field_name, type_name};
+use crate::docs::naming::{enum_variant_name, field_name, lang_code_fence, type_name};
 use crate::docs::{clean_doc, doc_type, template_env, version_labels};
 
 use super::function_render::push_version_annotation;
 
-pub(super) fn render_enum(en: &EnumDef, lang: Language, ffi_prefix: &str) -> String {
+/// For a WASM untagged data enum, the note-plus-code-block that replaces the `Value |
+/// Description` table below: that table's framing (a fixed set of named, referenceable
+/// "values") does not hold for these types at all in the WASM binding -- `enums::gen_enum` is
+/// never called for them (see its own `~keep` note), so there is no `Wasm{Enum}` class or
+/// member to reference by name. What a JS/TS caller actually sees is the structural TypeScript
+/// union `backends::wasm::docs_ts_type_for_untagged_enum` computes -- the SAME function the
+/// WASM backend itself calls to emit the `.d.ts`, so this can never independently drift from
+/// the real generated type the way the old per-variant table did. Returns `None` for every
+/// other language, and for a WASM enum that does not lower this way (see that function's own
+/// doc). ~keep
+fn wasm_untagged_union_note(
+    en: &EnumDef,
+    lang: Language,
+    config: &ResolvedCrateConfig,
+    api: &ApiSurface,
+) -> Option<String> {
+    if lang != Language::Wasm {
+        return None;
+    }
+    let ts_type = crate::backends::wasm::docs_ts_type_for_untagged_enum(en, api, config)?;
+    let mut out = String::new();
+    out.push_str(
+        "This type has no dedicated class in the WASM binding. It is expressed as the following \
+         structural TypeScript type:\n\n",
+    );
+    out.push_str(&template_env::render(
+        "code_block.jinja",
+        minijinja::context! { lang_code => lang_code_fence(lang), body => ts_type },
+    ));
+    Some(out)
+}
+
+pub(super) fn render_enum(
+    en: &EnumDef,
+    lang: Language,
+    config: &ResolvedCrateConfig,
+    api: &ApiSurface,
+    ffi_prefix: &str,
+) -> String {
     let mut out = String::new();
     let ename = type_name(&en.name, lang, ffi_prefix);
 
@@ -31,6 +69,12 @@ pub(super) fn render_enum(en: &EnumDef, lang: Language, ffi_prefix: &str) -> Str
         out.push_str(&doc);
         out.push('\n');
         out.push('\n');
+    }
+
+    if let Some(note) = wasm_untagged_union_note(en, lang, config, api) {
+        out.push_str(&note);
+        out.push('\n');
+        return out;
     }
 
     out.push_str("| Value | Description |\n");

@@ -50,6 +50,11 @@ pub(super) struct UntaggedEnumTsPlan {
 /// The complete TS plan for every untagged data enum in one crate's API surface.
 pub(super) struct AllUntaggedEnumsTsPlan {
     pub(super) plans: AHashMap<String, UntaggedEnumTsPlan>,
+    /// The plain TypeScript text of every declaration, with no Rust wrapper -- what
+    /// `ts_custom_section.jinja` embeds verbatim into `custom_section`'s `r#"..."#` string, and
+    /// what doc support (`docs_ts_type_for_untagged_enum`) wants directly rather than having to
+    /// strip the Rust wrapper back off. Empty if there were no untagged data enums.
+    pub(super) ts_body: String,
     /// One shared `typescript_custom_section`, or empty if there were no untagged data enums.
     /// Built once, across every enum, so a struct or fieldless enum reachable from more than one
     /// union (e.g. two different unions both carry a `ContentPart`-shaped variant) is declared
@@ -151,20 +156,28 @@ pub(super) fn build_untagged_enum_ts_plans(
         );
     }
 
-    let custom_section = if ctx.decls.is_empty() {
+    let ts_body = if ctx.decls.is_empty() {
         String::new()
     } else {
-        let ts_body = ctx.decls.iter().map(render_aux_decl).collect::<Vec<_>>().join("\n\n");
+        ctx.decls.iter().map(render_aux_decl).collect::<Vec<_>>().join("\n\n")
+    };
+    let custom_section = if ts_body.is_empty() {
+        String::new()
+    } else {
         crate::backends::wasm::template_env::render(
             "ts_custom_section",
             minijinja::context! {
                 const_name => "ALEF_UNTAGGED_UNIONS_TS",
-                ts_body => ts_body,
+                ts_body => ts_body.clone(),
             },
         )
     };
 
-    AllUntaggedEnumsTsPlan { plans, custom_section }
+    AllUntaggedEnumsTsPlan {
+        plans,
+        ts_body,
+        custom_section,
+    }
 }
 
 fn render_alias(name: &str, members: &[String]) -> String {
@@ -373,6 +386,79 @@ impl TsMapContext<'_> {
         // representation than the plain-JSON shape this module describes. ~keep
         "any".to_string()
     }
+}
+
+/// Doc support: the exact `.d.ts` union declaration text WASM emits for one untagged data
+/// enum's own type (plus every auxiliary interface/alias it recursively depends on), so
+/// `docs::language_pages::enum_render` can embed alef's OWN lowering decision for this enum
+/// instead of reading the IR a second, independently-drifting way -- the same shared-function
+/// pattern that closed the doc/binding disagreements fixed by 8d199c0bf and 64aa80692.
+///
+/// Returns `None` when `enum_def` does not become a JsValue/TS-union field at all: excluded via
+/// `[crates.wasm].exclude_types`, a fieldless enum, an internally-tagged data enum
+/// (`serde_tag`), or a `untagged_union_text_types` opt-in that pins the field to a plain
+/// `string` instead (see `build_untagged_enum_ts_plan_for_api`'s own filter, which this
+/// mirrors).
+///
+/// Uses only the config-declared exclusion/opaque sets (`wasm_exclude_types` /
+/// `wasm_opaque_type_names`), not the dynamic additions `generate_bindings` layers on top
+/// (cfg-gated features, dropped external crates, unknown-type omissions) -- the caller already
+/// hands this function a per-language cfg-filtered `ApiSurface` (see
+/// `docs::language_pages::generate_lang_doc`), which covers the common case. A variant payload
+/// that transitively reaches a type this binding drops for one of those dynamic reasons is a
+/// narrow, rare shape (an externally-defined or unrepresentable type inside a
+/// `#[serde(untagged)]` payload) that this function may render as a full interface where the
+/// real binding falls back to `any`; that gap is judged acceptable for a documentation aid. ~keep
+pub(crate) fn docs_ts_type_for_untagged_enum(
+    enum_def: &EnumDef,
+    api: &ApiSurface,
+    config: &crate::core::config::ResolvedCrateConfig,
+) -> Option<String> {
+    let exclude_types_vec = wasm_exclude_types(config);
+    let text_field_enum_names: AHashSet<String> = config.untagged_union_text_types.iter().cloned().collect();
+    if exclude_types_vec.contains(&enum_def.name)
+        || text_field_enum_names.contains(&enum_def.name)
+        || !is_untagged_data_enum(enum_def)
+    {
+        return None;
+    }
+    let exclude_types: AHashSet<String> = exclude_types_vec.iter().cloned().collect();
+    let opaque_type_names = wasm_opaque_type_names(api, &exclude_types_vec);
+    let prefix = config.wasm_type_prefix();
+    let plan = build_untagged_enum_ts_plans(&[enum_def], api, &exclude_types, &opaque_type_names, &prefix);
+    Some(plan.ts_body)
+}
+
+/// Types this WASM binding excludes from generation entirely: `[crates.wasm].exclude_types`
+/// plus opaque newtypes whose wrapped path carries a generic parameter (a `Vec<T>`-shaped
+/// opaque newtype never becomes a `#[wasm_bindgen]` class). `pub(super)` so `mod.rs`'s
+/// `generate_bindings` and this module's own `docs_ts_type_for_untagged_enum` compute the same
+/// exclusion set instead of two independently-drifting readings of `config`. ~keep
+pub(super) fn wasm_exclude_types(config: &crate::core::config::ResolvedCrateConfig) -> Vec<String> {
+    let mut exclude_types = config
+        .wasm
+        .as_ref()
+        .map(|c| c.exclude_types.clone())
+        .unwrap_or_default();
+    exclude_types.extend(
+        config
+            .opaque_types
+            .iter()
+            .filter(|(_, path)| path.contains('<'))
+            .map(|(name, _)| name.clone()),
+    );
+    exclude_types
+}
+
+/// The opaque type names this WASM binding wraps as `Arc`-backed handle structs, given the set
+/// already excluded from generation. Shared between `mod.rs` and `docs_ts_type_for_untagged_enum`
+/// for the same reason as `wasm_exclude_types`. ~keep
+pub(super) fn wasm_opaque_type_names(api: &ApiSurface, exclude_types: &[String]) -> AHashSet<String> {
+    api.types
+        .iter()
+        .filter(|t| t.is_opaque && !exclude_types.contains(&t.name))
+        .map(|t| t.name.clone())
+        .collect()
 }
 
 fn primitive_ts_type(prim: &crate::core::ir::PrimitiveType) -> &'static str {
