@@ -141,6 +141,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fun toWire(): String`, built from the same `wire_variant_value` mapping the
   `@JsonProperty` annotations commit to.
 
+- **`alef e2e generate`'s inert-example summary now names which language and fixture were
+  refused, not just a count.** The end-of-run line ("N generated example(s) across M
+  language(s) had no runnable expectation... X that rendered nothing at all") gave an operator
+  nothing to act on without re-running at `-vv` and grepping generated files for the same
+  reason text the ledger already carried. Each refusal is now logged individually
+  (`[language] alef rendered no runnable expectation for fixture ...`) before the aggregate
+  line, via the new `e2e::report_inert_examples`.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`
