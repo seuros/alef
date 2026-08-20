@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The two committed records no longer ping-pong against `poly fmt`.** `.alef-ownership.toml`
+  and `.alef-toml-merge-provenance.toml` wrote every array one element per line, but the format
+  gate consumers commit through collapses an array whose inline form fits 120 columns. Since both
+  records are rewritten wholesale on every `alef generate`, that was not a one-time cosmetic diff:
+  alef re-expanded what `poly fmt` had collapsed, the gate collapsed it again, and the files
+  changed in every commit forever with no way to settle it by hand. Both now collapse at exactly
+  the boundary the formatter does (measured, not assumed: 120 columns inline is collapsed, 121 is
+  left expanded), so a converged tree stays converged.
+
 - **`Publish` now refuses to publish a tag whose `CI` run is not green.** `Publish` fires on
   `release: published`, which is entirely independent of `CI`, and nothing in the workflow looked
   at whether the tagged commit ever built — a red `main` could be released to crates.io and

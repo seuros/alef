@@ -476,18 +476,38 @@ fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
 /// with nothing to configure) -- and so disagreed for as long as nothing compared them. ~keep
 const RECORD_ARRAY_INDENT: &str = "  ";
 
-/// Render `values` as a multi-line TOML array body -- `[`, one element per line at
-/// [`RECORD_ARRAY_INDENT`], trailing comma, `]` -- with no trailing newline.
+/// Widest `key = [...]` line `poly fmt` leaves inline. Measured against the bundled TOML
+/// formatter rather than assumed: a two-element array rendering to 120 columns is collapsed onto
+/// one line, 121 is left expanded, and no repo in the polyrepo overrides the formatter's column
+/// width. Both committed records are rewritten wholesale on every `alef generate`, so emitting a
+/// shape the formatter disagrees with is not a one-time cosmetic diff -- alef re-expands what
+/// `poly fmt` collapsed, the consumer's format gate rewrites it back, and the file ping-pongs in
+/// every commit forever. ~keep
+const RECORD_ARRAY_MAX_INLINE_WIDTH: usize = 120;
+
+/// Render `key = [...]` for a committed record array, with no trailing newline: inline when the
+/// result fits [`RECORD_ARRAY_MAX_INLINE_WIDTH`], otherwise one element per line at
+/// [`RECORD_ARRAY_INDENT`] with a trailing comma.
 ///
 /// Element reprs come from `toml_edit` rather than a hand-rolled escape so a value carrying a
 /// quote, a backslash or a control character cannot produce a record that no longer parses. An
 /// unparseable record is silent by design (it reads as "alef owns nothing" / "alef proposed
 /// nothing"), so a bad escape would not announce itself. ~keep
-fn render_record_array(values: &[String]) -> String {
-    let mut rendered = String::from("[\n");
-    for value in values {
+fn render_record_assignment(key: &str, values: &[String]) -> String {
+    let elements: Vec<String> = values
+        .iter()
+        .map(|value| toml_edit::Value::from(value.as_str()).to_string())
+        .collect();
+
+    let inline = format!("{key} = [{}]", elements.join(", "));
+    if inline.chars().count() <= RECORD_ARRAY_MAX_INLINE_WIDTH {
+        return inline;
+    }
+
+    let mut rendered = format!("{key} = [\n");
+    for element in &elements {
         rendered.push_str(RECORD_ARRAY_INDENT);
-        rendered.push_str(&toml_edit::Value::from(value.as_str()).to_string());
+        rendered.push_str(element);
         rendered.push_str(",\n");
     }
     rendered.push(']');
@@ -503,8 +523,8 @@ fn render_record_array(values: &[String]) -> String {
 /// reviewer. One path per line makes every claim its own `+` line. ~keep
 fn render_ownership_manifest(paths: &[String]) -> String {
     format!(
-        "{OWNERSHIP_MANIFEST_HEADER}\nowned_paths = {}\n",
-        render_record_array(paths)
+        "{OWNERSHIP_MANIFEST_HEADER}\n{}\n",
+        render_record_assignment("owned_paths", paths)
     )
 }
 
@@ -921,17 +941,12 @@ pub fn read_toml_merge_provenance(
 }
 
 /// Render the record body: one `[[entries]]` table per entry, blank-line separated, arrays
-/// indented at [`RECORD_ARRAY_INDENT`] like the sibling ownership record.
+/// rendered by [`render_record_assignment`] like the sibling ownership record.
 ///
 /// Hand-rendered for the indentation, which `toml::to_string_pretty` hard-codes at four spaces
 /// while `poly fmt` -- the gate consumers commit through -- normalises to two, leaving this file
 /// permanently "would reformat" in every repo alef generates into and unfixable by hand, since
-/// the next `alef generate` rewrites it.
-///
-/// Arrays shorter than two elements stay inline (`values = ["one"]`), which is the shape
-/// `to_string_pretty` already emitted and which the committed records prove `poly fmt` accepts.
-/// Spelling *those* multi-line as well would be a second, unmeasured bet on how the formatter
-/// treats a collapsible array; this change is indentation only. ~keep
+/// the next `alef generate` rewrites it. ~keep
 fn render_toml_merge_provenance(entries: &[TomlMergeProvenanceEntry]) -> String {
     let mut body = String::new();
     for entry in entries {
@@ -945,19 +960,7 @@ fn render_toml_merge_provenance(entries: &[TomlMergeProvenanceEntry]) -> String 
             body.push_str(&toml_edit::Value::from(value.as_str()).to_string());
             body.push('\n');
         }
-        body.push_str("values = ");
-        if entry.values.len() < 2 {
-            let inline: Vec<String> = entry
-                .values
-                .iter()
-                .map(|value| toml_edit::Value::from(value.as_str()).to_string())
-                .collect();
-            body.push('[');
-            body.push_str(&inline.join(", "));
-            body.push(']');
-        } else {
-            body.push_str(&render_record_array(&entry.values));
-        }
+        body.push_str(&render_record_assignment("values", &entry.values));
         body.push('\n');
     }
     body
@@ -2293,7 +2296,13 @@ mod tests {
     fn both_committed_records_indent_array_elements_identically() {
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path();
-        let values = vec!["target/**".to_string(), "docs/assets/**".to_string()];
+        // Long enough that neither record collapses to one line -- there is no element
+        // indentation to compare in the inline shape. ~keep
+        let values = vec![
+            "packages/generated-bindings/some-language/build/**".to_string(),
+            "packages/generated-bindings/other-language/build/**".to_string(),
+            "packages/generated-bindings/third-language/build/**".to_string(),
+        ];
         let mut arrays = std::collections::BTreeMap::new();
         arrays.insert("discovery.exclude".to_string(), values.clone());
 
@@ -2318,6 +2327,44 @@ mod tests {
             "the two committed records must indent array elements identically, got \
              {provenance_indents:?} for the provenance record and {ownership_indents:?} for the \
              ownership record"
+        );
+    }
+
+    /// Both committed records are rewritten wholesale on every `alef generate`, so the shape they
+    /// emit has to be the shape `poly fmt` would leave alone. It was not: a short array was
+    /// written one element per line, the consumer's format gate collapsed it onto one line, and
+    /// the next `alef generate` expanded it again -- the file changed in every commit forever and
+    /// no one could stop it by hand. The boundary below is measured against the bundled formatter
+    /// (120 columns inline is collapsed, 121 is left expanded), not assumed. ~keep
+    #[test]
+    fn record_arrays_collapse_exactly_where_the_format_gate_collapses_them() {
+        let short = render_record_assignment("values", &["one".to_string(), "two".to_string()]);
+        assert_eq!(
+            short, r#"values = ["one", "two"]"#,
+            "an array the format gate would collapse must be written inline"
+        );
+
+        let empty = render_record_assignment("values", &[]);
+        assert_eq!(empty, "values = []", "an empty array has nothing to spread over lines");
+
+        // Sized so `values = [...]` is exactly RECORD_ARRAY_MAX_INLINE_WIDTH columns.
+        let filler = "x".repeat(RECORD_ARRAY_MAX_INLINE_WIDTH - r#"values = [""]"#.len());
+        let at_limit = render_record_assignment("values", &[filler.clone()]);
+        assert_eq!(
+            at_limit.chars().count(),
+            RECORD_ARRAY_MAX_INLINE_WIDTH,
+            "apparatus check: the fixture must land exactly on the limit, got:\n{at_limit}"
+        );
+        assert!(
+            !at_limit.contains('\n'),
+            "a line exactly at the limit is still collapsed by the gate, so it must stay inline"
+        );
+
+        let over_limit = render_record_assignment("values", &[format!("{filler}y")]);
+        assert_eq!(
+            over_limit,
+            format!("values = [\n{RECORD_ARRAY_INDENT}\"{filler}y\",\n]"),
+            "one column past the limit the gate leaves the array expanded, so alef must too"
         );
     }
 
