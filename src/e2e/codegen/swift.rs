@@ -262,6 +262,8 @@ mod values;
 pub use stubs::emit_test_backend;
 
 #[cfg(test)]
+mod enum_field_classification_tests;
+#[cfg(test)]
 mod is_true_tests;
 #[cfg(test)]
 mod tests;

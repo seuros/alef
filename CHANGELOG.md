@@ -204,6 +204,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accessor already treated as a soft default, so enabling `jni` without also configuring
   `kotlin_android` produced a hard generate failure for a language the consumer did
   configure.
+- **Swift e2e assertions now classify enum-typed result fields from the IR, not only from
+  hand-maintained `fields_enum`/`[e2e.call.overrides.swift] enum_fields` config.** A consumer
+  whose `alef.toml` never declared that entry got a bare `XCTAssertEqual(result.kind,
+  "key_value")` for a first-class Codable struct's genuine `DataNodeKind` enum property — Swift
+  compares an enum and a `String` directly there with no implicit conversion, so the generated
+  test target failed to compile. Swift now wires the same IR-derived classification
+  (`FieldResolver::ir_enum_fields` + `with_ir_enum_map`, anchored at the call's declared Rust
+  return type) the rust/csharp/gleam generators use; an explicit config entry still wins.
 - **e2e/kotlin_android**: stop emitting a call to a function `[crates.kotlin_android].features`
   gated out of the binding. The kotlin_android binding generator already drops any
   `#[cfg(feature = "...")]`-gated function whose feature isn't in the binding's configured

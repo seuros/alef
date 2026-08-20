@@ -224,7 +224,6 @@ pub(super) fn swift_traversal_contains_assert(
     result_var: &str,
     negate: bool,
     msg: &str,
-    enum_fields: &std::collections::HashSet<String>,
     field_resolver: &FieldResolver,
 ) -> String {
     let array_accessor = field_resolver.accessor(array_part, "swift", result_var);
@@ -241,7 +240,10 @@ pub(super) fn swift_traversal_contains_assert(
         return line;
     }
     let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
-    let elem_is_enum = enum_fields.contains(full_field) || enum_fields.contains(resolved_full);
+    // `field_resolver.is_enum` consults the hand-maintained `fields_enum` config first and falls
+    // back to the IR-derived classification when the config is silent — see `render_assertion`'s
+    // `field_is_enum` comment for the failure mode a config-only check produced. ~keep
+    let elem_is_enum = field_resolver.is_enum(full_field);
     let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
         || field_resolver.is_optional(field_resolver.resolve(resolved_elem_part));
     let elem_str = if elem_is_enum {
@@ -499,7 +501,6 @@ mod nested_wildcard_tests {
             "result",
             false,
             "expected to contain",
-            &HashSet::new(),
             resolver,
         )
     }

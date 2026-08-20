@@ -50,7 +50,6 @@ fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         false,
         false,
     );

@@ -7,7 +7,6 @@ use crate::e2e::field_access::{FieldResolver, SwiftFirstClassMap};
 use crate::e2e::fixture::Fixture;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use regex::Regex;
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
@@ -82,6 +81,24 @@ pub(super) fn render_test_method(
         &fixture.tags,
         &fixture.input,
     );
+    let lang = "swift";
+    let call_overrides = call_config.overrides.get(lang);
+
+    // Merge per-call enum_fields keys into the effective enum set so that fields like "status"
+    // (BatchStatus, BatchObject) are treated as enum-typed even when they are not globally
+    // listed in fields_enum (they are context-dependent — BatchStatus on BatchObject but plain
+    // String on ResponseObject). `with_ir_enum_map` below then rescues every enum-typed field
+    // this config never mentions at all, anchored at the call's declared Rust return type. ~keep
+    let mut effective_enum_fields: HashSet<String> = e2e_config.effective_fields_enum(call_config).clone();
+    if let Some(o) = call_overrides {
+        effective_enum_fields.extend(o.enum_fields.keys().cloned());
+    }
+    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call_config,
+        lang,
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
+
     // Build per-call field resolver using the effective field sets for this call.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_swift_first_class(
@@ -94,11 +111,10 @@ pub(super) fn render_test_method(
         swift_first_class_map.clone(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_enum_fields(effective_enum_fields)
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
-    let enum_fields = e2e_config.effective_fields_enum(call_config);
-    let lang = "swift";
-    let call_overrides = call_config.overrides.get(lang);
     let function_name = call_overrides
         .and_then(|o| o.function.as_ref())
         .cloned()
@@ -254,25 +270,6 @@ pub(super) fn render_test_method(
     // query-param arguments on list_files/list_batches that have no fixture-level
     // input field).
     let extra_args = recipe.extra_args;
-
-    // Merge per-call enum_fields keys into the effective enum set so that
-    // fields like "status" (BatchStatus, BatchObject) are treated as enum-typed
-    // even when they are not globally listed in fields_enum (they are context-
-    // dependent — BatchStatus on BatchObject but plain String on ResponseObject).
-    let effective_enum_fields: Cow<HashSet<String>> = {
-        let per_call = call_overrides.map(|o| &o.enum_fields);
-        if let Some(pc) = per_call {
-            if !pc.is_empty() {
-                let mut merged = enum_fields.clone();
-                merged.extend(pc.keys().cloned());
-                Cow::Owned(merged)
-            } else {
-                Cow::Borrowed(enum_fields)
-            }
-        } else {
-            Cow::Borrowed(enum_fields)
-        }
-    };
 
     let options_via_str: Option<&str> = Some(recipe.options_via).filter(|value| *value != "kwargs");
     let options_type_str: Option<&str> = recipe.options_type;
@@ -529,7 +526,6 @@ pub(super) fn render_test_method(
             result_is_option,
             result_element_is_string,
             result_field_accessor,
-            &effective_enum_fields,
             is_streaming,
             call_config.returns_void,
         );

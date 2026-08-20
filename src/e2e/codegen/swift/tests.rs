@@ -55,7 +55,6 @@ fn swift_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         false,
         false,
     );
@@ -102,7 +101,6 @@ fn swift_ir_excluded_field_present_in_result_fields_is_still_skipped() {
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         false,
         false,
     );
@@ -146,7 +144,6 @@ fn not_empty_is_type_aware_for_optional_values() {
             false,
             false,
             &HashMap::new(),
-            &HashSet::new(),
             false,
             false,
         );
@@ -195,7 +192,6 @@ fn not_error_emits_a_real_xc_tassert_not_nil_on_the_result() {
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         false,
         false,
     );
@@ -223,7 +219,6 @@ fn not_error_on_a_streaming_fixture_asserts_on_drained_chunks_not_result() {
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         true,
         false,
     );
@@ -253,7 +248,6 @@ fn not_error_on_a_returns_void_call_emits_nothing() {
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         false,
         true,
     );
@@ -942,7 +936,6 @@ fn render_field_assertion(
         false,
         false,
         &HashMap::new(),
-        &HashSet::new(),
         false,
         false,
     );

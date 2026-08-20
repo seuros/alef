@@ -4,7 +4,7 @@ use crate::e2e::codegen::assertion_type_skip::{
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use super::accessors::{
@@ -30,7 +30,6 @@ pub(super) fn render_assertion(
     result_is_option: bool,
     result_element_is_string: bool,
     result_field_accessor: &HashMap<String, String>,
-    enum_fields: &HashSet<String>,
     is_streaming: bool,
     returns_void: bool,
 ) {
@@ -201,15 +200,22 @@ pub(super) fn render_assertion(
     if let Some(field) = assertion.field.as_deref()
         && let Some(dot) = field.find("[].")
     {
-        render_wildcard_assertion(out, assertion, field, dot, result_var, field_resolver, enum_fields);
+        render_wildcard_assertion(out, assertion, field, dot, result_var, field_resolver);
         return;
     }
 
-    // Determine if this field is an enum type.
+    // Determine if this field is an enum type. `field_resolver.is_enum` consults the
+    // hand-maintained `fields_enum`/`enum_fields` config first and only then the IR-derived
+    // classification (`with_ir_enum_map`), so an explicit config entry still wins — this only
+    // rescues fields a consumer's `alef.toml` never mentions at all. A config-only check here
+    // used to answer `false` for those, emitting `XCTAssertEqual(result.kind().toString(),
+    // "key_value")` against a field whose Swift type is the generated enum `DataNodeKind`,
+    // which is not compile-comparable to a `String`. ~keep
     let field_is_enum = assertion
         .field
         .as_deref()
-        .is_some_and(|f| enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)));
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| field_resolver.is_enum(f));
 
     // Determine if this field is a display-as-text content union (e.g. `AssistantContent`).
     // Such fields are emitted as Swift enums (not `String`) and expose a `.text()` method
@@ -911,7 +917,6 @@ fn render_wildcard_assertion(
     dot: usize,
     result_var: &str,
     field_resolver: &FieldResolver,
-    enum_fields: &HashSet<String>,
 ) {
     let array_part = &field[..dot];
     let elem_part = &field[dot + 3..];
@@ -940,7 +945,6 @@ fn render_wildcard_assertion(
                     field,
                     result_var,
                     field_resolver,
-                    enum_fields,
                 );
             }
         }
@@ -956,7 +960,6 @@ fn render_wildcard_assertion(
                         field,
                         result_var,
                         field_resolver,
-                        enum_fields,
                     );
                 }
             }
@@ -972,7 +975,6 @@ fn render_wildcard_assertion(
                     field,
                     result_var,
                     field_resolver,
-                    enum_fields,
                 );
             }
         }
@@ -984,7 +986,7 @@ fn render_wildcard_assertion(
                 .map(|d| &resolved_full[d + 3..])
                 .unwrap_or(elem_part);
             let elem_accessor = field_resolver.accessor(resolved_elem_part, "swift", "$0");
-            let elem_is_enum = enum_fields.contains(field) || enum_fields.contains(resolved_full);
+            let elem_is_enum = field_resolver.is_enum(field);
             let elem_is_optional = field_resolver.is_optional(resolved_elem_part)
                 || field_resolver.is_optional(field_resolver.resolve(resolved_elem_part));
             let elem_str = if elem_is_enum {
@@ -1019,7 +1021,6 @@ fn emit_wildcard_contains(
     field: &str,
     result_var: &str,
     field_resolver: &FieldResolver,
-    enum_fields: &HashSet<String>,
 ) {
     let swift_val = json_to_swift(value);
     let msg = if negate {
@@ -1035,7 +1036,6 @@ fn emit_wildcard_contains(
         result_var,
         negate,
         &msg,
-        enum_fields,
         field_resolver,
     );
     let _ = writeln!(out, "{line}");
@@ -1061,7 +1061,7 @@ mod nested_wildcard_tests {
         };
         let dot = field.find("[].").expect("test field must carry a wildcard");
         let mut out = String::new();
-        render_wildcard_assertion(&mut out, &assertion, field, dot, "result", resolver, &HashSet::new());
+        render_wildcard_assertion(&mut out, &assertion, field, dot, "result", resolver);
         out
     }
 
@@ -1118,7 +1118,6 @@ mod skip_marker_tests {
             false,
             false,
             &HashMap::new(),
-            &HashSet::new(),
             is_streaming,
             false,
         );

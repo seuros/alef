@@ -1,0 +1,256 @@
+//! Regression coverage for the Swift e2e generator's enum-field classification.
+//!
+//! `render_test_method` used to decide whether a result field is enum-typed purely from the
+//! hand-maintained `fields_enum` / `[e2e.call.overrides.swift] enum_fields` config
+//! (`assertions.rs`'s `field_is_enum`, and the wildcard mirrors at `render_wildcard_assertion`'s
+//! `elem_is_enum` and `accessors.rs::swift_traversal_contains_assert`'s `elem_is_enum`). A
+//! consumer whose `alef.toml` never declared that entry got no `.rawValue` on a first-class
+//! Codable struct's enum property — `XCTAssertEqual(result.kind, "keyValue")` compares a
+//! `DataNodeKind` against a `String`, which does not compile.
+//!
+//! `test_method.rs` now wires the same IR-derived classification the rust/csharp/gleam e2e
+//! generators use (`FieldResolver::ir_enum_fields` + `with_ir_enum_map`, anchored at the call's
+//! declared Rust return type via `resolve_declared_result_type`). These tests drive the real
+//! entry point, `render_test_method`, with no `fields_enum`/`enum_fields` config at all — the
+//! classification must come from the IR alone. ~keep
+
+use crate::core::config::ResolvedCrateConfig;
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, FunctionDef, TypeDef, TypeRef};
+use crate::e2e::config::{CallConfig, CallOverride, E2eConfig};
+use crate::e2e::field_access::SwiftFirstClassMap;
+use crate::e2e::fixture::{Assertion, Fixture};
+use std::collections::{HashMap, HashSet};
+
+/// A `DataNodeKind`-shaped enum: two unit variants, no serde rename overrides.
+fn data_node_kind_enum() -> EnumDef {
+    EnumDef {
+        name: "DataNodeKind".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "KeyValue".to_string(),
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Sequence".to_string(),
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    }
+}
+
+fn kind_field(ty: TypeRef, optional: bool) -> FieldDef {
+    FieldDef {
+        name: "kind".to_string(),
+        ty,
+        optional,
+        ..FieldDef::default()
+    }
+}
+
+fn fixture_calling(call: &str) -> Fixture {
+    Fixture {
+        id: "kind_smoke".to_string(),
+        description: "Kind field smoke".to_string(),
+        call: Some(call.to_string()),
+        assertions: vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("kind".to_string()),
+            value: Some(serde_json::Value::String("key_value".to_string())),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    }
+}
+
+/// `process` returns `ProcessResult { kind: DataNodeKind }`, `other` returns
+/// `OtherResult { kind: String }` (same leaf name, unrelated non-enum type — proves the
+/// classification is anchored per-call rather than matching on the leaf name alone), and
+/// `process_optional` returns `OptionalResult { kind: Option<DataNodeKind> }`.
+fn table_ir() -> (Vec<TypeDef>, Vec<EnumDef>, Vec<FunctionDef>) {
+    let type_defs = vec![
+        TypeDef {
+            name: "ProcessResult".to_string(),
+            fields: vec![kind_field(TypeRef::Named("DataNodeKind".to_string()), false)],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "OtherResult".to_string(),
+            fields: vec![kind_field(TypeRef::String, false)],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "OptionalResult".to_string(),
+            fields: vec![kind_field(
+                TypeRef::Optional(Box::new(TypeRef::Named("DataNodeKind".to_string()))),
+                true,
+            )],
+            ..TypeDef::default()
+        },
+    ];
+    let enums = vec![data_node_kind_enum()];
+    let functions = vec![
+        FunctionDef {
+            name: "process".to_string(),
+            return_type: TypeRef::Named("ProcessResult".to_string()),
+            ..FunctionDef::default()
+        },
+        FunctionDef {
+            name: "other".to_string(),
+            return_type: TypeRef::Named("OtherResult".to_string()),
+            ..FunctionDef::default()
+        },
+        FunctionDef {
+            name: "process_optional".to_string(),
+            return_type: TypeRef::Named("OptionalResult".to_string()),
+            ..FunctionDef::default()
+        },
+    ];
+    (type_defs, enums, functions)
+}
+
+/// A `SwiftFirstClassMap` that treats every table type as a first-class Codable struct, so
+/// `kind` renders via property access (`result.kind`) rather than a swift-bridge method call
+/// (`result.kind()`). The compile-breaking half of this defect only shows up on the property
+/// path: swift-bridge already bridges every enum getter to a `RustString`, so method-call
+/// `.toString()` is emitted for both an enum and a plain-string leaf — but a first-class
+/// Codable enum property needs `.rawValue` to compare against the fixture's wire-format string,
+/// and a plain `String` property must NOT get `.rawValue` (it has none). ~keep
+fn first_class_map() -> SwiftFirstClassMap {
+    SwiftFirstClassMap {
+        first_class_types: ["ProcessResult", "OtherResult", "OptionalResult"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        field_types: HashMap::new(),
+        vec_field_names: HashSet::new(),
+        root_type: None,
+        stringy_fields_by_type: HashMap::new(),
+    }
+}
+
+/// `render_test_method` (`swift/test_method.rs`) resolves the per-fixture Swift first-class
+/// root type from the call's `result_type` override on ANY of `c`/`csharp`/`java`/`kotlin`/`go`/
+/// `php` (`values::swift_call_result_type`) — Swift has no override axis of its own for this,
+/// so it reuses whichever backend's config already names the IR type. This is a different
+/// config axis from `enum_fields`/`fields_enum`, so setting it does not smuggle in the
+/// classification under test.
+fn e2e_config_for(call: &str, result_type: &str, extra: impl FnOnce(&mut CallConfig)) -> E2eConfig {
+    let mut call_config = CallConfig {
+        function: call.to_string(),
+        ..CallConfig::default()
+    };
+    call_config.overrides.insert(
+        "csharp".to_string(),
+        CallOverride {
+            result_type: Some(result_type.to_string()),
+            ..CallOverride::default()
+        },
+    );
+    extra(&mut call_config);
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.calls.insert(call.to_string(), call_config);
+    e2e_config
+}
+
+fn render(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    swift_first_class_map: &SwiftFirstClassMap,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[FunctionDef],
+) -> String {
+    let config = ResolvedCrateConfig {
+        name: "sample".to_string(),
+        ..ResolvedCrateConfig::default()
+    };
+    let mut out = String::new();
+    super::test_method::render_test_method(
+        &mut out,
+        fixture,
+        e2e_config,
+        "",
+        "",
+        &[],
+        false,
+        None,
+        swift_first_class_map,
+        "Sample",
+        &config,
+        type_defs,
+        enums,
+        functions,
+        &[],
+    );
+    out
+}
+
+struct Case {
+    name: &'static str,
+    call: &'static str,
+    result_type: &'static str,
+    expect_raw_value: bool,
+}
+
+const CASES: &[Case] = &[
+    Case {
+        name: "an enum-typed field with no fields_enum config gets .rawValue via the IR",
+        call: "process",
+        result_type: "ProcessResult",
+        expect_raw_value: true,
+    },
+    Case {
+        name: "a same-named non-enum field on an unrelated type is not misclassified as enum",
+        call: "other",
+        result_type: "OtherResult",
+        expect_raw_value: false,
+    },
+    Case {
+        name: "an Option<Enum> field is classified as enum via the IR",
+        call: "process_optional",
+        result_type: "OptionalResult",
+        expect_raw_value: true,
+    },
+];
+
+#[test]
+fn enum_field_classification_table() {
+    let (type_defs, enums, functions) = table_ir();
+    let map = first_class_map();
+    for case in CASES {
+        let e2e_config = e2e_config_for(case.call, case.result_type, |_| {});
+        let fixture = fixture_calling(case.call);
+        let out = render(&fixture, &e2e_config, &map, &type_defs, &enums, &functions);
+        let has_raw_value = out.contains(".rawValue");
+        assert_eq!(
+            has_raw_value, case.expect_raw_value,
+            "{}: expected .rawValue = {}, got:\n{out}",
+            case.name, case.expect_raw_value
+        );
+    }
+}
+
+/// An explicit per-call `enum_fields` entry keeps working unchanged (config wins) — the IR only
+/// rescues fields the config never mentioned. `other.kind` is `String` in the IR, so only the
+/// config entry can make this classify as enum.
+#[test]
+fn an_explicit_enum_fields_config_entry_still_classifies_as_enum() {
+    let (type_defs, enums, functions) = table_ir();
+    let map = first_class_map();
+    let e2e_config = e2e_config_for("other", "OtherResult", |call| {
+        call.overrides.insert(
+            "swift".to_string(),
+            CallOverride {
+                enum_fields: [("kind".to_string(), "DataNodeKind".to_string())].into_iter().collect(),
+                ..CallOverride::default()
+            },
+        );
+    });
+    let fixture = fixture_calling("other");
+    let out = render(&fixture, &e2e_config, &map, &type_defs, &enums, &functions);
+    assert!(
+        out.contains(".rawValue"),
+        "explicit enum_fields config must still classify the field as enum, got:\n{out}"
+    );
+}
