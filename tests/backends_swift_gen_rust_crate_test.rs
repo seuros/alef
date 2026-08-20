@@ -2210,7 +2210,11 @@ fn named_method_returns_wrap_optional_refs_and_vectors() {
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
     assert!(
-        lib.content.contains("(client.0.get(&id)).map(|v| Preset(v.clone()))"),
+        // `id` is an owned `String` param (`make_param` sets `is_ref: false`), so the call must
+        // NOT borrow it. This assertion previously demanded `&id`, encoding the unconditional
+        // borrow that `TypeRef::String => format!("&{name}")` used to emit for every string
+        // param regardless of `is_ref` -- an E0308 against any method taking an owned String. ~keep
+        lib.content.contains("(client.0.get(id)).map(|v| Preset(v.clone()))"),
         "Optional ref DTO return must clone and wrap; got:\n{}",
         lib.content
     );
