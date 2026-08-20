@@ -5,6 +5,7 @@ use ahash::AHashSet;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+mod exclusion;
 mod facade;
 mod ffi_class;
 pub mod helpers;
@@ -15,6 +16,7 @@ mod service_api;
 pub mod trait_bridge;
 mod types;
 
+use exclusion::{api_without_excluded_types, effective_exclude_types, should_filter_excluded_types};
 use facade::gen_facade_class;
 use ffi_class::gen_main_class;
 use helpers::{gen_exception_class, gen_infrastructure_exception_class, gen_json_util_class};
@@ -52,106 +54,6 @@ impl JavaBackend {
     fn resolve_main_class(api: &ApiSurface) -> String {
         crate::backends::java::naming::main_class_name(&api.crate_name)
     }
-}
-
-fn effective_exclude_types(api: &ApiSurface, config: &ResolvedCrateConfig) -> HashSet<String> {
-    let mut exclude_types: HashSet<String> = config
-        .ffi
-        .as_ref()
-        .map(|ffi| ffi.exclude_types.iter().cloned().collect())
-        .unwrap_or_default();
-    if let Some(java) = &config.java {
-        exclude_types.extend(java.exclude_types.iter().cloned());
-    }
-    exclude_types.extend(api.types.iter().filter(|t| t.binding_excluded).map(|t| t.name.clone()));
-    exclude_types.extend(
-        api.types
-            .iter()
-            .filter(|t| t.has_lifetime_params)
-            .map(|t| t.name.clone()),
-    );
-    exclude_types.extend(
-        config
-            .opaque_types
-            .iter()
-            .filter(|(_, path)| path.contains('<'))
-            .map(|(name, _)| name.clone()),
-    );
-    exclude_types
-}
-
-fn references_excluded_type(ty: &TypeRef, exclude_types: &HashSet<String>) -> bool {
-    exclude_types.iter().any(|name| ty.references_named(name))
-}
-
-fn signature_references_excluded_type(
-    params: &[crate::core::ir::ParamDef],
-    return_type: &TypeRef,
-    exclude_types: &HashSet<String>,
-) -> bool {
-    references_excluded_type(return_type, exclude_types)
-        || params
-            .iter()
-            .any(|param| references_excluded_type(&param.ty, exclude_types))
-}
-
-fn service_references_excluded_type(service: &crate::core::ir::ServiceDef, excluded: &HashSet<String>) -> bool {
-    excluded.contains(&service.name)
-        || signature_references_excluded_type(&service.constructor.params, &service.constructor.return_type, excluded)
-        || service
-            .configurators
-            .iter()
-            .any(|method| signature_references_excluded_type(&method.params, &method.return_type, excluded))
-        || service.registrations.iter().any(|registration| {
-            signature_references_excluded_type(&registration.metadata_params, &registration.return_type, excluded)
-                || registration.variants.iter().any(|variant| {
-                    variant
-                        .signature_params
-                        .iter()
-                        .any(|param| references_excluded_type(&param.ty, excluded))
-                })
-        })
-        || service
-            .entrypoints
-            .iter()
-            .any(|entrypoint| signature_references_excluded_type(&entrypoint.params, &entrypoint.return_type, excluded))
-}
-
-fn api_without_excluded_types(api: &ApiSurface, exclude_types: &HashSet<String>) -> ApiSurface {
-    let mut filtered = api.clone();
-    filtered
-        .services
-        .retain(|service| !service_references_excluded_type(service, exclude_types));
-    filtered.types.retain(|typ| !exclude_types.contains(&typ.name));
-    for typ in &mut filtered.types {
-        typ.fields
-            .retain(|field| !references_excluded_type(&field.ty, exclude_types));
-        // Trait methods are exempt: each one owns a positional slot in the C vtable the
-        // FFI crate declares from the unfiltered surface, and `java_type_visible` already
-        // degrades an excluded type in a bridge signature to a JSON `String`. Dropping the
-        // method here would leave Java writing N-1 upcall stubs into an N-slot struct, so
-        // every later slot dispatches through the wrong function pointer. ~keep
-        if !typ.is_trait {
-            typ.methods.retain(|method| {
-                !signature_references_excluded_type(&method.params, &method.return_type, exclude_types)
-            });
-        }
-    }
-    filtered
-        .enums
-        .retain(|enum_def| !exclude_types.contains(&enum_def.name));
-    for enum_def in &mut filtered.enums {
-        for variant in &mut enum_def.variants {
-            variant
-                .fields
-                .retain(|field| !references_excluded_type(&field.ty, exclude_types));
-        }
-    }
-    filtered
-        .functions
-        .retain(|func| !signature_references_excluded_type(&func.params, &func.return_type, exclude_types));
-    filtered.errors.retain(|error| !exclude_types.contains(&error.name));
-    filtered
 }
 
 /// Fail generation when the Java bridge's vtable does not slot-for-slot match the Rust
@@ -279,11 +181,11 @@ impl Backend for JavaBackend {
         let source_api = api;
         let exclude_types = effective_exclude_types(api, config);
         let filtered_api;
-        let api = if exclude_types.is_empty() {
-            api
-        } else {
+        let api = if should_filter_excluded_types(api, &exclude_types) {
             filtered_api = api_without_excluded_types(api, &exclude_types);
             &filtered_api
+        } else {
+            api
         };
         let bridge_filtered_api;
         let api = if api
@@ -568,6 +470,12 @@ impl Backend for JavaBackend {
                 crate::backends::java::gen_visitor::gen_visitor_files(api, config, &package, &main_class)
                     .unwrap_or_default()
             {
+                // `generated_header: false` here is intentional, not an omission: `content`
+                // already templates in its own `hash::header(...)` marker (see
+                // `gen_visit_result`/`gen_visitor_interface`/`gen_visitor_bridge`), so
+                // `GeneratedFile::carries_alef_marker` is true regardless of this flag, and
+                // `write_files_report`'s `ensure_generated_header` is a no-op on
+                // already-marked content. ~keep
                 files.push(GeneratedFile {
                     path: base_path.join(filename),
                     content,
@@ -652,11 +560,11 @@ impl Backend for JavaBackend {
     ) -> anyhow::Result<Vec<GeneratedFile>> {
         let exclude_types = effective_exclude_types(api, config);
         let type_filtered_api;
-        let api = if exclude_types.is_empty() {
-            api
-        } else {
+        let api = if should_filter_excluded_types(api, &exclude_types) {
             type_filtered_api = api_without_excluded_types(api, &exclude_types);
             &type_filtered_api
+        } else {
+            api
         };
         let bridge_filtered_api;
         let api = if api
@@ -741,10 +649,10 @@ impl Backend for JavaBackend {
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
         let exclude_types = effective_exclude_types(api, config);
-        if exclude_types.is_empty() {
-            service_api::generate(api, config)
-        } else {
+        if should_filter_excluded_types(api, &exclude_types) {
             service_api::generate(&api_without_excluded_types(api, &exclude_types), config)
+        } else {
+            service_api::generate(api, config)
         }
     }
 
@@ -841,7 +749,11 @@ mod tests {
     }
 
     #[test]
-    fn public_api_omits_functions_that_reference_excluded_types() {
+    fn public_api_keeps_functions_that_return_lifetime_bound_types() {
+        // A lifetime parameter alone (e.g. `BorrowedView<'a>`) is not a reason to drop a type
+        // or the functions that return it: the binding holds an opaque handle and the lifetime
+        // is erased at the C ABI, exactly like csharp/go/kotlin/kotlin_android, none of which
+        // exclude these types either. See `lifetime_bound_type_names`. ~keep
         let api = ApiSurface {
             crate_name: "sample".into(),
             types: vec![TypeDef {
@@ -864,12 +776,12 @@ mod tests {
         assert!(
             binding_files
                 .iter()
-                .all(|file| !file.content.contains("getBorrowedView"))
+                .any(|file| file.content.contains("getBorrowedView")),
+            "lifetime-bound return types must still be bound"
         );
         assert!(
-            public_files
-                .iter()
-                .all(|file| !file.content.contains("getBorrowedView"))
+            public_files.iter().any(|file| file.content.contains("getBorrowedView")),
+            "lifetime-bound return types must still be bound"
         );
     }
 

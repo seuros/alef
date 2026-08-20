@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+
+- **Java no longer drops every lifetime-parameterized type (e.g. `NodeContext<'a>`) from
+  generation.** A lifetime parameter alone is not a reason a type can't cross the JNI boundary —
+  the binding holds an opaque handle (or a plain record whose fields are already owned values),
+  and the lifetime is erased at the C ABI, exactly like every other FFI-dependent backend
+  (csharp, go, kotlin, kotlin_android). The blanket exclusion also silently broke the visitor
+  trait-bridge pattern whenever its configured `context_type` had a lifetime parameter:
+  `resolve_visitor_generation` could no longer find the type in the filtered surface, so
+  `VisitorBridge.java` and its sibling files stopped being generated with no error surfaced.
+  Java now only excludes a lifetime-bound type from a *service*'s constructor, configurators,
+  registrations, and entrypoints — the one place the IR can't prove borrowed data outlives a
+  long-running `run`/`finalize` call — leaving ordinary types, functions, and the visitor
+  pattern unaffected.
 - **The Ruby (Magnus) e2e visitor fixture now returns the lowercase wire values the generated
   binding actually matches on.** `e2e/templates/ruby/visitor_method.jinja` hardcoded
   `'Skip'`/`'Continue'`/`'PreserveHtml'`/`{ Custom: ... }`, while the Magnus backend's

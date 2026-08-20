@@ -4178,6 +4178,330 @@ result_type = "FlowDecision"
     assert!(!options.content.contains("Visitor hook"));
 }
 
+/// Regression test for a Java visitor `context_type` carrying a Rust lifetime parameter
+/// (e.g. `NodeContext<'a>`): a lifetime parameter alone must not exclude the type from the
+/// binding surface, or the visitor pattern silently stops resolving (`resolve_visitor_generation`
+/// fails to find `context_type` in `api.types` and returns `None`), leaving `VisitorBridge.java`
+/// and its siblings unemitted with nothing surfaced to the caller. See
+/// `JavaBackend::effective_exclude_types` / `lifetime_bound_type_names`.
+#[test]
+fn options_field_visitor_context_type_with_lifetime_params_is_still_bound() {
+    let backend = JavaBackend;
+
+    let field = |name: &str, ty: TypeRef| FieldDef {
+        version: Default::default(),
+        name: name.to_string(),
+        ty,
+        optional: false,
+        default: None,
+        doc: String::new(),
+        sanitized: false,
+        is_boxed: false,
+        type_rust_path: None,
+        cfg: None,
+        typed_default: None,
+        core_wrapper: alef::core::ir::CoreWrapper::None,
+        vec_inner_core_wrapper: alef::core::ir::CoreWrapper::None,
+        newtype_wrapper: None,
+        serde_rename: None,
+        serde_flatten: false,
+        serde_with: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        original_type: None,
+    };
+    let record = |name: &str, fields: Vec<FieldDef>, has_lifetime_params: bool| TypeDef {
+        name: name.to_string(),
+        rust_path: format!("test_lib::{name}"),
+        original_rust_path: String::new(),
+        fields,
+        methods: vec![],
+        is_opaque: false,
+        is_clone: true,
+        is_copy: false,
+        is_trait: false,
+        has_default: false,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: true,
+        serde_container_default: false,
+        super_traits: vec![],
+        doc: String::new(),
+        cfg: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params,
+        has_private_fields: false,
+        version: Default::default(),
+    };
+
+    let api = ApiSurface {
+        crate_name: "test_lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![
+            // `NodeContext<'a>` in the wild: a zero-copy context struct whose lifetime is
+            // erased at the C ABI and whose fields are already owned values in the IR.
+            record("VisitContext", vec![field("path", TypeRef::String)], true),
+            record(
+                "WorkConfig",
+                vec![
+                    field("hook", TypeRef::Named("CallbackHandle".to_string())),
+                    field("mode", TypeRef::String),
+                ],
+                false,
+            ),
+            record("WorkResult", vec![field("text", TypeRef::String)], false),
+            TypeDef {
+                name: "Callback".to_string(),
+                rust_path: "test_lib::Callback".to_string(),
+                original_rust_path: String::new(),
+                fields: vec![],
+                methods: vec![MethodDef {
+                    name: "inspect".to_string(),
+                    params: vec![
+                        ParamDef {
+                            name: "context".to_string(),
+                            ty: TypeRef::Named("VisitContext".to_string()),
+                            optional: false,
+                            default: None,
+                            sanitized: false,
+                            typed_default: None,
+                            is_ref: true,
+                            is_mut: false,
+                            newtype_wrapper: None,
+                            original_type: None,
+                            map_is_ahash: false,
+                            map_key_is_cow: false,
+                            vec_inner_is_ref: false,
+                            map_is_btree: false,
+                            core_wrapper: alef::core::ir::CoreWrapper::None,
+                        },
+                        ParamDef {
+                            name: "label".to_string(),
+                            ty: TypeRef::String,
+                            optional: false,
+                            default: None,
+                            sanitized: false,
+                            typed_default: None,
+                            is_ref: true,
+                            is_mut: false,
+                            newtype_wrapper: None,
+                            original_type: None,
+                            map_is_ahash: false,
+                            map_key_is_cow: false,
+                            vec_inner_is_ref: false,
+                            map_is_btree: false,
+                            core_wrapper: alef::core::ir::CoreWrapper::None,
+                        },
+                    ],
+                    return_type: TypeRef::Named("FlowDecision".to_string()),
+                    is_async: false,
+                    is_static: false,
+                    error_type: None,
+                    doc: String::new(),
+                    receiver: Some(ReceiverKind::RefMut),
+                    cfg: None,
+                    sanitized: false,
+                    trait_source: None,
+                    returns_ref: false,
+                    returns_cow: false,
+                    return_newtype_wrapper: None,
+                    has_default_impl: true,
+                    binding_excluded: false,
+                    binding_exclusion_reason: None,
+                    version: Default::default(),
+                }],
+                is_opaque: false,
+                is_clone: false,
+                is_copy: false,
+                is_trait: true,
+                has_default: false,
+                has_stripped_cfg_fields: false,
+                is_return_type: false,
+                serde_rename_all: None,
+                has_serde: false,
+                serde_container_default: false,
+                super_traits: vec![],
+                doc: String::new(),
+                cfg: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_variant_wrapper: false,
+                has_lifetime_params: false,
+                has_private_fields: false,
+                version: Default::default(),
+            },
+        ],
+        functions: vec![FunctionDef {
+            name: "process_html".to_string(),
+            rust_path: "test_lib::process_html".to_string(),
+            original_rust_path: String::new(),
+            params: vec![
+                ParamDef {
+                    name: "html".to_string(),
+                    ty: TypeRef::String,
+                    optional: false,
+                    default: None,
+                    sanitized: false,
+                    typed_default: None,
+                    is_ref: false,
+                    is_mut: false,
+                    newtype_wrapper: None,
+                    original_type: None,
+                    map_is_ahash: false,
+                    map_key_is_cow: false,
+                    vec_inner_is_ref: false,
+                    map_is_btree: false,
+                    core_wrapper: alef::core::ir::CoreWrapper::None,
+                },
+                ParamDef {
+                    name: "config".to_string(),
+                    ty: TypeRef::Named("WorkConfig".to_string()),
+                    optional: false,
+                    default: None,
+                    sanitized: false,
+                    typed_default: None,
+                    is_ref: false,
+                    is_mut: false,
+                    newtype_wrapper: None,
+                    original_type: None,
+                    map_is_ahash: false,
+                    map_key_is_cow: false,
+                    vec_inner_is_ref: false,
+                    map_is_btree: false,
+                    core_wrapper: alef::core::ir::CoreWrapper::None,
+                },
+            ],
+            return_type: TypeRef::Named("WorkResult".to_string()),
+            is_async: false,
+            error_type: None,
+            doc: String::new(),
+            cfg: None,
+            sanitized: false,
+            return_sanitized: false,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }],
+        enums: vec![EnumDef {
+            name: "FlowDecision".to_string(),
+            rust_path: "test_lib::FlowDecision".to_string(),
+            original_rust_path: String::new(),
+            variants: vec![
+                EnumVariant {
+                    name: "Proceed".to_string(),
+                    is_default: true,
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "DropNode".to_string(),
+                    ..EnumVariant::default()
+                },
+                EnumVariant {
+                    name: "ReplaceWith".to_string(),
+                    fields: vec![field("value", TypeRef::String)],
+                    is_tuple: true,
+                    ..EnumVariant::default()
+                },
+            ],
+            methods: vec![],
+            doc: String::new(),
+            cfg: None,
+            is_copy: false,
+            has_serde: true,
+            has_default: false,
+            serde_tag: None,
+            serde_content: None,
+            serde_untagged: false,
+            serde_rename_all: None,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            excluded_variants: vec![],
+            version: Default::default(),
+        }],
+        errors: vec![],
+        excluded_type_paths: ::std::collections::HashMap::new(),
+        excluded_trait_names: ::std::collections::HashSet::new(),
+        services: vec![],
+        handler_contracts: vec![],
+        unsupported_public_items: Vec::new(),
+    };
+
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["java", "ffi"]
+
+[[crates]]
+name = "test_lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "test"
+
+[crates.java]
+package = "com.example"
+
+[[crates.trait_bridges]]
+trait_name = "Callback"
+type_alias = "CallbackHandle"
+bind_via = "options_field"
+options_type = "WorkConfig"
+options_field = "hook"
+context_type = "VisitContext"
+result_type = "FlowDecision"
+"#,
+    );
+
+    let files = backend
+        .generate_bindings(&api, &config)
+        .expect("java generation must succeed");
+
+    // The context type itself must still be emitted as a plain IR-derived record...
+    let context = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("VisitContext.java"))
+        .expect("lifetime-bound context type must still be emitted as a Java record");
+    assert!(context.content.contains("public record VisitContext"));
+
+    // ...and the visitor pattern built on top of it must still resolve and emit its trio of
+    // support files, all carrying the alef marker so a future config change that drops the
+    // pattern again can be swept as an orphan instead of left dangling in the tree.
+    let visitor = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("Callback.java"))
+        .expect("visitor interface must still be emitted for a lifetime-bound context type");
+    assert!(visitor.content.contains("public interface Callback"));
+    assert!(
+        visitor.carries_alef_marker(),
+        "visitor interface must carry the alef marker"
+    );
+
+    let result = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("FlowDecision.java"))
+        .expect("visitor result enum must still be emitted for a lifetime-bound context type");
+    assert!(result.content.contains("public sealed interface FlowDecision"));
+    assert!(
+        result.carries_alef_marker(),
+        "visitor result type must carry the alef marker"
+    );
+
+    let bridge = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().contains("VisitorBridge.java"))
+        .expect("VisitorBridge.java must still be emitted for a lifetime-bound context type");
+    assert!(
+        bridge.carries_alef_marker(),
+        "VisitorBridge.java must carry the alef marker"
+    );
+}
+
 #[test]
 fn test_facade_no_java_lang_imports() {
     let backend = JavaBackend;
