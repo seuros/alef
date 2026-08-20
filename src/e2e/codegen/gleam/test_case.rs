@@ -1,5 +1,6 @@
 //! Gleam fixture test-case renderer.
 
+use crate::e2e::codegen::call_ir::resolve_declared_result_type;
 use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
 use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::config::E2eConfig;
@@ -68,17 +69,32 @@ pub(super) fn render_test_case(
         &fixture.tags,
         &fixture.input,
     );
+    let lang = "gleam";
+    let call_overrides = call_config.overrides.get(lang);
+
+    let mut effective_enum_fields: HashSet<String> = e2e_config.effective_fields_enum(call_config).clone();
+    if let Some(o) = call_overrides {
+        for k in o.enum_fields.keys() {
+            effective_enum_fields.insert(k.clone());
+        }
+        for k in o.assert_enum_fields.keys() {
+            effective_enum_fields.insert(k.clone());
+        }
+    }
+
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
         e2e_config.effective_result_fields(call_config),
         e2e_config.effective_fields_array(call_config),
         e2e_config.effective_fields_method_calls(call_config),
+    )
+    .with_enum_fields(effective_enum_fields)
+    .with_ir_enum_map(
+        FieldResolver::ir_enum_fields(ir.type_defs, enums),
+        resolve_declared_result_type(call_config, lang, ir),
     );
     let field_resolver = &call_field_resolver;
-    let enum_fields = e2e_config.effective_fields_enum(call_config);
-    let lang = "gleam";
-    let call_overrides = call_config.overrides.get(lang);
     let function_name = call_overrides
         .and_then(|o| o.function.as_ref())
         .cloned()
@@ -211,16 +227,6 @@ pub(super) fn render_test_case(
         .cloned()
         .unwrap_or_else(|| module_path.split('.').next().unwrap_or(module_path).to_string());
 
-    let mut effective_enum_fields: HashSet<String> = enum_fields.clone();
-    if let Some(o) = call_overrides {
-        for k in o.enum_fields.keys() {
-            effective_enum_fields.insert(k.clone());
-        }
-        for k in o.assert_enum_fields.keys() {
-            effective_enum_fields.insert(k.clone());
-        }
-    }
-
     // `out` accumulates every fixture's rendered test case in this file (see the
     // caller in `test_file.rs`), so the strict-availability scan below must only
     // look at the text this fixture's own assertion loop appends. ~keep
@@ -237,15 +243,7 @@ pub(super) fn render_test_case(
             );
             continue;
         }
-        render_assertion(
-            out,
-            assertion,
-            "r",
-            field_resolver,
-            &effective_enum_fields,
-            result_is_array,
-            &pkg_module,
-        );
+        render_assertion(out, assertion, "r", field_resolver, result_is_array, &pkg_module);
     }
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "gleam", &fixture.id);
     crate::e2e::codegen::fail_on_unavailable_field_markers(

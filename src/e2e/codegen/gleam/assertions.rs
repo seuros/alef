@@ -2,7 +2,6 @@ use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
 use heck::ToPascalCase;
-use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 
 use super::values::{default_gleam_value_for_optional, json_to_gleam};
@@ -264,7 +263,6 @@ pub(super) fn render_assertion(
     assertion: &Assertion,
     result_var: &str,
     field_resolver: &FieldResolver,
-    enum_fields: &HashSet<String>,
     result_is_array: bool,
     pkg_module: &str,
 ) {
@@ -411,10 +409,17 @@ pub(super) fn render_assertion(
         .as_deref()
         .is_some_and(|f| !f.is_empty() && field_resolver.is_optional(field_resolver.resolve(f)));
 
+    // `field_resolver.is_enum` consults the hand-maintained `fields_enum`/`enum_fields` config
+    // first and only then the IR-derived classification (`with_ir_enum_map`), so an explicit
+    // config entry still wins. A config-only check here answered `false` for every enum-typed
+    // field a consumer's `alef.toml` never listed, emitting `r.kind |> should.equal("key_value")`
+    // against a field whose Gleam type is the generated custom type `DataNodeKind` —
+    // `should.equal` is homogeneous, so the generated module does not compile. ~keep
     let field_is_enum = assertion
         .field
         .as_deref()
-        .is_some_and(|f| enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)));
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| field_resolver.is_enum(f));
     if field_is_enum && assertion.assertion_type == "equals" {
         let f = assertion.field.as_deref().unwrap_or("");
         let _ = writeln!(
@@ -673,15 +678,7 @@ mod strict_field_availability_marker_tests {
             ..Assertion::default()
         };
         let mut out = String::new();
-        render_assertion(
-            &mut out,
-            &assertion,
-            "r",
-            &resolver,
-            &HashSet::new(),
-            false,
-            "sample_pkg",
-        );
+        render_assertion(&mut out, &assertion, "r", &resolver, false, "sample_pkg");
         assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
     }
 }
@@ -708,15 +705,7 @@ mod optional_prefix_not_empty_tests {
             ..Assertion::default()
         };
         let mut out = String::new();
-        render_assertion(
-            &mut out,
-            &assertion,
-            "r",
-            &resolver,
-            &HashSet::new(),
-            false,
-            "sample_pkg",
-        );
+        render_assertion(&mut out, &assertion, "r", &resolver, false, "sample_pkg");
         out
     }
 
