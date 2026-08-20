@@ -336,6 +336,14 @@ const POLY: GateTool = GateTool {
     install_hint: "brew install goldziher/tap/poly (or `task setup`)",
 };
 
+// `POLY_FMT_LANE_EXCLUSIONS` and `poly_fmt_check_args` live in the `poly_fmt_exclusions`
+// submodule -- this file is already over the repo's 1,000-line file cap, and that cap says a
+// touched over-limit file must split the touched concern into a smaller module rather than
+// grow further. See that module's doc for why each exclusion exists. ~keep
+#[path = "generated_output_downstream_gate/poly_fmt_exclusions.rs"]
+mod poly_fmt_exclusions;
+use poly_fmt_exclusions::poly_fmt_check_args;
+
 const CARGO: GateTool = GateTool {
     program: "cargo",
     display: "cargo clippy",
@@ -608,6 +616,14 @@ fn inject(tree: &EmittedTree, sabotage: Sabotage) {
             // planted somewhere the tool never looks would fail this proof for a reason
             // that has nothing to do with the lane. ~keep
             //
+            // Also skip `Cargo.toml`: it is excluded from poly's own format pass at any depth
+            // (`scaffold::languages::poly::POLY_FORMAT_EXCLUDES`, cargo-sort owns it instead --
+            // see `Sabotage::CargoManifestIndentDrift`'s doc), and it sorts alphabetically
+            // ahead of every other emitted TOML at the tree root. Without this, the sabotage
+            // landed in a file `poly fmt --check` never looks at, and the lane's own
+            // anti-vacuity proof passed while examining nothing -- the exact defect this
+            // sabotage exists to catch, just one level up. ~keep
+            //
             // Matched against the path *relative to the emitted root*: `tempfile` names
             // its directories `.tmpXXXXXX`, so testing the absolute path would reject
             // every file in the tree and leave nothing to sabotage. ~keep
@@ -615,13 +631,14 @@ fn inject(tree: &EmittedTree, sabotage: Sabotage) {
                 .toml_files
                 .iter()
                 .find(|path| {
-                    path.strip_prefix(&tree.root).is_ok_and(|relative| {
-                        !relative
-                            .components()
-                            .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
-                    })
+                    path.file_name().is_some_and(|name| name != "Cargo.toml")
+                        && path.strip_prefix(&tree.root).is_ok_and(|relative| {
+                            !relative
+                                .components()
+                                .any(|component| component.as_os_str().to_string_lossy().starts_with('.'))
+                        })
                 })
-                .expect("emitted tree contains a TOML file outside a dot-directory");
+                .expect("emitted tree contains a TOML file outside a dot-directory and not named Cargo.toml");
             let text = std::fs::read_to_string(target).expect("read toml to sabotage");
             let widened = format!("{text}\n[gate_sabotage]\nvalues = [\n    \"a\",\n    \"b\",\n]\n");
             std::fs::write(target, widened).expect("write wide-indent toml");
@@ -916,7 +933,9 @@ fn clippy_manifest_dirs(tree: &EmittedTree) -> Vec<PathBuf> {
 /// this lane is the one that runs unconditionally over the full `GATE_LANGUAGES` set.
 fn poly_fmt_lane(tree: &EmittedTree) -> LaneOutcome {
     let root = assert_emitted_tree_is_isolated(&tree.root);
-    run_tool(POLY.program, POLY.check_args, &root)
+    let args = poly_fmt_check_args();
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    run_tool(POLY.program, &arg_refs, &root)
 }
 
 /// `cargo clippy -- -D warnings` over each emitted manifest, for the clippy-lane

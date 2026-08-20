@@ -66,6 +66,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and sorts the `#include`s. Unlike cbindgen's own header (see the poly_fmt gate exclusion
   below), this placeholder is alef's own literal string -- alef fully controls its formatting
   and has no reason not to match poly.
+- **The generated-output gate's poly_fmt lane no longer fails on cbindgen's own C header, and
+  its wide-TOML-array sabotage test no longer sabotages a file poly never checks.** cbindgen
+  writes `crates/*-ffi/include/*.h` (and build.rs's `packages/go/include/` copy) directly at
+  `cargo build` time -- never through alef's writer -- and the gate materializes it as a side
+  effect of the swift lane's post-build `cargo build` pulling in the FFI crate as a dependency,
+  before the follow-up `poly fmt --fix` a real consumer would run after building. The lane now
+  passes `--exclude '**/include/*.h'`, declared and justified in the new
+  `tests/generated_output_downstream_gate/poly_fmt_exclusions.rs` module (split out to keep the
+  gate file under the repo's 1,000-line cap), with its own
+  `every_poly_fmt_lane_exclusion_is_justified` test mirroring the clippy lane's discipline.
+  Separately, `Sabotage::WideTomlArrayIndent` picked the alphabetically-first emitted TOML file,
+  which is `Cargo.toml` at the tree root -- itself excluded from poly's format pass in favor of
+  `cargo sort` -- so the sabotage landed somewhere `poly fmt --check` never looks and the lane's
+  own anti-vacuity proof passed while examining nothing. It now skips `Cargo.toml`.
 - **The JNI shim templates emit `e.to_string()` instead of `format!("{e}")`.** The generated
   crates are checked with `cargo clippy -- -D warnings`, where that spelling is
   `clippy::useless_format` and therefore a hard error, so the emitted JNI crate could not build
