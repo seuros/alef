@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An absent Elixir or Go toolchain no longer kills the e2e format pass on Windows.**
+  The two residual steps (`mix format`, `go mod tidy`) ran as `sh -c "(cd {dir} && ...)"`
+  with the output directory interpolated raw. `canonicalize` yields Windows'
+  extended-length form (`\\?\C:\...`), which POSIX `cd` rejects, so the shell exited 1
+  from the failed `cd` before the tool was ever reached -- and 1 is not the
+  command-not-found status the absent-toolchain check looks for, so a missing `mix` was
+  reported as the formatter running and rejecting the generated code. Both steps now spawn
+  the tool directly with the working directory set by the OS, which also fixes the same
+  failure on any platform when the output path contains a space.
+
 - **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
   the napi and extendr backends actually look up, instead of a nested
   `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads
