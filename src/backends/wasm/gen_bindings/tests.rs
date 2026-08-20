@@ -1088,3 +1088,27 @@ fn cargo_toml_tables_are_in_cargo_sort_canonical_order() {
     }
     toml::from_str::<toml::Value>(&cargo_toml).expect("generated wasm Cargo.toml must be valid TOML");
 }
+
+/// The manifest's core-crate `path` must agree with where the manifest is actually written.
+///
+/// `gen_cargo_toml` hard-coded `path = "../{core_crate_dir}"`, which resolves only when the core
+/// crate is a `crates/` sibling of the wasm crate. For a root-flat core crate -- Cargo.toml at
+/// the project root, alef's own shape since 0.18.0 -- the emitted tree has no `crates/<core>`,
+/// so cargo failed with "failed to read .../crates/toolkit/Cargo.toml" before compiling a line.
+/// Same defect the FFI/Python/Node/PHP scaffolders had; the wasm backend builds its own manifest
+/// and so was missed. ~keep
+#[test]
+fn core_dep_path_matches_the_layout_the_manifest_is_written_into() {
+    let config = make_config();
+    let cargo_toml = gen_cargo_toml(&empty_api(), &config);
+
+    let expected = config.core_crate_dep_path(&super::wasm_output_layout(&config).root);
+    assert_eq!(
+        expected, "../..",
+        "sanity: the default layout puts the wasm crate two levels below a root-flat core crate"
+    );
+    assert!(
+        cargo_toml.contains(&format!(r#"path = "{expected}""#)),
+        "the core dep path must be derived from the emitted layout, got:\n{cargo_toml}"
+    );
+}

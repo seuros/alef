@@ -22,6 +22,17 @@ use regex::Regex;
 use std::path::PathBuf;
 
 use cargo::gen_cargo_toml;
+
+/// The emitted wasm crate's directory layout.
+///
+/// One derivation shared by the file-path side (`lib.rs`, `Cargo.toml`) and the manifest's own
+/// core-crate `path = "..."` dependency. When `gen_cargo_toml` hard-coded `../{core_crate_dir}`
+/// instead, the two disagreed for any layout that is not a `crates/` sibling pair: the manifest
+/// pointed at a `crates/<core>` that the emitted tree does not contain, and cargo failed to read
+/// it before compiling anything. ~keep
+pub(super) fn wasm_output_layout(config: &ResolvedCrateConfig) -> crate::core::config::OutputLayout {
+    resolve_output_layout(config.output_paths.get("wasm"), &config.name, "crates/{name}-wasm/src/")
+}
 use cfg::{
     cfg_condition_enabled, collect_cfg_features, field_references_excluded_type, first_unknown_named_type,
     is_gated_behind_disabled_feature,
@@ -1033,7 +1044,7 @@ impl Backend for WasmBackend {
         // `<crate root>/src/lib.rs`; both paths must therefore come from one derivation of the
         // output path, and taking the crate root to be its parent is right only when the
         // configured path is `src`-suffixed. ~keep
-        let layout = resolve_output_layout(config.output_paths.get("wasm"), &config.name, "crates/{name}-wasm/src/");
+        let layout = wasm_output_layout(config);
         let cargo_toml_path = layout.root.join("Cargo.toml");
 
         Ok(vec![

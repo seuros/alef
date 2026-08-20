@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The JNI binding crate's `Cargo.toml` no longer claims workspace inheritance that may not
+  exist.** It hard-coded `version.workspace = true` / `edition.workspace = true` /
+  `license.workspace = true`; in a root-flat emitted tree there is no workspace root, so cargo
+  rejected the manifest outright ("error inheriting `edition` from workspace root manifest") and
+  every downstream command over the JNI crate failed before compiling anything. It now routes
+  through `detect_workspace_inheritance_for_crate` and `cargo_package_header`, as the FFI,
+  Python, PHP, and Ruby scaffolders already did.
+- **The wasm binding crate's core dependency path is derived from the layout the manifest is
+  written into**, instead of a hard-coded `../{core_crate_dir}` that only resolves when the core
+  crate is a `crates/` sibling. For a root-flat core crate the manifest pointed at a
+  `crates/<core>` the emitted tree does not contain. This is the same defect fixed for the FFI,
+  Python, Node, and PHP scaffolders; the wasm backend builds its own manifest and was missed.
+
 - **An absent Elixir or Go toolchain no longer kills the e2e format pass on Windows.**
   The two residual steps (`mix format`, `go mod tidy`) ran as `sh -c "(cd {dir} && ...)"`
   with the output directory interpolated raw. `canonicalize` yields Windows'

@@ -116,6 +116,10 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
         })
         .unwrap_or_else(|| "wasm-opt = false".to_string());
 
+    // Derived from the same layout that decides where this manifest is written, so the depth of
+    // `..` always matches the emitted tree instead of assuming a `crates/` sibling pair. ~keep
+    let core_dep_path = config.core_crate_dep_path(&super::wasm_output_layout(config).root);
+
     let header = hash::header(CommentStyle::Hash);
 
     let has_trait_bridges = !config.trait_bridges.is_empty();
@@ -123,7 +127,7 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     let mut deps: Vec<(String, String)> = vec![
         (
             core_dep_key.clone(),
-            format!(r#"{{ path = "../{core_crate_dir}"{features_clause} }}"#),
+            format!(r#"{{ path = "{core_dep_path}"{features_clause} }}"#),
         ),
         ("futures".to_string(), format!(r#""{}""#, tv::cargo::FUTURES)),
         ("futures-util".to_string(), format!(r#""{}""#, tv::cargo::FUTURES_UTIL)),
