@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+<<<<<<< HEAD
 - **`alef verify`'s orphan check now accounts for post-build-owned paths.** `alef verify` never
   runs post-build steps (`complete_generated_artifacts` is `Commands::Generate`/`Commands::All`
   -only), so a path a configured `PostBuildStep` writes unguarded (`PostBuildStep::owned_paths`)
@@ -67,6 +68,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the gap was latent rather than live, but `find_missing_and_frozen_generated_files` now folds
   `verify_orphans::post_build_owned_paths`'s union into `managed_paths` regardless, the same way
   `Commands::Generate`'s own orphan sweep already does before its disk-scan diff.
+=======
+- **Swift `alef generate` no longer fails to compile on an enum with data-carrying variants.**
+  `gen_rust_crate::enums::emit_enum_wrapper` unconditionally emitted a
+  `__alef_{enum}_from_swift_string` reconstruction helper for every enum, with a bare
+  `EnumName::Variant` match arm per variant -- valid for a unit variant, but E0308/E0533 against
+  a tuple or struct variant, since a wire string carries only a variant's discriminant and never
+  its field data. No call site ever invoked this helper for such an enum in the first place
+  (`unit_enum_names`-gated call sites route tagged-enum parameters through
+  `serde_json::from_str` instead), so the helper was both broken and unused for this shape. The
+  fix stops emitting it entirely when any variant carries fields, rather than patching the arms
+  to compile and panic at runtime. `tests/generated_output_downstream_gate.rs`'s fixture now
+  includes a data-carrying enum (tuple and struct variants) so this shape has default coverage.
+>>>>>>> af19cda31 (fix(swift): stop emitting a broken from-string helper for fielded enums)
 
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted

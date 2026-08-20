@@ -100,28 +100,45 @@ pub(crate) fn emit_enum_wrapper(en: &EnumDef, source_crate: &str, type_paths: &H
         },
     ));
 
-    let mut from_string_variants = String::new();
-    for variant in &en.variants {
-        let serde_name = serde_variant_wire_name(variant, en.serde_rename_all.as_deref());
-        from_string_variants.push_str(&crate::backends::swift::template_env::render(
-            "rust_enum_from_string_variant.rs.jinja",
+    // `__alef_{enum}_from_swift_string` reconstructs an enum variant from the wire string
+    // swift-bridge hands it, which only carries a variant's discriminant -- never its field
+    // data. That is fine for a fieldless (unit) variant: `EnumName::Variant` is a complete
+    // value. It is not possible for a variant with fields: there is no field data in a `&str`
+    // to reconstruct with. Every call site that would invoke this helper already knows this
+    // and only does so when `unit_enum_names` (all variants fieldless) contains the enum --
+    // see `gen_rust_crate::shims` and `gen_rust_crate::wrappers::methods`. A tagged enum's
+    // parameters are routed through `serde_json::from_str` instead, never through this
+    // function. So when any variant carries fields, this helper has no caller and emitting it
+    // is emitting dead code that also happens to be broken (a bare `EnumName::StructVariant`
+    // or `EnumName::TupleVariant` path does not type-check, E0533/E0308). Skipping emission
+    // entirely -- rather than patching the arms to compile and silently panic at runtime --
+    // keeps the absence of a string-based reconstruction honest: the function simply does not
+    // exist for enums it cannot serve. ~keep
+    let is_unit_enum = en.variants.iter().all(|v| v.fields.is_empty());
+    if is_unit_enum {
+        let mut from_string_variants = String::new();
+        for variant in &en.variants {
+            let serde_name = serde_variant_wire_name(variant, en.serde_rename_all.as_deref());
+            from_string_variants.push_str(&crate::backends::swift::template_env::render(
+                "rust_enum_from_string_variant.rs.jinja",
+                minijinja::context! {
+                    variant_name => &variant.name,
+                    serde_name => &serde_name,
+                    source_path => &source_path,
+                },
+            ));
+        }
+
+        out.push_str(&crate::backends::swift::template_env::render(
+            "rust_enum_from_string_impl.rs.jinja",
             minijinja::context! {
-                variant_name => &variant.name,
-                serde_name => &serde_name,
+                fn_name => enum_from_string_fn_name(&en.name),
+                enum_name => &en.name,
                 source_path => &source_path,
+                variants => from_string_variants,
             },
         ));
     }
-
-    out.push_str(&crate::backends::swift::template_env::render(
-        "rust_enum_from_string_impl.rs.jinja",
-        minijinja::context! {
-            fn_name => enum_from_string_fn_name(&en.name),
-            enum_name => &en.name,
-            source_path => &source_path,
-            variants => from_string_variants,
-        },
-    ));
 
     out
 }
@@ -147,6 +164,103 @@ mod tests {
             cfg: cfg.map(str::to_string),
             ..Default::default()
         }
+    }
+
+    fn make_tuple_variant(name: &str) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "0".to_string(),
+                ty: crate::core::ir::TypeRef::String,
+                ..Default::default()
+            }],
+            is_tuple: true,
+            ..Default::default()
+        }
+    }
+
+    fn make_struct_variant(name: &str) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "value".to_string(),
+                ty: crate::core::ir::TypeRef::String,
+                ..Default::default()
+            }],
+            is_tuple: false,
+            ..Default::default()
+        }
+    }
+
+    /// A fieldless enum is exactly what `__alef_{enum}_from_swift_string` can reconstruct
+    /// from a wire string, and every call site that would invoke it only does so once
+    /// `unit_enum_names` (all variants fieldless) contains the enum. The helper must still
+    /// be emitted for this shape.
+    #[test]
+    fn fieldless_enum_still_emits_from_string_helper() {
+        let en = EnumDef {
+            name: "Mode".to_string(),
+            variants: vec![make_unit_variant("Fast", None), make_unit_variant("Thorough", None)],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        assert!(
+            out.contains("fn __alef_mode_from_swift_string"),
+            "expected the from-string helper for a fieldless enum, got:\n{out}"
+        );
+        assert!(
+            out.contains("\"Fast\" => mylib::Mode::Fast,"),
+            "expected a bare unit-variant arm, got:\n{out}"
+        );
+    }
+
+    /// A variant with fields cannot be reconstructed from a wire string alone -- there is no
+    /// field data in a `&str`. Before this fix, `emit_enum_wrapper` still emitted a bare
+    /// `EnumName::Variant` path for every variant regardless of fields, which does not
+    /// type-check against a tuple or struct variant (E0308 / E0533). No call site ever
+    /// invokes this helper for an enum with any fielded variant (they route through
+    /// `serde_json::from_str` instead), so the correct fix is to not emit the helper at all
+    /// for this shape, rather than patch the arms to compile and panic at runtime.
+    #[test]
+    fn fielded_enum_omits_from_string_helper_entirely() {
+        let en = EnumDef {
+            name: "AuthHeaderFormat".to_string(),
+            variants: vec![make_unit_variant("None", None), make_tuple_variant("ApiKey")],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        assert!(
+            !out.contains("__alef_auth_header_format_from_swift_string"),
+            "expected no from-string helper for an enum with a tuple variant, got:\n{out}"
+        );
+        assert!(
+            !out.contains("fn __alef_"),
+            "expected no from-string helper of any name for an enum with a tuple variant, got:\n{out}"
+        );
+    }
+
+    /// Same as above but for a struct variant (named fields), the other data-carrying shape.
+    #[test]
+    fn struct_variant_enum_omits_from_string_helper_entirely() {
+        let en = EnumDef {
+            name: "CacheBackend".to_string(),
+            variants: vec![make_unit_variant("Memory", None), make_struct_variant("OpenDal")],
+            methods: vec![],
+            excluded_variants: vec![],
+            ..Default::default()
+        };
+        let type_paths = std::collections::HashMap::new();
+        let out = emit_enum_wrapper(&en, "mylib", &type_paths);
+        assert!(
+            !out.contains("fn __alef_"),
+            "expected no from-string helper for an enum with a struct variant, got:\n{out}"
+        );
     }
 
     /// When any variant in the primary list carries a `#[cfg(...)]` gate the
