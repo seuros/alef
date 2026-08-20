@@ -825,24 +825,69 @@ fn render_rust_bridge_c_header(
          // The typedefs below are the minimum required for SwiftBridgeCore.swift\n\
          // to compile before the full cargo build has been run.\n\
          \n\
-         #include <stdint.h>\n\
          #include <stdbool.h>\n\
+         #include <stdint.h>\n\
          \n\
-         typedef struct RustStr {{ uint8_t* const start; uintptr_t len; }} RustStr;\n\
-         typedef struct __private__FfiSlice {{ void* const start; uintptr_t len; }} __private__FfiSlice;\n\
-         typedef struct __private__OptionU8 {{ uint8_t val; bool is_some; }} __private__OptionU8;\n\
-         typedef struct __private__OptionI8 {{ int8_t val; bool is_some; }} __private__OptionI8;\n\
-         typedef struct __private__OptionU16 {{ uint16_t val; bool is_some; }} __private__OptionU16;\n\
-         typedef struct __private__OptionI16 {{ int16_t val; bool is_some; }} __private__OptionI16;\n\
-         typedef struct __private__OptionU32 {{ uint32_t val; bool is_some; }} __private__OptionU32;\n\
-         typedef struct __private__OptionI32 {{ int32_t val; bool is_some; }} __private__OptionI32;\n\
-         typedef struct __private__OptionU64 {{ uint64_t val; bool is_some; }} __private__OptionU64;\n\
-         typedef struct __private__OptionI64 {{ int64_t val; bool is_some; }} __private__OptionI64;\n\
-         typedef struct __private__OptionUsize {{ uintptr_t val; bool is_some; }} __private__OptionUsize;\n\
-         typedef struct __private__OptionIsize {{ intptr_t val; bool is_some; }} __private__OptionIsize;\n\
-         typedef struct __private__OptionF32 {{ float val; bool is_some; }} __private__OptionF32;\n\
-         typedef struct __private__OptionF64 {{ double val; bool is_some; }} __private__OptionF64;\n\
-         typedef struct __private__OptionBool {{ bool val; bool is_some; }} __private__OptionBool;\n\
+         typedef struct RustStr {{\n  \
+         uint8_t *const start;\n  \
+         uintptr_t len;\n\
+         }} RustStr;\n\
+         typedef struct __private__FfiSlice {{\n  \
+         void *const start;\n  \
+         uintptr_t len;\n\
+         }} __private__FfiSlice;\n\
+         typedef struct __private__OptionU8 {{\n  \
+         uint8_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionU8;\n\
+         typedef struct __private__OptionI8 {{\n  \
+         int8_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionI8;\n\
+         typedef struct __private__OptionU16 {{\n  \
+         uint16_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionU16;\n\
+         typedef struct __private__OptionI16 {{\n  \
+         int16_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionI16;\n\
+         typedef struct __private__OptionU32 {{\n  \
+         uint32_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionU32;\n\
+         typedef struct __private__OptionI32 {{\n  \
+         int32_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionI32;\n\
+         typedef struct __private__OptionU64 {{\n  \
+         uint64_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionU64;\n\
+         typedef struct __private__OptionI64 {{\n  \
+         int64_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionI64;\n\
+         typedef struct __private__OptionUsize {{\n  \
+         uintptr_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionUsize;\n\
+         typedef struct __private__OptionIsize {{\n  \
+         intptr_t val;\n  \
+         bool is_some;\n\
+         }} __private__OptionIsize;\n\
+         typedef struct __private__OptionF32 {{\n  \
+         float val;\n  \
+         bool is_some;\n\
+         }} __private__OptionF32;\n\
+         typedef struct __private__OptionF64 {{\n  \
+         double val;\n  \
+         bool is_some;\n\
+         }} __private__OptionF64;\n\
+         typedef struct __private__OptionBool {{\n  \
+         bool val;\n  \
+         bool is_some;\n\
+         }} __private__OptionBool;\n\
          \n\
          #endif /* RUST_BRIDGE_C_H */\n"
     )

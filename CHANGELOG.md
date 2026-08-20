@@ -58,6 +58,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `packages/java/checkstyle.xml`, `checkstyle-suppressions.xml`, `versions-rules.xml`,
   `packages/ruby/spec/<crate>_spec.rb`). Each fix matches poly's actual output, measured by
   running `poly fmt --fix` over the emitted file rather than guessed.
+- **The swift-bridge placeholder `RustBridgeC.h` header (emitted before the binding crate's
+  first `cargo build`, in both `bridge_artifacts::emit_swift_bridge_files` and
+  `scaffold::languages::swift::render_rust_bridge_c_header`) now emits already `poly
+  fmt`-clean.** The struct typedefs were hand-formatted on single lines; poly's clang-format
+  catalog tool (enabled for every FFI-bearing consumer) expands them onto one member per line
+  and sorts the `#include`s. Unlike cbindgen's own header (see the poly_fmt gate exclusion
+  below), this placeholder is alef's own literal string -- alef fully controls its formatting
+  and has no reason not to match poly.
 - **The JNI shim templates emit `e.to_string()` instead of `format!("{e}")`.** The generated
   crates are checked with `cargo clippy -- -D warnings`, where that spelling is
   `clippy::useless_format` and therefore a hard error, so the emitted JNI crate could not build
