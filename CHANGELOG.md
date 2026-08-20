@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The generated Java `pom.xml` now excludes test, scratch, and build directories from the
+  compiler plugin.** `sourceDirectory` is `project.basedir`, so without excludes the compiler
+  also walks `src/test/java/**` (hand-written test sources), `.alef/**` (disposable doc-snippet
+  validation scratch), and `target/**` (its own prior output). Unexcluded, `.alef/`
+  snippet-scratch `Example.java` files from different sessions collide as duplicate top-level
+  classes and break `mvn compile`. The same template already excluded `**/.alef/**` for
+  checkstyle; the compiler block never got the equivalent, so consumers carrying the fix by hand
+  could not adopt the file without regeneration deleting it.
+
 ## [0.62.6] - 2026-08-20
 
 ### Added

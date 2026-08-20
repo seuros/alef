@@ -135,6 +135,19 @@
                     <compilerArgs>
                         <arg>--enable-preview</arg>
                     </compilerArgs>
+                    <!-- sourceDirectory is project.basedir (see above), so without these excludes
+                         the compiler also walks src/test/java/ (hand-written test sources, not
+                         part of the main build), .alef/ (disposable doc-snippet validation
+                         scratch, see the checkstyle excludes below for the same reasoning), and
+                         target/ (generated build output, which would make the compiler try to
+                         recompile its own prior output). Left unexcluded, .alef/ snippet-scratch
+                         `Example.java` files from different sessions collide as duplicate
+                         top-level classes and break `mvn compile`. ~keep -->
+                    <excludes>
+                        <exclude>src/test/java/**</exclude>
+                        <exclude>.alef/**</exclude>
+                        <exclude>target/**</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
             <plugin>
