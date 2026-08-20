@@ -1,5 +1,5 @@
-use super::{OutputLayout, default_binding_crate_root, resolve_output_layout};
-use std::path::PathBuf;
+use super::{OutputLayout, default_binding_crate_root, relative_slash_path, resolve_output_layout};
+use std::path::{Path, PathBuf};
 
 /// The one formula every scaffolder's hard-coded `crates/{crate}-<suffix>` manifest path,
 /// `OutputTemplate::resolve`'s single-crate default, and `package_dir`'s no-override
@@ -114,4 +114,31 @@ fn resolve_output_layout_prefers_the_configured_path() {
 
     assert_eq!(layout.root, PathBuf::from("bindings/toolkit-wasm"));
     assert_eq!(layout.src, PathBuf::from("bindings/toolkit-wasm/src"));
+}
+
+/// A binding crate always sits under `crates/{crate}-<lang>` -- two path components below
+/// the project root -- in both a root-flat core crate (root is the project root itself,
+/// an empty path) and a workspace-shaped one (root is a `crates/` sibling). The two shapes
+/// need a different number of `..` segments, which is exactly what the old hard-coded
+/// `../{core_crate_dir}` formula got wrong for the root-flat case.
+#[test]
+fn relative_slash_path_handles_root_flat_and_workspace_core_crates() {
+    let binding_root = Path::new("crates/toolkit-ffi");
+
+    assert_eq!(
+        relative_slash_path(binding_root, Path::new("")),
+        "../..",
+        "root-flat core crate: Cargo.toml sits at the project root"
+    );
+    assert_eq!(
+        relative_slash_path(binding_root, Path::new("crates/toolkit-core")),
+        "../toolkit-core",
+        "workspace-shaped core crate: Cargo.toml sits beside the binding crate"
+    );
+}
+
+#[test]
+fn relative_slash_path_collapses_to_dot_for_identical_roots() {
+    let same = Path::new("crates/toolkit-ffi");
+    assert_eq!(relative_slash_path(same, same), ".");
 }

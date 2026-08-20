@@ -1,8 +1,10 @@
 //! Core crate import path methods for `ResolvedCrateConfig`.
 
+use std::path::{Path, PathBuf};
+
 use super::ResolvedCrateConfig;
 use crate::core::config::extras::Language;
-use crate::core::config::resolve_helpers::find_after_crates_prefix;
+use crate::core::config::resolve_helpers::{find_after_crates_prefix, relative_slash_path};
 
 impl ResolvedCrateConfig {
     /// Get the core crate Rust import path (e.g., `"sample_llm"`).
@@ -52,6 +54,43 @@ impl ResolvedCrateConfig {
             }
         }
         self.name.clone()
+    }
+
+    /// The directory (relative to the project root) that holds the core crate's own
+    /// `Cargo.toml`.
+    ///
+    /// Mirrors [`Self::core_crate_dir`]'s walk up from the first `sources` entry looking
+    /// for a `src` component, but returns the whole path to that component's parent
+    /// instead of only its final segment. A root-flat core crate (`sources =
+    /// ["src/lib.rs"]`, the shape alef itself has used since 0.18.0) resolves to an empty
+    /// path -- the project root -- rather than a sibling directory that does not exist; a
+    /// workspace-shaped one (`sources = ["crates/my-core/src/lib.rs"]`) resolves to
+    /// `crates/my-core`. Scaffolders derive a binding crate's core-dependency `path = ...`
+    /// from this instead of assuming a fixed nesting depth. ~keep
+    pub fn core_crate_root(&self) -> PathBuf {
+        if let Some(first_source) = self.sources.first() {
+            let path = Path::new(first_source);
+            let mut current = path.parent();
+            while let Some(dir) = current {
+                if dir.file_name().is_some_and(|n| n == "src") {
+                    return dir.parent().map(Path::to_path_buf).unwrap_or_default();
+                }
+                current = dir.parent();
+            }
+        }
+        PathBuf::from("crates").join(&self.name)
+    }
+
+    /// The Cargo dependency `path = "..."` value a binding crate rooted at
+    /// `binding_root` (itself relative to the project root, e.g. `crates/toolkit-ffi`)
+    /// should use to reference this crate's core crate.
+    ///
+    /// Derives both the "from" and "to" side of the relative path from
+    /// [`Self::core_crate_root`], so a root-flat and a workspace-shaped core crate each get
+    /// the correct number of `..` segments instead of the single hard-coded `..` that only
+    /// the workspace shape happens to satisfy.
+    pub fn core_crate_dep_path(&self, binding_root: &Path) -> String {
+        relative_slash_path(binding_root, &self.core_crate_root())
     }
 
     /// Resolve the core Cargo dependency name (and matching directory) for a
@@ -235,6 +274,55 @@ sources = ["crates/my-core/src/lib.rs"]
     fn core_crate_dir_falls_back_to_name() {
         let r = minimal();
         assert_eq!(r.core_crate_dir(), "test-lib");
+    }
+
+    #[test]
+    fn core_crate_root_is_empty_for_a_root_flat_core_crate() {
+        // `minimal()` uses `sources = ["src/lib.rs"]` -- the shape alef itself has used
+        // since 0.18.0, with the core crate's own `Cargo.toml` at the project root.
+        let r = minimal();
+        assert_eq!(r.core_crate_root(), super::PathBuf::new());
+    }
+
+    #[test]
+    fn core_crate_root_is_the_crates_sibling_for_a_workspace_core_crate() {
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["crates/my-core/src/lib.rs"]
+"#,
+        );
+        assert_eq!(r.core_crate_root(), super::PathBuf::from("crates/my-core"));
+    }
+
+    #[test]
+    fn core_crate_dep_path_covers_both_layouts_from_the_default_binding_crate_root() {
+        let root_flat = minimal();
+        assert_eq!(
+            root_flat.core_crate_dep_path(std::path::Path::new("crates/test-lib-ffi")),
+            "../..",
+            "root-flat: binding crate is two levels below the core crate's own Cargo.toml"
+        );
+
+        let workspace = resolved_one(
+            r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["crates/my-core/src/lib.rs"]
+"#,
+        );
+        assert_eq!(
+            workspace.core_crate_dep_path(std::path::Path::new("crates/test-lib-ffi")),
+            "../my-core",
+            "workspace: core crate is a `crates/` sibling of the binding crate"
+        );
     }
 
     #[test]

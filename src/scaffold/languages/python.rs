@@ -158,9 +158,10 @@ pub(crate) fn scaffold_python_cargo(
         .as_ref()
         .map(|p| p.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep_py, core_target_blocks) = crate::scaffold::render_core_dep_with_overrides(
         &config.name,
-        &format!("../{core_crate_dir}"),
+        &core_dep_path,
         &core_dep_features(config, Language::Python),
         version,
         core_overrides,

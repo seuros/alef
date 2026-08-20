@@ -45,8 +45,11 @@ fn render_core_dep_falls_back_to_path_only_when_version_empty() {
 #[test]
 fn test_scaffold_python_core_dep_is_dual_form() {
     let content = core_cargo_toml_for(Language::Python);
+    // `test_config()` is root-flat (`sources = ["src/lib.rs"]`), so from
+    // `crates/my-lib-py` the core crate's `Cargo.toml` at the project root is `../..`, not
+    // the single-`..` workspace-sibling path a fixed nesting depth would assume. ~keep
     assert!(
-        content.contains(r#"my-lib = { version = "0.1.0", path = "../my-lib", features = ["full", "ocr"] }"#),
+        content.contains(r#"my-lib = { version = "0.1.0", path = "../..", features = ["full", "ocr"] }"#),
         "python core dep must be dual form with version + path + features; content:\n{content}"
     );
     assert!(
@@ -58,8 +61,9 @@ fn test_scaffold_python_core_dep_is_dual_form() {
 #[test]
 fn test_scaffold_node_core_dep_is_dual_form() {
     let content = core_cargo_toml_for(Language::Node);
+    // See `test_scaffold_python_core_dep_is_dual_form`: `test_config()` is root-flat. ~keep
     assert!(
-        content.contains(r#"my-lib = { version = "0.1.0", path = "../my-lib", features = ["full", "ocr"] }"#),
+        content.contains(r#"my-lib = { version = "0.1.0", path = "../..", features = ["full", "ocr"] }"#),
         "node core dep must be dual form; content:\n{content}"
     );
     assert!(
@@ -86,8 +90,9 @@ fn test_scaffold_ruby_core_dep_is_dual_form() {
 #[test]
 fn test_scaffold_php_core_dep_is_dual_form() {
     let content = core_cargo_toml_for(Language::Php);
+    // See `test_scaffold_python_core_dep_is_dual_form`: `test_config()` is root-flat. ~keep
     assert!(
-        content.contains(r#"my-lib = { version = "0.1.0", path = "../my-lib", features = ["full", "ocr"] }"#),
+        content.contains(r#"my-lib = { version = "0.1.0", path = "../..", features = ["full", "ocr"] }"#),
         "php core dep must be dual form; content:\n{content}"
     );
     assert!(
@@ -406,5 +411,85 @@ keywords = ["test"]
             content.contains(r#"features = ["macos-intel-target"]"#),
             "{lang:?} override must use the override features:\n{content}"
         );
+    }
+}
+
+/// Regression test for the FFI/Python/Node/PHP scaffolders hard-coding the core-crate
+/// dependency as `path = "../{core_crate_dir}"`, which only resolves when the core crate
+/// is a workspace-shaped sibling (`crates/{core}` beside `crates/{core}-<lang>`) and is
+/// simply wrong for a root-flat core crate (`Cargo.toml` at the project root -- the shape
+/// alef itself has used since 0.18.0), pointing at a `crates/<name>` directory that does
+/// not exist.
+///
+/// This does not compare the emitted string against a second hard-coded string -- two
+/// independently-typed literals that happen to agree is exactly the failure mode this
+/// codebase keeps producing. Instead it lays down real files matching each layout on disk
+/// and canonicalizes the emitted path against them, the same resolution `cargo build`
+/// itself would perform, and asserts it lands on the file the fixture actually put there.
+#[test]
+fn scaffold_core_dep_path_resolves_to_the_real_core_crate_manifest_for_both_layouts() {
+    let layouts: &[(&str, Vec<PathBuf>, PathBuf)] = &[
+        ("root-flat", vec![PathBuf::from("src/lib.rs")], PathBuf::new()),
+        (
+            "workspace",
+            vec![PathBuf::from("crates/my-lib/src/lib.rs")],
+            PathBuf::from("crates/my-lib"),
+        ),
+    ];
+
+    for (label, sources, core_crate_root) in layouts {
+        for lang in [Language::Ffi, Language::Python, Language::Node, Language::Php] {
+            let mut config = test_config();
+            config.sources = sources.clone();
+            let api = test_api();
+            let all_files = scaffold(&api, &config, &[lang]).unwrap();
+            let manifest = language_files(&all_files)
+                .into_iter()
+                .find(|f| f.path.ends_with("Cargo.toml") && f.content.contains("my-lib = {"))
+                .unwrap_or_else(|| panic!("{label}/{lang:?}: no core-dependency Cargo.toml emitted"));
+            let binding_root = manifest.path.parent().expect("manifest path has a parent directory");
+
+            let dep_path = manifest
+                .content
+                .lines()
+                .find_map(|line| {
+                    let trimmed = line.trim_start();
+                    if !trimmed.starts_with("my-lib = {") {
+                        return None;
+                    }
+                    trimmed.split("path = \"").nth(1)?.split('"').next()
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "{label}/{lang:?}: no `my-lib` path dependency in:\n{}",
+                        manifest.content
+                    )
+                });
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            let project_root = dir.path();
+            let core_dir = project_root.join(core_crate_root);
+            std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+            std::fs::write(core_dir.join("Cargo.toml"), "[package]\nname = \"my-lib\"\n")
+                .expect("write core Cargo.toml");
+            let binding_dir = project_root.join(binding_root);
+            std::fs::create_dir_all(&binding_dir).expect("create binding crate dir");
+
+            let resolved = binding_dir.join(dep_path).canonicalize().unwrap_or_else(|error| {
+                panic!(
+                    "{label}/{lang:?}: emitted path `{dep_path}` from `{}` does not resolve: {error}",
+                    binding_root.display()
+                )
+            });
+            let expected = core_dir
+                .canonicalize()
+                .expect("canonicalize the fixture's own core crate dir");
+            assert_eq!(
+                resolved,
+                expected,
+                "{label}/{lang:?}: emitted path `{dep_path}` from `{}` must resolve to the core crate's own directory",
+                binding_root.display()
+            );
+        }
     }
 }

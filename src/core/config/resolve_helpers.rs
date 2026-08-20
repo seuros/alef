@@ -1,7 +1,7 @@
 //! Shared helpers used during config resolution.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::extras::Language;
 use super::output::{OutputConfig, OutputTemplate};
@@ -202,6 +202,37 @@ pub(crate) fn find_after_crates_prefix(path: &str) -> Option<&str> {
         return Some(stripped);
     }
     None
+}
+
+/// Express `target` as a `/`-joined relative path from `base`, where both are given
+/// relative to the same root (typically the project root).
+///
+/// Lexical only -- no filesystem access -- so it works while scaffolding a project that
+/// does not exist on disk yet. Always emits forward slashes regardless of the host OS, so
+/// the result is a valid Cargo.toml `path = "..."` value on every platform `alef` runs on.
+/// An empty `target` (the project root itself) collapses trailing `..` segments correctly,
+/// e.g. `base = "crates/foo-ffi"`, `target = ""` yields `"../.."`, not `"../../"`. ~keep
+pub(crate) fn relative_slash_path(base: &Path, target: &Path) -> String {
+    let base_components: Vec<_> = base.components().collect();
+    let target_components: Vec<_> = target.components().collect();
+    let common = base_components
+        .iter()
+        .zip(target_components.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut parts: Vec<String> = base_components[common..].iter().map(|_| "..".to_string()).collect();
+    parts.extend(
+        target_components[common..]
+            .iter()
+            .map(|component| component.as_os_str().to_string_lossy().into_owned()),
+    );
+
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 #[cfg(test)]

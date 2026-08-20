@@ -218,9 +218,10 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep_php, core_target_blocks) = crate::scaffold::render_core_dep_with_overrides(
         &config.name,
-        &format!("../{core_crate_dir}"),
+        &core_dep_path,
         &merged_core_dep_features(config, &core_features_to_add),
         version,
         core_overrides,

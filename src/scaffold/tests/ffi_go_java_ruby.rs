@@ -177,7 +177,7 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
         "expected default-branch target table with cfg(not(...)), got:\n{cargo_toml}"
     );
     assert!(
-        cargo_toml.contains("my-lib = { path = \"../my-lib\", version = \"0.1.0\", features = [\"full\", \"ocr\"] }"),
+        cargo_toml.contains("my-lib = { path = \"../..\", version = \"0.1.0\", features = [\"full\", \"ocr\"] }"),
         "default branch should keep the full feature set, got:\n{cargo_toml}"
     );
 
@@ -186,7 +186,7 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
         "expected override target table, got:\n{cargo_toml}"
     );
     assert!(
-        cargo_toml.contains("my-lib = { path = \"../my-lib\", version = \"0.1.0\", features = [\"android-target\"] }"),
+        cargo_toml.contains("my-lib = { path = \"../..\", version = \"0.1.0\", features = [\"android-target\"] }"),
         "override branch should emit android-target feature, got:\n{cargo_toml}"
     );
 
@@ -243,13 +243,13 @@ fn test_scaffold_ffi_target_dep_overrides_default_features_false_drops_defaults(
     );
     assert!(
         cargo_toml.contains(
-            "my-lib = { path = \"../my-lib\", version = \"0.1.0\", default-features = false, features = [\"windows-target\"] }"
+            "my-lib = { path = \"../..\", version = \"0.1.0\", default-features = false, features = [\"windows-target\"] }"
         ),
         "default_features: false must drop the core dep's default features on the override branch, got:\n{cargo_toml}"
     );
     assert!(
         cargo_toml.contains(
-            "[target.'cfg(not(target_os = \"windows\"))'.dependencies]\nmy-lib = { path = \"../my-lib\", version = \"0.1.0\", features = [\"full\", \"ocr\"] }"
+            "[target.'cfg(not(target_os = \"windows\"))'.dependencies]\nmy-lib = { path = \"../..\", version = \"0.1.0\", features = [\"full\", \"ocr\"] }"
         ),
         "the default (non-overridden) branch must keep the full default feature set with no default-features key, got:\n{cargo_toml}"
     );

@@ -25,14 +25,13 @@ use std::path::PathBuf;
 /// `x86_64-linux-android`, which has no ONNX Runtime prebuilt).
 fn render_core_dep(
     crate_name: &str,
-    core_crate_dir: &str,
+    rel_path: &str,
     version: &str,
     default_features: &str,
     overrides: &[FfiTargetDepOverride],
 ) -> (String, String) {
     if overrides.is_empty() {
-        let line =
-            format!("{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_features} }}");
+        let line = format!("{crate_name} = {{ path = \"{rel_path}\", version = \"{version}\"{default_features} }}");
         return (line, String::new());
     }
 
@@ -45,7 +44,7 @@ fn render_core_dep(
 
     let mut entries: Vec<(String, String)> = vec![(
         format!("not({combined_cfg})"),
-        format!("{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_features} }}"),
+        format!("{crate_name} = {{ path = \"{rel_path}\", version = \"{version}\"{default_features} }}"),
     )];
     for override_ in overrides {
         let default_block = if override_.default_features {
@@ -61,9 +60,7 @@ fn render_core_dep(
         };
         entries.push((
             override_.cfg.clone(),
-            format!(
-                "{crate_name} = {{ path = \"../{core_crate_dir}\", version = \"{version}\"{default_block}{features_str} }}"
-            ),
+            format!("{crate_name} = {{ path = \"{rel_path}\", version = \"{version}\"{default_block}{features_str} }}"),
         ));
     }
     // See `crate::scaffold::join_sorted_target_dep_blocks`: cargo-sort orders
@@ -132,9 +129,10 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep_line, target_blocks) = render_core_dep(
         &config.name,
-        &core_crate_dir,
+        &core_dep_path,
         version,
         &core_dep_features(config, Language::Ffi),
         target_overrides,
@@ -401,7 +399,7 @@ mod tests {
     #[test]
     fn test_render_core_dep_includes_version_in_default_line() {
         let (core_dep_line, target_blocks) =
-            render_core_dep("my-lib", "my-lib-core", "1.2.3", ", features = [\"foo\"]", &[]);
+            render_core_dep("my-lib", "../my-lib-core", "1.2.3", ", features = [\"foo\"]", &[]);
 
         assert!(!core_dep_line.is_empty(), "Expected non-empty core_dep_line");
         assert!(
@@ -424,7 +422,7 @@ mod tests {
             features: vec!["windows-feature".to_string()],
             default_features: true,
         }];
-        let (core_dep_line, target_blocks) = render_core_dep("my-lib", "my-lib-core", "2.0.0", "", &overrides);
+        let (core_dep_line, target_blocks) = render_core_dep("my-lib", "../my-lib-core", "2.0.0", "", &overrides);
 
         assert!(
             core_dep_line.is_empty(),
@@ -460,7 +458,7 @@ mod tests {
             features: vec!["windows-target".to_string()],
             default_features: false,
         }];
-        let (core_dep_line, target_blocks) = render_core_dep("my-lib", "my-lib-core", "2.0.0", "", &overrides);
+        let (core_dep_line, target_blocks) = render_core_dep("my-lib", "../my-lib-core", "2.0.0", "", &overrides);
 
         assert!(
             core_dep_line.is_empty(),

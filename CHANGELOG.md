@@ -280,6 +280,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   binding whose `features` omits it). The fixture now renders as a `@Disabled` entry in
   `ExcludedBindingsTest.kt` naming the unsatisfied cfg gate, the same way a visitor-excluded
   fixture already does.
+- **The FFI, Python, Node, and PHP scaffolders no longer hard-code the core crate's Cargo
+  dependency as `path = "../{core_crate_dir}"`.** That formula only resolves when the core
+  crate is a workspace-shaped `crates/` sibling of the binding crate; for a root-flat core
+  crate (`Cargo.toml` at the project root -- the shape alef itself has used since 0.18.0) it
+  pointed at a `crates/<name>` directory that does not exist, and `cargo` failed to find the
+  dependency on the very first build. `ResolvedCrateConfig::core_crate_dep_path` now derives
+  the relative path from the binding crate's actual root to `core_crate_root` (a root-flat
+  layout resolves to the project root itself; a workspace layout to its `crates/` sibling),
+  so both shapes get the correct `..` depth instead of one hard-coded assumption.
 
 ## [0.62.5] - 2026-08-20
 

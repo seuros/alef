@@ -231,9 +231,10 @@ pub(crate) fn scaffold_node_cargo(
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep, core_target_blocks) = crate::scaffold::render_core_dep_with_overrides(
         &config.name,
-        &format!("../{core_crate_dir}"),
+        &core_dep_path,
         &core_dep_features(config, Language::Node),
         version,
         core_overrides,
