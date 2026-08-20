@@ -172,7 +172,7 @@ fn test_scaffold_multiple() {
     let api = test_api();
     let all_files = scaffold(&api, &config, &[Language::Python, Language::Node]).unwrap();
     let files = language_files(&all_files);
-    assert_eq!(files.len(), 14);
+    assert_eq!(files.len(), 15);
 }
 
 #[test]
