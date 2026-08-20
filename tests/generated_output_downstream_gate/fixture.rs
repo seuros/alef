@@ -41,7 +41,10 @@ pub enum Attachment {
     #[default]
     None,
     Url(String),
-    Inline { mime_type: String, bytes_len: u64 },
+    Inline {
+        mime_type: String,
+        bytes_len: u64,
+    },
 }
 
 /// No public fields, so the extractor keeps this opaque and every backend has to emit a
