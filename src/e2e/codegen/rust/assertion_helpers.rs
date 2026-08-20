@@ -18,6 +18,12 @@ pub(super) fn render_equals_assertion(
     if let Some(val) = &assertion.value {
         let expected = value_to_rust_string(val);
         if val.is_string() {
+            // Enum-typed fields are not guaranteed to implement `Display` — only `Debug`
+            // is a safe assumption (the containment predicates already rely on it). For a
+            // unit variant, `{:?}` prints exactly the variant name, matching the fixture's
+            // expected literal. This takes priority over the optional/display-as-text
+            // branches below because those assume the inner type is string-like. ~keep
+            let field_is_enum = assertion.field.as_ref().is_some_and(|f| field_resolver.is_enum(f));
             // When the field is Optional<String> and was NOT pre-unwrapped to a local
             // var (e.g. inside a result_is_vec iteration where the call-site unwrap
             // pass is skipped), emit `.as_deref().unwrap_or("")` so the expression is
@@ -41,7 +47,11 @@ pub(super) fn render_equals_assertion(
                 .field
                 .as_ref()
                 .is_some_and(|f| field_resolver.is_display_as_text(f));
-            let field_expr = if is_opt_str_not_unwrapped && is_display_as_text {
+            let field_expr = if field_is_enum && is_opt_str_not_unwrapped {
+                format!("{field_access}.as_ref().map(|v| format!(\"{{v:?}}\")).unwrap_or_default()")
+            } else if field_is_enum {
+                format!("format!(\"{{:?}}\", {field_access})")
+            } else if is_opt_str_not_unwrapped && is_display_as_text {
                 // Optional non-String content field not yet pre-unwrapped: use Display via
                 // `.as_ref().map(|v| v.to_string())` so the inner type need not impl
                 // `Deref<Target=str>`.
@@ -659,6 +669,112 @@ mod tests {
         assert!(
             !out.contains("unwrap_or_default"),
             "unwrapped field must NOT emit unwrap_or_default(); got: {out}"
+        );
+    }
+
+    fn enum_field_resolver(field: &str) -> FieldResolver {
+        empty_resolver().with_enum_fields(HashSet::from([field.to_string()]))
+    }
+
+    /// Table-driven regression for the `.to_string()`-on-enum defect: an enum field emits a
+    /// `format!("{:?}", ...)` expression (works with only `Debug`, the far more commonly
+    /// derived trait), while non-enum string fields keep the pre-existing `Display`-based
+    /// `.to_string()` path unchanged. The IR carries no signal for whether an enum ALSO
+    /// implements `Display` (verified: no `has_display`/`strum`/derive(Display) detection
+    /// anywhere in `src/extract/` or `src/core/ir`), so this is uniform for every enum field
+    /// regardless of whether the real Rust type also derives/implements `Display` — for a
+    /// unit variant, `{:?}` renders exactly the variant name, which is what `Display` also
+    /// renders for the idiomatic (unrenamed) case, so behavior is preserved for enums that
+    /// do implement Display too. ~keep
+    #[test]
+    fn render_equals_assertion_field_stringification_matches_field_kind() {
+        struct Case {
+            name: &'static str,
+            field: &'static str,
+            enum_field: bool,
+            must_contain: &'static str,
+            must_not_contain: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "enum field without Display uses Debug, not to_string",
+                field: "kind",
+                enum_field: true,
+                must_contain: "format!(\"{:?}\", result.kind)",
+                must_not_contain: "result.kind.to_string()",
+            },
+            Case {
+                name: "enum field that also implements Display still uses Debug (no IR signal to prefer Display)",
+                field: "kind",
+                enum_field: true,
+                must_contain: "format!(\"{:?}\", result.kind)",
+                must_not_contain: "result.kind.to_string()",
+            },
+            Case {
+                name: "non-enum string field is unchanged (Display via to_string)",
+                field: "name",
+                enum_field: false,
+                must_contain: "result.name.to_string()",
+                must_not_contain: "format!(\"{:?}\", result.name)",
+            },
+        ];
+        for case in cases {
+            let resolver = if case.enum_field {
+                enum_field_resolver(case.field)
+            } else {
+                empty_resolver()
+            };
+            let field_access = format!("result.{}", case.field);
+            let assertion = make_assertion(
+                "equals",
+                Some(case.field),
+                Some(serde_json::Value::String("KeyValue".into())),
+            );
+            let mut out = String::new();
+            render_equals_assertion(&mut out, &assertion, &field_access, false, &resolver);
+            assert!(
+                out.contains(case.must_contain),
+                "case '{}': expected output to contain '{}', got: {out}",
+                case.name,
+                case.must_contain
+            );
+            assert!(
+                !out.contains(case.must_not_contain),
+                "case '{}': expected output to NOT contain '{}', got: {out}",
+                case.name,
+                case.must_not_contain
+            );
+        }
+    }
+
+    /// The optional-not-unwrapped enum path must not fall through to `.as_deref()`
+    /// (which requires `Deref<Target=str>` and does not compile for an enum type).
+    #[test]
+    fn render_equals_assertion_optional_enum_field_uses_debug_map_not_as_deref() {
+        let mut optional = HashSet::new();
+        optional.insert("kind".to_string());
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &optional,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_enum_fields(HashSet::from(["kind".to_string()]));
+        let assertion = make_assertion(
+            "equals",
+            Some("kind"),
+            Some(serde_json::Value::String("KeyValue".into())),
+        );
+        let mut out = String::new();
+        render_equals_assertion(&mut out, &assertion, "result.kind", false, &resolver);
+        assert!(
+            out.contains("result.kind.as_ref().map(|v| format!(\"{v:?}\")).unwrap_or_default()"),
+            "got: {out}"
+        );
+        assert!(
+            !out.contains("as_deref"),
+            "must NOT emit as_deref() for an enum; got: {out}"
         );
     }
 
