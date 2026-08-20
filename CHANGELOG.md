@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`jni` no longer hard-fails generation when `[crates.kotlin_android]` is unconfigured.**
+  Every downstream accessor (`jni_kotlin_package`, `jni_excluded_functions`,
+  `jni_excluded_types`, `jni_capsule_types`) already tolerated its absence, falling back to
+  the same vendor-neutral placeholder package `kotlin`/`java` use when unconfigured — the
+  `generate_bindings` guard was the only place still bailing on a config gap every sibling
+  accessor already treated as a soft default, so enabling `jni` without also configuring
+  `kotlin_android` produced a hard generate failure for a language the consumer did
+  configure.
+
 ## [0.62.5] - 2026-08-20
 
 ### Added

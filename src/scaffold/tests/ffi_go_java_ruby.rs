@@ -1155,7 +1155,13 @@ fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_vio
     .expect("write real source");
 
     let real_violation_output = std::process::Command::new("mvn")
-        .args(["-o", "-q", "validate"])
+        // Not `-o`: a freshly provisioned CI runner has no cached copy of the checkstyle/
+        // source plugins this scaffolded `pom.xml` declares, so `-o` fails on plugin
+        // resolution before checkstyle ever runs -- passing the `!success()` assertion
+        // below for the wrong reason and never even reaching the one it exists to prove.
+        // Runners have real network access; only Maven's own offline flag was blocking it.
+        // ~keep
+        .args(["-q", "validate"])
         .current_dir(project_dir.path())
         .output()
         .expect("mvn runs");
@@ -1178,7 +1184,10 @@ fn test_scaffold_java_checkstyle_ignores_alef_scratch_but_still_catches_real_vio
     .expect("write scratch source");
 
     let scratch_output = std::process::Command::new("mvn")
-        .args(["-o", "-q", "validate"])
+        // Not `-o`: see the comment on the first `mvn` invocation above -- same reason,
+        // and here an unresolved plugin would fail this `success()` assertion for a
+        // network problem instead of a real checkstyle regression. ~keep
+        .args(["-q", "validate"])
         .current_dir(project_dir.path())
         .output()
         .expect("mvn runs");

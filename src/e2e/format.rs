@@ -179,8 +179,27 @@ fn format_language(
     // Default: shell out to `poly fmt --fix` over the directory. poly walks up
     // from `dir_path` for a `poly.toml` (falling back to poly's zero-config
     // defaults when none is found).
+    //
+    // A missing `poly` executable is the same "environment gap" the override branch
+    // above already treats leniently under non-`--strict` mode -- checked explicitly
+    // here (rather than routed through `poly_format_strict`'s own bail, which cannot
+    // tell a missing executable from poly running and rejecting the code) so this
+    // branch honors `strict` exactly the way the override branch and this module's own
+    // doc comment promise, instead of always failing hard regardless of `strict`. ~keep
     tracing::debug!("Formatting {lang} with poly: {dir}");
-    crate::cli::pipeline::poly_format_strict(std::slice::from_ref(&dir_path), &dir_path)?;
+    if !crate::cli::pipeline::is_tool_available("poly") {
+        if strict {
+            anyhow::bail!("poly not found on PATH; generated output cannot be formatted");
+        }
+        warn!("{lang}: poly fmt skipped — executable not found; continuing so the run reaches finalisation");
+        deferred.push(DeferredFormatting {
+            language: lang.to_owned(),
+            step: "poly fmt --fix".to_owned(),
+            reason: MISSING_TOOLCHAIN_REASON.to_owned(),
+        });
+    } else {
+        crate::cli::pipeline::poly_format_strict(std::slice::from_ref(&dir_path), &dir_path)?;
+    }
 
     // Residual: `go mod tidy` populates `go.sum` from `go.mod` (poly cannot —
     // it is dependency resolution, not formatting) so the Go suite builds.
@@ -521,8 +540,15 @@ mod tests {
         assert!(rendered.contains("not published yet"), "got: {rendered}");
     }
 
-    /// The default path shells out to `poly fmt --fix` and rejects an unavailable
-    /// formatter instead of accepting noncanonical output.
+    /// The default path shells out to `poly fmt --fix`. With poly installed it must
+    /// actually reformat the file; without it, non-strict mode must defer rather than
+    /// abort instead of the old behaviour of aborting regardless of `strict` -- a
+    /// missing default-path formatter is the same environment gap the override branch
+    /// already tolerated via `resolve_shell_failure`. Branches on the runner's real
+    /// `PATH` rather than forging one: mutating process-wide `PATH` is shared mutable
+    /// state across every test in this binary, the same hazard class documented on
+    /// `test_support::CWD_LOCK` for `set_current_dir`, and no such lock exists for env
+    /// vars here. ~keep
     #[test]
     fn default_path_formats_python_with_poly() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -548,7 +574,10 @@ mod tests {
                 "with poly installed, `poly fmt --fix` must reformat the e2e Python file"
             );
         } else {
-            assert!(run_formatters(&files, &e2e_config, false).is_err());
+            let deferred = run_formatters(&files, &e2e_config, false)
+                .expect("non-strict mode must defer a missing default-path formatter, not abort");
+            assert_eq!(deferred.len(), 1, "expected exactly one deferred step: {deferred:?}");
+            assert_eq!(deferred[0].language, "python");
         }
     }
 
