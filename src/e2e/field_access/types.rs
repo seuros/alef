@@ -58,6 +58,20 @@ pub struct FieldResolver {
     /// (e.g. a virtual namespace prefix or a synthetic/derived assertion field), so
     /// `result_fields` only gets the final say on names the IR is silent on.
     pub(super) ir_known_excluded_fields: HashSet<String>,
+    /// Bare field names that carry `#[serde(skip_serializing_if = "...")]` on at least one IR
+    /// type, i.e. fields whose JSON key may be entirely absent from the wire format even
+    /// though the underlying Rust value is never itself missing (a required `Vec<T>` skipped
+    /// via `Vec::is_empty`, an `Option<T>` skipped via `Option::is_none`, ...).
+    ///
+    /// Deliberately kept separate from `optional_fields`: that set drives
+    /// `Option<T>`-shaped codegen (`.as_ref().unwrap()`, `!`, nullability) for backends that
+    /// access the real typed value, where a required `Vec<T>` must NOT be treated as
+    /// `Option`-like. This set exists only for backends that walk a generic parsed-JSON tree
+    /// (currently the Zig e2e generator, which re-parses the FFI's serialized JSON for result
+    /// shapes it has no typed accessor for) and must guard a `.get(key)` lookup instead of
+    /// assuming the key exists. Populated via `with_wire_optional_fields`; empty when a codegen
+    /// call site hasn't wired IR data in.
+    pub(super) wire_optional_fields: HashSet<String>,
     /// IR-derived enum-field classification (`crate_type -> field -> {is-enum, next type}`),
     /// anchored at the call's declared result type. Populated via `with_ir_enum_map`; empty
     /// when a codegen call site hasn't wired IR data in, in which case `is_enum` falls back

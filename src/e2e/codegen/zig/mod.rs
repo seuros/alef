@@ -89,6 +89,8 @@ mod visitor;
 
 #[cfg(test)]
 mod enum_field_classification_tests;
+#[cfg(test)]
+mod wire_optional_json_key_tests;
 
 pub use stubs::emit_test_backend;
 
