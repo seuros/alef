@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Publish` now refuses to publish a tag whose `CI` run is not green.** `Publish` fires on
+  `release: published`, which is entirely independent of `CI`, and nothing in the workflow looked
+  at whether the tagged commit ever built — a red `main` could be released to crates.io and
+  Homebrew unnoticed. A new `check-ci` job resolves the release commit, polls the `CI` workflow
+  for that exact SHA for up to 60 minutes (so a release cut moments after the push waits rather
+  than failing on a still-queued run), and fails on any non-`success` conclusion.
+  `publish-crates` and `build-cli` now gate on it, which transitively gates the Homebrew and
+  release-asset jobs. A `skip_ci_gate` `workflow_dispatch` input exists for emergencies.
+
 - **`wasm` no longer emits a struct field and its accessors with different types when a union
   is in `untagged_union_text_types`.** A `#[serde(untagged)]` data enum listed in
   `untagged_union_text_types` was picked up by both opt-ins at once: the `type_overrides` entry
