@@ -1,4 +1,5 @@
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
@@ -21,6 +22,8 @@ pub(super) fn render_spec_file(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     errors: &[crate::core::ir::ErrorDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> String {
     // Resolve client_factory from ruby override.
     let client_factory = e2e_config
@@ -95,6 +98,14 @@ pub(super) fn render_spec_file(
             // Build per-call field resolver using the effective field sets for this call.
             let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) =
                 FieldResolver::ir_field_sets(type_defs);
+            // Anchor the IR-derived enum classification (`with_ir_enum_map`) at the call's
+            // declared Rust return type so a leaf field name that means different things on
+            // different types resolves per owner, mirroring the rust/csharp/gleam/swift/dart
+            // e2e generators. This is purely additive: `is_enum` still consults
+            // `with_enum_fields` (the hand-maintained `fields_enum` config) FIRST, so an
+            // explicit config entry always wins. ~keep
+            let call_root_type =
+                resolve_declared_result_type(fixture_call, "ruby", CallIr { functions, type_defs });
             let fixture_call_resolver = FieldResolver::new(
                 e2e_config.effective_fields(fixture_call),
                 e2e_config.effective_fields_optional(fixture_call),
@@ -102,6 +113,8 @@ pub(super) fn render_spec_file(
                 e2e_config.effective_fields_array(fixture_call),
                 &std::collections::HashSet::new(),
             )
+            .with_enum_fields(e2e_config.effective_fields_enum(fixture_call).clone())
+            .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
             .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
             let field_resolver = &fixture_call_resolver;
             let fixture_call_overrides = fixture_call.overrides.get("ruby");

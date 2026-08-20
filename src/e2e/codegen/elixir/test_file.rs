@@ -29,6 +29,7 @@ pub(super) fn render_test_file(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     errors: &[crate::core::ir::ErrorDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::Hash));
@@ -211,6 +212,7 @@ pub(super) fn render_test_file(
                 config,
                 type_defs,
                 errors,
+                functions,
             );
             // ~keep Elixir's error path asserts `{:error, _}` and returns, so every other
             // assertion on an error fixture — most often an `equals` against `error.status_code`
@@ -276,6 +278,7 @@ mod error_path_marker_tests {
             &ResolvedCrateConfig::default(),
             &[],
             errors,
+            &[],
         )
     }
 

@@ -29,6 +29,7 @@ pub(super) fn render_test_function(
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
     options_type: Option<&str>,
     options_via: &str,
     enum_fields: &HashMap<String, String>,
@@ -51,6 +52,16 @@ pub(super) fn render_test_function(
     // try to find a better-matching call from the named calls.
     call_config = super::super::select_best_matching_call(call_config, e2e_config, fixture);
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    // Anchor the IR-derived enum classification (`with_ir_enum_map`) at the call's declared
+    // Rust return type so a leaf field name that means different things on different types
+    // resolves per owner, mirroring the rust/csharp/gleam/swift/dart e2e generators. This is
+    // purely additive: `is_enum` still consults `with_enum_fields` (the hand-maintained
+    // `fields_enum` config) FIRST, so an explicit config entry always wins. ~keep
+    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call_config,
+        "python",
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -58,6 +69,8 @@ pub(super) fn render_test_function(
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
+    .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let function_name = resolve_function_name_for_call(call_config);
@@ -374,6 +387,7 @@ mod tests {
             &config,
             &type_defs,
             &enums,
+            &[],
             None,
             "kwargs",
             &HashMap::new(),

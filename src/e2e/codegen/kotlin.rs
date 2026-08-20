@@ -45,8 +45,8 @@ impl E2eCodegen for KotlinE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -205,6 +205,8 @@ impl E2eCodegen for KotlinE2eCodegen {
                 &type_enum_fields,
                 config,
                 type_defs,
+                enums,
+                functions,
             )?;
             files.push(GeneratedFile {
                 path: test_base.join(class_file_name),

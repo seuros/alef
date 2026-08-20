@@ -907,6 +907,8 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
         true,
         &config,
         &type_defs,
+        &[],
+        &[],
     )
     .expect("android streaming test file renders");
     assert!(
@@ -934,6 +936,8 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
         false,
         &config,
         &type_defs,
+        &[],
+        &[],
     )
     .expect("jvm streaming test file renders");
     assert!(
@@ -1023,6 +1027,8 @@ fn kotlin_android_object_mapper_emits_register_kotlin_module() {
         true,
         &config,
         &type_defs,
+        &[],
+        &[],
     )
     .expect("android configuration test file renders");
     assert!(
@@ -1050,6 +1056,8 @@ fn kotlin_android_object_mapper_emits_register_kotlin_module() {
         false,
         &config,
         &type_defs,
+        &[],
+        &[],
     )
     .expect("jvm configuration test file renders");
     assert!(
@@ -1349,6 +1357,8 @@ fn kotlin_android_test_file_loads_resolved_jni_lib_name_not_crate_name() {
         true,
         &config,
         &type_defs,
+        &[],
+        &[],
     )
     .expect("kotlin_android test file renders");
     assert!(

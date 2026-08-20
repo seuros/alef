@@ -25,8 +25,8 @@ impl E2eCodegen for RubyCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -188,6 +188,8 @@ impl E2eCodegen for RubyCodegen {
                     config,
                     type_defs,
                     errors,
+                    enums,
+                    functions,
                 );
                 files.push(GeneratedFile {
                     path: spec_base.join(filename),

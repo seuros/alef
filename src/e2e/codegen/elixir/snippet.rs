@@ -425,6 +425,7 @@ mod tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
+            &[],
         );
 
         let expected = concat!(

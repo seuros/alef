@@ -260,6 +260,8 @@ pub(super) fn render_test_method(
                             nested_types,
                             nested_types_optional,
                             path_fields,
+                            type_defs,
+                            enums,
                         );
                         let var_name = &arg.name;
                         builder_expressions.push_str(&format!("        var {} = {};\n", var_name, builder_expr));

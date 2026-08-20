@@ -22,7 +22,7 @@ impl E2eCodegen for ElixirCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -214,6 +214,7 @@ impl E2eCodegen for ElixirCodegen {
                 config,
                 type_defs,
                 errors,
+                functions,
             );
             files.push(GeneratedFile {
                 path: output_base.join("test").join(filename),

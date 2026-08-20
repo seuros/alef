@@ -1,6 +1,7 @@
 //! Elixir ordinary function-call e2e test rendering.
 
 use crate::core::config::ResolvedCrateConfig;
+use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::codegen::declared_error_variant::{DeclaredErrorAssertion, classify, skip_line};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::{escape_elixir, sanitize_ident};
@@ -67,6 +68,7 @@ pub(super) fn render_test_case(
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     errors: &[crate::core::ir::ErrorDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) {
     let test_name = sanitize_ident(&fixture.id);
     let test_label = fixture.id.replace('"', "\\\"");
@@ -122,8 +124,15 @@ pub(super) fn render_test_case(
         &fixture.tags,
         &fixture.input,
     );
+    let lang = "elixir";
     // Build per-call field resolver using the effective field sets for this call.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    // Anchor the IR-derived enum classification (`with_ir_enum_map`) at the call's declared
+    // Rust return type so a leaf field name that means different things on different types
+    // resolves per owner, mirroring the rust/csharp/gleam/swift/dart e2e generators. This is
+    // purely additive: `is_enum` still consults `with_enum_fields` (the hand-maintained
+    // `fields_enum` config) FIRST, so an explicit config entry always wins. ~keep
+    let call_root_type = resolve_declared_result_type(call_config, lang, CallIr { functions, type_defs });
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -132,9 +141,10 @@ pub(super) fn render_test_case(
         &std::collections::HashSet::new(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
-    let lang = "elixir";
     let call_overrides = call_config.overrides.get(lang);
 
     // Batch-fn skip removed: the rustler backend now supports `batch_extract_*` via JSON
@@ -762,6 +772,7 @@ mod dropped_field_marker_tests {
             &config,
             &type_defs,
             &[],
+            &[],
         );
 
         assert!(
@@ -811,6 +822,7 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            &[],
             &[],
         );
 
@@ -864,6 +876,7 @@ mod dropped_field_marker_tests {
             &[],
             &config,
             &type_defs,
+            &[],
             &[],
         );
 

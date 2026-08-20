@@ -132,6 +132,8 @@ pub(crate) fn render_test_file(
     type_enum_fields: &std::collections::HashMap<String, HashSet<String>>,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> anyhow::Result<String> {
     render_test_file_inner(
         category,
@@ -148,6 +150,8 @@ pub(crate) fn render_test_file(
         false,
         config,
         type_defs,
+        enums,
+        functions,
     )
 }
 
@@ -180,6 +184,8 @@ pub(crate) fn render_test_file_android(
     type_enum_fields: &std::collections::HashMap<String, HashSet<String>>,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> anyhow::Result<String> {
     render_test_file_inner(
         category,
@@ -196,6 +202,8 @@ pub(crate) fn render_test_file_android(
         true,
         config,
         type_defs,
+        enums,
+        functions,
     )
 }
 
@@ -215,6 +223,8 @@ pub(super) fn render_test_file_inner(
     kotlin_android_style: bool,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> anyhow::Result<String> {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -654,6 +664,8 @@ pub(super) fn render_test_file_inner(
             kotlin_android_style,
             config,
             type_defs,
+            enums,
+            functions,
         )?;
         let _ = writeln!(out);
     }

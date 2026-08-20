@@ -8,6 +8,7 @@ use std::fmt::Write as FmtWrite;
 
 use super::args::{KotlinArgsContext, build_args_and_setup};
 use super::assertions::render_assertion;
+use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::codegen::inert_example::{self, InertCause};
 use crate::e2e::escape::escape_kotlin;
 
@@ -61,6 +62,8 @@ pub(super) fn render_test_method(
     kotlin_android_style: bool,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> anyhow::Result<()> {
     // Delegate HTTP fixtures to the HTTP-specific renderer.
     if let Some(http) = &fixture.http {
@@ -76,8 +79,19 @@ pub(super) fn render_test_method(
         &fixture.tags,
         &fixture.input,
     );
+    let lang = if kotlin_android_style {
+        "kotlin_android"
+    } else {
+        "kotlin"
+    };
     // Build per-call field resolver using the effective field sets for this call.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    // Anchor the IR-derived enum classification (`with_ir_enum_map`) at the call's declared
+    // Rust return type so a leaf field name that means different things on different types
+    // resolves per owner, mirroring the rust/csharp/gleam/swift/dart e2e generators. This is
+    // purely additive: `is_enum` still consults `with_enum_fields` (the hand-maintained
+    // `fields_enum` config) FIRST, so an explicit config entry always wins. ~keep
+    let call_root_type = resolve_declared_result_type(call_config, lang, CallIr { functions, type_defs });
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -86,15 +100,12 @@ pub(super) fn render_test_method(
         &HashSet::new(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);
     let json_scalar_fields = e2e_config.effective_fields_json_scalar(call_config);
-    let lang = if kotlin_android_style {
-        "kotlin_android"
-    } else {
-        "kotlin"
-    };
     let call_overrides = call_config.overrides.get(lang);
 
     // Check for client_factory — when set, use instance-method call style.
@@ -625,6 +636,8 @@ mod tests {
             false,
             &config,
             &[],
+            &[],
+            &[],
         )
         .expect("render_test_method succeeds");
         out
@@ -838,6 +851,8 @@ mod tests {
             true, // kotlin_android_style
             &config,
             &[type_def],
+            &[],
+            &[],
         )
         .expect("a registered, implemented trait bridge must render successfully");
 
@@ -890,6 +905,8 @@ mod tests {
             &std::collections::HashMap::new(),
             true,
             &config,
+            &[],
+            &[],
             &[],
         )
         .expect_err("an unregistered trait must fail generation loudly, not silently degrade");
@@ -970,6 +987,8 @@ mod tests {
             false,
             &config,
             &[],
+            &[],
+            &[],
         )
         .expect("render_test_method succeeds");
 
@@ -1032,6 +1051,8 @@ mod tests {
             false,
             &config,
             &[],
+            &[],
+            &[],
         )
         .expect("render_test_method succeeds");
 
@@ -1083,6 +1104,8 @@ mod tests {
             &std::collections::HashMap::new(),
             false,
             &config,
+            &[],
+            &[],
             &[],
         )
         .expect("render_test_method succeeds");
@@ -1181,6 +1204,8 @@ mod inert_example_refusal_tests {
             &std::collections::HashMap::new(),
             false,
             &ResolvedCrateConfig::default(),
+            &[],
+            &[],
             &[],
         )
         .expect("render_test_method succeeds");

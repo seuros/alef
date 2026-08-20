@@ -32,6 +32,7 @@ pub(super) fn render_test_file(
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
     force_bind_result: bool,
 ) -> String {
     let module = resolve_module(e2e_config);
@@ -387,6 +388,7 @@ pub(super) fn render_test_file(
                 config,
                 type_defs,
                 enums,
+                functions,
                 effective_options_type.as_deref(),
                 effective_options_via,
                 enum_fields,
@@ -832,7 +834,7 @@ mod tests {
         let config = crate::core::config::ResolvedCrateConfig::default();
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let out = render_test_file("basic", &fixtures, &e2e_config, &config, &type_defs, &enums, false);
+        let out = render_test_file("basic", &fixtures, &e2e_config, &config, &type_defs, &enums, &[], false);
         assert!(out.contains("E2e tests for category: basic"), "got: {out}");
     }
 
@@ -946,7 +948,7 @@ mod tests {
         let config = crate::core::config::ResolvedCrateConfig::default();
         let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
         let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
-        let out = render_test_file("smoke", &fixtures, &e2e_config, &config, &type_defs, &enums, false);
+        let out = render_test_file("smoke", &fixtures, &e2e_config, &config, &type_defs, &enums, &[], false);
 
         assert!(
             !out.contains("_alef_e2e_item_texts"),
@@ -1048,7 +1050,7 @@ mod tests {
         .into_iter()
         .map(|(category, fixture)| {
             let fixtures: Vec<&crate::e2e::fixture::Fixture> = vec![fixture];
-            let out = render_test_file(category, &fixtures, &e2e_config, &config, &[], &[], false);
+            let out = render_test_file(category, &fixtures, &e2e_config, &config, &[], &[], &[], false);
             (category, out)
         })
         .collect();

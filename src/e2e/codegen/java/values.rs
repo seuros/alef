@@ -85,6 +85,8 @@ pub(super) fn java_builder_expression(
     nested_types: &std::collections::HashMap<String, String>,
     nested_types_optional: bool,
     path_fields: &[String],
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
 ) -> String {
     let mut expr = format!("{}.builder()", type_name);
     for (key, val) in obj {
@@ -155,6 +157,8 @@ pub(super) fn java_builder_expression(
                     nested_types,
                     nested_types_optional,
                     &[],
+                    type_defs,
+                    enums,
                 );
                 // Top-level config builders usually declare nested record fields as
                 // `Optional<T>`. Calls with non-optional nested config builders can opt

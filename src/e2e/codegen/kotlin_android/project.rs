@@ -71,6 +71,7 @@ pub(super) fn generate(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Result<Vec<GeneratedFile>> {
     let lang = "kotlin_android";
@@ -348,6 +349,8 @@ pub(super) fn generate(
             &type_enum_fields,
             config,
             type_defs,
+            enums,
+            functions,
         )?;
         files.push(GeneratedFile {
             path: test_base.join(&class_file_name),

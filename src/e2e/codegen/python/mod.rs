@@ -33,9 +33,9 @@ impl super::E2eCodegen for PythonE2eCodegen {
         groups: &[FixtureGroup],
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
-        _type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let mut files = Vec::new();
@@ -108,8 +108,9 @@ impl super::E2eCodegen for PythonE2eCodegen {
                 &fixtures,
                 e2e_config,
                 config,
-                _type_defs,
-                _enums,
+                type_defs,
+                enums,
+                functions,
                 false,
             );
             files.push(GeneratedFile {
@@ -187,6 +188,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
             config,
             type_defs,
             enums,
+            &[],
             force_bind_result,
         );
         let (imports, body, is_async) = extract_python_snippet(&test_file)?;

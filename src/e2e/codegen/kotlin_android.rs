@@ -33,11 +33,11 @@ impl E2eCodegen for KotlinAndroidE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
-        project::generate(groups, e2e_config, config, type_defs, functions)
+        project::generate(groups, e2e_config, config, type_defs, enums, functions)
     }
 
     fn render_snippet_body(
