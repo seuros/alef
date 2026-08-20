@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Rust e2e generator no longer emits `.to_string()` on enum-typed fields, which does
+  not compile unless the enum happens to derive/implement `Display`.** An `equals` assertion
+  on an enum field (e.g. `kind: DataNodeKind`) rendered
+  `result.kind.to_string()`, but alef requires no such trait -- most bound enums only derive
+  `Debug`. `render_equals_assertion` already had `field_is_enum` plumbed through
+  `FieldResolver::is_enum` for containment assertions, but never consulted it for `equals`, so
+  every enum-field equals assertion failed to compile (`error[E0599]: doesn't implement
+  std::fmt::Display`). It, and the analogous wildcard array-traversal `contains`/`not_empty`
+  predicates (`links[].link_type`), now stringify enum-typed leaves via `format!("{:?}", ...)`
+  (Debug), matching what the existing containment predicate already does -- for a unit variant
+  this renders exactly the variant name, matching the fixture's captured expected literal.
+
 - **A backfilled cfg-forwarded feature is now also enabled by default, not just declared.**
   Declaring `<feature> = ["<core-crate>/<feature>"]` in the Ruby/Elixir native manifest's
   `[features]` table does not turn the feature on -- `#[cfg(feature = "X")]` stayed false, and

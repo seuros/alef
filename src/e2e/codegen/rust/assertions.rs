@@ -785,6 +785,16 @@ fn render_rust_wildcard_assertion(
     };
     let array_is_optional = !array_part.is_empty() && field_resolver.is_optional(array_part);
     let escaped_field = escape_rust(field);
+    // Enum-typed elements are not guaranteed to implement `Display` — only `Debug` is a
+    // safe assumption (the non-wildcard containment predicate already relies on it below).
+    // `{elem_accessor}.to_string()` would fail to compile for an enum that only derives
+    // `Debug`, so stringify via Debug instead whenever the traversed leaf is an enum. ~keep
+    let elem_is_enum = field_resolver.is_enum(elem_part);
+    let elem_stringified = if elem_is_enum {
+        format!("format!(\"{{:?}}\", {elem_accessor})")
+    } else {
+        format!("{elem_accessor}.to_string()")
+    };
 
     match assertion.assertion_type.as_str() {
         "contains" | "contains_all" | "not_contains" => {
@@ -806,7 +816,7 @@ fn render_rust_wildcard_assertion(
                 let predicate = rust_wildcard_any(
                     &array_accessor,
                     array_is_optional,
-                    &format!("{elem_accessor}.to_string().contains({pattern})"),
+                    &format!("{elem_stringified}.contains({pattern})"),
                 );
                 if negate {
                     let _ = writeln!(
@@ -825,7 +835,7 @@ fn render_rust_wildcard_assertion(
             let predicate = rust_wildcard_any(
                 &array_accessor,
                 array_is_optional,
-                &format!("!{elem_accessor}.to_string().is_empty()"),
+                &format!("!{elem_stringified}.is_empty()"),
             );
             let _ = writeln!(
                 out,
@@ -906,6 +916,26 @@ mod tests {
         assert!(out.contains("result.links.iter().any(|e|"), "got: {out}");
         assert!(out.contains("e.link_type.to_string().contains("), "got: {out}");
         assert!(!out.contains("[0]"), "wildcard must not pin element 0, got: {out}");
+    }
+
+    /// Regression for the same `.to_string()`-on-enum defect as the `equals` path, but for
+    /// wildcard array-element traversal (`links[].link_type`): the element field's Rust
+    /// type may only derive `Debug`, not `Display`, so `e.link_type.to_string()` fails to
+    /// compile. The predicate must stringify via `format!("{:?}", ...)` for an enum-typed
+    /// traversal leaf, while a non-enum leaf keeps the pre-existing `.to_string()` form. ~keep
+    #[test]
+    fn rust_wildcard_contains_uses_debug_for_enum_element_field() {
+        let resolver = array_resolver("links").with_enum_fields(HashSet::from(["link_type".to_string()]));
+        let out = render_field_contains(&resolver, "links[].link_type", "external");
+        assert!(out.contains("result.links.iter().any(|e|"), "got: {out}");
+        assert!(
+            out.contains("format!(\"{:?}\", e.link_type).contains("),
+            "enum traversal leaf must stringify via Debug, got: {out}"
+        );
+        assert!(
+            !out.contains("e.link_type.to_string()"),
+            "enum traversal leaf must NOT use to_string(), got: {out}"
+        );
     }
 
     #[test]
