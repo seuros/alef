@@ -274,10 +274,7 @@ fn write_snippet_build(
     // `zig build` error (`expected path relative to build root; found absolute path`), not a
     // lint warning. `package_root` arrives absolute (from `zig_package_root`, which walks up
     // from an absolute manifest path), so it must be rebased here rather than written as-is. ~keep
-    let package_root = relative_path(directory, package_root)?
-        .to_string_lossy()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"");
+    let package_root = zon_dependency_path(&relative_path(directory, package_root)?);
     let build = format!(
         "const std = @import(\"std\");\n\npub fn build(b: *std.Build) void {{\n    const target = b.standardTargetOptions(.{{}});\n    const optimize = b.standardOptimizeOption(.{{}});\n    const binding = b.dependency(\"binding\", .{{ .target = target, .optimize = optimize }});\n    const root = b.createModule(.{{\n        .root_source_file = b.path(\"snippet.zig\"),\n        .target = target,\n        .optimize = optimize,\n    }});\n    root.addImport(\"{module_name}\", binding.module(\"{module_name}\"));\n    const executable = b.addExecutable(.{{ .name = \"snippet\", .root_module = root }});\n    b.default_step.dependOn(&executable.step);\n}}\n"
     );
@@ -289,6 +286,26 @@ fn write_snippet_build(
     std::fs::write(&build_file, build)?;
     std::fs::write(directory.join("build.zig.zon"), zon)?;
     Ok(build_file)
+}
+
+/// Render `relative` as the string a `build.zig.zon` `.path` field must hold.
+///
+/// Joins the path's *components* with `/` rather than formatting the path itself. On Windows
+/// `Path` renders with `\`, and Zig resolves `.path` dependencies POSIX-style, so a native
+/// rendering reached the manifest as a single nonsensical component (`..\\package`) and the
+/// dependency could not be fetched. Forward slashes are what Zig accepts on every platform. ~keep
+fn zon_dependency_path(relative: &std::path::Path) -> String {
+    relative
+        .components()
+        .map(|component| {
+            component
+                .as_os_str()
+                .to_string_lossy()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Express `target` as a path relative to `base`, purely lexically (no filesystem access, so
@@ -497,6 +514,53 @@ mod tests {
         );
     }
 
+    /// `build.zig.zon` `.path` values are resolved POSIX-style by Zig on every platform, so the
+    /// rendering must not follow the host's separator. Driving this from `Path` *components* is
+    /// the point: `Path::new("..").join("package")` carries exactly the component sequence
+    /// Windows renders as `..\package`, so this exercises the Windows input shape on any host --
+    /// the previous `to_string_lossy()` rendering turned that same sequence into a single
+    /// unfetchable component. ~keep
+    #[test]
+    fn a_zon_dependency_path_is_rendered_with_forward_slashes() {
+        assert_eq!(zon_dependency_path(&PathBuf::from("..").join("package")), "../package");
+        assert_eq!(
+            zon_dependency_path(&PathBuf::from("..").join("..").join("a").join("b")),
+            "../../a/b"
+        );
+        assert_eq!(zon_dependency_path(std::path::Path::new(".")), ".");
+    }
+
+    /// The emitted manifest must carry no separator Zig would refuse, whatever the host. ~keep
+    #[test]
+    fn a_zon_manifest_never_carries_a_host_path_separator() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = directory.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        let scratch = directory.path().join("scratch");
+        std::fs::create_dir(&scratch).unwrap();
+
+        write_snippet_build(&scratch, "sample_binding", &package).unwrap();
+        let zon = std::fs::read_to_string(scratch.join("build.zig.zon")).unwrap();
+
+        let dependency_line = zon
+            .lines()
+            .find(|line| line.contains(".path = "))
+            .expect("the manifest declares a path dependency");
+        assert!(
+            !dependency_line.contains('\\'),
+            "a backslash in a .zon dependency path is not a separator to Zig; got: {dependency_line}"
+        );
+        assert!(dependency_line.contains(".path = \"../package\""), "{dependency_line}");
+    }
+
+    /// `/tmp/...` is not an absolute path on Windows -- it has no drive prefix, so
+    /// `Path::is_absolute` is false and the absolute/relative mismatch these tests turn on never
+    /// arises. Building the root per platform keeps them testing what they claim. ~keep
+    fn absolute(tail: &str) -> PathBuf {
+        let root = if cfg!(windows) { r"C:\" } else { "/" };
+        PathBuf::from(root).join(tail)
+    }
+
     /// Regression: Zig 0.16 rejects an absolute `.path` dependency in `build.zig.zon` outright
     /// (`expected path relative to build root; found absolute path`) — this is a real `zig
     /// build` error, not a style nit, and it fired on every session-scoped snippet whose package
@@ -504,8 +568,8 @@ mod tests {
     /// absolute manifest path). ~keep
     #[test]
     fn relative_path_rebases_a_deeper_absolute_target_onto_a_shallower_base() {
-        let base = PathBuf::from("/tmp/session/scratch");
-        let target = PathBuf::from("/tmp/session/package/nested");
+        let base = absolute("tmp/session/scratch");
+        let target = absolute("tmp/session/package/nested");
 
         let relative = relative_path(&base, &target).unwrap();
 
@@ -514,7 +578,7 @@ mod tests {
 
     #[test]
     fn relative_path_is_dot_when_base_and_target_are_the_same_directory() {
-        let dir = PathBuf::from("/tmp/session/scratch");
+        let dir = absolute("tmp/session/scratch");
 
         let relative = relative_path(&dir, &dir).unwrap();
 
@@ -525,10 +589,10 @@ mod tests {
     /// path can be expressed, generation must fail loudly instead of falling back to one.
     #[test]
     fn relative_path_errors_rather_than_falling_back_to_absolute() {
-        let absolute = PathBuf::from("/tmp/session/package");
+        let rooted = absolute("tmp/session/package");
         let relative = PathBuf::from("package");
 
-        let err = relative_path(&absolute, &relative).unwrap_err();
+        let err = relative_path(&rooted, &relative).unwrap_err();
 
         assert!(
             err.to_string().contains("absolute"),

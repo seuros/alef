@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A session-scoped Zig snippet's `build.zig.zon` no longer names its dependency with a host
+  path separator.** The generated `.path` value was rendered with `Path::to_string_lossy`, which
+  on Windows emits `..\package`. Zig resolves `.path` dependencies POSIX-style on every platform,
+  so that reached the manifest as one nonsensical component and the binding package could not be
+  fetched. The value is now built by joining the path's components with `/`, which is what Zig
+  accepts everywhere.
+
+- **Gleam e2e assertions no longer compare an enum-typed field against a raw string.**
+  `render_test_case` decided enum-ness solely from the hand-maintained `fields_enum` /
+  `[e2e.call.overrides.gleam] enum_fields` config, so a consumer that never declared the entry
+  got `r.kind |> should.equal("key_value")` for a genuine `DataNodeKind` field. Gleam emits that
+  enum as a custom type and `should.equal` is homogeneous, so the generated module failed to
+  compile. Gleam now uses the same IR-derived classification the rust and csharp e2e generators
+  use (`FieldResolver::ir_enum_fields` + `with_ir_enum_map`), anchored at the call's declared
+  Rust return type so a leaf name meaning different things on different types resolves per
+  owner. The IR only ever adds: an explicit config entry still wins.
+
 - **Kotlin snippet validation no longer reports a toolchain it cannot launch.**
   `KotlinValidator::is_available` answers with `which::which("kotlinc")`, which searches the whole
   of `PATHEXT`, while spawning went through `Command::new("kotlinc")`, which on Windows only ever
