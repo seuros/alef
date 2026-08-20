@@ -776,7 +776,6 @@ pub(super) fn render_assertion(
     assertion: &Assertion,
     result_var: &str,
     field_resolver: &FieldResolver,
-    enum_fields: &HashSet<String>,
     result_is_option: bool,
     result_is_simple: bool,
 ) {
@@ -945,11 +944,26 @@ pub(super) fn render_assertion(
         return;
     }
 
-    // Determine if this field is an enum type.
-    let _field_is_enum = assertion
+    // `field_resolver.is_enum` consults the hand-maintained `fields_enum`/`enum_fields` config
+    // first and, when the config is silent, the IR-derived classification (`with_ir_enum_map`).
+    // A Zig enum does not compare against a `[]const u8` literal via `testing.expectEqual` (a
+    // type mismatch `zig build` rejects), so an `equals` assertion on an enum-typed field is
+    // skipped rather than emitting code that cannot compile. The JSON-struct path needs no such
+    // guard: there the field is a raw JSON string and `equals` already compares wire values.
+    let field_is_enum = assertion
         .field
         .as_deref()
-        .is_some_and(|f| enum_fields.contains(f) || enum_fields.contains(field_resolver.resolve(f)));
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| field_resolver.is_enum(f));
+    if field_is_enum && assertion.assertion_type == "equals" {
+        let f = assertion.field.as_deref().unwrap_or("");
+        let _ = writeln!(
+            out,
+            "    // skipped: {}",
+            FieldSkip::EnumEqualsNotSupportedOnZigTypedResult.message(f)
+        );
+        return;
+    }
 
     let field_expr = match &assertion.field {
         // When result_is_simple, the result is a scalar ([]u8 or ?T, etc.) — any

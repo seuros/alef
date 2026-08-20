@@ -76,6 +76,7 @@ pub(super) fn render_test_file(
     type_defs: &[crate::core::ir::TypeDef],
     errors: &[crate::core::ir::ErrorDef],
     ir: crate::e2e::codegen::call_ir::CallIr<'_>,
+    enums: &[crate::core::ir::EnumDef],
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -125,6 +126,7 @@ pub(super) fn render_test_file(
                 true,
                 false,
                 ir,
+                enums,
             );
         }
         let _ = writeln!(out);
@@ -180,6 +182,7 @@ fn render_test_fn(
     wrap_as_test: bool,
     for_docs: bool,
     ir: crate::e2e::codegen::call_ir::CallIr<'_>,
+    enums: &[crate::core::ir::EnumDef],
 ) {
     // Resolve per-fixture call config.
     let call_config = e2e_config.resolve_call_for_fixture(
@@ -190,6 +193,14 @@ fn render_test_fn(
         &fixture.input,
     );
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    let lang = "zig";
+    let call_overrides = call_config.overrides.get(lang);
+    // `field_resolver.is_enum` consults `effective_enum_fields` (hand-maintained config) first
+    // and only then the IR-derived classification (`with_ir_enum_map`), so an explicit config
+    // entry still wins. Mirrors the gleam e2e generator's fix for the same defect: a config-only
+    // check answered `false` for every enum-typed field a consumer's `alef.toml` never listed,
+    // so a typed-struct `equals` assertion on it compared a Zig enum value against a raw
+    // `[]const u8` literal via `testing.expectEqual` — a type mismatch `zig build` rejects. ~keep
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -197,11 +208,17 @@ fn render_test_fn(
         e2e_config.effective_fields_array(call_config),
         e2e_config.effective_fields_method_calls(call_config),
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    .with_enum_fields(super::enum_field_config::effective_enum_fields(
+        e2e_config,
+        call_config,
+        call_overrides,
+    ))
+    .with_ir_enum_map(
+        FieldResolver::ir_enum_fields(type_defs, enums),
+        crate::e2e::codegen::call_ir::resolve_declared_result_type(call_config, lang, ir),
+    );
     let field_resolver = &call_field_resolver;
-    let enum_fields = e2e_config.effective_fields_enum(call_config);
-    let lang = "zig";
-    let call_overrides = call_config.overrides.get(lang);
     let function_name = call_overrides
         .and_then(|o| o.function.as_ref())
         .cloned()
@@ -670,7 +687,6 @@ fn render_test_fn(
                     assertion,
                     result_var,
                     field_resolver,
-                    enum_fields,
                     result_is_option,
                     result_is_simple,
                 );
@@ -744,6 +760,7 @@ pub(super) fn render_snippet_body(
             functions: &[],
             type_defs,
         },
+        &[],
     );
     // The test-mode error path captures the failure with a discarded `else |_|` arm
     // (nothing to report inside `test { ... }`). The snippet is a runnable `main`,
@@ -959,6 +976,7 @@ mod snippet_tests {
             &[],
             &[],
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         );
 
         assert!(
@@ -1107,6 +1125,7 @@ mod snippet_tests {
             &[],
             &[],
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         );
 
         assert!(!rendered.contains("suppress_abort"), "{rendered}");
@@ -1231,6 +1250,7 @@ mod snippet_tests {
             &[],
             &[],
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         );
 
         assert!(rendered.contains("sample.c.sample_client_stream_records_start(_client._handle, _req_handle)"));
@@ -1312,6 +1332,7 @@ mod snippet_tests {
             &[],
             &[],
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         );
 
         assert!(rendered.contains("const testing = std.testing;"), "{rendered}");
@@ -1356,6 +1377,7 @@ mod expects_error_fails_on_unexpected_success_tests {
             &[],
             &[],
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         );
 
         // The old shape `catch { try testing.expect(true); return; }` never fails:
@@ -1409,6 +1431,7 @@ mod expects_error_fails_on_unexpected_success_tests {
             &[],
             &[],
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         );
 
         assert!(
@@ -1477,6 +1500,7 @@ mod error_value_and_error_field_tests {
             &[],
             errors,
             crate::e2e::codegen::call_ir::CallIr::default(),
+            &[],
         )
     }
 

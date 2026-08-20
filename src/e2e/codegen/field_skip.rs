@@ -214,6 +214,18 @@ field_skip_variants! {
     NotAvailableOnPhpResultType: AuthoringGap => ("field ", " not available on PHP result type"),
     /// Emitted by `templates/r/synthetic_assertion.jinja`. ~keep
     NotAvailableOnRResultType: AuthoringGap => ("field ", " not available on R result type"),
+    /// ~keep A Zig enum compares with `==`/`@tagName`, but the fixture's declared `equals` value
+    /// is the serde wire spelling, not the Zig-cased tag identifier `public_host_identifier`
+    /// would produce for it — reproducing that mapping correctly requires resolving the exact
+    /// `EnumDef` backing this field (its `serde_rename_all`/per-variant `serde_rename`), which
+    /// the field-path classification this skip guards does not carry. Mirrors gleam's
+    /// `EnumEquals...` skip for the same newly IR-classified case (see `8d199c0bf`): the JSON
+    /// path already handles enum `equals` correctly (it compares against the raw wire string
+    /// directly), so this is a `GeneratorGap` on the typed-struct path only, not a fixture bug.
+    EnumEqualsNotSupportedOnZigTypedResult: GeneratorGap => (
+        "enum field ",
+        " comparison not yet supported on zig's typed-struct result",
+    ),
 }
 
 impl FieldSkip {

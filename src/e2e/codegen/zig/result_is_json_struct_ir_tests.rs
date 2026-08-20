@@ -95,6 +95,7 @@ fn json_dto_return_with_no_config_routes_through_json_path_via_ir() {
         &type_defs,
         &[],
         ir,
+        &[],
     );
 
     assert!(
@@ -139,6 +140,7 @@ fn opaque_handle_return_with_no_config_stays_on_the_typed_struct_path() {
         &type_defs,
         &[],
         ir,
+        &[],
     );
 
     assert!(
@@ -180,6 +182,7 @@ fn an_explicit_override_still_forces_json_struct_without_ir_support() {
         &[],
         &[],
         CallIr::default(),
+        &[],
     );
 
     assert!(

@@ -325,6 +325,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   were bound `_enums`/`_functions` in `ZigE2eCodegen::generate` and discarded. Wiring
   `functions` in is what makes the JSON-struct auto-detection above possible; `enums` remains
   unused until the enum-field classification fix below.
+- **Zig e2e's enum-field classification now consults the core IR, not only
+  `fields_enum`/`[overrides.zig].enum_fields`.** With the two fixes above making the
+  typed-struct assertion path reachable for real enum-typed fields, the previously dead
+  `enum_fields` check would have emitted `testing.expectEqual("value", result.kind)` against
+  a genuine Zig enum — a type Zig's `expectEqual` cannot compare against a string literal.
+  Wires the same IR-derived classification (`FieldResolver::ir_enum_fields` +
+  `with_ir_enum_map`, anchored at the call's declared Rust return type) the gleam e2e
+  generator uses, and skips the `equals` assertion instead of emitting code that cannot
+  compile. Config still wins; the IR only adds.
 
 ## [0.62.5] - 2026-08-20
 

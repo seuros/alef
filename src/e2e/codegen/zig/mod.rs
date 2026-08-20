@@ -13,7 +13,9 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture, FixtureGroup};
 use anyhow::{Result, bail};
 use heck::{ToPascalCase, ToSnakeCase};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashSet;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
 
@@ -73,6 +75,7 @@ use super::streaming_assertions::{StreamingFieldResolver, is_streaming_virtual_f
 mod args;
 mod assertions;
 mod build;
+mod enum_field_config;
 mod hash;
 mod http;
 #[cfg(test)]
@@ -83,6 +86,9 @@ mod result_shape;
 mod stubs;
 mod test_file;
 mod visitor;
+
+#[cfg(test)]
+mod enum_field_classification_tests;
 
 pub use stubs::emit_test_backend;
 
@@ -102,7 +108,7 @@ impl E2eCodegen for ZigE2eCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
-        _enums: &[crate::core::ir::EnumDef],
+        enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
@@ -472,6 +478,7 @@ impl E2eCodegen for ZigE2eCodegen {
                 type_defs,
                 errors,
                 ir,
+                enums,
             );
             files.push(GeneratedFile {
                 path: output_base.join("src").join(filename),

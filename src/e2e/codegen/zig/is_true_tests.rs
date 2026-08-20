@@ -76,7 +76,7 @@ fn json_struct_is_true_on_non_optional_field_is_unchanged() {
 
 fn render_typed(resolver: &FieldResolver, assertion: &Assertion) -> String {
     let mut out = String::new();
-    render_assertion(&mut out, assertion, "result", resolver, &HashSet::new(), false, false);
+    render_assertion(&mut out, assertion, "result", resolver, false, false);
     out
 }
 
