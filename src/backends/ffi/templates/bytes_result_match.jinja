@@ -2,7 +2,10 @@
     match result {
         Ok(Some(val)) => {
             // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes
-            // (and any other type that implements Into<Vec<u8>>).
+            // (and any other type that implements Into<Vec<u8>>). The Vec<u8> case makes this a
+            // no-op clippy calls out; the conversion stays because it is real work for a
+            // bytes::Bytes-returning core fn. ~keep
+            #[allow(clippy::useless_conversion)]
             let buffer = Vec::<u8>::from(val).into_boxed_slice();
             let len = buffer.len();
             let ptr = Box::into_raw(buffer).cast::<u8>();
@@ -29,7 +32,10 @@
     match result {
         Some(val) => {
             // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes
-            // (and any other type that implements Into<Vec<u8>>).
+            // (and any other type that implements Into<Vec<u8>>). The Vec<u8> case makes this a
+            // no-op clippy calls out; the conversion stays because it is real work for a
+            // bytes::Bytes-returning core fn. ~keep
+            #[allow(clippy::useless_conversion)]
             let buffer = Vec::<u8>::from(val).into_boxed_slice();
             let len = buffer.len();
             let ptr = Box::into_raw(buffer).cast::<u8>();
@@ -50,7 +56,10 @@
     match result {
         Ok(val) => {
             // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes
-            // (and any other type that implements Into<Vec<u8>>).
+            // (and any other type that implements Into<Vec<u8>>). The Vec<u8> case makes this a
+            // no-op clippy calls out; the conversion stays because it is real work for a
+            // bytes::Bytes-returning core fn. ~keep
+            #[allow(clippy::useless_conversion)]
             let buffer = Vec::<u8>::from(val).into_boxed_slice();
             let len = buffer.len();
             let ptr = Box::into_raw(buffer).cast::<u8>();
@@ -66,6 +75,11 @@
         }
     }
 {% else %}
+    // Convert via Vec<u8> so the path works for both Vec<u8> and bytes::Bytes (and any other
+    // type that implements Into<Vec<u8>>). The Vec<u8> case makes this a no-op clippy calls
+    // out; the conversion stays because it is real work for a bytes::Bytes-returning core fn.
+    // ~keep
+    #[allow(clippy::useless_conversion)]
     let buffer = Vec::<u8>::from(result).into_boxed_slice();
     let len = buffer.len();
     let ptr = Box::into_raw(buffer).cast::<u8>();

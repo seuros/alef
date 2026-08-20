@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `typescript_custom_section` so a struct or fieldless enum reachable from more than one union is
   declared exactly once.
 
+### Changed
+
+- **The emitted FFI crate's crate-level `#![allow(...)]` list is narrower.** Every allow was
+  audited by removing it, regenerating an emitted tree, and running
+  `cargo clippy --all-targets -- -D warnings` over it (see `tests/generated_output_downstream_gate.rs`
+  for the harness). Three entries never fired and are gone: `missing_docs` (allow-by-default under
+  rustc; `-D warnings` never escalates it, so the crate-level allow was a no-op), and
+  `clippy::too_many_arguments` (already covered by a per-item `#[allow]` the emitter attaches at
+  every free function, len companion, method wrapper, constructor, and field accessor that can
+  exceed the threshold). `clippy::useless_conversion` is gone from the crate-level list too, but not
+  because it was dead — `bytes_result_match.jinja`'s `Vec::<u8>::from(..)` conversion (kept
+  polymorphic on purpose so the same code works for `Vec<u8>` and `bytes::Bytes` return types) is a
+  real no-op specifically for the `Vec<u8>` case, so its four call sites now each carry their own
+  `#[allow(clippy::useless_conversion)]` instead of hiding behind a crate-wide one. The remaining
+  entries (`dead_code`, `unused_imports`, `unused_mut`, `noop_method_call`,
+  `unsafe_op_in_unsafe_fn`, `unsafe_attr_outside_unsafe`, and the rest of the `clippy::` list) either
+  fired against a real emitted tree during the audit or could not be proven dead, so they stay.
+
 ### Fixed
 
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can

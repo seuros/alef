@@ -1,5 +1,6 @@
 mod basics;
 mod capsule;
+mod clippy_allowlist;
 mod common;
 mod constructors;
 mod custom_modules;
