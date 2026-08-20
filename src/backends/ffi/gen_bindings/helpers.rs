@@ -411,9 +411,7 @@ pub(super) fn gen_cbindgen_toml(
         .collect();
 
     {
-        let mut c_names: Vec<&str> = capsule_types.values().map(|c| c.c_return_type.as_str()).collect();
-        c_names.sort_unstable();
-        c_names.dedup();
+        let c_names = super::capsule::capsule_forward_declared_c_types(api, capsule_types, &capsule_used_as_opaque);
         for c_name in c_names {
             if !entries.iter().any(|(name, _, _)| name == c_name) {
                 entries.push((c_name.to_string(), String::new(), false));

@@ -23,8 +23,8 @@
 //! alef opaque box.
 
 use crate::core::config::FfiCapsuleTypeConfig;
-use crate::core::ir::{FunctionDef, TypeRef};
-use std::collections::HashMap;
+use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
+use std::collections::{HashMap, HashSet};
 
 /// Returns the capsule return-type name if this function returns a configured capsule type.
 ///
@@ -62,6 +62,43 @@ pub(in crate::backends::ffi::gen_bindings) fn capsule_c_return_type(cfg: &FfiCap
 /// `const {c_return_type} *` signature.
 pub(in crate::backends::ffi::gen_bindings) fn capsule_into_raw_expr(expr: &str, cfg: &FfiCapsuleTypeConfig) -> String {
     format!("{expr}.into_raw() as *const {}", cfg.into_raw_type)
+}
+
+/// The `c_return_type` names `gen_cbindgen_toml` must forward-declare: every configured capsule
+/// type actually reachable from the current API surface, via either an instance method
+/// (`capsule_used_as_opaque`, computed by the caller against `api.types.*.methods` -- a
+/// different question from this function, see below) or a free function, checked here through
+/// the SAME `capsule_return_name` decision the real function codegen in `lib_rs.rs` uses rather
+/// than a second, independently-reasoned match on `TypeRef`.
+///
+/// `capsule_used_as_opaque` is intentionally NOT folded into this check: it answers whether the
+/// capsule type's own handle-based typedef needs declaring *alongside* the raw pointee (a type
+/// used by both a method and a capsule function), which is a different, narrower condition than
+/// "is the raw pointee typedef needed at all" -- merging them would wrongly add the handle
+/// typedef for a capsule type that is used only by a free function.
+///
+/// Before this existed, a `[crates.ffi.capsule_types]` entry left behind after the function
+/// that used to return it was removed, renamed, or excluded still forward-declared its
+/// `c_return_type` unconditionally, producing a header typedef no generated function ever used.
+/// ~keep
+pub(in crate::backends::ffi::gen_bindings) fn capsule_forward_declared_c_types<'a>(
+    api: &'a ApiSurface,
+    capsule_types: &'a HashMap<String, FfiCapsuleTypeConfig>,
+    capsule_used_as_opaque: &HashSet<&str>,
+) -> Vec<&'a str> {
+    let used_by_function: HashSet<&str> = api
+        .functions
+        .iter()
+        .filter_map(|f| capsule_return_name(f, capsule_types))
+        .collect();
+    let mut c_names: Vec<&str> = capsule_types
+        .iter()
+        .filter(|(name, _)| capsule_used_as_opaque.contains(name.as_str()) || used_by_function.contains(name.as_str()))
+        .map(|(_, cfg)| cfg.c_return_type.as_str())
+        .collect();
+    c_names.sort_unstable();
+    c_names.dedup();
+    c_names
 }
 
 #[cfg(test)]

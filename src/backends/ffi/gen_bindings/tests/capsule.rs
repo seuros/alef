@@ -169,6 +169,7 @@ fn cbindgen_forward_declares_unprefixed_pointee() {
     let config = capsule_config();
     let files = FfiBackend.generate_bindings(&api, &config).unwrap();
     let cbindgen = files.iter().find(|f| f.path.ends_with("cbindgen.toml")).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
     assert!(
         cbindgen.content.contains("typedef struct TSLanguage TSLanguage;"),
@@ -178,5 +179,86 @@ fn cbindgen_forward_declares_unprefixed_pointee() {
     assert!(
         !cbindgen.content.contains("typedef struct TSPLanguage TSPLanguage;"),
         "capsule type must NOT be emitted as a prefixed opaque handle typedef"
+    );
+    assert!(
+        lib.content.contains("*const tree_sitter::ffi::TSLanguage"),
+        "the forward-declared TSLanguage typedef must have a real generated function that uses \
+         it as its return type, got lib.rs:\n{}",
+        lib.content
+    );
+}
+
+/// Regression coverage for an orphaned capsule typedef: `[crates.ffi.capsule_types]` still lists
+/// a type after the function that used to return it was removed, renamed, or excluded (a stale
+/// config entry). Before this fix, `gen_cbindgen_toml`'s capsule forward-declaration block
+/// unconditionally forward-declared `c_return_type` for every entry in `config.ffi.capsule_types`
+/// -- reading only the static config, never the actual API surface -- so the header kept
+/// declaring `typedef struct TSLanguage TSLanguage;` even though zero generated functions
+/// referenced it. A C consumer got a type it could neither construct (no function returns it)
+/// nor pass anywhere (no function takes it): "declared but unusable", not "declared and
+/// under-implemented" -- so the fix removes the orphan declaration rather than inventing a
+/// function nothing in the source ever asked for.
+#[test]
+fn capsule_c_return_type_typedef_omitted_when_no_function_returns_it() {
+    let mut api = capsule_api();
+    // No function/method returns `Language` (the capsule type) -- simulates a stale
+    // `[crates.ffi.capsule_types.Language]` entry left behind after `get_language` was removed
+    // or renamed.
+    api.functions.clear();
+
+    let config = capsule_config();
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let cbindgen = files.iter().find(|f| f.path.ends_with("cbindgen.toml")).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        !cbindgen.content.contains("TSLanguage"),
+        "an unused capsule type's c_return_type must not be forward-declared -- no generated \
+         function will ever reference it, got cbindgen.toml:\n{}",
+        cbindgen.content
+    );
+    assert!(
+        !lib.content.contains("TSLanguage") && !lib.content.contains("tree_sitter"),
+        "sanity check: no function anywhere actually returns the capsule type in this fixture, \
+         got lib.rs:\n{}",
+        lib.content
+    );
+}
+
+/// Same fixture, but with a second, still-used function alongside the stale capsule config --
+/// the fix must be scoped to the specific unused capsule entry, not disable forward declarations
+/// for capsule types wholesale.
+#[test]
+fn capsule_c_return_type_typedef_kept_for_still_used_entry_alongside_a_stale_one() {
+    let mut api = capsule_api();
+    api.functions.push(FunctionDef {
+        name: "get_other_language".to_string(),
+        rust_path: "ts_pack::get_other_language".to_string(),
+        original_rust_path: String::new(),
+        params: vec![],
+        return_type: TypeRef::Named("Language".to_string()),
+        is_async: false,
+        error_type: None,
+        doc: String::new(),
+        cfg: None,
+        sanitized: false,
+        return_sanitized: false,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    });
+
+    let config = capsule_config();
+    let files = FfiBackend.generate_bindings(&api, &config).unwrap();
+    let cbindgen = files.iter().find(|f| f.path.ends_with("cbindgen.toml")).unwrap();
+
+    assert!(
+        cbindgen.content.contains("typedef struct TSLanguage TSLanguage;"),
+        "a capsule type still returned by at least one function must keep its forward \
+         declaration, got cbindgen.toml:\n{}",
+        cbindgen.content
     );
 }

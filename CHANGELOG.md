@@ -111,6 +111,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ts_union.rs` emits. The docs page now calls a new `docs_ts_type_for_untagged_enum` (exposed
   from the WASM backend) to embed that SAME computed union text for WASM specifically, instead of
   restating a description of it that could drift; every other language's docs are unaffected.
+- **A stale `[crates.ffi.capsule_types]` entry no longer leaves an unusable typedef in the
+  generated C header.** `gen_cbindgen_toml`'s capsule forward-declaration block unconditionally
+  forward-declared every configured capsule type's `c_return_type`, reading only the static
+  config -- never whether any function in the current API surface actually returns that capsule
+  type (the same decision `super::capsule::capsule_return_name` already makes for the real
+  function codegen). A capsule type whose returning function was removed, renamed, or excluded
+  still got a `typedef struct {C_TYPE} {C_TYPE};` in the header with zero generated functions
+  using it -- a type a C consumer could neither construct nor pass anywhere. The forward
+  declaration is now gated on the same shared usage check.
 - **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
   the napi and extendr backends actually look up, instead of a nested
   `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads
