@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef e2e generate`'s formatter tests no longer assert the behaviour the formatter stopped
+  having.** Deferring a missing `poly`/`mix` executable instead of aborting (non-`--strict` mode)
+  left three `e2e::format` tests still asserting `is_err()` in their toolchain-absent branch, so
+  the suite failed on every machine without those tools installed — including all three CI
+  runners — while passing locally. The tests now assert the real contract: generation returns
+  `Ok`, the file is left untouched, and the absent step is recorded as a `DeferredFormatting`
+  entry. Asserting the record rather than bare `Ok` keeps a silently-skipped run distinguishable
+  from a fully-formatted one.
+
 - **`napi build` no longer overwrites the `index.d.ts` alef generates.** napi-rs writes its own
   auto-derived type declarations to whatever the crate's `package.json` `"types"` field names,
   which is `index.d.ts` — the exact file alef's node backend hand-derives, complete with union

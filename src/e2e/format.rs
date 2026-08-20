@@ -382,6 +382,21 @@ mod tests {
         }
     }
 
+    /// Assert `deferred` records exactly the absence of `step` for `language`.
+    ///
+    /// A missing formatter executable is not an error under non-`--strict` mode -- it is a
+    /// recorded deferral (see `resolve_shell_failure`). Asserting on the record rather than
+    /// merely on `Ok` is the point: a run that skipped silently and a run that formatted
+    /// everything both look like `Ok`, and only one of them is correct. ~keep
+    fn assert_deferred(deferred: &[DeferredFormatting], language: &str, step: &str) {
+        assert!(
+            deferred.iter().any(|entry| entry.language == language
+                && entry.step == step
+                && entry.reason == MISSING_TOOLCHAIN_REASON),
+            "expected a deferred `{step}` for {language}, got: {deferred:?}"
+        );
+    }
+
     #[test]
     fn formatter_directory_resolves_relative_targets_against_launch_directory() {
         let directory = tempfile::tempdir().expect("tempdir");
@@ -680,14 +695,15 @@ mod tests {
         std::fs::write(&py, "x=1").unwrap();
 
         let e2e_config = e2e_config_for(&out);
+        let deferred = run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config, false)
+            .expect("a missing poly is deferred, not fatal, under non-strict mode");
+        let formatted = std::fs::read_to_string(&py).unwrap();
         if which::which("poly").is_ok() {
-            run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config, false).unwrap();
-            let formatted = std::fs::read_to_string(&py).unwrap();
             assert_eq!(formatted, "x = 1\n");
+            assert!(deferred.is_empty(), "poly is installed, nothing to defer: {deferred:?}");
         } else {
-            assert!(
-                run_formatters_for_cached_paths(std::slice::from_ref(&py), dir.path(), &e2e_config, false).is_err()
-            );
+            assert_eq!(formatted, "x=1", "without poly the cached file must be left untouched");
+            assert_deferred(&deferred, "python", "poly fmt --fix");
         }
     }
 
@@ -754,10 +770,14 @@ mod tests {
             generated_header: false,
         }];
 
-        let result = run_formatters(&files, &e2e_config, false);
+        let deferred =
+            run_formatters(&files, &e2e_config, false).expect("absent toolchains are deferred, not fatal, here");
         let formatted = std::fs::read_to_string(&test_file).unwrap();
-        if which::which("poly").is_ok() && which::which("mix").is_ok() {
-            result.unwrap();
+
+        // poly excludes `.ex`/`.exs`, so mix alone decides whether this file is rewritten --
+        // independently of whether poly itself is installed. Each absent tool is asserted on
+        // its own deferral record. ~keep
+        if which::which("mix").is_ok() {
             assert_ne!(
                 formatted, unformatted,
                 "with mix installed, the elixir residual must reformat the over-long call"
@@ -767,8 +787,11 @@ mod tests {
                 "mix must wrap the over-long call onto its own line, got:\n{formatted}"
             );
         } else {
-            assert!(result.is_err());
             assert_eq!(formatted, unformatted, "without mix the file must be left untouched");
+            assert_deferred(&deferred, "elixir", "mix format");
+        }
+        if which::which("poly").is_err() {
+            assert_deferred(&deferred, "elixir", "poly fmt --fix");
         }
     }
 
@@ -789,11 +812,12 @@ mod tests {
             generated_header: false,
         }];
 
-        let result = run_formatters(&files, &e2e_config, false);
+        let deferred = run_formatters(&files, &e2e_config, false)
+            .expect("an unknown language is best-effort whether or not poly is installed");
         if which::which("poly").is_ok() {
-            result.unwrap();
+            assert!(deferred.is_empty(), "poly is installed, nothing to defer: {deferred:?}");
         } else {
-            assert!(result.is_err());
+            assert_deferred(&deferred, "cobol", "poly fmt --fix");
         }
     }
 
