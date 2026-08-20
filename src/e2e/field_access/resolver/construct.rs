@@ -2,6 +2,29 @@ use super::super::ir_enum::build_ir_enum_map;
 use super::super::types::{DartFirstClassMap, FieldResolver, IrEnumMap, PhpGetterMap, SwiftFirstClassMap};
 use std::collections::{HashMap, HashSet};
 
+thread_local! {
+    /// ~keep Fields already warned about by [`FieldResolver::warn_on_result_fields_contradicting_ir`]
+    /// this run. `result_fields` and the IR's `binding_excluded` set are both static per crate --
+    /// the contradiction a `field` entry represents does not change across the fixtures and
+    /// languages a resolver gets rebuilt for -- but `with_ir_fields` runs once per (fixture,
+    /// language, reachable/excluded pass), so without this a single bad config entry (e.g. a
+    /// `#[serde(skip)]` field still listed in `result_fields`) produced the identical WARN line
+    /// thousands of times in one run (2600+ in one crawlberg `adopt` for a single field). Repeating
+    /// the same finding that many times is the same failure mode as never emitting it: nobody reads
+    /// past the first screenful, so the config bug it is trying to surface stays unfixed.
+    static WARNED_CONTRADICTING_FIELDS: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
+}
+
+/// Clear the dedup set. Test-only: production runs are one process per invocation, so the
+/// thread-local's implicit reset on process exit is enough there; `cargo test` reuses threads
+/// across tests in the same binary, and dedup state from one test would otherwise silence the
+/// next.
+#[cfg(test)]
+pub(crate) fn reset_contradicting_field_warnings() {
+    WARNED_CONTRADICTING_FIELDS.with(|warned| warned.borrow_mut().clear());
+}
+
 impl FieldResolver {
     /// Create a new resolver from the e2e config's `fields` aliases,
     /// `fields_optional` set, `result_fields` set, `fields_array` set,
@@ -263,9 +286,16 @@ impl FieldResolver {
     /// shipped config was found with exactly this shape (a `#[serde(skip)]`, no-getter
     /// field still listed in `result_fields`) sitting undetected because nothing surfaced
     /// the contradiction. ~keep
+    ///
+    /// ~keep Deduplicated via [`WARNED_CONTRADICTING_FIELDS`]: the contradiction is a static
+    /// fact about the crate's config and IR, but this method runs once per (fixture, language,
+    /// reachable/excluded pass) resolver build, so without the dedup the same field warned
+    /// thousands of times in one run and buried the one thing worth reading.
     fn warn_on_result_fields_contradicting_ir(&self) {
         for field in &self.result_fields {
-            if self.ir_known_excluded_fields.contains(field) {
+            if self.ir_known_excluded_fields.contains(field)
+                && WARNED_CONTRADICTING_FIELDS.with(|warned| warned.borrow_mut().insert(field.clone()))
+            {
                 tracing::warn!(
                     field = %field,
                     "e2e config result_fields lists a field the IR marks binding_excluded (no \
@@ -324,5 +354,72 @@ impl FieldResolver {
             .filter_map(|(name, (seen_optional, seen_required))| (seen_optional && !seen_required).then_some(name))
             .collect();
         (reachable, excluded, optional)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A crawlberg `adopt` run hit this for real: one bad `result_fields` entry
+    /// (`screenshot`, IR-excluded) produced the identical WARN line 2600+ times in a
+    /// single run because `with_ir_fields` runs once per (fixture, language,
+    /// reachable/excluded pass) resolver build. The second `with_ir_fields` call below
+    /// reconstructs exactly that -- a fresh `FieldResolver` for the same contradicting
+    /// field, as a second fixture/language would produce -- and must not warn again. ~keep
+    #[test]
+    #[tracing_test::traced_test]
+    fn contradicting_result_fields_entry_warns_once_across_repeated_resolver_builds() {
+        reset_contradicting_field_warnings();
+        let result_fields: HashSet<String> = ["screenshot".to_owned()].into_iter().collect();
+        let excluded: HashSet<String> = ["screenshot".to_owned()].into_iter().collect();
+
+        for _ in 0..5 {
+            FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &result_fields,
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .with_ir_fields(HashSet::new(), excluded.clone(), HashSet::new());
+        }
+
+        logs_assert(|lines| {
+            let hits = lines.iter().filter(|line| line.contains("screenshot")).count();
+            if hits == 1 {
+                Ok(())
+            } else {
+                Err(format!(
+                    "expected exactly 1 warning for `screenshot`, got {hits}: {lines:?}"
+                ))
+            }
+        });
+    }
+
+    /// Two DIFFERENT contradicting fields must each still be named -- the dedup keys on
+    /// the field name, not on "have we warned at all this run".
+    #[test]
+    #[tracing_test::traced_test]
+    fn contradicting_result_fields_entries_are_deduplicated_per_field_not_globally() {
+        reset_contradicting_field_warnings();
+        let result_fields: HashSet<String> = ["screenshot".to_owned(), "raw_headers".to_owned()]
+            .into_iter()
+            .collect();
+        let excluded: HashSet<String> = ["screenshot".to_owned(), "raw_headers".to_owned()]
+            .into_iter()
+            .collect();
+
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &result_fields,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_ir_fields(HashSet::new(), excluded, HashSet::new());
+
+        assert!(logs_contain("screenshot"));
+        assert!(logs_contain("raw_headers"));
     }
 }

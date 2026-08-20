@@ -158,6 +158,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "wait for a release" instead of "install the toolchain". The prefix is now reason-agnostic
   and lets each entry's own `reason` field say why.
 
+- **A `result_fields` entry that contradicts the IR's `binding_excluded` set now warns once per
+  field per run, not once per resolver build.** `FieldResolver::warn_on_result_fields_contradicting_ir`
+  fires from `with_ir_fields`, which every backend's assertion codegen calls once per (fixture,
+  language, reachable/excluded pass) — a single bad config entry produced the identical WARN
+  line thousands of times in one run (2600+ occurrences of one field in a single `crawlberg
+  adopt`), burying the one finding worth reading. A thread-local dedup set now suppresses
+  repeats of the same field name for the life of the run.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`
