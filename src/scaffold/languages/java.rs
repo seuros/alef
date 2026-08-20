@@ -144,55 +144,55 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
 
 <!-- Checkstyle handles correctness checks only. Formatting is handled by poly. -->
 <module name="Checker">
-    <property name="charset" value="UTF-8"/>
-    <property name="severity" value="error"/>
-    <property name="fileExtensions" value="java"/>
+  <property name="charset" value="UTF-8" />
+  <property name="severity" value="error" />
+  <property name="fileExtensions" value="java" />
 
-    <module name="SuppressionFilter">
-        <property name="file" value="checkstyle-suppressions.xml"/>
-        <property name="optional" value="true"/>
-    </module>
+  <module name="SuppressionFilter">
+    <property name="file" value="checkstyle-suppressions.xml" />
+    <property name="optional" value="true" />
+  </module>
 
-    <module name="LineLength">
-        <!-- 200 accommodates the alef-emitted DefaultClient.java FFM call shims:
+  <module name="LineLength">
+    <!-- 200 accommodates the alef-emitted DefaultClient.java FFM call shims:
              the codegen chains arena allocation, MemorySegment marshalling, and
              error-result handling onto single lines that don't reflow cleanly.
              Tests and hand-written code stay well below this; the limit only
              gives the generator headroom. -->
-        <property name="max" value="200"/>
-        <property name="ignorePattern" value="^package.*|^import.*|a]href|href|http://|https://|ftp://"/>
+    <property name="max" value="200" />
+    <property name="ignorePattern" value="^package.*|^import.*|a]href|href|http://|https://|ftp://" />
+  </module>
+
+  <module name="TreeWalker">
+    <!-- Naming Conventions (relaxed for FFI snake_case from Rust) -->
+    <module name="ConstantName">
+      <property name="format" value="^([A-Z][A-Z0-9]*(_[A-Z0-9]+)*|[a-z][a-zA-Z0-9_]*)$" />
+    </module>
+    <module name="PackageName" />
+    <module name="TypeName" />
+
+    <!-- Modifier Checks -->
+    <module name="ModifierOrder" />
+    <module name="RedundantModifier" />
+
+    <!-- Imports -->
+    <module name="UnusedImports" />
+
+    <!-- Coding -->
+    <module name="EmptyStatement" />
+    <module name="EqualsHashCode" />
+    <module name="SimplifyBooleanExpression" />
+    <module name="SimplifyBooleanReturn" />
+
+    <!-- Size Violations -->
+    <module name="MethodLength">
+      <property name="max" value="150" />
     </module>
 
-    <module name="TreeWalker">
-        <!-- Naming Conventions (relaxed for FFI snake_case from Rust) -->
-        <module name="ConstantName">
-            <property name="format" value="^([A-Z][A-Z0-9]*(_[A-Z0-9]+)*|[a-z][a-zA-Z0-9_]*)$"/>
-        </module>
-        <module name="PackageName"/>
-        <module name="TypeName"/>
-
-        <!-- Modifier Checks -->
-        <module name="ModifierOrder"/>
-        <module name="RedundantModifier"/>
-
-        <!-- Imports -->
-        <module name="UnusedImports"/>
-
-        <!-- Coding -->
-        <module name="EmptyStatement"/>
-        <module name="EqualsHashCode"/>
-        <module name="SimplifyBooleanExpression"/>
-        <module name="SimplifyBooleanReturn"/>
-
-        <!-- Size Violations -->
-        <module name="MethodLength">
-            <property name="max" value="150"/>
-        </module>
-
-        <!-- Misc -->
-        <module name="ArrayTypeStyle"/>
-        <module name="UpperEll"/>
-    </module>
+    <!-- Misc -->
+    <module name="ArrayTypeStyle" />
+    <module name="UpperEll" />
+  </module>
 </module>
 "#;
 
@@ -204,15 +204,14 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     "https://checkstyle.org/dtds/suppressions_1_2.dtd">
 
 <suppressions>
-    <!-- FFI constants -->
-    <suppress checks="ConstantName" files=".*FFI\.java"/>
-    <suppress checks="MagicNumber" files=".*FFI\.java"/>
+  <!-- FFI constants -->
+  <suppress checks="ConstantName" files=".*FFI\.java" />
+  <suppress checks="MagicNumber" files=".*FFI\.java" />
 
-
-    <!-- Allow star imports and magic numbers in test files -->
-    <suppress checks="AvoidStarImport" files=".*Test\.java"/>
-    <suppress checks="MagicNumber" files=".*Test\.java"/>
-    <suppress checks="MethodLength" files=".*Test\.java"/>
+  <!-- Allow star imports and magic numbers in test files -->
+  <suppress checks="AvoidStarImport" files=".*Test\.java" />
+  <suppress checks="MagicNumber" files=".*Test\.java" />
+  <suppress checks="MethodLength" files=".*Test\.java" />
 </suppressions>
 "#;
 
@@ -240,15 +239,17 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         GeneratedFile {
             path: PathBuf::from("packages/java/versions-rules.xml"),
             content: r#"<?xml version="1.0" encoding="UTF-8"?>
-<ruleset xmlns="http://mojo.codehaus.org/versions-maven-plugin/rules/2.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://mojo.codehaus.org/versions-maven-plugin/rules/2.0.0
+<ruleset
+  xmlns="http://mojo.codehaus.org/versions-maven-plugin/rules/2.0.0"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://mojo.codehaus.org/versions-maven-plugin/rules/2.0.0
                              https://www.mojohaus.org/versions/versions-maven-plugin/xsd/rule-2.0.0.xsd"
-         comparisonMethod="maven">
-    <ignoreVersions>
-        <ignoreVersion type="regex">(?i).*[.-](alpha|beta|rc|cr|milestone|preview|ea|eap|snapshot).*</ignoreVersion>
-        <ignoreVersion type="regex">(?i).*[.-]m\d+.*</ignoreVersion>
-    </ignoreVersions>
+  comparisonMethod="maven"
+>
+  <ignoreVersions>
+    <ignoreVersion type="regex">(?i).*[.-](alpha|beta|rc|cr|milestone|preview|ea|eap|snapshot).*</ignoreVersion>
+    <ignoreVersion type="regex">(?i).*[.-]m\d+.*</ignoreVersion>
+  </ignoreVersions>
 </ruleset>
 "#
             .to_string(),

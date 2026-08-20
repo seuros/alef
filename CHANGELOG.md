@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at crate level, so the sabotage compiled clean and the lane reported success while proving
   nothing about whether it examines the emitted Rust at all.
 
+- **Scaffolded Node platform-loader JS, wasm `package.json`, Java checkstyle/versions-rules
+  XML, and the Ruby RSpec seed now emit already `poly fmt`-clean.** Each was hand-formatted at
+  a width or tag/matcher style poly's bundled engines (oxc for JS/JSON, a generic XML
+  reindenter, rubocop-style RSpec parenthesization) normalise differently, so the very first
+  `alef scaffold` left `poly fmt --check` red on files a consumer would never touch again
+  (`crates/<crate>-node/index.js`, `crates/<crate>-wasm/package.json`,
+  `packages/java/checkstyle.xml`, `checkstyle-suppressions.xml`, `versions-rules.xml`,
+  `packages/ruby/spec/<crate>_spec.rb`). Each fix matches poly's actual output, measured by
+  running `poly fmt --fix` over the emitted file rather than guessed.
 - **The JNI shim templates emit `e.to_string()` instead of `format!("{e}")`.** The generated
   crates are checked with `cargo clippy -- -D warnings`, where that spelling is
   `clippy::useless_format` and therefore a hard error, so the emitted JNI crate could not build

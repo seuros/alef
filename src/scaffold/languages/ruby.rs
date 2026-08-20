@@ -723,7 +723,7 @@ fn ruby_return_expectation(ty: &TypeRef) -> Option<&'static str> {
 
 fn ruby_primitive_expectation(primitive: &PrimitiveType) -> &'static str {
     match primitive {
-        PrimitiveType::Bool => "be(true).or be(false)",
+        PrimitiveType::Bool => "be(true).or(be(false))",
         PrimitiveType::F32 | PrimitiveType::F64 => "be_a(Float)",
         _ => "be_a(Integer)",
     }
@@ -811,7 +811,7 @@ fn ruby_call_example(function_name: &str, expectation: &str) -> String {
   # binding returns a value of the mapped Ruby type. Create-only scaffold seed: alef never
   # regenerates over this file, so replace it with a real suite. ~keep
   it "calls the generated `{function_name}` module function" do
-    expect(described_class.{function_name}).to {expectation}
+    expect(described_class.{function_name}).to({expectation})
   end
 "#
     )
@@ -825,7 +825,7 @@ fn ruby_construct_example(type_name: &str, fields: &[SimpleRubyField]) -> String
         .join(", ");
     let assertion = if let [only] = fields {
         format!(
-            "    expect(instance.{name}).to eq({literal})",
+            "    expect(instance.{name}).to(eq({literal}))",
             name = only.name,
             literal = only.literal
         )
@@ -839,7 +839,7 @@ fn ruby_construct_example(type_name: &str, fields: &[SimpleRubyField]) -> String
             .collect::<Vec<_>>()
             .join(", ");
         let literals = fields.iter().map(|f| f.literal.clone()).collect::<Vec<_>>().join(", ");
-        format!("    expect([{readers}]).to eq([{literals}])")
+        format!("    expect([{readers}]).to(eq([{literals}]))")
     };
     format!(
         r#"  # No generated function is safe to call with no arguments, so this exercises the
@@ -868,7 +868,7 @@ fn ruby_constant_example(type_name: &str) -> String {
   # the class's shape and calls nothing on it. Create-only scaffold seed: alef never
   # regenerates over this file, so replace it with a real suite. ~keep
   it "registers the generated `{type_name}` class on the module" do
-    expect(described_class.const_get(:{type_name})).to be_a(Module)
+    expect(described_class.const_get(:{type_name})).to(be_a(Module))
   end
 "#
     )
@@ -949,7 +949,7 @@ sources = []
         assert!(out.contains("require_relative \"../lib/my_lib\"\n"), "got:\n{out}");
         assert!(out.contains("RSpec.describe MyLib do\n"), "got:\n{out}");
         assert!(
-            out.contains("    expect(described_class.ping).to be(true).or be(false)\n"),
+            out.contains("    expect(described_class.ping).to(be(true).or(be(false)))\n"),
             "got:\n{out}"
         );
     }
@@ -958,14 +958,14 @@ sources = []
     #[test]
     fn matches_the_returned_ruby_type_for_each_return_kind() {
         let cases = [
-            (TypeRef::String, "expect(described_class.probe).to be_a(String)"),
+            (TypeRef::String, "expect(described_class.probe).to(be_a(String))"),
             (
                 TypeRef::Primitive(PrimitiveType::U64),
-                "expect(described_class.probe).to be_a(Integer)",
+                "expect(described_class.probe).to(be_a(Integer))",
             ),
             (
                 TypeRef::Primitive(PrimitiveType::F64),
-                "expect(described_class.probe).to be_a(Float)",
+                "expect(described_class.probe).to(be_a(Float))",
             ),
         ];
         for (return_type, expected) in cases {
@@ -1077,7 +1077,7 @@ sources = []
         let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
 
         assert!(
-            out.contains("    expect(described_class.always_works).to be_a(String)\n"),
+            out.contains("    expect(described_class.always_works).to(be_a(String))\n"),
             "got:\n{out}"
         );
         assert!(!out.contains("might_fail"), "got:\n{out}");
@@ -1097,7 +1097,7 @@ sources = []
         let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
 
         assert!(
-            out.contains("    expect(described_class.might_fail).to be_a(String)\n"),
+            out.contains("    expect(described_class.might_fail).to(be_a(String))\n"),
             "got:\n{out}"
         );
     }
@@ -1172,7 +1172,7 @@ exclude_functions = ["ping"]
             "got:\n{out}"
         );
         assert!(
-            out.contains("    expect([instance.label, instance.count]).to eq([\"alef-scaffold\", 1])\n"),
+            out.contains("    expect([instance.label, instance.count]).to(eq([\"alef-scaffold\", 1]))\n"),
             "got:\n{out}"
         );
     }
@@ -1187,7 +1187,7 @@ exclude_functions = ["ping"]
         let out = scaffold_ruby_spec(&api, &minimal_config(), "my_lib");
 
         assert!(
-            out.contains("    expect(instance.label).to eq(\"alef-scaffold\")\n"),
+            out.contains("    expect(instance.label).to(eq(\"alef-scaffold\"))\n"),
             "got:\n{out}"
         );
     }
@@ -1210,7 +1210,7 @@ exclude_functions = ["ping"]
 
         assert!(!out.contains(".new("), "got:\n{out}");
         assert!(
-            out.contains("    expect(described_class.const_get(:Widget)).to be_a(Module)\n"),
+            out.contains("    expect(described_class.const_get(:Widget)).to(be_a(Module))\n"),
             "got:\n{out}"
         );
     }
