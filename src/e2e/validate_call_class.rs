@@ -140,11 +140,24 @@ fn check_class_override(
     enums: &[EnumDef],
     errors: &mut Vec<ValidationError>,
 ) {
-    let candidates = emitted_class_names(lang, naming_lang, config, type_defs, enums);
+    let (candidates, facade_known) = emitted_class_names(lang, naming_lang, config, type_defs, enums);
     let simple_name = simple_class_name(class_value);
     if candidates.iter().any(|candidate| candidate == simple_name) {
         return;
     }
+
+    // A backend whose crate-facade name we cannot derive gives us an incomplete candidate
+    // set: the override may well name that undiscoverable facade correctly. Claiming it is
+    // wrong on the strength of a set we know is missing an entry would be a false positive
+    // wearing an "Error" severity, so this downgrades to a warning instead of bailing — see
+    // `crate_facade_class_names`'s doc comment for which backends this applies to (none of
+    // the six currently wired ones; this is a guard against a future backend being added to
+    // `CLASS_CONSUMING_LANGUAGES` without its facade derivation).
+    let severity = if facade_known {
+        Severity::Error
+    } else {
+        Severity::Warning
+    };
 
     let suggestion = closest_candidates(simple_name, &candidates);
     let suggestion_text = if suggestion.is_empty() {
@@ -152,27 +165,97 @@ fn check_class_override(
     } else {
         format!(" (did you mean {}?)", suggestion.join(" or "))
     };
+    let incomplete_text = if facade_known {
+        ""
+    } else {
+        " (this backend's crate-facade name could not be derived, so this candidate set may be incomplete)"
+    };
     errors.push(ValidationError {
         file: CONFIG_FILE_LABEL.to_string(),
         message: format!(
             "{config_key}.overrides.{lang}.class = \"{class_value}\" does not match any class the {lang} backend \
-             emits for crate '{}'{suggestion_text}",
+             emits for crate '{}'{suggestion_text}{incomplete_text}",
             config.name
         ),
-        severity: Severity::Error,
+        severity,
     });
+}
+
+/// The host-language class name(s) the `naming_lang` backend's crate facade is emitted
+/// under, i.e. what `[crates.<lang>]` config resolves to once the backend's own
+/// class-naming convention is applied — not a generic PascalCase of the Rust crate name.
+///
+/// Each arm calls the exact function the corresponding backend's codegen uses for this name
+/// (not a re-derivation), so a rename on either side breaks a test rather than silently
+/// drifting:
+/// - `Kotlin` emits the crate module object as `to_pascal_case(crate_name)` with no
+///   suffix stripping — `src/backends/kotlin/gen_bindings/mod.rs`'s `module_name`.
+/// - `Java` emits *two* real classes an override can legitimately name: the raw FFI wrapper
+///   via `crate::backends::java::naming::main_class_name` (PascalCased crate name, trailing
+///   `Rs` kept/added — `src/backends/java/gen_bindings/mod.rs`'s `main_class`), and the
+///   public facade that delegates to it via `..::public_class_name` (the same name with `Rs`
+///   stripped — that file's `public_class`). Both are genuine, alef-emitted classes; an e2e
+///   call override is free to target either. ~keep
+/// - `KotlinAndroid` emits its wrapper object via
+///   `crate::codegen::naming::kotlin_android_wrapper_object_name`, the same PascalCase-then-
+///   strip-`Rs` algorithm as Java's public facade, under its own name.
+/// - `Php` emits the facade class as `[crates.php] extension_name` (or the crate name with
+///   hyphens replaced by underscores, `ResolvedCrateConfig::php_extension_name`) PascalCased
+///   — `src/backends/php/gen_bindings/public_api.rs`'s `class_name`.
+/// - `Ruby` emits *two* real modules an override can legitimately name, the same
+///   raw/public split as Java: the compiled native extension registers itself as
+///   `to_pascal_case(crate_name)` (`src/backends/magnus/gen_bindings/mod.rs`'s
+///   `get_module_name(&api.crate_name)`), and a wrapper module re-exports its types and
+///   delegates its functions under `to_pascal_case([crates.ruby] gem_name)` (that file's
+///   `get_module_name(&config.ruby_gem_name())`). Verified against a real generated
+///   binding: `html-to-markdown-rs`'s crate name PascalCases to `HtmlToMarkdownRs` (the
+///   native module `lib/html_to_markdown/native.rb` loads and `const_get`s from), while
+///   its `[crates.ruby] gem_name = "html-to-markdown"` PascalCases to `HtmlToMarkdown`,
+///   the wrapper `lib/html_to_markdown.rb` declares and e2e specs call `.convert` on
+///   directly — `native.rb` wires `HtmlToMarkdown.convert` to forward to
+///   `HtmlToMarkdownRs.convert`, so both names are genuine, independently callable
+///   entry points. ~keep
+/// - `Dart` emits its FRB bridge class as `ResolvedCrateConfig::dart_bridge_class_name`,
+///   which is already the exact name the `dart` e2e generator's default receiver uses.
+///
+/// Returns `None` for any language not covered above. Every language actually reachable
+/// through `CLASS_CONSUMING_LANGUAGES` today is covered; `None` exists so a future addition
+/// to that list is forced to either wire up a real arm here or accept the warning-only
+/// fallback in `check_class_override`, rather than inheriting a guessed candidate silently.
+fn crate_facade_class_names(naming_lang: Language, config: &ResolvedCrateConfig) -> Option<Vec<String>> {
+    match naming_lang {
+        Language::Kotlin => Some(vec![naming::to_class_name(&config.name)]),
+        Language::Java => Some(vec![
+            crate::backends::java::naming::main_class_name(&config.name),
+            crate::backends::java::naming::public_class_name(&config.name),
+        ]),
+        Language::KotlinAndroid => Some(vec![naming::kotlin_android_wrapper_object_name(&config.name)]),
+        Language::Php => Some(vec![naming::to_class_name(&config.php_extension_name())]),
+        Language::Ruby => Some(vec![
+            naming::to_class_name(&config.name),
+            naming::to_class_name(&config.ruby_gem_name()),
+        ]),
+        Language::Dart => Some(vec![config.dart_bridge_class_name()]),
+        _ => None,
+    }
 }
 
 /// The host-language class names the `lang` backend actually emits for this crate: the
 /// crate facade, every struct/enum wrapper, and every active trait bridge.
+///
+/// Returns whether the facade name itself could be derived alongside the candidate list —
+/// `check_class_override` uses that flag to decide whether a non-match is a real typo
+/// (`Severity::Error`) or an unverifiable guess (`Severity::Warning`).
 fn emitted_class_names(
     lang: &str,
     naming_lang: Language,
     config: &ResolvedCrateConfig,
     type_defs: &[TypeDef],
     enums: &[EnumDef],
-) -> Vec<String> {
-    let mut names = vec![naming::to_class_name(&config.name)];
+) -> (Vec<String>, bool) {
+    let facade = crate_facade_class_names(naming_lang, config);
+    let facade_known = facade.is_some();
+    let mut names: Vec<String> = facade.into_iter().flatten().collect();
     for type_def in type_defs {
         names.push(naming::public_host_identifier(
             naming_lang,
@@ -194,7 +277,7 @@ fn emitted_class_names(
     }
     names.sort();
     names.dedup();
-    names
+    (names, facade_known)
 }
 
 /// The trailing class name of a possibly-qualified override value. Java/Kotlin/Dart use
@@ -438,5 +521,262 @@ mod tests {
         assert_eq!(levenshtein_distance("DocumentApi", "DocumentApi"), 0);
         assert_eq!(levenshtein_distance("DocumentAppi", "DocumentApi"), 1);
         assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+    }
+
+    fn resolved_one(toml: &str) -> ResolvedCrateConfig {
+        use crate::core::config::new_config::NewAlefConfig;
+        let cfg: NewAlefConfig = toml::from_str(toml).unwrap();
+        cfg.resolve().unwrap().remove(0)
+    }
+
+    /// Reproduces the exact reported regression: a crate whose name PascalCases to
+    /// `HtmlToMarkdownRs`, but whose kotlin_android backend strips the trailing `Rs` and
+    /// emits the wrapper object as `HtmlToMarkdown`. A bare override naming the real,
+    /// stripped facade must pass.
+    #[test]
+    fn a_bare_kotlin_android_override_matching_the_rs_stripped_facade_passes() {
+        let config = make_config("html-to-markdown-rs");
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("HtmlToMarkdown", "kotlin_android");
+
+        let errors =
+            validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["kotlin_android".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// Same regression as above, but with the fully-qualified form the reported override
+    /// actually used (`io.xberg.android.HtmlToMarkdown`), proving qualified overrides are
+    /// compared against the corrected, Rs-stripped facade name too.
+    #[test]
+    fn a_fully_qualified_kotlin_android_override_matching_the_rs_stripped_facade_passes() {
+        let config = make_config("html-to-markdown-rs");
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("io.xberg.android.HtmlToMarkdown", "kotlin_android");
+
+        let errors =
+            validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["kotlin_android".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// The `java` backend's public facade strips the same trailing `Rs` as `kotlin_android`
+    /// (`main_class_name` then `.trim_end_matches("Rs")`), so a bare override naming that
+    /// stripped facade must pass.
+    #[test]
+    fn a_bare_java_override_matching_the_rs_stripped_facade_passes() {
+        let config = make_config("html-to-markdown-rs");
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("HtmlToMarkdown", "java");
+
+        let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["java".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// The `java` backend also emits the raw FFI wrapper class the public facade delegates
+    /// to, `main_class_name` (the `Rs`-suffixed name, never stripped) -- this is the exact
+    /// shape of the real, previously-passing html-to-markdown override
+    /// (`io.xberg.htmltomarkdown.HtmlToMarkdownRs`). Narrowing the candidate set to only the
+    /// stripped public facade would regress this override from passing to failing. ~keep
+    #[test]
+    fn a_fully_qualified_java_override_matching_the_unstripped_raw_class_passes() {
+        let config = make_config("html-to-markdown-rs");
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("io.xberg.htmltomarkdown.HtmlToMarkdownRs", "java");
+
+        let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["java".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// The other reported regression: `[crates.php] extension_name` diverges from the crate
+    /// name, and the php facade is PascalCased from `extension_name`, not from the crate
+    /// name. A bare override naming that facade must pass.
+    #[test]
+    fn a_bare_php_override_matching_the_configured_extension_name_passes() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["php"]
+
+[[crates]]
+name = "html-to-markdown-rs"
+sources = ["src/lib.rs"]
+
+[crates.php]
+extension_name = "html_to_markdown"
+"#,
+        );
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("HtmlToMarkdown", "php");
+
+        let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["php".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// The ruby backend's compiled native extension registers itself under a module
+    /// PascalCased from the crate name (`get_module_name(&api.crate_name)`), independent of
+    /// `[crates.ruby] gem_name`. A bare override naming that raw native module must pass even
+    /// when `gem_name` is configured to something else entirely.
+    #[test]
+    fn a_bare_ruby_override_matching_the_crate_name_native_module_passes_regardless_of_gem_name() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["ruby"]
+
+[[crates]]
+name = "html-to-markdown-rs"
+sources = ["src/lib.rs"]
+
+[crates.ruby]
+gem_name = "html-to-markdown"
+"#,
+        );
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("HtmlToMarkdownRs", "ruby");
+
+        let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["ruby".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// The ruby backend also emits a wrapper module PascalCased from `[crates.ruby]
+    /// gem_name` that re-exports the native module's types and delegates its functions
+    /// (`get_module_name(&config.ruby_gem_name())`) — a real, independently callable module
+    /// an override is equally free to name, even when `gem_name` diverges from the crate
+    /// name (`gem_name` may contain `-`, which Ruby forbids in module names, so this is
+    /// never a no-op PascalCase of the crate name itself). ~keep
+    #[test]
+    fn a_bare_ruby_override_matching_the_gem_name_wrapper_module_passes() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["ruby"]
+
+[[crates]]
+name = "html-to-markdown-rs"
+sources = ["src/lib.rs"]
+
+[crates.ruby]
+gem_name = "html-to-markdown"
+"#,
+        );
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("HtmlToMarkdown", "ruby");
+
+        let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["ruby".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// The dart backend's FRB bridge class is `ResolvedCrateConfig::dart_bridge_class_name`
+    /// (`[crates.dart] lib_name`, PascalCased, plus a `Bridge` suffix), which the crate-name
+    /// PascalCase this validator used to compute never produces.
+    #[test]
+    fn a_bare_dart_override_matching_the_bridge_class_name_passes() {
+        let config = resolved_one(
+            r#"
+[workspace]
+languages = ["dart"]
+
+[[crates]]
+name = "html-to-markdown-rs"
+sources = ["src/lib.rs"]
+
+[crates.dart]
+lib_name = "h2m"
+"#,
+        );
+        let type_defs = vec![make_type("Placeholder")];
+        let e2e_config = make_e2e_config("H2mBridge", "dart");
+
+        let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["dart".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// A genuinely wrong override — one that matches neither the corrected facade name nor
+    /// any IR type — must still be rejected. The fix to the candidate set must not turn this
+    /// validator into a no-op.
+    #[test]
+    fn a_genuinely_absent_kotlin_android_class_is_still_rejected() {
+        let config = make_config("html-to-markdown-rs");
+        let type_defs = vec![make_type("HtmlMetadata")];
+        let e2e_config = make_e2e_config("io.xberg.android.HtmlToMarkdownConverter", "kotlin_android");
+
+        let errors =
+            validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["kotlin_android".to_string()]);
+
+        assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
+        assert_eq!(errors[0].severity, Severity::Error);
+        assert!(
+            errors[0]
+                .message
+                .contains("does not match any class the kotlin_android backend emits"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    /// A backend whose facade-name derivation is not wired into `crate_facade_class_names`
+    /// (simulated here via a `naming_lang` this module does not handle, since every language
+    /// actually reachable through `CLASS_CONSUMING_LANGUAGES` today is handled) must not
+    /// claim an override is wrong on the strength of a candidate set it knows is incomplete
+    /// — it downgrades to a warning instead of an error.
+    #[test]
+    fn an_unresolvable_facade_backend_downgrades_the_diagnostic_to_a_warning() {
+        let config = make_config("sample_crate");
+        let type_defs = vec![make_type("Placeholder")];
+        let mut errors = Vec::new();
+
+        check_class_override(
+            "[e2e.call]",
+            "mystery_backend",
+            Language::Python,
+            "TotallyUnverifiable",
+            &config,
+            &type_defs,
+            &[],
+            &mut errors,
+        );
+
+        assert_eq!(errors.len(), 1, "expected exactly one diagnostic, got: {errors:?}");
+        assert_eq!(errors[0].severity, Severity::Warning);
+        assert!(
+            errors[0].message.contains("candidate set may be incomplete"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn crate_facade_class_names_matches_each_backends_own_derivation() {
+        let html_to_markdown = make_config("html-to-markdown-rs");
+        assert_eq!(
+            crate_facade_class_names(Language::Kotlin, &html_to_markdown),
+            Some(vec!["HtmlToMarkdownRs".to_string()]),
+            "plain kotlin does not strip the Rs suffix"
+        );
+        assert_eq!(
+            crate_facade_class_names(Language::Java, &html_to_markdown),
+            Some(vec!["HtmlToMarkdownRs".to_string(), "HtmlToMarkdown".to_string()]),
+            "java's raw FFI class and its Rs-stripped public facade are both real candidates"
+        );
+        assert_eq!(
+            crate_facade_class_names(Language::KotlinAndroid, &html_to_markdown),
+            Some(vec!["HtmlToMarkdown".to_string()])
+        );
+        assert_eq!(
+            crate_facade_class_names(Language::Ruby, &html_to_markdown),
+            Some(vec!["HtmlToMarkdownRs".to_string(), "HtmlToMarkdownRs".to_string()]),
+            "ruby's native module (crate name) and its gem_name-derived wrapper module are \
+             both real candidates; with no `[crates.ruby] gem_name` configured, gem_name \
+             defaults to the crate name with hyphens replaced by underscores, which \
+             PascalCases identically to the crate name itself"
+        );
+        assert_eq!(crate_facade_class_names(Language::Python, &html_to_markdown), None);
     }
 }

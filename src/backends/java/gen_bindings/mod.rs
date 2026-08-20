@@ -715,7 +715,7 @@ impl Backend for JavaBackend {
                 .trait_bridges
                 .iter()
                 .any(|b| b.bind_via == BridgeBinding::OptionsField);
-        let public_class = main_class.trim_end_matches("Rs").to_string();
+        let public_class = crate::backends::java::naming::public_class_name(&api.crate_name);
         let facade_content = gen_facade_class(
             api,
             &package,

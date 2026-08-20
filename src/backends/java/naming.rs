@@ -31,6 +31,13 @@ pub(crate) fn exception_class_name(crate_name: &str) -> String {
     format!("{}Exception", main_class_name(crate_name))
 }
 
+/// Name of the public facade class the Java backend declares for `crate_name`: [`main_class_name`]
+/// with its `Rs` suffix stripped. This is the class `<PublicClass>.java` delegates to
+/// [`main_class_name`]'s raw FFI wrapper -- see `gen_bindings/mod.rs`'s `public_class`. ~keep
+pub(crate) fn public_class_name(crate_name: &str) -> String {
+    main_class_name(crate_name).trim_end_matches("Rs").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -48,5 +55,24 @@ mod tests {
     #[test]
     fn exception_class_name_appends_exception_to_the_main_class() {
         assert_eq!(exception_class_name("sample-multi-word"), "SampleMultiWordRsException");
+    }
+
+    #[test]
+    fn public_class_name_strips_the_rs_suffix_from_the_main_class() {
+        assert_eq!(public_class_name("sample-multi-word"), "SampleMultiWord");
+    }
+
+    #[test]
+    fn public_class_name_strips_a_crate_name_whose_own_trailing_segment_is_rs() {
+        assert_eq!(public_class_name("sample_rs"), "Sample");
+    }
+
+    /// `main_class_name` appends `Rs` when the crate name does not already end in it, so
+    /// stripping that suffix here returns the PascalCased crate name unchanged -- the facade is
+    /// named after the crate, and only the raw FFI class carries the marker. ~keep
+    #[test]
+    fn public_class_name_round_trips_a_crate_name_that_did_not_end_in_rs() {
+        assert_eq!(main_class_name("sample-sensors"), "SampleSensorsRs");
+        assert_eq!(public_class_name("sample-sensors"), "SampleSensors");
     }
 }
