@@ -41,6 +41,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `unsafe_op_in_unsafe_fn`, `unsafe_attr_outside_unsafe`, and the rest of the `clippy::` list) either
   fired against a real emitted tree during the audit or could not be proven dead, so they stay.
 
+- **`clippy::unnecessary_cast` is also gone from the FFI crate's crate-level allow list.** The
+  prior audit above could not reach the one template that emits an `as i32` cast on a field whose
+  Rust type is a genuine enum (`ffi_visitor_context_enum_init.jinja`, used only when a trait
+  bridge's visitor context struct has an enum-typed field) because doing so needs a configured
+  trait bridge, which the audit's fixture did not have. Reached this time via a real trait-bridge
+  fixture: `context_c_type` (`gen_visitor/context.rs`) only routes a field to this template when
+  it resolves to a real IR enum, never when the field is already `i32` (that case emits through
+  the cast-free passthrough template instead), so the cast's source is never nominally the same
+  type as its `i32` target and `clippy::unnecessary_cast` — which fires only on same-type casts —
+  can never flag it. Verified with a real `cargo clippy --all-targets -- -D warnings` run, both
+  over the non-visitor gate fixture and, for the enum-context site specifically, over a real
+  `alef generate` run with a trait bridge configured.
+
 ### Fixed
 
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can

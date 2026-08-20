@@ -57,6 +57,24 @@ prefix = "sample"
          conversion in bytes_result_match.jinja, which now carries its own narrow \
          #[allow(clippy::useless_conversion)] at each of its four sites:\n{header}"
     );
+    // `unnecessary_cast` fires only when a cast's source expression already has the exact
+    // destination type. Every `as i32`/`as u32`/`as usize` this backend emits casts a `bool`
+    // or a genuine `Named` enum field (see `ffi_visitor_context_enum_init.jinja`, reached only
+    // when `context_c_type` (`gen_visitor/context.rs`) resolves the field to a real IR enum --
+    // never when the field is already `TypeRef::Primitive(I32)`, which routes through the
+    // cast-free passthrough template instead) or an integer of a different width
+    // (`handle_registry.rs.jinja`'s `u64 -> usize`/`u64 -> u32`). None of those is ever the
+    // same type as the cast target, so clippy can never see this as redundant. Verified against
+    // a real `cargo clippy --all-targets -- -D warnings` run over the non-visitor emitted tree
+    // (`tests/generated_output_downstream_gate.rs`'s fixture) and, for the enum-context site
+    // specifically, over a real `alef generate` run with a configured trait bridge --
+    // `gen_bindings::tests::visitor::test_visitor_callbacks_emit_enum_node_type_as_i32` pins
+    // that this backend still reaches and emits that exact cast. ~keep
+    assert!(
+        !header.contains("clippy::unnecessary_cast"),
+        "every cast this backend emits converts a bool or a Named enum to a different \
+         primitive type, which clippy's same-type check can never flag as redundant:\n{header}"
+    );
 }
 
 /// The paired positive: the narrow per-item allow this audit added actually reaches the
