@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.5] - 2026-08-20
+
 ### Added
 
 - **`[crates.test.<lang>].e2e_precondition`** lets a block scope the `e2e` tooling gate
