@@ -61,6 +61,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accessor already treated as a soft default, so enabling `jni` without also configuring
   `kotlin_android` produced a hard generate failure for a language the consumer did
   configure.
+- **e2e/kotlin_android**: stop emitting a call to a function `[crates.kotlin_android].features`
+  gated out of the binding. The kotlin_android binding generator already drops any
+  `#[cfg(feature = "...")]`-gated function whose feature isn't in the binding's configured
+  `features` list (`with_cfg_filtered_deep`), but the e2e test generator had no equivalent
+  check and emitted a real call to the dropped symbol anyway, producing a Kotlin "Unresolved
+  reference" compile failure (e.g. `manifestLanguages`, gated on the `download` feature, for a
+  binding whose `features` omits it). The fixture now renders as a `@Disabled` entry in
+  `ExcludedBindingsTest.kt` naming the unsatisfied cfg gate, the same way a visitor-excluded
+  fixture already does.
 
 ## [0.62.5] - 2026-08-20
 

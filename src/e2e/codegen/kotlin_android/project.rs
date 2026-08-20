@@ -1,6 +1,7 @@
 use crate::backends::kotlin_android::naming;
 use crate::core::backend::GeneratedFile;
-use crate::core::config::ResolvedCrateConfig;
+use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::ir::cfg_feature_satisfied;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::escape::sanitize_filename;
 use crate::e2e::fixture::{Fixture, FixtureGroup, VISITOR_EXCLUDE_FUNCTION_NAME};
@@ -18,11 +19,59 @@ use super::gradle_wrapper::{
 };
 use crate::e2e::codegen::kotlin;
 
+/// One test that `ExcludedBindingsTest.kt` renders as `@Disabled` rather than as a real
+/// call, paired with the reason a human reads in the JUnit report.
+#[derive(serde::Serialize)]
+struct ExcludedFixtureEntry {
+    name: String,
+    reason: String,
+}
+
+/// True when `fixture`'s resolved call names a free function the core IR declares with a
+/// `#[cfg(feature = "...")]` gate that `enabled_features` does not satisfy.
+///
+/// `[crates.kotlin_android].features` (see [`ResolvedCrateConfig::features_for_language`])
+/// is the same feature list `backends::kotlin_android::effective_codegen_api` filters the
+/// *binding* surface with via `ApiSurface::with_cfg_filtered_deep`. Before this check, the
+/// e2e generator had no idea that filter existed: it emitted a call for every fixture whose
+/// declared function name resolved in the *unfiltered* IR, so a fixture routed to
+/// `manifest_languages` (gated on the `download` feature, which
+/// `[crates.kotlin_android].features = ["serde"]` does not enable) produced a Kotlin test
+/// calling `TreeSitterLanguagePack.manifestLanguages()` — a symbol the binding generator
+/// correctly never emitted. Free functions only: the `download` family this was found
+/// against has none of its members as methods, and a method's cfg would need agreement
+/// across every same-named method the way `CallIr::signature` requires for its own checks,
+/// which is out of scope for this fix.
+fn function_cfg_gated_out(
+    fixture: &Fixture,
+    lang: &str,
+    e2e_config: &E2eConfig,
+    functions: &[crate::core::ir::FunctionDef],
+    enabled_features: &HashSet<&str>,
+) -> Option<String> {
+    let call_config = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    let lookup_name = call_config.core_lookup_name(lang)?;
+    let function = functions.iter().find(|f| f.name == lookup_name)?;
+    let cfg = function.cfg.as_deref()?;
+    if cfg_feature_satisfied(Some(cfg), enabled_features) {
+        None
+    } else {
+        Some(cfg.to_string())
+    }
+}
+
 pub(super) fn generate(
     groups: &[FixtureGroup],
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Result<Vec<GeneratedFile>> {
     let lang = "kotlin_android";
     let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
@@ -178,21 +227,40 @@ pub(super) fn generate(
             .iter()
             .any(|name| name == VISITOR_EXCLUDE_FUNCTION_NAME)
     });
-    let excluded_visitor_fixtures: Vec<String> = groups
+    let enabled_features: HashSet<&str> = config
+        .features_for_language(Language::KotlinAndroid)
         .iter()
-        .flat_map(|group| group.fixtures.iter())
-        .filter(|fixture| fixture.visitor.is_some() && visitor_is_excluded)
-        .map(|fixture| sanitize_filename(&fixture.id))
+        .map(String::as_str)
         .collect();
-    if !excluded_visitor_fixtures.is_empty() {
+    let mut excluded_entries: Vec<ExcludedFixtureEntry> = Vec::new();
+    for fixture in groups.iter().flat_map(|group| group.fixtures.iter()) {
+        if fixture.visitor.is_some() && visitor_is_excluded {
+            excluded_entries.push(ExcludedFixtureEntry {
+                name: sanitize_filename(&fixture.id),
+                reason: "visitor is excluded by crates.kotlin_android.exclude_functions".to_string(),
+            });
+            continue;
+        }
+        if let Some(cfg) = function_cfg_gated_out(fixture, lang, e2e_config, functions, &enabled_features) {
+            // The cfg string comes from `#[cfg(...)]` and may itself contain double quotes
+            // (`feature = "download"`); this reason is spliced into a Kotlin string literal
+            // (`@Disabled("...")`) with no escaping downstream, so quotes are stripped here
+            // rather than passed through raw.
+            let cfg_display = cfg.replace('"', "");
+            excluded_entries.push(ExcludedFixtureEntry {
+                name: sanitize_filename(&fixture.id),
+                reason: format!("call is gated on {cfg_display}, which crates.kotlin_android.features does not enable"),
+            });
+        }
+    }
+    if !excluded_entries.is_empty() {
         files.push(GeneratedFile {
             path: test_base.join("ExcludedBindingsTest.kt"),
             content: crate::e2e::template_env::render(
                 "kotlin_android/excluded_fixtures.kt.jinja",
                 minijinja::context! {
                     package_name => kotlin_pkg_id.clone(),
-                    fixtures => excluded_visitor_fixtures,
-                    reason => "visitor is excluded by crates.kotlin_android.exclude_functions",
+                    entries => excluded_entries,
                 },
             ),
             generated_header: true,
@@ -247,12 +315,15 @@ pub(super) fn generate(
     // kotlin_android lacks a JNI trait-handle bridge (see alef-backend-jni follow-up), so
     // [crates.kotlin_android] excludes the visitor function. Fixtures whose payload uses
     // a visitor cannot be exercised through this binding — skip any visitor-using fixture.
+    // Also skip any fixture whose call resolves to a core function [crates.kotlin_android]
+    // does not compile in under its configured `features` — see `function_cfg_gated_out`.
     for group in groups {
         let active: Vec<&Fixture> = group
             .fixtures
             .iter()
             .filter(|f| crate::e2e::codegen::should_include_fixture(f, lang, e2e_config))
             .filter(|fixture| !(fixture.visitor.is_some() && visitor_is_excluded))
+            .filter(|fixture| function_cfg_gated_out(fixture, lang, e2e_config, functions, &enabled_features).is_none())
             .collect();
 
         if active.is_empty() {
@@ -286,4 +357,132 @@ pub(super) fn generate(
     }
 
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+    use crate::core::ir::{FunctionDef, TypeRef};
+
+    /// A resolved config for a crate whose `[crates.kotlin_android].features` does not
+    /// include `download` — the shape the tree-sitter-language-pack regression was found
+    /// against (`features = ["serde"]`).
+    fn config_excluding_download_feature() -> ResolvedCrateConfig {
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+features = ["serde"]
+"#,
+        )
+        .expect("fixture config parses");
+        raw.resolve().expect("fixture config resolves").remove(0)
+    }
+
+    /// The defect this pins: `manifest_languages` is gated on `#[cfg(feature = "download")]`
+    /// in the Rust core. `backends::kotlin_android::effective_codegen_api` correctly drops it
+    /// from the compiled facade because `[crates.kotlin_android].features` does not enable
+    /// `download` — but before `function_cfg_gated_out` existed, this e2e generator had no
+    /// way to know that and emitted `TreeSitterLanguagePack.manifestLanguages()` into a real
+    /// test anyway, producing a Kotlin "Unresolved reference" compile failure. The fixture
+    /// must now render as a `@Disabled` entry in `ExcludedBindingsTest.kt` instead, the same
+    /// way a visitor-excluded fixture already does.
+    #[test]
+    fn cfg_gated_out_function_is_excluded_instead_of_dangling() {
+        let config = config_excluding_download_feature();
+        let functions = [FunctionDef {
+            name: "manifest_languages".into(),
+            return_type: TypeRef::String,
+            cfg: Some("feature = \"download\"".into()),
+            ..FunctionDef::default()
+        }];
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "manifest_languages".into();
+        e2e_config.call.result_var = "result".into();
+        let fixture = Fixture {
+            id: "manifest_languages_smoke".into(),
+            description: "List manifest languages".into(),
+            category: Some("download".into()),
+            ..Fixture::default()
+        };
+        let groups = [FixtureGroup {
+            category: "download".into(),
+            fixtures: vec![fixture],
+        }];
+
+        let files = generate(&groups, &e2e_config, &config, &[], &functions).expect("generation succeeds");
+
+        for file in &files {
+            assert!(
+                !file.content.contains("manifestLanguages("),
+                "{} must not call manifestLanguages(): the binding never declares it under \
+                 `features = [\"serde\"]`\n{}",
+                file.path.display(),
+                file.content
+            );
+        }
+        let excluded = files
+            .iter()
+            .find(|f| f.path.ends_with("ExcludedBindingsTest.kt"))
+            .unwrap_or_else(|| panic!("expected an ExcludedBindingsTest.kt naming the gated-out fixture"));
+        assert!(
+            excluded.content.contains("manifest_languages_smoke"),
+            "{}",
+            excluded.content
+        );
+        assert!(
+            excluded.content.contains("feature = download"),
+            "the skip reason should name the unsatisfied cfg gate:\n{}",
+            excluded.content
+        );
+    }
+
+    /// The companion positive control: once the language enables the gating feature, the
+    /// same fixture must render as a normal call again, not stay excluded forever.
+    #[test]
+    fn cfg_satisfied_function_is_not_excluded() {
+        let mut config = config_excluding_download_feature();
+        config.kotlin_android = config.kotlin_android.map(|mut android| {
+            android.features = Some(vec!["serde".to_string(), "download".to_string()]);
+            android
+        });
+        let functions = [FunctionDef {
+            name: "manifest_languages".into(),
+            return_type: TypeRef::String,
+            cfg: Some("feature = \"download\"".into()),
+            ..FunctionDef::default()
+        }];
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "manifest_languages".into();
+        e2e_config.call.result_var = "result".into();
+        let fixture = Fixture {
+            id: "manifest_languages_smoke".into(),
+            description: "List manifest languages".into(),
+            category: Some("download".into()),
+            ..Fixture::default()
+        };
+        let groups = [FixtureGroup {
+            category: "download".into(),
+            fixtures: vec![fixture],
+        }];
+
+        let files = generate(&groups, &e2e_config, &config, &[], &functions).expect("generation succeeds");
+
+        assert!(
+            files.iter().any(|f| f.content.contains("manifestLanguages(")),
+            "expected a real call to manifestLanguages() once `download` is enabled"
+        );
+        assert!(
+            !files.iter().any(|f| f.path.ends_with("ExcludedBindingsTest.kt")),
+            "no fixture should be excluded once the gating feature is enabled"
+        );
+    }
 }

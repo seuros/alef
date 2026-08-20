@@ -4,9 +4,9 @@ import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 
 class ExcludedBindingsTest {
-{% for fixture in fixtures %}
+{% for entry in entries %}
     @Test
-    @Disabled("{{ reason }}")
-    fun {{ fixture }}() {}
+    @Disabled("{{ entry.reason }}")
+    fun {{ entry.name }}() {}
 {% endfor %}
 }

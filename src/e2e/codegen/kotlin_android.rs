@@ -34,10 +34,10 @@ impl E2eCodegen for KotlinAndroidE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
-        project::generate(groups, e2e_config, config, type_defs)
+        project::generate(groups, e2e_config, config, type_defs, functions)
     }
 
     fn render_snippet_body(
@@ -215,8 +215,10 @@ mod tests {
             "kotlin_android/excluded_fixtures.kt.jinja",
             minijinja::context! {
                 package_name => "dev.sample",
-                fixtures => vec!["visitor_round_trip"],
-                reason => "visitor is excluded by crates.kotlin_android.exclude_functions",
+                entries => vec![minijinja::context! {
+                    name => "visitor_round_trip",
+                    reason => "visitor is excluded by crates.kotlin_android.exclude_functions",
+                }],
             },
         );
 
