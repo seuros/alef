@@ -79,5 +79,41 @@ pub(crate) fn find_orphaned_generated_files(base_dir: &Path, managed_paths: &Has
     orphans
 }
 
+/// Every path a configured post-build step writes unguarded, across every language in
+/// `languages` -- see [`crate::core::backend::PostBuildStep::owned_paths`].
+///
+/// `alef verify` never runs post-build steps: `complete_generated_artifacts` is invoked only
+/// from `Commands::Generate`/`Commands::All` (`bin_cli::core_commands`), so a path one of these
+/// steps owns can never appear in `collect_managed_surface`'s in-memory surface the way a
+/// `GeneratedFile` would. Left out of the set passed to [`find_orphaned_generated_files`], such a
+/// path would misreport as an orphan on every single `alef verify` run the moment a post-build
+/// step plants an alef-marked file there -- the same false positive `Commands::Generate`'s own
+/// orphan sweep (`bin_cli::core_commands`) already avoids by folding this exact union in before
+/// its disk-scan diff (see `owned_paths`'s doc for the alef #B incident that guards against). No
+/// shipped backend's `owned_paths` returns a marker-carrying path today, so the gap is latent
+/// rather than live here too, but closing it keeps `alef verify` correct the moment one does. ~keep
+pub(crate) fn post_build_owned_paths(
+    languages: &[crate::core::config::Language],
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &Path,
+) -> HashSet<PathBuf> {
+    let mut owned = HashSet::new();
+    for &language in languages {
+        let Some(backend) = crate::cli::registry::try_get_backend(language) else {
+            continue;
+        };
+        let Some(build_config) = backend.build_config_with_config(config) else {
+            continue;
+        };
+        owned.extend(
+            build_config
+                .post_build
+                .iter()
+                .flat_map(|step| step.owned_paths(base_dir)),
+        );
+    }
+    owned
+}
+
 #[cfg(test)]
 mod tests;

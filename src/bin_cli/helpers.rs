@@ -706,10 +706,16 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     base_dir: &std::path::Path,
 ) -> anyhow::Result<MissingAndFrozenFiles> {
     let (surface, stage_failures) = collect_managed_surface(languages, api, config, config_path, base_dir)?;
+    // `surface` alone omits post-build-owned paths; see `verify_orphans::post_build_owned_paths`. ~keep
+    let mut managed_paths: std::collections::HashSet<std::path::PathBuf> =
+        surface.iter().map(|file| base_dir.join(&file.path)).collect();
+    managed_paths.extend(super::verify_orphans::post_build_owned_paths(
+        languages, config, base_dir,
+    ));
     let mut result = MissingAndFrozenFiles {
         missing: missing_managed_paths(&surface, base_dir),
         frozen: frozen_managed_paths(&surface, base_dir),
-        managed_paths: surface.iter().map(|file| base_dir.join(&file.path)).collect(),
+        managed_paths,
         stage_failures: stage_failures
             .into_iter()
             .map(|failure| format!("[{}] {}", failure.stage, failure.message))

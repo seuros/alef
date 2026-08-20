@@ -56,6 +56,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef verify`'s orphan check now accounts for post-build-owned paths.** `alef verify` never
+  runs post-build steps (`complete_generated_artifacts` is `Commands::Generate`/`Commands::All`
+  -only), so a path a configured `PostBuildStep` writes unguarded (`PostBuildStep::owned_paths`)
+  could never appear in the in-memory managed surface `find_missing_and_frozen_generated_files`
+  builds from `collect_managed_surface`. Any such step that plants an alef-marked file at a path
+  the in-band generator does not itself produce would have been reported as an orphan on every
+  single `alef verify` run. No shipped backend does this today (Swift's `MaterializeSwiftBridge`
+  is the only non-empty `owned_paths` today, and the trio it writes never carries alef's marker),
+  so the gap was latent rather than live, but `find_missing_and_frozen_generated_files` now folds
+  `verify_orphans::post_build_owned_paths`'s union into `managed_paths` regardless, the same way
+  `Commands::Generate`'s own orphan sweep already does before its disk-scan diff.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`

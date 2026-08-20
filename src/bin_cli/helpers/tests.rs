@@ -803,3 +803,64 @@ fn a_stage_failure_never_affects_an_empty_target_list() {
 
     assert!(!failure.affects_any(&[]));
 }
+
+fn swift_only_config() -> crate::core::config::ResolvedCrateConfig {
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "toolkit"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    cfg.resolve().unwrap().remove(0)
+}
+
+/// THE REGRESSION (latent): `alef verify` never runs post-build steps
+/// (`complete_generated_artifacts` is `Commands::Generate`/`Commands::All`-only), so a path a
+/// post-build step owns unguarded -- see `PostBuildStep::owned_paths` -- can never appear in
+/// `collect_managed_surface`'s in-memory surface. Left out of `managed_paths`, that path would
+/// misreport as an orphan on every single `alef verify` run the moment such a step writes an
+/// alef-marked file there. Swift's `MaterializeSwiftBridge` is the real post-build step this
+/// exercises: `SwiftBridgeCore.swift` is a path it owns (`PostBuildStep::owned_paths`) but that
+/// `collect_managed_surface`'s in-band bindings stage never emits as a `GeneratedFile` -- see
+/// `emit_swift_bridge_files`'s doc, which reads real `target/` build output only when called
+/// from the post-build step, never from `alef generate`'s own in-memory render. No shipped
+/// backend's `owned_paths` output actually carries an alef marker today (this file's own writer
+/// never headers it), which is why this is latent rather than a live false positive -- but a
+/// marked file at this exact path must still resolve as owned once one does. ~keep
+#[test]
+fn a_post_build_owned_path_not_produced_in_band_is_not_reported_as_an_orphan() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = swift_only_config();
+    let api = crate::core::ir::ApiSurface::default();
+    let config_path = dir.path().join("alef.toml");
+
+    // Matches `SwiftBackend::build_config_with_config`'s `package_root` fallback when no prior
+    // build has populated `<package_root>/Sources` yet: `Sources/RustBridge/SwiftBridgeCore.swift`
+    // directly under `base_dir`.
+    let owned_path = dir.path().join("Sources/RustBridge/SwiftBridgeCore.swift");
+    std::fs::create_dir_all(owned_path.parent().unwrap()).expect("create Sources/RustBridge");
+    let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
+    let marked = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
+    std::fs::write(&owned_path, marked).expect("write post-build-owned file");
+
+    let found = find_missing_and_frozen_generated_files(&[Language::Swift], &api, &config, &config_path, dir.path())
+        .expect("collect_managed_surface must succeed over a swift-only crate");
+
+    assert!(
+        found.managed_paths.contains(&owned_path),
+        "post-build-owned paths must be folded into the managed surface: {:?}",
+        found.managed_paths
+    );
+
+    let orphans = super::super::verify_orphans::find_orphaned_generated_files(dir.path(), &found.managed_paths);
+    assert!(
+        orphans.is_empty(),
+        "a path a post-build step owns unguarded must never be reported as an orphan just \
+         because `alef verify` cannot run that step itself: {orphans:?}"
+    );
+}
