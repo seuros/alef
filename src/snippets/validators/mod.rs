@@ -412,9 +412,11 @@ fn apply_environment_allowlist(
     include_windows_variables: bool,
     lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
 ) {
-    let windows_variables = include_windows_variables
-        .then_some(WINDOWS_ENVIRONMENT_VARIABLES)
-        .unwrap_or_default();
+    let windows_variables: &[&str] = if include_windows_variables {
+        WINDOWS_ENVIRONMENT_VARIABLES
+    } else {
+        &[]
+    };
     let values: Vec<_> = SANITIZED_ENVIRONMENT_VARIABLES
         .iter()
         .chain(windows_variables)
