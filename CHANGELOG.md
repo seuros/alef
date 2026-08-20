@@ -54,6 +54,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bindings last stamped before `strip_alef_version_pin` (fixed in 0.62.2) and converges in one
   run; a second clean-tree run against a real consumer wrote zero files.
 
+- **`alef generate` no longer refuses a different set of Swift files, or reports a different
+  file count, on a second run over an unchanged tree.** Two bugs compounded. First,
+  `emit_swift_bridge_files` read `target/`'s swift-bridge build output directly from the
+  `alef generate` code path, but that directory is populated by this same command's own
+  post-build step (`cargo build` + `MaterializeSwiftBridge`) — so whether it existed yet
+  depended on run ordering, not on source input. A run before any build saw nothing and
+  emitted a placeholder (or nothing); an otherwise-identical run after a build populated
+  `target/` emitted `SwiftBridgeCore.swift` and `{crate}.swift` in full and fed them through
+  the ownership-guarded writer, which refused both as foreign since swift-bridge's own
+  header/import conventions rule out an alef marker on them — moving both the refusal set
+  and the "Generated N files" count between two runs of identical source. `alef generate` now
+  never consults `target/` (`consult_build_output: false`); only the `MaterializeSwiftBridge`
+  post-build step, which runs after the build it triggers, does. Second, the "Generated N
+  files" total itself counted every file the generator computed in memory, including files
+  that were cache-skipped or refused and never actually written — now it sums actual writes,
+  matching every per-phase "Generated N ... files" line already printed alongside it. Third,
+  `PostBuildStep::MaterializeSwiftBridge` writes its three files unguarded, outside
+  `pipeline::generate()`'s tracked output, so a run where the generator itself found nothing
+  new to emit for those paths (a healthy, common case) dropped them from that run's
+  generation-ownership record; the very next run's orphan sweep then read the absence as
+  "alef no longer generates this" and deleted `RustBridgeC.h` from an otherwise unchanged
+  tree. `PostBuildStep::owned_paths` now names every path a post-build step writes outside
+  the guarded writer, and `alef generate` folds those into the same run's ownership record
+  unconditionally, so the sweep never mistakes a build tool's own output for an orphan.
 - **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
   the napi and extendr backends actually look up, instead of a nested
   `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads

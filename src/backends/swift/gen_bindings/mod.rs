@@ -514,8 +514,15 @@ impl Backend for SwiftBackend {
                     .map(|p| p.to_path_buf())
                     .unwrap_or_else(|| PathBuf::from("packages/swift"))
             });
+        // `consult_build_output: false` -- reading `target/`'s swift-bridge build output here
+        // is exactly the alef #A/#B bug: that directory is populated by this same command's
+        // own post-build step (`PostBuildStep::MaterializeSwiftBridge`, wired below in
+        // `build_config_with_config`), so whether it exists yet depends on run ordering, not
+        // on source input. `MaterializeSwiftBridge` already writes the real trio unguarded
+        // once the build succeeds; this call only ever emits the static, build-independent
+        // placeholder (or nothing, when a populated header is already committed). ~keep
         if let Some(bridge_files) =
-            bridge_artifacts::emit_swift_bridge_files(&api.crate_name, &binding_crate_name, &package_root)?
+            bridge_artifacts::emit_swift_bridge_files(&api.crate_name, &binding_crate_name, &package_root, false)?
         {
             files.extend(bridge_files);
         }

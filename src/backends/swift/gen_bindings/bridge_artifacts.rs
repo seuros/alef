@@ -46,17 +46,59 @@ pub(crate) fn find_swift_bridge_out_dir(binding_crate_name: &str) -> Option<Path
     best.map(|(_, p)| p)
 }
 
+/// Emit the swift-bridge-produced Swift/header trio, or `None` when there is nothing to
+/// write.
+///
+/// `consult_build_output` gates whether `target/`'s swift-bridge build output is read at
+/// all. It must be `false` from [`super::generate`] (the `alef generate` path) and `true`
+/// only from the [`PostBuildStep::MaterializeSwiftBridge`] post-build step
+/// (`cli::pipeline::commands::build`), which runs unconditionally after `alef generate`
+/// and `alef build` both trigger this crate's own `cargo build` via `complete_generated_artifacts`.
+///
+/// The two calls used to be one, unconditionally reading `target/`, and that was the alef
+/// #A/#B bug: `target/`'s build directory is a side effect of *this same command's own*
+/// post-build step, so whether it exists yet is a function of run ordering, not of source
+/// input. A `generate()` call early in the run saw no directory and emitted nothing (or a
+/// placeholder); an otherwise-identical call after a build had populated `target/` emitted
+/// the full trio and fed it through the ownership-guarded writer, which then refused two
+/// files it had never seen before — the refusal set and the "Generated N files" count both
+/// moved between two runs of an unmodified tree. `MaterializeSwiftBridge` already writes
+/// these same three files unguarded, straight to disk, every time this crate's `cargo
+/// build` succeeds — it is the one place a build tool's own output belongs. Routing
+/// `generate()` through the identical `target/`-reading branch duplicated that writer
+/// through the ownership-guarded path where the files can never carry a marker (swift
+/// bridge's own header/import conventions rule out `generated_header: true`), so the
+/// duplication was strictly worse than a no-op: it could only refuse or race, never help.
+///
+/// Ownership bookkeeping for the trio is handled separately, by
+/// [`PostBuildStep::owned_paths`] (`core::backend`), not by this function returning `None`
+/// or `Some`: the orphan sweep in `bin_cli::core_commands` needs these three paths claimed
+/// on every run `MaterializeSwiftBridge` is configured to touch them, independent of
+/// whether this call found anything new to write this time. ~keep
 pub(crate) fn emit_swift_bridge_files(
     crate_name: &str,
     binding_crate_name: &str,
     package_root: &std::path::Path,
+    consult_build_output: bool,
 ) -> anyhow::Result<Option<Vec<GeneratedFile>>> {
-    let out_dir = match find_swift_bridge_out_dir(binding_crate_name) {
+    let out_dir = consult_build_output
+        .then(|| find_swift_bridge_out_dir(binding_crate_name))
+        .flatten();
+    let out_dir = match out_dir {
         Some(d) => d,
         None => {
             let sources_rust_bridge_c = package_root.join("Sources").join("RustBridgeC");
             let header_path = sources_rust_bridge_c.join("RustBridgeC.h");
 
+            // A populated header means a prior build already materialized the real trio,
+            // and `MaterializeSwiftBridge` -- not this call -- is what keeps it current from
+            // here on (see that step's `owned_paths`, which is what stops the orphan sweep
+            // from reading this `None` as "alef no longer generates this" and deleting a
+            // file nothing here regenerated -- the alef #B incident). Re-deriving content
+            // here instead would have to round-trip through `normalize_content`, which the
+            // unguarded `MaterializeSwiftBridge` write never applies to what lands on disk;
+            // the two would disagree on whitespace and the ownership guard would refuse the
+            // "fix" as foreign, which is worse than doing nothing. ~keep
             if let Ok(existing) = std::fs::read_to_string(&header_path)
                 && existing.contains("__swift_bridge__$")
             {
@@ -67,7 +109,8 @@ pub(crate) fn emit_swift_bridge_files(
                  #define RUST_BRIDGE_C_H\n\
                  \n\
                  // Placeholder header for the RustBridgeC SwiftPM target.\n\
-                 // Run `cargo build -p {binding_crate_name}` and re-run `alef generate` to populate.\n\
+                 // `alef build` (or `alef generate`, which builds this crate as a post-build\n\
+                 // step) populates this header automatically once `{binding_crate_name}` builds.\n\
                  // The typedefs below are the minimum required for SwiftBridgeCore.swift\n\
                  // to compile before the full cargo build has been run.\n\
                  \n\
@@ -616,5 +659,65 @@ fn is_extension_param_bridgeable(ty: &TypeRef, api: &ApiSurface) -> bool {
         }
         TypeRef::Optional(inner) | TypeRef::Vec(inner) => is_extension_param_bridgeable(inner, api),
         TypeRef::Map(..) | TypeRef::Char | TypeRef::Json => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emit_swift_bridge_files;
+
+    /// The alef #A regression, isolated to this function: `alef generate` must call this
+    /// with `consult_build_output: false`, which skips `find_swift_bridge_out_dir` (and
+    /// therefore `target/`) entirely -- so two calls against the same starting disk state
+    /// return the same thing, independent of whatever this same command's own post-build
+    /// step may have populated under `target/` between them. Two calls back-to-back stand
+    /// in for two consecutive `alef generate` runs over an unchanged tree. ~keep
+    #[test]
+    fn placeholder_header_is_emitted_identically_across_two_consecutive_calls() {
+        let package_root = tempfile::tempdir().expect("temp package root");
+
+        let first = emit_swift_bridge_files("sample_lib", "sample-lib-swift", package_root.path(), false)
+            .expect("first call")
+            .expect("placeholder header expected when nothing exists yet");
+        let second = emit_swift_bridge_files("sample_lib", "sample-lib-swift", package_root.path(), false)
+            .expect("second call")
+            .expect("placeholder header expected when nothing exists yet");
+
+        assert_eq!(first.len(), 1, "only the placeholder header, not the real trio");
+        assert_eq!(second.len(), 1);
+        assert_eq!(first[0].path, second[0].path);
+        assert_eq!(first[0].content, second[0].content);
+        assert!(
+            !first[0].content.contains("__swift_bridge__$"),
+            "a placeholder must never claim swift-bridge's real declarations"
+        );
+    }
+
+    /// Companion to the placeholder case: once a prior build has populated the header,
+    /// `consult_build_output: false` must keep answering "nothing new to write" on every
+    /// later call, not just the first -- see `emit_swift_bridge_files`'s doc for why
+    /// re-deriving content here (rather than leaving it to `MaterializeSwiftBridge`) would
+    /// disagree with `normalize_content` and get refused as foreign. ~keep
+    #[test]
+    fn populated_header_yields_nothing_to_write_across_two_consecutive_calls() {
+        let package_root = tempfile::tempdir().expect("temp package root");
+        let header_dir = package_root.path().join("Sources").join("RustBridgeC");
+        std::fs::create_dir_all(&header_dir).expect("create RustBridgeC dir");
+        std::fs::write(
+            header_dir.join("RustBridgeC.h"),
+            "#ifndef RUST_BRIDGE_C_H\n#define RUST_BRIDGE_C_H\nvoid __swift_bridge__$example(void);\n#endif\n",
+        )
+        .expect("seed a populated header");
+
+        let first =
+            emit_swift_bridge_files("sample_lib", "sample-lib-swift", package_root.path(), false).expect("first call");
+        let second =
+            emit_swift_bridge_files("sample_lib", "sample-lib-swift", package_root.path(), false).expect("second call");
+
+        assert!(
+            first.is_none(),
+            "a populated header has nothing new for this path to write"
+        );
+        assert!(second.is_none(), "must stay stable, not just true on the first call");
     }
 }

@@ -900,6 +900,7 @@ pub fn run_post_build(
                     "",
                     binding_crate_name,
                     &package_root,
+                    true,
                 )
                 .with_context(|| format!("failed to re-materialize swift-bridge files for '{binding_crate_name}'"))?;
                 if let Some(files) = materialized {

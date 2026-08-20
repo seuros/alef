@@ -121,10 +121,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
                     std::collections::HashSet::new();
 
-                let mut generated_paths = std::collections::HashSet::new();
+                // The grand total this loop reports (`grand_total_generated`) counts actual
+                // writes only, matching every per-phase "Generated N ... files" line below --
+                // it must never be the size of a candidate set the generator merely computed in
+                // memory. A file that was cache-skipped, refused by the ownership guard, or
+                // matched what was already on disk was not generated this run in any sense a
+                // reader of that line would expect, so it must not inflate the count. ~keep
+                let mut written_count: usize = 0;
                 let mut any_written = false;
                 for (lang, lang_files) in &files {
-                    generated_paths.extend(lang_files.iter().map(|file| base_dir.join(&file.path)));
                     let lang_str = lang.to_string();
                     for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
                         current_gen_paths.insert(base_dir.join(&file.path));
@@ -153,6 +158,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let single = vec![(*lang, lang_files.clone())];
                     let report = pipeline::write_files_report(&single, &base_dir)?;
                     refusals.absorb_refusals(&report);
+                    written_count += report.changed_count();
                     if report.changed_count() > 0 {
                         any_written = true;
                         changed_languages.insert(*lang);
@@ -164,12 +170,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
-                        generated_paths.extend(
-                            svc_files
-                                .iter()
-                                .flat_map(|(_, generated)| generated.iter())
-                                .map(|file| base_dir.join(&file.path)),
-                        );
                         for (_, files) in &svc_files {
                             for file in files.iter().filter(|file| file.carries_alef_marker()) {
                                 current_gen_paths.insert(base_dir.join(&file.path));
@@ -190,6 +190,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
                         refusals.absorb_refusals(&report);
                         let svc_count = report.changed_count();
+                        written_count += svc_count;
                         tracing::info!("Generated {svc_count} service API files");
                         if svc_count > 0 {
                             any_written = true;
@@ -209,12 +210,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if resolved_cfg.generate.public_api {
                     let public_api_files = pipeline::generate_public_api(&api, resolved_cfg, &languages, config_path)?;
                     if !public_api_files.is_empty() {
-                        generated_paths.extend(
-                            public_api_files
-                                .iter()
-                                .flat_map(|(_, generated)| generated.iter())
-                                .map(|file| base_dir.join(&file.path)),
-                        );
                         let api_hashes: Vec<(String, String)> = public_api_files
                             .iter()
                             .flat_map(|(_, fs)| {
@@ -254,6 +249,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
                             refusals.absorb_refusals(&report);
                             let api_count = report.changed_count();
+                            written_count += api_count;
                             tracing::info!("Generated {api_count} public API files");
                             any_written |= api_count > 0;
                             let _ = cache::write_generation_hashes(&api_cache_key, &api_hashes);
@@ -274,12 +270,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let stub_files = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
                 if !stub_files.is_empty() {
-                    generated_paths.extend(
-                        stub_files
-                            .iter()
-                            .flat_map(|(_, generated)| generated.iter())
-                            .map(|file| base_dir.join(&file.path)),
-                    );
                     let stub_hashes: Vec<(String, String)> = stub_files
                         .iter()
                         .flat_map(|(_, fs)| {
@@ -319,6 +309,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let report = pipeline::write_files_report(&stub_files, &base_dir)?;
                         refusals.absorb_refusals(&report);
                         let stub_count = report.changed_count();
+                        written_count += stub_count;
                         tracing::info!("Generated {stub_count} type stub files");
                         any_written |= stub_count > 0;
                         let _ = cache::write_generation_hashes(&stubs_cache_key, &stub_hashes);
@@ -365,6 +356,38 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 tracing::info!("Running post-build processing...");
                 complete_generated_artifacts(&languages, resolved_cfg, &base_dir)?;
 
+                // Fold in every path a post-build step writes unguarded (see
+                // `PostBuildStep::owned_paths`'s doc for why this can't be left to the
+                // generator's own `GeneratedFile` output). Claimed on every run the step is
+                // configured for, independent of whether the generator found fresh content
+                // to emit for the same path this time -- that independence is the fix for the
+                // alef #B incident: without it, a run where the generator legitimately emits
+                // nothing for a path a post-build step still writes reads as "no longer
+                // generated" to the orphan sweep below. Also into `current_gen_paths` so a
+                // marker-carrying path a post-build step just wrote (`RustBridgeC.h`'s
+                // self-marked header) gets its `alef:hash:` line re-derived from what is
+                // actually on disk now, not left holding whatever `finalize_hashes` last saw. ~keep
+                for &language in &languages {
+                    let Some(backend) = crate::cli::registry::try_get_backend(language) else {
+                        continue;
+                    };
+                    let Some(build_config) = backend.build_config_with_config(resolved_cfg) else {
+                        continue;
+                    };
+                    let owned: Vec<_> = build_config
+                        .post_build
+                        .iter()
+                        .flat_map(|step| step.owned_paths(&base_dir))
+                        .collect();
+                    if owned.is_empty() {
+                        continue;
+                    }
+                    generation_owned_paths
+                        .entry(language)
+                        .or_default()
+                        .extend(owned.iter().cloned());
+                    current_gen_paths.extend(owned);
+                }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let previous_generation_owned: std::collections::HashMap<_, _> = languages
@@ -420,7 +443,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     tracing::info!("[e2e] block detected — run 'alef e2e generate' to regenerate e2e test suites");
                 }
 
-                grand_total_generated += generated_paths.len();
+                grand_total_generated += written_count;
             }
             pipeline::report_refused_writes(&refusals);
             tracing::info!("Generated {grand_total_generated} files");

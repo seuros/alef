@@ -137,6 +137,55 @@ pub enum PostBuildStep {
     },
 }
 
+impl PostBuildStep {
+    /// Paths this step writes directly to disk, outside the ownership-guarded writer
+    /// (`cli::pipeline::generate::write::write_files_report`).
+    ///
+    /// A step earns an entry here only when it writes content a build tool -- not alef's
+    /// own generator -- produced, so the file can never carry an alef marker and the
+    /// ownership guard can never durably prove alef owns it (`MaterializeSwiftBridge`'s
+    /// case: swift-bridge's own header/import conventions rule out `generated_header:
+    /// true`, and the file changes on every build regardless of source input). Most
+    /// variants return nothing: their output either flows through the normal
+    /// `GeneratedFile`/`write_files_report` path already, or (like `StageDartNatives`
+    /// copying prebuilt native libraries) is not something `alef generate`'s own run
+    /// tracks as its output at all.
+    ///
+    /// Callers fold these into the same run's `generation_owned_paths` the generator's own
+    /// `GeneratedFile`s populate, so the orphan sweep (`bin_cli::core_commands`) sees these
+    /// paths as claimed on every run this step is configured to touch -- not only the runs
+    /// where the corresponding generator call happened to find fresh content to emit. Without
+    /// this, a path this step writes unguarded but the generator omits (because it was
+    /// already up to date, or because build output wasn't available to read back without
+    /// disagreeing with `normalize_content`) reads as "alef no longer generates this" on the
+    /// very next run and gets deleted -- the alef #B incident
+    /// (`packages/swift/Sources/RustBridgeC/RustBridgeC.h` removed from an otherwise
+    /// unchanged tree). ~keep
+    pub fn owned_paths(&self, base_dir: &std::path::Path) -> Vec<PathBuf> {
+        match self {
+            PostBuildStep::MaterializeSwiftBridge {
+                binding_crate_name,
+                package_root,
+            } => {
+                let package_root = base_dir.join(package_root);
+                let sources_rust_bridge = package_root.join("Sources").join("RustBridge");
+                let sources_rust_bridge_c = package_root.join("Sources").join("RustBridgeC");
+                vec![
+                    sources_rust_bridge_c.join("RustBridgeC.h"),
+                    sources_rust_bridge.join("SwiftBridgeCore.swift"),
+                    sources_rust_bridge.join(format!("{binding_crate_name}.swift")),
+                ]
+            }
+            PostBuildStep::PatchFile { .. }
+            | PostBuildStep::RunCommand { .. }
+            | PostBuildStep::PostProcessFile { .. }
+            | PostBuildStep::StageDartNatives { .. }
+            | PostBuildStep::CarryFrbCfgGates { .. }
+            | PostBuildStep::RewriteWasmPackageName { .. } => Vec::new(),
+        }
+    }
+}
+
 /// A generated file to write to disk.
 #[derive(Debug, Clone)]
 pub struct GeneratedFile {
@@ -352,5 +401,70 @@ mod generated_file_tests {
             !file("class X {}\n", false).carries_alef_marker(),
             "scaffold-once files alef does not own must stay unclaimed"
         );
+    }
+}
+
+#[cfg(test)]
+mod post_build_step_owned_paths_tests {
+    use super::PostBuildStep;
+    use std::path::{Path, PathBuf};
+
+    /// The regression this guards: the orphan sweep in `bin_cli::core_commands` claims a
+    /// path as generation-owned via `generation_owned_paths`, built from *this run's*
+    /// `owned_paths()` union across every configured post-build step. If
+    /// `MaterializeSwiftBridge` ever stopped naming all three paths it actually writes,
+    /// the missing one would read as "alef no longer generates this" on the very next run
+    /// and get deleted -- the alef #B incident this whole mechanism exists to prevent. ~keep
+    #[test]
+    fn materialize_swift_bridge_claims_all_three_files_it_writes_unguarded() {
+        let step = PostBuildStep::MaterializeSwiftBridge {
+            binding_crate_name: "sample-lib-swift".to_string(),
+            package_root: "packages/swift".to_string(),
+        };
+        let base_dir = Path::new("/repo");
+        let mut owned = step.owned_paths(base_dir);
+        owned.sort();
+
+        let mut expected = vec![
+            PathBuf::from("/repo/packages/swift/Sources/RustBridgeC/RustBridgeC.h"),
+            PathBuf::from("/repo/packages/swift/Sources/RustBridge/SwiftBridgeCore.swift"),
+            PathBuf::from("/repo/packages/swift/Sources/RustBridge/sample-lib-swift.swift"),
+        ];
+        expected.sort();
+        assert_eq!(owned, expected);
+    }
+
+    #[test]
+    fn steps_that_flow_through_the_normal_write_path_claim_nothing() {
+        let base_dir = Path::new("/repo");
+        let steps = [
+            PostBuildStep::PatchFile {
+                path: "lib.rs",
+                find: "a",
+                replace: "b",
+            },
+            PostBuildStep::RunCommand {
+                cmd: "cargo",
+                args: vec!["build"],
+            },
+            PostBuildStep::StageDartNatives {
+                lib_stem: "sample_lib_dart".to_string(),
+            },
+            PostBuildStep::CarryFrbCfgGates {
+                source_path: PathBuf::from("lib.rs"),
+                target_path: PathBuf::from("frb_generated.rs"),
+            },
+            PostBuildStep::RewriteWasmPackageName {
+                package_json_path: PathBuf::from("packages/wasm/pkg/package.json"),
+                package_name: "@sample/lib".to_string(),
+            },
+        ];
+        for step in &steps {
+            assert!(
+                step.owned_paths(base_dir).is_empty(),
+                "{step:?} flows through the ownership-guarded writer already and must not \
+                 also claim paths here"
+            );
+        }
     }
 }
