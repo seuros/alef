@@ -334,6 +334,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `with_ir_enum_map`, anchored at the call's declared Rust return type) the gleam e2e
   generator uses, and skips the `equals` assertion instead of emitting code that cannot
   compile. Config still wins; the IR only adds.
+- **Zig backend: a method returning a real enum no longer emits an invalid `._handle` struct
+  literal.** `opaque_handles::returns::method_unwrap_return_expr`'s bare-`Named` return arm
+  treated every non-`struct_names` `Named` return as an opaque handle and produced
+  `MyEnum{ ._handle = raw }` — not valid Zig for an `enum { ... }` declaration, which has no
+  `._handle` field. A genuine enum return is now cast back from its raw discriminant with
+  `@as(EnumName, @enumFromInt(raw))`, and skips the zero-sentinel null check the handle arm
+  uses (a real enum variant can legitimately serialize to `0`).
 
 ## [0.62.5] - 2026-08-20
 

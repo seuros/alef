@@ -95,6 +95,7 @@ pub(super) fn emit_opaque_method(
         method,
         prefix,
         struct_names,
+        enum_names,
         effective_params,
         returns_bytes,
         &c_call,
@@ -215,6 +216,7 @@ fn emit_method_body(
     method: &MethodDef,
     prefix: &str,
     struct_names: &HashSet<String>,
+    enum_names: &HashSet<String>,
     params: &[ParamDef],
     returns_bytes: bool,
     c_call: &str,
@@ -222,9 +224,28 @@ fn emit_method_body(
     out: &mut String,
 ) {
     if let Some(err_ty) = zig_error_type {
-        emit_fallible_method_body(method, prefix, struct_names, params, returns_bytes, c_call, err_ty, out);
+        emit_fallible_method_body(
+            method,
+            prefix,
+            struct_names,
+            enum_names,
+            params,
+            returns_bytes,
+            c_call,
+            err_ty,
+            out,
+        );
     } else {
-        emit_infallible_method_body(method, prefix, struct_names, params, returns_bytes, c_call, out);
+        emit_infallible_method_body(
+            method,
+            prefix,
+            struct_names,
+            enum_names,
+            params,
+            returns_bytes,
+            c_call,
+            out,
+        );
     }
 }
 
@@ -233,6 +254,7 @@ fn emit_fallible_method_body(
     method: &MethodDef,
     prefix: &str,
     struct_names: &HashSet<String>,
+    enum_names: &HashSet<String>,
     params: &[ParamDef],
     returns_bytes: bool,
     c_call: &str,
@@ -279,7 +301,7 @@ fn emit_fallible_method_body(
             },
         ));
     } else if !matches!(method.return_type, TypeRef::Unit) {
-        let ret_expr = method_unwrap_return_expr("_result", &method.return_type, prefix, struct_names);
+        let ret_expr = method_unwrap_return_expr("_result", &method.return_type, prefix, struct_names, enum_names);
         out.push_str(&render(
             "opaque_method_return.jinja",
             minijinja::context! {
@@ -289,10 +311,12 @@ fn emit_fallible_method_body(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_infallible_method_body(
     method: &MethodDef,
     prefix: &str,
     struct_names: &HashSet<String>,
+    enum_names: &HashSet<String>,
     params: &[ParamDef],
     returns_bytes: bool,
     c_call: &str,
@@ -332,7 +356,7 @@ fn emit_infallible_method_body(
             },
         ));
         emit_consumed_receiver_invalidation(method, out);
-        let ret_expr = method_unwrap_return_expr("_result", &method.return_type, prefix, struct_names);
+        let ret_expr = method_unwrap_return_expr("_result", &method.return_type, prefix, struct_names, enum_names);
         out.push_str(&render(
             "opaque_method_return.jinja",
             minijinja::context! {
