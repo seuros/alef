@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The generated-output gate's clippy self-check now sabotages a file where the lint can
+  actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
+  source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`
+  at crate level, so the sabotage compiled clean and the lane reported success while proving
+  nothing about whether it examines the emitted Rust at all.
+
 - **The JNI shim templates emit `e.to_string()` instead of `format!("{e}")`.** The generated
   crates are checked with `cargo clippy -- -D warnings`, where that spelling is
   `clippy::useless_format` and therefore a hard error, so the emitted JNI crate could not build

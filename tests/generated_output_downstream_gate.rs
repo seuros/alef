@@ -695,6 +695,13 @@ fn widen_key_value_spacing(manifest: &str) -> String {
 /// ruby crate would leave the sabotage test failing for the honest reason that clippy
 /// never looks there, which reads as "the lane is broken" instead of "the lane does not
 /// cover that language". ~keep
+/// A source file the redundant-cast sabotage can actually be detected in.
+///
+/// Skips any file that allows `clippy::unnecessary_cast` at crate level. The emitted FFI crate's
+/// `lib.rs` -- the alphabetically first candidate, and so the one this used to return every time
+/// -- carries exactly that allow, so the sabotage compiled clean and the lane's self-check
+/// reported success while proving nothing. A lane that cannot fail is the thing this file exists
+/// to prevent, so an all-candidates-allow-it tree is a hard error rather than a skip. ~keep
 fn emitted_rust_source(tree: &EmittedTree) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = clippy_manifest_dirs(tree)
         .iter()
@@ -704,7 +711,31 @@ fn emitted_rust_source(tree: &EmittedTree) -> Option<PathBuf> {
         .filter(|path| path.components().any(|component| component.as_os_str() == "src"))
         .collect();
     candidates.sort();
-    candidates.into_iter().next()
+
+    let allows_the_lint = |path: &PathBuf| {
+        std::fs::read_to_string(path).is_ok_and(|body| {
+            body.lines()
+                .filter(|line| line.starts_with("#!["))
+                .any(|line| line.contains("clippy::unnecessary_cast"))
+        })
+    };
+    let lintable: Vec<PathBuf> = candidates
+        .iter()
+        .filter(|path| !allows_the_lint(path))
+        .cloned()
+        .collect();
+    assert!(
+        !lintable.is_empty() || candidates.is_empty(),
+        "every emitted Rust source allows `clippy::unnecessary_cast` at crate level, so the \
+         redundant-cast sabotage cannot be detected anywhere and the clippy lane's self-check \
+         would pass without examining anything. Candidates:\n{}",
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    lintable.into_iter().next()
 }
 
 // ---------------------------------------------------------------------------
