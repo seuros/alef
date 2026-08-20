@@ -10,7 +10,7 @@ fn plugin_section<'a>(pom_content: &'a str, artifact_id: &str) -> &'a str {
 }
 
 /// Extracts the first `<excludes>...</excludes>` block (inclusive) out of `section`.
-fn excludes_block<'a>(section: &'a str) -> &'a str {
+fn excludes_block(section: &str) -> &str {
     let start = section
         .find("<excludes>")
         .unwrap_or_else(|| panic!("expected an <excludes> block in:\n{section}"));
