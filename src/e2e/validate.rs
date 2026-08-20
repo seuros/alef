@@ -828,6 +828,31 @@ mod tests {
         assert!(!errors.iter().any(|e| e.message.contains("unknown call")));
     }
 
+    // `"_default"` is not a recognized sentinel for "use [e2e.call]" — the schema says the
+    // default is selected by OMITTING `call`, not by naming it. A fixture author who writes
+    // `"call": "_default"` gets exactly the same unknown-call error as any other typo, but
+    // this test pins the message to name the string, so the failure reads as "you wrote the
+    // sentinel wrong" instead of surfacing only through a whole-pipeline gate's generic
+    // "unknown call" diagnostic. ~keep
+    #[test]
+    fn fixture_call_named_default_sentinel_is_still_flagged_as_unknown() {
+        let fixtures = vec![make_fixture(
+            "test_default_sentinel",
+            "test.json",
+            None,
+            Some("_default"),
+        )];
+        let config = make_e2e_config(vec![]);
+        let errors = validate_fixtures_semantic(&fixtures, &config, &["rust".to_string()]);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.severity == Severity::Error && e.message.contains("unknown call '_default'")),
+            "expected an unknown-call error naming '_default'; to use [e2e.call], omit `call` \
+             entirely rather than spelling out the sentinel name: {errors:?}"
+        );
+    }
+
     #[test]
     fn preserve_input_urls_requires_mock_url_argument() {
         let mut fixture = make_fixture("literal_url", "literal_url.json", None, None);

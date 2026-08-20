@@ -208,7 +208,6 @@ const FIXTURE_COMPLETE_JSON: &str = r#"{
   },
   "category": "smoke",
   "tags": ["smoke"],
-  "call": "_default",
   "input": {
     "prompt": "hello"
   },
