@@ -361,10 +361,64 @@ const SANITIZED_ENVIRONMENT_VARIABLES: &[&str] = &[
     "GOPATH",
 ];
 
+/// The variables that identify the machine itself on Windows, allowed through in addition to
+/// [`SANITIZED_ENVIRONMENT_VARIABLES`].
+///
+/// Sanitisation clears the child environment and re-adds an allowlist. That allowlist was
+/// Unix-shaped, and on Windows a toolchain that cannot see these does not degrade -- it fails
+/// with an error that names none of them. NuGet resolves its global packages folder through
+/// `USERPROFILE`, and without it every `dotnet build` dies in `NuGet.targets` with
+/// `Value cannot be null. (Parameter 'path1')`. rustc locates the MSVC linker by running
+/// `vswhere.exe` under `ProgramFiles(x86)`, and without it falls back to the first `link.exe`
+/// on `PATH` -- which on any box with Git for Windows is GNU coreutils' `link`, producing
+/// `link: extra operand` and advice to install the C++ build tools that are already installed.
+/// These are the same class of variable as `SYSTEMROOT` and `WINDIR`, which the list above
+/// already allows, and they carry no consumer-specific state. ~keep
+const WINDOWS_ENVIRONMENT_VARIABLES: &[&str] = &[
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ALLUSERSPROFILE",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "COMSPEC",
+    "SystemDrive",
+    "PUBLIC",
+    "USERNAME",
+    "NUMBER_OF_PROCESSORS",
+    "PROCESSOR_ARCHITECTURE",
+];
+
 fn sanitize_environment(command: &mut std::process::Command) {
+    apply_environment_allowlist(command, cfg!(windows), |key| std::env::var_os(key));
+}
+
+/// Replace `command`'s inherited environment with the allowlisted subset `lookup` can resolve,
+/// keeping any variable the caller set explicitly.
+///
+/// `include_windows_variables` and `lookup` are parameters rather than reads of the ambient
+/// platform and environment so the allowlist can be asserted on any host: a test that has to
+/// mutate the real process environment to check this would be racing every other test in the
+/// binary. ~keep
+fn apply_environment_allowlist(
+    command: &mut std::process::Command,
+    include_windows_variables: bool,
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) {
+    let windows_variables = include_windows_variables
+        .then_some(WINDOWS_ENVIRONMENT_VARIABLES)
+        .unwrap_or_default();
     let values: Vec<_> = SANITIZED_ENVIRONMENT_VARIABLES
         .iter()
-        .filter_map(|key| std::env::var_os(key).map(|value| (*key, value)))
+        .chain(windows_variables)
+        .filter_map(|key| lookup(key).map(|value| (*key, value)))
         .collect();
     let explicit_values = command
         .get_envs()
@@ -419,15 +473,96 @@ impl WaitTimeout for std::process::Child {
     }
 }
 
+#[cfg(test)]
+mod environment_tests {
+    use std::collections::HashMap;
+    use std::ffi::OsString;
+
+    /// Every allowlisted name mapped to a recognisable value, so a dropped variable shows up as a
+    /// missing key rather than as an empty string that could have come from anywhere.
+    fn fake_environment() -> HashMap<&'static str, OsString> {
+        super::SANITIZED_ENVIRONMENT_VARIABLES
+            .iter()
+            .chain(super::WINDOWS_ENVIRONMENT_VARIABLES)
+            .map(|key| (*key, OsString::from(format!("value-of-{key}"))))
+            .collect()
+    }
+
+    fn sanitized(include_windows_variables: bool) -> HashMap<String, String> {
+        let environment = fake_environment();
+        let mut command = std::process::Command::new("does-not-run");
+        command.env("EXPLICIT", "kept");
+        super::apply_environment_allowlist(&mut command, include_windows_variables, |key| {
+            environment.get(key).cloned()
+        });
+        command
+            .get_envs()
+            .filter_map(|(key, value)| {
+                value.map(|value| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn go_dependency_cache_paths_survive_sanitisation() {
+        let passed = sanitized(false);
+
+        assert_eq!(
+            passed.get("GOMODCACHE").map(String::as_str),
+            Some("value-of-GOMODCACHE")
+        );
+        assert_eq!(passed.get("GOPATH").map(String::as_str), Some("value-of-GOPATH"));
+    }
+
+    /// The two variables named here are the ones the Windows CI failures traced back to, and they
+    /// are asserted individually rather than as "the list is non-empty" because dropping either
+    /// one on its own is a whole language going dark: `USERPROFILE` for `dotnet`, and
+    /// `ProgramFiles(x86)` for rustc's MSVC linker discovery. ~keep
+    #[test]
+    fn windows_toolchain_variables_survive_sanitisation_on_windows_hosts() {
+        let passed = sanitized(true);
+
+        assert_eq!(
+            passed.get("USERPROFILE").map(String::as_str),
+            Some("value-of-USERPROFILE"),
+            "dotnet restore resolves its global packages folder through USERPROFILE"
+        );
+        assert_eq!(
+            passed.get("ProgramFiles(x86)").map(String::as_str),
+            Some("value-of-ProgramFiles(x86)"),
+            "rustc finds vswhere.exe, and so link.exe, under ProgramFiles(x86)"
+        );
+        for key in super::WINDOWS_ENVIRONMENT_VARIABLES {
+            assert!(passed.contains_key(*key), "{key} must survive sanitisation");
+        }
+    }
+
+    /// The Windows names must not widen what a Unix child inherits: `USERNAME` and `PUBLIC` do
+    /// exist on some Unix hosts, and sanitisation is an isolation boundary, not a convenience. ~keep
+    #[test]
+    fn windows_variables_are_withheld_from_non_windows_hosts() {
+        let passed = sanitized(false);
+
+        for key in super::WINDOWS_ENVIRONMENT_VARIABLES {
+            assert!(
+                !passed.contains_key(*key),
+                "{key} must not leak into a non-Windows child"
+            );
+        }
+    }
+
+    #[test]
+    fn explicitly_set_variables_outlive_the_environment_clear() {
+        let passed = sanitized(true);
+
+        assert_eq!(passed.get("EXPLICIT").map(String::as_str), Some("kept"));
+        assert_eq!(passed.get("NO_COLOR").map(String::as_str), Some("1"));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use std::time::{Duration, Instant};
-
-    #[test]
-    fn sanitized_environment_preserves_go_dependency_cache_paths() {
-        assert!(super::SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOMODCACHE"));
-        assert!(super::SANITIZED_ENVIRONMENT_VARIABLES.contains(&"GOPATH"));
-    }
 
     /// The backoff has to start far below the old fixed 50ms floor and still stop growing, so a
     /// short command returns almost immediately while a long compile is not polled a thousand

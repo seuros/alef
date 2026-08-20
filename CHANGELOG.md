@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snippet validation no longer strips the environment every Windows toolchain needs.** Each
+  validator subprocess has its environment cleared and rebuilt from an allowlist, and that
+  allowlist was Unix-shaped: it kept `SYSTEMROOT` and `WINDIR` but dropped `USERPROFILE`,
+  `ProgramFiles(x86)` and the rest of the variables that identify a Windows machine. Every
+  `dotnet build` then failed inside `NuGet.targets` with `Value cannot be null. (Parameter
+  'path1')` -- NuGet resolves its global packages folder through `USERPROFILE` -- and every Rust
+  snippet failed to link, because rustc locates the MSVC linker by running `vswhere.exe` under
+  `ProgramFiles(x86)` and without it fell back to whatever `link.exe` came first on `PATH`, which
+  on a box with Git for Windows is GNU coreutils' `link`. C# and Rust snippet validation were
+  broken on every Windows host, not just CI.
+
 - **The Windows test suite no longer fails on its own fixtures' path quoting.** Six tests built
   an `alef.toml` fixture by interpolating a `tempfile` directory into a TOML *basic* string. A
   Windows tempdir is `C:\Users\RUNNER~1\...`, where `\U` opens a unicode escape, so `toml`
