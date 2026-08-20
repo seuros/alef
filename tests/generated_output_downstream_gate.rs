@@ -222,83 +222,9 @@ fn clippy_lane_languages() -> Vec<&'static str> {
 // Fixture: a synthetic consumer, deliberately nobody's real crate
 // ---------------------------------------------------------------------------
 
-const FIXTURE_SOURCE: &str = r#"
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Segment {
-    pub index: u32,
-    pub text: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Report {
-    pub id: String,
-    pub total: u64,
-    pub segments: Vec<Segment>,
-}
-
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
-pub enum Mode {
-    Fast,
-    Thorough,
-}
-
-/// No public fields, so the extractor keeps this opaque and every backend has to emit a
-/// handle type for it. The handle is what the JNI emitter turns into a `jlong` round
-/// trip — the surface the redundant-cast regression lived on. ~keep
-pub struct Session {
-    token: String,
-}
-
-impl Session {
-    pub fn new(token: String) -> Self {
-        Self { token }
-    }
-
-    pub fn token(&self) -> String {
-        self.token.clone()
-    }
-
-    pub fn analyze(&self, input: String, mode: Mode) -> Result<Report, String> {
-        let _ = (input, mode);
-        Err("unimplemented".to_string())
-    }
-}
-
-pub fn summarize(input: String) -> Result<Report, String> {
-    let _ = input;
-    Err("unimplemented".to_string())
-}
-"#;
-
-// The fixture's own core crate derives serde, so it needs the dependency to compile. It went
-// unnoticed until the core crate became reachable from the emitted binding crates: before that
-// nothing ever built it, so an uncompilable fixture still passed every lane. ~keep
-const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n";
-
-// `java` and `elixir` scaffolders bail `alef generate` outright when repository/license/
-// authors are unset (`scaffold::languages::java`, `scaffold::languages::elixir`), and both
-// are gate languages, so this metadata is required for `alef generate` to succeed over the
-// fixture at all -- not merely to exercise a "configured" code path. ~keep
-const FIXTURE_ALEF_TOML: &str = r#"
-[workspace]
-alef_version = "__ALEF_VERSION__"
-languages = [__LANGUAGES__]
-
-[[crates]]
-name = "toolkit"
-sources = ["src/lib.rs"]
-version_from = "Cargo.toml"
-
-[crates.generate]
-public_api = true
-
-[crates.package_metadata]
-repository = "https://github.com/example/toolkit"
-license = "MIT"
-authors = ["Example Author <author@example.invalid>"]
-"#;
+#[path = "generated_output_downstream_gate/fixture.rs"]
+mod fixture;
+use fixture::{FIXTURE_ALEF_TOML, FIXTURE_CARGO_TOML, FIXTURE_SOURCE};
 
 // ---------------------------------------------------------------------------
 // Tooling: present and executable, or the gate fails
