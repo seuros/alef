@@ -5,6 +5,8 @@
 
 mod assertions;
 mod config;
+#[cfg(test)]
+mod enum_field_classification_tests;
 mod helpers;
 mod http;
 mod json;

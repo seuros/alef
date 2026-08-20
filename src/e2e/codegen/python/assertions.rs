@@ -98,6 +98,16 @@ pub(super) fn render_assertion(
         if fields_enum.contains(resolved) {
             return true;
         }
+        // Neither the explicit config nor the per-call override named this field. Fall back
+        // to the IR-derived classification (`with_ir_enum_map`, anchored at the call's
+        // declared Rust return type via `resolve_declared_result_type`) so a consumer that
+        // never configured `fields_enum` still gets a correct classification instead of the
+        // dynamically-typed default of "compare as a plain string" — which asserts the wire
+        // value against the Python enum's `repr`/member name instead of coercing it first.
+        // This is purely additive: it only turns a `false` into a `true`. ~keep
+        if field_resolver.is_enum(f) {
+            return true;
+        }
         field_resolver.accessor(f, "python", result_var).contains("[0]")
     });
 

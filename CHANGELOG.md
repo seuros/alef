@@ -332,6 +332,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameter is now underscore-prefixed when there are no typed error variants to
   downcast against.
 
+- **Python e2e assertions now classify enum-typed result fields from the IR, not only from
+  hand-maintained config.** `render_assertion` read enum-ness solely from the effective
+  `fields_enum` config (plus a per-call `assert_enum_fields` override and an accessor-shape
+  heuristic), so a consumer that never declared `fields_enum` got a bare
+  `assert result.kind == "key_value"` for a genuine `DataNodeKind` enum field. Python does not
+  fail to compile on that — it silently compares the PyO3 enum object against a plain string,
+  which is `False` for a real enum even when the wire value matches, so the test asserts the
+  wrong thing instead of refusing to build. Python now also consults the same IR-derived
+  classification the rust/csharp/gleam/swift/dart e2e generators use, anchored at the call's
+  declared Rust return type. An explicit config entry still wins.
 - **Kotlin e2e assertions now classify enum-typed result fields from the IR, not only from
   hand-maintained config.** `render_assertion` read enum-ness solely from the effective
   `fields_enum` config (itself merged with a per-call `type_enum_fields` auto-detect that
