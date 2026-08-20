@@ -2041,3 +2041,36 @@ fn trait_bridge_register_shim_panics_without_trait_def() {
     let config = trait_bridge_config(&[]);
     JniBackend.generate_bindings(&api, &config).unwrap();
 }
+
+/// No emitted Rust may wrap a `Display` value in `format!("{e}")`.
+///
+/// The generated crates are checked with `cargo clippy -- -D warnings`, where that spelling is
+/// `clippy::useless_format` and therefore a hard error — the JNI crate failed to compile at all
+/// until every template was switched to `e.to_string()`. Scanning the templates rather than one
+/// rendered fixture is deliberate: the defect is per-template, and only some templates are
+/// reachable from any single API surface, so a render-based check would pass while examining
+/// almost none of them. ~keep
+#[test]
+fn no_backend_template_emits_a_useless_format() {
+    let mut offenders = Vec::new();
+    for entry in walkdir::WalkDir::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "jinja"))
+    {
+        let Ok(body) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        for (index, line) in body.lines().enumerate() {
+            if line.contains(r#"format!("{e}")"#) || line.contains(r#"format!("{err}")"#) {
+                offenders.push(format!("{}:{}", entry.path().display(), index + 1));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "templates must emit `.to_string()`, not `format!(\"{{e}}\")` -- clippy rejects it as \
+         useless_format and the emitted crate then fails to build:\n{}",
+        offenders.join("\n")
+    );
+}

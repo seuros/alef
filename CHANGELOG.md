@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The JNI shim templates emit `e.to_string()` instead of `format!("{e}")`.** The generated
+  crates are checked with `cargo clippy -- -D warnings`, where that spelling is
+  `clippy::useless_format` and therefore a hard error, so the emitted JNI crate could not build
+  at all. A new test scans every `.jinja` under `src/` for the pattern.
+
 - **The JNI binding crate's `Cargo.toml` no longer claims workspace inheritance that may not
   exist.** It hard-coded `version.workspace = true` / `edition.workspace = true` /
   `license.workspace = true`; in a root-flat emitted tree there is no workspace root, so cargo

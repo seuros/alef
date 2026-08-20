@@ -151,12 +151,12 @@ pub unsafe extern "system" fn Java_dev_sample_1crate_demo_DemoBridge_nativeCreat
     let Some(__jni_result) = run_or_throw(env, |env| {
     let api_key = match jstring_to_string(env, api_key) {
         Ok(s) => s,
-        Err(e) => { throw_jni_error(env, &format!("{e}")); return 0; }
+        Err(e) => { throw_jni_error(env, &e.to_string()); return 0; }
     };
     let result = runtime().block_on(core_crate::create_client(api_key));
     match result {
         Err(e) => {
-            throw_jni_error(env, &format!("{e}"));
+            throw_jni_error(env, &e.to_string());
             0
         }
         Ok(v) => {
@@ -300,16 +300,16 @@ pub unsafe extern "system" fn Java_dev_sample_1crate_demo_DemoBridge_nativeDemoC
     let client: &core_crate::DemoClient = unsafe { &*(client_handle as *const core_crate::DemoClient) };
     let req_str = match jstring_to_string(env, request_json) {
         Ok(s) => s,
-        Err(e) => { throw_jni_error(env, &format!("{e}")); return 0; }
+        Err(e) => { throw_jni_error(env, &e.to_string()); return 0; }
     };
     let request: core_crate::StreamRequest = match serde_json::from_str(&req_str) {
         Ok(v) => v,
-        Err(e) => { throw_jni_error(env, &format!("{e}")); return 0; }
+        Err(e) => { throw_jni_error(env, &e.to_string()); return 0; }
     };
     let stream_result = runtime().block_on(async { client.stream_data(request).await });
     let stream = match stream_result {
         Ok(s) => s,
-        Err(e) => { throw_jni_error(env, &format!("{e}")); return 0; }
+        Err(e) => { throw_jni_error(env, &e.to_string()); return 0; }
     };
     // Map the concrete error type to Box<dyn Error> so the handle type is
     // independent of the stream's error associated type.
@@ -350,7 +350,7 @@ pub unsafe extern "system" fn Java_dev_sample_1crate_demo_DemoBridge_nativeDemoC
     match next {
         None => std::ptr::null_mut(),
         Some(Err(e)) => {
-            throw_jni_error(env, &format!("{e}"));
+            throw_jni_error(env, &e.to_string());
             std::ptr::null_mut()
         }
         Some(Ok(chunk)) => {
