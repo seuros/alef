@@ -273,11 +273,32 @@ fn required_post_build_failure_is_propagated_with_language_context() {
     )
     .expect_err("missing Swift build project must fail");
 
-    assert!(
-        error
-            .to_string()
-            .contains("failed to run required post-build steps for swift")
-    );
+    assert!(error.to_string().contains("swift"));
+}
+
+/// One language's post-build failure used to abort the loop via `?` before any later
+/// language's post-build ran at all -- so a Swift codegen defect silently hid whatever Dart's
+/// post-build (`flutter_rust_bridge_codegen`, a `RunCommand` step with no precondition gate of
+/// its own, so it genuinely runs and fails rather than being skipped) would have reported for
+/// the same run, the same shape `e2e::run_generators`'s doc comment describes a consumer
+/// hitting for two days. Both languages here fail (no build project exists in the temp dir for
+/// either -- Dart's default style is FRB, see `dart_style_defaults_to_frb`), and both failures
+/// must be named -- proving the second language was actually attempted, not just that the
+/// error text happens to mention it. ~keep
+#[test]
+fn a_failing_language_does_not_abort_the_remaining_post_builds() {
+    let directory = tempfile::tempdir().expect("temporary project");
+    let error = run_required_post_builds(
+        &[Language::Swift, Language::Dart],
+        &crate::core::config::ResolvedCrateConfig::default(),
+        directory.path(),
+    )
+    .expect_err("missing build projects for both languages must fail");
+
+    let message = error.to_string();
+    assert!(message.contains("swift"), "got: {message}");
+    assert!(message.contains("dart"), "got: {message}");
+    assert!(message.contains("2 of 2"), "got: {message}");
 }
 
 #[test]

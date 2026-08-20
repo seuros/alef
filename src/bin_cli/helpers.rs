@@ -1,10 +1,24 @@
 use anyhow::{Context, Result};
 
+/// Run every language's required post-build step, isolating one language's failure from
+/// every other language's.
+///
+/// ~keep This used to propagate the first failure with `?` immediately, which made one
+/// language's post-build break abort every later-listed language's post-build too -- even
+/// though each is an independent `cargo build` (or equivalent) with no dependency on the
+/// others having succeeded. `e2e::run_generators` hit the identical shape first (see its own
+/// doc comment: a consumer's C backend `bail!` silently starved every later e2e backend and
+/// the snippet stage for two days) and was fixed to attempt every backend regardless of
+/// earlier failures, reporting all of them once every backend that could run has. This mirrors
+/// that fix for `alef generate`'s post-build phase: a Swift codegen defect that fails `cargo
+/// build` must not also hide whatever Kotlin/Android, Wasm, or Dart's post-build would have
+/// reported for the same run.
 fn run_required_post_builds(
     languages: &[crate::core::config::Language],
     config: &crate::core::config::ResolvedCrateConfig,
     base_dir: &std::path::Path,
 ) -> Result<()> {
+    let mut failures: Vec<String> = Vec::new();
     for &language in languages {
         let Some(backend) = crate::cli::registry::try_get_backend(language) else {
             continue;
@@ -16,11 +30,23 @@ fn run_required_post_builds(
             continue;
         }
         tracing::info!("  [{language}] running post-build...");
-        crate::cli::pipeline::run_post_build(language, &build_config, config, base_dir)
-            .with_context(|| format!("failed to run required post-build steps for {language}"))?;
-        tracing::info!("  [{language}] post-build processing complete");
+        match crate::cli::pipeline::run_post_build(language, &build_config, config, base_dir) {
+            Ok(()) => tracing::info!("  [{language}] post-build processing complete"),
+            Err(error) => {
+                tracing::warn!("[{language}] post-build failed, continuing with remaining languages: {error:#}");
+                failures.push(format!("[{language}] {error:#}"));
+            }
+        }
     }
-    Ok(())
+    if failures.is_empty() {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "post-build failed for {} of {} language(s): {}",
+        failures.len(),
+        languages.len(),
+        failures.join("; ")
+    );
 }
 
 /// Complete every generated artifact that depends on a backend build and then

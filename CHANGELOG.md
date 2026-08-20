@@ -141,6 +141,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fun toWire(): String`, built from the same `wire_variant_value` mapping the
   `@JsonProperty` annotations commit to.
 
+- **`alef generate` no longer lets one language's post-build failure hide every later
+  language's post-build result.** `run_required_post_builds` propagated the first failure with
+  `?` immediately, aborting the loop before any later-listed language's post-build (e.g.
+  Kotlin/Android's Gradle build, Dart's `flutter_rust_bridge_codegen`) ran at all -- even
+  though each is an independent step with no dependency on the others having succeeded. This
+  mirrors the `e2e::run_generators` fix for the identical shape (see its doc comment: a
+  consumer's C backend `bail!` silently starved every later e2e backend for two days). Every
+  language's post-build is now attempted regardless of an earlier one's failure, with every
+  failure named once every backend that could run has.
+
 - **`alef e2e generate`'s inert-example summary now names which language and fixture were
   refused, not just a count.** The end-of-run line ("N generated example(s) across M
   language(s) had no runnable expectation... X that rendered nothing at all") gave an operator
