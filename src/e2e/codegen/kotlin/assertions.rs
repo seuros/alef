@@ -780,9 +780,8 @@ pub(super) fn render_assertion(
                 );
             }
         }
-        "not_error" => {
-            // Already handled by the call succeeding without exception.
-        }
+        // See `not_error::render_not_error` for why this is not a no-op.
+        "not_error" => super::not_error::render_not_error(out, result_var, is_streaming),
         "error" => {
             // Handled at the test method level.
         }

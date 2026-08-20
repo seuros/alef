@@ -19,6 +19,7 @@ mod args;
 mod assertions;
 mod discriminated;
 mod http;
+mod not_error;
 mod project;
 pub(crate) mod snippet;
 mod stubs;

@@ -466,6 +466,7 @@ pub(super) fn render_test_file_inner(
     let _ = writeln!(out, "import kotlin.test.assertTrue");
     let _ = writeln!(out, "import kotlin.test.assertFalse");
     let _ = writeln!(out, "import kotlin.test.assertFailsWith");
+    let _ = writeln!(out, "import kotlin.test.assertNotNull");
     if has_client_factory_fixtures || kotlin_android_style {
         let _ = writeln!(out, "import kotlinx.coroutines.runBlocking");
     }

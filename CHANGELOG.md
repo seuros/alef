@@ -168,6 +168,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "wait for a release" instead of "install the toolchain". The prefix is now reason-agnostic
   and lets each entry's own `reason` field say why.
 
+- **Kotlin's `not_error` assertion renders a real, visible check instead of a vacuous body.**
+  Every sibling backend (java, csharp, typescript, swift, python, elixir) already carried this
+  fix; Kotlin still rendered nothing on the theory that the call succeeding without throwing
+  already proved it, so a fixture whose only assertion was `not_error` compiled and passed
+  while asserting nothing at runtime. Surfaced by the `alef e2e generate` inert-example warning
+  naming 9 such fixtures in a real consumer (`liter-llm`) once that warning started naming
+  refusals instead of only counting them. Non-streaming fixtures now render
+  `assertNotNull(<result>, "expected non-null result")`; streaming fixtures assert on the
+  drained `chunks` list instead, matching every other streaming assertion in this backend.
+  `assertNotNull` rather than `assertTrue(x != null, ...)` because Kotlin flags an explicit
+  `!= null` comparison against a statically non-nullable type as "condition is always true".
+  The rendering moved to a new `kotlin/not_error.rs` module rather than growing
+  `kotlin/assertions.rs`, which is already over this repo's 1,000-line file cap.
+
 - **A `result_fields` entry that contradicts the IR's `binding_excluded` set now warns at most
   once per worker thread per run, not once per resolver build.** `FieldResolver::warn_on_result_fields_contradicting_ir`
   fires from `with_ir_fields`, which every backend's assertion codegen calls once per (fixture,
