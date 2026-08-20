@@ -687,11 +687,11 @@ name = "html-to-markdown-rs"
 sources = ["src/lib.rs"]
 
 [crates.dart]
-lib_name = "h2m"
+lib_name = "widget"
 "#,
         );
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("H2mBridge", "dart");
+        let e2e_config = make_e2e_config("WidgetBridge", "dart");
 
         let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["dart".to_string()]);
 

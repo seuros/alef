@@ -35,10 +35,10 @@ struct ExcludedFixtureEntry {
 /// *binding* surface with via `ApiSurface::with_cfg_filtered_deep`. Before this check, the
 /// e2e generator had no idea that filter existed: it emitted a call for every fixture whose
 /// declared function name resolved in the *unfiltered* IR, so a fixture routed to
-/// `manifest_languages` (gated on the `download` feature, which
+/// `manifest_languages` (gated on a `download` feature that
 /// `[crates.kotlin_android].features = ["serde"]` does not enable) produced a Kotlin test
-/// calling `TreeSitterLanguagePack.manifestLanguages()` — a symbol the binding generator
-/// correctly never emitted. Free functions only: the `download` family this was found
+/// calling `SampleFacade.manifestLanguages()` — a symbol the binding generator
+/// correctly never emitted. Free functions only: the gated family this was found
 /// against has none of its members as methods, and a method's cfg would need agreement
 /// across every same-named method the way `CallIr::signature` requires for its own checks,
 /// which is out of scope for this fix.
