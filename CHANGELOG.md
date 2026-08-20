@@ -141,6 +141,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fun toWire(): String`, built from the same `wire_variant_value` mapping the
   `@JsonProperty` annotations commit to.
 
+- **The Ruby `cargo sort` residual formatting step now targets the directory the scaffold
+  actually creates.** It derived the extension directory from the configured (or
+  crate-name-derived) `gem_name`, but `scaffold::languages::ruby` always names it
+  `ext/{core_crate_dir}_rb/native`, independent of any `gem_name` override -- those two
+  namespaces can legitimately diverge (a gem renamed for RubyGems without renaming the crate).
+  A configured `gem_name` silently pointed the residual step at a directory that was never
+  created, failing with "No file found at" against a real consumer. Both now go through a new
+  `ResolvedCrateConfig::ruby_native_ext_name`.
+
+- **The Swift backend no longer emits a wire-string-to-enum conversion that cannot compile for
+  a data-carrying variant.** `emit_enum_wrapper` unconditionally generated a reverse
+  (`__alef_<enum>_from_swift_string`) conversion for every enum, including one arm per variant
+  regardless of fields -- `"heading" => real::Enum::Heading,` does not type-check when
+  `Heading` is a struct or tuple variant (E0533/E0308: "expected value, found struct/tuple
+  variant"). This broke `alef generate` outright for any crate with a data-carrying enum
+  crossing the Swift boundary; it reproduced independently in three separate consumer repos.
+  Every call site that invokes the emitted function already gates on the same all-fieldless
+  check (`unit_enum_names`), so the function is now only emitted when every variant is
+  fieldless -- removing dead, non-compiling code rather than any code a caller could reach.
+
 - **`alef generate` no longer lets one language's post-build failure hide every later
   language's post-build result.** `run_required_post_builds` propagated the first failure with
   `?` immediately, aborting the loop before any later-listed language's post-build (e.g.

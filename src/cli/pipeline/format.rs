@@ -579,8 +579,12 @@ fn language_residuals(config: &ResolvedCrateConfig, lang: Language, base_dir: &P
         }
         Language::Ffi => vec![cargo_sort(vec!["-w".to_owned()], base_dir.to_path_buf())],
         Language::Ruby => {
-            let gem_name = config.ruby_gem_name();
-            let native_subdir = format!("ext/{gem_name}/native");
+            // `ruby_native_ext_name`, not `ruby_gem_name`: the extension directory the
+            // scaffold actually creates (`ext/{core_crate_dir}_rb/native`) does not track a
+            // configured `gem_name` override -- see that method's doc comment for the
+            // consumer-reproduced bug this fixes. ~keep
+            let ext_name = config.ruby_native_ext_name();
+            let native_subdir = format!("ext/{ext_name}/native");
             vec![cargo_sort(vec![native_subdir], base_dir.join("packages/ruby"))]
         }
         Language::Elixir => {

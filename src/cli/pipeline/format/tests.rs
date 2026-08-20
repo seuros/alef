@@ -148,6 +148,42 @@ fn ruby_residual_sorts_the_native_crate() {
     assert_eq!(steps[0].work_dir, Path::new("/repo/packages/ruby"));
 }
 
+/// The scaffold (`scaffold::languages::ruby::ruby_native_manifest_path` and
+/// `scaffold_ruby_cargo`) always creates `ext/{core_crate_dir}_rb/native`, independent of any
+/// configured `gem_name`. This residual step used to target `ext/{ruby_gem_name}/native`
+/// instead, which agrees with the scaffold only when `gem_name` is left at its default (the
+/// crate name) -- a configured `gem_name` silently pointed `cargo sort` at a directory that
+/// was never created, and the step failed with "No file found at" against a real consumer.
+/// ~keep
+#[test]
+fn ruby_residual_targets_the_scaffolds_directory_not_a_configured_gem_name() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["rust"]
+[[crates]]
+name = "crawlberg"
+sources = ["src/lib.rs"]
+[crates.ruby]
+gem_name = "crawlberg_gem"
+"#,
+    )
+    .expect("valid config");
+    let config = cfg.resolve().unwrap().remove(0);
+
+    // Sanity: the configured override really does diverge from the crate name, which is the
+    // precondition for this test to distinguish the two naming schemes at all.
+    assert_eq!(config.ruby_gem_name(), "crawlberg_gem");
+
+    let steps = language_residuals(&config, Language::Ruby, Path::new("/repo"));
+    assert_eq!(
+        steps[0].args[2], "ext/crawlberg_rb/native",
+        "must target the scaffold's actual directory (core_crate_dir + \"_rb\"), not the \
+         configured gem_name -- got: {:?}",
+        steps[0].args
+    );
+}
+
 #[test]
 fn elixir_residual_is_cargo_sort_then_mix_deps_get_then_mix_format() {
     let config = make_config("sample-model");

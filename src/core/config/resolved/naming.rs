@@ -52,6 +52,22 @@ impl ResolvedCrateConfig {
             .unwrap_or_else(|| self.name.replace('-', "_"))
     }
 
+    /// Get the Ruby native extension directory name (the `{name}` in `ext/{name}/native`).
+    ///
+    /// ~keep Deliberately NOT [`Self::ruby_gem_name`]: the extension directory is always
+    /// `{core_crate_dir}_rb`, derived from the core crate's directory name regardless of any
+    /// configured `gem_name` override (see `scaffold::languages::ruby`, the single source of
+    /// truth this mirrors). `gem_name` names the published gem / Ruby module, a separate
+    /// namespace that can legitimately diverge from the crate directory name (e.g. a gem
+    /// renamed for RubyGems without renaming the crate). Before this helper existed,
+    /// `cli::pipeline::format`'s `cargo sort` residual step for Ruby called `ruby_gem_name()`
+    /// directly, so a configured `gem_name` silently pointed the residual at a directory the
+    /// scaffold never created -- reproduced for real in a consumer with `cargo sort -n
+    /// ext/<gem_name>/native` against a tree that only had `ext/<core_crate_dir>_rb/native`.
+    pub fn ruby_native_ext_name(&self) -> String {
+        format!("{}_rb", self.core_crate_dir().replace('-', "_"))
+    }
+
     /// Get the PHP extension name.
     pub fn php_extension_name(&self) -> String {
         self.php
@@ -258,6 +274,34 @@ package_name = "@scope/explicit-wasm"
     fn ruby_gem_name_replaces_hyphens() {
         let r = minimal();
         assert_eq!(r.ruby_gem_name(), "test_lib");
+    }
+
+    #[test]
+    fn ruby_native_ext_name_appends_rb_suffix() {
+        let r = minimal();
+        assert_eq!(r.ruby_native_ext_name(), "test_lib_rb");
+    }
+
+    /// The bug this method exists to fix: a configured `gem_name` must not change the native
+    /// extension directory name, since the scaffold that actually creates it never reads
+    /// `gem_name` either.
+    #[test]
+    fn ruby_native_ext_name_ignores_a_configured_gem_name() {
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["ruby"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.ruby]
+gem_name = "totally_different_gem"
+"#,
+        );
+        assert_eq!(r.ruby_gem_name(), "totally_different_gem");
+        assert_eq!(r.ruby_native_ext_name(), "test_lib_rb");
     }
 
     #[test]
