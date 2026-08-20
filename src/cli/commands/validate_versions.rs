@@ -952,7 +952,7 @@ python = "{python_output}"
                 "test_apps/rust/Cargo.lock#app",
                 Some("3.6.18"),
                 false,
-                Some("html-to-markdown-rs@3.11.2"),
+                Some("sample-crate-rs@3.11.2"),
             ),
         ];
         assert!(
@@ -970,7 +970,7 @@ python = "{python_output}"
                 "test_apps/rust/Cargo.lock#app",
                 Some("3.6.18"),
                 false,
-                Some("html-to-markdown-rs@3.11.2"),
+                Some("sample-crate-rs@3.11.2"),
             ),
             check("packages/ruby/Cargo.toml", Some("3.11.1"), false, None),
         ];

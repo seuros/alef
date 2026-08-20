@@ -207,13 +207,12 @@ fn check_class_override(
 ///   `to_pascal_case(crate_name)` (`src/backends/magnus/gen_bindings/mod.rs`'s
 ///   `get_module_name(&api.crate_name)`), and a wrapper module re-exports its types and
 ///   delegates its functions under `to_pascal_case([crates.ruby] gem_name)` (that file's
-///   `get_module_name(&config.ruby_gem_name())`). Verified against a real generated
-///   binding: `html-to-markdown-rs`'s crate name PascalCases to `HtmlToMarkdownRs` (the
-///   native module `lib/html_to_markdown/native.rb` loads and `const_get`s from), while
-///   its `[crates.ruby] gem_name = "html-to-markdown"` PascalCases to `HtmlToMarkdown`,
-///   the wrapper `lib/html_to_markdown.rb` declares and e2e specs call `.convert` on
-///   directly — `native.rb` wires `HtmlToMarkdown.convert` to forward to
-///   `HtmlToMarkdownRs.convert`, so both names are genuine, independently callable
+///   `get_module_name(&config.ruby_gem_name())`). For a crate named `sample-widget-rs`, the crate name PascalCases to `SampleWidgetRs` (the
+///   native module `lib/sample_widget/native.rb` loads and `const_get`s from), while
+///   its `[crates.ruby] gem_name = "sample-widget"` PascalCases to `SampleWidget`,
+///   the wrapper `lib/sample_widget.rb` declares and e2e specs call `.convert` on
+///   directly — `native.rb` wires `SampleWidget.convert` to forward to
+///   `SampleWidgetRs.convert`, so both names are genuine, independently callable
 ///   entry points. ~keep
 /// - `Dart` emits its FRB bridge class as `ResolvedCrateConfig::dart_bridge_class_name`,
 ///   which is already the exact name the `dart` e2e generator's default receiver uses.
@@ -530,14 +529,14 @@ mod tests {
     }
 
     /// Reproduces the exact reported regression: a crate whose name PascalCases to
-    /// `HtmlToMarkdownRs`, but whose kotlin_android backend strips the trailing `Rs` and
-    /// emits the wrapper object as `HtmlToMarkdown`. A bare override naming the real,
+    /// `SampleWidgetRs`, but whose kotlin_android backend strips the trailing `Rs` and
+    /// emits the wrapper object as `SampleWidget`. A bare override naming the real,
     /// stripped facade must pass.
     #[test]
     fn a_bare_kotlin_android_override_matching_the_rs_stripped_facade_passes() {
-        let config = make_config("html-to-markdown-rs");
+        let config = make_config("sample-widget-rs");
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("HtmlToMarkdown", "kotlin_android");
+        let e2e_config = make_e2e_config("SampleWidget", "kotlin_android");
 
         let errors =
             validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["kotlin_android".to_string()]);
@@ -546,13 +545,13 @@ mod tests {
     }
 
     /// Same regression as above, but with the fully-qualified form the reported override
-    /// actually used (`io.xberg.android.HtmlToMarkdown`), proving qualified overrides are
+    /// actually used (`com.example.android.SampleWidget`), proving qualified overrides are
     /// compared against the corrected, Rs-stripped facade name too.
     #[test]
     fn a_fully_qualified_kotlin_android_override_matching_the_rs_stripped_facade_passes() {
-        let config = make_config("html-to-markdown-rs");
+        let config = make_config("sample-widget-rs");
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("io.xberg.android.HtmlToMarkdown", "kotlin_android");
+        let e2e_config = make_e2e_config("com.example.android.SampleWidget", "kotlin_android");
 
         let errors =
             validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["kotlin_android".to_string()]);
@@ -565,9 +564,9 @@ mod tests {
     /// stripped facade must pass.
     #[test]
     fn a_bare_java_override_matching_the_rs_stripped_facade_passes() {
-        let config = make_config("html-to-markdown-rs");
+        let config = make_config("sample-widget-rs");
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("HtmlToMarkdown", "java");
+        let e2e_config = make_e2e_config("SampleWidget", "java");
 
         let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["java".to_string()]);
 
@@ -576,14 +575,14 @@ mod tests {
 
     /// The `java` backend also emits the raw FFI wrapper class the public facade delegates
     /// to, `main_class_name` (the `Rs`-suffixed name, never stripped) -- this is the exact
-    /// shape of the real, previously-passing html-to-markdown override
-    /// (`io.xberg.htmltomarkdown.HtmlToMarkdownRs`). Narrowing the candidate set to only the
+    /// shape of a previously-passing fully-qualified override
+    /// (`com.example.samplewidget.SampleWidgetRs`). Narrowing the candidate set to only the
     /// stripped public facade would regress this override from passing to failing. ~keep
     #[test]
     fn a_fully_qualified_java_override_matching_the_unstripped_raw_class_passes() {
-        let config = make_config("html-to-markdown-rs");
+        let config = make_config("sample-widget-rs");
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("io.xberg.htmltomarkdown.HtmlToMarkdownRs", "java");
+        let e2e_config = make_e2e_config("com.example.samplewidget.SampleWidgetRs", "java");
 
         let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["java".to_string()]);
 
@@ -601,15 +600,15 @@ mod tests {
 languages = ["php"]
 
 [[crates]]
-name = "html-to-markdown-rs"
+name = "sample-widget-rs"
 sources = ["src/lib.rs"]
 
 [crates.php]
-extension_name = "html_to_markdown"
+extension_name = "sample_widget"
 "#,
         );
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("HtmlToMarkdown", "php");
+        let e2e_config = make_e2e_config("SampleWidget", "php");
 
         let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["php".to_string()]);
 
@@ -628,15 +627,15 @@ extension_name = "html_to_markdown"
 languages = ["ruby"]
 
 [[crates]]
-name = "html-to-markdown-rs"
+name = "sample-widget-rs"
 sources = ["src/lib.rs"]
 
 [crates.ruby]
-gem_name = "html-to-markdown"
+gem_name = "sample-widget"
 "#,
         );
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("HtmlToMarkdownRs", "ruby");
+        let e2e_config = make_e2e_config("SampleWidgetRs", "ruby");
 
         let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["ruby".to_string()]);
 
@@ -657,15 +656,15 @@ gem_name = "html-to-markdown"
 languages = ["ruby"]
 
 [[crates]]
-name = "html-to-markdown-rs"
+name = "sample-widget-rs"
 sources = ["src/lib.rs"]
 
 [crates.ruby]
-gem_name = "html-to-markdown"
+gem_name = "sample-widget"
 "#,
         );
         let type_defs = vec![make_type("Placeholder")];
-        let e2e_config = make_e2e_config("HtmlToMarkdown", "ruby");
+        let e2e_config = make_e2e_config("SampleWidget", "ruby");
 
         let errors = validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["ruby".to_string()]);
 
@@ -683,7 +682,7 @@ gem_name = "html-to-markdown"
 languages = ["dart"]
 
 [[crates]]
-name = "html-to-markdown-rs"
+name = "sample-widget-rs"
 sources = ["src/lib.rs"]
 
 [crates.dart]
@@ -703,9 +702,9 @@ lib_name = "widget"
     /// validator into a no-op.
     #[test]
     fn a_genuinely_absent_kotlin_android_class_is_still_rejected() {
-        let config = make_config("html-to-markdown-rs");
+        let config = make_config("sample-widget-rs");
         let type_defs = vec![make_type("HtmlMetadata")];
-        let e2e_config = make_e2e_config("io.xberg.android.HtmlToMarkdownConverter", "kotlin_android");
+        let e2e_config = make_e2e_config("com.example.android.SampleWidgetConverter", "kotlin_android");
 
         let errors =
             validate_call_class_overrides(&e2e_config, &config, &type_defs, &[], &["kotlin_android".to_string()]);
@@ -754,29 +753,29 @@ lib_name = "widget"
 
     #[test]
     fn crate_facade_class_names_matches_each_backends_own_derivation() {
-        let html_to_markdown = make_config("html-to-markdown-rs");
+        let sample_widget = make_config("sample-widget-rs");
         assert_eq!(
-            crate_facade_class_names(Language::Kotlin, &html_to_markdown),
-            Some(vec!["HtmlToMarkdownRs".to_string()]),
+            crate_facade_class_names(Language::Kotlin, &sample_widget),
+            Some(vec!["SampleWidgetRs".to_string()]),
             "plain kotlin does not strip the Rs suffix"
         );
         assert_eq!(
-            crate_facade_class_names(Language::Java, &html_to_markdown),
-            Some(vec!["HtmlToMarkdownRs".to_string(), "HtmlToMarkdown".to_string()]),
+            crate_facade_class_names(Language::Java, &sample_widget),
+            Some(vec!["SampleWidgetRs".to_string(), "SampleWidget".to_string()]),
             "java's raw FFI class and its Rs-stripped public facade are both real candidates"
         );
         assert_eq!(
-            crate_facade_class_names(Language::KotlinAndroid, &html_to_markdown),
-            Some(vec!["HtmlToMarkdown".to_string()])
+            crate_facade_class_names(Language::KotlinAndroid, &sample_widget),
+            Some(vec!["SampleWidget".to_string()])
         );
         assert_eq!(
-            crate_facade_class_names(Language::Ruby, &html_to_markdown),
-            Some(vec!["HtmlToMarkdownRs".to_string(), "HtmlToMarkdownRs".to_string()]),
+            crate_facade_class_names(Language::Ruby, &sample_widget),
+            Some(vec!["SampleWidgetRs".to_string(), "SampleWidgetRs".to_string()]),
             "ruby's native module (crate name) and its gem_name-derived wrapper module are \
              both real candidates; with no `[crates.ruby] gem_name` configured, gem_name \
              defaults to the crate name with hyphens replaced by underscores, which \
              PascalCases identically to the crate name itself"
         );
-        assert_eq!(crate_facade_class_names(Language::Python, &html_to_markdown), None);
+        assert_eq!(crate_facade_class_names(Language::Python, &sample_widget), None);
     }
 }
