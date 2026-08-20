@@ -156,7 +156,11 @@ pub(crate) fn extract_struct(
         for field in &mut fields {
             field.typed_default = Some(DefaultValue::Empty);
         }
-        warn_on_default_disagreement(&rust_path, &fields, &serde_defaults);
+        // Every field's `typed_default` was just set to `Empty` above (the `#[derive(Default)]`
+        // path), so `warn_on_default_disagreement`'s enum-agreement check never applies here —
+        // it only fires for a manual `impl Default`'s `EnumVariant` value. An empty map is
+        // therefore exact, not a missed opportunity. ~keep
+        warn_on_default_disagreement(&rust_path, &fields, &serde_defaults, &AHashMap::new());
     }
 
     let has_stripped_cfg_fields = fields.iter().any(|f| f.cfg.is_some());

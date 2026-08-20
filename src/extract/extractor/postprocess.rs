@@ -1,5 +1,26 @@
-use crate::core::ir::{ApiSurface, DefaultValue, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, DefaultValue, EnumDef, FieldDef, TypeRef};
 use ahash::AHashMap;
+
+/// Build a lookup of enum name → the name of its `#[default]`-marked unit variant.
+///
+/// Deliberately stricter than `default_value_for_enum::default_variant_name`: this lookup is
+/// used to assert that two `DefaultValue`s denote the *same* concrete value, so it omits enums
+/// with no genuine `#[default]` variant rather than falling back to "the first variant" — a
+/// fallback appropriate for backends that must materialize *some* value, but wrong for a
+/// comparison that would otherwise manufacture a false agreement between an enum with no
+/// declared default and whichever variant happens to be listed first. ~keep
+pub(super) fn enum_default_variant_names(enums: &[EnumDef]) -> AHashMap<String, String> {
+    enums
+        .iter()
+        .filter(|enum_def| enum_def.has_default)
+        .filter_map(|enum_def| {
+            let variant = enum_def.variants.iter().find(|variant| {
+                variant.is_default && variant.fields.is_empty() && !variant.originally_had_data_fields
+            })?;
+            Some((enum_def.name.clone(), variant.name.clone()))
+        })
+        .collect()
+}
 
 pub(super) fn resolve_public_default_functions(surface: &mut ApiSurface) {
     let public_methods: AHashMap<(String, String), String> = surface
@@ -58,17 +79,7 @@ pub(super) fn resolve_public_default_functions(surface: &mut ApiSurface) {
 /// already unresolved into what most backends can render directly; it never turns a resolvable
 /// value into a guess. ~keep
 pub(super) fn resolve_enum_field_defaults(surface: &mut ApiSurface) {
-    let enum_default_variants: AHashMap<String, String> = surface
-        .enums
-        .iter()
-        .filter(|enum_def| enum_def.has_default)
-        .filter_map(|enum_def| {
-            let variant = enum_def.variants.iter().find(|variant| {
-                variant.is_default && variant.fields.is_empty() && !variant.originally_had_data_fields
-            })?;
-            Some((enum_def.name.clone(), variant.name.clone()))
-        })
-        .collect();
+    let enum_default_variants = enum_default_variant_names(&surface.enums);
 
     if enum_default_variants.is_empty() {
         return;
@@ -333,6 +344,37 @@ fn denotes_type_zero(value: &DefaultValue) -> bool {
         || matches!(value, DefaultValue::FloatLiteral(f) if *f == 0.0)
 }
 
+/// True when `serde_default` and `actual_default` are `Empty` and an `EnumVariant` that name the
+/// same value: an enum-typed field's "type zero" is not a literal `denotes_type_zero` can
+/// recognize on its own, it is whichever variant carries `#[default]`.
+///
+/// `field_type` and `enum_default_variants` narrow this to only the case both sides can be
+/// *proven* equal: `field_type` must be the field's own declared type (a struct-literal field
+/// position can only ever be filled with a value of that type, so "the type's zero" and "this
+/// field's zero" are the same question), and `enum_default_variants` must actually know that
+/// type's `#[default]` variant. When the enum is not in the map — because it was not found, or
+/// genuinely has no `#[default]` variant — this returns `false` and the caller falls back to
+/// its ordinary (warn-on-mismatch) behavior rather than guessing agreement. ~keep
+fn agrees_via_enum_default(
+    serde_default: &DefaultValue,
+    actual_default: &DefaultValue,
+    field_type: &TypeRef,
+    enum_default_variants: &AHashMap<String, String>,
+) -> bool {
+    let DefaultValue::EnumVariant(actual_variant) = actual_default else {
+        return false;
+    };
+    if !matches!(serde_default, DefaultValue::Empty) {
+        return false;
+    }
+    let TypeRef::Named(type_name) = field_type else {
+        return false;
+    };
+    enum_default_variants
+        .get(type_name)
+        .is_some_and(|default_variant| default_variant == actual_variant)
+}
+
 /// Warn when a field's serde-reader default and its final `#[derive(Default)]`/manual
 /// `impl Default` value are both fully known and disagree (issue #153).
 ///
@@ -354,11 +396,19 @@ fn denotes_type_zero(value: &DefaultValue) -> bool {
 /// that derives `Default` while also carrying `#[serde(default)]` fields) from this diagnostic.
 ///
 /// A structural mismatch is still not always a disagreement: see [`denotes_type_zero`] for the
-/// case where both sides name the same zero value under different `DefaultValue` spellings. ~keep
+/// case where both sides name the same zero value under different `DefaultValue` spellings, and
+/// [`agrees_via_enum_default`] for the enum-typed equivalent, where the type's zero is a named
+/// variant rather than a literal.
+///
+/// `enum_default_variants` is whatever the caller's `EnumDef`s are known at the point this runs
+/// (see the call sites for how much of the crate's enums that covers); an enum missing from it
+/// is treated as "cannot prove agreement", not as "known to disagree" — see
+/// [`agrees_via_enum_default`]. ~keep
 pub(crate) fn warn_on_default_disagreement(
     rust_path: &str,
     fields: &[FieldDef],
     serde_defaults: &AHashMap<String, DefaultValue>,
+    enum_default_variants: &AHashMap<String, String>,
 ) {
     for field in fields {
         let Some(serde_default) = serde_defaults.get(&field.name) else {
@@ -376,7 +426,10 @@ pub(crate) fn warn_on_default_disagreement(
             );
             continue;
         }
-        if serde_default != actual_default && !(denotes_type_zero(serde_default) && denotes_type_zero(actual_default)) {
+        let agrees = serde_default == actual_default
+            || (denotes_type_zero(serde_default) && denotes_type_zero(actual_default))
+            || agrees_via_enum_default(serde_default, actual_default, &field.ty, enum_default_variants);
+        if !agrees {
             tracing::warn!(
                 target: "alef::extract::defaults",
                 rust_type = rust_path,
@@ -419,7 +472,7 @@ mod default_disagreement_tests {
         let fields = vec![field("retries", Some(DefaultValue::IntLiteral(5)))];
         let defaults = serde_defaults(&[("retries", DefaultValue::IntLiteral(3))]);
 
-        warn_on_default_disagreement("my_crate::Config", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Config", &fields, &defaults, &AHashMap::new());
 
         assert!(logs_contain("my_crate::Config"));
         assert!(logs_contain("retries"));
@@ -436,7 +489,7 @@ mod default_disagreement_tests {
         let fields = vec![field("host", Some(DefaultValue::Empty))];
         let defaults = serde_defaults(&[("host", DefaultValue::StringLiteral("localhost".to_string()))]);
 
-        warn_on_default_disagreement("my_crate::Client", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Client", &fields, &defaults, &AHashMap::new());
 
         assert!(logs_contain("my_crate::Client"));
         assert!(logs_contain("host"));
@@ -451,7 +504,7 @@ mod default_disagreement_tests {
         let fields = vec![field("retries", Some(DefaultValue::IntLiteral(3)))];
         let defaults = serde_defaults(&[("retries", DefaultValue::IntLiteral(3))]);
 
-        warn_on_default_disagreement("my_crate::Config", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Config", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -464,9 +517,83 @@ mod default_disagreement_tests {
         let fields = vec![field("count", Some(DefaultValue::Empty))];
         let defaults = serde_defaults(&[("count", DefaultValue::Empty)]);
 
-        warn_on_default_disagreement("my_crate::Config", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Config", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
+    }
+
+    fn enum_typed_field(name: &str, typed_default: Option<DefaultValue>, enum_type_name: &str) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            typed_default,
+            ty: TypeRef::Named(enum_type_name.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn enum_default_variants(entries: &[(&str, &str)]) -> AHashMap<String, String> {
+        entries
+            .iter()
+            .map(|(enum_name, variant_name)| ((*enum_name).to_string(), (*variant_name).to_string()))
+            .collect()
+    }
+
+    /// (f) A bare `#[serde(default)]` (`Empty`) agrees with a manual `impl Default`'s
+    /// `EnumVariant` when that variant is genuinely the field type's `#[default]` — both spell
+    /// "this field's type-zero", just via different `DefaultValue` shapes. See
+    /// `agrees_via_enum_default`.
+    #[test]
+    #[traced_test]
+    fn empty_serde_default_agreeing_with_the_enum_default_variant_is_not_reported() {
+        let fields = vec![enum_typed_field(
+            "tier_strategy",
+            Some(DefaultValue::EnumVariant("Auto".to_string())),
+            "TierStrategy",
+        )];
+        let defaults = serde_defaults(&[("tier_strategy", DefaultValue::Empty)]);
+        let enums = enum_default_variants(&[("TierStrategy", "Auto")]);
+
+        warn_on_default_disagreement("my_crate::ConversionOptions", &fields, &defaults, &enums);
+
+        assert!(!logs_contain("disagrees"));
+    }
+
+    /// (f) continued: a manual `impl Default` naming a variant *other than* the enum's
+    /// `#[default]` is a genuine disagreement — serde would fall back to the `#[default]`
+    /// variant, the manual impl would not — and must still be reported.
+    #[test]
+    #[traced_test]
+    fn empty_serde_default_disagreeing_with_a_non_default_enum_variant_is_reported() {
+        let fields = vec![enum_typed_field(
+            "tier_strategy",
+            Some(DefaultValue::EnumVariant("Tier2".to_string())),
+            "TierStrategy",
+        )];
+        let defaults = serde_defaults(&[("tier_strategy", DefaultValue::Empty)]);
+        let enums = enum_default_variants(&[("TierStrategy", "Auto")]);
+
+        warn_on_default_disagreement("my_crate::ConversionOptions", &fields, &defaults, &enums);
+
+        assert!(logs_contain("disagrees"));
+        assert!(logs_contain("tier_strategy"));
+    }
+
+    /// (g) When the field's enum is absent from `enum_default_variants` — not yet extracted, or
+    /// genuinely has no `#[default]` variant — agreement cannot be proven, so this falls back to
+    /// the ordinary warn-on-mismatch behavior rather than assuming agreement.
+    #[test]
+    #[traced_test]
+    fn empty_serde_default_against_an_unknown_enum_is_reported_conservatively() {
+        let fields = vec![enum_typed_field(
+            "tier_strategy",
+            Some(DefaultValue::EnumVariant("Auto".to_string())),
+            "TierStrategy",
+        )];
+        let defaults = serde_defaults(&[("tier_strategy", DefaultValue::Empty)]);
+
+        warn_on_default_disagreement("my_crate::ConversionOptions", &fields, &defaults, &AHashMap::new());
+
+        assert!(logs_contain("disagrees"));
     }
 
     /// (c) `Unresolved` on the resolved (`#[derive(Default)]`/`impl Default`) side is an
@@ -480,7 +607,7 @@ mod default_disagreement_tests {
         )];
         let defaults = serde_defaults(&[("level", DefaultValue::IntLiteral(9))]);
 
-        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -492,7 +619,7 @@ mod default_disagreement_tests {
         let fields = vec![field("level", Some(DefaultValue::IntLiteral(9)))];
         let defaults = serde_defaults(&[("level", DefaultValue::Unresolved("compute_default()".to_string()))]);
 
-        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -514,7 +641,7 @@ mod default_disagreement_tests {
             DefaultValue::TupleVariant("Custom".to_string(), vec![DefaultValue::IntLiteral(5)]),
         )]);
 
-        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -538,7 +665,7 @@ mod default_disagreement_tests {
             ),
         )]);
 
-        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -553,7 +680,7 @@ mod default_disagreement_tests {
         let fields = vec![field("token", Some(DefaultValue::StringLiteral("abc".to_string())))];
         let defaults = serde_defaults(&[("token", DefaultValue::FunctionCall("generate_token".to_string()))]);
 
-        warn_on_default_disagreement("my_crate::Auth", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Auth", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -565,7 +692,7 @@ mod default_disagreement_tests {
         let fields = vec![field("untouched", Some(DefaultValue::IntLiteral(1)))];
         let defaults = serde_defaults(&[]);
 
-        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -579,7 +706,7 @@ mod default_disagreement_tests {
         let fields = vec![field("count", Some(DefaultValue::IntLiteral(0)))];
         let defaults = serde_defaults(&[("count", DefaultValue::Empty)]);
 
-        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults);
+        warn_on_default_disagreement("my_crate::Cfg", &fields, &defaults, &AHashMap::new());
 
         assert!(!logs_contain("disagrees"));
     }
@@ -665,7 +792,7 @@ mod default_disagreement_tests {
             let fields = vec![field("value", Some(case.actual_default.clone()))];
             let defaults = serde_defaults(&[("value", case.serde_default.clone())]);
 
-            warn_on_default_disagreement(case.type_name, &fields, &defaults);
+            warn_on_default_disagreement(case.type_name, &fields, &defaults, &AHashMap::new());
 
             let warned = logs_contain(case.type_name) && logs_contain("disagrees");
             assert_eq!(

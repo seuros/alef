@@ -4,7 +4,7 @@ use ahash::AHashMap;
 use super::super::SerdeDefaultsByType;
 use super::super::defaults::{ConstructorIndex, extract_default_values};
 use super::super::helpers::{build_rust_path, extract_binding_exclusion_reason, extract_cfg_condition, is_test_gated};
-use super::super::postprocess::warn_on_default_disagreement;
+use super::super::postprocess::{enum_default_variant_names, warn_on_default_disagreement};
 use super::extract_method;
 
 fn has_non_lifetime_generics(generics: &syn::Generics) -> bool {
@@ -393,7 +393,18 @@ fn extract_trait_impl_methods(
         type_def.has_default = true;
         extract_default_values(item, &self_type, &mut type_def.fields, literal_consts, constructors);
         if let Some(serde_defaults) = pending_serde_defaults.get(&type_def.rust_path) {
-            warn_on_default_disagreement(&type_def.rust_path, &type_def.fields, serde_defaults);
+            // Only the enums this crate has extracted so far (this file's own module, plus any
+            // earlier file in `sources`) are visible here — a manual `impl Default` naming a
+            // variant of an enum declared in a *later* source file cannot be proven to agree, so
+            // it falls back to `warn_on_default_disagreement`'s ordinary (warn-on-mismatch)
+            // behavior instead of guessing. See `agrees_via_enum_default`. ~keep
+            let enum_default_variants = enum_default_variant_names(&surface.enums);
+            warn_on_default_disagreement(
+                &type_def.rust_path,
+                &type_def.fields,
+                serde_defaults,
+                &enum_default_variants,
+            );
         }
     }
 
