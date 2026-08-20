@@ -8,4 +8,5 @@ pub(crate) mod helpers;
 pub(crate) mod output;
 pub(crate) mod publish_commands;
 pub(crate) mod release_commands;
+mod verify_orphans;
 mod verify_outcome;

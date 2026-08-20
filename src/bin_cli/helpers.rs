@@ -419,8 +419,9 @@ const VERIFY_SCAN_FILENAMES: &[&str] = &[
 /// Walk `base_dir` and return every alef-owned file paired with its optional
 /// `alef:hash:<hex>` stamp. Skips build/cache directories and files without the
 /// Alef ownership marker. Shared by [`verify_walk`] and [`verify_walk_multi`]
-/// so both see the same file set.
-fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, Option<String>, String)> {
+/// so both see the same file set, and by [`super::verify_orphans::find_orphaned_generated_files`]
+/// so the orphan check sees the identical disk-side file set too. ~keep
+pub(crate) fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, Option<String>, String)> {
     let mut found = Vec::new();
     let mut stack: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
 
@@ -644,6 +645,17 @@ fn frozen_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir:
 pub(crate) struct MissingAndFrozenFiles {
     pub(crate) missing: Vec<String>,
     pub(crate) frozen: Vec<FrozenFile>,
+    /// Absolute paths of every file this crate's configuration would produce this run, from the
+    /// same `surface` `missing`/`frozen` are derived from -- deliberately every path, not only
+    /// [`crate::cli::pipeline::managed_output_paths`]'s marker-carrying subset: a self-marking
+    /// backend (pyo3's `lib.rs`, `docs::render`'s HTML-commented pages) bakes its header into
+    /// `content` at write time via `ensure_generated_header`, not at this in-memory render, so
+    /// `carries_alef_marker()` reads `false` here for a file that is unquestionably still
+    /// produced this run -- filtering by it would misreport that file as an orphan the moment it
+    /// left the marker-carrying subset. A multi-crate caller unions this across every crate
+    /// before handing it to [`super::verify_orphans::find_orphaned_generated_files`], so a file
+    /// legitimately owned by crate B is never mistaken for an orphan while diffing crate A alone. ~keep
+    pub(crate) managed_paths: std::collections::HashSet<std::path::PathBuf>,
     /// [`StageFailure`]s [`collect_managed_surface`] tolerated while still building the
     /// rest of the surface, rendered as `[<stage>] <message>`. `alef verify` is
     /// read-only, so it has no target to decide "does this affect me" the way `alef
@@ -697,6 +709,7 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     let mut result = MissingAndFrozenFiles {
         missing: missing_managed_paths(&surface, base_dir),
         frozen: frozen_managed_paths(&surface, base_dir),
+        managed_paths: surface.iter().map(|file| base_dir.join(&file.path)).collect(),
         stage_failures: stage_failures
             .into_iter()
             .map(|failure| format!("[{}] {}", failure.stage, failure.message))
@@ -819,10 +832,26 @@ pub(crate) fn collect_managed_surface(
     // safe to call unconditionally. `generate_public_api` has no such internal
     // guard — mirror `Commands::Generate`'s `config.generate.public_api` gate so
     // this stays a faithful picture of what `alef generate` would produce, not a
-    // superset of it. ~keep
+    // superset of it.
+    //
+    // `clean: true`, not `false`: `pipeline::generate`'s own `clean` parameter gates a
+    // language-level cache short-circuit (`!clean && cache::is_lang_cached(..)` in
+    // `generate/generation.rs`) that returns zero files for a language whose lang-hash
+    // already matches the on-disk `.alef/<crate>/hashes/<lang>.hash` -- exactly the state
+    // every language is in immediately after the `alef generate` run that wrote it, which is
+    // the single most common moment `alef verify` runs. `clean: false` here silently dropped
+    // every one of that language's bindings-stage files from `surface` in precisely that
+    // steady state, which `missing_managed_paths`/`frozen_managed_paths` tolerate (an absent
+    // `surface` entry just means that path is not checked) but which made every one of that
+    // language's self-marking bindings files -- `packages/python/lib.rs` and its pyo3
+    // equivalents on every other self-marking backend -- a guaranteed, permanent orphan false
+    // positive on exactly the run `alef verify` is normally expected to pass. `clean: true`
+    // forces full in-memory regeneration regardless of cache state, matching this function's
+    // own contract: `surface` is "what this run's backends would produce," not "what they
+    // would bother producing given whatever happens to already be cached." ~keep
     let bindings_stage: Stage<'_> = Box::new(|| {
         let mut files = Vec::new();
-        for (_, produced) in crate::cli::pipeline::generate(api, config, languages, false, config_path, false)? {
+        for (_, produced) in crate::cli::pipeline::generate(api, config, languages, true, config_path, false)? {
             files.extend(produced);
         }
         for (_, produced) in crate::cli::pipeline::generate_service_api(api, config, languages)? {

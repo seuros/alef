@@ -413,6 +413,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not compile. Kotlin now also consults the same IR-derived classification the rust/csharp/
   gleam/swift/dart e2e generators use, anchored at the call's declared Rust return type. An
   explicit config entry still wins.
+
+- **`alef verify` now detects orphaned generated files** — an alef-marked file still on disk
+  that the current run's backends would no longer produce (a dropped emit, a removed language,
+  or a config change), the exact failure mode that let Java's `NodeContext.java` /
+  `HtmlVisitor.java` / `VisitorBridge.java` sit unnoticed across releases. Detection is
+  report-only: alef never deletes a file it flags. The finding is folded into `verify`'s
+  existing hard-fail exit code (downgraded to a report with `--report-only`, same as every
+  other finding), and excludes both unmarked user-owned files and known create-once seeds
+  (`rust-toolchain.toml`, the wasm-only `.cargo/config.toml`) that a scaffold stage only emits
+  once, when absent.
+
+### Fixed
+
+- **`alef verify`'s in-memory regeneration pass no longer skips a language whose output happens
+  to already be cache-fresh**, which previously dropped every one of that language's
+  bindings-stage files from the surface `verify` compares against disk — the exact steady state
+  right after `alef generate`/`alef all` writes the cache, i.e. the most common moment `alef
+  verify` runs. Combined with the new orphan check above, this made a self-marking backend's own
+  bindings file (`packages/python/lib.rs` and its pyo3-style equivalents) a guaranteed false
+  orphan on a tree that had just been generated cleanly.
 - **`jni` no longer hard-fails generation when `[crates.kotlin_android]` is unconfigured.**
   Every downstream accessor (`jni_kotlin_package`, `jni_excluded_functions`,
   `jni_excluded_types`, `jni_capsule_types`) already tolerated its absence, falling back to

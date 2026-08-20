@@ -7,6 +7,7 @@ use crate::cli::{cache, dispatch, pipeline, version_pin};
 use super::args::*;
 use super::dispatch::DispatchContext;
 use super::helpers::*;
+use super::verify_orphans;
 
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
@@ -915,6 +916,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // `FrozenFile`). ~keep
             let mut missing_generated_files: Vec<String> = Vec::new();
             let mut frozen_generated_files: Vec<FrozenFile> = Vec::new();
+            // Unioned across every crate before the orphan diff runs below: a file legitimately
+            // owned by crate B must never look orphaned merely because crate A's own managed
+            // surface doesn't mention it. See `verify_orphans::find_orphaned_generated_files`. ~keep
+            let mut all_managed_paths: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
             // Debt `collect_managed_surface` tolerated while still building the rest of
             // the surface (currently only the e2e stages' deferred strict-assertion
             // failure). `alef verify` is read-only and has no target to excuse a stage
@@ -930,6 +935,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
                 missing_generated_files.extend(found.missing);
                 frozen_generated_files.extend(found.frozen);
+                all_managed_paths.extend(found.managed_paths);
                 stage_failures.extend(
                     found
                         .stage_failures
@@ -960,6 +966,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let has_stage_failures = !stage_failures.is_empty();
             let has_missing_files = !missing_generated_files.is_empty();
             let has_frozen_files = !frozen_generated_files.is_empty();
+            // Report-only: see `verify_orphans`'s module doc for why this never deletes.
+            let orphan_generated_files = verify_orphans::find_orphaned_generated_files(&base_dir, &all_managed_paths);
+            let has_orphan_files = !orphan_generated_files.is_empty();
 
             // Catches the cross-artifact ABI straddle a per-file hash check cannot
             // see: an FFI header and a binding backend's opaque-handle file each
@@ -1018,6 +1027,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             if stale.is_empty()
                 && !has_missing_files
                 && !has_frozen_files
+                && !has_orphan_files
                 && !has_abi_disagreement
                 && !has_version_issues
                 && snippet_coverage_issues.is_empty()
@@ -1073,6 +1083,24 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
+                // Report-only, never auto-deleted: see `verify_orphans`'s module doc for the
+                // asymmetry between a missed report (status quo) and a wrong deletion
+                // (unrecoverable). Folded into the hard-fail exit code below anyway, same as
+                // frozen files, so CI actually surfaces a dropped emit instead of staying green
+                // forever -- which is the exact failure mode that let Java's visitor files sit
+                // as invisible orphans across releases. ~keep
+                if has_orphan_files {
+                    crate::bin_cli::output::line(
+                        "Orphaned generated files detected (alef's marker is present but the current run's \
+                         backends would not produce these paths -- a backend may have stopped emitting them, \
+                         they were dropped from generation config, or the file is a create-once seed alef only \
+                         writes when absent; review each and delete by hand if genuinely stale, alef never \
+                         deletes automatically):",
+                    );
+                    for path in &orphan_generated_files {
+                        crate::bin_cli::output::line(format_args!("  {path}"));
+                    }
+                }
                 // Not folded into missing/frozen: this is debt `collect_managed_surface`
                 // hit while building the surface those two lists come from, not a
                 // conclusion drawn *from* the surface. Naming it separately is what makes
@@ -1093,6 +1121,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 !stale.is_empty()
                     || has_missing_files
                     || has_frozen_files
+                    || has_orphan_files
                     || has_abi_disagreement
                     || has_stage_failures,
                 has_version_issues,
@@ -1368,5 +1397,119 @@ output = "packages/python/test_lib"
             "alef diff is documented as \"without writing\" and must not regress \
              <lang>.manifest -- got {after:?}, expected the unchanged pre-diff set {before:?}"
         );
+    }
+
+    fn verify_command() -> Commands {
+        Commands::Verify {
+            exit_code: false,
+            report_only: false,
+            compile: false,
+            lint: false,
+            lang: None,
+        }
+    }
+
+    /// Drives `alef verify`'s orphan finding through the real `Commands::Verify` dispatch path
+    /// against a real `alef generate` output tree -- not a direct call into
+    /// `verify_orphans::find_orphaned_generated_files`, which the unit tests in
+    /// `verify_orphans::tests` already cover in isolation. A unit test proves the diff logic is
+    /// correct; it does not prove the CLI ever reaches it. This is the "implemented, tested, but
+    /// never wired into the command that is supposed to call it" shape the module doc for
+    /// `verify_orphans` exists to close, so the regression this guards against is the wiring,
+    /// not the diff. ~keep
+    #[test]
+    fn verify_command_reports_and_fails_on_a_real_orphaned_generated_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+        write_diff_fixture_workspace(&root);
+        let _cwd = crate::test_support::CwdGuard::enter(&root);
+
+        let context = DispatchContext {
+            config_path: root.join("alef.toml"),
+            crate_filter: Vec::new(),
+        };
+
+        // `Commands::All`, not `Commands::Generate`: `alef verify`'s missing-file check spans
+        // every stage in `collect_managed_surface` (bindings, scaffold, e2e, README, docs), so
+        // `alef generate` alone always leaves README/docs reported missing regardless of this
+        // fix -- a pre-existing, correct, and unrelated finding. Only `alef all`'s full pass
+        // produces a tree the sanity check below can honestly call clean.
+        //
+        // `crate::bin_cli::all_commands::handle`, not `super::handle`: `core_commands::handle`'s
+        // match has no `Commands::All` arm, so in the real binary `dispatch::run`'s
+        // chain-of-responsibility loop (`src/bin_cli/dispatch.rs`) passes `All` straight through
+        // core_commands untouched and on to `all_commands::handle`, which is the one that
+        // actually owns it. `super::handle(Commands::All { .. }, ..)` would return `Ok(Some(_))`
+        // having done nothing -- an `Ok` a careless `.expect` would not catch -- which is exactly
+        // why this bootstrap step names the real owning handler instead. ~keep
+        crate::bin_cli::all_commands::handle(
+            Commands::All {
+                clean: false,
+                clobber_create_once_seeds: false,
+                strict: false,
+                skip_frb: true,
+            },
+            &context,
+        )
+        .expect("alef all must succeed against the fixture");
+
+        // Sanity: immediately after a real `alef all`, a real `alef verify` against the
+        // same tree must pass. Without this, a failure below could not be pinned on the orphan
+        // this test injects -- it could equally be a fixture that was never clean to begin with.
+        // This is also the regression control for the `bindings_stage` cache fix directly above
+        // this test in the diff: before it, `packages/python/lib.rs` -- already cached from the
+        // `alef all` run that just wrote it -- was silently dropped from `collect_managed_surface`
+        // and reported as an orphan right here, on the exact tree `alef verify` is supposed to
+        // pass on. ~keep
+        super::handle(verify_command(), &context)
+            .expect("alef verify must pass on a tree alef all just produced, before any orphan is injected");
+
+        // Simulate a backend that stopped emitting a file it used to (the Java visitor-file
+        // case `verify_orphans`'s module doc describes): copy an existing alef-marked file's
+        // real bytes -- header and hash intact -- to a path no current backend's output would
+        // include. `api.py` is one of the six paths `diff_does_not_regress_a_language_manifest_
+        // generate_already_reconciled` already proves `alef generate` writes for this fixture.
+        let current = root.join("packages/python/test_lib/api.py");
+        let stale = root.join("packages/python/test_lib/legacy_visitor.py");
+        std::fs::copy(&current, &stale).expect("plant a stale alef-marked file");
+
+        // `Commands` carries no `Debug` impl, so `Result<Option<Commands>, _>` cannot be
+        // `expect_err`/`{:?}`-formatted directly; `.err()` discards the `Ok` payload and hands
+        // back a plain `anyhow::Error`, which does implement `Debug`/`Display`.
+        let error = super::handle(verify_command(), &context)
+            .err()
+            .expect("alef verify must fail once an alef-marked file is orphaned on disk");
+        let message = error.to_string();
+        assert!(
+            message.contains("out of date"),
+            "alef verify's real failure path must be the one under test, got: {message}"
+        );
+
+        // `output::line` writes straight to stdout (see `bin_cli::output`), not through
+        // anything this in-process test can intercept, so causation is pinned by timing
+        // instead: verify passed on this exact tree immediately before the copy above and will
+        // pass again immediately after the removal below, so the one file present only in
+        // between is what the failure in between is attributable to. The orphan module's own
+        // unit tests (`verify_orphans::tests`) are what assert on the specific path text.
+        let report_only_error = super::handle(
+            Commands::Verify {
+                exit_code: false,
+                report_only: true,
+                compile: false,
+                lint: false,
+                lang: None,
+            },
+            &context,
+        )
+        .err();
+        assert!(
+            report_only_error.is_none(),
+            "--report-only must downgrade the same orphan finding to a non-fatal report, got: \
+             {report_only_error:?}"
+        );
+
+        std::fs::remove_file(&stale).expect("remove the planted orphan");
+        super::handle(verify_command(), &context)
+            .expect("alef verify must pass again once the orphaned file is removed from disk");
     }
 }
