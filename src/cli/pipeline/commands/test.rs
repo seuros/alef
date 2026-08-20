@@ -1,11 +1,41 @@
 use crate::cli::pipeline::helpers::{check_precondition, run_before, run_command_streamed_with_env};
 use crate::cli::registry;
+use crate::core::config::output::{StringOrVec, TestConfig};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::publish::ffi_stage;
 use crate::publish::platform::RustTarget;
 use anyhow::Context as _;
 use rayon::prelude::*;
 use tracing::{error, info, warn};
+
+/// Whether the `command`/`coverage` phase would run for `lang_test` under `coverage`.
+fn resolve_command_list(lang_test: &TestConfig, coverage: bool) -> Option<&StringOrVec> {
+    if coverage {
+        lang_test.coverage.as_ref().or(lang_test.command.as_ref())
+    } else {
+        lang_test.command.as_ref()
+    }
+}
+
+/// Check the precondition gate for the `e2e` phase.
+///
+/// `precondition` is written for what `command`/`before` need, not for `e2e` -- a block that
+/// tests Python via `uv` but lints with `ruff` has no reason for its `e2e` run to require `ruff`.
+/// Gating `e2e` on the block's main `precondition` inherits a check that was authored for a
+/// different command, which silently skips a suite that could otherwise run.
+///
+/// `e2e_precondition` scopes the tooling check to what `e2e` itself needs. When it is unset, this
+/// deliberately does NOT fall back to `precondition`: falling back would reintroduce the exact bug
+/// this field exists to fix. Instead `e2e` runs ungated. The failure mode this trades away is a
+/// hard command failure (e.g. "napi: command not found") instead of a graceful skip -- worse
+/// diagnostics, but not a false "everything passed" and not a silent no-op either; the missing
+/// tool surfaces as a real, reported test failure. Blocks that want a graceful skip declare
+/// `e2e_precondition` explicitly; `validate_test_e2e_precondition` requires one of the two
+/// precondition fields whenever `e2e` is set, so this ungated path only applies when a
+/// `precondition` covers the `command`/`before` phase but was never meant to gate `e2e` too.
+fn check_e2e_precondition(lang: Language, lang_test: &TestConfig) -> bool {
+    check_precondition(lang, lang_test.e2e_precondition.as_deref())
+}
 
 pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, coverage: bool) -> anyhow::Result<()> {
     let pdfium_dir = compute_pdfium_dir();
@@ -34,7 +64,13 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
         .copied()
         .filter(|lang| {
             let lang_test = config.test_config_for_language(*lang);
-            check_precondition(*lang, lang_test.precondition.as_deref())
+            let command_will_run = resolve_command_list(&lang_test, coverage).is_some();
+            let e2e_will_run = e2e && lang_test.e2e.is_some();
+
+            let command_gate = command_will_run && check_precondition(*lang, lang_test.precondition.as_deref());
+            let e2e_gate = e2e_will_run && check_e2e_precondition(*lang, &lang_test);
+
+            command_gate || e2e_gate
         })
         .collect();
     ensure_requested_suites_will_run(languages, &langs_to_test)?;
@@ -48,7 +84,7 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
     if e2e {
         for &lang in &langs_to_test {
             let lang_test = config.test_config_for_language(lang);
-            if lang_test.e2e.is_none() {
+            if lang_test.e2e.is_none() || !check_e2e_precondition(lang, &lang_test) {
                 continue;
             }
             let Some(backend) = registry::try_get_backend(lang) else {
@@ -69,7 +105,7 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
         let host_target = get_host_target().context("failed to detect host target for FFI staging")?;
         for &lang in &langs_to_test {
             let lang_test = config.test_config_for_language(lang);
-            if lang_test.e2e.is_none() {
+            if lang_test.e2e.is_none() || !check_e2e_precondition(lang, &lang_test) {
                 continue;
             }
             if !matches!(lang, Language::Go | Language::Java | Language::Csharp) {
@@ -108,20 +144,21 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
             let label = lang.to_string();
             let lang_test = config.test_config_for_language(*lang);
 
-            let test_cmds = if coverage {
-                lang_test.coverage.as_ref().or(lang_test.command.as_ref())
-            } else {
-                lang_test.command.as_ref()
-            };
+            let test_cmds = resolve_command_list(&lang_test, coverage);
 
-            if let Some(cmd_list) = test_cmds {
+            if let Some(cmd_list) = test_cmds
+                && check_precondition(*lang, lang_test.precondition.as_deref())
+            {
                 for cmd in cmd_list.commands() {
                     if let Err(e) = run_command_streamed_with_env(cmd, Some(&label), &env_vars) {
                         return (*lang, Err(e));
                     }
                 }
             }
-            if e2e && let Some(e2e_cmd_list) = &lang_test.e2e {
+            if e2e
+                && let Some(e2e_cmd_list) = &lang_test.e2e
+                && check_e2e_precondition(*lang, &lang_test)
+            {
                 for cmd in e2e_cmd_list.commands() {
                     if let Err(e) = run_command_streamed_with_env(cmd, Some(&label), &env_vars) {
                         return (*lang, Err(e));
@@ -296,6 +333,136 @@ e2e = "{e2e_cmd}"
             vec!["A", "B"],
             "before hook must run before e2e command; got order: {lines:?}"
         );
+    }
+
+    /// Build a ResolvedCrateConfig with `[crates.test.python]` set to `extra_toml` plus an `e2e`
+    /// command built from `e2e_cmd`. No `command` is set, so the block exercises the `e2e` phase
+    /// in isolation -- matching the common consumer shape (`before` + `e2e`, no unit-test phase).
+    #[cfg(unix)]
+    fn make_config_with_e2e(extra_toml: &str, e2e_cmd: &str) -> ResolvedCrateConfig {
+        let toml = format!(
+            r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.test.python]
+{extra_toml}
+e2e = "{e2e_cmd}"
+"#
+        );
+        let cfg: NewAlefConfig = toml::from_str(&toml).unwrap();
+        cfg.resolve().unwrap().remove(0)
+    }
+
+    /// A shell command that appends `text` to `path`, escaped for single-quoting.
+    #[cfg(unix)]
+    fn shell_append_cmd(path: &std::path::Path, text: &str) -> String {
+        let escaped = path.display().to_string().replace('\'', "'\\''");
+        format!("printf '{text}\\n' >> '{escaped}'")
+    }
+
+    /// A fresh, empty marker file path scoped by `name` and the test process id, so concurrent
+    /// tests in this file never collide.
+    #[cfg(unix)]
+    fn marker_path(name: &str) -> std::path::PathBuf {
+        let tmp = std::env::temp_dir().join(format!("alef_e2e_precondition_{name}_{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).expect("create tmp dir");
+        tmp.join("marker.txt")
+    }
+
+    /// `e2e_precondition` present and passing: the e2e command runs.
+    #[cfg(unix)]
+    #[test]
+    fn e2e_precondition_present_and_passing_allows_e2e_to_run() {
+        let marker = marker_path("passing");
+        let e2e_cmd = shell_append_cmd(&marker, "ran");
+        let config = make_config_with_e2e("e2e_precondition = \"true\"", &e2e_cmd);
+
+        test(&config, &[Language::Python], true, false).expect("e2e should run when e2e_precondition passes");
+
+        assert!(marker.exists(), "e2e command should have executed");
+        std::fs::remove_dir_all(marker.parent().unwrap()).ok();
+    }
+
+    /// `e2e_precondition` present and failing: the e2e command is skipped, and since it is the
+    /// only requested suite, the exit-1 backstop fires.
+    #[cfg(unix)]
+    #[test]
+    fn e2e_precondition_present_and_failing_skips_e2e_and_trips_backstop() {
+        let marker = marker_path("failing");
+        let e2e_cmd = shell_append_cmd(&marker, "ran");
+        let config = make_config_with_e2e("e2e_precondition = \"false\"", &e2e_cmd);
+
+        let error = test(&config, &[Language::Python], true, false)
+            .expect_err("a failing e2e_precondition for the only requested language must trip the backstop");
+        assert!(
+            error.to_string().contains("every requested test suite was skipped"),
+            "got: {error}"
+        );
+        assert!(!marker.exists(), "e2e command must not run when e2e_precondition fails");
+        std::fs::remove_dir_all(marker.parent().unwrap()).ok();
+    }
+
+    /// `e2e_precondition` absent: the e2e phase runs ungated rather than inheriting a failing main
+    /// `precondition` written for a different command. This is the fix for the reported defect --
+    /// before it, a block with no `command` (only `before` + `e2e`) had no way to give `e2e` its
+    /// own tooling gate, so consumers set `precondition` to whatever `command` needed and `e2e`
+    /// inherited it.
+    #[cfg(unix)]
+    #[test]
+    fn absent_e2e_precondition_does_not_inherit_a_failing_main_precondition() {
+        let marker = marker_path("absent");
+        let e2e_cmd = shell_append_cmd(&marker, "ran");
+        let config = make_config_with_e2e("precondition = \"false\"", &e2e_cmd);
+
+        test(&config, &[Language::Python], true, false)
+            .expect("e2e must run ungated when e2e_precondition is absent, even if the main precondition fails");
+
+        assert!(
+            marker.exists(),
+            "e2e command should have executed despite the failing main precondition"
+        );
+        std::fs::remove_dir_all(marker.parent().unwrap()).ok();
+    }
+
+    /// The main `precondition` still gates the `command` phase exactly as before this change.
+    #[cfg(unix)]
+    #[test]
+    fn main_precondition_still_gates_the_command_phase() {
+        let marker = marker_path("command_gate");
+        let cmd = shell_append_cmd(&marker, "ran");
+        let toml = format!(
+            r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.test.python]
+precondition = "false"
+command = "{cmd}"
+"#
+        );
+        let cfg: NewAlefConfig = toml::from_str(&toml).unwrap();
+        let config = cfg.resolve().unwrap().remove(0);
+
+        let error = test(&config, &[Language::Python], false, false)
+            .expect_err("a failing main precondition must still skip the command phase and trip the backstop");
+        assert!(
+            error.to_string().contains("every requested test suite was skipped"),
+            "got: {error}"
+        );
+        assert!(
+            !marker.exists(),
+            "command must not run when the main precondition fails"
+        );
+        std::fs::remove_dir_all(marker.parent().unwrap()).ok();
     }
 
     #[test]
