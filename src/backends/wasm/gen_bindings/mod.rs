@@ -14,7 +14,7 @@ use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::{generators, shared};
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
-use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_dir};
+use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_layout};
 use crate::core::ir::{ApiSurface, ReceiverKind, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use regex::Regex;
@@ -1006,16 +1006,16 @@ impl Backend for WasmBackend {
             }
         }
 
-        let output_dir = resolve_output_dir(config.output_paths.get("wasm"), &config.name, "crates/{name}-wasm/src/");
-
-        let cargo_toml_path = PathBuf::from(&output_dir)
-            .parent()
-            .map(|p| p.join("Cargo.toml"))
-            .unwrap_or_else(|| PathBuf::from("Cargo.toml"));
+        // `gen_cargo_toml` emits no `[lib] path`, so cargo resolves the library at
+        // `<crate root>/src/lib.rs`; both paths must therefore come from one derivation of the
+        // output path, and taking the crate root to be its parent is right only when the
+        // configured path is `src`-suffixed. ~keep
+        let layout = resolve_output_layout(config.output_paths.get("wasm"), &config.name, "crates/{name}-wasm/src/");
+        let cargo_toml_path = layout.root.join("Cargo.toml");
 
         Ok(vec![
             GeneratedFile {
-                path: PathBuf::from(&output_dir).join("lib.rs"),
+                path: layout.src.join("lib.rs"),
                 content,
                 generated_header: false,
             },

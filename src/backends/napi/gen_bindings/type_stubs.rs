@@ -1,9 +1,10 @@
 use crate::backends::napi::gen_bindings::errors;
 use crate::core::backend::GeneratedFile;
-use crate::core::config::{AdapterPattern, NodeCapsuleTypeConfig, ResolvedCrateConfig, resolve_output_dir};
+use crate::core::config::{
+    AdapterPattern, NodeCapsuleTypeConfig, OutputLayout, ResolvedCrateConfig, resolve_output_dir,
+};
 use crate::core::ir::ApiSurface;
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 pub(super) fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
     let prefix = config.node_type_prefix();
@@ -47,16 +48,8 @@ pub(super) fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow
     let src_dir = resolve_output_dir(config.output_paths.get("node"), &config.name, "crates/{name}-node/src/");
 
     Ok(vec![GeneratedFile {
-        path: crate_root(&src_dir).join("index.d.ts"),
+        path: OutputLayout::from_output_dir(&src_dir).root.join("index.d.ts"),
         content,
         generated_header: false,
     }])
-}
-
-fn crate_root(src_dir: &str) -> PathBuf {
-    let path = PathBuf::from(src_dir);
-    match path.file_name().and_then(|name| name.to_str()) {
-        Some("src") => path.parent().map(|parent| parent.to_path_buf()).unwrap_or(path),
-        _ => path,
-    }
 }

@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A project that configures no `[crates.output]` no longer has its wasm manifest written into
+  the directory that holds every other language's package.** `OutputTemplate::resolve` defaults
+  wasm to the crate-root-shaped `packages/wasm`, while the wasm, ffi, and php emitters recovered
+  the crate root from that path with a bare `Path::parent` -- correct only for the `src`-suffixed
+  shape every consumer repo spells out. On a stock scaffold the wasm `Cargo.toml` landed at
+  `packages/Cargo.toml` (declaring a library whose `lib.rs` sat one level below it), ffi's
+  `build.rs` and `cbindgen.toml` beside it, and php's stubs at `packages/stubs/`. Cargo walks
+  upward looking for a workspace, so the stray manifest failed the *sibling* languages' builds:
+  swift's post-build step was the one that went red. The crate root is now derived from the path's
+  shape by `OutputLayout` -- parent of a `src`-suffixed path, the path itself otherwise, with
+  sources under `<root>/src` -- so the manifest always contains the sources it declares, and every
+  `src`-suffixed config resolves to exactly the paths it did before.
+
 - **Three snippet-session tests and two config tests no longer examine nothing on Windows.**
   Their `before` hooks were POSIX shell (`! find ... | grep -q .`, `$(( ))`), and alef runs hooks
   through `cmd` on Windows, which split the `;`-sequenced line on spaces and handed `touch` a

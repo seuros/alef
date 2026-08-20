@@ -8,7 +8,7 @@ mod service_api;
 mod types;
 
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::{Language, OutputLayout, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use std::path::PathBuf;
 
@@ -52,10 +52,11 @@ impl Backend for FfiBackend {
 
         validate_custom_modules_exist(config, &output_dir, config.custom_modules.for_language(Language::Ffi))?;
 
-        let parent_dir = PathBuf::from(&output_dir)
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
+        // `cbindgen.toml` and `build.rs` belong to the FFI crate, so they are placed against
+        // its root rather than against `output_dir`'s parent: a crate-root-shaped output path
+        // has no `src` to strip, and stripping one anyway drops both files into the directory
+        // that holds every *other* language's package. ~keep
+        let crate_root = OutputLayout::from_output_dir(&output_dir).root;
 
         let go_output_dir = if config.targets(Language::Go) {
             config.output_paths.get("go").map(|p| p.to_string_lossy().into_owned())
@@ -74,12 +75,12 @@ impl Backend for FfiBackend {
                 generated_header: false,
             },
             GeneratedFile {
-                path: parent_dir.join("cbindgen.toml"),
+                path: crate_root.join("cbindgen.toml"),
                 content: gen_cbindgen_toml(&prefix, api, &ffi_capsule_types, &cbindgen_exclude_types),
                 generated_header: false,
             },
             GeneratedFile {
-                path: parent_dir.join("build.rs"),
+                path: crate_root.join("build.rs"),
                 content: gen_build_rs(
                     &header_name,
                     &format!("lib{lib_name}"),

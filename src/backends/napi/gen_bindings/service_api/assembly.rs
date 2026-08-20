@@ -14,13 +14,7 @@ pub fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Resul
     use crate::core::config::resolve_output_dir;
 
     let output_dir = resolve_output_dir(config.output_paths.get("node"), &config.name, "crates/{name}-node/src/");
-    let crate_root = {
-        let p = PathBuf::from(&output_dir);
-        match p.file_name().and_then(|n| n.to_str()) {
-            Some("src") => p.parent().map(|parent| parent.to_path_buf()).unwrap_or(p),
-            _ => p,
-        }
-    };
+    let crate_root = crate::core::config::OutputLayout::from_output_dir(&output_dir).root;
     let package_name = config.name.replace('-', "_");
 
     let service_rs = gen_service_rs(api, config);

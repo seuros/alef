@@ -71,6 +71,56 @@ pub fn resolve_output_dir(config_path: Option<&PathBuf>, crate_name: &str, defau
         .unwrap_or_else(|| default.replace("{name}", crate_name))
 }
 
+/// The crate root and generated-source directory implied by one binding output path.
+///
+/// `[crates.output]` entries and [`OutputTemplate`](super::output::OutputTemplate) defaults
+/// disagree about shape: consumer configs spell out a `src`-suffixed path
+/// (`crates/foo-wasm/src/`) naming where generated *sources* land, while the template default
+/// is crate-root-shaped (`packages/wasm`) and names the *package* directory. A backend that
+/// recovers the crate root from either shape with a bare `Path::parent` is right only for the
+/// first: given the second it writes the crate's own manifest and build script into the parent
+/// of the package directory, and every sibling package's cargo invocation then walks up into
+/// that stray manifest. Derive the root from the shape instead of assuming one. ~keep
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputLayout {
+    /// The binding crate's root: where `Cargo.toml`, `build.rs`, and sibling
+    /// directories such as `stubs/` belong.
+    pub root: PathBuf,
+    /// Where generated Rust sources belong. Always `root`, `root/src`, or the
+    /// configured `src`-suffixed path itself.
+    pub src: PathBuf,
+}
+
+impl OutputLayout {
+    /// Split an already-resolved output directory into its crate root and source directory.
+    ///
+    /// A path whose final component is `src` is a source directory, so the root is its
+    /// parent. Anything else is the crate root itself, so sources go under `<root>/src`.
+    #[must_use]
+    pub fn from_output_dir(output_dir: &str) -> Self {
+        let path = PathBuf::from(output_dir);
+        if path.file_name().and_then(|name| name.to_str()) == Some("src") {
+            // An empty parent means the configured path was a bare `src`, so the crate root
+            // is the project root; joining onto it yields `Cargo.toml`, which is what the
+            // previous `unwrap_or_else` fallback produced for that case. ~keep
+            let root = path.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
+            Self { root, src: path }
+        } else {
+            let src = path.join("src");
+            Self { root: path, src }
+        }
+    }
+}
+
+/// Resolve a configured output path and split it into its crate root and source directory.
+///
+/// Takes the same arguments as [`resolve_output_dir`], whose `{name}` substitution and
+/// default handling it reuses.
+#[must_use]
+pub fn resolve_output_layout(config_path: Option<&PathBuf>, crate_name: &str, default: &str) -> OutputLayout {
+    OutputLayout::from_output_dir(&resolve_output_dir(config_path, crate_name, default))
+}
+
 /// Detect whether `serde` and `serde_json` are available in a binding crate's Cargo.toml.
 ///
 /// `output_dir` is the generated source directory (e.g., `crates/sample_project-py/src/`).
@@ -130,3 +180,6 @@ pub(crate) fn find_after_crates_prefix(path: &str) -> Option<&str> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests;

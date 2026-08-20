@@ -11,7 +11,7 @@ use crate::codegen::doc_emission::{DocTarget, sanitize_rust_idioms};
 use crate::codegen::naming::to_php_name;
 use crate::codegen::shared::{binding_fields, can_auto_delegate};
 use crate::core::backend::GeneratedFile;
-use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
+use crate::core::config::{ResolvedCrateConfig, resolve_output_layout};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, EnumDef, FieldDef, TypeRef};
 use ahash::AHashSet;
@@ -515,11 +515,8 @@ pub(super) fn generate_type_stubs(
             // Stubs are a sibling of the resolved class directory (e.g. `crates/{name}-php/stubs/`
             // next to `crates/{name}-php/src/`) so a co-located crate keeps composer.json,
             // classes, and IDE stubs together. ~keep
-            let class_dir = resolve_output_dir(config.output_paths.get("php"), &config.name, "packages/php/src/");
-            std::path::Path::new(&class_dir)
-                .parent()
-                .map(|parent| parent.join("stubs").to_string_lossy().into_owned())
-                .unwrap_or_else(|| "packages/php/stubs/".to_string())
+            let layout = resolve_output_layout(config.output_paths.get("php"), &config.name, "packages/php/src/");
+            layout.root.join("stubs").to_string_lossy().into_owned()
         });
 
     Ok(vec![GeneratedFile {
