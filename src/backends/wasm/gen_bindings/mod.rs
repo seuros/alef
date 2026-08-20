@@ -6,6 +6,7 @@ pub mod errors;
 pub mod functions;
 pub mod methods;
 pub mod service_api;
+mod ts_union;
 pub mod types;
 
 mod cargo;
@@ -643,6 +644,17 @@ impl Backend for WasmBackend {
             .cloned()
             .collect();
 
+        // Built up front (structs are emitted before enums below) so `gen_struct_methods` can
+        // type an untagged-enum-typed field's getter/setter as the real structural union instead
+        // of bare `JsValue`. `untagged_ts_plan.plans` is consumed later, in the enum loop, to
+        // keep emission order (structs, then enums) unchanged. ~keep
+        let mut untagged_ts_plan =
+            ts_union::build_untagged_enum_ts_plan_for_api(api, &exclude_types, &opaque_types, &prefix);
+        if !untagged_ts_plan.custom_section.is_empty() {
+            builder.add_item(&untagged_ts_plan.custom_section);
+        }
+        let untagged_ts_value_types = ts_union::value_type_names(&untagged_ts_plan);
+
         let core_to_binding_convertible_for_structs =
             crate::codegen::conversions::core_to_binding_convertible_types(api, &exclude_types);
 
@@ -709,13 +721,19 @@ impl Backend for WasmBackend {
                     &prefix,
                     &mutex_types,
                     &streaming_item_types,
+                    &untagged_ts_value_types,
                 ));
             }
         }
 
         for enum_def in &api.enums {
+            if exclude_types.contains(&enum_def.name) {
+                continue;
+            }
             // No `Wasm{Enum}` type for an untagged data enum — see `register_untagged_data_enum_overrides`. ~keep
-            if !exclude_types.contains(&enum_def.name) && !enums::is_untagged_data_enum(enum_def) {
+            if let Some(plan) = untagged_ts_plan.plans.remove(&enum_def.name) {
+                builder.add_item(&plan.extern_type_declaration);
+            } else if !enums::is_untagged_data_enum(enum_def) {
                 builder.add_item(&gen_enum(enum_def, &prefix));
             }
         }

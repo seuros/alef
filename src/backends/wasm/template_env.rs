@@ -153,6 +153,15 @@ static TEMPLATES: &[(&str, &str)] = &[
         "service_js_decorator_variant.jinja",
         include_str!("templates/service_js_decorator_variant.jinja"),
     ),
+    ("ts_interface", include_str!("templates/ts_interface.jinja")),
+    ("ts_inline_object", include_str!("templates/ts_inline_object.jinja")),
+    ("ts_type_alias", include_str!("templates/ts_type_alias.jinja")),
+    ("ts_custom_section", include_str!("templates/ts_custom_section.jinja")),
+    (
+        "ts_extern_value_type",
+        include_str!("templates/ts_extern_value_type.jinja"),
+    ),
+    ("ts_bridged_setter", include_str!("templates/ts_bridged_setter.jinja")),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {

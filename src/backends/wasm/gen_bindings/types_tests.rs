@@ -9,6 +9,10 @@ fn enum_names(names: &[&str]) -> AHashSet<String> {
     names.iter().map(|s| (*s).to_string()).collect()
 }
 
+fn no_untagged_ts_types() -> ahash::AHashMap<String, String> {
+    ahash::AHashMap::default()
+}
+
 #[test]
 fn gen_getter_option_vec_unit_enum_flattens_option() {
     let field = FieldDef {
@@ -19,7 +23,7 @@ fn gen_getter_option_vec_unit_enum_flattens_option() {
     };
     let enums = enum_names(&["Modality"]);
     let tagged: AHashSet<String> = AHashSet::new();
-    let out = gen_getter(&field, &mapper(), &enums, &tagged, false);
+    let out = gen_getter(&field, &mapper(), &enums, &tagged, false, &no_untagged_ts_types());
     assert!(
         out.contains("-> Option<Vec<String>>"),
         "getter must return Option<Vec<String>>: {out}"
@@ -44,7 +48,7 @@ fn gen_setter_option_vec_unit_enum_wraps_some() {
     };
     let enums = enum_names(&["Modality"]);
     let tagged: AHashSet<String> = AHashSet::new();
-    let out = gen_setter(&field, &mapper(), &enums, false, &tagged);
+    let out = gen_setter(&field, &mapper(), &enums, false, &tagged, &no_untagged_ts_types());
     assert!(
         out.contains("value: Option<Vec<String>>"),
         "setter must take Option<Vec<String>>: {out}"
@@ -65,7 +69,7 @@ fn gen_getter_setter_required_vec_unit_enum_unchanged() {
     };
     let enums = enum_names(&["Modality"]);
     let tagged: AHashSet<String> = AHashSet::new();
-    let getter = gen_getter(&field, &mapper(), &enums, &tagged, false);
+    let getter = gen_getter(&field, &mapper(), &enums, &tagged, false, &no_untagged_ts_types());
     assert!(
         getter.contains("-> Vec<String>"),
         "getter must return Vec<String>: {getter}"
@@ -74,7 +78,7 @@ fn gen_getter_setter_required_vec_unit_enum_unchanged() {
         getter.contains("self.tags.iter().map(|v| v.to_api_str().to_owned()).collect()"),
         "getter must iterate the Vec directly: {getter}"
     );
-    let setter = gen_setter(&field, &mapper(), &enums, false, &tagged);
+    let setter = gen_setter(&field, &mapper(), &enums, false, &tagged, &no_untagged_ts_types());
     assert!(
         setter.contains("value: Vec<String>"),
         "setter must take Vec<String>: {setter}"
@@ -125,6 +129,7 @@ fn gen_struct_methods_skips_method_wrapper_when_field_getter_already_emitted() {
         "Wasm",
         &AHashSet::default(),
         &ahash::AHashMap::default(),
+        &no_untagged_ts_types(),
     );
 
     let occurrences = out.matches("fn providers(").count();
@@ -192,6 +197,7 @@ fn gen_getter_named_enum_mapped_to_js_value_skips_to_api_str() {
         &enums,
         &tagged,
         false,
+        &no_untagged_ts_types(),
     );
     assert!(
         !out.contains("to_api_str"),
@@ -216,7 +222,7 @@ fn gen_getter_named_enum_without_override_still_uses_to_api_str() {
     let enums = enum_names(&["Modality"]);
     let tagged: AHashSet<String> = AHashSet::new();
 
-    let out = gen_getter(&field, &mapper(), &enums, &tagged, false);
+    let out = gen_getter(&field, &mapper(), &enums, &tagged, false, &no_untagged_ts_types());
     assert!(out.contains("-> String"), "getter must expose the wire string: {out}");
     assert!(
         out.contains("self.modality.to_api_str().to_owned()"),
@@ -242,13 +248,14 @@ fn gen_setter_vec_enum_mapped_to_js_value_skips_from_api_str() {
         &enums,
         false,
         &tagged,
+        &no_untagged_ts_types(),
     );
     assert!(
         !out.contains("from_api_str") && !out.contains("WasmModality"),
         "an overridden enum has no generated wrapper to parse into: {out}"
     );
 
-    let control = gen_setter(&field, &mapper(), &enums, false, &tagged);
+    let control = gen_setter(&field, &mapper(), &enums, false, &tagged, &no_untagged_ts_types());
     assert!(
         control.contains("WasmModality::from_api_str"),
         "wrapper-backed enum setter must keep parsing wire strings: {control}"

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The WASM backend gives `#[serde(untagged)]` data enums a real structural TypeScript type**
+  instead of `any`. A field of that type still round-trips through `JsValue` via
+  `serde_wasm_bindgen` exactly as before (unchanged Rust-side bridging), but its getter/setter
+  now returns/accepts a wasm-bindgen extern type carrying a hand-written `typescript_type`
+  (e.g. `content: string | ContentPart[]` instead of `content: any`). The new
+  `src/backends/wasm/gen_bindings/ts_union.rs` module recursively maps each variant's payload —
+  primitives, `String`, `Vec`, `Option`, string-keyed `Map`, newtype and struct variants, named
+  structs (emitted as a TS `interface`), and named fieldless enums (emitted as a string-literal
+  union, since the enum's own wasm-bindgen `enum` uses an incompatible numeric ABI
+  representation) — with a per-variant fallback to `any` for opaque/excluded/unresolvable
+  payloads only, never the whole union. Every untagged enum in a crate shares one combined
+  `typescript_custom_section` so a struct or fieldless enum reachable from more than one union is
+  declared exactly once.
+
 ### Fixed
 
 

@@ -166,15 +166,32 @@ fn required_untagged_data_enum_field_becomes_js_value_not_fieldless_wasm_enum() 
 
     assert!(
         lib_rs.contains("input: JsValue,"),
-        "the struct field must be stored as JsValue so the payload round-trips;\nactual:\n{lib_rs}"
+        "the struct field must still be stored as JsValue so the payload round-trips;\nactual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("pub fn set_input(&mut self, value: JsValue)"),
-        "the setter must accept JsValue (any JS value), not the old fieldless enum;\nactual:\n{lib_rs}"
+        lib_rs.contains("pub fn set_input(&mut self, value: WasmEmbeddingInputValue)"),
+        "the setter must accept the structural TS wrapper type, not bare JsValue;\nactual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("pub fn input(&self) -> JsValue"),
-        "the getter must return JsValue, not a wire string of the variant name;\nactual:\n{lib_rs}"
+        lib_rs.contains("self.input = value.into();"),
+        "the setter must convert the wrapper type into the JsValue field;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("pub fn input(&self) -> WasmEmbeddingInputValue"),
+        "the getter must return the structural TS wrapper type so the .d.ts carries a real type \
+         instead of `any`, not a wire string of the variant name;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("self.input.clone().unchecked_into()"),
+        "the getter must convert the JsValue field into the wrapper type;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains(r#"typescript_type = "WasmEmbeddingInput""#),
+        "the untagged enum must get a typescript_type declaration describing its real shape;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmEmbeddingInput = string | string[];"),
+        "the declared TS union must be the structural shape, not `any`;\nactual:\n{lib_rs}"
     );
 
     assert!(
@@ -223,11 +240,23 @@ fn optional_untagged_data_enum_field_becomes_option_js_value() {
     );
     assert!(
         lib_rs.contains("input: Option<JsValue>,"),
-        "an optional field of this type must be Option<JsValue>;\nactual:\n{lib_rs}"
+        "an optional field of this type must still be stored as Option<JsValue>;\nactual:\n{lib_rs}"
     );
     assert!(
-        lib_rs.contains("pub fn set_input(&mut self, value: Option<JsValue>)"),
-        "the setter must accept Option<JsValue>;\nactual:\n{lib_rs}"
+        lib_rs.contains("pub fn set_input(&mut self, value: Option<WasmEmbeddingInputValue>)"),
+        "the setter must accept Option<the structural TS wrapper type>;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("self.input = value.map(Into::into);"),
+        "the setter must convert each Some value into JsValue;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("pub fn input(&self) -> Option<WasmEmbeddingInputValue>"),
+        "the getter must return Option<the structural TS wrapper type>;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("self.input.clone().map(|v| v.unchecked_into())"),
+        "the getter must convert each Some JsValue into the wrapper type;\nactual:\n{lib_rs}"
     );
 }
 
@@ -325,6 +354,138 @@ fn untagged_data_enum_in_text_types_is_string_on_every_surface() {
             name: "input".to_string(),
             ty: TypeRef::Named("EmbeddingInput".to_string()),
             optional: true,
+/// Every real-consumer shape from `ts_union.rs`'s module doc comment, generated together in one
+/// crate — proves the combined-custom-section dedup holds end to end (not just in `ts_union`'s
+/// own unit tests) and that a fieldless enum used both as a union member and as its own ordinary
+/// field type coexists without a name collision. This exact generated source was also used to
+/// manually verify the real `.d.ts` wasm-bindgen produces (see the PR description / commit
+/// message for that evidence — a unit test cannot itself invoke wasm-bindgen).
+#[test]
+fn all_real_consumer_shapes_share_one_custom_section_without_collisions() {
+    let mut api = empty_api();
+
+    let embedding_input = embedding_input_enum();
+
+    let moderation_input = EnumDef {
+        name: "ModerationInput".to_string(),
+        rust_path: "test_lib::ModerationInput".to_string(),
+        variants: embedding_input.variants.clone(),
+        has_serde: true,
+        has_default: true,
+        serde_untagged: true,
+        ..Default::default()
+    };
+
+    let rerank_document = EnumDef {
+        name: "RerankDocument".to_string(),
+        rust_path: "test_lib::RerankDocument".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Text".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                is_tuple: true,
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Object".to_string(),
+                fields: vec![FieldDef {
+                    name: "text".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                is_tuple: false,
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        has_default: true,
+        serde_untagged: true,
+        ..Default::default()
+    };
+
+    let user_content = EnumDef {
+        name: "UserContent".to_string(),
+        rust_path: "test_lib::UserContent".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Text".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                is_tuple: true,
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Parts".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::Vec(Box::new(TypeRef::Named("ContentPart".to_string()))),
+                    ..Default::default()
+                }],
+                is_tuple: true,
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        has_default: true,
+        serde_untagged: true,
+        ..Default::default()
+    };
+
+    let content_part = TypeDef {
+        name: "ContentPart".to_string(),
+        rust_path: "test_lib::ContentPart".to_string(),
+        fields: vec![
+            FieldDef {
+                name: "text".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            },
+            FieldDef {
+                name: "kind".to_string(),
+                ty: TypeRef::String,
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        ..Default::default()
+    };
+
+    let tool_choice_mode = EnumDef {
+        name: "ToolChoiceMode".to_string(),
+        rust_path: "test_lib::ToolChoiceMode".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Auto".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Required".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "None".to_string(),
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        is_copy: true,
+        serde_rename_all: Some("snake_case".to_string()),
+        ..Default::default()
+    };
+
+    let specific_tool_choice = TypeDef {
+        name: "SpecificToolChoice".to_string(),
+        rust_path: "test_lib::SpecificToolChoice".to_string(),
+        fields: vec![FieldDef {
+            name: "name".to_string(),
+            ty: TypeRef::String,
             ..Default::default()
         }],
         has_serde: true,
@@ -332,6 +493,87 @@ fn untagged_data_enum_in_text_types_is_string_on_every_surface() {
     }];
 
     let config = make_config_with_text_types("\"EmbeddingInput\"");
+    };
+
+    let tool_choice = EnumDef {
+        name: "ToolChoice".to_string(),
+        rust_path: "test_lib::ToolChoice".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Mode".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::Named("ToolChoiceMode".to_string()),
+                    ..Default::default()
+                }],
+                is_tuple: true,
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Specific".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::Named("SpecificToolChoice".to_string()),
+                    ..Default::default()
+                }],
+                is_tuple: true,
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        has_default: true,
+        serde_untagged: true,
+        ..Default::default()
+    };
+
+    api.enums = vec![
+        embedding_input,
+        moderation_input,
+        rerank_document,
+        user_content,
+        tool_choice_mode,
+        tool_choice,
+    ];
+    api.types = vec![
+        content_part,
+        specific_tool_choice,
+        TypeDef {
+            name: "AllShapes".to_string(),
+            rust_path: "test_lib::AllShapes".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "embedding".to_string(),
+                    ty: TypeRef::Named("EmbeddingInput".to_string()),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "moderation".to_string(),
+                    ty: TypeRef::Named("ModerationInput".to_string()),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "document".to_string(),
+                    ty: TypeRef::Named("RerankDocument".to_string()),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "content".to_string(),
+                    ty: TypeRef::Named("UserContent".to_string()),
+                    ..Default::default()
+                },
+                FieldDef {
+                    name: "choice".to_string(),
+                    ty: TypeRef::Named("ToolChoice".to_string()),
+                    ..Default::default()
+                },
+            ],
+            has_serde: true,
+            ..Default::default()
+        },
+    ];
+    api.functions = vec![function_taking("AllShapes")];
+
+    let config = make_config();
     let files = WasmBackend.generate_bindings(&api, &config).unwrap();
     let lib_rs = &files
         .iter()
@@ -358,5 +600,53 @@ fn untagged_data_enum_in_text_types_is_string_on_every_surface() {
     assert!(
         !lib_rs.contains("serde_wasm_bindgen::to_value(&val.input)"),
         "conversions must use the display-text bridge, not serde_wasm_bindgen;\nactual:\n{lib_rs}"
+        .unwrap()
+        .content;
+    // All six untagged-union shapes share one combined typescript_custom_section (see
+    // `ts_union::AllUntaggedEnumsTsPlan`) — each alias declared exactly once.
+    assert!(lib_rs.contains("const ALEF_UNTAGGED_UNIONS_TS"), "actual:\n{lib_rs}");
+    assert_eq!(
+        lib_rs.matches("typescript_custom_section").count(),
+        1,
+        "every untagged union must share one custom section, not one each;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmEmbeddingInput = string | string[];"),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmModerationInput = string | string[];"),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmRerankDocument = string | { text: string; };"),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export interface WasmContentPart {\n    text: string;\n    kind: string;\n}"),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmUserContent = string | WasmContentPart[];"),
+        "actual:\n{lib_rs}"
+    );
+    // `ToolChoiceMode` is ALSO independently emitted as a real `Wasm{Enum}` wasm-bindgen TS enum
+    // below (it's a plain fieldless enum, so `gen_enum` always emits it) — the union member must
+    // use the disambiguated `Wire` name, never the bare name the real enum already claims.
+    assert!(
+        lib_rs.contains(r#"export type WasmToolChoiceModeWire = "auto" | "required" | "none";"#),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export interface WasmSpecificToolChoice {\n    name: string;\n}"),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("export type WasmToolChoice = WasmToolChoiceModeWire | WasmSpecificToolChoice;"),
+        "actual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("pub enum WasmToolChoiceMode {"),
+        "the real fieldless enum must still be emitted unchanged alongside the union;\nactual:\n{lib_rs}"
     );
 }

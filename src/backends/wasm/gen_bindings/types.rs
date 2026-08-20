@@ -6,7 +6,7 @@ use crate::codegen::type_mapper::TypeMapper;
 use crate::codegen::{generators, naming::to_node_name, shared};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::{EnumDef, FieldDef, MethodDef, ReceiverKind, TypeDef, TypeRef};
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use heck::ToPascalCase;
 
 use super::functions::{emit_rustdoc, format_param_unused, gen_wasm_unimplemented_body, wasm_wrap_return};
@@ -461,6 +461,7 @@ pub(super) fn gen_struct_methods(
     prefix: &str,
     mutex_types: &AHashSet<String>,
     streaming_item_types: &ahash::AHashMap<String, String>,
+    untagged_ts_value_types: &AHashMap<String, String>,
 ) -> String {
     use super::field_references_excluded_type;
 
@@ -501,6 +502,7 @@ pub(super) fn gen_struct_methods(
             &enum_names,
             &tagged_data_enum_names,
             typ.has_default,
+            untagged_ts_value_types,
         ));
         impl_builder.add_method(&gen_setter(
             field,
@@ -508,6 +510,7 @@ pub(super) fn gen_struct_methods(
             &enum_names,
             typ.has_default,
             &tagged_data_enum_names,
+            untagged_ts_value_types,
         ));
     }
 
@@ -711,6 +714,28 @@ fn wrapper_backed_enum_names(mapper: &WasmMapper, enum_names: &AHashSet<String>)
         .collect()
 }
 
+/// If `field` is a bare or `Option`-wrapped reference to an untagged data enum that has a
+/// registered structural TS type (see `ts_union.rs`), returns `(is_optional, value_type_name)`
+/// — the wasm-bindgen extern type the getter/setter should expose instead of bare `JsValue`.
+/// `Vec`/`Map`-nested references aren't covered: those still collapse to a bare `JsValue` field
+/// exactly as before, since `Vec<extern-type>` across the wasm-bindgen ABI wasn't verified. ~keep
+fn untagged_ts_value_type(
+    field: &FieldDef,
+    untagged_ts_value_types: &AHashMap<String, String>,
+) -> Option<(bool, String)> {
+    if field.optional {
+        match optional_inner(&field.ty) {
+            TypeRef::Named(n) => untagged_ts_value_types.get(n).map(|v| (true, v.clone())),
+            _ => None,
+        }
+    } else {
+        match &field.ty {
+            TypeRef::Named(n) => untagged_ts_value_types.get(n).map(|v| (false, v.clone())),
+            _ => None,
+        }
+    }
+}
+
 /// Generate a getter method for a field.
 fn gen_getter(
     field: &FieldDef,
@@ -718,6 +743,7 @@ fn gen_getter(
     enum_names: &AHashSet<String>,
     tagged_data_enum_names: &AHashSet<String>,
     has_default: bool,
+    untagged_ts_value_types: &AHashMap<String, String>,
 ) -> String {
     let force_optional = has_default && !field.optional && matches!(field.ty, TypeRef::Duration);
     let field_type = if force_optional {
@@ -758,8 +784,15 @@ fn gen_getter(
             TypeRef::Vec(elem) if matches!(elem.as_ref(), TypeRef::Named(n) if !enum_names.contains(n))
         )
         && !is_vec_of_tagged_data_enum(inner_ty, tagged_data_enum_names);
+    let untagged_ts = untagged_ts_value_type(field, untagged_ts_value_types);
 
-    let (field_type, return_expr) = if is_vec_unit_enum {
+    let (field_type, return_expr) = if let Some((true, value_type)) = &untagged_ts {
+        let expr = format!("self.{}.clone().map(|v| v.unchecked_into())", field.name);
+        (format!("Option<{value_type}>"), expr)
+    } else if let Some((false, value_type)) = &untagged_ts {
+        let expr = format!("self.{}.clone().unchecked_into()", field.name);
+        (value_type.clone(), expr)
+    } else if is_vec_unit_enum {
         let expr = format!(
             "self.{}.iter().map(|v| v.to_api_str().to_owned()).collect()",
             field.name
@@ -819,6 +852,7 @@ fn gen_setter(
     enum_names: &AHashSet<String>,
     has_default: bool,
     tagged_data_enum_names: &AHashSet<String>,
+    untagged_ts_value_types: &AHashMap<String, String>,
 ) -> String {
     let force_optional = has_default && !field.optional && matches!(field.ty, TypeRef::Duration);
     let is_vec_tagged_enum = is_vec_of_tagged_data_enum(&field.ty, tagged_data_enum_names);
@@ -839,6 +873,25 @@ fn gen_setter(
     } else {
         String::new()
     };
+
+    if let Some((is_optional, value_type)) = untagged_ts_value_type(field, untagged_ts_value_types) {
+        let (param_type, assign_expr) = if is_optional {
+            (format!("Option<{value_type}>"), "value.map(Into::into)".to_string())
+        } else {
+            (value_type, "value.into()".to_string())
+        };
+        return crate::backends::wasm::template_env::render(
+            "ts_bridged_setter",
+            minijinja::context! {
+                js_name_attr => js_name_attr,
+                field_name => field.name,
+                param_type => param_type,
+                assign_expr => format!("self.{} = {assign_expr};", field.name),
+            },
+        )
+        .trim_end()
+        .to_string();
+    }
 
     if is_vec_unit_enum {
         let inner = vec_unit_enum_inner_name(&field.ty, &wrapper_enum_names, tagged_data_enum_names, &mapper.prefix)
