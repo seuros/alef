@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Ruby (Magnus) e2e visitor fixture now returns the lowercase wire values the generated
+  binding actually matches on.** `e2e/templates/ruby/visitor_method.jinja` hardcoded
+  `'Skip'`/`'Continue'`/`'PreserveHtml'`/`{ Custom: ... }`, while the Magnus backend's
+  `gen_visitor_bridge` matches on the enum's lowercase wire name (`"skip"`/`"continue"`/
+  `"preserve_html"`) and looks up the custom payload via `ruby.to_symbol("custom")`. Every
+  skip/continue/preserve_html callback fell through to the catch-all as `Custom("Skip")`
+  and every custom-hash lookup missed. `php/visitor_method.jinja` and the unused
+  `wasm/visitor_method.jinja` and `r/visitor_method.jinja` templates had the same
+  hardcoded-PascalCase defect and are fixed alongside it.
+
 - **A project that configures no `[crates.output]` no longer has its wasm manifest written into
   the directory that holds every other language's package.** `OutputTemplate::resolve` defaults
   wasm to the crate-root-shaped `packages/wasm`, while the wasm, ffi, and php emitters recovered

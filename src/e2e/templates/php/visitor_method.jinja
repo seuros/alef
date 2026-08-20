@@ -8,18 +8,18 @@
 #}
     public function {{ method_name }}({{ params }}) {
 {% if action_type == "skip" %}
-        return 'Skip';
+        return 'skip';
 {% elif action_type == "continue" %}
-        return 'Continue';
+        return 'continue';
 {% elif action_type == "preserve_html" %}
-        return 'PreserveHtml';
+        return 'preserve_html';
 {% elif action_type == "custom" %}
-        return ['Custom' => "{{ action_value }}"];
+        return ['custom' => "{{ action_value }}"];
 {% elif action_type == "custom_template" %}
 {% if return_form == "bare_string" %}
         return "{{ action_value }}";
 {% else %}
-        return ['Custom' => "{{ action_value }}"];
+        return ['custom' => "{{ action_value }}"];
 {% endif %}
 {% endif %}
     }

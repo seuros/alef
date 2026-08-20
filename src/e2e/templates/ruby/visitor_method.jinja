@@ -9,18 +9,18 @@
 #}
   def {{ method_name }}({{ params }})
 {% if action_type == "skip" %}
-    'Skip'
+    'skip'
 {% elif action_type == "continue" %}
-    'Continue'
+    'continue'
 {% elif action_type == "preserve_html" %}
-    'PreserveHtml'
+    'preserve_html'
 {% elif action_type == "custom" %}
-    { Custom: {{ action_value }} }
+    { custom: {{ action_value }} }
 {% elif action_type == "custom_template" %}
 {% if return_form == "bare_string" %}
     {{ action_value }}
 {% else %}
-    { Custom: {{ action_value }} }
+    { custom: {{ action_value }} }
 {% endif %}
 {% endif %}
   end
