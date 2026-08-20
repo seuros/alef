@@ -421,7 +421,7 @@ features = ["serde"]
             fixtures: vec![fixture],
         }];
 
-        let files = generate(&groups, &e2e_config, &config, &[], &functions).expect("generation succeeds");
+        let files = generate(&groups, &e2e_config, &config, &[], &[], &functions).expect("generation succeeds");
 
         for file in &files {
             assert!(
@@ -477,7 +477,7 @@ features = ["serde"]
             fixtures: vec![fixture],
         }];
 
-        let files = generate(&groups, &e2e_config, &config, &[], &functions).expect("generation succeeds");
+        let files = generate(&groups, &e2e_config, &config, &[], &[], &functions).expect("generation succeeds");
 
         assert!(
             files.iter().any(|f| f.content.contains("manifestLanguages(")),
