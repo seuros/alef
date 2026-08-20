@@ -96,18 +96,28 @@ jobs:
           # release. ~keep
           deadline=$(( SECONDS + 3600 ))
           while true; do
-            conclusion="$(gh api \
+            # One request per poll, read three fields from it. Two separate calls could
+            # straddle a state change and report a stale status against a fresh conclusion,
+            # and they doubled the request count against a 60m poll loop. ~keep
+            #
+            # `|| true` because this loop must survive a transient API failure. Under
+            # `set -e` a single 5xx or a secondary rate-limit would abort the job, which
+            # here means refusing to publish a release whose CI is perfectly green. An
+            # empty read is indistinguishable from "no run yet" and simply polls again;
+            # the deadline below is what bounds the loop. ~keep
+            run_json="$(gh api \
               "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=1" \
-              --jq '.workflow_runs[0].conclusion // ""')"
-            status="$(gh api \
-              "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=1" \
-              --jq '.workflow_runs[0].status // ""')"
+              --jq '.workflow_runs[0] | "\(.conclusion // "")\t\(.status // "")\t\(.html_url // "")"' \
+              2>/dev/null || true)"
+            conclusion="$(printf '%s' "$run_json" | cut -f1)"
+            status="$(printf '%s' "$run_json" | cut -f2)"
+            run_url="$(printf '%s' "$run_json" | cut -f3)"
             if [ "$conclusion" = "success" ]; then
-              echo "CI succeeded for $sha"
+              echo "CI succeeded for $sha ($run_url)"
               exit 0
             fi
             if [ -n "$conclusion" ]; then
-              echo "::error::CI concluded '$conclusion' for $sha -- refusing to publish."
+              echo "::error::CI concluded '$conclusion' for $sha -- refusing to publish. See $run_url"
               exit 1
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
