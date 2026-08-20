@@ -61,7 +61,6 @@ pub(super) fn render_assertion_dart(
     result_var: &str,
     result_is_simple: bool,
     field_resolver: &FieldResolver,
-    enum_fields: &std::collections::HashSet<String>,
 ) {
     // Skip assertions on fields that don't exist on the dart result type. This must run
     // BEFORE the array-traversal and standard accessor paths since both emit code that
@@ -211,14 +210,19 @@ pub(super) fn render_assertion_dart(
                 let dart_val = format_value(expected);
                 // Check if this field is an enum field. Enum fields need _alefE2eText for serde
                 // wire format conversion (e.g. FinishReason.toolCalls → "tool_calls").
+                // `field_resolver.is_enum` consults the hand-maintained `fields_enum`/
+                // `enum_fields` config first and only then the IR-derived classification
+                // (`with_ir_enum_map`), so an explicit config entry still wins — this only
+                // rescues fields a consumer's `alef.toml` never mentions. A config-only check
+                // used to answer `false` for those, SILENTLY skipping `_alefE2eText` rather than
+                // failing to compile: `expect(result.kind.toString(), equals('key_value'))`
+                // compares the enum's Dart `toString()` (its variant name) against the fixture's
+                // serde wire value, so the test passes or fails on the wrong string. ~keep
                 let is_enum_field = assertion
                     .field
                     .as_deref()
-                    .map(|f| {
-                        let resolved = field_resolver.resolve(f);
-                        enum_fields.contains(f) || enum_fields.contains(resolved)
-                    })
-                    .unwrap_or(false);
+                    .filter(|f| !f.is_empty())
+                    .is_some_and(|f| field_resolver.is_enum(f));
 
                 // Check if this field is a display-as-text type (e.g. AssistantContent).
                 let is_display_as_text = assertion
@@ -287,15 +291,13 @@ pub(super) fn render_assertion_dart(
         "not_equals" => {
             if let Some(expected) = &assertion.value {
                 let dart_val = format_value(expected);
-                // Check if this field is an enum field.
+                // Check if this field is an enum field. See the `equals`/`field_equals` arm
+                // above for why this must consult the IR, not only the config. ~keep
                 let is_enum_field = assertion
                     .field
                     .as_deref()
-                    .map(|f| {
-                        let resolved = field_resolver.resolve(f);
-                        enum_fields.contains(f) || enum_fields.contains(resolved)
-                    })
-                    .unwrap_or(false);
+                    .filter(|f| !f.is_empty())
+                    .is_some_and(|f| field_resolver.is_enum(f));
 
                 // Check if this field is a display-as-text type.
                 let is_display_as_text = assertion
@@ -827,7 +829,7 @@ mod wildcard_tests {
             ..Assertion::default()
         };
         let mut out = String::new();
-        render_assertion_dart(&mut out, &assertion, "result", false, resolver, &HashSet::new());
+        render_assertion_dart(&mut out, &assertion, "result", false, resolver);
         out
     }
 
@@ -927,7 +929,7 @@ mod is_true_optional_field_tests {
 
     fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
         let mut out = String::new();
-        render_assertion_dart(&mut out, assertion, "result", false, resolver, &HashSet::new());
+        render_assertion_dart(&mut out, assertion, "result", false, resolver);
         out
     }
 

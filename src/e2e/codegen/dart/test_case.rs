@@ -169,6 +169,24 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
             .with_functions(functions);
     let target_params = call_recipe.target_params(lang);
+    let call_overrides = call_config.overrides.get(lang);
+
+    // Merge per-language enum_fields from the Dart override into the effective enum set so that
+    // fields like "status" (BatchStatus on BatchObject) are treated as enum-typed even when
+    // they are not globally listed in fields_enum (they are context-dependent — BatchStatus on
+    // BatchObject but plain String on ResponseObject). `with_ir_enum_map` below then rescues
+    // every enum-typed field this config never mentions at all, anchored at the call's declared
+    // Rust return type. ~keep
+    let mut effective_enum_fields: HashSet<String> = e2e_config.effective_fields_enum(call_config).clone();
+    if let Some(overrides) = call_overrides {
+        effective_enum_fields.extend(overrides.enum_fields.keys().cloned());
+    }
+    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call_config,
+        lang,
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
+
     // Build per-call field resolver using the effective field sets for this call.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_dart_first_class(
@@ -182,26 +200,10 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_dart_root_type(super::dart_call_result_type(call_config).or_else(|| dart_first_class_map.root_type.clone()))
+    .with_enum_fields(effective_enum_fields)
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
-    let enum_fields_base = e2e_config.effective_fields_enum(call_config);
-
-    // Merge per-language enum_fields from the Dart override into the effective enum set so that
-    // fields like "status" (BatchStatus on BatchObject) are treated as enum-typed
-    // even when they are not globally listed in fields_enum (they are context-
-    // dependent — BatchStatus on BatchObject but plain String on ResponseObject).
-    let effective_enum_fields: HashSet<String> = {
-        let dart_overrides = call_config.overrides.get("dart");
-        if let Some(overrides) = dart_overrides {
-            let mut merged = enum_fields_base.clone();
-            merged.extend(overrides.enum_fields.keys().cloned());
-            merged
-        } else {
-            enum_fields_base.clone()
-        }
-    };
-    let enum_fields = &effective_enum_fields;
-    let call_overrides = call_config.overrides.get(lang);
     let mut function_name = call_overrides
         .and_then(|o| o.function.as_ref())
         .cloned()
@@ -1146,14 +1148,7 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
             if is_streaming {
                 render_streaming_assertion_dart(out, assertion, result_var);
             } else {
-                render_assertion_dart(
-                    out,
-                    assertion,
-                    result_var,
-                    result_is_simple,
-                    field_resolver,
-                    enum_fields,
-                );
+                render_assertion_dart(out, assertion, result_var, result_is_simple, field_resolver);
             }
         }
 

@@ -212,6 +212,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test target failed to compile. Swift now wires the same IR-derived classification
   (`FieldResolver::ir_enum_fields` + `with_ir_enum_map`, anchored at the call's declared Rust
   return type) the rust/csharp/gleam generators use; an explicit config entry still wins.
+- **Dart e2e assertions now classify enum-typed result fields from the IR, not only from
+  hand-maintained `fields_enum`/`[e2e.call.overrides.dart] enum_fields` config.** A consumer
+  whose `alef.toml` never declared that entry got no `_alefE2eText` serde-wire conversion on a
+  genuine `DataNodeKind` enum field — `expect(result.kind.toString(), equals('key_value'))`
+  compares Dart's default enum `toString()` (its declaration name) against the fixture's serde
+  wire value, so the assertion silently asserts the wrong string instead of failing to compile.
+  Dart now wires the same IR-derived classification (`FieldResolver::ir_enum_fields` +
+  `with_ir_enum_map`, anchored at the call's declared Rust return type) the rust/csharp/swift/
+  gleam generators use; an explicit config entry still wins.
 - **e2e/kotlin_android**: stop emitting a call to a function `[crates.kotlin_android].features`
   gated out of the binding. The kotlin_android binding generator already drops any
   `#[cfg(feature = "...")]`-gated function whose feature isn't in the binding's configured
