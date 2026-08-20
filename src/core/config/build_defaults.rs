@@ -418,24 +418,32 @@ mod tests {
     /// and no fetched dependencies — and it must fail. ~keep
     #[test]
     fn mix_dependency_check_fails_on_a_pristine_checkout_and_passes_once_deps_are_fetched() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let package = dir.path().to_str().expect("utf-8 path");
-        let passes = |dir: &str| {
+        let root = tempfile::tempdir().expect("tempdir");
+        // The check is emitted with the *relative* `output_dir` a real config carries
+        // (`packages/elixir`), and is run from the workspace root. Handing `sh` an absolute path
+        // instead would feed it `C:\Users\...` on Windows, where every backslash is an `sh`
+        // escape -- the test then answers "no deps" whatever is on disk, and its first assertion
+        // passes for the wrong reason. ~keep
+        const PACKAGE: &str = "packages/elixir";
+        let package = root.path().join(PACKAGE);
+        std::fs::create_dir_all(&package).expect("create package dir");
+        let passes = || {
             std::process::Command::new("sh")
-                .args(["-c", &mix_dependency_check(dir)])
+                .args(["-c", &mix_dependency_check(PACKAGE)])
+                .current_dir(root.path())
                 .status()
                 .expect("check runs")
                 .success()
         };
-        std::fs::write(dir.path().join("mix.exs"), "defmodule Sample.MixProject do\nend\n").expect("write mix.exs");
+        std::fs::write(package.join("mix.exs"), "defmodule Sample.MixProject do\nend\n").expect("write mix.exs");
 
         assert!(
-            !passes(package),
+            !passes(),
             "a checked-out mix project with no deps/ has not run `mix deps.get`"
         );
 
-        std::fs::create_dir(dir.path().join("deps")).expect("create deps");
-        assert!(passes(package), "fetched deps must let the build through");
+        std::fs::create_dir(package.join("deps")).expect("create deps");
+        assert!(passes(), "fetched deps must let the build through");
     }
 
     #[test]

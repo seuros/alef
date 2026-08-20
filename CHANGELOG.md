@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three snippet-session tests and two config tests no longer examine nothing on Windows.**
+  Their `before` hooks were POSIX shell (`! find ... | grep -q .`, `$(( ))`), and alef runs hooks
+  through `cmd` on Windows, which split the `;`-sequenced line on spaces and handed `touch` a
+  `-lt` flag; the mix dependency check was driven with an absolute Windows path through `sh`,
+  where every backslash is an escape, so it answered "no deps" whatever was on disk and its
+  first assertion passed for the wrong reason. The hooks are now `cmd`-metacharacter-free and
+  handed to `sh` explicitly on Windows, the mix check runs against the relative package directory
+  a real config carries, and the README snippet-root assertion builds its expected path with
+  `Path::join` instead of a hard-coded `/`.
+
 - **A session-scoped Zig snippet's `build.zig.zon` no longer names its dependency with a host
   path separator.** The generated `.path` value was rendered with `Path::to_string_lossy`, which
   on Windows emits `..\package`. Zig resolves `.path` dependencies POSIX-style on every platform,

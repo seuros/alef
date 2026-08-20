@@ -442,6 +442,40 @@ mod tests {
         assert!(error.contains("manifest does not exist"));
     }
 
+    /// Wrap a POSIX `before` hook so it survives whichever shell [`shell_command`] picks.
+    ///
+    /// Hooks are consumer-authored shell text run verbatim, and on Windows that shell is `cmd`,
+    /// which cannot parse `!`, `[ ... ]` or `$(( ))` and which splits a `;`-sequenced line on
+    /// spaces -- `touch a; attempts=0; while [ $attempts -lt 500 ]` reached `touch` as one
+    /// argument list and died on `-lt`. The orchestration these tests exercise (purge ordering,
+    /// concurrent scheduling) is platform-independent; only the instrument is POSIX, so the
+    /// instrument is handed to `sh` explicitly there.
+    ///
+    /// `script` must therefore contain no `cmd` metacharacter -- `& | < > ( ) ^ "` -- because
+    /// `cmd` parses the outer line before `sh` ever sees it. Single quotes are not special to
+    /// `cmd` and survive to `sh` intact. ~keep
+    fn posix_hook(script: &str) -> String {
+        debug_assert!(
+            !script.contains(['&', '|', '<', '>', '(', ')', '^', '"']),
+            "a `cmd` metacharacter in {script:?} would be parsed before `sh` sees the hook"
+        );
+        if cfg!(windows) {
+            format!("sh -c '{script}'")
+        } else {
+            script.to_owned()
+        }
+    }
+
+    /// Render `path` the way the `sh` in [`posix_hook`] can read it on either platform.
+    ///
+    /// `sh` treats a backslash as an escape, so a Windows path handed to it verbatim arrives as
+    /// `C:UsersRUNNER1...` and every `[ -e ... ]` against it answers "absent" whatever is on
+    /// disk -- a test that then passes has examined nothing. MSYS `sh` accepts a drive-letter
+    /// path spelled with forward slashes. ~keep
+    fn sh_path(path: &Path) -> String {
+        path.display().to_string().replace('\\', "/")
+    }
+
     /// The regression this closes: a `before` hook that builds the whole module from
     /// `working_directory` (`npm run build`, for a TypeScript session — java no longer takes this
     /// path at all; see `external_workspace_directory`) runs once, before any of *this* run's
@@ -459,7 +493,7 @@ mod tests {
             language: Language::TypeScript,
             working_directory: directory.path().to_path_buf(),
             manifest: None,
-            before: vec!["! find .alef/snippets/sessions -name snippet.ts | grep -q .".into()],
+            before: vec![posix_hook("find . -name snippet.ts -exec false {} +")],
             env: BTreeMap::new(),
             include_paths: Vec::new(),
             rust_features: Vec::new(),
@@ -518,7 +552,7 @@ mod tests {
                 language: Language::Java,
                 working_directory: directory.path().to_path_buf(),
                 manifest: None,
-                before: vec!["! find . -name 'Example.java' | grep -q .".into()],
+                before: vec![posix_hook("find . -name Example.java -exec false {} +")],
                 env: BTreeMap::new(),
                 include_paths: Vec::new(),
                 rust_features: Vec::new(),
@@ -630,12 +664,12 @@ mod tests {
             language,
             working_directory: working_directory.to_path_buf(),
             manifest: None,
-            before: vec![format!(
+            before: vec![posix_hook(&format!(
                 "touch {own}; attempts=0; while [ $attempts -lt {ACTIVATION_PROBE_ATTEMPTS} ]; do \
-                 [ -e {sibling} ] && exit 0; sleep 0.01; attempts=$((attempts+1)); done; exit 1",
-                own = own.display(),
-                sibling = sibling.display(),
-            )],
+                 if [ -e {sibling} ]; then exit 0; fi; sleep 0.01; attempts=`expr $attempts + 1`; done; exit 1",
+                own = sh_path(own),
+                sibling = sh_path(sibling),
+            ))],
             env: BTreeMap::new(),
             include_paths: Vec::new(),
             rust_features: Vec::new(),

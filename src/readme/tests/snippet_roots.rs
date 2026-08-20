@@ -123,5 +123,8 @@ fn missing_mapping_root_reports_the_mapping_path_and_resolved_root() {
     let error = generate_readmes(&test_api(), &config, &[Language::Python]).expect_err("missing mapping root");
     let message = format!("{error:#}");
     assert!(message.contains("current.md"), "{message}");
-    assert!(message.contains("missing/python/current.md"), "{message}");
+    // The resolved path is reported with the host's separators, so the expectation has to be
+    // built the same way rather than spelled with `/`. ~keep
+    let resolved_tail = PathBuf::from("missing").join("python").join("current.md");
+    assert!(message.contains(&resolved_tail.display().to_string()), "{message}");
 }
