@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Zig runtime-file-IO compile check now links libc, the way every generated `build.zig`
+  does.** The check compiled its snippet with `zig build-exe -fno-emit-bin` and no `-lc`, while
+  the emitted body allocates through `std.heap.c_allocator` and every generated Zig project sets
+  `.link_libc = true`. Zig 0.16 rejects `c_allocator` outright without libc, so the check was
+  compiling under settings no real generated project uses — and passed only on macOS, where
+  libSystem is linked implicitly.
+
 - **`alef e2e generate`'s formatter tests no longer assert the behaviour the formatter stopped
   having.** Deferring a missing `poly`/`mix` executable instead of aborting (non-`--strict` mode)
   left three `e2e::format` tests still asserting `is_err()` in their toolchain-absent branch, so

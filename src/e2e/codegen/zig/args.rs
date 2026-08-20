@@ -303,8 +303,13 @@ pub fn main(init: std.process.Init) !void {
 }
 "#;
         std::fs::write(&source_path, source).expect("write Zig source");
+        // `-lc` mirrors the `.link_libc = true` that `zig/build.rs` writes into every generated
+        // e2e `build.zig`: the emitted body allocates through `std.heap.c_allocator`, which Zig
+        // rejects outright unless libc is linked. Without the flag this check compiled the
+        // snippet under settings no generated project actually uses, and passed only on macOS,
+        // where libSystem is linked implicitly. ~keep
         let output = std::process::Command::new("zig")
-            .args(["build-exe", "-fno-emit-bin"])
+            .args(["build-exe", "-fno-emit-bin", "-lc"])
             .arg(&source_path)
             .current_dir(env!("CARGO_MANIFEST_DIR"))
             .output()
