@@ -75,17 +75,31 @@ pub(super) fn build_untagged_enum_ts_plan_for_api(
     prefix: &str,
 ) -> AllUntaggedEnumsTsPlan {
     let exclude_types_set: AHashSet<String> = exclude_types.iter().cloned().collect();
-    // `untagged_union_text_types` pins these to `String` on the field, the getter and the
-    // setter alike. Handing one an extern wrapper type here would retype only the accessors
-    // and reintroduce the E0308 that 3678c3e8a fixed, so the text opt-in wins first. ~keep
     let untagged_enum_defs: Vec<&EnumDef> = api
         .enums
         .iter()
-        .filter(|e| {
-            !exclude_types_set.contains(&e.name) && !text_field_enum_names.contains(&e.name) && is_untagged_data_enum(e)
-        })
+        .filter(|e| gets_a_ts_union(e, &exclude_types_set, text_field_enum_names))
         .collect();
     build_untagged_enum_ts_plans(&untagged_enum_defs, api, &exclude_types_set, opaque_type_names, prefix)
+}
+
+/// Whether this enum gets a structural TypeScript union rather than staying `any`/`String`.
+///
+/// The binding and the docs page must answer this identically -- the docs promising a type the
+/// binding does not emit is the exact defect `f1fa69fd0` fixed, and two copies of the predicate
+/// is how it comes back.
+///
+/// `untagged_union_text_types` pins its members to `String` on the field, the getter and the
+/// setter alike. Handing one an extern wrapper type here would retype only the accessors and
+/// reintroduce the E0308 that `3678c3e8a` fixed, so the text opt-in wins first. ~keep
+fn gets_a_ts_union(
+    enum_def: &EnumDef,
+    exclude_types: &AHashSet<String>,
+    text_field_enum_names: &AHashSet<String>,
+) -> bool {
+    !exclude_types.contains(&enum_def.name)
+        && !text_field_enum_names.contains(&enum_def.name)
+        && is_untagged_data_enum(enum_def)
 }
 
 /// The per-enum extern wrapper type name, by Rust enum name — what `gen_struct_methods` needs to
@@ -416,13 +430,10 @@ pub(crate) fn docs_ts_type_for_untagged_enum(
 ) -> Option<String> {
     let exclude_types_vec = wasm_exclude_types(config);
     let text_field_enum_names: AHashSet<String> = config.untagged_union_text_types.iter().cloned().collect();
-    if exclude_types_vec.contains(&enum_def.name)
-        || text_field_enum_names.contains(&enum_def.name)
-        || !is_untagged_data_enum(enum_def)
-    {
+    let exclude_types: AHashSet<String> = exclude_types_vec.iter().cloned().collect();
+    if !gets_a_ts_union(enum_def, &exclude_types, &text_field_enum_names) {
         return None;
     }
-    let exclude_types: AHashSet<String> = exclude_types_vec.iter().cloned().collect();
     let opaque_type_names = wasm_opaque_type_names(api, &exclude_types_vec);
     let prefix = config.wasm_type_prefix();
     let plan = build_untagged_enum_ts_plans(&[enum_def], api, &exclude_types, &opaque_type_names, &prefix);
