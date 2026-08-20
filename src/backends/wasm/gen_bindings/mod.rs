@@ -648,8 +648,13 @@ impl Backend for WasmBackend {
         // type an untagged-enum-typed field's getter/setter as the real structural union instead
         // of bare `JsValue`. `untagged_ts_plan.plans` is consumed later, in the enum loop, to
         // keep emission order (structs, then enums) unchanged. ~keep
-        let mut untagged_ts_plan =
-            ts_union::build_untagged_enum_ts_plan_for_api(api, &exclude_types, &opaque_types, &prefix);
+        let mut untagged_ts_plan = ts_union::build_untagged_enum_ts_plan_for_api(
+            api,
+            &exclude_types,
+            &opaque_types,
+            &text_field_enum_names,
+            &prefix,
+        );
         if !untagged_ts_plan.custom_section.is_empty() {
             builder.add_item(&untagged_ts_plan.custom_section);
         }

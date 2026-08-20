@@ -320,40 +320,6 @@ fn fieldless_enum_field_is_unaffected() {
     );
 }
 
-fn make_config_with_text_types(text_types: &str) -> ResolvedCrateConfig {
-    let cfg: NewAlefConfig = toml::from_str(&format!(
-        r#"
-[workspace]
-languages = ["wasm"]
-[[crates]]
-name = "test-lib"
-sources = ["src/lib.rs"]
-untagged_union_text_types = [{text_types}]
-[crates.wasm]
-"#
-    ))
-    .unwrap();
-    cfg.resolve().unwrap().remove(0)
-}
-
-/// An untagged data enum that is *also* opted into `untagged_union_text_types` used to be
-/// generated two different ways at once: the `type_overrides` entry pinned to `String` drove the
-/// constructor, getter, and setter, while the JsValue-bridged set drove the struct field and both
-/// conversions. The emitted struct declared `Option<JsValue>` and handed it to accessors typed
-/// `Option<String>`, so the whole binding crate failed to compile with E0308. The text opt-in is
-/// the more specific signal and must win on every surface.
-#[test]
-fn untagged_data_enum_in_text_types_is_string_on_every_surface() {
-    let mut api = empty_api();
-    api.enums = vec![embedding_input_enum()];
-    api.functions = vec![function_taking("ModerationRequest")];
-    api.types = vec![TypeDef {
-        name: "ModerationRequest".to_string(),
-        rust_path: "test_lib::ModerationRequest".to_string(),
-        fields: vec![FieldDef {
-            name: "input".to_string(),
-            ty: TypeRef::Named("EmbeddingInput".to_string()),
-            optional: true,
 /// Every real-consumer shape from `ts_union.rs`'s module doc comment, generated together in one
 /// crate — proves the combined-custom-section dedup holds end to end (not just in `ts_union`'s
 /// own unit tests) and that a fieldless enum used both as a union member and as its own ordinary
@@ -490,9 +456,6 @@ fn all_real_consumer_shapes_share_one_custom_section_without_collisions() {
         }],
         has_serde: true,
         ..Default::default()
-    }];
-
-    let config = make_config_with_text_types("\"EmbeddingInput\"");
     };
 
     let tool_choice = EnumDef {
@@ -578,28 +541,6 @@ fn all_real_consumer_shapes_share_one_custom_section_without_collisions() {
     let lib_rs = &files
         .iter()
         .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
-        .expect("lib.rs must be generated")
-        .content;
-
-    assert!(
-        lib_rs.contains("input: Option<String>,"),
-        "the struct field must follow the text opt-in, not the JsValue bridge;\nactual:\n{lib_rs}"
-    );
-    assert!(
-        !lib_rs.contains("input: Option<JsValue>,"),
-        "the JsValue-bridged representation must not be emitted for a text-typed union;\nactual:\n{lib_rs}"
-    );
-    assert!(
-        lib_rs.contains("pub fn input(&self) -> Option<String>"),
-        "the getter must agree with the field type;\nactual:\n{lib_rs}"
-    );
-    assert!(
-        lib_rs.contains("pub fn set_input(&mut self, value: Option<String>)"),
-        "the setter must agree with the field type;\nactual:\n{lib_rs}"
-    );
-    assert!(
-        !lib_rs.contains("serde_wasm_bindgen::to_value(&val.input)"),
-        "conversions must use the display-text bridge, not serde_wasm_bindgen;\nactual:\n{lib_rs}"
         .unwrap()
         .content;
     // All six untagged-union shapes share one combined typescript_custom_section (see
@@ -648,5 +589,75 @@ fn all_real_consumer_shapes_share_one_custom_section_without_collisions() {
     assert!(
         lib_rs.contains("pub enum WasmToolChoiceMode {"),
         "the real fieldless enum must still be emitted unchanged alongside the union;\nactual:\n{lib_rs}"
+    );
+}
+
+fn make_config_with_text_types(text_types: &str) -> ResolvedCrateConfig {
+    let cfg: NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["wasm"]
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+untagged_union_text_types = [{text_types}]
+[crates.wasm]
+"#
+    ))
+    .unwrap();
+    cfg.resolve().unwrap().remove(0)
+}
+
+/// An untagged data enum that is *also* opted into `untagged_union_text_types` used to be
+/// generated two different ways at once: the `type_overrides` entry pinned to `String` drove the
+/// constructor, getter, and setter, while the JsValue-bridged set drove the struct field and both
+/// conversions. The emitted struct declared `Option<JsValue>` and handed it to accessors typed
+/// `Option<String>`, so the whole binding crate failed to compile with E0308. The text opt-in is
+/// the more specific signal and must win on every surface.
+#[test]
+fn untagged_data_enum_in_text_types_is_string_on_every_surface() {
+    let mut api = empty_api();
+    api.enums = vec![embedding_input_enum()];
+    api.functions = vec![function_taking("ModerationRequest")];
+    api.types = vec![TypeDef {
+        name: "ModerationRequest".to_string(),
+        rust_path: "test_lib::ModerationRequest".to_string(),
+        fields: vec![FieldDef {
+            name: "input".to_string(),
+            ty: TypeRef::Named("EmbeddingInput".to_string()),
+            optional: true,
+            ..Default::default()
+        }],
+        has_serde: true,
+        ..Default::default()
+    }];
+
+    let config = make_config_with_text_types("\"EmbeddingInput\"");
+    let files = WasmBackend.generate_bindings(&api, &config).unwrap();
+    let lib_rs = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
+        .expect("lib.rs must be generated")
+        .content;
+
+    assert!(
+        lib_rs.contains("input: Option<String>,"),
+        "the struct field must follow the text opt-in, not the JsValue bridge;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        !lib_rs.contains("input: Option<JsValue>,"),
+        "the JsValue-bridged representation must not be emitted for a text-typed union;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("pub fn input(&self) -> Option<String>"),
+        "the getter must agree with the field type;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        lib_rs.contains("pub fn set_input(&mut self, value: Option<String>)"),
+        "the setter must agree with the field type;\nactual:\n{lib_rs}"
+    );
+    assert!(
+        !lib_rs.contains("serde_wasm_bindgen::to_value(&val.input)"),
+        "conversions must use the display-text bridge, not serde_wasm_bindgen;\nactual:\n{lib_rs}"
     );
 }

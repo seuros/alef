@@ -66,13 +66,19 @@ pub(super) fn build_untagged_enum_ts_plan_for_api(
     api: &ApiSurface,
     exclude_types: &[String],
     opaque_type_names: &AHashSet<String>,
+    text_field_enum_names: &AHashSet<String>,
     prefix: &str,
 ) -> AllUntaggedEnumsTsPlan {
     let exclude_types_set: AHashSet<String> = exclude_types.iter().cloned().collect();
+    // `untagged_union_text_types` pins these to `String` on the field, the getter and the
+    // setter alike. Handing one an extern wrapper type here would retype only the accessors
+    // and reintroduce the E0308 that 3678c3e8a fixed, so the text opt-in wins first. ~keep
     let untagged_enum_defs: Vec<&EnumDef> = api
         .enums
         .iter()
-        .filter(|e| !exclude_types_set.contains(&e.name) && is_untagged_data_enum(e))
+        .filter(|e| {
+            !exclude_types_set.contains(&e.name) && !text_field_enum_names.contains(&e.name) && is_untagged_data_enum(e)
+        })
         .collect();
     build_untagged_enum_ts_plans(&untagged_enum_defs, api, &exclude_types_set, opaque_type_names, prefix)
 }
