@@ -260,6 +260,7 @@ fn test_gen_constructor_more_than_7_fields_gets_clippy_allow() {
             serde_rename: None,
             serde_flatten: false,
             serde_with: None,
+            serde_skip_serializing_if: false,
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,

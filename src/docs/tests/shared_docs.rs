@@ -208,6 +208,7 @@ fn test_generate_configuration_doc_renders_referenced_enums_only() {
                 serde_rename: None,
                 serde_flatten: false,
                 serde_with: None,
+                serde_skip_serializing_if: false,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,

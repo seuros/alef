@@ -351,6 +351,7 @@ mod tests {
             name: "timeout".to_string(),
             ty: TypeRef::Duration,
             serde_with: serde_with.map(str::to_string),
+            serde_skip_serializing_if: false,
             ..Default::default()
         }
     }
@@ -396,6 +397,7 @@ mod tests {
             name: "label".to_string(),
             ty: TypeRef::String,
             serde_with: Some("custom".to_string()),
+            serde_skip_serializing_if: false,
             ..Default::default()
         };
         assert_eq!(

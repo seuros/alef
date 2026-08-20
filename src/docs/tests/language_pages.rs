@@ -348,6 +348,7 @@ fn test_generate_docs_with_type_renders_fields_and_doc() {
                 serde_rename: None,
                 serde_flatten: false,
                 serde_with: None,
+                serde_skip_serializing_if: false,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,
