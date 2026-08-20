@@ -51,7 +51,6 @@ fn an_equals_assertion_keeps_its_statement_indentation() {
         false,
         false,
         false,
-        &std::collections::HashSet::new(),
         &std::collections::HashMap::new(),
     );
     assert_eq!(out, "        Assert.Equal(\"hello\", result.Content);\n");
@@ -83,7 +82,6 @@ fn a_multiline_not_empty_switch_assertion_keeps_its_opening_line_indentation() {
         false,
         false,
         false,
-        &std::collections::HashSet::new(),
         &std::collections::HashMap::new(),
     );
     assert_eq!(

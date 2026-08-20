@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`csharp` e2e no longer emits a raw string comparison against an enum-typed result field.**
+  The generator decided enum-ness purely from hand-maintained `[e2e.call.overrides.csharp]
+  enum_fields` config, so a consumer that never declared the entry got
+  `Assert.Equal("KeyValue", result.Data!.Kind)` for a genuine enum field — a `CS1503` whose
+  reported message names `IAsyncEnumerable<char>?` (xunit's closest-matching but unrelated
+  overload) rather than anything resembling the real defect. C# now wires the same IR-derived
+  classification the Rust e2e generator uses, anchored at the call's declared return type, so a
+  field renders as enum-typed whenever the IR says so, config or not.
+
 - **`alef e2e generate` no longer rejects an `overrides.<lang>.class` that names a class the
   backend really emits.** The validator built its candidate set by PascalCasing the crate name,
   which is not what any of the six class-consuming backends actually name their crate facade:

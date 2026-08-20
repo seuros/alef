@@ -41,7 +41,6 @@ pub(super) fn render_assertion(
     result_is_vec: bool,
     result_is_array: bool,
     result_is_bytes: bool,
-    fields_enum: &std::collections::HashSet<String>,
     assert_enum_fields: &std::collections::HashMap<String, String>,
 ) {
     // Byte-buffer returns: emit length-based assertions instead of struct-field
@@ -448,10 +447,17 @@ pub(super) fn render_assertion(
     // Detect enum-typed fields. C# emits typed enums (e.g. `FinishReason?`) for
     // these so the codegen must avoid `.Trim()` (string-only) and instead
     // compare via `?.ToString()?.ToLower()` to match snake_case JSON.
-    let field_is_enum = assertion.field.as_deref().filter(|f| !f.is_empty()).is_some_and(|f| {
-        let resolved = field_resolver.resolve(f);
-        fields_enum.contains(f) || fields_enum.contains(resolved)
-    });
+    //
+    // `field_resolver.is_enum` checks the hand-maintained `fields_enum` config first, then
+    // falls back to the IR-derived classification (`with_ir_enum_map`) when the config never
+    // mentioned the field. A config-only check here would default `false` for every enum-typed
+    // field a consumer's `alef.toml` never lists, emitting `Assert.Equal("KeyValue", ...)`
+    // against a `DataNodeKind` field — a CS1503 the field's declared C# type can't satisfy. ~keep
+    let field_is_enum = assertion
+        .field
+        .as_deref()
+        .filter(|f| !f.is_empty())
+        .is_some_and(|f| field_resolver.is_enum(f));
 
     // Detect display-as-text fields (e.g. `RichTextContent?`). Their C# binding
     // exposes a `.Text()` method returning `string?`. Wrap the accessor so that
@@ -1024,7 +1030,6 @@ mod ir_oracle_wiring_tests {
             false,
             false,
             false,
-            &HashSet::new(),
             &HashMap::new(),
         );
         assert!(!out.contains("skipped"), "got: {out}");
@@ -1061,7 +1066,6 @@ mod ir_oracle_wiring_tests {
             false,
             false,
             false,
-            &HashSet::new(),
             &HashMap::new(),
         );
         assert!(out.contains("skipped"), "got: {out}");
@@ -1113,7 +1117,6 @@ mod not_error_vacuous_test_fix_tests {
             false,
             false,
             false,
-            &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
         assert_eq!(out, "        Assert.NotNull(result);\n");
@@ -1137,7 +1140,6 @@ mod not_error_vacuous_test_fix_tests {
             false,
             false,
             true,
-            &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
         assert_eq!(out, "        Assert.NotNull(result);\n");
@@ -1296,7 +1298,6 @@ mod wildcard_traversal_tests {
             false,
             false,
             false,
-            &std::collections::HashSet::new(),
             &std::collections::HashMap::new(),
         );
         out

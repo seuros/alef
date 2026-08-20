@@ -500,12 +500,38 @@ fn render_test_method(
     // Fallback: if the resolved call has required args missing from input,
     // try to find a better-matching call from the named calls.
     call_config = super::select_best_matching_call(call_config, e2e_config, fixture);
+    let lang = "csharp";
+    let cs_overrides = call_config.overrides.get(lang);
+
+    // Merge per-call C# `enum_fields` keys with the global file-level
+    // `fields_enum` set so call-specific enum-typed result fields (e.g.
+    // BatchObject's `status` → BatchStatus) trigger enum coercion in
+    // assertions even when the global set does not list them. The
+    // file-level `enum_fields` argument carries the default-call's override;
+    // `cs_overrides.enum_fields` carries the per-fixture-call's override
+    // (e.g. retrieve_batch.overrides.csharp.enum_fields).
+    // Must be the EFFECTIVE set: a per-call `fields_enum` REPLACES the global rather than merging,
+    // so reading the global directly discards the override outright. Every other language resolves
+    // this through the accessor; C# was the only one reading the raw global. This is a different
+    // axis from the per-language `enum_fields` override maps merged in just below. ~keep
+    let mut effective_enum_fields: std::collections::HashSet<String> =
+        e2e_config.effective_fields_enum(call_config).clone();
+    for k in enum_fields.keys() {
+        effective_enum_fields.insert(k.clone());
+    }
+    if let Some(o) = cs_overrides {
+        for k in o.enum_fields.keys() {
+            effective_enum_fields.insert(k.clone());
+        }
+    }
+
     // Per-call field resolver: overrides the top-level resolver when this call
     // declares its own result_fields / fields / fields_optional / fields_array.
     // Without this, fields like `pages.length` on a `crawl` call would be skipped
     // because the default `result_fields` (configured for the top-level `scrape`
     // call) does not contain `pages`.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    let call_root_type = values::resolve_csharp_call_root_type(call_config, type_defs, functions);
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -514,10 +540,10 @@ fn render_test_method(
         &std::collections::HashSet::new(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_enum_fields(effective_enum_fields.clone())
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
-    let lang = "csharp";
-    let cs_overrides = call_config.overrides.get(lang);
 
     // Streaming branch: streaming adapters return IAsyncEnumerable<T>, not
     // Task<T>. Emit `await foreach` over the stream, building local
@@ -872,28 +898,6 @@ fn render_test_method(
         format!("{}({})", effective_function_name, final_args)
     };
 
-    // Merge per-call C# `enum_fields` keys with the global file-level
-    // `fields_enum` set so call-specific enum-typed result fields (e.g.
-    // BatchObject's `status` → BatchStatus) trigger enum coercion in
-    // assertions even when the global set does not list them. The
-    // file-level `enum_fields` argument carries the default-call's override;
-    // `cs_overrides.enum_fields` carries the per-fixture-call's override
-    // (e.g. retrieve_batch.overrides.csharp.enum_fields).
-    // Must be the EFFECTIVE set: a per-call `fields_enum` REPLACES the global rather than merging,
-    // so reading the global directly discards the override outright. Every other language resolves
-    // this through the accessor; C# was the only one reading the raw global. This is a different
-    // axis from the per-language `enum_fields` override maps merged in just below. ~keep
-    let mut effective_enum_fields: std::collections::HashSet<String> =
-        e2e_config.effective_fields_enum(call_config).clone();
-    for k in enum_fields.keys() {
-        effective_enum_fields.insert(k.clone());
-    }
-    if let Some(o) = cs_overrides {
-        for k in o.enum_fields.keys() {
-            effective_enum_fields.insert(k.clone());
-        }
-    }
-
     // Merge per-call C# `assert_enum_fields` keys with the global file-level
     // so call-specific sealed-union fields trigger display wrapper usage.
     let mut effective_assert_enum_fields: std::collections::HashMap<String, String> = assert_enum_fields.clone();
@@ -918,7 +922,6 @@ fn render_test_method(
                 call_config.result_is_vec || cs_overrides.is_some_and(|o| o.result_is_vec),
                 call_config.result_is_array,
                 effective_result_is_bytes,
-                &effective_enum_fields,
                 &effective_assert_enum_fields,
             );
         }
@@ -1140,6 +1143,8 @@ pub use stubs::emit_test_backend;
 
 #[cfg(test)]
 mod assertion_indentation_layout_tests;
+#[cfg(test)]
+mod enum_field_classification_tests;
 #[cfg(test)]
 mod fact_attribute_layout_tests;
 #[cfg(test)]

@@ -1,7 +1,21 @@
 //! C# JSON literal and sealed-display rendering helpers.
 
 use crate::core::hash::{self, CommentStyle};
+use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
 use crate::e2e::escape::escape_csharp;
+
+/// The call's declared Rust result type, resolved from the IR itself (not a hand-configured
+/// override) — anchors `FieldResolver`'s IR-derived enum classification (`with_ir_enum_map`) at
+/// the exact struct/enum this call returns, mirroring the rust e2e generator's fix for the same
+/// defect shape (a field name that means different things on different types). ~keep
+pub(super) fn resolve_csharp_call_root_type(
+    call_config: &crate::e2e::config::CallConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> Option<String> {
+    let call_ir = CallIr { functions, type_defs };
+    resolve_declared_result_type(call_config, "csharp", call_ir)
+}
 
 /// Render a C# sealed-union display helper for assert_enum_fields.
 /// Pattern-matches on variants from the IR and returns a displayable string.
