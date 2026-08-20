@@ -2349,7 +2349,7 @@ mod tests {
 
         // Sized so `values = [...]` is exactly RECORD_ARRAY_MAX_INLINE_WIDTH columns.
         let filler = "x".repeat(RECORD_ARRAY_MAX_INLINE_WIDTH - r#"values = [""]"#.len());
-        let at_limit = render_record_assignment("values", &[filler.clone()]);
+        let at_limit = render_record_assignment("values", std::slice::from_ref(&filler));
         assert_eq!(
             at_limit.chars().count(),
             RECORD_ARRAY_MAX_INLINE_WIDTH,
