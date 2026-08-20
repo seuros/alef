@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **The generated Java `pom.xml` now excludes test, scratch, and build directories from the
-  compiler plugin.** `sourceDirectory` is `project.basedir`, so without excludes the compiler
-  also walks `src/test/java/**` (hand-written test sources), `.alef/**` (disposable doc-snippet
-  validation scratch), and `target/**` (its own prior output). Unexcluded, `.alef/`
-  snippet-scratch `Example.java` files from different sessions collide as duplicate top-level
-  classes and break `mvn compile`. The same template already excluded `**/.alef/**` for
-  checkstyle; the compiler block never got the equivalent, so consumers carrying the fix by hand
-  could not adopt the file without regeneration deleting it.
-
 ## [0.62.6] - 2026-08-20
 
 ### Added
@@ -74,6 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `alef generate` run with a trait bridge configured.
 
 ### Fixed
+
+- **The generated Java `pom.xml` now excludes test, scratch, and build directories from the
+  compiler plugin.** `sourceDirectory` is `project.basedir`, so without excludes the compiler
+  also walks `src/test/java/**` (hand-written test sources), `.alef/**` (disposable doc-snippet
+  validation scratch), and `target/**` (its own prior output). Unexcluded, `.alef/`
+  snippet-scratch `Example.java` files from different sessions collide as duplicate top-level
+  classes and break `mvn compile`. The same template already excluded `**/.alef/**` for
+  checkstyle; the compiler block never got the equivalent, so consumers carrying the fix by hand
+  could not adopt the file without regeneration deleting it.
 
 - **`alef verify`'s orphan check now accounts for post-build-owned paths.** `alef verify` never
   runs post-build steps (`complete_generated_artifacts` is `Commands::Generate`/`Commands::All`
@@ -1004,7 +1002,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reported; a genuine mismatch sitting beside one still fails, and an empty check set is still not
   a pass.
 
-
 ## [0.62.0] - 2026-08-19
 
 ### Fixed
@@ -1708,7 +1705,6 @@ as well as this one; read both.
   `iterate` already had. Without it Rust snippets always rendered `println!("{:?}", …)`, so documentation printed
   `Some(Text("Hello!"))` where a reader expects `Hello!`. Defaults to the previous behaviour.
 
-
 - **readme**: expose each language README's generated public functions as structured `functions` template values
   with `name`, `rust_name`, `is_async`, and `documentation` fields. Names honor language exclusions, feature gates,
   ABI prefixes, Go type collisions, Ruby re-export names, and the centralized host-language naming policy.
@@ -1744,7 +1740,6 @@ as well as this one; read both.
   writes a developer's machine permitted. Reads union the committed record with the legacy gitignored one, which is
   never written again, so upgrading does not turn every unmarkable file into a refusal at once. Entries migrate on
   the first authorised write of that path. Commit the file. Do not hand-add entries: use `alef adopt`.
-
 
 - **formatting**: normalize the persistent FRB Cargo-cache helper with the repository Rust formatter.
 - **test formatting**: normalize recently added FFI handle-registry, enum-conversion, and generated-hash regression
@@ -2191,7 +2186,6 @@ as well as this one; read both.
   process-global cwd into tempdirs that are then dropped, so an inherited cwd could already be deleted and the
   toolchain died at startup rather than reporting any result.
 
-
 - **build observability**: emit centralized backend completion events with `duration_ms` and explicit success, failure,
   or skip outcomes for every configured language.
 
@@ -2399,7 +2393,6 @@ as well as this one; read both.
   `typecheck` request for either language now reports `effective_level: syntax` and counts as `downgraded`.
   ShellCheck and R's `codetools::checkUsage`/lintr exist but aren't wired up here, so `typecheck` must not be
   claimed until they are.
-
 
 - **C# e2e**: omit the illegal `private` modifier from file-scope generated visitor classes while preserving the
   same class shape when the visitor appears inside a nested test container.
@@ -2674,7 +2667,6 @@ as well as this one; read both.
   trailing whitespace off the actual value only; both made assertions against expected values with a legitimate
   trailing newline permanently unsatisfiable. `equals` now compares both sides exactly, matching every other
   generated language.
-
 
 - **config/services**: accept registration variant `languages` maps and carry each canonical language's style,
   handler shape, and method prefix through extraction into service generation. Python decorator overrides now use
