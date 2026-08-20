@@ -275,6 +275,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same shape without the orphan-impl problem) that matches the wire string back to
   the enum's variants, and by only borrowing `String` parameters the core signature
   actually takes by reference.
+- **The generated FFI crate's `alef_ffi_error_code` helper no longer triggers an
+  `unused_variables` warning in every consumer whose fallible functions return a plain
+  `String` error.** Its `error: &dyn std::any::Any` parameter is only read inside the
+  per-typed-error `downcast_ref` arms `gen_last_error` emits from `api.errors`; a crate
+  with no registered error types got a body that never reads `error` at all. The
+  parameter is now underscore-prefixed when there are no typed error variants to
+  downcast against.
 - **`jni` no longer hard-fails generation when `[crates.kotlin_android]` is unconfigured.**
   Every downstream accessor (`jni_kotlin_package`, `jni_excluded_functions`,
   `jni_excluded_types`, `jni_capsule_types`) already tolerated its absence, falling back to

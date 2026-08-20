@@ -713,12 +713,14 @@ pub(super) fn gen_last_error(api: &ApiSurface, prefix: &str, core_import: &str) 
             FfiErrorCodeImpl { error_path, variants }
         })
         .collect();
+    let has_error_code_impls = !error_code_impls.is_empty();
     crate::backends::ffi::template_env::render(
         "last_error.jinja",
         minijinja::context! {
             prefix => prefix,
             builtin_prefix => crate::codegen::naming::ffi_builtin_error_code_prefix(prefix),
             error_code_impls => error_code_impls,
+            has_error_code_impls => has_error_code_impls,
             taxonomy => taxonomy.iter().map(|entry| minijinja::context! {
                 code => entry.code,
                 enum_variant => crate::codegen::naming::ffi_error_code_variant_name(&entry.error_type, &entry.variant),

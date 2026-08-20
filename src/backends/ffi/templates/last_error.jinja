@@ -22,7 +22,7 @@ const ALEF_FFI_UNKNOWN_ERROR: i32 = AlefFfiErrorCode::{{ builtin_prefix }}Unknow
 const ALEF_FFI_PANIC_ERROR: i32 = AlefFfiErrorCode::{{ builtin_prefix }}Panic as i32;
 const ALEF_INVALID_HANDLE_ERROR: i32 = AlefFfiErrorCode::{{ builtin_prefix }}InvalidHandle as i32;
 
-fn alef_ffi_error_code(error: &dyn std::any::Any) -> i32 {
+fn alef_ffi_error_code({% if has_error_code_impls %}error{% else %}_error{% endif %}: &dyn std::any::Any) -> i32 {
 {% for error_code_impl in error_code_impls %}
     if let Some(error) = error.downcast_ref::<{{ error_code_impl.error_path }}>() {
         #[allow(unreachable_patterns)]

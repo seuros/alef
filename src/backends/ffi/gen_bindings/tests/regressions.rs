@@ -394,6 +394,7 @@ fn catch_ffi_panic_preserves_a_more_specific_error_set_before_an_unrelated_panic
             prefix => "sample",
             builtin_prefix => "",
             error_code_impls => Vec::<String>::new(),
+            has_error_code_impls => false,
             taxonomy => Vec::<String>::new(),
             no_error_code => 0,
             conversion_error_code => 1,

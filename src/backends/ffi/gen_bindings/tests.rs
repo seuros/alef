@@ -7,6 +7,7 @@ mod doxygen;
 mod feature_defines;
 mod fields;
 mod handle_registry;
+mod last_error_unused_variable;
 mod methods;
 mod regressions;
 mod security;
