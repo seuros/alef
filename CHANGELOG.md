@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`wasm` no longer emits a struct field and its accessors with different types when a union
+  is in `untagged_union_text_types`.** A `#[serde(untagged)]` data enum listed in
+  `untagged_union_text_types` was picked up by both opt-ins at once: the `type_overrides` entry
+  pinned to `String` drove the constructor, getter, and setter, while the JsValue-bridged set
+  drove the struct field and both conversions. The emitted struct declared `Option<JsValue>` and
+  handed it to accessors typed `Option<String>`, so the binding crate failed to compile with
+  `E0308`. The text opt-in is the more specific signal and now wins on every surface.
+
 - **`jni` no longer hard-fails generation when `[crates.kotlin_android]` is unconfigured.**
   Every downstream accessor (`jni_kotlin_package`, `jni_excluded_functions`,
   `jni_excluded_types`, `jni_capsule_types`) already tolerated its absence, falling back to

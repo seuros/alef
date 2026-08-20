@@ -618,11 +618,20 @@ impl Backend for WasmBackend {
 
         // Names whose fields are stored as `JsValue` and bridged through `serde_wasm_bindgen`,
         // for both `gen_struct` below and `wasm_conv_config`. ~keep
+        //
+        // `untagged_union_text_types` members are excluded even when they are untagged data
+        // enums: that opt-in already pinned their `type_overrides` entry to `String`, which is
+        // what the accessor/constructor emitter reads. Leaving them here too would store the
+        // field as `JsValue` while the getter and setter still say `String` -- a struct that
+        // does not compile. The text opt-in is the more specific signal, so it wins on both
+        // sides. ~keep
         let jsvalue_bridged_enum_names: AHashSet<String> = api
             .enums
             .iter()
             .filter(|e| {
-                !exclude_types.contains(&e.name) && (enums::is_tagged_data_enum(e) || enums::is_untagged_data_enum(e))
+                !exclude_types.contains(&e.name)
+                    && !text_field_enum_names.contains(&e.name)
+                    && (enums::is_tagged_data_enum(e) || enums::is_untagged_data_enum(e))
             })
             .map(|e| e.name.clone())
             .collect();
