@@ -104,8 +104,7 @@ pub(super) fn render_spec_file(
             // e2e generators. This is purely additive: `is_enum` still consults
             // `with_enum_fields` (the hand-maintained `fields_enum` config) FIRST, so an
             // explicit config entry always wins. ~keep
-            let call_root_type =
-                resolve_declared_result_type(fixture_call, "ruby", CallIr { functions, type_defs });
+            let call_root_type = resolve_declared_result_type(fixture_call, "ruby", CallIr { functions, type_defs });
             let fixture_call_resolver = FieldResolver::new(
                 e2e_config.effective_fields(fixture_call),
                 e2e_config.effective_fields_optional(fixture_call),
