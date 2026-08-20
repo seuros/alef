@@ -78,6 +78,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tree. `PostBuildStep::owned_paths` now names every path a post-build step writes outside
   the guarded writer, and `alef generate` folds those into the same run's ownership record
   unconditionally, so the sweep never mistakes a build tool's own output for an orphan.
+- **`alef scaffold` no longer silently skips recreating a deleted create-once seed file
+  (e.g. a language's `<crate>_test.zig`/`.dart` sample suite).** Its stage cache
+  (`cache::is_stage_cached`) is a hit only when the input hash matches *and* every path in
+  the recorded manifest still exists on disk — but the manifest passed to `write_stage_hash`
+  was filtered to marker-carrying files only, and a create-once seed is deliberately emitted
+  unmarked (`generated_header: false`) so a hand-grown suite is never clobbered on a later
+  run. Deleting one left the seed invisible to the disk-presence check: the stage hash was
+  unchanged (source, config, and fixtures were untouched), so the cache read as a hit and
+  `pipeline::scaffold`'s own create-if-absent logic never ran again to replace it. The
+  manifest now records every path `pipeline::scaffold` returned, not only the marked subset —
+  presence is a weaker claim than ownership, and it's exactly what a create-once file's
+  absence should invalidate.
 - **The TypeScript and R e2e visitor fixtures now emit the flat `{ custom: ... }` payload
   the napi and extendr backends actually look up, instead of a nested
   `{ type: "custom", output: ... }` envelope.** `visitor_method.jinja` (napi) reads

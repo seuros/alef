@@ -562,7 +562,20 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     .collect();
                 let scaffold_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
                 pipeline::finalize_hashes(&scaffold_paths, &sources_hash, &alef_toml_bytes)?;
-                cache::write_stage_hash(&resolved_cfg.name, "scaffold", &stage_hash, &output_paths)?;
+                // The stage manifest passed to `write_stage_hash` is deliberately every path
+                // `pipeline::scaffold` returned, not `output_paths`'s marker-filtered subset.
+                // `is_stage_cached`'s disk-presence check (`cache::outputs_exist`) only ever
+                // inspects paths recorded in that manifest, so a create-once seed file --
+                // `generated_header: false`, unmarked by design so a hand-grown suite is never
+                // clobbered on a later run -- was invisible to it. Deleting one left the "scaffold"
+                // stage hash unchanged (source, config, and fixtures were untouched) and the cache
+                // read as a hit, so `pipeline::scaffold`'s own create-if-absent logic never ran
+                // again to replace it: the alef #C incident. Presence is a weaker claim than
+                // ownership -- it only says "a path this stage is responsible for still exists",
+                // which is exactly what a create-once file's absence should invalidate, independent
+                // of whether alef may ever overwrite its content. ~keep
+                let all_output_paths: Vec<PathBuf> = files.iter().map(|file| base_dir.join(&file.path)).collect();
+                cache::write_stage_hash(&resolved_cfg.name, "scaffold", &stage_hash, &all_output_paths)?;
                 grand_total += count;
             }
 
