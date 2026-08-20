@@ -75,6 +75,7 @@ pub(super) fn render_test_file(
     config: &crate::core::config::ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
     errors: &[crate::core::ir::ErrorDef],
+    ir: crate::e2e::codegen::call_ir::CallIr<'_>,
 ) -> String {
     let mut out = String::new();
     out.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -123,6 +124,7 @@ pub(super) fn render_test_file(
                 errors,
                 true,
                 false,
+                ir,
             );
         }
         let _ = writeln!(out);
@@ -177,6 +179,7 @@ fn render_test_fn(
     errors: &[crate::core::ir::ErrorDef],
     wrap_as_test: bool,
     for_docs: bool,
+    ir: crate::e2e::codegen::call_ir::CallIr<'_>,
 ) {
     // Resolve per-fixture call config.
     let call_config = e2e_config.resolve_call_for_fixture(
@@ -235,8 +238,15 @@ fn render_test_fn(
     // The zig and C bindings share the same byte-buffer convention, so a C override
     // of `result_is_bytes = true` is a reliable proxy when no zig override exists.
     let call_result_is_bytes = call_config.result_is_bytes || call_config.overrides.values().any(|o| o.result_is_bytes);
-    let result_is_json_struct =
-        !call_result_is_bytes && (call_overrides.is_some_and(|o| o.result_is_json_struct) || client_factory.is_some());
+    // The IR fallback closes the gap `zig_return_type` opens: it maps EVERY `Named` struct
+    // return with `has_serde` to `[]u8` unconditionally, whether or not the e2e call config
+    // ever declared `result_is_json_struct` or a `client_factory`. Additive only — `||`'d onto
+    // the existing config-driven checks, so an explicit `false` cannot be produced here, only a
+    // `true` a config author never had to spell out. See `result_shape::ir_says_json_struct`.
+    let result_is_json_struct = !call_result_is_bytes
+        && (call_overrides.is_some_and(|o| o.result_is_json_struct)
+            || client_factory.is_some()
+            || super::result_shape::ir_says_json_struct(call_config, lang, ir, type_defs));
 
     // Whether the bare wrapper return type is `?T` (Optional). The zig backend
     // emits `?[]u8` for nullable JSON results and `?<Primitive>` for nullable
@@ -727,6 +737,13 @@ pub(super) fn render_snippet_body(
         &[],
         false,
         true,
+        // Snippet rendering has no free-function IR to consult — only `type_defs`. This still
+        // lets `ir_says_json_struct` resolve through a method on an IR type (client_factory
+        // calls), the same degraded-but-not-absent state `CallIr::is_absent` already models.
+        crate::e2e::codegen::call_ir::CallIr {
+            functions: &[],
+            type_defs,
+        },
     );
     // The test-mode error path captures the failure with a discarded `else |_|` arm
     // (nothing to report inside `test { ... }`). The snippet is a runnable `main`,
@@ -941,6 +958,7 @@ mod snippet_tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
+            crate::e2e::codegen::call_ir::CallIr::default(),
         );
 
         assert!(
@@ -1088,6 +1106,7 @@ mod snippet_tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
+            crate::e2e::codegen::call_ir::CallIr::default(),
         );
 
         assert!(!rendered.contains("suppress_abort"), "{rendered}");
@@ -1211,6 +1230,7 @@ mod snippet_tests {
             &config,
             &[],
             &[],
+            crate::e2e::codegen::call_ir::CallIr::default(),
         );
 
         assert!(rendered.contains("sample.c.sample_client_stream_records_start(_client._handle, _req_handle)"));
@@ -1291,6 +1311,7 @@ mod snippet_tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
+            crate::e2e::codegen::call_ir::CallIr::default(),
         );
 
         assert!(rendered.contains("const testing = std.testing;"), "{rendered}");
@@ -1334,6 +1355,7 @@ mod expects_error_fails_on_unexpected_success_tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
+            crate::e2e::codegen::call_ir::CallIr::default(),
         );
 
         // The old shape `catch { try testing.expect(true); return; }` never fails:
@@ -1386,6 +1408,7 @@ mod expects_error_fails_on_unexpected_success_tests {
             &ResolvedCrateConfig::default(),
             &[],
             &[],
+            crate::e2e::codegen::call_ir::CallIr::default(),
         );
 
         assert!(
@@ -1453,6 +1476,7 @@ mod error_value_and_error_field_tests {
             &ResolvedCrateConfig::default(),
             &[],
             errors,
+            crate::e2e::codegen::call_ir::CallIr::default(),
         )
     }
 

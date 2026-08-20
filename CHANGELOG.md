@@ -313,6 +313,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not declare. Mirrors the existing Rust accessor's `method_calls`/`result_fields`
   disambiguation: a path in `method_calls` and not in `result_fields` now gets `()`; a path
   classified as both keeps the pre-existing tagged-union-variant shape (plain dot access).
+- **Zig e2e now auto-detects a JSON-struct return from the core IR.** `render_test_fn` only
+  took the JSON-parsing assertion path when a call declared `result_is_json_struct` or a
+  `client_factory`, but `zig_return_type` maps EVERY `Named` struct return with `has_serde`
+  to `[]u8` unconditionally. A plain function returning such a struct, with neither config,
+  emitted `result.<field>` against the byte slice the backend actually returns — a compile
+  error on every field. The generator now also resolves the call's declared Rust return type
+  through the IR and treats it as JSON whenever that type is one the Zig backend serializes,
+  additively, without disturbing existing overrides/`client_factory` behavior.
+- **The Zig e2e IR (`enums`, `functions`) was never wired into the generator at all** — both
+  were bound `_enums`/`_functions` in `ZigE2eCodegen::generate` and discarded. Wiring
+  `functions` in is what makes the JSON-struct auto-detection above possible; `enums` remains
+  unused until the enum-field classification fix below.
 
 ## [0.62.5] - 2026-08-20
 

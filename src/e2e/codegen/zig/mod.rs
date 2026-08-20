@@ -77,6 +77,9 @@ mod hash;
 mod http;
 #[cfg(test)]
 mod is_true_tests;
+#[cfg(test)]
+mod result_is_json_struct_ir_tests;
+mod result_shape;
 mod stubs;
 mod test_file;
 mod visitor;
@@ -100,10 +103,11 @@ impl E2eCodegen for ZigE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
+        let ir = crate::e2e::codegen::call_ir::CallIr { functions, type_defs };
         let output_base = PathBuf::from(e2e_config.effective_output()).join(lang);
 
         let mut files = Vec::new();
@@ -467,6 +471,7 @@ impl E2eCodegen for ZigE2eCodegen {
                 config,
                 type_defs,
                 errors,
+                ir,
             );
             files.push(GeneratedFile {
                 path: output_base.join("src").join(filename),
