@@ -306,6 +306,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   layout resolves to the project root itself; a workspace layout to its `crates/` sibling),
   so both shapes get the correct `..` depth instead of one hard-coded assumption.
 
+- **Zig e2e's opaque-handle accessor path can now emit a real method call.**
+  `render_zig_with_optionals` could only ever produce `.field` for a `method_calls` path,
+  never `.field()`, so a fixture asserting on a field the generated Zig binding exposes as an
+  FFI getter method on an opaque handle (`tree.language()`) rendered a path the struct does
+  not declare. Mirrors the existing Rust accessor's `method_calls`/`result_fields`
+  disambiguation: a path in `method_calls` and not in `result_fields` now gets `()`; a path
+  classified as both keeps the pre-existing tagged-union-variant shape (plain dot access).
+
 ## [0.62.5] - 2026-08-20
 
 ### Added

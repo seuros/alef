@@ -22,3 +22,7 @@ mod tests;
 #[cfg(test)]
 #[path = "field_access/ir_enum_tests.rs"]
 mod ir_enum_tests;
+
+#[cfg(test)]
+#[path = "field_access/zig_method_call_accessor_tests.rs"]
+mod zig_method_call_accessor_tests;

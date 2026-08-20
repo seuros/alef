@@ -447,23 +447,31 @@ pub(super) fn render_rust_with_optionals(
     out
 }
 
-/// Zig accessor that unwraps optional fields with `.?`.
+/// Zig accessor that unwraps optional fields with `.?`, and adds `()` for opaque-handle
+/// getter fields.
 ///
 /// Zig does not allow field access, indexing, or comparisons through `?T`;
 /// the value must be unwrapped first. Each segment whose path appears in the
 /// optional-field set is followed by `.?` so the resulting expression is a
 /// concrete value usable in assertions.
 ///
-/// Paths in `method_calls` represent tagged-union variant accessors (Rust
-/// variant getters such as `FormatMetadata::excel()`). In Zig, tagged-union
-/// variants are accessed via the same dot syntax as struct fields, so the
-/// segment is emitted as `.{name}` *without* `.?` even if the path also
-/// appears in `optional_fields`.
+/// `method_calls` is overloaded the same way `render_rust_with_optionals` disambiguates it
+/// (see that function's doc comment): a path in `method_calls` AND NOT in `result_fields` is a
+/// real Zig method call on an opaque-handle type (`tree.language()`, an FFI getter) and gets a
+/// trailing `()`. A path in `method_calls` that the per-fixture `[fields_method_calls]`/
+/// `result_fields` config has ALSO classified as `result_fields` keeps the pre-existing
+/// tagged-union-variant shape: plain `.{name}` with no `()` and no forced `.?`, because Zig
+/// tagged-union variants are accessed via ordinary dot syntax and this path is the one
+/// `render_rust_with_optionals`'s own doc names as the reason `result_fields` overrides the
+/// global `method_calls` set. ~keep Before this, `method_calls` could only ever suppress `.?`;
+/// there was no way for this function to emit `()` at all, so every opaque-handle getter field
+/// path it built was unreachable-shaped: `.field` where the generated Zig needs `.field()`.
 pub(super) fn render_zig_with_optionals(
     segments: &[PathSegment],
     result_var: &str,
     optional_fields: &HashSet<String>,
     method_calls: &HashSet<String>,
+    result_fields: &HashSet<String>,
 ) -> String {
     let mut out = result_var.to_string();
     let mut path_so_far = String::new();
@@ -473,17 +481,13 @@ pub(super) fn render_zig_with_optionals(
                 push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(f);
-                if !method_calls.contains(&path_so_far) && optional_fields.contains(&path_so_far) {
-                    out.push_str(".?");
-                }
+                zig_append_call_and_unwrap(&mut out, &path_so_far, optional_fields, method_calls, result_fields);
             }
             PathSegment::ArrayField { name, index } => {
                 push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(name);
-                if !method_calls.contains(&path_so_far) && optional_fields.contains(&path_so_far) {
-                    out.push_str(".?");
-                }
+                zig_append_call_and_unwrap(&mut out, &path_so_far, optional_fields, method_calls, result_fields);
                 out.push_str(&format!("[{index}]"));
                 push_key_index_suffix(&mut path_so_far, seg);
             }
@@ -491,9 +495,7 @@ pub(super) fn render_zig_with_optionals(
                 push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(field);
-                if !method_calls.contains(&path_so_far) && optional_fields.contains(&path_so_far) {
-                    out.push_str(".?");
-                }
+                zig_append_call_and_unwrap(&mut out, &path_so_far, optional_fields, method_calls, result_fields);
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
@@ -507,6 +509,28 @@ pub(super) fn render_zig_with_optionals(
         }
     }
     out
+}
+
+/// Append `()` for an opaque-handle method-call segment, then `.?` when the segment is
+/// registered optional — shared by every segment kind in [`render_zig_with_optionals`] so the
+/// method-call/tagged-union disambiguation is written once. See that function's doc comment for
+/// what distinguishes the two `method_calls` meanings.
+fn zig_append_call_and_unwrap(
+    out: &mut String,
+    path_so_far: &str,
+    optional_fields: &HashSet<String>,
+    method_calls: &HashSet<String>,
+    result_fields: &HashSet<String>,
+) {
+    let is_opaque_method = method_calls.contains(path_so_far) && !result_fields.contains(path_so_far);
+    if is_opaque_method {
+        out.push_str("()");
+        if optional_fields.contains(path_so_far) {
+            out.push_str(".?");
+        }
+    } else if !method_calls.contains(path_so_far) && optional_fields.contains(path_so_far) {
+        out.push_str(".?");
+    }
 }
 
 pub(super) fn render_pascal_dot(segments: &[PathSegment], result_var: &str) -> String {

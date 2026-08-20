@@ -789,7 +789,13 @@ impl FieldResolver {
                 &self.result_fields,
             ),
             "csharp" => render_csharp_with_optionals(&segments, result_var, &self.optional_fields),
-            "zig" => render_zig_with_optionals(&segments, result_var, &self.optional_fields, &self.method_calls),
+            "zig" => render_zig_with_optionals(
+                &segments,
+                result_var,
+                &self.optional_fields,
+                &self.method_calls,
+                &self.result_fields,
+            ),
             // Always use `render_swift_with_first_class_map` for Swift. The map
             // correctly handles both first-class (property syntax) and opaque
             // (method-call syntax) types. When no type info is available (empty map,
