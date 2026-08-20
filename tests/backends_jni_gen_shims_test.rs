@@ -513,17 +513,24 @@ fn snapshot_destructor() {
 }
 
 #[test]
-fn snapshot_validation_requires_kotlin_android() {
+fn generation_succeeds_when_kotlin_android_is_unconfigured() {
     let api = make_demo_api();
     let mut config = make_demo_config();
     config.kotlin_android = None;
 
-    let result = JniBackend.generate_bindings(&api, &config);
-    assert!(result.is_err(), "must return Err when kotlin_android is missing");
-    let msg = result.unwrap_err().to_string();
+    let files = JniBackend
+        .generate_bindings(&api, &config)
+        .expect("jni must generate without [crates.kotlin_android]");
+
+    // Asserting on the emitted package, not merely on `Ok`: the guarantee is that the
+    // absent config falls back to the same package the kotlin/java backends use, not just
+    // that generation stopped bailing. A run that emitted an empty or differently-packaged
+    // shim would also be `Ok`. ~keep
+    let package = config.kotlin_package();
+    let joined = files.iter().map(|f| f.content.as_str()).collect::<Vec<_>>().join("\n");
     assert!(
-        msg.contains("kotlin-android"),
-        "error must mention 'kotlin-android'; got: {msg}"
+        joined.contains(&package.replace('.', "_")) || joined.contains(&package),
+        "emitted shims must use the fallback package `{package}`; got:\n{joined}"
     );
 }
 
