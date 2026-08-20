@@ -807,8 +807,14 @@ mod tests {
         )
         .expect("write manifest");
         let body = lines.join("\n    ");
+        // `#[allow(dead_code)]`: this harness only ever constructs `DocumentInput` to prove
+        // the emitted deserialization expression type-checks -- nothing reads `.bytes`
+        // afterward. `#[derive(Deserialize)]` writes the field but rustc's dead-code
+        // analysis only tracks reads, so without the allow this fails under `-D warnings`
+        // (which CI's `RUSTFLAGS` sets ambiently and this spawned `cargo check` inherits),
+        // even though the snippet is valid Rust. ~keep
         let source = format!(
-            "#[derive(serde::Deserialize)]\nstruct DocumentInput {{ bytes: Vec<u8> }}\nfn main() {{\n    {body}\n    let _input: DocumentInput = {expression};\n}}\n"
+            "#[derive(serde::Deserialize)]\n#[allow(dead_code)]\nstruct DocumentInput {{ bytes: Vec<u8> }}\nfn main() {{\n    {body}\n    let _input: DocumentInput = {expression};\n}}\n"
         );
         std::fs::write(directory.path().join("src/main.rs"), source).expect("write Rust source");
         std::fs::write(directory.path().join("document.pdf"), b"document").expect("write fixture file");
