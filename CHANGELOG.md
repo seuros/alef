@@ -80,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to compile and panic at runtime. `tests/generated_output_downstream_gate.rs`'s fixture now
   includes a data-carrying enum (tuple and struct variants) so this shape has default coverage.
 
+- **Swift e2e `not_error` assertions no longer contradict a paired `is_empty`/`is_true` check on
+  a bare `Optional<T>` result.** `render_assertion`'s `"not_error"` arm always emitted
+  `XCTAssertNotNil(result)`, even when the fixture's result is itself `Optional<T>` and `nil` is
+  a valid non-error outcome (e.g. `detectLanguageFromContent("")` returning `nil`). A fixture
+  combining `not_error` with `is_empty` on the bare result therefore generated both
+  `XCTAssertNotNil(result)` and `XCTAssertNil(result)` back to back -- an assertion pair that can
+  never pass. Zig and Kotlin already treated `not_error` as inert for this shape; Swift's arm is
+  now split into `src/e2e/codegen/swift/not_error_assertion.rs` (new module, keeping
+  `swift/assertions.rs` from growing past the file-size cap) with the same
+  `bare_result_is_option` guard.
+
 - **The generated-output gate's clippy self-check now sabotages a file where the lint can
   actually fire.** It appended a redundant pointer cast to the alphabetically first emitted
   source, which is the FFI crate's `lib.rs` -- and that file allows `clippy::unnecessary_cast`

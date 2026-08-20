@@ -252,6 +252,7 @@ mod accessors;
 mod args;
 mod assertions;
 mod http;
+mod not_error_assertion;
 mod project;
 mod snippet;
 mod stubs;
