@@ -393,12 +393,18 @@ fn kotlin_android_field_access_uses_property_syntax_not_getters() {
     );
 }
 
-/// Regression for Bug 4: enum-typed fields in kotlin_android tests must be
-/// serialized via `.name.lowercase()` (which maps `FinishReason.STOP` to the
-/// wire value `"stop"`) rather than `.getValue()` (which does not exist on
-/// plain Kotlin `enum class` values).
+/// Regression for Bug 4, later superseded: enum-typed fields in kotlin_android tests must
+/// be serialized via `.toWire()` (the enum's always-generated accessor, built from the
+/// same `wire_variant_value` mapping its `@JsonProperty` annotations commit to) rather than
+/// `.getValue()` (which does not exist on plain Kotlin `enum class` values) or
+/// `.name.lowercase()`. `.name.lowercase()` was the original fix for Bug 4, but it assumed
+/// every enum's wire value is its lowercased constant name, which only holds under
+/// `#[serde(rename_all = "snake_case")]`; an enum with no `rename_all` whose unit variants
+/// serialize verbatim (e.g. `DataNodeKind`: `KEY_VALUE` -> `"keyvalue"`, not `"KeyValue"`)
+/// produced the wrong wire string and failed the assertion at runtime. See
+/// `src/e2e/codegen/kotlin/assertions.rs`'s `kotlin_android_style` doc comment for the fix.
 #[test]
-fn kotlin_android_enum_field_uses_name_lowercase_not_get_value() {
+fn kotlin_android_enum_field_uses_to_wire_not_get_value_or_name_lowercase() {
     let fixture = make_chat_fixture_with_field_assertion("chat_finish", "choices.finish_reason", "stop");
     let rendered = render_kotlin_android_chat(TOML_WITH_ENUM_FIELDS, fixture);
 
@@ -407,8 +413,13 @@ fn kotlin_android_enum_field_uses_name_lowercase_not_get_value() {
         "must NOT emit .getValue() on kotlin_android enum; got:\n{rendered}"
     );
     assert!(
-        rendered.contains(".name") && rendered.contains(".lowercase()"),
-        "must emit .name.lowercase() for enum serialization; got:\n{rendered}"
+        !(rendered.contains(".name") && rendered.contains(".lowercase()")),
+        "must NOT emit .name.lowercase() for enum serialization -- it disagrees with the real \
+         wire value under a non-snake_case rename policy; got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains(".toWire()"),
+        "must emit .toWire() for enum serialization; got:\n{rendered}"
     );
 }
 

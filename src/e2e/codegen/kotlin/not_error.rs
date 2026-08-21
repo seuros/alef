@@ -14,7 +14,7 @@ use std::fmt::Write as FmtWrite;
 /// must still leave a real, visible assertion instead of a vacuous body: `inert_example` exists
 /// specifically to catch a generated example that is green because it asserts nothing, and this
 /// shape was invisible to it before the fix landed for the other backends -- it surfaced as 9
-/// distinct kotlin fixtures in a real consumer's `alef e2e generate` run (`liter-llm`), each
+/// distinct kotlin fixtures in a real downstream consumer's `alef e2e generate` run, each
 /// logged individually once the inert-example ledger started naming refusals.
 ///
 /// `assertNotNull` (not `assertTrue(x != null, ...)`) because Kotlin's compiler flags an

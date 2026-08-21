@@ -241,10 +241,10 @@ fn deferred_entry_renders_language_step_and_reason() {
 
 /// `warn_deferred`'s own prefix used to hard-code "deferred until the pinned version is
 /// published" for every entry, which is only true of [`UNPUBLISHED_VERSION_REASON`]. A
-/// [`MISSING_TOOLCHAIN_REASON`] entry — the shape a CI job without `mix`/`go` on PATH hits on
-/// every run (see the `html-to-markdown` `e2e-freshness` job) — got the same false claim,
-/// pointing an operator at "wait for a release" when the fix is "install the toolchain". The
-/// prefix must stay reason-agnostic and let each entry's own `reason` field say why. ~keep
+/// [`MISSING_TOOLCHAIN_REASON`] entry — the shape a downstream `e2e-freshness` CI job without
+/// `mix`/`go` on PATH hits on every run — got the same false claim, pointing an operator at
+/// "wait for a release" when the fix is "install the toolchain". The prefix must stay
+/// reason-agnostic and let each entry's own `reason` field say why. ~keep
 #[test]
 #[tracing_test::traced_test]
 fn warn_deferred_does_not_claim_an_unpublished_version_for_a_missing_toolchain() {
