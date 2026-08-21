@@ -9,6 +9,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The C e2e generator lowered a `field[].key` fixture path (e.g. `structure[].kind`) to a
+  scalar `alef_json_get_string(array_json, "key")` call against the ARRAY's own JSON text,
+  making every "contains"-shaped assertion built from it unsatisfiable by construction — the
+  array never has a `"key"` property, no matter what its elements contain.**
+  `emit_nested_accessor`'s json-extraction leaf (`src/e2e/codegen/c/assertions.rs`) did not
+  distinguish a true wildcard (`field[]`, "every element") from an explicit numeric index
+  (`field[N]`, one concrete element) once both had entered the same json-extraction code path,
+  so both fell through to the same single-scalar accessor. Every other e2e backend already
+  quantifies over the array for this fixture shape (`field_resolver.wildcard_split` +
+  `.iter().any(..)` / `Enum.any?` / `any(...)`, depending on language) — C was the only backend
+  missing it. Fixed by tracking whether `json_extract_mode` was entered through an empty `[]`
+  key, and deferring a wildcard leaf to a new per-element quantifier
+  (`src/e2e/codegen/c/collection_wildcard.rs`, rendered through the new
+  `templates/c/wildcard_collection_assertion.jinja`) instead of emitting the scalar accessor.
+  Supports `contains`, `contains_all`, `contains_any`, `not_contains` and `equals`; any other
+  assertion type against a wildcard field now renders an honest skip comment instead of a
+  silently-wrong assertion. As a forced consequence of unifying the three call sites
+  (`call_patterns.rs`, `test_function.rs` x2) onto one classification function, also fixed a
+  latent divergence where one of the three filed every nested opaque-handle leaf under
+  `primitive_locals` instead of `opaque_handle_locals`.
+
+  Surfaced by tree-sitter-language-pack's generated `e2e/c/test_process.c`, whose
+  `structure[].kind` / `Module`/`Class`/`Function` "contains" assertions could never pass.
+
+  A second, distinct defect on the same tslp gate: `is_empty`/`not_empty` against a `char*`
+  leaf holding serialized JSON collection text (e.g. a `Vec<T>` field) compared with
+  `strlen(field_expr) == 0`, which reads an empty collection's own serialization (`"[]"`/`"{}"`)
+  as non-empty. Fixed via a new `templates/c/scalar_or_collection_empty.jinja` that accepts
+  either empty form. Reproduced by `data_extraction_json_empty_object` /
+  `data_extraction_properties_empty`'s `is_empty` on `data.children` (`test_data_extraction.c`).
+
+  Audited every other e2e backend for the same `field[].key` mis-lowering: Python, Rust,
+  TypeScript, Ruby, Java, C#, Go, Dart, Zig, Swift, Kotlin, PHP and R already quantify over the
+  array correctly; Gleam and (via delegation) WASM/Kotlin Android deliberately refuse the path
+  with an honest skip comment rather than mis-emit. Elixir also already quantifies correctly
+  (`Enum.any?`) — its "many `Assertion with ==` failed" C FFI-gate-adjacent failures on the same
+  tslp run are a different, not-yet-investigated defect.
+
+  Regression coverage: `src/e2e/codegen/c/wildcard_collection_regression_tests.rs` (five tests,
+  asserting on generated C TEXT — not a hand-written mirror of the intended semantics, which
+  the original bug would not have caught) and
+  `src/e2e/codegen/c/collection_empty_assertion_tests.rs` (two tests). Both new sibling
+  modules, not additions to `assertions.rs`/`test_function.rs` (already over the 1,000-line
+  file cap).
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it

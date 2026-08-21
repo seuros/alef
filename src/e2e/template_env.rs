@@ -350,6 +350,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         "c/docs_json_cleanup.jinja",
         include_str!("templates/c/docs_json_cleanup.jinja"),
     ),
+    (
+        "c/wildcard_collection_assertion.jinja",
+        include_str!("templates/c/wildcard_collection_assertion.jinja"),
+    ),
+    (
+        "c/scalar_or_collection_empty.jinja",
+        include_str!("templates/c/scalar_or_collection_empty.jinja"),
+    ),
     ("java/pom.xml.jinja", include_str!("templates/java/pom.xml.jinja")),
     ("java/test_file.jinja", include_str!("templates/java/test_file.jinja")),
     (

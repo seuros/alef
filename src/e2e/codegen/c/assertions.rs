@@ -10,7 +10,10 @@ use heck::{ToPascalCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
-use super::{c_optional_sentinel, is_primitive_c_type, is_skipped_c_field, json_to_c, try_emit_enum_accessor};
+use super::{
+    NestedLeafOutcome, c_optional_sentinel, is_primitive_c_type, is_skipped_c_field, json_to_c,
+    render_wildcard_assertion, try_emit_enum_accessor,
+};
 
 /// Emit chained FFI accessor calls for a nested resolved field path.
 ///
@@ -39,7 +42,7 @@ pub(super) fn emit_nested_accessor(
     raw_field: &str,
     type_defs: &[crate::core::ir::TypeDef],
     config_sources: &FieldConfigSources,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<Option<NestedLeafOutcome>> {
     let segments: Vec<&str> = resolved.split('.').collect();
     // cbindgen's `[export] prefix` is shouty-snake, not uppercase; re-deriving it here as
     // `to_uppercase` names types the generated header never declares for any prefix carrying an
@@ -58,6 +61,20 @@ pub(super) fn emit_nested_accessor(
     // Set to true when we've traversed a `[]` array element accessor and subsequent
     // fields must be extracted via alef_json_get_string rather than FFI function calls.
     let mut json_extract_mode = false;
+    // Set to true only when that `[]` had an EMPTY key — a true wildcard ("every element"),
+    // as opposed to an explicit numeric index (`[N]`) that also enables `json_extract_mode`
+    // but names one concrete element. Distinguishes the two at the leaf below: an indexed
+    // leaf still resolves to one scalar value, a wildcard leaf does not.
+    //
+    // `assertions.rs` and `test_function.rs` are both already over the repo's 1,000-line cap
+    // (`file-modularization`), and this fix necessarily touches both: the mis-selection lives
+    // in THIS function, and each of its three call sites (`call_patterns.rs`,
+    // `test_function.rs` x2) has to learn about the new `wildcard_locals` bucket to stop
+    // freeing a C local that was never declared. The new logic itself — the quantifier
+    // renderer and the primitive/opaque/wildcard classification — lives in
+    // `collection_wildcard.rs` instead of growing either capped file further; what remains
+    // here and in `test_function.rs` is the minimum wiring needed to reach it. ~keep
+    let mut is_wildcard = false;
 
     for (i, segment) in segments.iter().enumerate() {
         let is_leaf = i + 1 == segments.len();
@@ -76,6 +93,18 @@ pub(super) fn emit_nested_accessor(
             };
             let seg_snake = bare_segment.to_snake_case();
             if is_leaf {
+                // `field[].key`: `current_handle` names the ARRAY's own JSON text (the `[]`
+                // branch below set it and never drilled into one element), so a scalar
+                // `alef_json_get_string(current_handle, ...)` here would look up "key" as a
+                // property of the array itself — never present, making every "contains"-shaped
+                // assertion built from the (buggy) scalar local unsatisfiable by construction.
+                // Defer to a per-element quantifier at assertion-render time instead. ~keep
+                if is_wildcard && bracket_key.is_none() {
+                    return Ok(Some(NestedLeafOutcome::Wildcard {
+                        array_var: current_handle.clone(),
+                        key_snake: seg_snake,
+                    }));
+                }
                 let _ = writeln!(
                     out,
                     "    char* {local_var} = alef_json_get_string({current_handle}, \"{seg_snake}\");"
@@ -140,6 +169,7 @@ pub(super) fn emit_nested_accessor(
                 if !is_leaf {
                     current_handle = json_var;
                     json_extract_mode = true;
+                    is_wildcard = true;
                     continue;
                 }
                 return Ok(None);
@@ -175,7 +205,8 @@ pub(super) fn emit_nested_accessor(
 
         // Skip any assertion that touches a field marked "skip" in fields_c_types.
         if is_skipped_c_field(fields_c_types, &current_snake_type, &seg_snake) {
-            return Ok(Some("__skip__".to_string())); // Sentinel: no accessor emitted, assertion skipped later.
+            // Sentinel: no accessor emitted, assertion skipped later.
+            return Ok(Some(NestedLeafOutcome::Typed("__skip__".to_string())));
         }
 
         if is_leaf {
@@ -184,7 +215,7 @@ pub(super) fn emit_nested_accessor(
             let lookup_key = format!("{current_snake_type}.{seg_snake}");
             if let Some(t) = fields_c_types.get(&lookup_key).filter(|t| is_primitive_c_type(t)) {
                 let _ = writeln!(out, "    {t} {local_var} = {accessor_fn}({current_handle});");
-                return Ok(Some(t.clone()));
+                return Ok(Some(NestedLeafOutcome::Typed(t.clone())));
             }
             // Enum leaf: opaque enum pointer that needs `_to_string` conversion. Must run
             // BEFORE the opaque-struct-leaf check below: `try_emit_enum_accessor` gates
@@ -236,7 +267,8 @@ pub(super) fn emit_nested_accessor(
                 if local_var != handle_var {
                     let _ = writeln!(out, "    {prefix_upper}AlefHandle {local_var} = {handle_var};");
                 }
-                return Ok(Some(opaque_snake)); // return type name so caller can register opaque handle cleanup
+                // return type name so caller can register opaque handle cleanup
+                return Ok(Some(NestedLeafOutcome::Typed(opaque_snake)));
             }
             // Every branch above proved the leaf exists — an explicit `fields_c_types`
             // declaration, or an enum registration. This default proves nothing: it emits
@@ -312,7 +344,7 @@ pub(super) fn emit_nested_accessor(
                 // If the next (and final) segment is "length", emit the count accessor.
                 if i + 2 == segments.len() && segments[i + 1] == "length" {
                     let _ = writeln!(out, "    int {local_var} = alef_json_array_count({json_var});");
-                    return Ok(Some("int".to_string()));
+                    return Ok(Some(NestedLeafOutcome::Typed("int".to_string())));
                 }
                 current_snake_type = seg_snake.clone();
                 current_type_from_ir = false;
@@ -1279,6 +1311,7 @@ pub(super) fn render_assertion(
     accessed_fields: &[(String, String, bool)],
     primitive_locals: &HashMap<String, String>,
     opaque_handle_locals: &HashMap<String, String>,
+    wildcard_locals: &HashMap<String, (String, String)>,
 ) {
     // Skip assertions on fields that don't exist on the result type.
     if let Some(f) = &assertion.field
@@ -1304,6 +1337,14 @@ pub(super) fn render_assertion(
         }
         _ => result_var.to_string(),
     };
+
+    // `field[].key`: the extraction phase declared no scalar local for it (see
+    // `emit_nested_accessor`'s wildcard leaf), only registered `array_var`/`key_snake` here.
+    // Render the per-element quantifier and stop — none of the scalar branches below apply.
+    if let Some((array_var, key_snake)) = wildcard_locals.get(&field_expr) {
+        render_wildcard_assertion(out, assertion, array_var, key_snake);
+        return;
+    }
 
     // If the field was marked with the "__skip__" sentinel (fields_c_types = "skip"),
     // the accessor was never emitted — skip the assertion silently.
@@ -1473,9 +1514,19 @@ pub(super) fn render_assertion(
                 // matches the handle's actual "none" sentinel (`0`, not `NULL`).
                 let _ = writeln!(out, "    assert({field_expr} != 0 && \"expected non-null handle\");");
             } else {
+                // A `char*` leaf can hold plain text OR the serialized JSON text of a
+                // collection field (e.g. `alef_json_array_count`'s own input) — an empty
+                // collection serializes as the two-byte string "[]"/"{}", not "", so `strlen`
+                // alone reads it as non-empty. `c/scalar_or_collection_empty.jinja` accepts
+                // either empty form. ~keep
+                let condition = crate::e2e::template_env::render(
+                    "c/scalar_or_collection_empty.jinja",
+                    minijinja::context! { field_expr => field_expr, negate => true, allow_null => false },
+                );
                 let _ = writeln!(
                     out,
-                    "    assert({field_expr} != NULL && strlen({field_expr}) > 0 && \"expected non-empty value\");"
+                    "    assert({} && \"expected non-empty value\");",
+                    condition.trim_end()
                 );
             }
         }
@@ -1484,15 +1535,17 @@ pub(super) fn render_assertion(
                 let _ = writeln!(out, "    assert({field_expr} == 0 && \"expected null handle\");");
             } else if assertion_field_is_optional || !field_is_primitive {
                 // Optional string fields may return NULL — treat NULL as empty.
-                let _ = writeln!(
-                    out,
-                    "    assert(({field_expr} == NULL || strlen({field_expr}) == 0) && \"expected empty value\");"
+                let condition = crate::e2e::template_env::render(
+                    "c/scalar_or_collection_empty.jinja",
+                    minijinja::context! { field_expr => field_expr, negate => false, allow_null => true },
                 );
+                let _ = writeln!(out, "    assert({} && \"expected empty value\");", condition.trim_end());
             } else {
-                let _ = writeln!(
-                    out,
-                    "    assert(strlen({field_expr}) == 0 && \"expected empty value\");"
+                let condition = crate::e2e::template_env::render(
+                    "c/scalar_or_collection_empty.jinja",
+                    minijinja::context! { field_expr => field_expr, negate => false, allow_null => false },
                 );
+                let _ = writeln!(out, "    assert({} && \"expected empty value\");", condition.trim_end());
             }
         }
         "contains_any" => {
@@ -1923,6 +1976,7 @@ mod tests {
             &[],
             &HashMap::new(),
             &HashMap::new(),
+            &HashMap::new(),
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -1959,6 +2013,7 @@ mod tests {
             "sample",
             &resolver,
             &[],
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
         );
@@ -2001,6 +2056,7 @@ mod tests {
             &accessed_fields,
             &HashMap::new(),
             &opaque_handle_locals,
+            &HashMap::new(),
         );
 
         assert!(out.contains("status == 2"), "got: {out}");
@@ -2043,6 +2099,7 @@ mod tests {
             &accessed_fields,
             &HashMap::new(),
             &opaque_handle_locals,
+            &HashMap::new(),
         );
 
         assert!(out.contains("status != 0"), "got: {out}");
@@ -2366,7 +2423,7 @@ mod tests {
         resolved: &str,
         raw_field: &str,
         fields_c_types: &HashMap<String, String>,
-    ) -> anyhow::Result<(String, Option<String>)> {
+    ) -> anyhow::Result<(String, Option<NestedLeafOutcome>)> {
         walk_completion_response_with_sources(resolved, raw_field, fields_c_types, &global_sources())
     }
 
@@ -2375,7 +2432,7 @@ mod tests {
         raw_field: &str,
         fields_c_types: &HashMap<String, String>,
         config_sources: &FieldConfigSources,
-    ) -> anyhow::Result<(String, Option<String>)> {
+    ) -> anyhow::Result<(String, Option<NestedLeafOutcome>)> {
         let mut output = String::new();
         let mut handles = Vec::new();
         let leaf = emit_nested_accessor(

@@ -1042,6 +1042,9 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, i
 
 mod assertions;
 mod call_patterns;
+#[cfg(test)]
+mod collection_empty_assertion_tests;
+mod collection_wildcard;
 mod docs_input;
 mod enum_field_inference;
 mod ffi_constructors;
@@ -1057,11 +1060,14 @@ mod test_function;
 mod trait_bridge_snippet;
 mod visitor;
 mod void_call_status;
+#[cfg(test)]
+mod wildcard_collection_regression_tests;
 
 use assertions::{
     FieldConfigSources, LeafFieldCheck, build_args_string_c, emit_nested_accessor, ensure_leaf_field_exists,
     render_assertion,
 };
+use collection_wildcard::{NestedLeafOutcome, classify_nested_leaf, render_wildcard_assertion};
 // Test-only: the tests here and in `snippet_regressions` (which pulls this scope in via
 // `use super::*`) construct sources explicitly to pin which config key a diagnostic names, while
 // non-test code only ever goes through `FieldConfigSources`. Importing it unconditionally would be
