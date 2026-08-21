@@ -67,3 +67,6 @@ CLAUDE.md
 # a review artifact awaiting `cargo insta accept`, never a baseline, and committing one
 # makes an unreviewed snapshot look adopted.
 *.snap.new
+
+# Sibling-session agent worktrees; never part of the repo. ~keep
+.worktrees/
