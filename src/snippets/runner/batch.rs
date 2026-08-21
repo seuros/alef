@@ -1,6 +1,6 @@
 use super::{
-    BatchKey, FailureReporter, RunnerConfig, ValidationOutcome, batch_level, finalize_result, result, session_for,
-    session_key, session_preparation_error,
+    BatchKey, FailureReporter, RunnerConfig, ValidationOutcome, batch_level, finalize_result, session_for, session_key,
+    session_preparation_error, session_preparation_result,
 };
 use crate::snippets::error::Result;
 use crate::snippets::session::ValidationSession;
@@ -33,7 +33,7 @@ pub(super) fn validate_batches(
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     sessions: &HashMap<String, ValidationSession>,
-    session_errors: &HashMap<String, String>,
+    session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     session_locks: &HashMap<String, Mutex<()>>,
     reporter: &FailureReporter,
 ) -> Vec<Option<ValidationResult>> {
@@ -60,21 +60,14 @@ fn group_batchable_snippets(
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     sessions: &HashMap<String, ValidationSession>,
-    session_errors: &HashMap<String, String>,
+    session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     reporter: &FailureReporter,
 ) -> GroupedSnippets {
     let mut results = vec![None; snippets.len()];
     let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
     for (index, snippet) in snippets.iter().enumerate() {
-        if let Some(message) = session_preparation_error(snippet, sessions, session_errors) {
-            let failure = result(
-                snippet,
-                SnippetStatus::Error,
-                config.level,
-                config.level,
-                Some(message.to_owned()),
-                0,
-            );
+        if let Some(preparation_error) = session_preparation_error(snippet, sessions, session_errors) {
+            let failure = session_preparation_result(snippet, config, preparation_error);
             reporter.record(&failure);
             results[index] = Some(failure);
             continue;

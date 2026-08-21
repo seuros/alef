@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Snippet session preparation timeouts were reported as opaque validation errors instead of an
+  ordering problem (alef #142).** A `docs.snippets.sessions` `before` hook builds a language's
+  artifacts (`cargo build --release -p <crate>-jni`, `pnpm run build:all`, ...) before any of its
+  snippets can validate; when that hook itself outlived `timeout_secs` — readily hit on a loaded
+  machine, or right after `alef all --clean` removed the artifacts it exists to rebuild —
+  `activate_session` (`src/snippets/session/mod.rs`) collapsed the resulting `Error::Timeout` into
+  the same generic `Error::Other` every other preparation failure produces, and both
+  `runner::validate_one`'s fail-fast path and `batch::group_batchable_snippets`'s parallel path
+  independently stamped every snippet in that session `SnippetStatus::Error` from the bare
+  stringified message — indistinguishable from a genuinely broken snippet or a misconfigured
+  session. `before`-hook timeouts now propagate as `Error::Timeout` intact, and
+  `SessionPreparationError::ordering` reclassifies them through the same `unresolved_dependency` /
+  `SnippetStatus::Unavailable` bucket a validator's own dependency-shaped `Fail` already uses, with
+  a message that names the ordering problem instead of reading as a bare timeout. Every other
+  preparation failure (missing manifest, missing directory, a `before` hook that ran to completion
+  and failed on its own terms) keeps `SnippetStatus::Error`. New
+  `src/snippets/runner/session_prep.rs` unifies the two previously-independent classification call
+  sites. Regression coverage: `src/snippets/session/preparation_error_tests.rs`,
+  `src/snippets/runner/session_preparation_classification_tests.rs`.
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed

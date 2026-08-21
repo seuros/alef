@@ -12,8 +12,10 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 mod batch;
+mod session_prep;
 
 use batch::validate_batches;
+use session_prep::{session_preparation_error, session_preparation_result};
 
 pub struct RunnerConfig {
     pub level: ValidationLevel,
@@ -89,7 +91,7 @@ fn fail_fast_results(
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
-    session_errors: &HashMap<String, String>,
+    session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     session_locks: &HashMap<String, Mutex<()>>,
 ) -> Vec<ValidationResult> {
     tracing::info!(
@@ -144,7 +146,7 @@ fn parallel_results(
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
-    session_errors: &HashMap<String, String>,
+    session_errors: &HashMap<String, crate::snippets::session::SessionPreparationError>,
     session_locks: &HashMap<String, Mutex<()>>,
 ) -> Vec<ValidationResult> {
     let reporter = FailureReporter::new(snippets);
@@ -543,45 +545,17 @@ fn session_key<'a>(
         .map(|(key, _)| key.as_str())
 }
 
-fn session_preparation_error<'a>(
-    snippet: &Snippet,
-    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
-    errors: &'a HashMap<String, String>,
-) -> Option<&'a str> {
-    let target = snippet
-        .metadata
-        .target
-        .as_ref()
-        .map(|target| crate::snippets::types::Language::normalize_session_target(target));
-    if let Some(target) = target.as_deref() {
-        if let Some(error) = errors.get(target) {
-            return Some(error);
-        }
-        if sessions.contains_key(target) {
-            return None;
-        }
-    }
-    errors.get(&snippet.language.to_string()).map(String::as_str)
-}
-
 fn validate_one(
     snippet: &Snippet,
     registry: &ValidatorRegistry,
     config: &RunnerConfig,
     session: Option<&crate::snippets::session::ValidationSession>,
     session_lock: Option<&Mutex<()>>,
-    session_preparation_error: Option<&str>,
+    session_preparation_error: Option<&crate::snippets::session::SessionPreparationError>,
     reporter: Option<&FailureReporter>,
 ) -> ValidationResult {
-    if let Some(message) = session_preparation_error {
-        return result(
-            snippet,
-            SnippetStatus::Error,
-            config.level,
-            config.level,
-            Some(message.to_owned()),
-            0,
-        );
+    if let Some(preparation_error) = session_preparation_error {
+        return session_preparation_result(snippet, config, preparation_error);
     }
     if let Some(result) = cached_result(snippet, config, session) {
         return result;
@@ -879,7 +853,7 @@ fn side_effect_rejection(snippet: &Snippet, config: &RunnerConfig) -> Option<Str
     }
 }
 
-fn result(
+pub(super) fn result(
     snippet: &Snippet,
     status: SnippetStatus,
     requested_level: ValidationLevel,
@@ -913,6 +887,9 @@ mod no_work_logging_tests;
 
 #[cfg(test)]
 mod session_concurrency_tests;
+
+#[cfg(test)]
+mod session_preparation_classification_tests;
 
 #[cfg(test)]
 mod tests {
