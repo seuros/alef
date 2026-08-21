@@ -42,6 +42,7 @@ pub(super) fn render_assertion(
     result_is_array: bool,
     result_is_bytes: bool,
     assert_enum_fields: &std::collections::HashMap<String, String>,
+    has_other_assertions: bool,
 ) {
     // Byte-buffer returns: emit length-based assertions instead of struct-field
     // accessors. The result is a `byte[]` and has no named fields like
@@ -423,7 +424,22 @@ pub(super) fn render_assertion(
         result_is_array
     } else {
         match &assertion.field {
-            Some(f) if !f.is_empty() => field_resolver.is_array(f),
+            // `is_array` alone misses a collection field whose entries are only tracked via
+            // their element paths in `fields_array` (e.g. `children[0]` for a recursive
+            // `List<DataNode> Children`, never a bare `children` entry) — `is_collection_root`
+            // catches that shape. Without it, `field_needs_json_serialize` stayed false for
+            // `Children`, so `is_empty`'s template branch fell through to
+            // `Assert.True(string.IsNullOrEmpty(field.ToString()))`: `List<T>.ToString()`
+            // returns the type name, a non-empty string, so the assertion could never pass.
+            // Checked against both the raw and resolved path, matching kotlin/swift's identical
+            // `field_is_collection` guard. ~keep
+            Some(f) if !f.is_empty() => {
+                let resolved = field_resolver.resolve(f);
+                field_resolver.is_array(f)
+                    || field_resolver.is_array(resolved)
+                    || field_resolver.is_collection_root(f)
+                    || field_resolver.is_collection_root(resolved)
+            }
             // No field specified — the whole result object; needs serialization when complex.
             _ => !result_is_simple,
         }
@@ -836,7 +852,19 @@ pub(super) fn render_assertion(
             // existing `Assert.NotNull` idiom instead. Not reached for streaming
             // fixtures: `csharp/test_method.jinja`'s `is_streaming` branch takes
             // priority over `assertions_body` and never references it. ~keep
-            let _ = writeln!(out, "        Assert.NotNull({result_var});");
+            //
+            // `Assert.NotNull` here is only a stand-in for "the call succeeded",
+            // needed solely to avoid a vacuous test when `not_error` is the
+            // fixture's sole assertion. It is wrong whenever a sibling assertion
+            // exists: a fixture can legitimately pair `not_error` with `is_empty`
+            // on an `Option<T>`-returning call whose success path returns nothing
+            // (None -> C# null). The sibling assertion already gives the test
+            // real, non-vacuous coverage, so this fallback only fires when
+            // nothing else will — same reasoning as TypeScript's
+            // `has_other_assertions` guard (alef #165). ~keep
+            if !has_other_assertions {
+                let _ = writeln!(out, "        Assert.NotNull({result_var});");
+            }
         }
         "error" => {
             // Handled at the test method level.
@@ -1032,6 +1060,7 @@ mod ir_oracle_wiring_tests {
             false,
             false,
             &HashMap::new(),
+            false,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -1068,6 +1097,7 @@ mod ir_oracle_wiring_tests {
             false,
             false,
             &HashMap::new(),
+            false,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -1119,6 +1149,7 @@ mod not_error_vacuous_test_fix_tests {
             false,
             false,
             &std::collections::HashMap::new(),
+            false,
         );
         assert_eq!(out, "        Assert.NotNull(result);\n");
     }
@@ -1142,6 +1173,7 @@ mod not_error_vacuous_test_fix_tests {
             false,
             true,
             &std::collections::HashMap::new(),
+            false,
         );
         assert_eq!(out, "        Assert.NotNull(result);\n");
     }
@@ -1300,6 +1332,7 @@ mod wildcard_traversal_tests {
             false,
             false,
             &std::collections::HashMap::new(),
+            false,
         );
         out
     }

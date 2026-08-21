@@ -23,8 +23,22 @@ use std::fmt::Write as FmtWrite;
 /// For streaming fixtures, assert on the drained `chunks` list (bound by `collect_snippet`
 /// before this runs) instead of `result_var`, matching every other streaming assertion in
 /// `assertions.rs`.
-pub(super) fn render_not_error(out: &mut String, result_var: &str, is_streaming: bool) {
-    if is_streaming {
+///
+/// `bare_result_is_option`: a bare `T?` result (no field path) may legitimately be `null` on
+/// success -- e.g. detecting a language from empty content returning `null` is not an error.
+/// Asserting `assertNotNull` there directly contradicts a paired `is_empty`/`not_empty`
+/// assertion on the same bare result, which correctly emits `assertNull`/`assertNotNull`
+/// itself (see `assertions.rs`'s own `bare_result_is_option` branches). This module's own doc
+/// comment previously claimed Kotlin already treated `not_error` as inert in this shape --
+/// it did not; `render_not_error` took no such parameter. Mirrors the fix already shipped for
+/// swift (`swift/not_error_assertion.rs`). ~keep
+pub(super) fn render_not_error(out: &mut String, result_var: &str, bare_result_is_option: bool, is_streaming: bool) {
+    if bare_result_is_option {
+        let _ = writeln!(
+            out,
+            "        // not_error: covered by the bare Optional's own assertion"
+        );
+    } else if is_streaming {
         let _ = writeln!(
             out,
             "        assertTrue(chunks.isNotEmpty(), \"expected at least one streamed chunk\")"
@@ -45,7 +59,7 @@ mod tests {
     #[test]
     fn non_streaming_renders_a_real_assertion_on_the_result_variable() {
         let mut out = String::new();
-        render_not_error(&mut out, "result", false);
+        render_not_error(&mut out, "result", false, false);
         assert_eq!(out, "        assertNotNull(result, \"expected non-null result\")\n");
     }
 
@@ -55,7 +69,7 @@ mod tests {
     #[test]
     fn streaming_asserts_on_the_drained_chunks_list_not_the_result_variable() {
         let mut out = String::new();
-        render_not_error(&mut out, "result", true);
+        render_not_error(&mut out, "result", false, true);
         assert_eq!(
             out,
             "        assertTrue(chunks.isNotEmpty(), \"expected at least one streamed chunk\")\n"
@@ -63,6 +77,22 @@ mod tests {
         assert!(
             !out.contains("result"),
             "streaming must not reference result_var: got {out}"
+        );
+    }
+
+    /// Regression: a bare `T?` result (no field path) must not get an `assertNotNull` from
+    /// `not_error` -- `null` is a valid non-error outcome, and a paired `is_empty`/`not_empty`
+    /// assertion on the same bare result already emits its own `assertNull`/`assertNotNull`.
+    /// Before this fix, `render_not_error` had no `bare_result_is_option` parameter and always
+    /// emitted `assertNotNull(result, ...)`, producing a contradictory pair with a sibling
+    /// `is_empty` that can never both pass. ~keep
+    #[test]
+    fn bare_optional_result_emits_no_not_null_assertion() {
+        let mut out = String::new();
+        render_not_error(&mut out, "result", true, false);
+        assert!(
+            !out.contains("assertNotNull(result"),
+            "bare Optional result must not assert non-null from not_error: got {out}"
         );
     }
 }

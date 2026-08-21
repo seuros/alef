@@ -45,6 +45,17 @@ pub(super) fn render_assertion(
                 ));
                 return;
             }
+            "not_error" => {
+                // A bare `@Nullable T` result may legitimately be `null` on success (e.g.
+                // detecting a language from empty content returning `null` is not an
+                // error). The general `not_error` arm below emits `assertNotNull`
+                // unconditionally, which directly contradicts a paired `is_empty`
+                // assertion on the same bare result (the arm just above, which correctly
+                // emits `assertNull`). Stay inert here instead — the uncaught-exception-
+                // fails-the-test behavior alone covers `not_error` for this shape, mirroring
+                // swift's `bare_result_is_option` guard (`swift/not_error_assertion.rs`). ~keep
+                return;
+            }
             _ => {}
         }
     }

@@ -28,6 +28,7 @@ pub(super) fn render_assertion(
     result_is_simple: bool,
     is_streaming: bool,
     returns_void: bool,
+    has_other_assertions: bool,
 ) {
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct field accesses on the result.
@@ -649,7 +650,19 @@ pub(super) fn render_assertion(
             // check (an `{:error, _}` return raises `MatchError`, failing the test), the
             // same way Rust's `.expect()` and Gleam's `let assert Ok(...)` already are for
             // their own void calls. ~keep
-            if !returns_void {
+            //
+            // `refute is_nil(result)` is only a stand-in for "the call succeeded", needed
+            // solely to avoid the unused-variable warning above when `not_error` is the
+            // fixture's sole assertion. It is wrong whenever a sibling assertion exists: a
+            // fixture can legitimately pair `not_error` with `is_empty` on an
+            // Option<T>-returning call whose success path returns nothing (None -> Elixir
+            // `nil`) — `is_empty`'s own `assert is_nil(field_expr) or ...` (this same match,
+            // above) directly contradicts `refute is_nil(result)` on the identical variable.
+            // The sibling assertion already references `result_var` (avoiding the unused-
+            // variable warning) and gives the test real, non-vacuous coverage, so this
+            // fallback only fires when nothing else will — same reasoning as TypeScript's
+            // `has_other_assertions` guard (alef #165). ~keep
+            if !returns_void && !has_other_assertions {
                 let _ = writeln!(out, "      refute is_nil({result_var})");
             }
         }
@@ -813,6 +826,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -838,6 +852,7 @@ mod tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
             false,
@@ -888,6 +903,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -916,6 +932,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             true,
+            false,
             false,
             false,
         );
@@ -955,6 +972,7 @@ mod tests {
             true,
             false,
             false,
+            false,
         );
         assert!(
             !out.contains("String.trim("),
@@ -986,6 +1004,7 @@ mod tests {
                 &HashSet::new(),
                 &HashMap::new(),
                 true,
+                false,
                 false,
                 false,
             );
@@ -1024,6 +1043,7 @@ mod tests {
             &HashMap::new(),
             false,
             is_streaming,
+            false,
             false,
         );
         out
@@ -1142,6 +1162,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
         assert_eq!(out, "      refute is_nil(result)\n");
     }
@@ -1170,6 +1191,7 @@ mod tests {
             &HashMap::new(),
             false,
             true,
+            false,
             false,
         );
         assert_eq!(out, "      refute is_nil(chunks)\n");
@@ -1202,6 +1224,7 @@ mod tests {
             false,
             false,
             true,
+            false,
         );
         assert!(
             out.is_empty(),
@@ -1231,6 +1254,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
     }
 
@@ -1251,6 +1275,7 @@ mod tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
             false,
@@ -1282,6 +1307,7 @@ mod tests {
             false,
             false,
             false,
+            false,
         );
     }
 
@@ -1302,6 +1328,7 @@ mod tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
             false,
@@ -1333,6 +1360,7 @@ mod tests {
             &HashMap::new(),
             false,
             true,
+            false,
             false,
         );
         assert_eq!(
@@ -1369,6 +1397,7 @@ mod tests {
             false,
             true,
             false,
+            false,
         );
         assert_eq!(out, "      assert length(result) >= 1\n");
     }
@@ -1403,6 +1432,7 @@ mod wildcard_tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
             false,
@@ -1503,6 +1533,7 @@ mod skip_marker_tests {
             &HashMap::new(),
             false,
             true,
+            false,
             false,
         );
         out

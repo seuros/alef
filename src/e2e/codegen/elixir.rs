@@ -260,4 +260,6 @@ mod enum_field_classification_tests;
 #[cfg(test)]
 mod is_true_tests;
 #[cfg(test)]
+mod not_error_sibling_assertion_tests;
+#[cfg(test)]
 mod tests;

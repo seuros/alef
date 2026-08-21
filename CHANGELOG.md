@@ -88,6 +88,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `source`, `alias`, `text`, and `signature` via substring, falling back to the item's whole JSON
   text, matching the Python/Node/Ruby key list and the Java/C# whole-item fallback. Regression
   coverage: `src/e2e/codegen/rust/assertion_containment_tests.rs`.
+- **C# `not_error` asserted presence beside a sibling `is_empty` on a bare `Option<T>` result,
+  a contradictory pair that could never pass (alef #165, C# arm).** `csharp/assertions.rs`'s
+  `not_error` arm unconditionally emitted `Assert.NotNull(result)`, even when a fixture
+  legitimately paired it with `is_empty` on a call whose success path returns nothing (`None`
+  -> C# `null`). Mirrors the guard already shipped for typescript/wasm: `render_assertion` now
+  takes a `has_other_assertions` flag (`fixture.assertions.len() > 1`, threaded from
+  `csharp.rs`) and skips the presence fallback whenever a sibling assertion already gives the
+  test real coverage. Regression coverage:
+  `csharp/not_error_presence_guard_tests.rs`.
+- **C# `is_empty` on a `List<T>` field fell back to a `ToString()`-based emptiness check that
+  could never pass.** `field_needs_json_serialize` (`csharp/assertions.rs`) only checked
+  `field_resolver.is_array(f)`, missing a collection field whose entries are tracked only via
+  their element paths in `fields_array` (e.g. `children[0]` for a recursive `List<DataNode>
+  Children`, never a bare `children` entry). Without `is_collection_root`, `csharp/assertion
+  .jinja`'s `is_empty` branch fell through to `Assert.True(string.IsNullOrEmpty(field
+  .ToString()))`: `List<T>.ToString()` returns the type name, a non-empty string, so the
+  assertion could never pass. Now checks `is_array`/`is_collection_root` against both the raw
+  and resolved field path, matching kotlin/swift's identical `field_is_collection` guard.
+  Regression coverage: `csharp/collection_is_empty_tests.rs`.
+- **Java `not_error` also asserted presence beside a sibling `is_empty` on a bare `Option<T>`
+  result, the same alef #165 shape audited across every e2e backend while fixing the C# arm
+  above.** `assertions.rs`'s `not_error` arm fell through the `result_is_option && bare_field`
+  block that already special-cases `is_empty`/`not_empty` for this shape, so it hit the general
+  arm's unconditional `assertNotNull(result, ...)`; the block now treats `not_error` as inert
+  there too. Regression coverage: `java/not_error_bare_option_tests.rs`.
+- **Elixir `not_error` had the identical unguarded-presence defect.** `assertions.rs`'s
+  `not_error` arm had no guard of any kind against its own `is_empty` arm's `assert is_nil
+  (field_expr) or ...` a few lines above; it now takes the same `has_other_assertions` flag as
+  C#/typescript, threaded from `test_case.rs`. Regression coverage:
+  `elixir/not_error_sibling_assertion_tests.rs`.
+- **Kotlin's `not_error` arm (`kotlin/not_error.rs`) was documented as already immune to this
+  same defect class but never actually was.** A comment in the swift fix's doc claimed "Zig and
+  Kotlin already treat `not_error` as inert in this shape", but `render_not_error` took no
+  `bare_result_is_option`-equivalent parameter and always emitted `assertNotNull(result, ...)`,
+  contradicting a sibling `is_empty`/`not_empty` arm's `assertNull`/`assertNotNull` in
+  `assertions.rs` (which already computes `bare_result_is_option` for its own use). Threaded the
+  same predicate into `render_not_error`, mirroring swift's `bare_result_is_option` guard.
+  Regression coverage: `kotlin/not_error.rs`'s `bare_optional_result_emits_no_not_null_assertion`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**
