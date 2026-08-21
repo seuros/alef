@@ -80,8 +80,13 @@ fn collection_item_matches(item: &serde_json::Value, expected: &str) -> bool {
     }
 }
 
-/// Table-driven regression for the four scenarios that distinguish the fixed predicate from
-/// the pre-fix `name`-only equality check.
+/// Specifies the intended truth table, and NOTHING ABOUT THE GENERATOR. `collection_item_matches`
+/// above is a hand-written mirror of the predicate's semantics, so this test exercises the mirror,
+/// not the emitted code — it passes unchanged against the pre-fix `name`-only equality generator,
+/// which I confirmed empirically by reverting the predicate and re-running. Keep it as a readable
+/// executable spec, but never read a green result here as evidence the generator is correct:
+/// `generated_predicate_checks_every_key_with_substring_not_equality` is the only test in this
+/// file that fails when the generator regresses. ~keep
 #[test]
 fn collection_contains_matches_the_intended_substring_semantics() {
     let function_item = serde_json::json!({"kind": "Function", "name": "main"});
