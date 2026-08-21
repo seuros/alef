@@ -4,10 +4,32 @@ use std::path::PathBuf;
 
 const FLUTTER_RUST_BRIDGE_CODEGEN: &str = "flutter_rust_bridge_codegen";
 
+/// `flutter_rust_bridge_codegen` treats the presence of `CARGO_MANIFEST_DIR` in its own
+/// environment as proof that it is running nested inside an already-active `cargo` invocation
+/// (Cargo sets this variable only for processes it spawns itself, such as a build script) and,
+/// to avoid deadlocking on that outer invocation's jobserver, silently skips its `cargo-expand`
+/// macro/cfg-expansion pass — logging "Skip cargo-expand ... because cargo is already running
+/// and would block cargo-expand" — and falls back to a raw, cfg-unaware `syn` parse that emits
+/// bindings for every `pub fn` regardless of whether its `#[cfg(feature = ...)]` gate is
+/// actually active. This was confirmed empirically (alef #140) by bisecting a build script's
+/// full captured environment down to this one variable: with it present, a bare, non-nested
+/// invocation reproduces the exact same degraded output as a real `cargo build`-nested one;
+/// without it, the same invocation runs a real `cargo-expand` and correctly excludes
+/// feature-gated functions whose feature is not active for the crate.
+///
+/// alef's own invocation must always take the full, cfg-aware path, regardless of how alef
+/// itself happens to be launched (an installed binary has no such variable, but `cargo run`
+/// during alef's own development would set it for alef's process and, by default child-process
+/// env inheritance, for this command too). Stripped unconditionally rather than relying on
+/// alef's own launch context staying clean forever.
+const CARGO_MANIFEST_DIR_ENV: &str = "CARGO_MANIFEST_DIR";
+
 pub(super) fn configure(command: &mut std::process::Command, cmd: &str, cache_scope: &str) -> anyhow::Result<()> {
     if cmd != FLUTTER_RUST_BRIDGE_CODEGEN {
         return Ok(());
     }
+
+    command.env_remove(CARGO_MANIFEST_DIR_ENV);
 
     let xdg_cache_home = std::env::var_os("XDG_CACHE_HOME");
     let home = std::env::var_os("HOME");
@@ -101,6 +123,37 @@ fn cache_scope_component(scope: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// alef #140: `flutter_rust_bridge_codegen` degrades to a cfg-unaware parse whenever
+    /// `CARGO_MANIFEST_DIR` is present in its environment (see `CARGO_MANIFEST_DIR_ENV`'s doc
+    /// for how this was established). `configure` must strip it from the spawned command's
+    /// environment unconditionally, regardless of whether it happens to be set in alef's own
+    /// process -- `Command::env_remove` records an explicit removal that `get_envs` reports as
+    /// `None`, which is what proves the child would not inherit an ambient value.
+    #[test]
+    fn configure_strips_cargo_manifest_dir_from_the_frb_command() {
+        let mut command = std::process::Command::new(FLUTTER_RUST_BRIDGE_CODEGEN);
+        configure(&mut command, FLUTTER_RUST_BRIDGE_CODEGEN, "sample-api").expect("configure must succeed");
+
+        let removed = command
+            .get_envs()
+            .any(|(key, value)| key == OsStr::new(CARGO_MANIFEST_DIR_ENV) && value.is_none());
+        assert!(removed, "CARGO_MANIFEST_DIR must be explicitly removed from the frb command's env");
+    }
+
+    /// `configure` only touches `flutter_rust_bridge_codegen` invocations (see the `cmd !=
+    /// FLUTTER_RUST_BRIDGE_CODEGEN` early return) -- it must not strip `CARGO_MANIFEST_DIR`
+    /// from an unrelated post-build `RunCommand`, which may legitimately depend on it.
+    #[test]
+    fn configure_leaves_other_commands_env_untouched() {
+        let mut command = std::process::Command::new("echo");
+        configure(&mut command, "echo", "sample-api").expect("configure must succeed");
+
+        let touched = command
+            .get_envs()
+            .any(|(key, _)| key == OsStr::new(CARGO_MANIFEST_DIR_ENV));
+        assert!(!touched, "configure must not touch env for commands other than flutter_rust_bridge_codegen");
+    }
 
     #[test]
     fn fvm_cache_is_stable_across_clean_worktrees() {
