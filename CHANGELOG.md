@@ -22,6 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a consumer's own differently-configured `alef-snippets` entry. Regression coverage:
   `src/scaffold/tests/poly_migrations.rs`.
 
+- **The Ruby scaffold's `spec/<name>_spec.rb` seed failed `Style/WordArray` on any DTO with
+  two or more `String` fields.** `ruby_construct_example` asserted a multi-field DTO's values
+  with a bracketed array literal (e.g. `["alef-scaffold", "alef-scaffold"]`); the repeated
+  seed literal is a hyphenated word, which the scaffolded `.rubocop.yml`'s default
+  `Style/WordArray` (`WordRegex` permits one hyphen, `MinSize: 2`) still flags. An all-String
+  field list now emits `%w[...]` instead, leaving mixed-type field lists (never all-String
+  literals) on the bracket form the cop does not flag.
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it
