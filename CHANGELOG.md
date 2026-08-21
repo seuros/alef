@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Rust e2e generator's `contains`/`contains_all`/`contains_any`/`not_contains` assertions on
+  a collection field only matched an item's `"name"` key with exact equality, so a fixture like
+  `{"type":"contains","field":"structure","value":"Function"}` against items shaped
+  `{"kind":"Function","name":"main",...}` failed with `expected collection item name: Function` —
+  the match text lived under `kind`, which the predicate never inspected (alef defect B1). The
+  other five e2e backends (Python, Node/TypeScript, Ruby, Java, C#) already implement the intended
+  semantics: a substring search over several item keys (or the whole serialized item). Rust's
+  `containment_predicate` (`src/e2e/codegen/rust/assertions.rs`) now searches `kind`, `name`,
+  `source`, `alias`, `text`, and `signature` via substring, falling back to the item's whole JSON
+  text, matching the Python/Node/Ruby key list and the Java/C# whole-item fallback. Regression
+  coverage: `src/e2e/codegen/rust/assertion_containment_tests.rs`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**
