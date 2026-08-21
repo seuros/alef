@@ -28,6 +28,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assertion could never pass. Now checks `is_array`/`is_collection_root` against both the raw
   and resolved field path, matching kotlin/swift's identical `field_is_collection` guard.
   Regression coverage: `csharp/collection_is_empty_tests.rs`.
+- **Java `not_error` also asserted presence beside a sibling `is_empty` on a bare `Option<T>`
+  result, the same alef #165 shape audited across every e2e backend while fixing the C# arm
+  above.** `assertions.rs`'s `not_error` arm fell through the `result_is_option && bare_field`
+  block that already special-cases `is_empty`/`not_empty` for this shape, so it hit the general
+  arm's unconditional `assertNotNull(result, ...)`; the block now treats `not_error` as inert
+  there too. Regression coverage: `java/not_error_bare_option_tests.rs`.
+- **Elixir `not_error` had the identical unguarded-presence defect.** `assertions.rs`'s
+  `not_error` arm had no guard of any kind against its own `is_empty` arm's `assert is_nil
+  (field_expr) or ...` a few lines above; it now takes the same `has_other_assertions` flag as
+  C#/typescript, threaded from `test_case.rs`. Regression coverage:
+  `elixir/not_error_sibling_assertion_tests.rs`.
+- **Kotlin's `not_error` arm (`kotlin/not_error.rs`) was documented as already immune to this
+  same defect class but never actually was.** A comment in the swift fix's doc claimed "Zig and
+  Kotlin already treat `not_error` as inert in this shape", but `render_not_error` took no
+  `bare_result_is_option`-equivalent parameter and always emitted `assertNotNull(result, ...)`,
+  contradicting a sibling `is_empty`/`not_empty` arm's `assertNull`/`assertNotNull` in
+  `assertions.rs` (which already computes `bare_result_is_option` for its own use). Threaded the
+  same predicate into `render_not_error`, mirroring swift's `bare_result_is_option` guard.
+  Regression coverage: `kotlin/not_error.rs`'s `bare_optional_result_emits_no_not_null_assertion`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

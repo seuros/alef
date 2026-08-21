@@ -780,8 +780,13 @@ pub(super) fn render_assertion(
                 );
             }
         }
-        // See `not_error::render_not_error` for why this is not a no-op.
-        "not_error" => super::not_error::render_not_error(out, result_var, is_streaming),
+        // See `not_error::render_not_error` for why this is not a no-op, and for why a bare
+        // `T?` result (`result_is_option` with no field path) suppresses it instead.
+        "not_error" => {
+            let bare_result_is_option =
+                result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
+            super::not_error::render_not_error(out, result_var, bare_result_is_option, is_streaming);
+        }
         "error" => {
             // Handled at the test method level.
         }

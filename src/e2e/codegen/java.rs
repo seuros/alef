@@ -371,6 +371,8 @@ mod assertion_indentation_layout_tests;
 #[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
+mod not_error_bare_option_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod void_not_error_call_tests;

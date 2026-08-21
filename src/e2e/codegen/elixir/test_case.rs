@@ -593,6 +593,10 @@ pub(super) fn render_test_case(
         let _ = writeln!(out, "      {collect}");
     }
 
+    // `not_error`'s presence fallback (`assertions::render_assertion`) is only a stand-in for
+    // "the call succeeded" and is wrong once a sibling assertion exists — mirrors
+    // typescript's `has_other_assertions` guard (alef #165). ~keep
+    let has_other_assertions = fixture.assertions.len() > 1;
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
         render_assertion(
@@ -606,6 +610,7 @@ pub(super) fn render_test_case(
             result_is_simple,
             is_streaming,
             call_config.returns_void,
+            has_other_assertions,
         );
     }
     // A fixture that declared at least one assertion but every one of them resolved
