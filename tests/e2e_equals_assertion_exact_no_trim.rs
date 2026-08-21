@@ -8,11 +8,17 @@
 //! "fix" that but silently mask real trailing-whitespace regressions — the contract here
 //! is exact equality: neither side is normalized.
 //!
-//! This is a single data-driven table test, parameterized over all 14 language codegens
+//! This is a single data-driven table test, parameterized over all 15 language codegens
 //! that H2M (html-to-markdown) consumes, so a future per-language regression in any one
-//! of them is caught by this one test rather than requiring 14 separate discoveries.
+//! of them is caught by this one test rather than requiring 15 separate discoveries.
 //! (`wasm` is intentionally excluded: its codegen delegates directly to the `typescript`
 //! backend and shares its `assertions.rs`, so it has no independent code path to regress.)
+//!
+//! `rust` was missing from this table even though it has its own independent
+//! `render_equals_assertion` path (`src/e2e/codegen/rust/assertion_helpers.rs`) with its
+//! own no-trim contract and unit tests — those per-backend unit tests don't provide the
+//! cross-language guard this table does, so the gap left Rust's exact-equality contract
+//! unverified at this level (alef task #162).
 
 use alef::core::config::NewAlefConfig;
 use alef::e2e::codegen::E2eCodegen;
@@ -27,6 +33,7 @@ use alef::e2e::codegen::php::PhpCodegen;
 use alef::e2e::codegen::python::PythonE2eCodegen;
 use alef::e2e::codegen::r::RCodegen;
 use alef::e2e::codegen::ruby::RubyCodegen;
+use alef::e2e::codegen::rust::RustE2eCodegen;
 use alef::e2e::codegen::swift::SwiftE2eCodegen;
 use alef::e2e::codegen::typescript::TypeScriptCodegen;
 use alef::e2e::codegen::zig::ZigE2eCodegen;
@@ -225,6 +232,7 @@ macro_rules! equals_is_exact_case {
     };
 }
 
+equals_is_exact_case!(equals_assertion_is_exact_for_rust, RustE2eCodegen);
 equals_is_exact_case!(equals_assertion_is_exact_for_python, PythonE2eCodegen);
 equals_is_exact_case!(equals_assertion_is_exact_for_node, TypeScriptCodegen);
 equals_is_exact_case!(equals_assertion_is_exact_for_go, GoCodegen);

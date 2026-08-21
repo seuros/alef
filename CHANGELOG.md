@@ -138,6 +138,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capsule crate's path, so the dependency the manifest declared was genuinely unused. `scaffold_jni`
   (`src/scaffold/languages/jni.rs`) no longer adds a capsule package dependency to the JNI
   manifest. Regression coverage: `scaffold_jni_never_declares_a_capsule_package_dependency`.
+- **`tests/e2e_equals_assertion_exact_no_trim.rs` audited the wrong side of the html-to-markdown
+  Rust e2e trailing-newline reports (alef #162).** 12+ generated Rust `equals` assertions were
+  failing in CI (`test_conversion_autolink_https_url` and others) because the library's actual
+  output carries a trailing `\n` that the fixture's `expected` literal lacks. Comparing actual CI
+  runs for the *same* commit across languages (Python, Ruby) showed the identical mismatch failing
+  there too — `equals` assertions are rendered as an exact, unnormalized literal comparison in
+  every backend, Rust included (`render_equals_assertion`,
+  `src/e2e/codegen/rust/assertion_helpers.rs`), so no backend "passes for the wrong reason" here.
+  The root cause is stale `expected` values in the consumer repo's fixture JSON, not an alef
+  codegen divergence; no alef backend needed a behavior change. `rust` was, however, missing from
+  the cross-language `equals`-assertion-exactness regression table in
+  `tests/e2e_equals_assertion_exact_no_trim.rs` (14 of the other 15 consumed backends were
+  covered) — added so a future one-sided-trim regression in the Rust path is caught here instead
+  of only by its own per-backend unit tests.
 
 ## [0.62.8] - 2026-08-21
 
