@@ -45,6 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure — the same "SKIPPED reads as PASSED" shape that produced a false-premise bug report
   in html-to-markdown. The step now hard-fails when the target list is empty, before ever
   writing `matrix=`/`assets=` to `$GITHUB_OUTPUT`.
+- **The TypeScript e2e generator emitted `.resolves` on synchronous void calls, throwing
+  `TypeError: You must provide a Promise to expect() when using .resolves, not 'undefined'`
+  (alef #B5).** A `returns_void` call whose only assertion is `not_error` wraps `call_expr`
+  in an expectation instead of a bare statement, but `test_case.rs`'s `void_not_error`
+  computation never consulted `call_is_async`, so `typescript/test_function.jinja` emitted
+  `await expect(call_expr).resolves.not.toThrow()` even for synchronous NAPI bindings
+  (`cleanCache()`, `configure()`, `init()`, `prefetch()`) that resolve no Promise at all.
+  `call_is_async` (`src/e2e/codegen/typescript/test_file/test_case.rs:71-75`) is now threaded
+  into the template context; `test_function.jinja`'s `void_not_error` branch selects
+  `.resolves.not.toThrow()` for async calls and `expect(() => call_expr).not.toThrow()` for
+  sync calls. Regression coverage:
+  `src/e2e/codegen/typescript/test_file/void_not_error_call_tests.rs` (new, table-driven
+  sync/async pair) and the corrected sync-shape assertion in
+  `test_case.rs::void_not_error_tests::void_not_error_wraps_the_call_without_asserting_tobedefined`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

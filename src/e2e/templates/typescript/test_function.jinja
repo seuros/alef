@@ -9,8 +9,12 @@
    - call_expr: function call expression
    - has_usable_assertion: bool
    - void_not_error: bool — returns_void call whose only meaningful check is `not_error`;
-     wraps call_expr in expect(...).resolves.not.toThrow() so the check is a real, visible
+     wraps call_expr in expect(...).resolves.not.toThrow() (async calls) or
+     expect(() => ...).not.toThrow() (sync calls) so the check is a real, visible
      assertion instead of a bare, unbound call statement
+   - call_is_async: bool — whether call_expr resolves a Promise; selects which
+     void_not_error wrapper shape to emit (a sync call has no Promise for `.resolves` to
+     unwrap, so `expect()` would throw TypeError instead of running the assertion)
    - result_var: result variable name
    - await_kw: "await " (or empty string)
    - assertions_body: string containing all rendered assertions
@@ -88,7 +92,11 @@
 		{{ line }}
 {% endfor %}
 {% if void_not_error %}
+{% if call_is_async %}
 		await expect({{ call_expr }}).resolves.not.toThrow();
+{% else %}
+		expect(() => {{ call_expr }}).not.toThrow();
+{% endif %}
 {% elif has_usable_assertion %}
 		const {{ result_var }} = {{ await_kw }}{{ call_expr }};
 {% else %}
