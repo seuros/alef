@@ -127,6 +127,14 @@ fn capsule_function_returns_raw_language_pointer() {
     );
 }
 
+/// `val.into_raw()` must be called bare, with no `as *const {into_raw_type}` cast appended.
+/// `into_raw_type` is documented as the pointee type `value.into_raw()` already returns (see
+/// `FfiCapsuleTypeConfig::into_raw_type`), and tree-sitter's own
+/// `Language::into_raw(self) -> *const ffi::TSLanguage` confirms it for this fixture -- so
+/// `val.into_raw() as *const tree_sitter::ffi::TSLanguage` is a same-type cast that trips
+/// `clippy::unnecessary_cast` under `-D warnings`. Regression coverage for the
+/// tree-sitter-language-pack sighting; this test was red before the fix (it asserted the
+/// cast WAS present).
 #[test]
 fn capsule_function_calls_into_raw_not_box() {
     let api = capsule_api();
@@ -135,9 +143,13 @@ fn capsule_function_calls_into_raw_not_box() {
     let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
 
     assert!(
+        lib.content.contains("val.into_raw()"),
+        "capsule fn must convert via into_raw(). Got:\n{}",
         lib.content
-            .contains("val.into_raw() as *const tree_sitter::ffi::TSLanguage"),
-        "capsule fn must convert via into_raw() cast. Got:\n{}",
+    );
+    assert!(
+        !lib.content.contains("val.into_raw() as"),
+        "capsule fn must not append a redundant cast to into_raw()'s own type. Got:\n{}",
         lib.content
     );
     assert!(

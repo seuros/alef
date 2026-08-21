@@ -1100,11 +1100,8 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
                         "serialized_value_to_c.jinja",
                         context! { value => val_expr, indent => "            " },
                     )
-                } else if let Some(cfg) = capsule_cfg {
-                    format!(
-                        "            {}",
-                        super::super::capsule::capsule_into_raw_expr(val_expr, cfg)
-                    )
+                } else if capsule_cfg.is_some() {
+                    format!("            {}", super::super::capsule::capsule_into_raw_expr(val_expr))
                 } else if returns_c_char(&func.return_type) {
                     gen_owned_c_char_to_c_with_len(val_expr, &func.return_type, "            ", &ffi_name)
                 } else {
@@ -1131,8 +1128,8 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function(
                     "serialized_value_to_c.jinja",
                     context! { value => result_expr, indent => "    " },
                 )
-            } else if let Some(cfg) = capsule_cfg {
-                format!("    {}", super::super::capsule::capsule_into_raw_expr(result_expr, cfg))
+            } else if capsule_cfg.is_some() {
+                format!("    {}", super::super::capsule::capsule_into_raw_expr(result_expr))
             } else if returns_c_char(&func.return_type) {
                 gen_owned_c_char_to_c_with_len(result_expr, &func.return_type, "    ", &ffi_name)
             } else {

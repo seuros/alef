@@ -9,7 +9,7 @@
 //! pub extern "C" fn TSLP_get_language(name: *const c_char) -> *const tree_sitter::ffi::TSLanguage {
 //!     // ... param conversion ...
 //!     let result = language_registry::get_language(&name_rs);
-//!     result.into_raw() as *const tree_sitter::ffi::TSLanguage
+//!     result.into_raw()
 //! }
 //! ```
 //!
@@ -55,13 +55,16 @@ pub(in crate::backends::ffi::gen_bindings) fn capsule_c_return_type(cfg: &FfiCap
     format!("*const {}", cfg.into_raw_type)
 }
 
-/// The owned-value conversion expression for a capsule return: `{expr}.into_raw() as *const {into_raw_type}`.
+/// The owned-value conversion expression for a capsule return: `{expr}.into_raw()`.
 ///
-/// `value.into_raw()` transfers the grammar pointer to the host runtime; the cast
-/// normalizes the pointee to the configured FFI type so cbindgen emits a stable
-/// `const {c_return_type} *` signature.
-pub(in crate::backends::ffi::gen_bindings) fn capsule_into_raw_expr(expr: &str, cfg: &FfiCapsuleTypeConfig) -> String {
-    format!("{expr}.into_raw() as *const {}", cfg.into_raw_type)
+/// `value.into_raw()` transfers the grammar pointer to the host runtime. No cast is applied:
+/// `FfiCapsuleTypeConfig::into_raw_type` is documented as the pointee type `value.into_raw()`
+/// already returns, and `capsule_c_return_type` declares the exported function's return as
+/// exactly `*const {into_raw_type}` to match -- so the source and destination types are the
+/// same type by construction. A cast here would be a no-op that trips
+/// `clippy::unnecessary_cast`, which is denied.
+pub(in crate::backends::ffi::gen_bindings) fn capsule_into_raw_expr(expr: &str) -> String {
+    format!("{expr}.into_raw()")
 }
 
 /// The `c_return_type` names `gen_cbindgen_toml` must forward-declare: every configured capsule
@@ -173,11 +176,20 @@ mod tests {
         );
     }
 
+    /// Regression test: `capsule_into_raw_expr` must not append `as *const {into_raw_type}`,
+    /// because `into_raw_type` is documented as the type `value.into_raw()` already returns --
+    /// tree-sitter's own `Language::into_raw(self) -> *const ffi::TSLanguage` confirms this for
+    /// the real-world capsule config. A trailing cast to the expression's own type trips
+    /// `clippy::unnecessary_cast`, which is denied in downstream consumers (e.g.
+    /// tree-sitter-language-pack's generated `ts-pack-core-ffi` crate). This test was red before
+    /// the fix: it asserted on `" as *const"` appearing in the output.
     #[test]
-    fn capsule_into_raw_expr_casts_to_configured_type() {
-        assert_eq!(
-            capsule_into_raw_expr("result", &default_cfg()),
-            "result.into_raw() as *const tree_sitter::ffi::TSLanguage"
+    fn capsule_into_raw_expr_emits_no_redundant_cast() {
+        let expr = capsule_into_raw_expr("result");
+        assert_eq!(expr, "result.into_raw()");
+        assert!(
+            !expr.contains(" as "),
+            "capsule return must not cast into_raw()'s own type: {expr}"
         );
     }
 }

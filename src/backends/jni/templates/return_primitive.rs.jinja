@@ -1,1 +1,5 @@
+{%- if jni_ty %}
 {{ indent }}v as {{ jni_ty }}
+{% else %}
+{{ indent }}v
+{% endif %}

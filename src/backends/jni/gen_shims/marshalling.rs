@@ -193,7 +193,14 @@ fn emit_return_marshal_with_indent(out: &mut String, return_type: &TypeRef, inde
             ));
         }
         TypeRef::Primitive(p) => {
-            let jni_ty = jni_primitive_type(p);
+            // Only pass a cast target when the JNI wire type actually differs from `v`'s own
+            // Rust type (see `jni_primitive_needs_cast`) -- otherwise `v as <wire type>` is a
+            // no-op cast that trips `clippy::unnecessary_cast`.
+            let jni_ty = if jni_primitive_needs_cast(p) {
+                jni_primitive_type(p)
+            } else {
+                ""
+            };
             out.push_str(&template_env::render(
                 "return_primitive.rs.jinja",
                 context! {
@@ -239,5 +246,29 @@ fn emit_return_marshal_with_indent(out: &mut String, return_type: &TypeRef, inde
                 },
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod marshalling_tests {
+    use super::*;
+
+    /// Return-side counterpart of the liter-llm sighting: a method returning `f64` must not
+    /// cast its own return value to its own JNI wire type (`jni::sys::jdouble`, an alias of
+    /// `f64`). This test was red before the fix (`out` contained `"v as jni::sys::jdouble"`).
+    #[test]
+    fn f64_return_has_no_cast() {
+        let mut out = String::new();
+        emit_return_marshal_with_indent(&mut out, &TypeRef::Primitive(PrimitiveType::F64), "    ", "0.0f64");
+        assert_eq!(out, "    v\n");
+    }
+
+    /// Sibling positive control: `u64`'s JNI wire type (`jlong`) genuinely differs from `u64`,
+    /// so the return cast must still be emitted.
+    #[test]
+    fn u64_return_still_casts() {
+        let mut out = String::new();
+        emit_return_marshal_with_indent(&mut out, &TypeRef::Primitive(PrimitiveType::U64), "    ", "0");
+        assert_eq!(out, "    v as jlong\n");
     }
 }

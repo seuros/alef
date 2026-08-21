@@ -302,3 +302,37 @@ fn render_function_return_body(
     emit_return_marshal_with_indent(&mut body, &function.return_type, indent, return_null);
     body
 }
+
+#[cfg(test)]
+mod function_shims_tests {
+    use super::*;
+    use crate::core::ir::ParamDef;
+
+    fn primitive_param(name: &str, primitive: PrimitiveType) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            ty: TypeRef::Primitive(primitive),
+            ..Default::default()
+        }
+    }
+
+    /// Regression test for the liter-llm sighting: generated JNI shim code contained
+    /// `record_cost_usd(..., cost_usd as f64)` where `cost_usd` is already `f64`, tripping
+    /// `clippy::unnecessary_cast`. This test was red before the fix (`call_arg` contained
+    /// `" as f64"`).
+    #[test]
+    fn f64_param_call_arg_has_no_cast() {
+        let param = primitive_param("cost_usd", PrimitiveType::F64);
+        let projection = project_primitive_function_param(&param, &PrimitiveType::F64, "cost_usd");
+        assert_eq!(projection.call_arg, "cost_usd");
+    }
+
+    /// Sibling positive control: a genuinely-needed cast (JNI wire type `jlong` differs from
+    /// `u64`) must still be emitted -- the fix must not remove casts wholesale.
+    #[test]
+    fn u64_param_call_arg_still_casts() {
+        let param = primitive_param("count", PrimitiveType::U64);
+        let projection = project_primitive_function_param(&param, &PrimitiveType::U64, "count");
+        assert_eq!(projection.call_arg, "count as u64");
+    }
+}

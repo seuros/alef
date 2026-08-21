@@ -29,8 +29,12 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FfiCapsuleTypeConfig {
-    /// Fully-qualified Rust pointee type produced by `value.into_raw()`.
-    /// The generated body casts to `*const {into_raw_type}`.
+    /// Fully-qualified Rust pointee type of the `*const {into_raw_type}` that
+    /// `value.into_raw()` already returns. The generated body calls `value.into_raw()`
+    /// as-is (no cast is added): since this field IS the declared return type of
+    /// `into_raw()`, and the exported function's return type is declared as the same
+    /// `*const {into_raw_type}`, an `as` cast would be a no-op and trip
+    /// `clippy::unnecessary_cast`.
     /// **Required** — there is no default.
     pub into_raw_type: String,
     /// The bare C type name the exported function returns (used by cbindgen to

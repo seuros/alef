@@ -59,16 +59,37 @@ fn jni_return_type(ty: &TypeRef) -> &'static str {
     }
 }
 
-fn jni_primitive_type(p: &PrimitiveType) -> &'static str {
+/// The JNI wire representation of a primitive: the `jni`-crate sys type name used in shim
+/// signatures, paired with the actual Rust type that sys type is a type alias for (e.g.
+/// `jni::sys::jbyte` is `i8`, `jlong` is `i64`). `jni_primitive_type` and `primitive_cast`
+/// both read this single table, so the declared signature type and the "does this value need
+/// an `as` cast" decision can never independently disagree about what crosses the boundary. A
+/// second, separately-maintained cast table previously assumed every primitive needs a cast to
+/// its own JNI wire type, which is false whenever the wire type already IS that Rust type (e.g.
+/// `F64` against `jni::sys::jdouble` = `f64`), producing `clippy::unnecessary_cast`. ~keep
+fn jni_wire_repr(p: &PrimitiveType) -> (&'static str, &'static str) {
     match p {
-        PrimitiveType::Bool => "jboolean",
-        PrimitiveType::I8 | PrimitiveType::U8 => "jni::sys::jbyte",
-        PrimitiveType::I16 | PrimitiveType::U16 => "jni::sys::jshort",
-        PrimitiveType::I32 | PrimitiveType::U32 => "jni::sys::jint",
-        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize => "jlong",
-        PrimitiveType::F32 => "jni::sys::jfloat",
-        PrimitiveType::F64 => "jni::sys::jdouble",
+        PrimitiveType::Bool => ("jboolean", "bool"),
+        PrimitiveType::I8 | PrimitiveType::U8 => ("jni::sys::jbyte", "i8"),
+        PrimitiveType::I16 | PrimitiveType::U16 => ("jni::sys::jshort", "i16"),
+        PrimitiveType::I32 | PrimitiveType::U32 => ("jni::sys::jint", "i32"),
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Usize | PrimitiveType::Isize => ("jlong", "i64"),
+        PrimitiveType::F32 => ("jni::sys::jfloat", "f32"),
+        PrimitiveType::F64 => ("jni::sys::jdouble", "f64"),
     }
+}
+
+fn jni_primitive_type(p: &PrimitiveType) -> &'static str {
+    jni_wire_repr(p).0
+}
+
+/// True when the primitive's JNI wire type is not itself the primitive's own Rust type, so a
+/// value crossing the JNI boundary in either direction needs an explicit `as` cast. Used by
+/// `primitive_cast` (JNI wire -> core, in function-parameter unmarshalling) and by the
+/// core -> JNI wire return-value cast in `emit_return_marshal_with_indent`, so both directions
+/// consult the same wire/core comparison instead of guessing independently.
+fn jni_primitive_needs_cast(p: &PrimitiveType) -> bool {
+    jni_wire_repr(p).1 != primitive_rust_type(p)
 }
 
 /// Return the Rust zero-literal for a JNI primitive, used as the null-sentinel
@@ -93,22 +114,15 @@ fn primitive_zero_literal(p: &PrimitiveType) -> Option<&'static str> {
 }
 
 /// Return a Rust cast target for a JNI primitive → Rust type conversion, or "" if no cast needed.
-/// jboolean is bool (jni 0.22+) and jint is i32, so those types need no cast.
+/// Consults [`jni_primitive_needs_cast`] rather than a hand-picked list of "types that need
+/// casting" — e.g. `Bool` and `I32` need none because `jboolean`/`jint` already alias `bool`/
+/// `i32`, and the same reasoning now covers every other primitive whose wire type happens to
+/// equal its own Rust type.
 fn primitive_cast(p: &PrimitiveType) -> &'static str {
-    match p {
-        PrimitiveType::Bool => "",
-        PrimitiveType::I8 => "i8",
-        PrimitiveType::U8 => "u8",
-        PrimitiveType::I16 => "i16",
-        PrimitiveType::U16 => "u16",
-        PrimitiveType::I32 => "",
-        PrimitiveType::U32 => "u32",
-        PrimitiveType::I64 => "i64",
-        PrimitiveType::U64 => "u64",
-        PrimitiveType::F32 => "f32",
-        PrimitiveType::F64 => "f64",
-        PrimitiveType::Usize => "usize",
-        PrimitiveType::Isize => "isize",
+    if jni_primitive_needs_cast(p) {
+        primitive_rust_type(p)
+    } else {
+        ""
     }
 }
 
@@ -252,4 +266,75 @@ fn resolve_error_class(config: &ResolvedCrateConfig, package: &str) -> String {
 /// `sample-llm`), converting hyphens to underscores per Rust convention.
 fn core_use_path(config: &ResolvedCrateConfig) -> String {
     config.name.replace('-', "_")
+}
+
+#[cfg(test)]
+mod type_helpers_tests {
+    use super::*;
+
+    /// Regression coverage for the `clippy::unnecessary_cast` bug: `primitive_cast` (used to
+    /// build the JNI-wire -> core Rust cast at a call site, e.g. `record_cost_usd(...,
+    /// cost_usd as f64)` where `cost_usd` is already `f64`) must return `""` for every
+    /// primitive whose JNI wire type is already that primitive's own Rust type, and a real
+    /// cast target for every primitive whose wire type differs. This test was red before the
+    /// fix -- `primitive_cast(&PrimitiveType::F64)` returned `"f64"`, not `""`.
+    #[test]
+    fn primitive_cast_omits_cast_when_wire_type_already_matches() {
+        for p in [
+            PrimitiveType::Bool,
+            PrimitiveType::I32,
+            PrimitiveType::I8,
+            PrimitiveType::I16,
+            PrimitiveType::I64,
+            PrimitiveType::F32,
+            PrimitiveType::F64,
+        ] {
+            assert_eq!(
+                primitive_cast(&p),
+                "",
+                "{p:?} wire type already matches its own Rust type"
+            );
+        }
+    }
+
+    #[test]
+    fn primitive_cast_still_emits_a_genuinely_needed_cast() {
+        assert_eq!(primitive_cast(&PrimitiveType::U8), "u8");
+        assert_eq!(primitive_cast(&PrimitiveType::U16), "u16");
+        assert_eq!(primitive_cast(&PrimitiveType::U32), "u32");
+        assert_eq!(primitive_cast(&PrimitiveType::U64), "u64");
+        assert_eq!(primitive_cast(&PrimitiveType::Usize), "usize");
+        assert_eq!(primitive_cast(&PrimitiveType::Isize), "isize");
+    }
+
+    /// Same defect, return direction: `emit_return_marshal_with_indent` builds `v as {jni_ty}`
+    /// from `jni_primitive_needs_cast`. F64's wire type (`jni::sys::jdouble`) is `f64` itself,
+    /// so a `f64`-returning method must not cast its return value.
+    #[test]
+    fn jni_primitive_needs_cast_agrees_with_primitive_cast_directionally() {
+        for p in [
+            PrimitiveType::Bool,
+            PrimitiveType::I8,
+            PrimitiveType::I16,
+            PrimitiveType::I32,
+            PrimitiveType::I64,
+            PrimitiveType::F32,
+            PrimitiveType::F64,
+        ] {
+            assert!(!jni_primitive_needs_cast(&p), "{p:?} needs no cast in either direction");
+        }
+        for p in [
+            PrimitiveType::U8,
+            PrimitiveType::U16,
+            PrimitiveType::U32,
+            PrimitiveType::U64,
+            PrimitiveType::Usize,
+            PrimitiveType::Isize,
+        ] {
+            assert!(
+                jni_primitive_needs_cast(&p),
+                "{p:?} genuinely needs a cast in either direction"
+            );
+        }
+    }
 }

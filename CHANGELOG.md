@@ -29,6 +29,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The JNI and FFI backends no longer emit `as <T>` casts on expressions that are already
+  type `T`, which tripped `clippy::unnecessary_cast` under `-D warnings` in any consumer that
+  lints generated code.** Two independent sightings shared one mechanism: a cast target was
+  chosen without checking whether the source expression already had that type.
+  - **JNI** (`src/backends/jni/gen_shims/type_helpers.rs`): `primitive_cast` used a hand-picked
+    per-`PrimitiveType` table of cast targets that assumed every primitive needs converting to
+    its own JNI wire type, which is false whenever the wire type already IS that Rust type (e.g.
+    `F64` against `jni::sys::jdouble`, itself a type alias for `f64`) — so a call like
+    `record_cost_usd(..., cost_usd as f64)` cast an already-`f64` value. The same defect existed
+    independently on the return path (`emit_return_marshal_with_indent` in
+    `src/backends/jni/gen_shims/marshalling.rs`, `src/backends/jni/templates/return_primitive.rs.jinja`),
+    for the same reason. Both directions now consult a single `jni_wire_repr` table pairing each
+    primitive's JNI wire type with the Rust type that wire type is an alias for, and only emit a
+    cast when the two differ. `I8`, `I16`, `I32`, `I64`, `F32`, and `F64` (whose wire
+    representations are aliases of their own Rust type) no longer get a redundant cast in either
+    direction; `U8`/`U16`/`U32`/`U64`/`Usize`/`Isize` (whose wire types are signed/widened) still
+    do.
+  - **FFI** (`src/backends/ffi/gen_bindings/capsule.rs`): `capsule_into_raw_expr` unconditionally
+    appended `as *const {into_raw_type}` to a capsule-typed function's `value.into_raw()` call,
+    even though `into_raw_type` is documented as the pointee type `value.into_raw()` already
+    returns and the exported function's return type is declared as exactly the same
+    `*const {into_raw_type}` — so the cast's source and destination were the same type by
+    construction. Confirmed against tree-sitter's own
+    `Language::into_raw(self) -> *const ffi::TSLanguage`. The cast is no longer emitted;
+    `capsule_into_raw_expr` now just calls `value.into_raw()`.
+  - `tests/generated_output_downstream_gate.rs`'s self-check previously skipped to whichever
+    emitted Rust file allowed `clippy::unnecessary_cast` at crate level, which happened to
+    always be the FFI crate's `lib.rs` — so the self-check "passed" without ever running clippy
+    against a lintable file. That gap was already closed on `main` (the crate-level allow was
+    dropped and the self-check now hard-fails instead of silently picking an allow-listed file).
+    However, the gate's shared fixture (`tests/generated_output_downstream_gate/fixture.rs`)
+    still has no `f64`-typed field or parameter and no `[crates.ffi.capsule_types]`
+    configuration, so neither of these two code paths is ever exercised by a live gate run — a
+    regression of either bug would still not be caught today. Flagged here rather than fixed:
+    the fixture drives every clippy-lane language and changing it needs validation against the
+    full (heavy, `#[ignore]`d, multi-toolchain) gate suite this session could not run.
+
 - **`sync-versions` now bumps the `[package] version` field itself in every alef-owned Cargo.toml
   it touches, not just dependency pins.** Two manifests kept their pre-bump version after
   `alef sync-versions --bump`: the Ruby native (Magnus) crate manifest at
