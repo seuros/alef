@@ -720,3 +720,129 @@ skip_languages = ["wasm", "kotlin"]
     let resolved = cfg.resolve().expect("valid skip_languages should not fail");
     assert_eq!(resolved[0].adapters[0].skip_languages, vec!["wasm", "kotlin"]);
 }
+
+#[test]
+fn resolve_rejects_unknown_language_in_registration_variant() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "sample_router"
+sources = ["src/lib.rs"]
+
+[[crates.handler_contracts]]
+trait_name = "Handler"
+dispatch_method = "call"
+
+[[crates.services]]
+owner_type = "App"
+
+[[crates.services.registrations]]
+method = "add_route"
+callback_param = "handler"
+callback_bound = "IntoHandler"
+callback_contract = "Handler"
+
+[[crates.services.registrations.variants]]
+name = "get"
+fixed = { method = "GET" }
+
+[crates.services.registrations.variants.languages.knotlin]
+method_prefix = "Map"
+"#,
+    )
+    .unwrap();
+    let err = cfg.resolve().unwrap_err();
+    assert!(
+        matches!(&err, ResolveError::InvalidConfig(msg) if msg.contains("knotlin")),
+        "expected InvalidConfig error mentioning the bad name, got: {err:?}"
+    );
+}
+
+#[test]
+fn resolve_accepts_valid_language_in_registration_variant() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "sample_router"
+sources = ["src/lib.rs"]
+
+[[crates.handler_contracts]]
+trait_name = "Handler"
+dispatch_method = "call"
+
+[[crates.services]]
+owner_type = "App"
+
+[[crates.services.registrations]]
+method = "add_route"
+callback_param = "handler"
+callback_bound = "IntoHandler"
+callback_contract = "Handler"
+
+[[crates.services.registrations.variants]]
+name = "get"
+fixed = { method = "GET" }
+
+[crates.services.registrations.variants.languages.kotlin]
+method_prefix = "Map"
+"#,
+    )
+    .unwrap();
+    let resolved = cfg.resolve().expect("valid variant language should not fail");
+    assert!(
+        resolved[0].services[0].registrations[0].variants[0]
+            .languages
+            .contains_key("kotlin")
+    );
+}
+
+#[test]
+fn resolve_rejects_unknown_language_in_trait_bridge_exclude_languages() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "sample_router"
+sources = ["src/lib.rs"]
+
+[[crates.trait_bridges]]
+trait_name = "OcrBackend"
+exclude_languages = ["wasm32"]
+"#,
+    )
+    .unwrap();
+    let err = cfg.resolve().unwrap_err();
+    assert!(
+        matches!(&err, ResolveError::InvalidConfig(msg) if msg.contains("wasm32")),
+        "expected InvalidConfig error mentioning the bad name, got: {err:?}"
+    );
+}
+
+#[test]
+fn resolve_accepts_valid_trait_bridge_exclude_languages() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "sample_router"
+sources = ["src/lib.rs"]
+
+[[crates.trait_bridges]]
+trait_name = "OcrBackend"
+exclude_languages = ["wasm", "elixir"]
+"#,
+    )
+    .unwrap();
+    let resolved = cfg.resolve().expect("valid exclude_languages should not fail");
+    assert_eq!(resolved[0].trait_bridges[0].exclude_languages, vec!["wasm", "elixir"]);
+}
