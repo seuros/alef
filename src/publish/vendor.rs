@@ -357,11 +357,14 @@ where
 ///
 /// For every dependency table — `[dependencies]`, `[dev-dependencies]`,
 /// `[build-dependencies]`, and each `[target.<cfg>.dependencies]` subtable — any
-/// dependency whose key names a workspace member (per `members.names`) AND whose
-/// value is a table containing a `path` key is replaced with an inline table of
-/// the form `{ version = "<version>", <preserved extras> }`. Both `path` and any
-/// `workspace` key are removed; other keys (`features`, `optional`,
-/// `default-features`, …) are preserved.
+/// dependency whose resolved crate name (its `package = "..."` alias, or its
+/// table key when there is no alias — see
+/// [`dependency_crate_name`][crate::publish::workspace::dependency_crate_name])
+/// names a workspace member AND whose value is a table containing a `path` key
+/// is replaced with an inline table of the form `{ version = "<version>",
+/// <preserved extras> }`. Both `path` and any `workspace` key are removed;
+/// other keys (`features`, `optional`, `default-features`, `package`, …) are
+/// preserved.
 ///
 /// Dependencies that are plain version strings, or that are not workspace
 /// members, are left untouched. The operation is **idempotent**: re-running it on
@@ -406,7 +409,8 @@ fn rewrite_dep_table(table: &mut Table, members: &crate::publish::workspace::Wor
     let keys: Vec<String> = table
         .iter()
         .filter_map(|(key, item)| {
-            if !members.names.contains(key) {
+            let crate_name = crate::publish::workspace::dependency_crate_name(key, item);
+            if !members.names.contains(crate_name) {
                 return None;
             }
             let has_path = item.as_table_like().is_some_and(|t| t.contains_key("path"));
