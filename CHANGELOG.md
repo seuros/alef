@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.10] - 2026-08-21
+
 ### Fixed
 
 - **Snippet validation passed `-I` to `zig build`, which rejects it, failing every zig snippet
