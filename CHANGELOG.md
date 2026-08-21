@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sync-versions` could leave `packages/go/cmd/setup/main.go`'s `versionIdent` const
+  stale after a release, referencing a `RequireNativeSetup_<ident>` symbol that no longer
+  existed in `native_setup.go` and failing the Go build (alef #159, html-to-markdown
+
+  #463).** `cmd/setup/main.go` carries two version-derived consts: `moduleVersion` (a plain
+  semver string) and `versionIdent` (the sanitized Go identifier `renderShim` bakes into
+  its `RequireNativeSetup_<ident>` runtime reference). `sync_versions` (`src/cli/pipeline/
+  version.rs`) patched `moduleVersion` on every run but never touched `versionIdent`, while
+  `native_setup.go`'s `RequireNativeSetup_<ident>` sentinel was independently re-derived
+  from the version via its own `to_go_version_ident` call — two computations of the "same"
+  value that silently diverged across sync-versions-only releases. `versionIdent` and the
+  sentinel identifier are now both derived from a single `to_go_version_ident` call made
+  once per `sync_versions` run and threaded into both files via the new
+  `sync_go_cmd_setup_version_ident` (paired with the updated `sync_go_native_setup_sentinel`
+  signature), so a version bump can no longer move one file's identifier without moving the
+  other's. Regression coverage: `sync_versions_updates_go_module_version_in_cmd_setup`
+  (`src/cli/pipeline/version_tests/e2e_manifests.rs`), which cross-checks the identifiers
+  extracted from both files against each other and against an independently computed
+  `to_go_version_ident`, not just two hardcoded literals.
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed
