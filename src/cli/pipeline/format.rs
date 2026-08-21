@@ -114,20 +114,29 @@ pub fn format_generated(
     base_dir: &Path,
     only_languages: Option<&HashSet<Language>>,
 ) {
-    let mut seen = HashSet::new();
-    let poly_langs: Vec<Language> = files
-        .iter()
-        .map(|(lang, _)| *lang)
-        .filter(|lang| seen.insert(*lang) && only_languages.is_none_or(|filter| filter.contains(lang)))
-        .collect();
-
-    if poly_langs.is_empty() {
-        return;
-    }
-
+    // `None` (full regen, the `alef all` path) always runs the whole-tree convergence pass
+    // below and never consults `poly_langs` at all: it formats every generated package under
+    // `base_dir` regardless of which languages happen to be represented in `files`. Gating it
+    // on `poly_langs.is_empty()` was itself an instance of the #119 bug -- `files` here is only
+    // ever `bindings` + `stubs` (see `alef all`'s call site), so a run where bindings generation
+    // was entirely skipped by the per-language lang-hash cache (nothing regenerated in-memory,
+    // so `bindings` comes back empty) and a crate with no stub-capable languages configured
+    // would have left `poly_langs` empty even though the caller had already decided -- from the
+    // full write set, not just bindings/stubs -- that formatting was needed. Only the `Some(_)`
+    // (partial regen) branch below genuinely needs a non-empty language list: it is what tells
+    // `poly_paths` which package directories to format at all. ~keep
     match only_languages {
         None => converge_full_regen_formatting(base_dir),
-        Some(_) => {
+        Some(only) => {
+            let mut seen = HashSet::new();
+            let poly_langs: Vec<Language> = files
+                .iter()
+                .map(|(lang, _)| *lang)
+                .filter(|lang| seen.insert(*lang) && only.contains(lang))
+                .collect();
+            if poly_langs.is_empty() {
+                return;
+            }
             let paths = poly_paths(config, base_dir, only_languages, &poly_langs);
             poly_format(&paths, base_dir);
             for &lang in &poly_langs {

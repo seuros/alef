@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 
 mod post_build;
+pub(crate) use post_build::languages_have_post_build_steps;
 use post_build::run_required_post_builds;
 
 /// Complete every generated artifact that depends on a backend build and then

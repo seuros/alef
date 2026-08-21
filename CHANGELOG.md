@@ -29,6 +29,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`alef all` now formats every language it actually wrote this run, not only the ones that
+  registered a bindings/service-API/stub change.** The whole-tree `poly fmt` convergence pass in
+  `src/bin_cli/all_commands.rs` was gated on `changed_languages`, a set populated only from the
+  bindings, service-API, and stub write phases. Scaffold, public API, e2e/test-apps, README, and
+  docs output could all be freshly written to disk without the gate ever noticing, and a
+  post-build step (e.g. Dart's `flutter_rust_bridge_codegen`, which reruns unconditionally every
+  pass and writes straight to disk with no write-report at all) was invisible to every signal
+  built from write reports. A run that only changed one of those phases — observed as README
+  regeneration alone in a real project — left its output permanently unformatted, since the same
+  narrow gate applied on every subsequent run too. The gate is now driven by `any_output_changed`,
+  set from every write phase's `changed_count()` plus a new `languages_have_post_build_steps`
+  check (`src/bin_cli/helpers/post_build.rs`) that treats a configured post-build step as "output
+  may have changed" by construction. `format_generated`'s own `None` (full-regen) branch had the
+  identical shape one level down — it early-returned when the `bindings`/`stubs` file list handed
+  to it was empty, independent of whether the caller had already decided formatting was needed
+  from the fuller write set — so that early return now only applies to the partial-regen
+  (`Some(_)`) branch, where the language list is actually load-bearing.
+
 - **Generated Java no longer carries a dead `import java.util.List;`.** `ffi_imports.jinja`'s
   import gate decides whether to emit the import by substring-matching `body.contains("List<")`,
   which fires identically on a genuine bare `List<...>` and on an already-qualified
