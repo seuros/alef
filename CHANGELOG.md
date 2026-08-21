@@ -37,7 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/generated_output_downstream_gate/ffi_allowlist_gate.rs`, a real-clippy-backed check for
   the direction the existing allow-list tests never covered: an allow entry with no matching
   generated pattern now fails the gate instead of sitting there silently.
-
+- **The CLI release matrix step could resolve to zero targets and still report success,
+  building no CLI binaries.** `.github/workflows/publish.yaml`'s "Resolve CLI target matrix"
+  step read `.github/cli-targets.json` and fed it straight into `build-cli`'s
+  `strategy.matrix.include` with no check that the list was non-empty; GitHub Actions runs a
+  zero-entry matrix as zero job legs and reports the job as a vacuous success rather than a
+  failure — the same "SKIPPED reads as PASSED" shape that produced a false-premise bug report
+  in html-to-markdown. The step now hard-fails when the target list is empty, before ever
+  writing `matrix=`/`assets=` to `$GITHUB_OUTPUT`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

@@ -65,6 +65,13 @@ jobs:
       # takes the asset set it demands from `assets`. Both must come from here. A
       # hand-maintained second list is what let the v0.62.6 re-run skip Build CLI and
       # Upload release assets on a release that only had two homebrew bottles on it.
+      #
+      # ~keep An empty `targets` list must hard-fail this step, never fall through to
+      # `matrix=[]`: `build-cli`'s `strategy.matrix.include` (below) runs zero legs for a
+      # zero-entry matrix, and GitHub Actions reports that as a silent job success, not a
+      # failure -- a release with no CLI binaries and no red X anywhere. That is the same
+      # "SKIPPED reads as PASSED" shape that caused a false-premise bug report in
+      # html-to-markdown.
       - name: Resolve CLI target matrix
         id: cli-targets
         shell: bash
@@ -73,8 +80,14 @@ jobs:
           python3 - <<'PY' >>"$GITHUB_OUTPUT"
           import json
           import pathlib
+          import sys
 
           targets = json.loads(pathlib.Path(".github/cli-targets.json").read_text())
+          if not targets:
+              sys.exit(
+                  "CLI release target list is empty -- expected at least one platform in "
+                  ".github/cli-targets.json; refusing to build a vacuous release matrix"
+              )
           print("matrix=" + json.dumps(targets, separators=(",", ":")))
           print("assets=" + ",".join(f"alef-{t['target']}.{t['archive_ext']}" for t in targets))
           PY
