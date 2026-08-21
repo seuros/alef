@@ -47,6 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the fuller write set — so that early return now only applies to the partial-regen
   (`Some(_)`) branch, where the language list is actually load-bearing.
 
+- **`alef fmt` no longer disagrees with `alef all` about the canonical formatting of the same
+  file.** `pipeline::fmt` (`src/cli/pipeline/commands/lint.rs`) ran a bespoke single `poly fmt
+  --fix` pass plus the old per-language `cargo sort` residual list — a second, independently
+  maintained formatting implementation that never invoked `mix format` at all (leaving every
+  `alef fmt`-only run's Elixir output completely unformatted) and never looped `poly fmt --fix`
+  to a fixed point, unlike `alef all`'s `converge_full_regen_formatting`. That single-pass gap is
+  what let `alef fmt` rewrite a consumer's `packages/dart/.../frb_generated.dart` to an incorrect
+  intermediate form (relative imports, two dropped `dart:core` imports) that a following `alef
+  all` then reverted. `fmt` and `fmt_post_generate` now delegate to the exact same
+  `converge_full_regen_formatting` function `alef all` uses, so the two commands cannot produce
+  different output for the same tree. The now-unused single-pass `poly_fmt` and
+  `run_cargo_sort_residuals` helpers (and their `cargo_sort_residuals` selector) were removed.
+
 - **Generated Java no longer carries a dead `import java.util.List;`.** `ffi_imports.jinja`'s
   import gate decides whether to emit the import by substring-matching `body.contains("List<")`,
   which fires identically on a genuine bare `List<...>` and on an already-qualified

@@ -184,7 +184,7 @@ const MAX_POLY_FMT_PASSES: u32 = 3;
 ///
 /// Best-effort throughout: a missing `poly`, `cargo`, `rustfmt`, `cargo-sort`, or
 /// `mix` is a warning, never a failure, and generation is never aborted.
-fn converge_full_regen_formatting(base_dir: &Path) {
+pub(crate) fn converge_full_regen_formatting(base_dir: &Path) {
     let poly_present = is_tool_available("poly");
     if !poly_present {
         warn!("poly not found on PATH (skipping post-generation formatting)");
@@ -278,13 +278,6 @@ fn run_workspace_cargo_sort(base_dir: &Path) {
     }
 }
 
-/// Run `poly fmt --fix <base_dir>`. Best-effort: a missing `poly` binary or
-/// non-zero exit is logged as a warning and never propagated.
-pub fn poly_fmt(base_dir: &Path) {
-    let paths = vec![base_dir.to_path_buf()];
-    poly_format(&paths, base_dir);
-}
-
 /// Run `poly lint <base_dir>`. Propagates failure — a non-zero exit is an error.
 pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
     if !is_tool_available("poly") {
@@ -299,42 +292,6 @@ pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
             Ok(())
         }
         Err(e) => Err(anyhow::anyhow!("poly lint failed: {e}")),
-    }
-}
-
-/// Return the fixed set of all cargo-sort residual steps that alef always runs
-/// after formatting, regardless of which languages the config targets.
-///
-/// The fixed set covers: workspace-wide (via ffi), wasm, ruby, elixir, R.
-/// Dart and swift have no cargo residuals (poly covers them).
-///
-/// Filters each language's residuals down to `cargo` steps: Elixir's residual
-/// list also carries `mix deps.get`/`mix format` steps (see
-/// [`language_residuals`]'s `Language::Elixir` arm), which are a distinct
-/// formatting concern from cargo-sort and out of scope for a function whose name
-/// and every caller assume "cargo sort only."
-fn cargo_sort_residuals(config: &ResolvedCrateConfig, base_dir: &Path) -> Vec<ResidualStep> {
-    let mut steps = Vec::new();
-    for language in [
-        Language::Ffi,
-        Language::Wasm,
-        Language::Ruby,
-        Language::Elixir,
-        Language::R,
-    ] {
-        steps.extend(
-            language_residuals(config, language, base_dir)
-                .into_iter()
-                .filter(|step| step.command == "cargo"),
-        );
-    }
-    steps
-}
-
-/// Run all cargo-sort residuals (ffi workspace, wasm, ruby, elixir, R). Best-effort.
-pub(crate) fn run_cargo_sort_residuals(config: &ResolvedCrateConfig, base_dir: &Path) {
-    for step in cargo_sort_residuals(config, base_dir) {
-        run_residual(&step, "residual");
     }
 }
 
