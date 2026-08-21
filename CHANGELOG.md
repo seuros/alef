@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A renamed workspace-member path dependency (dependency-table key different from the crate's
+  published `package = "..."` name) was silently left as a `path = "..."` dependency when
+  `alef publish` rewrote a shipped binding manifest to registry version-pins, producing a
+  manifest that cannot resolve off the workspace it was cut from.**
+  `rewrite_dep_table` (`src/publish/vendor.rs`) determined workspace-member path deps by matching
+  the raw dependency-table key against `WorkspaceMembers::names`, so an aliased entry like
+  `mylib_core = { path = "../mylib-core", version = "1.7.0", package = "mylib-core" }` was never
+  recognized as a member dependency and its `path` was never stripped — while
+  `registry_dependencies_on_local_crates` (`src/cli/commands/version_manifests.rs`, feeding
+  `alef validate versions`) already resolved the same shape correctly through the entry's
+  `package = "..."` field. `dependency_crate_name` (`src/publish/workspace.rs`) is now the single
+  place that resolves a dependency-table entry's real crate name (its `package` alias, or the key
+  when there is none), and both `rewrite_dep_table` and the `alef publish prepare` defense-in-depth
+  check `assert_no_member_path_deps` (`src/publish/mod.rs`) call it, so the two can no longer
+  disagree about which entries are workspace members. Regression coverage:
+  `rewrite_path_deps_resolves_package_alias_for_membership`
+  (`src/publish/vendor/tests.rs`).
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

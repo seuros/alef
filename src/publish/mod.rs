@@ -666,7 +666,8 @@ fn assert_no_member_path_deps(
     let section_has_member_path = |table: Option<&toml_edit::Item>| -> Option<String> {
         let table = table?.as_table_like()?;
         for (key, item) in table.iter() {
-            if members.names.contains(key) && item.as_table_like().is_some_and(|t| t.contains_key("path")) {
+            let crate_name = workspace::dependency_crate_name(key, item);
+            if members.names.contains(crate_name) && item.as_table_like().is_some_and(|t| t.contains_key("path")) {
                 return Some(key.to_string());
             }
         }

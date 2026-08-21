@@ -161,6 +161,24 @@ pub fn manifest_is_publishable(cargo_toml_path: &Path) -> bool {
     package_is_publishable(package)
 }
 
+/// Resolve the real crate a dependency-table entry refers to: its explicit
+/// `package = "..."` alias when present, else the dependency-table key itself.
+///
+/// Cargo's rename mechanism means the table key is not necessarily the
+/// crate's published name — `mylib_core = { path = "...", package =
+/// "mylib-core" }` depends on `mylib-core` under the local alias
+/// `mylib_core`. Every membership check against [`WorkspaceMembers::names`]
+/// must resolve through this first, or a renamed workspace-member dependency
+/// is silently treated as external and its `path = "..."` is never rewritten
+/// to a registry `version = "..."` pin — a shipped manifest that cannot
+/// resolve off a consumer's machine.
+pub fn dependency_crate_name<'a>(key: &'a str, item: &'a toml_edit::Item) -> &'a str {
+    item.as_table_like()
+        .and_then(|table| table.get("package"))
+        .and_then(|package| package.as_str())
+        .unwrap_or(key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

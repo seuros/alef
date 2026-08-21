@@ -327,6 +327,107 @@ my-lib = "1"
     assert_eq!(deps["my-lib"].as_str(), Some("1"));
 }
 
+/// Table-driven regression for a renamed workspace-member dependency: the
+/// dependency-table KEY (`my_lib_core`) differs from the crate's published
+/// name (`my-lib-core`) and the entry disambiguates via `package = "..."`.
+///
+/// Before the fix, `rewrite_dep_table` matched membership on the raw table
+/// key only, so this shape was silently skipped — the shipped manifest kept
+/// `path = "../my-lib-core"`, which does not resolve off a consumer's
+/// machine (no workspace present). The fix resolves the real crate name
+/// through `package = "..."` first, matching how
+/// `registry_dependencies_on_local_crates` (the `alef validate versions`
+/// side) already read the same field. Each case asserts both: the dep is
+/// rewritten to a registry pin (`path` gone, `version` set), and `package`
+/// round-trips unchanged so Cargo can still map the alias to the real crate.
+struct RenamedDepCase {
+    name: &'static str,
+    dep_line: &'static str,
+    member_crate_name: &'static str,
+    expected_package: &'static str,
+    expect_rewritten: bool,
+}
+
+const RENAMED_DEP_CASES: &[RenamedDepCase] = &[
+    RenamedDepCase {
+        name: "underscore_alias_of_hyphenated_member",
+        dep_line: r#"my_lib_core = { path = "../my-lib-core", package = "my-lib-core", features = ["full"] }"#,
+        member_crate_name: "my-lib-core",
+        expected_package: "my-lib-core",
+        expect_rewritten: true,
+    },
+    RenamedDepCase {
+        name: "arbitrary_alias_of_hyphenated_member",
+        dep_line: r#"core = { path = "../my-lib-core", package = "my-lib-core" }"#,
+        member_crate_name: "my-lib-core",
+        expected_package: "my-lib-core",
+        expect_rewritten: true,
+    },
+    RenamedDepCase {
+        name: "aliased_dep_naming_a_non_member_stays_untouched",
+        dep_line: r#"core = { path = "../vendor/openssl-sys", package = "openssl-sys" }"#,
+        member_crate_name: "my-lib-core",
+        expected_package: "openssl-sys",
+        expect_rewritten: false,
+    },
+];
+
+#[test]
+fn rewrite_path_deps_resolves_package_alias_for_membership() {
+    for case in RENAMED_DEP_CASES {
+        let tmp = TempDir::new().unwrap();
+        let manifest = tmp.path().join("Cargo.toml");
+        fs::write(
+            &manifest,
+            format!(
+                "[package]\nname = \"b\"\nversion = \"0.1.0\"\n\n[dependencies]\n{}\n",
+                case.dep_line
+            ),
+        )
+        .unwrap();
+
+        let members = members_with(&[case.member_crate_name]);
+        rewrite_path_deps_to_registry(&manifest, &members, "1.7.1").unwrap();
+
+        let doc: DocumentMut = fs::read_to_string(&manifest).unwrap().parse().unwrap();
+        let deps = doc["dependencies"].as_table().unwrap();
+        let (key, _) = deps.iter().next().expect("one dependency entry");
+        let entry = deps[key].as_inline_table().unwrap();
+
+        if case.expect_rewritten {
+            assert!(
+                entry.get("path").is_none(),
+                "case {}: path must be stripped once the alias resolves to a member:\n{doc}",
+                case.name
+            );
+            assert_eq!(
+                entry.get("version").and_then(|v| v.as_str()),
+                Some("1.7.1"),
+                "case {}: version must be set to the registry pin:\n{doc}",
+                case.name
+            );
+        } else {
+            assert!(
+                entry.get("path").is_some(),
+                "case {}: non-member aliased dep must keep its path:\n{doc}",
+                case.name
+            );
+            assert!(
+                entry.get("version").is_none(),
+                "case {}: non-member aliased dep must not gain a version pin:\n{doc}",
+                case.name
+            );
+        }
+
+        assert_eq!(
+            entry.get("package").and_then(|v| v.as_str()),
+            Some(case.expected_package),
+            "case {}: package alias key must round-trip unchanged:\n{doc}",
+            case.name
+        );
+    }
+}
+
 #[test]
 fn scrub_lock_deletes_existing_when_not_regenerating() {
     let tmp = TempDir::new().unwrap();
