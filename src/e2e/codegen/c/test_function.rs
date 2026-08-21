@@ -242,6 +242,14 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     } else {
         TargetParams::resolve(call, "c", ir)
     };
+    // Computed before the `returns_void` branch (not just the non-void path below it) so a
+    // void-configured fixture's `error`/`not_error` declaration is not silently discarded --
+    // see `void_call_status`'s module doc for why a `returns_void` call can still carry a
+    // real status to check. ~keep
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
     if info.returns_void {
         // `{prefix_upper}AlefHandle` must be spelled the way the header declares it -- see
         // `render_test_function_impl`'s identical lookup for why this can't be a bare
@@ -287,9 +295,17 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         };
         arg_parts.extend(info.extra_args.iter().cloned());
         let args = arg_parts.join(", ");
-        let call_line = crate::e2e::template_env::render(
-            "c/snippet_void_call.jinja",
-            minijinja::context! { function_name => info.function_name, args => args },
+        // `call`'s Rust-side signature, not `info.function_name` (already rewritten to the ABI
+        // export name above): a `Result<(), E>` free function/method is fallible at the C ABI
+        // even though this fixture is configured `returns_void`, and discarding that status is
+        // the defect `void_call_status` exists to close. ~keep
+        let is_fallible_void = super::void_call_status::is_fallible(call, ir);
+        let call_line = super::void_call_status::render_call_line(
+            &info.function_name,
+            &args,
+            call.effective_result_var(),
+            expects_error,
+            is_fallible_void,
         );
         let mut cleanup = String::new();
         render_typed_arg_cleanup(&mut cleanup, prefix, &typed_arg_cleanup);
@@ -328,10 +344,6 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
         info.c_engine_factory.as_deref(),
         info.streaming,
     )?;
-    let expects_error = fixture
-        .assertions
-        .iter()
-        .any(|assertion| assertion.assertion_type == "error");
     let result_var = call.effective_result_var();
     let mut call_fixture = fixture.clone();
     if !expects_error {

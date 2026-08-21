@@ -1,0 +1,6 @@
+int32_t {{ result_var }} = {{ function_name }}({{ args }});
+{% if expects_error %}
+assert({{ result_var }} != 0 && "expected call to fail");
+{% else %}
+assert({{ result_var }} == 0 && "expected call to succeed");
+{% endif %}

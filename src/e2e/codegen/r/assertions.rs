@@ -15,6 +15,11 @@ pub(super) struct RAssertionContext<'a> {
     /// Whether the call returns `()` — see the `not_error` arm, which routes the whole
     /// assertion to the call site for that case rather than rendering here. ~keep
     pub(super) returns_void: bool,
+    /// Whether the function returns `Option<T>` — combined with `result_is_simple`, this is
+    /// the other shape the `not_error` arm routes to the call site instead of asserting on
+    /// here, because R's `NULL`/`NA` "nothing" is a legitimate success value for it. See
+    /// `not_error_assertion`'s module doc. ~keep
+    pub(super) result_is_option: bool,
 }
 
 pub(super) fn render_assertion(
@@ -482,19 +487,18 @@ pub(super) fn render_assertion(
             }
         }
         "not_error" => {
-            // ~keep A `returns_void` call binds no `result` at all (`test_case.rs` emits the
-            // call under `expect_no_error(...)` instead of `result <- ...`), so the real,
-            // failable check for this assertion is the `expect_no_error` wrapper at the call
-            // site — nothing is rendered here. Emitting `expect_true(TRUE)` beside it would add
-            // a second "assertion" that can never fail, which is exactly the vacuous shape
-            // `inert_example` exists to catch.
-            if context.returns_void {
-                return;
-            }
-            // The call itself stops the test on error; emit an explicit
-            // `expect_true(TRUE)` so testthat doesn't report the test as
-            // empty when this is the only assertion.
-            let _ = writeln!(out, "  expect_true(TRUE)");
+            // See `not_error_assertion`'s module doc: a `returns_void` call, and a
+            // `result_is_simple`/`result_is_option` call whose empty representation is a
+            // legitimate success value, both route their real, failable check to the
+            // `expect_no_error(...)` wrapper `test_case.rs` puts around the call site instead
+            // of asserting on the bound `result` here. ~keep
+            super::not_error_assertion::render(
+                out,
+                result_var,
+                context.returns_void,
+                context.result_is_simple,
+                context.result_is_option,
+            );
         }
         "error" => {
             // Handled at the test level.
@@ -649,6 +653,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -675,6 +680,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -754,6 +760,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -789,6 +796,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -817,6 +825,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -846,6 +855,7 @@ mod tests {
             result_is_bytes: true,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -880,6 +890,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -901,6 +912,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -928,6 +940,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -950,6 +963,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -972,6 +986,7 @@ mod tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
 
@@ -1012,6 +1027,7 @@ mod wildcard_tests {
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
             returns_void: false,
+            result_is_option: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, assertion, "result", &context);

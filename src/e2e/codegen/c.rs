@@ -1056,6 +1056,7 @@ mod streaming;
 mod test_function;
 mod trait_bridge_snippet;
 mod visitor;
+mod void_call_status;
 
 use assertions::{
     FieldConfigSources, LeafFieldCheck, build_args_string_c, emit_nested_accessor, ensure_leaf_field_exists,
