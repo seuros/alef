@@ -355,7 +355,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
-                complete_generated_artifacts(&languages, resolved_cfg, &base_dir)?;
+                // Surface refusals before a post-build error, not after -- see the identical
+                // guard (and its full rationale) on `all_commands.rs`'s "All" arm. ~keep
+                if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
+                    pipeline::report_refused_writes(&refusals);
+                    return Err(error);
+                }
 
                 // Fold in every path a post-build step writes unguarded (see
                 // `PostBuildStep::owned_paths`'s doc for why this can't be left to the

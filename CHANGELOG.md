@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`alef all` / `alef generate` swallowed the one diagnostic that explains a Dart FRB post-build
+  failure caused by a frozen manifest, leaving operators chasing the wrong fix.** A Dart FRB
+  facade (`packages/dart/rust/src/lib.rs`) self-marks and so always regenerates freely, but its
+  sibling manifest (`packages/dart/rust/Cargo.toml`) is markable and `generated_header: true`;
+  in a consumer tree where that `Cargo.toml` predates alef ever stamping `.toml` output, it
+  carries no `alef:hash:` marker, so the ownership guard refuses every write to it forever —
+  including the forwarding `[features]` entry `collect_cfg_features` adds the moment a facade
+  function gains a new `#[cfg(feature = "...")]` gate. The facade gains the gated function; the
+  manifest that would activate its feature for a real `cargo-expand` does not; `flutter_rust_bridge_codegen`
+  correctly omits the function; `VerifyFrbBridgeCoverage` (alef #135) correctly fails the build.
+  `pipeline::report_refused_writes` — the only call site that turns that refusal into an
+  actionable "run `alef adopt <path>`" message — was only ever invoked at the very end of
+  `handle`'s `Commands::All` / `Commands::Generate` arms, unreachable once `complete_generated_artifacts`'s
+  bare `?` had already propagated the post-build error. Reordered both call sites to surface the
+  refusal report before returning the post-build error. `VerifyFrbBridgeCoverage`'s own detection
+  is unchanged and still fails the build. Regression:
+  `all_surfaces_the_refusal_report_before_a_post_build_coverage_failure`
+  (`src/bin_cli/all_commands_refusal_tests.rs`, a new sibling test module —
+  `all_commands_tests.rs` is already near the 1,000-line file cap).
+
 ## [0.62.10] - 2026-08-21
 
 ### Fixed

@@ -445,7 +445,22 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
-                complete_generated_artifacts(&languages, resolved_cfg, &base_dir)?;
+                // A bare `?` here used to hide the one diagnostic that explains this exact
+                // failure mode: a post-build check like `VerifyFrbBridgeCoverage` (alef #135)
+                // fails precisely when a facade file regenerated (e.g. `lib.rs`, which
+                // self-marks and so always writes) while a sibling manifest it depends on
+                // (e.g. the FRB crate's `Cargo.toml`, which predates marker-stamping in an
+                // older consumer tree) was refused by the ownership guard and stayed stale.
+                // `refusals` already has that refusal recorded by now (the bindings phase
+                // above ran first), but `pipeline::report_refused_writes` was only ever
+                // called at the very end of this function -- unreachable once this `?`
+                // propagates. Surfacing it here, before the post-build error, is what turns
+                // "install/enable flutter_rust_bridge_codegen" (misleading; the tool is
+                // present) into "run `alef adopt <path>`" (the actual fix). ~keep
+                if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
+                    pipeline::report_refused_writes(&refusals);
+                    return Err(error);
+                }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating type stubs...");
@@ -973,3 +988,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 #[cfg(test)]
 #[path = "all_commands_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "all_commands_refusal_tests.rs"]
+mod refusal_tests;
