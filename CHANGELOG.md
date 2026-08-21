@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Centralized the `not_error`-must-not-assert-presence-beside-a-sibling-assertion decision
+  (alef #165) into shared `src/e2e/` logic instead of letting each backend rediscover WHETHER
+  to guard.** The rule had been independently discovered and fixed seven times under seven
+  different flag names — `has_other_assertions` (typescript, csharp, elixir),
+  `bare_result_is_option` (swift, kotlin, r), `result_is_option && bare_field` (java) — with
+  every new backend starting unguarded by default and Kotlin's own doc comment at one point
+  falsely claiming the case was already handled. Added
+  `not_error_presence::may_assert_presence(fixture, result_is_option) -> bool`
+  (`src/e2e/codegen/not_error_presence.rs`), the one place that now decides whether a
+  `not_error` assertion may render an explicit presence check: unsafe when the call's result is
+  `Option<T>` (a legitimate `None` on success) or when a sibling assertion already gives the
+  fixture non-vacuous coverage. Converted csharp, typescript, elixir, java, and kotlin to call
+  it once per fixture and thread the single resulting boolean into `render_assertion` (backends
+  keep control of *how* to render the check; the shared function decides only *whether*).
+  Closes a real, previously-unfixed gap in csharp/typescript/elixir: a fixture whose *sole*
+  assertion was `not_error` on an `Option<T>`-returning call still asserted presence
+  unconditionally there (their `has_other_assertions` guards only fired beside a sibling
+  assertion), which fails whenever the call's success path legitimately returns `None`. Also
+  fixed a second latent bug this exposed in Elixir: `apply_vacuous_assertion_fallback`
+  (`test_case.rs`) reinjected the identical unsafe `refute is_nil(...)` whenever the assertions
+  body ended up empty, silently undoing the new guard for a `not_error`-only fixture on a bare
+  `Option<T>` result — now gated on the same `result_is_option` fact. Added
+  `not_error_presence::tests` (4 cases) plus per-backend regression coverage
+  (`csharp/not_error_presence_guard_tests.rs`, `typescript/not_error_sibling_assertion_tests.rs`,
+  `elixir/not_error_sibling_assertion_tests.rs`,
+  `elixir/not_error_bare_option_underscoring_tests.rs`, `java/not_error_bare_option_tests.rs`,
+  `kotlin/not_error.rs`) driving the real generators — not hand-written mirrors of them — with
+  flags produced by the real shared function.
+
 ## [0.62.10] - 2026-08-21
 
 ### Fixed

@@ -1,4 +1,10 @@
 //! Kotlin assertion rendering helpers.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification (routing `not_error` through
+//! `not_error_presence::may_assert_presence`) added one parameter to `render_assertion`,
+//! required at every call site — the small net growth here is that mechanical churn plus the
+//! `not_error` arm's updated doc comment, not new unrelated functionality.
 
 use heck::ToLowerCamelCase;
 use std::fmt::Write as FmtWrite;
@@ -25,6 +31,7 @@ pub(super) fn render_assertion(
     fields_c_types: &std::collections::HashMap<String, String>,
     is_streaming: bool,
     kotlin_android_style: bool,
+    not_error_may_assert_presence: bool,
 ) {
     // In streaming context, `usage` and `usage.*` fields must be read from the
     // last collected chunk, not from the stream iterator (which has no `usage()` method).
@@ -780,12 +787,11 @@ pub(super) fn render_assertion(
                 );
             }
         }
-        // See `not_error::render_not_error` for why this is not a no-op, and for why a bare
-        // `T?` result (`result_is_option` with no field path) suppresses it instead.
+        // See `not_error::render_not_error` for why this is not a no-op. WHETHER it may assert
+        // presence at all is decided once, centrally, by `not_error_presence::may_assert_presence`
+        // -- passed in as `not_error_may_assert_presence` -- not re-derived here.
         "not_error" => {
-            let bare_result_is_option =
-                result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
-            super::not_error::render_not_error(out, result_var, bare_result_is_option, is_streaming);
+            super::not_error::render_not_error(out, result_var, not_error_may_assert_presence, is_streaming);
         }
         "error" => {
             // Handled at the test method level.
@@ -846,6 +852,7 @@ mod strict_field_availability_marker_tests {
             &HashMap::new(),
             false,
             false,
+            true,
         );
         assert!(out.contains("field 'nonexistent_field' not available"), "got: {out}");
     }
@@ -881,6 +888,7 @@ mod is_true_optional_field_tests {
             &HashMap::new(),
             false,
             kotlin_android_style,
+            true,
         );
         out
     }
@@ -955,6 +963,7 @@ mod is_true_optional_field_tests {
             &HashMap::new(),
             false,
             true,
+            true,
         );
         assert_eq!(out, "        assertTrue(result.active == true, \"expected true\")\n");
     }
@@ -993,6 +1002,7 @@ mod wildcard_tests {
             &HashMap::new(),
             false,
             false,
+            true,
         );
         out
     }

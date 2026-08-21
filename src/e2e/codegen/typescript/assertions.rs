@@ -21,7 +21,7 @@ pub(super) fn render_assertion(
     lang: &str,
     is_streaming: bool,
     returns_void: bool,
-    has_other_assertions: bool,
+    not_error_may_assert_presence: bool,
 ) {
     // An uncaught throw already fails the test, but the caller (`test_case.rs`)
     // only ever used a separate `has_usable_assertion` predicate to decide
@@ -42,17 +42,13 @@ pub(super) fn render_assertion(
             // `expect(callExpr()).resolves.not.toThrow()` instead, so nothing renders here.
         } else if is_streaming {
             out.push_str("    expect(chunks).toBeDefined();\n");
-        } else if has_other_assertions {
-            // `toBeDefined()` here is a stand-in for "the call succeeded", used only to
-            // avoid a vacuous test when `not_error` is the fixture's sole assertion. It is
-            // wrong whenever a sibling assertion exists: a fixture can legitimately pair
-            // `not_error` with `is_empty` on an `Option<T>`-returning call whose success
-            // path returns nothing (e.g. detecting a language from empty content ->
-            // `None`). wasm-bindgen maps `None` to JS `undefined`, so `toBeDefined()`
-            // would contradict the fixture's own `is_empty` contract and fail every time —
-            // NAPI's `None` -> `null` mapping happened to dodge this because
-            // `null !== undefined`. A sibling assertion already gives the test real,
-            // non-vacuous coverage, so this fallback only fires when nothing else will. ~keep
+        } else if !not_error_may_assert_presence {
+            // WHETHER `toBeDefined()` may render at all is decided once, centrally, by
+            // `not_error_presence::may_assert_presence` — a sibling assertion or an
+            // `Option<T>` result both make it unsafe (wasm-bindgen maps `None` to JS
+            // `undefined`, which fails an unconditional `toBeDefined()`; NAPI's `None` ->
+            // `null` mapping only dodged this by accident, since `null !== undefined`).
+            // This arm only decides how. ~keep
         } else {
             out.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
         }
@@ -1291,7 +1287,7 @@ mod tests {
             "node",
             false,
             false,
-            false,
+            true,
         );
         assert_eq!(out, "    expect(result).toBeDefined();\n");
     }
@@ -1311,7 +1307,7 @@ mod tests {
             "node",
             true,
             false,
-            false,
+            true,
         );
         assert_eq!(out, "    expect(chunks).toBeDefined();\n");
     }

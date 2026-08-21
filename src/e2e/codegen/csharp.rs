@@ -2,6 +2,11 @@
 //!
 //! Generates `e2e/csharp/E2eTests.csproj` and `tests/{Category}Tests.cs`
 //! files from JSON fixtures, driven entirely by `E2eConfig` and `CallConfig`.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification replaced a local `fixture.assertions.len() > 1`
+//! computation with a call to the shared `not_error_presence::may_assert_presence` — a net
+//! two-line change, not new unrelated functionality.
 
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
@@ -909,10 +914,12 @@ fn render_test_method(
 
     // Build assertions body for non-error cases
     let mut assertions_body = String::new();
-    // `not_error`'s presence fallback (`assertions::render_assertion`) is only a stand-in for
-    // "the call succeeded" and is wrong once a sibling assertion exists — mirrors
-    // typescript's `has_other_assertions` guard (alef #165). ~keep
-    let has_other_assertions = fixture.assertions.len() > 1;
+    // WHETHER `not_error` may render its presence fallback (`assertions::render_assertion`) is
+    // decided once, centrally — see `not_error_presence::may_assert_presence`'s doc for why a
+    // sibling assertion or an `Option<T>` result both make the fallback unsafe. ~keep
+    let not_error_result_is_option = call_config.result_is_option || cs_overrides.is_some_and(|o| o.result_is_option);
+    let not_error_may_assert_presence =
+        crate::e2e::codegen::not_error_presence::may_assert_presence(fixture, not_error_result_is_option);
     if !expects_error && !returns_void {
         for assertion in &fixture.assertions {
             render_assertion(
@@ -927,7 +934,7 @@ fn render_test_method(
                 call_config.result_is_array,
                 effective_result_is_bytes,
                 &effective_assert_enum_fields,
-                has_other_assertions,
+                not_error_may_assert_presence,
             );
         }
     }

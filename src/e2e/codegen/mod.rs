@@ -42,6 +42,7 @@ pub mod java;
 mod java_mvnw;
 pub mod kotlin;
 pub mod kotlin_android;
+pub(crate) mod not_error_presence;
 pub mod php;
 pub mod php_ext;
 mod presentation;

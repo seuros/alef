@@ -1,4 +1,15 @@
 //! Elixir ordinary function-call e2e test rendering.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification (routing through
+//! `not_error_presence::may_assert_presence`) touched `render_test_case` and
+//! `apply_vacuous_assertion_fallback` directly and could not be split out — both are
+//! tightly coupled to this function's local control flow (the underscore-prefixing decision
+//! for `actual_result_var` and the vacuous-assertion fallback both need the same
+//! already-in-scope `call_config`/`fixture` locals) — so this file grew by a small,
+//! bounded amount of production logic. The accompanying regression test was moved to a new
+//! sibling file (`not_error_bare_option_underscoring_tests.rs`) specifically to avoid adding
+//! to that growth.
 
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::codegen::call_ir::{CallIr, resolve_declared_result_type};
@@ -146,6 +157,16 @@ pub(super) fn render_test_case(
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let call_overrides = call_config.overrides.get(lang);
+    // WHETHER `not_error` may assert presence is decided once, centrally — see
+    // `not_error_presence::may_assert_presence`'s doc for why a sibling assertion or an
+    // `Option<T>` result both make an unconditional presence check unsafe. Resolved this early
+    // (rather than just above the `render_assertion` loop) because `actual_result_var`'s own
+    // underscore-prefixing decision below also depends on it: when this is `false` for a
+    // fixture whose only assertion is `not_error`, `render_assertion` renders nothing, and the
+    // `{:ok, result} = call(...)` binding would otherwise go unreferenced. ~keep
+    let not_error_result_is_option = call_config.result_is_option || call_overrides.is_some_and(|o| o.result_is_option);
+    let not_error_may_assert_presence =
+        crate::e2e::codegen::not_error_presence::may_assert_presence(fixture, not_error_result_is_option);
 
     // Batch-fn skip removed: the rustler backend now supports `batch_extract_*` via JSON
     // parameter marshalling (Vec<Named> → Option<String> JSON, deserialized in the NIF
@@ -555,17 +576,20 @@ pub(super) fn render_test_case(
     // encodes a Rust `()` success payload as `nil`, so `render_assertion`'s `not_error` arm
     // renders nothing for it (asserting non-nil there would fail every successful call) —
     // the `{:ok, result} = call(...)` match above is already the real check. `result` would
-    // otherwise be bound and never referenced. ~keep
+    // otherwise be bound and never referenced. A fixture whose only assertion is `not_error`
+    // on a bare `Option<T>` result is the same shape again: `not_error_may_assert_presence`
+    // (computed above) is `false` there too, so `render_assertion` renders nothing and
+    // `result` would otherwise go unreferenced. ~keep
     let all_not_error = fixture
         .assertions
         .iter()
         .all(|assertion| assertion.assertion_type == "not_error");
-    let actual_result_var =
-        if !is_streaming && (fixture.assertions.is_empty() || (call_config.returns_void && all_not_error)) {
-            format!("_{result_var}")
-        } else {
-            result_var.to_string()
-        };
+    let not_error_renders_nothing = all_not_error && (call_config.returns_void || !not_error_may_assert_presence);
+    let actual_result_var = if !is_streaming && (fixture.assertions.is_empty() || not_error_renders_nothing) {
+        format!("_{result_var}")
+    } else {
+        result_var.to_string()
+    };
 
     // Render function call: omit args entirely if effective_args is empty (no-arg functions).
     // This prevents emitting `func(nil)` which causes FunctionClauseError on nil-free function signatures.
@@ -593,10 +617,6 @@ pub(super) fn render_test_case(
         let _ = writeln!(out, "      {collect}");
     }
 
-    // `not_error`'s presence fallback (`assertions::render_assertion`) is only a stand-in for
-    // "the call succeeded" and is wrong once a sibling assertion exists — mirrors
-    // typescript's `has_other_assertions` guard (alef #165). ~keep
-    let has_other_assertions = fixture.assertions.len() > 1;
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
         render_assertion(
@@ -610,19 +630,28 @@ pub(super) fn render_test_case(
             result_is_simple,
             is_streaming,
             call_config.returns_void,
-            has_other_assertions,
+            not_error_may_assert_presence,
         );
     }
     // A fixture that declared at least one assertion but every one of them resolved
     // to a "skipped" comment (all its fields are unavailable on the result type) is
     // otherwise indistinguishable from a fixture with zero declared assertions — an
     // entirely comment-only, vacuously-passing test body. `not_error` already emits
-    // a real `refute is_nil(...)` (see `render_assertion`'s `not_error` arm), so this
-    // only fires on the remaining gap: real field assertions that all got dropped.
-    // Elixir was the one backend in this defect class with no fallback of any kind
-    // for that case — mirror python/php/typescript's `apply_vacuous_assertion_fallback`.
-    // A fixture with genuinely zero declared assertions is left untouched, matching
-    // every other backend's deliberate "just call it" smoke-test contract. ~keep
+    // a real `refute is_nil(...)` (see `render_assertion`'s `not_error` arm) whenever
+    // that's safe, so this only fires on the remaining gap: real field assertions that
+    // all got dropped. Elixir was the one backend in this defect class with no fallback
+    // of any kind for that case — mirror python/php/typescript's
+    // `apply_vacuous_assertion_fallback`. A fixture with genuinely zero declared
+    // assertions is left untouched, matching every other backend's deliberate "just
+    // call it" smoke-test contract.
+    //
+    // `not_error_result_is_option` gates this the same way it gates `render_assertion`'s
+    // own `not_error` arm: this fallback emits the identical `refute is_nil(...)` idiom,
+    // so it is exactly as unsafe on a bare `Option<T>` result -- reinjecting it here would
+    // silently undo `not_error_presence::may_assert_presence`'s decision for a fixture
+    // whose only assertion is `not_error` on such a call (assertions_body is empty
+    // precisely because that decision correctly suppressed it, not because a field
+    // assertion was dropped). ~keep
     apply_vacuous_assertion_fallback(
         &mut assertions_body,
         !fixture.assertions.is_empty(),
@@ -630,6 +659,7 @@ pub(super) fn render_test_case(
         chunks_var,
         &result_var,
         call_config.returns_void,
+        not_error_result_is_option,
     );
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &assertions_body,
@@ -666,6 +696,7 @@ fn apply_vacuous_assertion_fallback(
     chunks_var: &str,
     result_var: &str,
     returns_void: bool,
+    not_error_result_is_option: bool,
 ) {
     let has_real_assertion = assertions_body.lines().any(|line| {
         let trimmed = line.trim();
@@ -679,6 +710,13 @@ fn apply_vacuous_assertion_fallback(
     // `{:ok, result} = call(...)` match this fallback's caller already emitted is the real check
     // for a void call. See `render_assertion`'s `not_error` arm for the identical reasoning.
     if returns_void {
+        return;
+    }
+    // ~keep Same unsafety `not_error_presence::may_assert_presence` protects against: a bare
+    // `Option<T>` result may legitimately be `nil` on success, so `refute is_nil(...)` is wrong
+    // here for exactly the same reason it would be wrong in `render_assertion`'s own `not_error`
+    // arm, regardless of why `assertions_body` ended up empty.
+    if not_error_result_is_option {
         return;
     }
     let fallback_var = if is_streaming { chunks_var } else { result_var };

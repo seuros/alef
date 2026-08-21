@@ -1,3 +1,11 @@
+//! Kotlin test-method rendering.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification (routing `not_error` through
+//! `not_error_presence::may_assert_presence`) added one call-site argument to both
+//! `render_assertion` invocations here plus the shared computation feeding them — a small,
+//! bounded amount of production wiring, not new unrelated functionality.
+
 use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::config::E2eConfig;
 use crate::e2e::field_access::FieldResolver;
@@ -222,6 +230,11 @@ pub(super) fn render_test_method(
     // call-level default. When set the function returns `T?` and bare-result
     // emptiness assertions must use a null-check instead of `.isEmpty()`.
     let result_is_option = call_overrides.is_some_and(|o| o.result_is_option) || call_config.result_is_option;
+    // WHETHER `not_error` may assert presence is decided once, centrally — see
+    // `not_error_presence::may_assert_presence`'s doc for why a sibling assertion or an
+    // `Option<T>` result both make an unconditional presence check unsafe. ~keep
+    let not_error_may_assert_presence =
+        crate::e2e::codegen::not_error_presence::may_assert_presence(fixture, result_is_option);
     let adapter_lookup_name = call_config.core_lookup_name(lang);
     let adapter = adapter_lookup_name
         .as_deref()
@@ -469,6 +482,7 @@ pub(super) fn render_test_method(
                 e2e_config.effective_fields_c_types(call_config),
                 is_streaming,
                 kotlin_android_style,
+                not_error_may_assert_presence,
             );
         }
         crate::e2e::codegen::fail_on_unavailable_field_markers(
@@ -536,6 +550,7 @@ pub(super) fn render_test_method(
             &e2e_config.fields_c_types,
             is_streaming,
             kotlin_android_style,
+            not_error_may_assert_presence,
         );
     }
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&out[assertions_start..], "kotlin", &fixture.id);
