@@ -9,18 +9,19 @@ thread_local! {
     /// the fixtures and languages a resolver gets rebuilt for -- but `with_ir_fields` runs once
     /// per (fixture, language, reachable/excluded pass), so without this a single bad config
     /// entry (e.g. a `#[serde(skip)]` field still listed in `result_fields`) produced the
-    /// identical WARN line thousands of times in one run (2600+ in one crawlberg `adopt` for a
-    /// single field). Repeating the same finding that many times is the same failure mode as
-    /// never emitting it: nobody reads past the first screenful, so the config bug it is trying
-    /// to surface stays unfixed.
+    /// identical WARN line thousands of times in one run (2600+ in one downstream consumer's
+    /// `adopt` run for a single field). Repeating the same finding that many times is the same
+    /// failure mode as never emitting it: nobody reads past the first screenful, so the config
+    /// bug it is trying to surface stays unfixed.
     ///
     /// Thread-local, not a global set, for the same reason `e2e::codegen`'s `SKIP_LEDGER` and
     /// its inert-example counterpart are: matches the existing convention in this codebase
     /// rather than introducing a new synchronization primitive. This bounds repeats to "at most
     /// once per worker thread" rather than "exactly once per run" under `alef`'s `-j` job
     /// parallelism (verified: `-j1` produces exactly one warning per field; the default parallel
-    /// job count produced two for crawlberg's one contradicting field, one per thread that
-    /// happened to build a resolver for it) -- still a ~1300x reduction against the un-deduped
+    /// job count produced two for that same downstream consumer's one contradicting field, one
+    /// per thread that happened to build a resolver for it) -- still a ~1300x reduction against
+    /// the un-deduped
     /// count, and a bound proportional to core count rather than to fixture count.
     static WARNED_CONTRADICTING_FIELDS: std::cell::RefCell<HashSet<String>> =
         std::cell::RefCell::new(HashSet::new());
@@ -409,7 +410,7 @@ impl FieldResolver {
 mod tests {
     use super::*;
 
-    /// A crawlberg `adopt` run hit this for real: one bad `result_fields` entry
+    /// A downstream consumer's `adopt` run hit this for real: one bad `result_fields` entry
     /// (`screenshot`, IR-excluded) produced the identical WARN line 2600+ times in a
     /// single run because `with_ir_fields` runs once per (fixture, language,
     /// reachable/excluded pass) resolver build. The second `with_ir_fields` call below

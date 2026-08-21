@@ -97,6 +97,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which every caller only inspects after the post-build step already ran, so a real trio
   already on disk from an earlier run still stays protected from the orphan sweep.
 
+- **Doc-comment rationale in three e2e modules named real downstream consumer projects
+  (`html-to-markdown`, `liter-llm`, `crawlberg`) in violation of alef's project-agnostic-codegen
+  rule.** `src/e2e/format_tests.rs`, `src/e2e/codegen/kotlin/not_error.rs`, and
+  `src/e2e/field_access/resolver/construct.rs` genericized the offending mentions to
+  "a downstream consumer" while preserving the rationale each comment records.
+
 ### Changed
 
 - The `Publish` workflow no longer gates on a green `CI` run for the released commit. The gate
