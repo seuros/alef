@@ -398,13 +398,20 @@ const VERIFY_SCAN_FILENAMES: &[&str] = &[
 ];
 
 /// Walk `base_dir` and return every alef-owned file paired with its optional
-/// `alef:hash:<hex>` stamp. Skips build/cache directories and files without the
-/// Alef ownership marker. Shared by [`verify_walk`] and [`verify_walk_multi`]
-/// so both see the same file set, and by [`super::verify_orphans::find_orphaned_generated_files`]
-/// so the orphan check sees the identical disk-side file set too. ~keep
+/// `alef:hash:<hex>` stamp. Skips build/cache directories, every directory git considers
+/// ignored (see [`super::verify_gitignore::gitignored_dirs`]), and files without the Alef
+/// ownership marker. Shared by [`verify_walk`] and [`verify_walk_multi`] so both see the same
+/// file set, and by [`super::verify_orphans::find_orphaned_generated_files`] so the orphan
+/// check sees the identical disk-side file set too. ~keep
 pub(crate) fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, Option<String>, String)> {
     let mut found = Vec::new();
     let mut stack: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
+    // A gitignored dependency-fetch cache (a zig package manager's local package cache) or
+    // build-output directory (wasm-pack's own `pkg/`, which copies the crate's real,
+    // alef-marked README into a tree this walk otherwise has no reason to open) is neither
+    // this run's generated output nor its generation input -- it must never be read as either.
+    // See that module's doc for the incident this closes. ~keep
+    let gitignored_dirs = super::verify_gitignore::gitignored_dirs(base_dir);
 
     while let Some(dir) = stack.pop() {
         let entries = match std::fs::read_dir(&dir) {
@@ -420,7 +427,10 @@ pub(crate) fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path:
             if file_type.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let pruned_as_dotfile = name.starts_with('.') && !VERIFY_SCAN_DOT_DIRS.contains(&name);
-                if VERIFY_SKIP_DIRS.contains(&name) || pruned_as_dotfile {
+                let pruned_as_gitignored = path
+                    .strip_prefix(base_dir)
+                    .is_ok_and(|relative| gitignored_dirs.contains(relative));
+                if VERIFY_SKIP_DIRS.contains(&name) || pruned_as_dotfile || pruned_as_gitignored {
                     continue;
                 }
                 stack.push(path);
@@ -1015,10 +1025,13 @@ pub(crate) fn verify_walk_multi(
 /// equal the content-derived hash seeded by `inputs_hash`.
 ///
 /// Skips obvious build/cache directories (`target/`, `node_modules/`, `_build/`,
-/// `.alef/`, `parsers/`, `dist/`, `vendor/`, `.git/`) so verify stays fast on
-/// large repos. Files without the alef header marker are skipped silently —
-/// those are user-owned (scaffold-once Cargo.toml templates, composer.json,
-/// gemspec, package.json, lockfiles, etc.) and alef has no claim.
+/// `.alef/`, `parsers/`, `dist/`, `vendor/`, `.git/`), and every directory git considers
+/// ignored (see [`super::verify_gitignore::gitignored_dirs`]) — a consumer's own
+/// dependency-fetch cache or build-output directory is neither this run's generated output
+/// nor its generation input — so verify stays fast and never claims foreign content. Files
+/// without the alef header marker are skipped silently — those are user-owned (scaffold-once
+/// Cargo.toml templates, composer.json, gemspec, package.json, lockfiles, etc.) and alef has
+/// no claim.
 pub(crate) fn verify_walk(base_dir: &std::path::Path, inputs_hash: &str) -> anyhow::Result<Vec<StaleMismatch>> {
     let mut stale: Vec<StaleMismatch> = collect_alef_hashes(base_dir)
         .into_iter()
