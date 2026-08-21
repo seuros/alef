@@ -429,12 +429,22 @@ pub(super) fn render_assertion(
     // Determine if this field is an enum type (no `.contains()` on enums in Java).
     // Check both the raw fixture field path and the resolved (aliased) path so that
     // `fields_enum` entries can use either form (e.g., `"assets[].category"` or the
-    // resolved `"assets[].asset_category"`).
+    // resolved `"assets[].asset_category"`). The hand-maintained `enum_fields` config is
+    // checked first, but a field it never lists (e.g. a recursive struct's own enum field,
+    // reached only through its parent's path — `data.kind` on a self-referential
+    // `Option<Box<DataNode>>`) must still be rescued from the IR-derived classification, the
+    // same way `field_resolver.is_enum` already backs every other backend's equivalent check
+    // (csharp/kotlin/dart/gleam/swift/...). Without it, such a field silently falls through to
+    // a plain `assertEquals(String, EnumType)` that can never pass, since a `String` is never
+    // `.equals()` an enum constant. ~keep
     // NOTE: Sealed-interface types (those in assert_enum_types) are not Java enums
     // and do not have a .getValue() method — exclude them from enum field treatment.
     let field_is_enum = assertion.field.as_deref().is_some_and(|f| {
         let resolved = field_resolver.resolve(f);
-        let in_enum_fields = enum_fields.get(f).is_some() || enum_fields.get(resolved).is_some();
+        let in_enum_fields = enum_fields.get(f).is_some()
+            || enum_fields.get(resolved).is_some()
+            || field_resolver.is_enum(f)
+            || field_resolver.is_enum(resolved);
         in_enum_fields && !is_sealed_display_field
     });
 
