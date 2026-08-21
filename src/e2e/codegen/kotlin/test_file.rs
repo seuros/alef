@@ -461,12 +461,37 @@ pub(super) fn render_test_file_inner(
         })
         .collect();
 
+    // `assertNotNull` is only emitted by `not_error::render_not_error`'s non-streaming
+    // branch (the streaming branch asserts on the drained `chunks` list via `assertTrue`
+    // instead, see that function's doc comment). A file whose fixtures never reach that
+    // branch -- no `not_error` assertion at all, or only streaming ones -- must not import
+    // an identifier it never spells; an unconditional import here is exactly that dead
+    // import, flagged by Kotlin's unused-import lint the same way checkstyle flags it in
+    // the java backend. ~keep
+    let needs_assert_not_null = fixtures.iter().any(|f| {
+        if f.is_http_test() {
+            return false;
+        }
+        if !f
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "not_error")
+        {
+            return false;
+        }
+        let cc =
+            e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
+        !crate::e2e::codegen::streaming_assertions::resolve_is_streaming(f, cc.streaming_enabled())
+    });
+
     let _ = writeln!(out, "import org.junit.jupiter.api.Test");
     let _ = writeln!(out, "import kotlin.test.assertEquals");
     let _ = writeln!(out, "import kotlin.test.assertTrue");
     let _ = writeln!(out, "import kotlin.test.assertFalse");
     let _ = writeln!(out, "import kotlin.test.assertFailsWith");
-    let _ = writeln!(out, "import kotlin.test.assertNotNull");
+    if needs_assert_not_null {
+        let _ = writeln!(out, "import kotlin.test.assertNotNull");
+    }
     if has_client_factory_fixtures || kotlin_android_style {
         let _ = writeln!(out, "import kotlinx.coroutines.runBlocking");
     }

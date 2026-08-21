@@ -946,6 +946,99 @@ fn kotlin_android_streaming_fixture_emits_flow_to_list_import() {
     );
 }
 
+fn make_not_error_fixture_test_file(id: &str, assertions: Vec<Assertion>) -> String {
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: id.to_string(),
+        category: None,
+        description: "not_error import test".to_string(),
+        tags: vec![],
+        skip: None,
+        env: None,
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::json!({}),
+        mock_response: None,
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+        assertions,
+        source: String::new(),
+        http: None,
+        asyncapi: None,
+        websocket: None,
+        preserve_input_urls: false,
+    };
+    let e2e_config = E2eConfig::default();
+    let config = ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    render_test_file_inner(
+        "not_error",
+        &[&fixture],
+        "SampleClient",
+        "getItem",
+        "dev.sample_crate",
+        "result",
+        &[],
+        None,
+        false,
+        &e2e_config,
+        &HashMap::new(),
+        false,
+        &config,
+        &type_defs,
+        &[],
+        &[],
+    )
+    .expect("not_error test file renders")
+}
+
+/// Regression: `import kotlin.test.assertNotNull` used to be written into every generated
+/// Kotlin test file unconditionally (`test_file.rs`), whether or not any fixture in that file
+/// renders `not_error::render_not_error`'s non-streaming branch -- the only call site that
+/// spells `assertNotNull`. A file with no `not_error` assertion at all never calls that branch,
+/// so the import was dead: Kotlin's unused-import lint flags it the same way checkstyle flags
+/// an unused `java.util.List` import in the java backend.
+#[test]
+fn kotlin_test_file_without_not_error_fixture_omits_assert_not_null_import() {
+    let out = make_not_error_fixture_test_file(
+        "equals_only",
+        vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("id".to_string()),
+            value: Some(serde_json::Value::String("abc".to_string())),
+            ..Assertion::default()
+        }],
+    );
+    assert!(
+        !out.contains("import kotlin.test.assertNotNull"),
+        "a file with no `not_error` assertion must not import assertNotNull, got:\n{out}"
+    );
+}
+
+/// Companion to the test above: a fixture that DOES declare a (non-streaming) `not_error`
+/// assertion drives `render_not_error`'s `assertNotNull(...)` branch, so the import must be
+/// present.
+#[test]
+fn kotlin_test_file_with_not_error_fixture_imports_assert_not_null() {
+    let out = make_not_error_fixture_test_file(
+        "not_error_only",
+        vec![Assertion {
+            assertion_type: "not_error".to_string(),
+            ..Assertion::default()
+        }],
+    );
+    assert!(
+        out.contains("import kotlin.test.assertNotNull"),
+        "a file with a non-streaming `not_error` assertion must import assertNotNull, got:\n{out}"
+    );
+    assert!(
+        out.contains("assertNotNull(result, \"expected non-null result\")"),
+        "the not_error assertion itself must still render, got:\n{out}"
+    );
+}
+
 /// Regression: kotlin_android test files that instantiate an ObjectMapper must
 /// emit `import com.fasterxml.jackson.module.kotlin.registerKotlinModule` and
 /// call `.registerKotlinModule()` on the mapper.  Non-android files use plain
