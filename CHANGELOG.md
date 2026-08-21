@@ -475,6 +475,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/cli/pipeline/commands/test.rs` deterministically reproduces the race (enter a tempdir as
   cwd, delete it, call `get_host_target`) rather than relying on true thread interleaving.
 
+- **`is_known_language` hand-maintained a fifth copy of the canonical `Language` name list,**
+  alongside `Language::ALL`, `Display`, and two identical "valid names are: ..." error strings in
+  `new_config.rs` — a variant added to the enum without also updating this list would be
+  silently rejected by `skip_languages` validation with an error message that also omitted it
+  from the "valid names" it printed. `is_known_language` now derives its answer from
+  `Language::ALL` and `Display` instead of a second hand-typed list, and the two `new_config.rs`
+  error messages build their "valid names" text from the new `Language::all_names_joined()`
+  instead of a literal copy of the same names. (`src/core/config/extras.rs`,
+  `src/core/config/new_config.rs`)
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it

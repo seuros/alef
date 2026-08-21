@@ -57,6 +57,15 @@ impl Language {
         Self::C,
         Self::Jni,
     ];
+
+    /// Comma-joined canonical names of every `Language` variant, derived from [`Self::ALL`]
+    /// and [`Display`](std::fmt::Display) rather than a second hand-typed list. Used to build
+    /// "valid names are: ..." validation messages so they cannot drift from the enum they
+    /// describe.
+    #[must_use]
+    pub fn all_names_joined() -> String {
+        Self::ALL.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+    }
 }
 
 impl std::fmt::Display for Language {
@@ -153,11 +162,8 @@ pub struct AdapterConfig {
     /// where it works, with explicit per-backend opt-out rather than removing
     /// the adapter entirely.
     ///
-    /// Values must match the canonical TOML language names used in `languages`
-    /// (`"python"`, `"node"`, `"wasm"`, `"ruby"`, `"php"`, `"go"`,
-    /// `"java"`, `"csharp"`, `"elixir"`, `"kotlin"`, `"kotlin_android"`,
-    /// `"swift"`, `"dart"`, `"zig"`, `"ffi"`, `"r"`, `"gleam"`, `"c"`,
-    /// `"jni"`, `"rust"`). An unknown name fails at config-resolve time.
+    /// Values must match a canonical [`Language`] name (see [`Language::ALL`]).
+    /// An unknown name fails at config-resolve time.
     ///
     /// Example: `skip_languages = ["wasm", "kotlin"]`
     #[serde(default)]
@@ -165,30 +171,11 @@ pub struct AdapterConfig {
 }
 
 /// Returns `true` when `lang_str` is a recognised canonical language name.
+///
+/// Derived from [`Language::ALL`] rather than a second hand-typed name list, so a variant
+/// added to the enum is recognised here without a separate edit to keep in sync.
 pub fn is_known_language(lang_str: &str) -> bool {
-    matches!(
-        lang_str,
-        "python"
-            | "node"
-            | "ruby"
-            | "php"
-            | "elixir"
-            | "wasm"
-            | "ffi"
-            | "go"
-            | "java"
-            | "csharp"
-            | "r"
-            | "rust"
-            | "kotlin"
-            | "kotlin_android"
-            | "swift"
-            | "dart"
-            | "gleam"
-            | "zig"
-            | "c"
-            | "jni"
-    )
+    Language::ALL.iter().any(|language| language.to_string() == lang_str)
 }
 
 #[cfg(test)]
@@ -221,31 +208,14 @@ mod tests {
         assert!(config.skip_languages.is_empty());
     }
 
+    /// Iterates `Language::ALL` rather than a hand-typed name list, so this test stays coupled
+    /// to the enum instead of drifting alongside a second copy of it: a variant whose canonical
+    /// name `is_known_language` fails to recognise is caught here without editing the test.
     #[test]
-    fn is_known_language_accepts_all_canonical_names() {
-        for name in &[
-            "python",
-            "node",
-            "ruby",
-            "php",
-            "elixir",
-            "wasm",
-            "ffi",
-            "go",
-            "java",
-            "csharp",
-            "r",
-            "rust",
-            "kotlin",
-            "kotlin_android",
-            "swift",
-            "dart",
-            "gleam",
-            "zig",
-            "c",
-            "jni",
-        ] {
-            assert!(is_known_language(name), "{name} should be recognised");
+    fn is_known_language_accepts_every_all_variant() {
+        for language in Language::ALL {
+            let name = language.to_string();
+            assert!(is_known_language(&name), "{name} should be recognised");
         }
     }
 

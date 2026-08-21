@@ -168,9 +168,11 @@ impl NewAlefConfig {
                 if !is_known_language(lang.as_str()) {
                     return Err(ResolveError::InvalidConfig(format!(
                         "crate `{}`: adapter `{}` has unknown language `{}` in skip_languages; \
-                         valid names are: python, node, ruby, php, elixir, wasm, ffi, go, java, \
-                         csharp, r, rust, kotlin, kotlin_android, swift, dart, gleam, zig, c, jni",
-                        krate.name, adapter.name, lang
+                         valid names are: {}",
+                        krate.name,
+                        adapter.name,
+                        lang,
+                        Language::all_names_joined()
                     )));
                 }
             }
@@ -181,9 +183,11 @@ impl NewAlefConfig {
                 if !is_known_language(lang.as_str()) {
                     return Err(ResolveError::InvalidConfig(format!(
                         "crate `{}`: service `{}` has unknown language `{}` in skip_languages; \
-                         valid names are: python, node, ruby, php, elixir, wasm, ffi, go, java, \
-                         csharp, r, rust, kotlin, kotlin_android, swift, dart, gleam, zig, c, jni",
-                        krate.name, service.owner_type, lang
+                         valid names are: {}",
+                        krate.name,
+                        service.owner_type,
+                        lang,
+                        Language::all_names_joined()
                     )));
                 }
             }
