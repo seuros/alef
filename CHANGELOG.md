@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`packages/dart/rust/build.rs` raced alef's own FRB regeneration and corrupted committed
+  Dart bindings (alef #140).** alef's post-build `RunCommand` step and the generated `build.rs`
+  both invoke `flutter_rust_bridge_codegen generate` — the former is the canonical path
+  (`alef generate`/`alef build`, with alef's full post-processing pipeline), the latter fired
+  unconditionally on every consumer `cargo build`/`cargo test`/`cargo clippy`. `build.rs`'s
+  embedded post-processing only ever replicated 3 of alef's ~8 `PostProcessFile` steps
+  (`fix_handler_executor_calls`, `carry_frb_cfg_gates`, `patch_published_loader`), silently
+  omitting the native-library-loader package-import rewrite/`dart:core` aliasing and
+  injected-text-method steps bundled into `PostProcessor::FrbDartSealedVariants`/
+  `FrbDartInjectTextMethods` — so a plain `cargo build` after `alef generate` flipped
+  already-correct committed output back to a different, partially processed form. `build.rs`
+  now only invokes `flutter_rust_bridge_codegen` behind an explicit opt-in
+  (`ALEF_FRB_REGENERATE_ON_BUILD=1`) for local Flutter-only iteration; by default it leaves the
+  committed, alef-processed bridge untouched
+  (`src/backends/dart/templates/rust_build_rs.rs.jinja`).
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed

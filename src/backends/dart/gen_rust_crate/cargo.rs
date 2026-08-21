@@ -489,10 +489,11 @@ fn dart_init_prologue_replacement(package_name: &str, module_name: &str, stem: &
 /// `#[cfg(...)]` gates from `lib.rs` into the committed `frb_generated.rs` once
 /// (see `PostBuildStep::CarryFrbCfgGates` / `carry_lib_rs_cfg_gates_into_frb_generated`
 /// in `frb_rewrite::cfg_gates`), but that file is regenerated from scratch whenever
-/// `flutter_rust_bridge_codegen` runs again at consumer build time (e.g. during
-/// `dart pub get`), which drops the injected gates. This embedded copy re-applies
-/// them after every such run, mirroring the alef-side logic exactly since the
-/// generated build.rs is a standalone crate with no dependency on alef itself.
+/// `flutter_rust_bridge_codegen` runs again, which drops the injected gates. This
+/// build script only invokes FRB under the opt-in `ALEF_FRB_REGENERATE_ON_BUILD`
+/// gate (alef #140), so this embedded copy only needs to re-apply the gates after
+/// that opt-in run, mirroring the alef-side logic exactly since the generated
+/// build.rs is a standalone crate with no dependency on alef itself.
 fn render_cfg_gates_fn() -> String {
     template_env::render("rust_frb_cfg_gates_fn.rs.jinja", minijinja::context! {})
 }
@@ -1101,6 +1102,42 @@ mod build_rs_tests {
             "sample_router",
             "sample_router",
             "sample_router_dart",
+        );
+        syn::parse_file(&file.content).expect("generated build.rs must be valid Rust");
+    }
+
+    /// alef #140: `build.rs` used to invoke `flutter_rust_bridge_codegen` unconditionally on
+    /// every `cargo build`/`cargo test`/`cargo clippy`, racing alef's own post-build
+    /// `RunCommand` invocation and regenerating with a different (incomplete) subset of
+    /// alef's post-processing -- a real invocation the consumer never asked for, applied by
+    /// a tool the consumer never ran. alef must own frb regeneration exclusively; `build.rs`
+    /// may only regenerate when a developer explicitly opts in, since generated sources are
+    /// already committed and correct as of the last `alef generate`.
+    #[test]
+    fn emitted_build_rs_does_not_regenerate_frb_by_default() {
+        let file = emit_build_rs(
+            "packages/dart/rust",
+            "sample_router",
+            "sample_router",
+            "sample_router_dart",
+        );
+        assert!(
+            file.content.contains("ALEF_FRB_REGENERATE_ON_BUILD"),
+            "build.rs must gate FRB regeneration behind an explicit opt-in env var; got:\n{}",
+            file.content
+        );
+        let frb_invocation = file
+            .content
+            .find(r#"Command::new("flutter_rust_bridge_codegen")"#)
+            .expect("build.rs must still be able to invoke flutter_rust_bridge_codegen for the opt-in path");
+        let gate_check = file
+            .content
+            .find("ALEF_FRB_REGENERATE_ON_BUILD")
+            .expect("gate check must exist");
+        assert!(
+            gate_check < frb_invocation,
+            "the opt-in env var must be checked before flutter_rust_bridge_codegen is invoked; got:\n{}",
+            file.content
         );
         syn::parse_file(&file.content).expect("generated build.rs must be valid Rust");
     }
