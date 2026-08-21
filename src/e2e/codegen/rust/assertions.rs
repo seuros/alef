@@ -36,15 +36,25 @@ fn is_optional_scalar_field(assertion: &Assertion, is_unwrapped: bool, field_res
 ///
 /// ~keep Every containment operator shares this, because a fixture author picks the operator
 /// and the field independently: an enum field has no `contains` method of its own, and a
-/// collection field's `contains` compares whole elements rather than the name a fixture
-/// names. An operator that emits the plain form for those two field kinds emits Rust that
-/// does not compile, which is invisible until the consumer builds its generated tests.
+/// collection field's `contains` compares whole elements rather than performing the substring
+/// search a fixture value expects. An operator that emits the plain form for those two field
+/// kinds emits Rust that does not compile, which is invisible until the consumer builds its
+/// generated tests.
+///
+/// ~keep The collection arm's semantics must match the five other e2e backends (Python, Node,
+/// Ruby, Java, C#): a substring search over several item keys, not an exact match on `name`
+/// alone. Fixture items commonly carry the searched text under `kind` (e.g. `{"kind":
+/// "Function","name":"main"}` matched by `{"type":"contains","value":"Function"}`), so pinning
+/// the check to `name` with `==` made every such fixture fail. The key list mirrors the
+/// Python/Node/Ruby helpers (`kind`, `name`, `source`, `alias`, `text`, `signature`); the
+/// whole-value JSON fallback mirrors Java's `.toString()` / C#'s `JsonSerializer.Serialize`
+/// approach of searching the serialized item as a whole.
 fn containment_predicate(field_access: &str, expected: &str, field_is_enum: bool, field_is_collection: bool) -> String {
     if field_is_enum {
         format!("format!(\"{{:?}}\", {field_access}).to_lowercase().contains(&{expected}.to_lowercase())")
     } else if field_is_collection {
         format!(
-            "{field_access}.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value {{ serde_json::Value::String(text) => text == {expected}, serde_json::Value::Object(fields) => fields.get(\"name\").and_then(serde_json::Value::as_str).is_some_and(|text| text == {expected}), _ => false }}))"
+            "{field_access}.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match &value {{ serde_json::Value::String(text) => text.contains({expected}), serde_json::Value::Object(fields) => [\"kind\", \"name\", \"source\", \"alias\", \"text\", \"signature\"].iter().any(|key| fields.get(*key).and_then(serde_json::Value::as_str).is_some_and(|text| text.contains({expected}))) || value.to_string().contains({expected}), _ => false }}))"
         )
     } else {
         format!("{field_access}.contains({expected})")
@@ -54,7 +64,7 @@ fn containment_predicate(field_access: &str, expected: &str, field_is_enum: bool
 /// The failure text describing what [`containment_predicate`] looked for.
 fn containment_message(field_is_enum: bool, field_is_collection: bool) -> &'static str {
     if !field_is_enum && field_is_collection {
-        "expected collection item name"
+        "expected collection item to contain"
     } else {
         "expected to contain"
     }
@@ -1287,7 +1297,8 @@ mod tests {
         }
         assert_eq!(assertions.matches("format!(\"{:?}\"").count(), 1, "got: {assertions}");
         assert!(assertions.contains("result.cookies.iter().any"), "got: {assertions}");
-        assert!(assertions.contains("fields.get(\"name\")"), "got: {assertions}");
+        assert!(assertions.contains("fields.get(*key)"), "got: {assertions}");
+        assert!(assertions.contains("\"name\""), "got: {assertions}");
     }
 
     #[test]
@@ -1410,8 +1421,9 @@ mod tests {
                  element against a name; got: {rendered}"
             );
             assert!(
-                rendered.contains("fields.get(\"name\")"),
-                "`{operator}` must accept an object element matched by its `name`; got: {rendered}"
+                rendered.contains("fields.get(*key)") && rendered.contains("\"name\""),
+                "`{operator}` must accept an object element matched by its `name` (among other \
+                 keys), not only a whole-element comparison; got: {rendered}"
             );
         }
     }
@@ -1468,7 +1480,7 @@ mod tests {
             (
                 "cookies",
                 "session",
-                "    assert!(result.cookies.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value { serde_json::Value::String(text) => text == r#\"session\"#, serde_json::Value::Object(fields) => fields.get(\"name\").and_then(serde_json::Value::as_str).is_some_and(|text| text == r#\"session\"#), _ => false })), \"expected collection item name: {}\", r#\"session\"#);\n",
+                "    assert!(result.cookies.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match &value { serde_json::Value::String(text) => text.contains(r#\"session\"#), serde_json::Value::Object(fields) => [\"kind\", \"name\", \"source\", \"alias\", \"text\", \"signature\"].iter().any(|key| fields.get(*key).and_then(serde_json::Value::as_str).is_some_and(|text| text.contains(r#\"session\"#))) || value.to_string().contains(r#\"session\"#), _ => false })), \"expected collection item to contain: {}\", r#\"session\"#);\n",
             ),
         ];
 
@@ -1503,7 +1515,7 @@ mod tests {
     /// rustc also accepting the result.
     const ENUM_PREDICATE: &str = r#"format!("{:?}", kind).to_lowercase().contains(&"anchor".to_lowercase())"#;
 
-    const COLLECTION_PREDICATE: &str = r#"items.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value { serde_json::Value::String(text) => text == "needle", serde_json::Value::Object(fields) => fields.get("name").and_then(serde_json::Value::as_str).is_some_and(|text| text == "needle"), _ => false }))"#;
+    const COLLECTION_PREDICATE: &str = r#"items.iter().any(|item| serde_json::to_value(item).ok().is_some_and(|value| match &value { serde_json::Value::String(text) => text.contains("needle"), serde_json::Value::Object(fields) => ["kind", "name", "source", "alias", "text", "signature"].iter().any(|key| fields.get(*key).and_then(serde_json::Value::as_str).is_some_and(|text| text.contains("needle"))) || value.to_string().contains("needle"), _ => false }))"#;
 
     #[test]
     fn the_enum_predicate_is_valid_rust_against_a_real_enum() {
@@ -1531,13 +1543,22 @@ mod tests {
         assert!(
             items
                 .iter()
-                .any(|item| serde_json::to_value(item).ok().is_some_and(|value| match value {
-                    serde_json::Value::String(text) => text == "needle",
-                    serde_json::Value::Object(fields) => fields
-                        .get("name")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|text| text == "needle"),
-                    _ => false,
+                .any(|item| serde_json::to_value(item).ok().is_some_and(|value| {
+                    match &value {
+                        serde_json::Value::String(text) => text.contains("needle"),
+                        serde_json::Value::Object(fields) => {
+                            ["kind", "name", "source", "alias", "text", "signature"]
+                                .iter()
+                                .any(|key| {
+                                    fields
+                                        .get(*key)
+                                        .and_then(serde_json::Value::as_str)
+                                        .is_some_and(|text| text.contains("needle"))
+                                })
+                                || value.to_string().contains("needle")
+                        }
+                        _ => false,
+                    }
                 }))
         );
 

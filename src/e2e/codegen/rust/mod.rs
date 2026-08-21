@@ -11,6 +11,8 @@ pub mod mock_server;
 pub mod test_file;
 
 mod args;
+#[cfg(test)]
+mod assertion_containment_tests;
 mod assertion_helpers;
 mod assertion_synthetic;
 
