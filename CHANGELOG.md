@@ -126,6 +126,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `assertions.rs` (which already computes `bare_result_is_option` for its own use). Threaded the
   same predicate into `render_not_error`, mirroring swift's `bare_result_is_option` guard.
   Regression coverage: `kotlin/not_error.rs`'s `bare_optional_result_emits_no_not_null_assertion`.
+- **The downstream generated-output gate never exercised either code path fixed in the
+  `clippy::unnecessary_cast` regression (alef commit `c82f8f117`), so a regression of that
+  bug would not have been caught by the gate that exists specifically to catch this class of
+  bug.** `c82f8f117` added thorough unit coverage for `primitive_cast` (JNI param
+  unmarshalling), `emit_return_marshal_with_indent` (JNI return marshalling), and
+  `capsule_into_raw_expr` (FFI capsule return), but its own CHANGELOG entry flagged that the
+  gate's shared fixture (`tests/generated_output_downstream_gate/fixture.rs`) still had no
+  `f64`-typed field or parameter and no `[crates.ffi.capsule_types]` configuration, so neither
+  fixed path was ever compiled and linted by a live `cargo clippy -- -D warnings` run over
+  real generated output. The fixture now includes `round_trip_cost(cost_usd: f64) -> f64`
+  (exercises the JNI f64 param/return cast) and a `Language`/`RawLanguage` capsule pair
+  configured via `[crates.ffi.capsule_types.Language]` (exercises the FFI capsule return
+  cast). Verified by temporarily reverting `c82f8f117`'s source changes against the new
+  fixture: `emitted_tree_passes_clippy` failed with
+  `casting to the same type is unnecessary (f64 -> f64)` at
+  `core_crate::round_trip_cost(cost_usd as f64)`, and passed again once the fix was restored.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**
