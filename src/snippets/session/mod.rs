@@ -1,4 +1,6 @@
 mod fingerprint;
+#[cfg(test)]
+mod preparation_error_tests;
 mod purge;
 
 use fingerprint::session_fingerprint;
@@ -40,7 +42,25 @@ pub struct ValidationSession {
 
 pub(crate) struct SessionPreparation {
     pub sessions: HashMap<String, ValidationSession>,
-    pub errors: HashMap<String, String>,
+    pub errors: HashMap<String, SessionPreparationError>,
+}
+
+/// A session's preparation failure, classified so a downstream snippet is never reported as
+/// failed validation for a reason it never actually reached.
+///
+/// `ordering` is the split this type exists to carry: a `before` hook builds this language's
+/// artifacts (`cargo build --release -p <crate>-jni`, `pnpm run build:all`, ...) before any of
+/// its snippets can validate, and when that hook itself outlives `timeout_secs` -- readily hit on
+/// a loaded machine, or right after `--clean` wiped the artifacts it exists to rebuild -- that is
+/// a build that has not finished yet, not a defect in any snippet and not a broken session. Every
+/// other preparation failure (a missing manifest, a missing working directory, a `before` hook
+/// that ran to completion and then failed on its own terms) is a real configuration problem and
+/// keeps `ordering` false. See `runner::session_prep::session_preparation_result`, the only
+/// reader of this field. ~keep
+#[derive(Debug, Clone)]
+pub(crate) struct SessionPreparationError {
+    pub message: String,
+    pub ordering: bool,
 }
 
 /// The in-tree root every fingerprint-keyed session scratch directory is nested under, relative to
@@ -271,19 +291,43 @@ fn activation_groups(resolved: &[ResolvedSession<'_>]) -> Vec<Vec<usize>> {
     groups.into_values().collect()
 }
 
-fn record_preparation_error(errors: &mut HashMap<String, String>, target: &str, spec: &SessionSpec, error: &Error) {
-    let message = format!("preparing snippet validation target `{target}`: {error}");
-    // Every snippet targeting this session ends up `SnippetStatus::Error` (see
-    // `runner::session_preparation_error`) with no other signal that the *target*, not the
-    // individual snippets, is what broke — this had zero `tracing::` calls before, so a whole
-    // language's worth of results going Error was silent beyond the final summary counts. ~keep
+fn record_preparation_error(
+    errors: &mut HashMap<String, SessionPreparationError>,
+    target: &str,
+    spec: &SessionSpec,
+    error: &Error,
+) {
+    // A `before` hook is the step that builds this language's artifacts, and `Error::Timeout` is
+    // the only way `activate_session` can reach this function without first collapsing the error
+    // into `Error::Other` -- see the `before` loop there. That means `Error::Timeout` here can
+    // only mean one thing: the build step itself did not finish in time, which is an ordering
+    // problem, not a broken session or a broken snippet. ~keep
+    let ordering = matches!(error, Error::Timeout { .. });
+    let message = if ordering {
+        format!(
+            "preparing snippet validation target `{target}`: the {} session's `before` hook -- which builds this \
+             language's artifacts before its snippets can validate against them -- {error}. This is an ordering \
+             problem, not a snippet defect: run `alef build` (or an equivalent build step) before validating, or \
+             raise `docs.snippets.timeout_secs` if the build itself genuinely needs longer. `alef all --clean` \
+             removes any artifacts a previous build left in place, which makes this more likely, not less.",
+            spec.language
+        )
+    } else {
+        format!("preparing snippet validation target `{target}`: {error}")
+    };
+    // Every snippet targeting this session ends up `Unavailable` or `Error` (see
+    // `runner::session_prep::session_preparation_result`) with no other signal that the
+    // *target*, not the individual snippets, is what broke — this had zero `tracing::` calls
+    // before, so a whole language's worth of results going dark was silent beyond the final
+    // summary counts. ~keep
     tracing::error!(
         target = %target,
         language = %spec.language,
         error = %error,
+        ordering,
         "snippet validation session preparation failed"
     );
-    errors.insert(target.to_owned(), message);
+    errors.insert(target.to_owned(), SessionPreparationError { message, ordering });
 }
 
 /// Validates a spec and derives its fingerprint. Deliberately runs no `before` hook: the hook must
@@ -317,8 +361,15 @@ fn resolve_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
 fn activate_session(spec: &SessionSpec, session: &ValidationSession, timeout_secs: u64) -> Result<()> {
     let language = spec.language;
     for command in &spec.before {
-        run_before(command, &spec.working_directory, &spec.env, timeout_secs)
-            .map_err(|error| Error::Other(format!("preparing {language} snippet validation session: {error}")))?;
+        run_before(command, &spec.working_directory, &spec.env, timeout_secs).map_err(|error| match error {
+            // A `before` hook's own timeout is propagated verbatim, not wrapped into
+            // `Error::Other`, so `record_preparation_error` can still tell "the build step never
+            // finished" apart from every other way session preparation can fail. Wrapping it here
+            // would erase the one signal that distinguishes an ordering problem from a broken
+            // session -- see `SessionPreparationError::ordering`. ~keep
+            Error::Timeout { .. } => error,
+            other => Error::Other(format!("preparing {language} snippet validation session: {other}")),
+        })?;
     }
     let caches = session.cache_directories();
     for directory in caches.directories() {
@@ -439,7 +490,12 @@ mod tests {
         assert!(logs_contain("snippet validation session preparation failed"));
         assert!(logs_contain("typescript"));
 
-        assert!(error.contains("manifest does not exist"));
+        assert!(error.message.contains("manifest does not exist"));
+        assert!(
+            !error.ordering,
+            "a missing manifest is a configuration error, not an ordering problem: {}",
+            error.message
+        );
     }
 
     /// Wrap a POSIX `before` hook so it survives whichever shell [`shell_command`] picks.
