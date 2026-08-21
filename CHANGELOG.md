@@ -69,6 +69,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shape a hand-maintained config is least likely to list. Wired both in, mirroring
   csharp/kotlin/swift's `resolve_declared_result_type` anchor. Regression coverage:
   `java/assertion_enum_field_classification_tests.rs`.
+- **The `[workspace] alef_version` pin exclusion from `compute_inputs_hash` (0.62.2) had no
+  coverage of the real write path, only of the hash function in isolation.** Investigating a
+  ~8,300-file `alef:hash:`-only diff reported against a consumer repo traced it to three prior
+  commits that edited `alef.toml` (`languages`, e2e registry package versions) without ever
+  running `alef generate` afterward — the observed diff was that backlog converging in one
+  regeneration, not a live regression: `compute_inputs_hash` was verified byte-for-byte stable
+  across the reported before/after `alef.toml` pair once the unrelated drift is excluded, and a
+  version-only bump reproduces zero embedded-hash changes. Added
+  `tests/cli_generate_version_pin_hash_stability.rs`, which runs the real `alef` binary through
+  two full `generate` invocations differing only in the pin and asserts the entire output tree is
+  byte-identical, including every `alef:hash:` line — closing the gap left by
+  `inputs_hash_alef_version_pin_table`, which only ever exercised `compute_inputs_hash` directly
+  and could not have caught a bug anywhere else in `write_files_report` or `finalize_hashes`.
+  Confirmed this new test fails (8 files rewritten) against the pre-0.62.2 hash formula and
+  passes against the current one.
 
 ## [0.62.10] - 2026-08-21
 
