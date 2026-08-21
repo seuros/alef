@@ -54,6 +54,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `all_surfaces_the_refusal_report_before_a_post_build_coverage_failure`
   (`src/bin_cli/all_commands_refusal_tests.rs`, a new sibling test module —
   `all_commands_tests.rs` is already near the 1,000-line file cap).
+- **Java `equals` assertions on a real Java enum field the consumer's `alef.toml` never listed
+  under `fields_enum` rendered a raw `assertEquals("KeyValue", result.data().kind())` instead of
+  `result.data().kind().getValue()`, an assertion that can never pass — `assertEquals`'s
+  `.equals()` never matches a `String` against an enum constant regardless of the actual value.**
+  `java/assertions.rs`'s `field_is_enum` classified a field only from the hand-maintained
+  `enum_fields` config; unlike every other backend with the same enum/equals codegen
+  (csharp, kotlin, dart, gleam, swift, python, ruby, rust, zig), it never consulted
+  `FieldResolver::is_enum`, the IR-derived classification anchored at the call's declared Rust
+  return type. `java/test_method.rs` compounded this: its `FieldResolver` was built without ever
+  calling `.with_enum_fields`/`.with_ir_enum_map`, so the IR data was never even wired in. A
+  recursive struct's own enum field reached only through its parent's field path (e.g.
+  `DataNodeKind` via `data.kind` on a self-referential `Option<Box<DataNode>>`) is exactly the
+  shape a hand-maintained config is least likely to list. Wired both in, mirroring
+  csharp/kotlin/swift's `resolve_declared_result_type` anchor. Regression coverage:
+  `java/assertion_enum_field_classification_tests.rs`.
 
 ## [0.62.10] - 2026-08-21
 

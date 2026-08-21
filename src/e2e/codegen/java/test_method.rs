@@ -107,6 +107,18 @@ pub(super) fn render_test_method(
     // Per-call field resolver: overrides the category-level resolver when this call
     // declares its own result_fields / fields / fields_optional / fields_array.
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    let lang = "java";
+    // Anchor the IR-derived enum classification (`with_ir_enum_map`) at the call's declared
+    // Rust return type, mirroring the csharp/kotlin/swift/dart/gleam e2e generators. Without
+    // this, `field_is_enum` in `assertions.rs` can only see the hand-maintained `fields_enum`
+    // config, so a real Java enum field nobody listed there (e.g. a recursive struct's own
+    // enum field, reached only through the parent's field path) silently falls back to a plain
+    // `assertEquals(String, EnumType)` that can never pass. ~keep
+    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call_config,
+        lang,
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -115,11 +127,12 @@ pub(super) fn render_test_method(
         &std::collections::HashSet::new(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let effective_enum_fields = e2e_config.effective_fields_enum(call_config);
     let enum_fields = effective_enum_fields;
-    let lang = "java";
     let call_overrides = call_config.overrides.get(lang);
     let effective_function_name = call_overrides
         .and_then(|o| o.function.as_ref())
