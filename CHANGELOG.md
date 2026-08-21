@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C# `not_error` asserted presence beside a sibling `is_empty` on a bare `Option<T>` result,
+  a contradictory pair that could never pass (alef #165, C# arm).** `csharp/assertions.rs`'s
+  `not_error` arm unconditionally emitted `Assert.NotNull(result)`, even when a fixture
+  legitimately paired it with `is_empty` on a call whose success path returns nothing (`None`
+  -> C# `null`). Mirrors the guard already shipped for typescript/wasm: `render_assertion` now
+  takes a `has_other_assertions` flag (`fixture.assertions.len() > 1`, threaded from
+  `csharp.rs`) and skips the presence fallback whenever a sibling assertion already gives the
+  test real coverage. Regression coverage:
+  `csharp/not_error_presence_guard_tests.rs`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

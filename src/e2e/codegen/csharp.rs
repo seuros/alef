@@ -909,6 +909,10 @@ fn render_test_method(
 
     // Build assertions body for non-error cases
     let mut assertions_body = String::new();
+    // `not_error`'s presence fallback (`assertions::render_assertion`) is only a stand-in for
+    // "the call succeeded" and is wrong once a sibling assertion exists — mirrors
+    // typescript's `has_other_assertions` guard (alef #165). ~keep
+    let has_other_assertions = fixture.assertions.len() > 1;
     if !expects_error && !returns_void {
         for assertion in &fixture.assertions {
             render_assertion(
@@ -923,6 +927,7 @@ fn render_test_method(
                 call_config.result_is_array,
                 effective_result_is_bytes,
                 &effective_assert_enum_fields,
+                has_other_assertions,
             );
         }
     }
@@ -1157,6 +1162,8 @@ mod assertion_indentation_layout_tests;
 mod enum_field_classification_tests;
 #[cfg(test)]
 mod fact_attribute_layout_tests;
+#[cfg(test)]
+mod not_error_presence_guard_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
