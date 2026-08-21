@@ -19,8 +19,21 @@ use crate::backends::ffi::gen_bindings::types::{
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, TypeRef};
 use heck::ToPascalCase;
+
+/// Extracts the `Named` (or `Optional<Named>`) type name a return/param/field position holds,
+/// if any. Shared by the enum-pointer-return and enum-pointer-param scans below. ~keep
+fn named_type_ref(ty: &TypeRef) -> Option<String> {
+    match ty {
+        TypeRef::Named(n) => Some(n.clone()),
+        TypeRef::Optional(inner) => match inner.as_ref() {
+            TypeRef::Named(n) => Some(n.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
 
 pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateConfig) -> anyhow::Result<String> {
     let mut builder = RustFileBuilder::new().with_generated_header();
@@ -337,18 +350,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
             if ffi_exclude_set.contains(func.name.as_str()) {
                 continue;
             }
-            let return_named = match &func.return_type {
-                crate::core::ir::TypeRef::Named(n) => Some(n.clone()),
-                crate::core::ir::TypeRef::Optional(inner) => {
-                    if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                        Some(n.clone())
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-            if let Some(name) = return_named
+            if let Some(name) = named_type_ref(&func.return_type)
                 && api.enums.iter().any(|e| e.name == name)
             {
                 enum_pointer_return.insert(name);
@@ -356,18 +358,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
         }
         for typ in api.types.iter().filter(|t| !t.is_trait) {
             for method in &typ.methods {
-                let return_named = match &method.return_type {
-                    crate::core::ir::TypeRef::Named(n) => Some(n.clone()),
-                    crate::core::ir::TypeRef::Optional(inner) => {
-                        if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                            Some(n.clone())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some(name) = return_named
+                if let Some(name) = named_type_ref(&method.return_type)
                     && api.enums.iter().any(|e| e.name == name)
                 {
                     enum_pointer_return.insert(name);
@@ -377,18 +368,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                 if field.binding_excluded {
                     continue;
                 }
-                let field_named = match &field.ty {
-                    crate::core::ir::TypeRef::Named(n) => Some(n.clone()),
-                    crate::core::ir::TypeRef::Optional(inner) => {
-                        if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                            Some(n.clone())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some(name) = field_named
+                if let Some(name) = named_type_ref(&field.ty)
                     && api.enums.iter().any(|e| e.name == name)
                 {
                     enum_pointer_return.insert(name);
@@ -408,27 +388,44 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
             }
         }
 
+        // `enum_pointer_param` must walk every parameter position an enum can occupy, not just
+        // free functions: `enum_pointer_return` above already does that (functions, methods,
+        // fields), but this set previously covered only `api.functions[].params`. A
+        // data-carrying enum reached solely through a `TypeDef::methods[].params` position (no
+        // free function ever consumed it) got no `_from_json`, even though the C# backend
+        // declares the DllImport for any `has_serde` parameter-position enum regardless of
+        // whether a free function or a method carries it.
+        //
+        // Fieldless `is_copy` enums must stay excluded from this set: they cross the C ABI as a
+        // scalar `int32_t` (`ffi::type_map::scalar_c_abi_named_types`), and the FFI deliberately
+        // gives them `from_i32`/`from_str` instead, never a handle-returning `from_json`. Without
+        // this filter, broadening the scan to method params would resurrect the symbol the C#
+        // fix in scalar_c_abi_named_types's callers (task #48) had to work around: an
+        // `EntryPointNotFoundException`-shaped export that no caller expects. ~keep
+        let scalar_named_enums = crate::backends::ffi::type_map::scalar_c_abi_named_types(api);
         let mut enum_pointer_param: ahash::AHashSet<String> = ahash::AHashSet::new();
         for func in &api.functions {
             if ffi_exclude_set.contains(func.name.as_str()) {
                 continue;
             }
             for param in &func.params {
-                let param_named = match &param.ty {
-                    crate::core::ir::TypeRef::Named(n) => Some(n.clone()),
-                    crate::core::ir::TypeRef::Optional(inner) => {
-                        if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                            Some(n.clone())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                if let Some(name) = param_named
+                if let Some(name) = named_type_ref(&param.ty)
                     && api.enums.iter().any(|e| e.name == name)
+                    && !scalar_named_enums.contains(&name)
                 {
                     enum_pointer_param.insert(name);
+                }
+            }
+        }
+        for typ in api.types.iter().filter(|t| !t.is_trait) {
+            for method in &typ.methods {
+                for param in &method.params {
+                    if let Some(name) = named_type_ref(&param.ty)
+                        && api.enums.iter().any(|e| e.name == name)
+                        && !scalar_named_enums.contains(&name)
+                    {
+                        enum_pointer_param.insert(name);
+                    }
                 }
             }
         }
