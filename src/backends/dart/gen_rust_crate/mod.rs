@@ -23,6 +23,35 @@ use cargo::{emit_build_rs, emit_cargo_toml, emit_frb_yaml};
 use mirror::{emit_mirror_enum, emit_mirror_error, emit_mirror_struct};
 use trait_bridge::{emit_excluded_bridge_types, emit_trait_bridge, needs_excluded_bridge_type};
 
+/// The path (relative to the project root) of the Dart FRB bridge crate's Cargo.toml.
+///
+/// Single source of truth for where [`emit`] (via `cargo::emit_cargo_toml`) writes that
+/// manifest, so a caller wanting to read it back (`scaffold::repair::repair_missing_cfg_binding_features`,
+/// cross-checking it against `codegen::cfg::collect_cfg_features`) does not have to re-derive the
+/// formula from an unrelated path -- mirrors `scaffold::ruby_native_manifest_path`/
+/// `scaffold::elixir_native_crate_dir`'s own doc for why. ~keep
+pub(crate) fn dart_native_manifest_path(config: &ResolvedCrateConfig) -> std::path::PathBuf {
+    std::path::PathBuf::from(resolve_output_dir(None, &config.name, "packages/dart/rust")).join("Cargo.toml")
+}
+
+/// The Cargo dependency-table key the Dart FRB bridge crate's `Cargo.toml` uses for its
+/// dependency on the core crate: `[crates.dart] core_crate_override` when configured, otherwise
+/// the core crate's name with every `-` replaced by `_` (`cargo`'s own default dependency-key
+/// convention, and `emit`'s own `source_crate_name`). `cargo::emit_cargo_toml` uses this exact
+/// value both for the `core_dep_line` dependency entry and for every `<feature> =
+/// ["{core_dep_key}/<feature>"]` forwarding row it writes, so a caller repairing that manifest
+/// after the fact (`scaffold::repair::repair_missing_cfg_binding_features`) must derive the
+/// identical key -- unlike Ruby/Elixir, whose own forwarding rows key off the raw, unmodified
+/// crate name and so pass `&config.name` straight through instead. ~keep
+pub(crate) fn dart_core_dep_key(config: &ResolvedCrateConfig) -> String {
+    config
+        .dart
+        .as_ref()
+        .and_then(|c| c.core_crate_override.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| config.name.replace('-', "_"))
+}
+
 /// Emit the Rust-side flutter_rust_bridge bridge crate for the given API surface.
 ///
 /// Returns four files that together form the `packages/dart/rust/` crate:

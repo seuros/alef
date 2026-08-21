@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Dart FRB bridge crate's `Cargo.toml` could permanently miss a `#[cfg(feature = "X")]`
+  gate its own `lib.rs` already forwards, producing `unexpected cfg condition value` once
+  `flutter_rust_bridge_codegen` re-emitted that gate on the wire wrapper (alef #154).**
+  `codegen::cfg::merge_missing_cfg_features` -- the additive repair that backfills a missing
+  cfg-forwarded feature into an already-scaffolded, guard-refused binding manifest without a
+  full overwrite -- was wired up for Ruby (Magnus) and Elixir (Rustler) only
+  (`scaffold::repair::managed_manifests`); Dart's `packages/dart/rust/Cargo.toml` is exactly as
+  exposed to the same staleness (also `generated_header: true`, also derived from
+  `collect_cfg_features` on the same `ApiSurface` as `lib.rs`) but was never added when this
+  repair was written. Reproduced against liter-llm's actual shape: `lib.rs` already emits
+  `#[cfg(feature = "tokenizer")] pub fn count_tokens(...)` /
+  `#[cfg(feature = "tower")] pub fn record_cost_usd(...)`, forwarded there from
+  `count_tokens`/`count_request_tokens`/`record_cost_usd`'s real gates in the core crate, but the
+  committed Dart Cargo.toml never picked up `tokenizer`/`tower` because nothing ever repaired it
+  after it was first scaffolded. `managed_manifests` now also covers
+  `packages/dart/rust/Cargo.toml` (`backends::dart::gen_rust_crate::dart_native_manifest_path`).
+  Dart's forwarding rows key off the Cargo dependency-table key its own generator uses
+  (`[crates.dart] core_crate_override`, or the crate name with `-` replaced by `_` --
+  `backends::dart::gen_rust_crate::dart_core_dep_key`), which differs from Ruby/Elixir's raw,
+  unmodified crate name, so `repair_missing_cfg_binding_features` now threads a per-language
+  dependency key through `managed_manifests` instead of assuming Ruby/Elixir's convention
+  everywhere. Regression coverage: `repair_adds_missing_features_to_dart_manifest`
+  (`src/scaffold/tests/repair.rs`), asserting the forwarded rows use the underscored dependency
+  key, not the raw crate name.
+
 - **`sync-versions` (without `--regen`, the default — regenerating code is opt-in) bumped
   `[package] version` in the Rust e2e harness manifest (`<e2e.output>/rust/Cargo.toml`,
   `<e2e.registry.output>/rust/Cargo.toml`) but never touched the manifest's own
