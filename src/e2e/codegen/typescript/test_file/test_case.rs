@@ -297,6 +297,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // outright for some calls, but `render_assertion`'s own `not_error` arm was
     // *also* a no-op regardless of that condition, so the guard was a distinction
     // without a difference: both branches produced the same (vacuous) result.
+    let has_other_assertions = fixture.assertions.len() > 1;
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
         render_assertion(
@@ -309,6 +310,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
             lang,
             is_streaming,
             call_config.returns_void,
+            has_other_assertions,
         );
     }
 
