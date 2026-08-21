@@ -116,15 +116,18 @@ fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap, field
 /// required `Vec<T>`/`HashMap<K, V>`, or on an `Option<T>` alongside `Option::is_none`) —
 /// see `FieldDef::serde_skip_serializing_if` and `FieldResolver::is_wire_optional_key`.
 /// `.?`/`orelse return err` both assume the key is present, which panics/fails the whole
-/// test on exactly the values that legitimately triggered the skip. Substituting `.null`
+/// test on exactly the values that legitimately triggered the skip. Substituting a null value
 /// for a missing wire-optional key is safe regardless of the caller's `unwrap` mode: it
 /// matches how this same template already treats a *present* `null` value (the
 /// `is_empty`/`not_empty`/`is_true`/`is_false` branches all special-case `.null`), so a
 /// wire-optional field renders the same assertion outcome whether serde wrote `null` or
-/// omitted the key outright. ~keep
+/// omitted the key outright. The fallback must be `std.json.Value{ .null = {} }`, not the bare
+/// `.null` enum literal: chained straight into further `.object.get(...)` with no declaration
+/// in between, a bare literal has no result type for Zig's peer resolution — an uncaught
+/// non-compiling regression in 0.62.7. ~keep
 fn json_get(expr: &str, key: &str, unwrap: Unwrap, field_resolver: &FieldResolver) -> String {
     if field_resolver.is_wire_optional_key(key) {
-        return format!("({expr}.object.get(\"{key}\") orelse .null)");
+        return format!("({expr}.object.get(\"{key}\") orelse std.json.Value{{ .null = {{}} }})");
     }
     match unwrap {
         Unwrap::Panic => format!("{expr}.object.get(\"{key}\").?"),

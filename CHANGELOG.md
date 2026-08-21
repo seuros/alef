@@ -59,6 +59,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/e2e/codegen/typescript/test_file/void_not_error_call_tests.rs` (new, table-driven
   sync/async pair) and the corrected sync-shape assertion in
   `test_case.rs::void_not_error_tests::void_not_error_wraps_the_call_without_asserting_tobedefined`.
+- **Generated Zig e2e assertions for a wire-optional JSON key did not compile at all, failing
+  the entire Zig gate in consumer repos.** 0.62.7 taught `json_get`
+  (`src/e2e/codegen/zig/assertions.rs`) to guard a `#[serde(skip_serializing_if = "...")]` key
+  with `orelse .null` instead of force-unwrapping it with `.?`, so a missing key renders the same
+  as a present JSON `null` instead of panicking. That guard compiles fine as the right-hand side
+  of a `const` whose type Zig infers from the optional's own payload, but the bare `.null` enum
+  literal has no result-type context the moment the guarded expression is chained straight into
+  more field access with no intervening declaration — exactly what happens when the wire-optional
+  key sits in the *middle* of a field path (`a.b.c` where `b` is wire-optional) rather than at the
+  leaf. `zig` rejected it with "incompatible types: '*const json.dynamic.Value' and '*const
+  @EnumLiteral()'", and this shipped uncaught because snapshot tests only assert on emitted text,
+  never that it compiles. `json_get` now emits the fully-qualified `std.json.Value{ .null = {} }`
+  instead of the bare literal, which removes the ambiguity regardless of where the expression is
+  used next. Regression coverage:
+  `orelse_null_compile_tests::nested_wire_optional_key_assertion_compiles_under_real_zig`
+  (`src/e2e/codegen/zig/orelse_null_compile_tests.rs`) renders the exact nested-key shape and
+  compiles it through the same `zig build-exe` toolchain `ZigValidator` uses for doc snippets,
+  so a regression here fails a real compile rather than a text comparison.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

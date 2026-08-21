@@ -65,11 +65,15 @@ fn wire_optional_leaf_key_is_not_force_unwrapped() {
         "a wire-optional key must not be force-unwrapped with `.?`, which panics when serde \
          omitted the key entirely. Rendered:\n{out}"
     );
+    let qualified_null = "std.json.Value{ .null = {} }";
     assert!(
-        out.contains("(result.object.get(\"data\").object.get(\"children\") orelse .null)")
-            || out.contains(".object.get(\"children\") orelse .null"),
-        "a wire-optional key must be guarded with `orelse .null` so a missing key renders the \
-         same as a present `null` value. Rendered:\n{out}"
+        out.contains(&format!(
+            "(result.object.get(\"data\").object.get(\"children\") orelse {qualified_null})"
+        )) || out.contains(&format!(".object.get(\"children\") orelse {qualified_null}")),
+        "a wire-optional key must be guarded with `orelse {qualified_null}` so a missing key \
+         renders the same as a present `null` value. A bare `orelse .null` compiles only where \
+         Zig can infer a result type, which a chained `.object.get(...)` access does not \
+         provide. Rendered:\n{out}"
     );
 }
 
@@ -89,7 +93,7 @@ fn non_wire_optional_leaf_key_keeps_force_unwrap() {
         "a field not marked wire-optional must keep the plain `.?` accessor. Rendered:\n{out}"
     );
     assert!(
-        !out.contains("orelse .null"),
+        !out.contains("orelse std.json.Value{ .null = {} }"),
         "a field not marked wire-optional must not be guarded. Rendered:\n{out}"
     );
 }
