@@ -1315,47 +1315,6 @@ mod tests {
         );
         assert_eq!(out, "    expect(chunks).toBeDefined();\n");
     }
-
-    /// Regression test for alef task #165: tslp's WASM e2e gate failed on
-    /// `error_detect_content_empty` and its extension/path siblings — fixtures whose title
-    /// says "returns null" but paired `not_error` with `is_empty` on an `Option<T>`-returning
-    /// call. `not_error` used to emit an unconditional `expect(result).toBeDefined();`
-    /// regardless of sibling assertions, which wasm-bindgen's `None` -> `undefined` mapping
-    /// genuinely fails (NAPI's `None` -> `null` mapping only passed by accident, since
-    /// `null !== undefined`). `not_error` must yield to a sibling assertion instead of
-    /// asserting presence on a call whose success path can legitimately be absent — the same
-    /// rendering path is shared by "node" and "wasm", so both must agree. ~keep
-    #[test]
-    fn not_error_paired_with_is_empty_does_not_assert_presence() {
-        for lang in ["node", "wasm"] {
-            let resolver = empty_resolver();
-            let not_error = make_assertion("not_error", None, None);
-            let is_empty = make_assertion("is_empty", None, None);
-            let mut out = String::new();
-            for assertion in [&not_error, &is_empty] {
-                render_assertion(
-                    &mut out,
-                    assertion,
-                    "result",
-                    &resolver,
-                    false,
-                    &std::collections::HashMap::new(),
-                    lang,
-                    false,
-                    false,
-                    true,
-                );
-            }
-            assert!(
-                !out.contains("toBeDefined()"),
-                "[{lang}] not_error must not assert presence alongside is_empty; got: {out}"
-            );
-            assert!(
-                out.contains("(result ?? \"\").length"),
-                "[{lang}] is_empty must still render its own nullish-safe check; got: {out}"
-            );
-        }
-    }
 }
 
 #[cfg(test)]

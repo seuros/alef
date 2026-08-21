@@ -5,6 +5,8 @@ pub(crate) mod config;
 #[cfg(test)]
 mod is_true_tests;
 mod json;
+#[cfg(test)]
+mod not_error_sibling_assertion_tests;
 pub(crate) mod test_file;
 mod visitors;
 
