@@ -29,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The publish workflow's GitHub-release guard now checks the release's *assets*, not the
+  release object.** `check-github-release` passed `asset-prefix: alef-`, which the homebrew
+  bottles (`alef-<version>.<bottle_tag>.bottle.tar.gz`) also match — so the v0.62.6 re-run, on a
+  release that carried two bottles and no CLI archive, read "already published" and skipped both
+  `build-cli` and `upload-release-assets`, leaving `cargo binstall alef` and the direct-download
+  path broken on the published version. The guard now demands the exact archive set, and both
+  that set and `build-cli`'s matrix are derived from a single new source of truth,
+  `.github/cli-targets.json`, so the demanded assets cannot drift from the built ones.
+  `tests/publish_workflow_cli_asset_guard.rs` extracts and executes the workflow's own steps to
+  hold that invariant.
+
 - **Generated Java no longer carries a dead `import java.util.List;`.** `ffi_imports.jinja`'s
   import gate decides whether to emit the import by substring-matching `body.contains("List<")`,
   which fires identically on a genuine bare `List<...>` and on an already-qualified

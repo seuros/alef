@@ -50,10 +50,31 @@ jobs:
       release_crates: ${{ steps.meta.outputs.release_crates }}
       release_cli: ${{ steps.meta.outputs.release_cli }}
       release_homebrew: ${{ steps.meta.outputs.release_homebrew }}
+      cli_matrix: ${{ steps.cli-targets.outputs.matrix }}
+      cli_assets: ${{ steps.cli-targets.outputs.assets }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # ~keep `.github/cli-targets.json` is the single source of truth for the CLI release
+      # artifacts: `build-cli` takes its matrix from `matrix`, and `check-github-release`
+      # takes the asset set it demands from `assets`. Both must come from here. A
+      # hand-maintained second list is what let the v0.62.6 re-run skip Build CLI and
+      # Upload release assets on a release that only had two homebrew bottles on it.
+      - name: Resolve CLI target matrix
+        id: cli-targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >>"$GITHUB_OUTPUT"
+          import json
+          import pathlib
+
+          targets = json.loads(pathlib.Path(".github/cli-targets.json").read_text())
+          print("matrix=" + json.dumps(targets, separators=(",", ":")))
+          print("assets=" + ",".join(f"alef-{t['target']}.{t['archive_ext']}" for t in targets))
+          PY
 
       - name: Prepare release metadata
         id: meta
@@ -87,6 +108,10 @@ jobs:
     outputs:
       exists: ${{ steps.check.outputs.exists }}
     steps:
+      # ~keep `assets` (every expected archive must be present), never `asset-prefix`:
+      # the homebrew bottles are named `alef-<version>.<bottle_tag>.bottle.tar.gz`, so
+      # `asset-prefix: alef-` reported "published" for a release carrying nothing but
+      # two bottles and no CLI archive at all.
       - name: Check GitHub release assets
         id: check
         uses: xberg-io/actions/check-registry@v1
@@ -95,7 +120,7 @@ jobs:
           package: alef
           version: ${{ needs.prepare.outputs.version }}
           tag: ${{ needs.prepare.outputs.tag }}
-          asset-prefix: alef-
+          assets: ${{ needs.prepare.outputs.cli_assets }}
           repo: xberg-io/alef
           alef-version: main
 
@@ -124,28 +149,15 @@ jobs:
       always() &&
       needs.prepare.outputs.release_cli == 'true' &&
       (needs.check-github-release.outputs.exists != 'true' || needs.prepare.outputs.force_republish == 'true')
+    # ~keep Windows must stay in `.github/cli-targets.json`: without a published Windows
+    # binary, `xberg-io/actions/install-alef` finds no asset and falls back to
+    # `cargo install --git --tag`, which builds alef from source on a Windows runner and
+    # blows the consumer's 60-minute job timeout — html-to-markdown's Windows Node e2e job
+    # was cancelled twice this way.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - label: linux-x86_64
-            runner: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - label: linux-aarch64
-            runner: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-          - label: macos-arm64
-            runner: macos-latest
-            target: aarch64-apple-darwin
-          # ~keep Without a published Windows binary, `xberg-io/actions/install-alef` finds no
-          # asset and falls back to `cargo install --git --tag`, which builds alef from source on
-          # a Windows runner and blows the consumer's 60-minute job timeout — html-to-markdown's
-          # Windows Node e2e job was cancelled twice this way. The `.zip` branch in the archive
-          # step and the `disable-cache` toggle below were already written for Windows; only this
-          # matrix entry was missing.
-          - label: windows-x86_64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
+        include: ${{ fromJSON(needs.prepare.outputs.cli_matrix) }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
@@ -177,11 +189,10 @@ jobs:
           ARCHIVE_DIR="alef-${{ matrix.target }}"
           mkdir -p "${ARCHIVE_DIR}"
           cp "${{ steps.build.outputs.binary-path }}" "${ARCHIVE_DIR}/"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            ARCHIVE_NAME="alef-${{ matrix.target }}.zip"
+          ARCHIVE_NAME="alef-${{ matrix.target }}.${{ matrix.archive_ext }}"
+          if [[ "${{ matrix.archive_ext }}" == "zip" ]]; then
             7z a "${ARCHIVE_NAME}" "${ARCHIVE_DIR}"
           else
-            ARCHIVE_NAME="alef-${{ matrix.target }}.tar.gz"
             tar -czf "${ARCHIVE_NAME}" "${ARCHIVE_DIR}"
           fi
           echo "path=${ARCHIVE_NAME}" >> "$GITHUB_OUTPUT"
