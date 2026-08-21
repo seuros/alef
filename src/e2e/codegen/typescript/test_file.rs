@@ -25,6 +25,8 @@ mod test_case;
 #[cfg(test)]
 mod tests;
 mod visitor;
+#[cfg(test)]
+mod void_not_error_call_tests;
 mod wasm;
 
 pub use render::render_test_file;

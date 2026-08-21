@@ -455,6 +455,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         call_expr => call_expr,
         has_usable_assertion => has_usable_assertion || is_streaming,
         void_not_error => void_not_error,
+        call_is_async => call_is_async,
         result_var => ts_result_var,
         await_kw => await_kw,
         collect_snippet => collect_snippet,
@@ -609,19 +610,22 @@ mod void_not_error_tests {
         out
     }
 
-    /// The regression this test exists for: before the fix, a void `not_error`-only fixture
-    /// rendered `const result = await prefetchLanguages(); expect(result).toBeDefined();`
+    /// The regression this test exists for: before this earlier fix, a void `not_error`-only
+    /// fixture rendered `const result = await prefetchLanguages(); expect(result).toBeDefined();`
     /// — an assertion that fails on every successful call, since a void call resolves `undefined`.
+    /// `CallConfig::default()` is synchronous, so the wrapper shape asserted here is the sync one
+    /// (`expect(() => ...)`, no Promise); see `void_not_error_call_tests.rs` for the sibling
+    /// async-shape coverage and the sync/async selection defect this split guards against.
     #[test]
-    fn void_not_error_wraps_the_call_in_resolves_not_to_throw() {
+    fn void_not_error_wraps_the_call_without_asserting_tobedefined() {
         let out = render_void_call(vec![Assertion {
             assertion_type: "not_error".to_string(),
             ..Default::default()
         }]);
 
         assert!(
-            out.contains("await expect(prefetchLanguages()).resolves.not.toThrow();"),
-            "expected the void call wrapped in expect(...).resolves.not.toThrow(), got:\n{out}"
+            out.contains("expect(() => prefetchLanguages()).not.toThrow();"),
+            "expected the sync void call wrapped in expect(() => ...).not.toThrow(), got:\n{out}"
         );
         assert!(
             !out.contains("toBeDefined()"),
@@ -629,11 +633,13 @@ mod void_not_error_tests {
         );
     }
 
-    /// A void `not_error` fixture over a *synchronous* call still renders `await expect(..)` in
-    /// the body, so the `it(..)` callback it lives in must carry `async`. `async_kw` is derived
-    /// from `test_is_async`, which knew about `call_is_async`, byte-file reads and trait bridges
-    /// but not about this branch — so a sync void call emitted `await` inside a plain arrow
-    /// function. That is not a weak assertion, it is a TS/JS syntax error, and it aborted the
+    /// A void `not_error` fixture over a *synchronous* call renders its wrapper expression
+    /// (`expect(() => ...).not.toThrow()`, see `void_not_error_call_tests.rs`) inside the `it(..)`
+    /// callback whose `async` keyword is frozen into `async_kw` by `test_is_async` two lines above
+    /// `void_not_error`'s use site. `test_is_async` forces `async` whenever `void_not_error` is set
+    /// (regardless of `call_is_async`) so that other backends' analogous async-body content, or a
+    /// future template change, can never reintroduce an `await` stranded in a non-async callback —
+    /// that would not be a weak assertion, it would be a TS/JS syntax error, and it aborted the
     /// entire formatting phase of `alef all` (taking every other language's formatting with it)
     /// rather than failing one test. `CallConfig::default()` is synchronous, which is exactly the
     /// shape that reproduces it.
