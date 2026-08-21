@@ -256,8 +256,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
                 let mut current_gen_paths = std::collections::HashSet::new();
-                let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
-                    std::collections::HashSet::new();
+                // Whether formatting is needed this run -- covers every write phase (bindings,
+                // service API, stubs, public API, scaffold, e2e/test-apps, README, docs), not just
+                // bindings/service-API/stubs. A single `HashSet<Language>` populated from only those
+                // three phases (`changed_languages`, pre-fix) under-triggered `format_generated`:
+                // a run that only rewrote e.g. scaffold or README output left that phase's own
+                // `report.changed_count() > 0` unread by the gate, so the whole-tree converging pass
+                // never ran and the newly written file stayed unformatted with a stale hash (alef
+                // #119). Seeded from `languages_have_post_build_steps` because a post-build step
+                // (e.g. Dart's `flutter_rust_bridge_codegen`) runs unconditionally every pass and
+                // writes straight to disk with no `WriteReport` at all -- see that function's doc
+                // comment for why its mere presence must count as "may have changed". ~keep
+                let mut any_output_changed = languages_have_post_build_steps(&languages, resolved_cfg);
                 // Registry-mode dependency resolution that had to wait for a publish.
                 // Collected rather than raised so finalisation, the orphan sweep and
                 // docs all still run; reported once the pipeline has completed. ~keep
@@ -373,7 +383,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     refusals.absorb_refusals(&report);
                     binding_count += report.changed_count();
                     if report.changed_count() > 0 {
-                        changed_languages.insert(*lang);
+                        any_output_changed = true;
                     }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
@@ -395,13 +405,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         refusals.absorb_refusals(&report);
                         let svc_count = report.changed_count();
                         tracing::info!("Generated {svc_count} service API files");
-                        for (lang, generated) in &svc_files {
-                            if generated
-                                .iter()
-                                .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
-                            {
-                                changed_languages.insert(*lang);
-                            }
+                        if svc_count > 0 {
+                            any_output_changed = true;
                         }
                     }
                 }
@@ -425,6 +430,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     pipeline::write_scaffold_files_report(&scaffold_files, &base_dir, overwrite_create_once)?;
                 refusals.absorb_refusals(&scaffold_report);
                 let scaffold_count = scaffold_report.changed_count();
+                if scaffold_count > 0 {
+                    any_output_changed = true;
+                }
                 let scaffold_output_paths: Vec<PathBuf> =
                     scaffold_files.iter().map(|file| base_dir.join(&file.path)).collect();
                 for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
@@ -464,13 +472,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     refusals.absorb_refusals(&report);
                     let count = report.changed_count();
                     let _ = cache::write_generation_hashes(&stubs_cache_key, &stub_hashes);
-                    for (lang, generated) in &stubs {
-                        if generated
-                            .iter()
-                            .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
-                        {
-                            changed_languages.insert(*lang);
-                        }
+                    if count > 0 {
+                        any_output_changed = true;
                     }
                     count
                 } else {
@@ -525,6 +528,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             refusals.absorb_refusals(&report);
                             api_count = report.changed_count();
                             tracing::info!("Generated {api_count} public API files");
+                            if api_count > 0 {
+                                any_output_changed = true;
+                            }
                             let _ = cache::write_generation_hashes(&api_cache_key, &api_hashes);
                         } else {
                             tracing::info!("  [public_api] up to date (skipping)");
@@ -610,6 +616,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let e2e_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         refusals.absorb_refusals(&e2e_report);
                         e2e_count = e2e_report.changed_count();
+                        if e2e_count > 0 {
+                            any_output_changed = true;
+                        }
                         let managed_files: Vec<_> = files
                             .iter()
                             .filter(|file| file.carries_alef_marker())
@@ -684,7 +693,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         )?;
                         let test_apps_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         refusals.absorb_refusals(&test_apps_report);
-                        e2e_count += test_apps_report.changed_count();
+                        let test_apps_count = test_apps_report.changed_count();
+                        e2e_count += test_apps_count;
+                        if test_apps_count > 0 {
+                            any_output_changed = true;
+                        }
                         let managed_files: Vec<_> = files
                             .iter()
                             .filter(|file| file.carries_alef_marker())
@@ -733,6 +746,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let readme_report = pipeline::write_scaffold_files_report(&readme_files, &base_dir, true)?;
                 refusals.absorb_refusals(&readme_report);
                 let readme_count = readme_report.changed_count();
+                if readme_count > 0 {
+                    any_output_changed = true;
+                }
                 for file in readme_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
@@ -758,6 +774,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let doc_report = pipeline::write_scaffold_files_report(&doc_files, &base_dir, overwrite_create_once)?;
                 refusals.absorb_refusals(&doc_report);
                 let doc_count = doc_report.changed_count();
+                if doc_count > 0 {
+                    any_output_changed = true;
+                }
                 for file in doc_files.iter().filter(|file| file.carries_alef_marker()) {
                     current_gen_paths.insert(base_dir.join(&file.path));
                 }
@@ -881,18 +900,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     cache::write_lang_manifest(&resolved_cfg.name, &language.to_string(), &paths)?;
                 }
 
-                if !changed_languages.is_empty() {
+                if any_output_changed {
                     tracing::info!("Formatting generated files...");
                     let mut files_to_format = bindings.clone();
                     files_to_format.extend(stubs.clone());
                     // `None` selects the converging whole-tree pass, which is what a full regen needs
                     // and what `converge_full_regen_formatting` documents itself as serving. Passing
-                    // `Some(&changed_languages)` took the single-pass branch instead, so the loop that
-                    // exists precisely because poly's .cs/.java/.json engines are not single-pass
-                    // idempotent never ran on the one command that regenerates everything: `alef all`
-                    // left drift that a second `alef all` would silently settle, and stamped hashes
-                    // over it. The language filter is wrong for the workspace-wide `cargo sort -n -w`
-                    // folded into that loop too, which must cover crates this run did not generate. ~keep
+                    // `Some(&only_languages_that_wrote_bindings)` would take the single-pass branch
+                    // instead, so the loop that exists precisely because poly's .cs/.java/.json engines
+                    // are not single-pass idempotent would never run on the one command that regenerates
+                    // everything: `alef all` would leave drift that a second `alef all` would silently
+                    // settle, and stamp hashes over it. The language filter is also wrong for the
+                    // workspace-wide `cargo sort -n -w` folded into that loop, which must cover crates
+                    // this run did not generate. ~keep
                     pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, None);
                 }
 

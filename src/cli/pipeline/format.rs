@@ -114,20 +114,29 @@ pub fn format_generated(
     base_dir: &Path,
     only_languages: Option<&HashSet<Language>>,
 ) {
-    let mut seen = HashSet::new();
-    let poly_langs: Vec<Language> = files
-        .iter()
-        .map(|(lang, _)| *lang)
-        .filter(|lang| seen.insert(*lang) && only_languages.is_none_or(|filter| filter.contains(lang)))
-        .collect();
-
-    if poly_langs.is_empty() {
-        return;
-    }
-
+    // `None` (full regen, the `alef all` path) always runs the whole-tree convergence pass
+    // below and never consults `poly_langs` at all: it formats every generated package under
+    // `base_dir` regardless of which languages happen to be represented in `files`. Gating it
+    // on `poly_langs.is_empty()` was itself an instance of the #119 bug -- `files` here is only
+    // ever `bindings` + `stubs` (see `alef all`'s call site), so a run where bindings generation
+    // was entirely skipped by the per-language lang-hash cache (nothing regenerated in-memory,
+    // so `bindings` comes back empty) and a crate with no stub-capable languages configured
+    // would have left `poly_langs` empty even though the caller had already decided -- from the
+    // full write set, not just bindings/stubs -- that formatting was needed. Only the `Some(_)`
+    // (partial regen) branch below genuinely needs a non-empty language list: it is what tells
+    // `poly_paths` which package directories to format at all. ~keep
     match only_languages {
         None => converge_full_regen_formatting(base_dir),
-        Some(_) => {
+        Some(only) => {
+            let mut seen = HashSet::new();
+            let poly_langs: Vec<Language> = files
+                .iter()
+                .map(|(lang, _)| *lang)
+                .filter(|lang| seen.insert(*lang) && only.contains(lang))
+                .collect();
+            if poly_langs.is_empty() {
+                return;
+            }
             let paths = poly_paths(config, base_dir, only_languages, &poly_langs);
             poly_format(&paths, base_dir);
             for &lang in &poly_langs {
@@ -175,7 +184,7 @@ const MAX_POLY_FMT_PASSES: u32 = 3;
 ///
 /// Best-effort throughout: a missing `poly`, `cargo`, `rustfmt`, `cargo-sort`, or
 /// `mix` is a warning, never a failure, and generation is never aborted.
-fn converge_full_regen_formatting(base_dir: &Path) {
+pub(crate) fn converge_full_regen_formatting(base_dir: &Path) {
     let poly_present = is_tool_available("poly");
     if !poly_present {
         warn!("poly not found on PATH (skipping post-generation formatting)");
@@ -269,13 +278,6 @@ fn run_workspace_cargo_sort(base_dir: &Path) {
     }
 }
 
-/// Run `poly fmt --fix <base_dir>`. Best-effort: a missing `poly` binary or
-/// non-zero exit is logged as a warning and never propagated.
-pub fn poly_fmt(base_dir: &Path) {
-    let paths = vec![base_dir.to_path_buf()];
-    poly_format(&paths, base_dir);
-}
-
 /// Run `poly lint <base_dir>`. Propagates failure — a non-zero exit is an error.
 pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
     if !is_tool_available("poly") {
@@ -290,42 +292,6 @@ pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
             Ok(())
         }
         Err(e) => Err(anyhow::anyhow!("poly lint failed: {e}")),
-    }
-}
-
-/// Return the fixed set of all cargo-sort residual steps that alef always runs
-/// after formatting, regardless of which languages the config targets.
-///
-/// The fixed set covers: workspace-wide (via ffi), wasm, ruby, elixir, R.
-/// Dart and swift have no cargo residuals (poly covers them).
-///
-/// Filters each language's residuals down to `cargo` steps: Elixir's residual
-/// list also carries `mix deps.get`/`mix format` steps (see
-/// [`language_residuals`]'s `Language::Elixir` arm), which are a distinct
-/// formatting concern from cargo-sort and out of scope for a function whose name
-/// and every caller assume "cargo sort only."
-fn cargo_sort_residuals(config: &ResolvedCrateConfig, base_dir: &Path) -> Vec<ResidualStep> {
-    let mut steps = Vec::new();
-    for language in [
-        Language::Ffi,
-        Language::Wasm,
-        Language::Ruby,
-        Language::Elixir,
-        Language::R,
-    ] {
-        steps.extend(
-            language_residuals(config, language, base_dir)
-                .into_iter()
-                .filter(|step| step.command == "cargo"),
-        );
-    }
-    steps
-}
-
-/// Run all cargo-sort residuals (ffi workspace, wasm, ruby, elixir, R). Best-effort.
-pub(crate) fn run_cargo_sort_residuals(config: &ResolvedCrateConfig, base_dir: &Path) {
-    for step in cargo_sort_residuals(config, base_dir) {
-        run_residual(&step, "residual");
     }
 }
 

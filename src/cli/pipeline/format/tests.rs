@@ -255,46 +255,6 @@ fn languages_without_residuals_have_none() {
 }
 
 #[test]
-fn cargo_sort_residuals_returns_fixed_set() {
-    let config = make_config("sample-model");
-    let steps = cargo_sort_residuals(&config, Path::new("/repo"));
-    assert_eq!(steps.len(), 5, "cargo_sort_residuals must return exactly 5 steps");
-    for step in &steps {
-        assert_eq!(step.command, "cargo");
-        assert_eq!(step.args[0], "sort");
-        assert_eq!(step.args[1], "-n", "all residuals must use -n flag");
-    }
-}
-
-#[test]
-fn cargo_sort_residuals_includes_workspace_wide_step() {
-    let config = make_config("sample-model");
-    let steps = cargo_sort_residuals(&config, Path::new("/repo"));
-    let has_workspace_wide = steps.iter().any(|s| s.args.contains(&"-w".to_owned()));
-    assert!(
-        has_workspace_wide,
-        "cargo_sort_residuals must include a workspace-wide step"
-    );
-}
-
-#[test]
-fn cargo_sort_residuals_excludes_elixirs_mix_steps() {
-    // Elixir's own `language_residuals` entry now returns 3 steps (cargo sort,
-    // mix deps.get, mix format). `cargo_sort_residuals` must still report exactly
-    // 5 steps, all `cargo` -- the fixed set stays a pure cargo-sort aggregator and
-    // must not silently start running `mix` commands under a name/contract that
-    // says "cargo sort only" (this backs `run_cargo_sort_residuals`, used by the
-    // `alef fmt` command).
-    let config = make_config("sample-model");
-    let steps = cargo_sort_residuals(&config, Path::new("/repo"));
-    assert_eq!(steps.len(), 5, "mix steps must not leak into the cargo-sort aggregator");
-    assert!(
-        steps.iter().all(|s| s.command == "cargo"),
-        "cargo_sort_residuals must only ever contain `cargo` steps, got: {steps:?}"
-    );
-}
-
-#[test]
 fn poly_paths_full_regen_is_repo_root() {
     let config = make_config("sample-model");
     let paths = poly_paths(&config, Path::new("/repo"), None, &[Language::Python]);
