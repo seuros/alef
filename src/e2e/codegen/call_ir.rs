@@ -52,6 +52,7 @@ impl<'a> CallIr<'a> {
             return Some(IrSignature {
                 params: &function.params,
                 return_type: &function.return_type,
+                error_type: function.error_type.as_deref(),
             });
         }
         let mut methods = self
@@ -66,6 +67,7 @@ impl<'a> CallIr<'a> {
         Some(IrSignature {
             params: &first.params,
             return_type: &first.return_type,
+            error_type: first.error_type.as_deref(),
         })
     }
 }
@@ -75,6 +77,13 @@ impl<'a> CallIr<'a> {
 pub(crate) struct IrSignature<'a> {
     pub params: &'a [crate::core::ir::ParamDef],
     pub return_type: &'a crate::core::ir::TypeRef,
+    /// The Rust `Result<_, E>` error type name declared for this call, if the call is
+    /// fallible. Read by the C backend's void-call e2e path (`c/test_function.rs`) to tell a
+    /// genuinely void export apart from one whose C ABI is a status code because the Rust
+    /// function it wraps returns `Result<(), E>` -- `has_error && is_void_return` in
+    /// `backends::ffi::orchestration` is exactly this condition, and the two must agree on
+    /// what "fallible" means for the same function. ~keep
+    pub error_type: Option<&'a str>,
 }
 
 /// Whether two same-named methods declare the same thing, for the purposes of the three
