@@ -581,6 +581,13 @@ pub fn write_scaffold_files_report(
     crate::scaffold::migrate_wasm_cargo_config_allow_multiple_definition(base_dir)
         .context("failed to migrate pre-existing .cargo/config.toml wasm32 rustflags")?;
 
+    // `poly.toml`'s managed merge unions and prunes array values but never retracts a whole
+    // table alef stops emitting, so this repairs the one known stale table left behind. Called
+    // unconditionally, self-guarding like the repair above -- see
+    // `migrate_poly_toml_drop_snippet_hook`'s doc for the full defect. ~keep
+    crate::scaffold::migrate_poly_toml_drop_snippet_hook(base_dir)
+        .context("failed to migrate pre-existing poly.toml alef-snippets pre-commit hook")?;
+
     // The refusal summary is deliberately NOT emitted here. Scaffolding is one of five writing
     // phases, and a summary printed by one writer can only ever describe that writer's refusals —
     // which is how `alef all` came to report the scaffold phase's refusals while silently omitting

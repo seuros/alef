@@ -99,6 +99,7 @@ mod language_swift_kotlin_gleam_zig;
 mod licenses;
 mod marker_stamping;
 mod poly;
+mod poly_migrations;
 mod python_node;
 mod repair;
 mod workspace_inheritance;

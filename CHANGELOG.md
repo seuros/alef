@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An already-scaffolded consumer's `poly.toml` kept re-merging the `alef-snippets`
+  pre-commit hook forever, after alef itself stopped emitting it in 0.61.1.**
+  `merge_managed_toml_core`'s prune pass removes only array *values* it tracked itself; it has
+  no counterpart that retracts a whole *table* alef stops emitting, so the union pass kept
+  re-adding a table already present on disk. Every commit shelled out to an `alef` binary the
+  consumer's lint job never installs, failing `poly lint`/pre-commit with `alef-snippets: 1:
+  alef: not found`. Added `migrate_poly_toml_drop_snippet_hook`
+  (`src/scaffold/languages/poly_migrations.rs`), registered in
+  `write_scaffold_files_report` next to the other pre-existing-file repairs: self-guarding on
+  an exact match of the table's own `run` command and `workspace = true`, so it never touches
+  a consumer's own differently-configured `alef-snippets` entry. Regression coverage:
+  `src/scaffold/tests/poly_migrations.rs`.
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it

@@ -20,8 +20,9 @@ pub use languages::{
 pub(crate) use languages::{
     elixir_native_crate_dir, migrate_build_zig_test_target, migrate_dart_placeholder_test, migrate_dart_pubignore,
     migrate_java_checkstyle_line_length, migrate_kotlin_build_gradle, migrate_node_package_json_service_export,
-    migrate_php_composer_phpunit_constraint, migrate_swift_placeholder_test, migrate_wasm_package_json_exports,
-    migrate_zig_build_ffi_include_default, migrate_zig_example, ruby_native_manifest_path,
+    migrate_php_composer_phpunit_constraint, migrate_poly_toml_drop_snippet_hook, migrate_swift_placeholder_test,
+    migrate_wasm_package_json_exports, migrate_zig_build_ffi_include_default, migrate_zig_example,
+    ruby_native_manifest_path,
 };
 
 /// Fields available via `[workspace.package]` inheritance detected from the root `Cargo.toml`.
