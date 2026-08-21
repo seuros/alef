@@ -50,11 +50,11 @@ enum Unwrap {
 /// Error returned by a wildcard element check when the element lacks the field. ~keep
 const WILDCARD_MISSING_FIELD_ERROR: &str = "error.WildcardElementFieldMissing";
 
-fn json_path_expr(result_var: &str, field_path: &str) -> String {
-    json_path_expr_with(result_var, field_path, Unwrap::Panic)
+fn json_path_expr(result_var: &str, field_path: &str, field_resolver: &FieldResolver) -> String {
+    json_path_expr_with(result_var, field_path, Unwrap::Panic, field_resolver)
 }
 
-fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap) -> String {
+fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap, field_resolver: &FieldResolver) -> String {
     let segments: Vec<&str> = field_path.split('.').collect();
     let mut expr = result_var.to_string();
     let mut prev_seg: Option<&str> = None;
@@ -73,7 +73,7 @@ fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap) -> St
         //                   never reaches here — the caller lowers it to a loop instead.
         //   "results[0]"  → access the array, then specific index N. ~keep
         if let Some(key) = seg.strip_suffix("[]") {
-            expr = format!("{}.array.items[0]", json_get(&expr, key, unwrap));
+            expr = format!("{}.array.items[0]", json_get(&expr, key, unwrap, field_resolver));
         } else if let Some(bracket_pos) = seg.find('[') {
             if let Some(end_pos) = seg.find(']')
                 && end_pos > bracket_pos + 1
@@ -82,7 +82,7 @@ fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap) -> St
                 let key = &seg[..bracket_pos];
                 let idx = &seg[bracket_pos + 1..end_pos];
                 if idx.chars().all(|c| c.is_ascii_digit()) {
-                    expr = format!("{}.array.items[{idx}]", json_get(&expr, key, unwrap));
+                    expr = format!("{}.array.items[{idx}]", json_get(&expr, key, unwrap, field_resolver));
                     prev_seg = Some(seg);
                     continue;
                 }
@@ -91,13 +91,18 @@ fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap) -> St
                 // `.object.get("field").?.object.get("key").?`. Used by nested fixture objects.
                 // `metadata.document.open_graph[title]` alias pattern where
                 // `open_graph` is a `HashMap<String, String>`.
-                expr = json_get(&json_get(&expr, key, unwrap), idx, unwrap);
+                expr = json_get(
+                    &json_get(&expr, key, unwrap, field_resolver),
+                    idx,
+                    unwrap,
+                    field_resolver,
+                );
                 prev_seg = Some(seg);
                 continue;
             }
-            expr = json_get(&expr, seg, unwrap);
+            expr = json_get(&expr, seg, unwrap, field_resolver);
         } else {
-            expr = json_get(&expr, seg, unwrap);
+            expr = json_get(&expr, seg, unwrap, field_resolver);
         }
         prev_seg = Some(seg);
     }
@@ -105,7 +110,22 @@ fn json_path_expr_with(result_var: &str, field_path: &str, unwrap: Unwrap) -> St
 }
 
 /// One `.object.get("key")` step, unwrapped according to `unwrap`.
-fn json_get(expr: &str, key: &str, unwrap: Unwrap) -> String {
+///
+/// `key` may be a JSON key serde omits entirely for some values even though the
+/// underlying Rust field is always present (`#[serde(skip_serializing_if = "...")]` on a
+/// required `Vec<T>`/`HashMap<K, V>`, or on an `Option<T>` alongside `Option::is_none`) —
+/// see `FieldDef::serde_skip_serializing_if` and `FieldResolver::is_wire_optional_key`.
+/// `.?`/`orelse return err` both assume the key is present, which panics/fails the whole
+/// test on exactly the values that legitimately triggered the skip. Substituting `.null`
+/// for a missing wire-optional key is safe regardless of the caller's `unwrap` mode: it
+/// matches how this same template already treats a *present* `null` value (the
+/// `is_empty`/`not_empty`/`is_true`/`is_false` branches all special-case `.null`), so a
+/// wire-optional field renders the same assertion outcome whether serde wrote `null` or
+/// omitted the key outright. ~keep
+fn json_get(expr: &str, key: &str, unwrap: Unwrap, field_resolver: &FieldResolver) -> String {
+    if field_resolver.is_wire_optional_key(key) {
+        return format!("({expr}.object.get(\"{key}\") orelse .null)");
+    }
     match unwrap {
         Unwrap::Panic => format!("{expr}.object.get(\"{key}\").?"),
         Unwrap::Error => format!("({expr}.object.get(\"{key}\") orelse return {WILDCARD_MISSING_FIELD_ERROR})"),
@@ -141,6 +161,7 @@ fn render_wildcard_json_assertion(
     array_root: &str,
     element_sub_path: &str,
     is_length_access: bool,
+    field_resolver: &FieldResolver,
 ) {
     let field_name = assertion.field.as_deref().unwrap_or_default();
 
@@ -152,7 +173,7 @@ fn render_wildcard_json_assertion(
         return;
     }
 
-    let element_expr = json_path_expr_with("_wce", element_sub_path, Unwrap::Error);
+    let element_expr = json_path_expr_with("_wce", element_sub_path, Unwrap::Error, field_resolver);
     // Wildcard loop elements are `Vec<T>` items, not the `Option<T>` field itself, so the
     // per-element assertion has no leaf-optionality of its own to consult here.
     let body = render_json_assertion_template(assertion, &element_expr, is_length_access, false);
@@ -168,7 +189,7 @@ fn render_wildcard_json_assertion(
         return;
     }
 
-    let array_expr = json_path_expr(result_var, array_root);
+    let array_expr = json_path_expr(result_var, array_root, field_resolver);
     let _ = writeln!(out, "    {{");
     let _ = writeln!(out, "        const _WildcardCheck = struct {{");
     let _ = writeln!(out, "            fn check(_wce: std.json.Value) anyerror!void {{");
@@ -558,6 +579,7 @@ pub(super) fn render_json_assertion(
             array_root,
             element_sub_path,
             is_length_access,
+            field_resolver,
         );
         return;
     }
@@ -565,7 +587,7 @@ pub(super) fn render_json_assertion(
     let field_expr = if field_path_for_expr.is_empty() {
         result_var.to_string()
     } else {
-        json_path_expr(result_var, field_path_for_expr)
+        json_path_expr(result_var, field_path_for_expr, field_resolver)
     };
     let field_is_optional = !field_path_for_expr.is_empty() && field_resolver.is_optional(field_path_for_expr);
 
@@ -580,7 +602,7 @@ pub(super) fn render_json_assertion(
             "equals" | "contains" | "not_empty" | "is_empty" | "starts_with" | "ends_with"
         )
     {
-        let base = json_path_expr(result_var, field_path_for_expr);
+        let base = json_path_expr(result_var, field_path_for_expr, field_resolver);
         let _ = writeln!(out, "    {{");
         let _ = writeln!(out, "        const _fmt_obj = {base}.object;");
         let _ = writeln!(out, "        const _fmt_type = _fmt_obj.get(\"format_type\").?.string;");

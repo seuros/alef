@@ -1,6 +1,6 @@
 use super::attributes::{
-    extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all, extract_serde_with,
-    has_container_serde_default, has_derive, has_derive_path,
+    extract_alef_error_code, extract_alef_since, extract_deprecation, extract_serde_rename_all,
+    extract_serde_skip_serializing_if, extract_serde_with, has_container_serde_default, has_derive, has_derive_path,
 };
 use super::normalize_rustdoc;
 
@@ -420,6 +420,40 @@ fn serde_with_absent_returns_none() {
 fn serde_with_ignores_a_non_serde_attribute() {
     let attrs = parse_attrs("#[alef(skip)]");
     assert!(extract_serde_with(&attrs).is_none());
+}
+
+// --- extract_serde_skip_serializing_if ---
+
+#[test]
+fn serde_skip_serializing_if_detects_vec_is_empty() {
+    // The exact shape that produced tslp's `data_extraction_json_empty_object` crash:
+    // `Vec<DataNode>` is a required field, but serde omits the JSON key when it's empty.
+    let attrs = parse_attrs(r#"#[serde(default, skip_serializing_if = "Vec::is_empty")]"#);
+    assert!(extract_serde_skip_serializing_if(&attrs));
+}
+
+#[test]
+fn serde_skip_serializing_if_detects_option_is_none() {
+    let attrs = parse_attrs(r#"#[serde(default, skip_serializing_if = "Option::is_none")]"#);
+    assert!(extract_serde_skip_serializing_if(&attrs));
+}
+
+#[test]
+fn serde_skip_serializing_if_reads_through_cfg_attr() {
+    let attrs = parse_attrs(r#"#[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]"#);
+    assert!(extract_serde_skip_serializing_if(&attrs));
+}
+
+#[test]
+fn serde_skip_serializing_if_absent_returns_false() {
+    let attrs = parse_attrs(r#"#[serde(rename = "type")]"#);
+    assert!(!extract_serde_skip_serializing_if(&attrs));
+}
+
+#[test]
+fn serde_skip_serializing_if_ignores_a_non_serde_attribute() {
+    let attrs = parse_attrs("#[alef(skip)]");
+    assert!(!extract_serde_skip_serializing_if(&attrs));
 }
 
 // --- has_container_serde_default ---

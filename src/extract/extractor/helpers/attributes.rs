@@ -462,6 +462,21 @@ pub(crate) fn has_serde_default(attrs: &[syn::Attribute]) -> bool {
     })
 }
 
+/// Check if a field carries `#[serde(skip_serializing_if = "...")]` (also matching
+/// `#[cfg_attr(..., serde(skip_serializing_if = "..."))]`).
+///
+/// The predicate path itself (`Option::is_none`, `Vec::is_empty`, ...) does not matter
+/// here — presence alone means serde may omit the field's JSON key entirely for some
+/// values, independent of whether the field's Rust type is `Option<T>`. See
+/// `FieldDef::serde_skip_serializing_if` for why this must be tracked separately from
+/// `optional`.
+pub(crate) fn extract_serde_skip_serializing_if(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        let attr_str = quote::quote!(#attr).to_string();
+        attr_str.contains("serde") && attr_str.contains("skip_serializing_if")
+    })
+}
+
 /// Check if a *container* (struct/enum) carries `#[serde(default)]` or
 /// `#[serde(default = "path")]`, including through `#[cfg_attr(..., serde(default))]`.
 ///

@@ -60,6 +60,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
         }
     }
@@ -91,6 +92,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
         }
     }
@@ -132,6 +134,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
         }
     }
@@ -179,6 +182,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
         }
     }
@@ -210,6 +214,7 @@ impl FieldResolver {
             display_as_text_fields: HashSet::new(),
             ir_reachable_fields: HashSet::new(),
             ir_known_excluded_fields: HashSet::new(),
+            wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
         }
     }
@@ -283,6 +288,18 @@ impl FieldResolver {
         self.ir_known_excluded_fields = excluded;
         self.optional_fields.extend(optional);
         self.warn_on_result_fields_contradicting_ir();
+        self
+    }
+
+    /// Return a clone of this resolver with IR-derived wire-optionality data set.
+    ///
+    /// `fields` comes from [`Self::ir_wire_optional_fields`]. Consulted by
+    /// [`Self::is_wire_optional_key`], which JSON-tree-walking accessor generators (currently
+    /// only the Zig e2e generator) use to guard a `.get(key)` lookup instead of assuming presence.
+    /// Deliberately a separate set from `optional_fields` / [`Self::with_ir_fields`] — see
+    /// [`Self::ir_wire_optional_fields`] for why the two must not be merged.
+    pub fn with_wire_optional_fields(mut self, fields: HashSet<String>) -> Self {
+        self.wire_optional_fields = fields;
         self
     }
 
@@ -364,6 +381,27 @@ impl FieldResolver {
             .filter_map(|(name, (seen_optional, seen_required))| (seen_optional && !seen_required).then_some(name))
             .collect();
         (reachable, excluded, optional)
+    }
+
+    /// Compute the wire-optional field-name set from a crate's IR type definitions, for use
+    /// with [`Self::with_wire_optional_fields`].
+    ///
+    /// A field name lands here when it carries `#[serde(skip_serializing_if = "...")]` on AT
+    /// LEAST ONE type — unlike [`Self::ir_field_sets`]'s `optional` set, this does not require
+    /// unanimity across every declaration of the name. The asymmetry is intentional: merging a
+    /// wrong name into `wire_optional_fields` only makes a JSON-tree-walking accessor guard a
+    /// `.get(key)` lookup that would have succeeded anyway (defensive, always safe), whereas
+    /// `ir_field_sets`'s `optional` set changes the *shape* of emitted code
+    /// (`.as_ref().unwrap()`, `!`, …) and a false positive there is a compile error in a
+    /// caller's generated test. No such risk exists here, so "any type wins" is the right,
+    /// simpler rule. ~keep
+    pub fn ir_wire_optional_fields(type_defs: &[crate::core::ir::TypeDef]) -> HashSet<String> {
+        type_defs
+            .iter()
+            .flat_map(|type_def| &type_def.fields)
+            .filter(|field| field.serde_skip_serializing_if)
+            .map(|field| field.name.clone())
+            .collect()
     }
 }
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The IR now tracks `#[serde(skip_serializing_if = "...")]` as a fact distinct from
+  `Option<T>`-optionality.** A new `FieldDef::serde_skip_serializing_if` flag (threaded through
+  `src/extract/extractor/helpers/attributes.rs::extract_serde_skip_serializing_if` and
+  `src/extract/extractor/helpers/fields.rs`) records that a field's JSON key may be entirely
+  absent from the wire format — not `null`, absent — even when the underlying Rust field is a
+  required, non-`Option` type (e.g. `Vec<T>` with `skip_serializing_if = "Vec::is_empty"`). This
+  fixes a Zig e2e crash: `FieldResolver::ir_wire_optional_fields` and the new
+  `FieldResolver::is_wire_optional_key` predicate let the Zig e2e generator's JSON-tree accessor
+  chain (`src/e2e/codegen/zig/assertions.rs`) guard a `.object.get(key)` lookup with
+  `orelse .null` instead of `.?`, so a fixture like tslp's `data_extraction_json_empty_object`
+  (asserting `is_empty` on a `Vec<DataNode>` field serde omitted because it was empty) no longer
+  panics with "attempt to use null value". Other JSON-consuming backends (C FFI, and every other
+  language binding) were audited and found not exposed: they access the real typed value through
+  the binding rather than re-parsing a generic JSON blob, so a `Vec<T>` field is always present
+  (possibly empty) regardless of `skip_serializing_if`. `optional_fields` (the existing
+  `Option<T>`-driven set) is left untouched, since conflating the two would make e.g. the Rust
+  e2e backend emit `.as_ref().unwrap()` against a plain, always-present `Vec<T>`.
+
 ### Fixed
 
 - **Generated Java no longer carries a dead `import java.util.List;`.** `ffi_imports.jinja`'s

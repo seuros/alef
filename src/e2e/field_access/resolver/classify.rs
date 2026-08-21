@@ -133,6 +133,19 @@ impl FieldResolver {
         false
     }
 
+    /// Check whether a single bare JSON key (not a dotted path) may be entirely absent from
+    /// the wire format, per [`Self::with_wire_optional_fields`].
+    ///
+    /// Callers that walk a parsed JSON tree segment-by-segment (currently the Zig e2e
+    /// generator) should consult this once per `.get(key)` step, not once for the whole
+    /// resolved path: `wire_optional_fields` is IR-derived from bare field names, with no
+    /// notion of nesting depth, so matching happens per key the same way the field was
+    /// recorded — unlike [`Self::is_optional`], which matches config-declared, fully
+    /// dotted paths.
+    pub fn is_wire_optional_key(&self, key: &str) -> bool {
+        self.wire_optional_fields.contains(key)
+    }
+
     /// Check if a fixture field has an explicit alias mapping.
     pub fn has_alias(&self, fixture_field: &str) -> bool {
         self.aliases.contains_key(fixture_field)

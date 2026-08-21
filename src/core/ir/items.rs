@@ -164,6 +164,17 @@ pub struct FieldDef {
     /// shape it did not derive.
     #[serde(default)]
     pub serde_with: Option<String>,
+    /// True when the field carries `#[serde(skip_serializing_if = "...")]`.
+    ///
+    /// The field is still a normal, required member of the Rust struct — this is purely a
+    /// wire-format fact: serde omits the JSON key entirely (not `null`) whenever the predicate
+    /// holds, most commonly `Option::is_none` or `Vec::is_empty` on a field that is not itself
+    /// `Option<T>`. Distinct from `optional` (which tracks `Option<T>`-ness of the Rust type):
+    /// a `Vec<T>` field with `skip_serializing_if = "Vec::is_empty"` is `optional: false` but
+    /// `serde_skip_serializing_if: true`, and a JSON-tree-walking accessor generator must guard
+    /// against the key being absent even though the underlying Rust value is never `None`.
+    #[serde(default)]
+    pub serde_skip_serializing_if: bool,
     /// True when source metadata explicitly excludes this field from generated
     /// polyglot binding surfaces.
     #[serde(default)]
@@ -708,26 +719,27 @@ mod tests {
     #[allow(dead_code)]
     fn field_def_field_coverage_witness(value: FieldDef) {
         let FieldDef {
-            name: _,                     // identifier; every backend reads it directly
-            ty: _,                       // determines the emitted binding type
-            optional: _,                 // nullability across every backend
-            default: _,                  // literal default expression
-            doc: _,                      // doc-comment emission
-            sanitized: _,                // gates auto-generated From/Into conversions
-            is_boxed: _,                 // FFI deref-before-clone on Box<T> fields
-            type_rust_path: _,           // disambiguates same-named types across modules
-            cfg: _,                      // conditional inclusion in struct literals
-            typed_default: _,            // language-native default emission
-            core_wrapper: _,             // Cow/Arc/Bytes/Box From/Into codegen
-            vec_inner_core_wrapper: _,   // Vec<Wrapper<T>> element codegen
-            newtype_wrapper: _,          // wrap/unwrap newtype at the binding boundary
-            serde_rename: _,             // wire-name parity with core serde
-            serde_flatten: _,            // language-native flatten support (e.g. Jackson)
-            serde_with: _,               // suppresses derive-shape wire assumptions (e.g. Duration)
-            binding_excluded: _,         // drops the field from the generated surface
-            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
-            original_type: _,            // reconstructs pre-sanitize (de)serialization
-            version: _,                  // since/deprecated annotation emission
+            name: _,                      // identifier; every backend reads it directly
+            ty: _,                        // determines the emitted binding type
+            optional: _,                  // nullability across every backend
+            default: _,                   // literal default expression
+            doc: _,                       // doc-comment emission
+            sanitized: _,                 // gates auto-generated From/Into conversions
+            is_boxed: _,                  // FFI deref-before-clone on Box<T> fields
+            type_rust_path: _,            // disambiguates same-named types across modules
+            cfg: _,                       // conditional inclusion in struct literals
+            typed_default: _,             // language-native default emission
+            core_wrapper: _,              // Cow/Arc/Bytes/Box From/Into codegen
+            vec_inner_core_wrapper: _,    // Vec<Wrapper<T>> element codegen
+            newtype_wrapper: _,           // wrap/unwrap newtype at the binding boundary
+            serde_rename: _,              // wire-name parity with core serde
+            serde_flatten: _,             // language-native flatten support (e.g. Jackson)
+            serde_with: _,                // suppresses derive-shape wire assumptions (e.g. Duration)
+            serde_skip_serializing_if: _, // wire-optional JSON key despite a required Rust field
+            binding_excluded: _,          // drops the field from the generated surface
+            binding_exclusion_reason: _,  // diagnostics only; deliberately not codegen input
+            original_type: _,             // reconstructs pre-sanitize (de)serialization
+            version: _,                   // since/deprecated annotation emission
         } = value;
     }
 

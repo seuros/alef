@@ -84,6 +84,7 @@ fn test_generate_docs_typescript_optional_field_emits_consistent_table_cells() {
                 serde_rename: None,
                 serde_flatten: false,
                 serde_with: None,
+                serde_skip_serializing_if: false,
                 binding_excluded: false,
                 binding_exclusion_reason: None,
                 original_type: None,

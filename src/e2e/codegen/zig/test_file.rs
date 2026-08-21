@@ -209,6 +209,7 @@ fn render_test_fn(
         e2e_config.effective_fields_method_calls(call_config),
     )
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    .with_wire_optional_fields(FieldResolver::ir_wire_optional_fields(type_defs))
     .with_enum_fields(super::enum_field_config::effective_enum_fields(
         e2e_config,
         call_config,
