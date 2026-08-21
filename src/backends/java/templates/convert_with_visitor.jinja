@@ -15,7 +15,7 @@
                 operationFailure = new {{ exception_class }}("FFI call failed", e);
                 throw operationFailure;
             } finally {
-                java.util.List<Throwable> cleanupFailures = new java.util.ArrayList<>();
+                List<Throwable> cleanupFailures = new java.util.ArrayList<>();
                 try {
                     NativeLib.{{ prefix_upper }}_VISITOR_FREE.invoke(visitorHandle);
                 } catch (Throwable failure) {

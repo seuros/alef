@@ -12,6 +12,7 @@
    - skip_test: boolean (for unskipped non-assertions)
    - call_expr: the complete function call expression
    - result_var: result variable name
+   - returns_void: bool — whether the call returns void (Rust `()` / `Result<(),E>`)
    - field_bindings: string with field binding statements (e.g., $chunks = $result->getChunks();)
    - assertions_body: string containing all rendered assertions
 #}
@@ -29,7 +30,11 @@
         {{ line }}
 {% endfor %}
         ${{ result_var }} = {{ call_expr }};
+{% if returns_void %}
+        $this->assertTrue(true, 'expected the call not to throw');
+{% else %}
         $this->assertNotNull(${{ result_var }});
+{% endif %}
 {% else %}
 {% for line in setup_lines %}
         {{ line }}

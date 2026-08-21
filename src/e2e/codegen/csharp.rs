@@ -934,6 +934,15 @@ fn render_test_method(
     );
     crate::e2e::codegen::fail_on_unsupported_assertion_type_markers(&assertions_body, "csharp", &fixture.id);
 
+    // A `returns_void` call has no result to assert a value against, so a fixture whose only
+    // assertion is `not_error` had nothing rendered here — `assertions_body` stays empty for
+    // it, same as every other void fixture. Give it a real, visible check anyway: xUnit has no
+    // `Assert.DoesNotThrow`, so `csharp/test_method.jinja`'s `void_not_error` branch wraps the
+    // call in `Record.Exception`/`Record.ExceptionAsync` and asserts the caught exception is
+    // null, instead of relying only on the bare call's uncaught-exception-fails-the-test
+    // behavior the way every other void fixture still does. ~keep
+    let void_not_error = returns_void && fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+
     // ~keep `expects_error` and `returns_void` are excluded because neither splices
     // `assertions_body` into the emitted method: the throws-assertion is the expectation for the
     // first, and for the second the call itself throwing is the only check there ever was.
@@ -992,6 +1001,7 @@ fn render_test_method(
         unrenderable_error_assertions => unrenderable_error_assertions.trim_end(),
         client_factory_setup => client_factory_setup,
         has_usable_assertion => !expects_error && !returns_void,
+        void_not_error => void_not_error,
         result_var => result_var,
         assertions_body => assertions_body,
         refusal_skip_reason => refusal_skip_reason,
@@ -1149,3 +1159,5 @@ mod enum_field_classification_tests;
 mod fact_attribute_layout_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod void_not_error_call_tests;

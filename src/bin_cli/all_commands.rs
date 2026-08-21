@@ -806,16 +806,27 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                     Err(error) => {
-                        let error = if refusals.refused_count() > 0 {
+                        // Gated on `refused_snippet_dir_paths` (refusals inside `docs.snippets`
+                        // roots), not `refusals.refused_count()` (every refusal anywhere in the
+                        // run): a refusal to an unrelated scaffold or README file must not attach
+                        // an "ownership guard" excuse to a validation failure it had nothing to do
+                        // with -- that wrong attribution is what previously sent investigators
+                        // chasing the ownership guard for a plain checkstyle/compiler defect in
+                        // freshly generated content. Mirrors the `Ok` arm above: both arms consult
+                        // the same scoped set so a validation failure and a validation pass
+                        // attribute refusals identically. ~keep
+                        let snippet_refusals =
+                            refused_snippet_dir_paths(&refusals.refused_paths, resolved_cfg, &base_dir);
+                        let error = if !snippet_refusals.is_empty() {
                             pipeline::report_refused_writes(&refusals);
                             error.context(format!(
-                                "{} file write(s) earlier in this run were refused by the ownership guard \
-                                 (see the refusal report above). Docs/snippet validation reads content from \
-                                 disk, so a refused write leaves stale content in place for it to grade -- if \
-                                 this failure looks like a content mismatch rather than a real defect, check \
-                                 whether the affected path is among the refused writes and run \
-                                 `alef adopt <path>`.",
-                                refusals.refused_count()
+                                "{} file write(s) inside this crate's docs.snippets root(s) were refused by \
+                                 the ownership guard this run (see the refusal report above). \
+                                 Docs/snippet validation reads content from disk, so a refused write \
+                                 leaves stale content in place for it to grade -- if this failure looks \
+                                 like a content mismatch rather than a real defect, check whether the \
+                                 affected path is among the refused writes and run `alef adopt <path>`.",
+                                snippet_refusals.len()
                             ))
                         } else {
                             error

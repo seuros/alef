@@ -12,6 +12,9 @@ pub(super) struct RAssertionContext<'a> {
     pub(super) result_is_simple: bool,
     pub(super) result_is_bytes: bool,
     pub(super) assert_enum_fields: &'a std::collections::HashMap<String, String>,
+    /// Whether the call returns `()` — see the `not_error` arm, which routes the whole
+    /// assertion to the call site for that case rather than rendering here. ~keep
+    pub(super) returns_void: bool,
 }
 
 pub(super) fn render_assertion(
@@ -479,6 +482,15 @@ pub(super) fn render_assertion(
             }
         }
         "not_error" => {
+            // ~keep A `returns_void` call binds no `result` at all (`test_case.rs` emits the
+            // call under `expect_no_error(...)` instead of `result <- ...`), so the real,
+            // failable check for this assertion is the `expect_no_error` wrapper at the call
+            // site — nothing is rendered here. Emitting `expect_true(TRUE)` beside it would add
+            // a second "assertion" that can never fail, which is exactly the vacuous shape
+            // `inert_example` exists to catch.
+            if context.returns_void {
+                return;
+            }
             // The call itself stops the test on error; emit an explicit
             // `expect_true(TRUE)` so testthat doesn't report the test as
             // empty when this is the only assertion.
@@ -636,6 +648,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -661,6 +674,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -739,6 +753,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -773,6 +788,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, &assertion, "result", &context);
@@ -800,6 +816,7 @@ mod tests {
             result_is_simple: true,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -828,6 +845,7 @@ mod tests {
             result_is_simple: true,
             result_is_bytes: true,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -861,6 +879,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -881,6 +900,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -907,6 +927,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -928,6 +949,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -949,6 +971,7 @@ mod tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
 
@@ -988,6 +1011,7 @@ mod wildcard_tests {
             result_is_simple: false,
             result_is_bytes: false,
             assert_enum_fields: &enum_fields,
+            returns_void: false,
         };
         let mut out = String::new();
         render_assertion(&mut out, assertion, "result", &context);

@@ -232,6 +232,93 @@ fn test_options_field_visitor_setter_uses_configured_renderer_field() {
     );
 }
 
+/// The defect: `needs_list` (`ffi_imports.jinja`'s import gate) decides whether to emit
+/// `import java.util.List;` by substring-matching `body.contains("List<")` -- a match that
+/// fires identically whether the body's only `List<` text is a genuine bare use or an
+/// already-qualified `java.util.List<...>`. The visitor-cleanup failure aggregator used to
+/// spell its own declaration as `java.util.List<Throwable>`, fully qualified. A main class
+/// whose only function is visitor-bridged (no `Vec<T>`-returning function anywhere to
+/// contribute a real bare `List<...>` to the body, e.g. from a return-type signature) still
+/// tripped `needs_list` on that qualified text, so the import was emitted and never once
+/// spelled as the bare identifier it imports -- checkstyle's `UnusedImports` flags exactly
+/// this. Fixed by declaring `cleanupFailures` as bare `List<Throwable>`, matching the
+/// convention `opaque_handle_header.jinja` already uses. ~keep
+#[test]
+fn visitor_only_main_class_never_emits_a_dead_list_import() {
+    let api = ApiSurface {
+        functions: vec![FunctionDef {
+            name: "parse".to_string(),
+            rust_path: "syntax::parse".to_string(),
+            params: vec![
+                ParamDef {
+                    name: "source".to_string(),
+                    ty: TypeRef::String,
+                    ..ParamDef::default()
+                },
+                ParamDef {
+                    name: "options".to_string(),
+                    ty: TypeRef::Named("ParseOptions".to_string()),
+                    ..ParamDef::default()
+                },
+            ],
+            return_type: TypeRef::Named("WalkOutcome".to_string()),
+            error_type: Some("ParseError".to_string()),
+            ..FunctionDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    let config = ResolvedCrateConfig {
+        trait_bridges: vec![TraitBridgeConfig {
+            trait_name: "SyntaxWalker".to_string(),
+            type_alias: Some("SyntaxWalkerHandle".to_string()),
+            param_name: Some("renderer".to_string()),
+            bind_via: BridgeBinding::OptionsField,
+            options_type: Some("ParseOptions".to_string()),
+            options_field: Some("renderer".to_string()),
+            context_type: Some("SyntaxContext".to_string()),
+            result_type: Some("WalkOutcome".to_string()),
+            ..TraitBridgeConfig::default()
+        }],
+        ..ResolvedCrateConfig::default()
+    };
+    let out = gen_main_class(
+        &api,
+        &config,
+        "dev.syntax",
+        "Syntax",
+        "syn",
+        &HashSet::new(),
+        &HashSet::new(),
+        true,
+        &create_test_capsule_types(),
+    );
+
+    let imports_list = out.contains("import java.util.List;");
+    // A "bare" `List<` use is one that is neither part of a longer identifier ending in
+    // `List` (`ArrayList<`, `LinkedList<`, ...) nor already fully qualified
+    // (`java.util.List<`). Both must be excluded: `NativeResources` always constructs a
+    // `new java.util.ArrayList<>()` inside the cleanup block regardless of how
+    // `cleanupFailures` itself is declared, so a naive `"List<"` substring search alone
+    // always finds a hit and would make this assertion pass even when the declaration is
+    // dead-import-qualified.
+    let has_bare_list_use = out.match_indices("List<").any(|(index, _)| {
+        let before = &out[..index];
+        let preceded_by_identifier_char = before.chars().next_back().is_some_and(char::is_alphanumeric);
+        !preceded_by_identifier_char && !before.ends_with("java.util.")
+    });
+
+    assert_eq!(
+        imports_list, has_bare_list_use,
+        "`import java.util.List;` must be emitted if and only if the body spells the bare `List` \
+         identifier somewhere -- an import paired with only fully-qualified `java.util.List<...>` \
+         text is dead and checkstyle flags it:\n{out}"
+    );
+    assert!(
+        imports_list,
+        "sanity: this fixture's visitor-cleanup block must still trigger the List import\n{out}"
+    );
+}
+
 #[test]
 fn test_java_async_wrappers_respect_generate_override() {
     let api = ApiSurface {

@@ -49,6 +49,7 @@ fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
         &HashMap::new(),
         "node",
         false,
+        false,
     );
     out
 }

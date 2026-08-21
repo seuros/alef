@@ -109,11 +109,15 @@ pub(super) fn render_assertion(
     // than the raw `result_var`, so a lazily-consumed stream that errors only on
     // iteration is still caught. `returns_void` calls bind no `result_var` at all
     // (`java/test_method.jinja`'s `{% if returns_void %}` branch calls without
-    // assigning) — asserting on it there would not compile, and the call having
-    // thrown already fails the test, so those are left as-is. ~keep
+    // assigning), so asserting on a variable here would not compile — that case is
+    // handled at the call-emission site instead: `test_method.rs`'s `void_not_error`
+    // flag wraps `call_expr` itself in `assertDoesNotThrow(() -> ...)`, so this arm
+    // stays a no-op purely because the real assertion lives one level up, not because
+    // nothing is asserted. ~keep
     if assertion.assertion_type == "not_error" {
         if returns_void {
-            // No variable to assert on; the exception path already covers this.
+            // Handled by `test_method.rs`'s `void_not_error` wrapping the call in
+            // assertDoesNotThrow — nothing to render into assertions_body here.
         } else if is_streaming {
             out.push_str("        assertNotNull(chunks, \"expected drained chunks list\");\n");
         } else {
@@ -1287,7 +1291,9 @@ mod tests {
 
     /// A `returns_void` call binds no `result_var` at all (see
     /// `java/test_method.jinja`'s `{% if returns_void %}` branch) — asserting on it
-    /// would not compile. The exception path already covers `not_error` there.
+    /// would not compile. The real assertion for this case lives one level up: see
+    /// `test_method.rs`'s `void_not_error_call_wraps_call_expr_in_assert_does_not_throw`,
+    /// which wraps `call_expr` in `assertDoesNotThrow` at the call-emission site instead.
     #[test]
     fn not_error_on_a_returns_void_call_emits_nothing() {
         let resolver = make_resolver(HashSet::new(), HashSet::new());

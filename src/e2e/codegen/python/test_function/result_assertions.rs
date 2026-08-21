@@ -28,8 +28,21 @@ fn has_real_assertion(body: &str) -> bool {
 /// NO assertions at all are left untouched: that's a pre-existing, intentional
 /// "just call it" smoke test contract (see
 /// `should_discard_result_when_force_bind_result_is_unset_and_unused`). ~keep
-fn apply_vacuous_assertion_fallback(temp_assertions: &mut String, has_declared_assertions: bool, result_var: &str) {
+fn apply_vacuous_assertion_fallback(
+    temp_assertions: &mut String,
+    has_declared_assertions: bool,
+    result_var: &str,
+    returns_void: bool,
+) {
     if !has_declared_assertions || has_real_assertion(temp_assertions) {
+        return;
+    }
+    // ~keep A void call's binding return is PyO3's mapping of Rust `()` — Python `None` — on
+    // every successful call, so `assert result is not None` would fail every successful call,
+    // not just an unsuccessful one: a guaranteed-red test, worse than the vacuous body it was
+    // meant to replace. There is no result to assert on; a bare, unbound call statement is
+    // already non-vacuous in pytest, since an uncaught exception fails the test on its own.
+    if returns_void {
         return;
     }
     let _ = writeln!(temp_assertions, "    assert {result_var} is not None  # noqa: S101");
@@ -104,7 +117,12 @@ pub(super) fn emit_result_and_assertions(
                 );
             }
         }
-        apply_vacuous_assertion_fallback(&mut streaming_assertions, !fixture.assertions.is_empty(), chunks_var);
+        apply_vacuous_assertion_fallback(
+            &mut streaming_assertions,
+            !fixture.assertions.is_empty(),
+            chunks_var,
+            call_config.returns_void,
+        );
         crate::e2e::codegen::fail_on_unavailable_field_markers(
             &streaming_assertions,
             "python",
@@ -135,7 +153,12 @@ pub(super) fn emit_result_and_assertions(
             );
         }
 
-        apply_vacuous_assertion_fallback(&mut temp_assertions, !fixture.assertions.is_empty(), result_var);
+        apply_vacuous_assertion_fallback(
+            &mut temp_assertions,
+            !fixture.assertions.is_empty(),
+            result_var,
+            call_config.returns_void,
+        );
         crate::e2e::codegen::fail_on_unavailable_field_markers(
             &temp_assertions,
             "python",
@@ -420,7 +443,7 @@ mod tests {
     #[test]
     fn vacuous_fallback_is_a_noop_without_declared_assertions() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, false, "result");
+        apply_vacuous_assertion_fallback(&mut body, false, "result", false);
         assert!(
             body.is_empty(),
             "a fixture with no declared assertions is an intentional smoke test and must stay untouched"
@@ -430,14 +453,14 @@ mod tests {
     #[test]
     fn vacuous_fallback_emits_a_real_assertion_when_body_is_empty() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, true, "result");
+        apply_vacuous_assertion_fallback(&mut body, true, "result", false);
         assert_eq!(body, "    assert result is not None  # noqa: S101\n");
     }
 
     #[test]
     fn vacuous_fallback_emits_a_real_assertion_over_comment_only_body() {
         let mut body = "    # skipped: field 'chunks' not available on result type\n".to_string();
-        apply_vacuous_assertion_fallback(&mut body, true, "result");
+        apply_vacuous_assertion_fallback(&mut body, true, "result", false);
         assert!(
             body.contains("assert result is not None"),
             "a comment-only body must still get a real fallback assertion, got: {body}"
@@ -448,10 +471,25 @@ mod tests {
     fn vacuous_fallback_leaves_a_real_assertion_untouched() {
         let mut body = "    assert result.count == 1  # noqa: S101\n".to_string();
         let original = body.clone();
-        apply_vacuous_assertion_fallback(&mut body, true, "result");
+        apply_vacuous_assertion_fallback(&mut body, true, "result", false);
         assert_eq!(
             body, original,
             "a fixture with a real assertion must not get an extra fallback line"
+        );
+    }
+
+    /// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+    /// fixture whose only declared assertion was `not_error` fell into the fallback and emitted
+    /// `assert result is not None` — but PyO3 maps a void call's `Ok(())` to Python `None`, so
+    /// that assertion FAILED on every successful call, not just an unsuccessful one.
+    #[test]
+    fn vacuous_fallback_emits_nothing_for_a_void_call() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, true, "result", true);
+        assert!(
+            body.is_empty(),
+            "a void call's result is always None; asserting not-None would fail every successful \
+             call, got: {body}"
         );
     }
 
@@ -493,6 +531,53 @@ mod tests {
         assert!(
             out.contains("assert result is not None"),
             "a not_error-only fixture must emit a real assertion instead of a vacuous body, got: {out}"
+        );
+    }
+
+    /// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+    /// fixture whose only declared assertion was `not_error` bound the result and asserted
+    /// `assert result is not None` — but PyO3 maps a void call's `Ok(())` to Python `None`, so
+    /// this assertion FAILED every successful call. The correct rendering is a bare, unbound
+    /// call statement: an uncaught exception already fails a pytest test on its own.
+    #[test]
+    fn void_not_error_fixture_emits_a_bare_unbound_call_not_a_guaranteed_failure() {
+        let mut fixture = minimal_fixture();
+        fixture.assertions = vec![assertion("not_error", None, None)];
+        let e2e_config = E2eConfig::default();
+        let call_config = crate::e2e::config::CallConfig {
+            returns_void: true,
+            ..Default::default()
+        };
+        let field_resolver = FieldResolver::new(
+            &std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+        );
+        let mut out = String::new();
+
+        emit_result_and_assertions(
+            &mut out,
+            &fixture,
+            &e2e_config,
+            &call_config,
+            "await widget_client.prefetch()",
+            "result",
+            &field_resolver,
+            false,
+            false,
+            false,
+        );
+
+        assert!(
+            !out.contains("assert result is not None"),
+            "a void call's result is always None; asserting not-None would fail every successful \
+             call, got: {out}"
+        );
+        assert!(
+            out.contains("await widget_client.prefetch()") && !out.contains("result ="),
+            "a void not_error-only fixture must emit a bare, unbound call statement, got: {out}"
         );
     }
 

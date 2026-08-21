@@ -1130,7 +1130,24 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
         // wrappers (registerValidator, registerOcrBackend, ...) are declared `returns_void`
         // in alef.toml precisely because the generated Dart bridge method returns
         // `Future<void>`, so honor that flag here instead of always binding a variable.
-        if call_config.returns_void {
+        // A `returns_void` call binds no `result` (see the compile-error rationale just
+        // above), so a fixture whose only assertion is `not_error` has nothing to assert a
+        // value against the way the fallback below does. `package:test` has no
+        // `throwsNothing`/`completesNormally` boolean-style matcher, but `completes` IS a
+        // real matcher: it fails the test if the `Future` rejects. Wrap the call in
+        // `expectLater(..., completes)` instead of leaving it a bare `await` that relies
+        // only on the implicit "an uncaught rejection fails the test" behavior every other
+        // `returns_void` fixture still uses. ~keep
+        let void_not_error = fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "not_error");
+        if call_config.returns_void && void_not_error {
+            out.push_str(&crate::e2e::template_env::render(
+                "dart/void_not_error_call.jinja",
+                minijinja::context! { receiver => receiver, function_name => function_name, args => args_str },
+            ));
+        } else if call_config.returns_void {
             let _ = writeln!(out, "    await {receiver}.{function_name}({args_str});");
         } else if is_streaming {
             let _ = writeln!(

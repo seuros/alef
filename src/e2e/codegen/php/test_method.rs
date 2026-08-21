@@ -33,6 +33,7 @@ fn apply_vacuous_assertion_fallback(
     expects_error: bool,
     result_var: &str,
     streaming_drive_is_the_check: bool,
+    returns_void: bool,
 ) {
     if expects_error || has_executable_assertion(assertions_body) {
         return;
@@ -47,6 +48,14 @@ fn apply_vacuous_assertion_fallback(
         if streaming_drive_is_the_check {
             assertions_body.push_str("        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n");
         }
+    } else if returns_void {
+        // ~keep A void call's return value is PHP `null` on success — PHP's binding backend
+        // declares these functions `: void` (see `src/backends/php/gen_bindings/public_api.rs`),
+        // and a void function's return is always `null`. `assertNotNull($result)` would therefore
+        // fail on every successful call, not just an unsuccessful one: a guaranteed-red test, worse
+        // than the vacuous body it replaced. There is no result to assert on, so assert the one
+        // thing that is true and meaningful here — the call ran this far without throwing.
+        assertions_body.push_str("        $this->assertTrue(true, 'expected the call not to throw');\n");
     } else {
         let _ = writeln!(assertions_body, "        $this->assertNotNull(${result_var});");
     }
@@ -474,6 +483,7 @@ pub(super) fn render_test_method(
             expects_error,
             result_var,
             declares_not_error,
+            call_config.returns_void,
         );
     }
 
@@ -501,6 +511,7 @@ pub(super) fn render_test_method(
             expects_error => expects_error,
             error_test_body => error_test_body,
             skip_test => fixture.assertions.is_empty(),
+            returns_void => call_config.returns_void,
             call_expr => call_expr,
             result_var => result_var,
             collect_snippet => collect_snippet,
@@ -541,13 +552,32 @@ mod vacuous_assertion_fallback_tests {
         );
     }
 
+    /// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+    /// fixture whose only assertion was `not_error` fell into the non-streaming branch and
+    /// emitted `$this->assertNotNull($result);` — but a void call's binding return is always
+    /// PHP `null` on success, so that assertion FAILED on every successful call, not just an
+    /// unsuccessful one. Worse than the vacuous body it was meant to replace.
+    #[test]
+    fn void_not_error_body_gets_a_real_assertion_that_a_successful_call_can_pass() {
+        let mut body = String::new();
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false, true);
+        assert_eq!(
+            body,
+            "        $this->assertTrue(true, 'expected the call not to throw');\n"
+        );
+        assert!(
+            !body.contains("assertNotNull"),
+            "a void call's result is always null; assertNotNull would fail every successful call, got: {body}"
+        );
+    }
+
     /// Regression test for the not_error-only vacuous-test defect: a fixture whose
     /// only assertion is `not_error` renders an empty assertions_body. The fallback
     /// must emit a real assertion, never `expectNotToPerformAssertions()`.
     #[test]
     fn not_error_only_body_gets_a_real_assertion_not_a_framework_suppression() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false, false);
         assert_eq!(body, "        $this->assertNotNull($result);\n");
         assert!(!body.contains("expectNotToPerformAssertions"));
     }
@@ -555,7 +585,7 @@ mod vacuous_assertion_fallback_tests {
     #[test]
     fn comment_only_body_also_gets_a_real_assertion() {
         let mut body = "        // skipped: field 'chunks' not available on result type\n".to_string();
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false, false);
         assert!(
             body.contains("$this->assertNotNull($result);"),
             "a comment-only body must still get a real fallback assertion, got: {body}"
@@ -568,7 +598,7 @@ mod vacuous_assertion_fallback_tests {
     #[test]
     fn streaming_not_error_body_keeps_the_line_that_marks_the_test_non_risky() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, true, false, "result", true);
+        apply_vacuous_assertion_fallback(&mut body, true, false, "result", true, false);
         assert_eq!(
             body,
             "        $this->assertTrue(is_array($chunks), 'expected drained chunks list');\n"
@@ -583,7 +613,7 @@ mod vacuous_assertion_fallback_tests {
     fn streaming_body_without_not_error_gets_no_guard_that_cannot_fail() {
         let mut body = "        // skipped: field 'x' not available on result type\n".to_string();
         let original = body.clone();
-        apply_vacuous_assertion_fallback(&mut body, true, false, "result", false);
+        apply_vacuous_assertion_fallback(&mut body, true, false, "result", false, false);
         assert_eq!(
             body, original,
             "a check that cannot fail must not be injected in place of the dropped assertions"
@@ -593,7 +623,7 @@ mod vacuous_assertion_fallback_tests {
     #[test]
     fn error_expecting_fixture_is_left_untouched() {
         let mut body = String::new();
-        apply_vacuous_assertion_fallback(&mut body, false, true, "result", false);
+        apply_vacuous_assertion_fallback(&mut body, false, true, "result", false, false);
         assert!(
             body.is_empty(),
             "error-expecting fixtures render their own error_test_body, not this fallback"
@@ -604,7 +634,7 @@ mod vacuous_assertion_fallback_tests {
     fn body_with_a_real_assertion_is_left_untouched() {
         let mut body = "        $this->assertEquals(1, $result->count);\n".to_string();
         let original = body.clone();
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false, false);
         assert_eq!(
             body, original,
             "a fixture with a real assertion must not get an extra fallback line"
@@ -622,7 +652,7 @@ mod vacuous_assertion_fallback_tests {
         let mut body = "        // skipped: field 'nonexistent_field' not available on result type\n".to_string();
         // Confirm the comment alone doesn't get treated as a real assertion.
         assert!(!has_executable_assertion(&body));
-        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false);
+        apply_vacuous_assertion_fallback(&mut body, false, false, "result", false, false);
         assert!(
             body.contains("field 'nonexistent_field' not available on result type"),
             "got: {body}"

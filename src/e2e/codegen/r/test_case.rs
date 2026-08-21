@@ -191,7 +191,18 @@ pub(super) fn render_test_case(
     // emission of `result <- {function_name}(...)` was already correct when
     // `function_name` resolved, but parsers flag a stray `result` for void
     // calls. Use `invisible(...)` to make the void contract explicit.
-    if call_config.returns_void {
+    // A `returns_void` call binds no `result`, so a fixture whose only assertion is `not_error`
+    // has nothing to assert a value against. testthat's `expect_no_error(...)` IS a real,
+    // failable expectation for exactly this shape, so wrap the call in it rather than emitting
+    // a bare `invisible(...)` beside an `expect_true(TRUE)` that can never fail. ~keep
+    let void_not_error = call_config.returns_void
+        && fixture
+            .assertions
+            .iter()
+            .any(|assertion| assertion.assertion_type == "not_error");
+    if void_not_error {
+        let _ = writeln!(out, "  expect_no_error({function_name}({final_args}))");
+    } else if call_config.returns_void {
         let _ = writeln!(out, "  invisible({function_name}({final_args}))");
     } else if result_is_simple || result_is_r_list {
         let _ = writeln!(out, "  {result_var} <- {function_name}({final_args})");
@@ -223,6 +234,7 @@ pub(super) fn render_test_case(
             result_is_simple,
             result_is_bytes,
             assert_enum_fields,
+            returns_void: call_config.returns_void,
         };
         assertions::render_assertion(out, assertion, result_var, &context);
     }
@@ -443,5 +455,81 @@ mod vacuous_assertion_fallback_tests {
             !out.contains("expect_true(!is.null(result))"),
             "a fixture with zero declared assertions must stay vacuous, got:\n{out}"
         );
+    }
+
+    /// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+    /// fixture whose only assertion was `not_error` rendered `invisible(process())` followed by
+    /// `expect_true(TRUE)` — an "assertion" that can never fail, which is the exact vacuous shape
+    /// `inert_example` exists to catch. testthat's `expect_no_error(...)` is a real, failable
+    /// expectation for this shape, so the call is wrapped in it instead.
+    #[test]
+    fn void_not_error_wraps_the_call_in_expect_no_error() {
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "prefetch_languages".to_string();
+        e2e_config.call.result_var = "result".to_string();
+        e2e_config.call.returns_void = true;
+
+        let fixture = Fixture {
+            id: "prefetch_languages".to_string(),
+            description: "test".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "not_error".to_string(),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        };
+
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut out = String::new();
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[], &[]);
+
+        assert!(
+            out.contains("expect_no_error(prefetch_languages())"),
+            "expected the void call wrapped in expect_no_error, got:\n{out}"
+        );
+        assert!(
+            !out.contains("expect_true(TRUE)"),
+            "must not emit an assertion that can never fail beside the real one, got:\n{out}"
+        );
+        assert!(
+            !out.contains("invisible("),
+            "the call must not also be emitted unasserted, got:\n{out}"
+        );
+    }
+
+    /// A void fixture with no `not_error` assertion keeps its prior `invisible(...)` emission —
+    /// wrapping every void call regardless of what it asserts would be a different, unrequested
+    /// behavior change.
+    #[test]
+    fn void_call_without_not_error_keeps_invisible() {
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "prefetch_languages".to_string();
+        e2e_config.call.result_var = "result".to_string();
+        e2e_config.call.returns_void = true;
+
+        let fixture = Fixture {
+            id: "prefetch_languages".to_string(),
+            description: "test".to_string(),
+            assertions: Vec::new(),
+            ..Fixture::default()
+        };
+
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut out = String::new();
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[], &[]);
+
+        assert!(
+            out.contains("invisible(prefetch_languages())"),
+            "expected the prior invisible(...) emission, got:\n{out}"
+        );
+        assert!(!out.contains("expect_no_error"), "got:\n{out}");
     }
 }

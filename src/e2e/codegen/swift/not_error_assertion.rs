@@ -13,8 +13,13 @@ use std::fmt::Write as FmtWrite;
 /// Emit a real assertion instead, for the cases where one is actually meaningful:
 ///
 /// - `returns_void` calls bind no `result` at all (see `test_method.rs`'s `if
-///   call_config.returns_void` branch), so there's nothing to assert on — the exception path
-///   already covers it.
+///   call_config.returns_void` branch), so there's nothing to assert *on* the way the
+///   non-void cases below do. `test_method.rs` never even reaches this function for that
+///   case — its assertion loop skips `not_error` on a void call outright and instead wraps
+///   the call itself in `XCTAssertNoThrow` (sync) or a do/catch (async), via its
+///   `void_not_error` flag, so the real check lives one level up from here. This branch
+///   stays as this function's own correct behavior in isolation — asserting on an unbound
+///   variable would not compile — not because the void case goes unchecked. ~keep
 /// - Streaming fixtures assert on the drained `chunks` array (bound by the collect snippet
 ///   before this runs) rather than the raw stream.
 /// - A bare `Optional<T>` result (`bare_result_is_option`) may legitimately be `nil` on

@@ -27,6 +27,7 @@ pub(super) fn render_assertion(
     per_call_enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
     is_streaming: bool,
+    returns_void: bool,
 ) {
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct field accesses on the result.
@@ -636,8 +637,21 @@ pub(super) fn render_assertion(
             // stays named and unreferenced, an "unused variable" warning that `mix
             // compile --warnings-as-errors` (used by downstream consumers of this
             // generator) promotes to a build failure. Emit a real, visible assertion
-            // that also consumes the variable. ~keep
-            let _ = writeln!(out, "      refute is_nil({result_var})");
+            // that also consumes the variable.
+            //
+            // `returns_void` calls are the one exception: rustler encodes a Rust `()`
+            // success payload as the Elixir atom `nil` (`TypeRef::Unit => "nil"` in
+            // `backends/rustler/gen_bindings`), so `result` is `nil` on every SUCCESSFUL
+            // void call, not just a failed one. `refute is_nil(result)` there would fail
+            // every passing call — a guaranteed-red test, worse than the vacuous check it
+            // replaced. There is nothing left to assert on a `nil` payload; the `{:ok,
+            // result} = call(...)` match above is already the real, visible `not_error`
+            // check (an `{:error, _}` return raises `MatchError`, failing the test), the
+            // same way Rust's `.expect()` and Gleam's `let assert Ok(...)` already are for
+            // their own void calls. ~keep
+            if !returns_void {
+                let _ = writeln!(out, "      refute is_nil({result_var})");
+            }
         }
         // ~keep Unreachable by construction: `expects_error` in test_case.rs is true
         // whenever any assertion is type "error", and every such fixture returns early
@@ -798,6 +812,7 @@ mod tests {
             &HashMap::new(),
             false,
             false,
+            false,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -823,6 +838,7 @@ mod tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
         );
@@ -871,6 +887,7 @@ mod tests {
             &HashMap::new(),
             false,
             false,
+            false,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -899,6 +916,7 @@ mod tests {
             &HashSet::new(),
             &HashMap::new(),
             true,
+            false,
             false,
         );
         assert!(
@@ -936,6 +954,7 @@ mod tests {
             &HashMap::new(),
             true,
             false,
+            false,
         );
         assert!(
             !out.contains("String.trim("),
@@ -967,6 +986,7 @@ mod tests {
                 &HashSet::new(),
                 &HashMap::new(),
                 true,
+                false,
                 false,
             );
             out
@@ -1004,6 +1024,7 @@ mod tests {
             &HashMap::new(),
             false,
             is_streaming,
+            false,
         );
         out
     }
@@ -1120,6 +1141,7 @@ mod tests {
             &HashMap::new(),
             false,
             false,
+            false,
         );
         assert_eq!(out, "      refute is_nil(result)\n");
     }
@@ -1148,8 +1170,44 @@ mod tests {
             &HashMap::new(),
             false,
             true,
+            false,
         );
         assert_eq!(out, "      refute is_nil(chunks)\n");
+    }
+
+    /// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+    /// fixture whose only assertion was `not_error` still fell into the `refute is_nil(result)`
+    /// branch above — but rustler encodes a Rust `()` success payload as the atom `nil`, so
+    /// that assertion FAILED on every successful call, not just an unsuccessful one. The
+    /// `{:ok, result} = call(...)` binding `test_case.rs` already emits is the real check for a
+    /// void call: an `{:error, _}` return raises `MatchError`, failing the test on its own.
+    #[test]
+    fn void_not_error_emits_nothing_relying_on_the_ok_match_above() {
+        let resolver = empty_resolver();
+        let assertion = Assertion {
+            assertion_type: "not_error".to_string(),
+            field: None,
+            value: None,
+            ..Default::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            &resolver,
+            "Sample",
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            false,
+            true,
+        );
+        assert!(
+            out.is_empty(),
+            "a void call's result is always nil; asserting non-nil would fail every successful \
+             call, got: {out}"
+        );
     }
 
     #[test]
@@ -1172,6 +1230,7 @@ mod tests {
             &HashMap::new(),
             false,
             false,
+            false,
         );
     }
 
@@ -1192,6 +1251,7 @@ mod tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
         );
@@ -1221,6 +1281,7 @@ mod tests {
             &HashMap::new(),
             false,
             false,
+            false,
         );
     }
 
@@ -1241,6 +1302,7 @@ mod tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
         );
@@ -1271,6 +1333,7 @@ mod tests {
             &HashMap::new(),
             false,
             true,
+            false,
         );
         assert_eq!(
             out.trim_end(),
@@ -1305,6 +1368,7 @@ mod tests {
             &HashMap::new(),
             false,
             true,
+            false,
         );
         assert_eq!(out, "      assert length(result) >= 1\n");
     }
@@ -1339,6 +1403,7 @@ mod wildcard_tests {
             "Sample",
             &HashSet::new(),
             &HashMap::new(),
+            false,
             false,
             false,
         );
@@ -1438,6 +1503,7 @@ mod skip_marker_tests {
             &HashMap::new(),
             false,
             true,
+            false,
         );
         out
     }
