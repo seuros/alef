@@ -114,6 +114,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kept separate from `regressions.rs` to avoid growing it past the file-modularization line
   cap) and a fourth test in `tests/backends_csharp_ffi_symbol_subset.rs` asserting the FFI
   export and the C# P/Invoke agree for a method-only-parameter data-carrying enum.
+- **The Dart FRB bridge crate's `Cargo.toml` could permanently miss a `#[cfg(feature = "X")]`
+  gate its own `lib.rs` already forwards, producing `unexpected cfg condition value` once
+  `flutter_rust_bridge_codegen` re-emitted that gate on the wire wrapper (alef #154).**
+  `codegen::cfg::merge_missing_cfg_features` -- the additive repair that backfills a missing
+  cfg-forwarded feature into an already-scaffolded, guard-refused binding manifest without a
+  full overwrite -- was wired up for Ruby (Magnus) and Elixir (Rustler) only
+  (`scaffold::repair::managed_manifests`); Dart's `packages/dart/rust/Cargo.toml` is exactly as
+  exposed to the same staleness (also `generated_header: true`, also derived from
+  `collect_cfg_features` on the same `ApiSurface` as `lib.rs`) but was never added when this
+  repair was written. Reproduced against liter-llm's actual shape: `lib.rs` already emits
+  `#[cfg(feature = "tokenizer")] pub fn count_tokens(...)` /
+  `#[cfg(feature = "tower")] pub fn record_cost_usd(...)`, forwarded there from
+  `count_tokens`/`count_request_tokens`/`record_cost_usd`'s real gates in the core crate, but the
+  committed Dart Cargo.toml never picked up `tokenizer`/`tower` because nothing ever repaired it
+  after it was first scaffolded. `managed_manifests` now also covers
+  `packages/dart/rust/Cargo.toml` (`backends::dart::gen_rust_crate::dart_native_manifest_path`).
+  Dart's forwarding rows key off the Cargo dependency-table key its own generator uses
+  (`[crates.dart] core_crate_override`, or the crate name with `-` replaced by `_` --
+  `backends::dart::gen_rust_crate::dart_core_dep_key`), which differs from Ruby/Elixir's raw,
+  unmodified crate name, so `repair_missing_cfg_binding_features` now threads a per-language
+  dependency key through `managed_manifests` instead of assuming Ruby/Elixir's convention
+  everywhere. Regression coverage: `repair_adds_missing_features_to_dart_manifest`
+  (`src/scaffold/tests/repair.rs`), asserting the forwarded rows use the underscored dependency
+  key, not the raw crate name.
+
+- **`sync-versions` (without `--regen`, the default — regenerating code is opt-in) bumped
+  `[package] version` in the Rust e2e harness manifest (`<e2e.output>/rust/Cargo.toml`,
+  `<e2e.registry.output>/rust/Cargo.toml`) but never touched the manifest's own
+  self-referential dependency pin, leaving it stuck on the pre-bump version (alef #152).**
+  `sync_rust_test_app_version`/`sync_rust_harness_cargo_toml`
+  (`src/cli/pipeline/version_workspace.rs`) called `write_version_to_cargo_toml` (patches
+  `[package] version` only) but never called `patch_workspace_dep_versions` (patches the
+  dependency pin) — unlike the sibling `packages/ruby/ext/*/native/Cargo.toml` block in
+  `version.rs`, which already pairs both calls for exactly this reason. This was initially
+  reported as a `package = "..."` rename discriminator (crawlberg 1.3.2's plain-form
+  `crawlberg = { version = "1.3.1", ... }` stayed stale while sibling releases' renamed-form
+  pins, e.g. liter-llm's `liter_llm = { package = "liter-llm", version = "...", ... }`, looked
+  correctly bumped in their committed trees) — but reproducing against crawlberg's actual
+  alef.toml and source tree showed the rename spelling was never the deciding factor: neither
+  spelling was ever patched by `sync-versions` itself; the sibling releases' pins were correct
+  only because a later, separate full regen (`alef generate`/`alef all`, which does run
+  `render_cargo_toml`) happened to land before crawlberg's did. The downstream consequence:
+  the stale requirement leaves `cargo update --offline -w` unable to resolve against the crate's
+  newly-bumped (not-yet-published) version, and `blocked_on_publish` detection — which keys off
+  the *expected* version matching the requirement — doesn't recognize the mismatch as "blocked
+  on this release," so the release gate fails with a confusing message instead of the intended
+  graceful skip. `sync_rust_harness_cargo_toml` now calls `patch_workspace_dep_versions` with
+  the crate's own name for every Rust e2e harness manifest it owns, alongside the existing
+  `[package] version` write — `patch_workspace_dep_versions`'s membership check already covers
+  both the plain form and the `package = "..."` renamed form, so one call fixes both spellings.
+  Regression coverage: `sync_versions_bumps_registry_dep_pin_with_package_rename` and
+  `sync_versions_bumps_registry_dep_pin_without_package_rename`
+  (`src/cli/pipeline/version_tests/registry_dep_pin.rs`), both run with `no_regen: true` to
+  match the real, default `sync-versions` invocation that reproduced the bug.
 
 ## [0.62.10] - 2026-08-21
 

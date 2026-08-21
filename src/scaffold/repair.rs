@@ -13,18 +13,45 @@
 //! always-safe operation instead of widening the guard: inserting a missing forwarding row is
 //! purely additive and cannot corrupt, reorder, or drop anything else already in the file, so it
 //! runs on its own write path and does not need the guard's proof of full-file authorship. ~keep
+//!
+//! `Dart` (`packages/dart/rust/Cargo.toml`, via `backends::dart::gen_rust_crate::emit`) is
+//! exactly as exposed to this same staleness as Ruby/Elixir: its manifest is also
+//! `generated_header: true` and also derives `[features]` from `collect_cfg_features` on the
+//! same `ApiSurface` used for its `lib.rs`, so a cfg-gated free function reexported into that
+//! `lib.rs` after the manifest was first scaffolded hits the identical guard-refusal gap (alef
+//! #154: liter-llm's committed `packages/dart/rust/Cargo.toml` never picked up the `tokenizer`/
+//! `tower` features `lib.rs` already forwards for `count_tokens`/`count_request_tokens`/
+//! `record_cost_usd`, producing `unexpected cfg condition value` once `frb_generated.rs`
+//! re-emits those same gates). Dart was simply never added to `managed_manifests` below when
+//! this repair was written for Ruby/Elixir; nothing about the mechanism is Ruby/Elixir-specific. ~keep
 
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use std::path::PathBuf;
 
-/// One Rust-emitting binding manifest this repair covers, paired with the language it belongs to.
-fn managed_manifests(config: &ResolvedCrateConfig) -> Vec<(Language, PathBuf)> {
+/// One Rust-emitting binding manifest this repair covers: the language it belongs to, its
+/// manifest path, and the Cargo dependency-table key its own generator uses for the core crate
+/// dependency -- the same key each `<feature> = ["{key}/<feature>"]` forwarding row must use, or
+/// the row points at a dependency-table entry the manifest does not have. Ruby and Elixir key
+/// their forwarding rows off the raw, unmodified crate name; Dart keys off `[crates.dart]
+/// core_crate_override` when configured, otherwise the crate name with `-` replaced by `_` (see
+/// `backends::dart::gen_rust_crate::dart_core_dep_key`'s doc). ~keep
+fn managed_manifests(config: &ResolvedCrateConfig) -> Vec<(Language, PathBuf, String)> {
     vec![
-        (Language::Ruby, super::ruby_native_manifest_path(config)),
+        (
+            Language::Ruby,
+            super::ruby_native_manifest_path(config),
+            config.name.clone(),
+        ),
         (
             Language::Elixir,
             PathBuf::from(super::elixir_native_crate_dir(config)).join("Cargo.toml"),
+            config.name.clone(),
+        ),
+        (
+            Language::Dart,
+            crate::backends::dart::gen_rust_crate::dart_native_manifest_path(config),
+            crate::backends::dart::gen_rust_crate::dart_core_dep_key(config),
         ),
     ]
 }
@@ -46,7 +73,7 @@ pub(crate) fn repair_missing_cfg_binding_features(
     languages: &[Language],
 ) -> Vec<PathBuf> {
     let mut repaired = Vec::new();
-    for (language, relative_manifest) in managed_manifests(config) {
+    for (language, relative_manifest, core_dep_key) in managed_manifests(config) {
         if !languages.contains(&language) {
             continue;
         }
@@ -55,7 +82,7 @@ pub(crate) fn repair_missing_cfg_binding_features(
             continue;
         };
         let core_declared_features = crate::codegen::cfg::core_crate_declared_features(config);
-        match crate::codegen::cfg::merge_missing_cfg_features(&existing, api, &config.name, &core_declared_features) {
+        match crate::codegen::cfg::merge_missing_cfg_features(&existing, api, &core_dep_key, &core_declared_features) {
             Ok(Some(patched)) => match std::fs::write(&manifest_path, &patched) {
                 Ok(()) => {
                     tracing::info!(

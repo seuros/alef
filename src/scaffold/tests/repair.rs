@@ -130,6 +130,61 @@ fn repair_adds_missing_features_to_both_ruby_and_elixir_manifests() {
     }
 }
 
+/// Same incident, but for the Dart FRB bridge crate's manifest (alef #154: liter-llm's
+/// `packages/dart/rust/Cargo.toml` never picked up `tokenizer`/`tower` after its `lib.rs`
+/// started forwarding those gates for `count_tokens`/`count_request_tokens`/`record_cost_usd`).
+/// Dart was missing from `managed_manifests` entirely -- this is the regression test for adding
+/// it back, not a duplicate of the Ruby/Elixir case above: Dart's forwarding rows key off
+/// `dart_core_dep_key` (the crate name with `-` replaced by `_`, absent a `core_crate_override`),
+/// not the raw crate name Ruby/Elixir use, so `sample-core` must forward as `sample_core/<feature>`
+/// here -- proving the per-language dependency key threaded through `managed_manifests` is
+/// actually used, not just the Ruby/Elixir default carried over unchanged.
+#[test]
+fn repair_adds_missing_features_to_dart_manifest() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ws_root = dir.path();
+    let config = sample_config(ws_root);
+    write_core_crate_manifest(ws_root);
+
+    let dart_relative = crate::backends::dart::gen_rust_crate::dart_native_manifest_path(&config);
+    let dart_manifest = write_existing_manifest(&config, &dart_relative);
+
+    let api = sample_api();
+    let repaired = repair_missing_cfg_binding_features(&api, &config, &[Language::Dart]);
+
+    assert_eq!(
+        repaired,
+        vec![dart_manifest.clone()],
+        "the Dart manifest must be reported as repaired"
+    );
+
+    let content = std::fs::read_to_string(&dart_manifest).expect("read repaired manifest");
+    assert!(
+        content.contains(r#"tokenizer = ["sample_core/tokenizer"]"#),
+        "tokenizer must be forwarded to the underscored dependency key, got:\n{content}"
+    );
+    assert!(
+        content.contains(r#"tower = ["sample_core/tower"]"#),
+        "tower must be forwarded to the underscored dependency key, got:\n{content}"
+    );
+    assert!(
+        content.contains(r#"default = ["native-http", "tokenizer", "tower"]"#),
+        "declaring a feature is not enough -- it must also be enabled by default, got:\n{content}"
+    );
+    for preserved in [
+        r#"native-http = ["sample-core/native-http"]"#,
+        r#"opendal-cache = ["sample-core/opendal-cache"]"#,
+        r#"wasm-http = ["sample-core/wasm-http"]"#,
+        "[dependencies]",
+        "magnus = \"0.7\"",
+    ] {
+        assert!(
+            content.contains(preserved),
+            "`{preserved}` must survive the repair, got:\n{content}"
+        );
+    }
+}
+
 /// A language absent from the requested set must not have its manifest touched, even though it
 /// is equally missing the feature -- scaffolding one language must never write another's files.
 #[test]
