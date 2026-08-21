@@ -75,6 +75,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RunCommand` step now strips `CARGO_MANIFEST_DIR` from the environment it spawns
   `flutter_rust_bridge_codegen` in, so alef's own invocation always takes the full, cfg-aware
   path regardless of how alef itself was launched (`src/cli/pipeline/commands/build/frb_cache.rs`).
+- **A non-empty `Vec<String>` default (`vec!["noscript"]`) failed to compile in every
+  Rust-emitting binding backend (alef #156).** `config_scalar_default`
+  (`src/codegen/config_gen/shared.rs`) rendered a `DefaultValue::StringLiteral` list element the
+  same way for every language — a bare `"noscript"` — which is a `&'static str` and does not
+  coerce to the `Vec<String>` the source field actually has, producing `E0308: mismatched types`.
+  Every caller that renders real Rust source (`default_value_for_field_in_type(field, "rust",
+  typ)`) hit this identically: Magnus/Ruby, Rustler/Elixir, NAPI/Node, and PHP. It killed every
+  `Build Ruby gem` and `Build Elixir NIF` leg of a real release. `config_scalar_default` now emits
+  `"noscript".to_string()` for `"rust"` (every other language's list literal already accepts a
+  bare element and is unchanged). `Option<String>` and `Vec<Vec<String>>` were checked and are
+  not affected: `Option<String>` literal defaults already went through a different, already-correct
+  branch, and nested list defaults already fall back to the safe empty collection rather than a
+  partial literal. `HashMap<String, String>` has no non-empty literal default path at all yet
+  (only `Empty`/`Unresolved`), so there was nothing to fix there.
 
 ## [0.62.8] - 2026-08-21
 

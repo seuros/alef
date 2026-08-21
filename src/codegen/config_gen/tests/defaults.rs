@@ -1133,3 +1133,89 @@ fn empty_default_still_renders_the_type_zero_table_go() {
 
     assert_eq!(default_value_for_field(&field, "go"), "0");
 }
+
+/// Regression for alef#156: a non-empty `Vec<String>` default (`#[serde(default =
+/// "default_tags")]` folding to `vec!["noscript"]` in the source crate) rendered its elements as
+/// bare string literals for `"rust"`. A bare literal's element type is `&'static str`, which does
+/// not coerce to `Vec<String>` — this shipped as `E0308: mismatched types` in every generated
+/// crate that renders its config constructor in real Rust (Magnus/Ruby, Rustler/Elixir, NAPI,
+/// PHP), because they all call `default_value_for_field_in_type(field, "rust", typ)`. It killed
+/// every `Build Ruby gem` and `Build Elixir NIF` leg of a real release. Every other language's
+/// collection literal already accepts a bare literal element, so this only affects `"rust"`.
+#[test]
+fn list_literal_of_strings_renders_owned_strings_for_rust() {
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::ListLiteral(vec![
+            DefaultValue::StringLiteral("noscript".to_string()),
+            DefaultValue::StringLiteral("script".to_string()),
+        ])),
+        ..make_field("tags", TypeRef::Vec(Box::new(TypeRef::String)))
+    };
+
+    assert_eq!(
+        default_value_for_field(&field, "rust"),
+        r#"vec!["noscript".to_string(), "script".to_string()]"#
+    );
+
+    // Every other language's list literal already accepts a bare element and must not gain a
+    // spurious conversion.
+    assert_eq!(default_value_for_field(&field, "python"), r#"["noscript", "script"]"#);
+    assert_eq!(default_value_for_field(&field, "ruby"), r#"["noscript", "script"]"#);
+    assert_eq!(default_value_for_field(&field, "csharp"), r#"["noscript", "script"]"#);
+    assert_eq!(default_value_for_field(&field, "php"), r#"["noscript", "script"]"#);
+    assert_eq!(
+        default_value_for_field(&field, "java"),
+        r#"List.of("noscript", "script")"#
+    );
+}
+
+/// The same fixture as `list_literal_of_strings_renders_owned_strings_for_rust`, but proving the
+/// rendered expression is real, compiling Rust rather than just the expected string — a
+/// hand-typed `assert_eq!` on the output would not have caught alef#156, since the bug was that
+/// the emitted text *looked* right (a `vec![...]` of quoted strings) while failing to type-check
+/// against `Vec<String>`. This mirrors the exact shape the Magnus/Rustler/NAPI/PHP constructors
+/// emit: `<expr>.unwrap_or(<rendered default>)` assigned into a `Vec<String>` field.
+#[test]
+fn list_literal_of_strings_compiles_against_vec_string() {
+    let field = FieldDef {
+        typed_default: Some(DefaultValue::ListLiteral(vec![
+            DefaultValue::StringLiteral("noscript".to_string()),
+            DefaultValue::StringLiteral("script".to_string()),
+        ])),
+        ..make_field("tags", TypeRef::Vec(Box::new(TypeRef::String)))
+    };
+    let rendered = default_value_for_field(&field, "rust");
+
+    let source = format!(
+        r#"
+fn build_tags(candidate: Option<Vec<String>>) -> Vec<String> {{
+    candidate.unwrap_or({rendered})
+}}
+
+fn main() {{
+    let tags = build_tags(None);
+    assert_eq!(tags, vec!["noscript".to_string(), "script".to_string()]);
+}}
+"#
+    );
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("list_literal_of_strings_compiles.rs");
+    let binary_path = directory.path().join("list-literal-of-strings-compiles-test");
+    std::fs::write(&source_path, &source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(
+        compile.status.success(),
+        "generated Vec<String> default must compile: {}\n---source---\n{source}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&binary_path)
+        .output()
+        .expect("run compiled harness");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}

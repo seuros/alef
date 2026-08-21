@@ -645,7 +645,14 @@ fn config_scalar_default(item: &DefaultValue, language: &str) -> Option<String> 
             }
             _ => b.to_string(),
         }),
-        DefaultValue::StringLiteral(s) => Some(format!("\"{}\"", s.escape_default())),
+        DefaultValue::StringLiteral(s) => Some(match language {
+            // A `Vec<String>` element must be an owned `String`, not the `&'static str` a bare
+            // string literal produces — `vec!["noscript"]` fails to type-check against
+            // `Vec<String>` (E0308). Every other language's collection literal accepts a bare
+            // string literal for its elements, so only "rust" needs the conversion. ~keep
+            "rust" => format!("\"{}\".to_string()", s.escape_default()),
+            _ => format!("\"{}\"", s.escape_default()),
+        }),
         DefaultValue::IntLiteral(i) => Some(i.to_string()),
         DefaultValue::FloatLiteral(f) => Some(f.to_string()),
         DefaultValue::ListLiteral(_)
