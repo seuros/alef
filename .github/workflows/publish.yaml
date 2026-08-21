@@ -20,7 +20,10 @@ on:
         default: false
         type: boolean
       targets:
-        description: "Comma-separated targets (empty = all). Values: crates,cli,homebrew"
+        # ~keep Empty means `crates,cli`, NOT every available target -- `homebrew` is opt-in
+        # only, because nothing in this org installs alef via brew. Name it explicitly to get a
+        # brew release. See the fallback chain on `prepare-release-metadata` below.
+        description: "Comma-separated targets (empty = crates,cli). Values: crates,cli,homebrew"
         required: false
         default: ""
         type: string
@@ -76,11 +79,20 @@ jobs:
           print("assets=" + ",".join(f"alef-{t['target']}.{t['archive_ext']}" for t in targets))
           PY
 
+      # ~keep Homebrew stays OFF by default: nothing in this org installs alef via brew, so
+      # every release was paying for a formula update, a four-way bottle matrix and a DSL merge
+      # that no consumer ever consumed. `homebrew` is deliberately still listed in
+      # `available-targets` and the four `*homebrew*` jobs below are deliberately still here --
+      # this is a default, not a removal. Re-enable a brew release by dispatching with an
+      # explicit `targets` that names it (e.g. `cli,homebrew`), which the fallback chain below
+      # honours; only the empty/automatic case is narrowed to `crates,cli`. A `release`-triggered
+      # run carries no targets at all, so the automatic path is exactly the case this narrows.
       - name: Prepare release metadata
         id: meta
         uses: xberg-io/actions/prepare-release-metadata@v1
         with:
           available-targets: crates,cli,homebrew
+          targets: ${{ inputs.targets || github.event.client_payload.targets || 'crates,cli' }}
           alef-version: main
 
   check-cratesio:
