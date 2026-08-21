@@ -7,7 +7,9 @@ use crate::core::config::ResolvedCrateConfig;
 
 use super::version_core::{patch_cargo_crates_io_version, patch_workspace_dep_versions, write_version_to_cargo_toml};
 
-/// Sync `[package] version` in every Rust e2e harness manifest alef owns.
+/// Sync `[package] version` AND the self-referential dependency pin (`<crate> = {
+/// version = "...", ... }`, with or without a `package = "..."` rename key) in every
+/// Rust e2e harness manifest alef owns.
 ///
 /// `alef e2e generate` writes the local/path-mode harness under `<e2e.output>/rust`
 /// (default `"e2e"`) and, separately, the registry-mode harness under
@@ -16,6 +18,24 @@ use super::version_core::{patch_cargo_crates_io_version, patch_workspace_dep_ver
 /// one lookup that only ever checked `e2e.registry.output`, so a consumer using the
 /// (default) local/path e2e harness had its `e2e/rust/Cargo.toml` silently skipped
 /// on every version bump. ~keep
+///
+/// `alef sync-versions` (without `--regen`) never runs `alef e2e generate`'s full
+/// `render_cargo_toml` pass — regenerating code is opt-in and deliberately gated
+/// behind `--regen` (see `SyncVersions::regen`'s doc). Without a second, explicit
+/// patch here, a plain `sync-versions` run bumped `[package] version` in this exact
+/// manifest but left its `[dependencies]` pin on the crate itself untouched — the
+/// same shape as the `packages/ruby/ext/*/native/Cargo.toml` gap below, which already
+/// pairs `write_version_to_cargo_toml` with `patch_workspace_dep_versions` for exactly
+/// this reason. `patch_workspace_dep_versions`'s membership check already covers both
+/// the plain form (`crawlberg = { version = "...", ... }`, dependency key == crate
+/// name, no `package = "..."` needed) and the renamed form (`liter_llm = { package =
+/// "liter-llm", version = "...", ... }`); this call just needed to exist. Confirmed by
+/// reproducing against crawlberg's actual alef.toml/source tree: a plain `alef
+/// sync-versions --bump patch` left `crawlberg = { version = "1.3.1", ... }` pinned to
+/// the pre-bump version while `[package] version` moved to 1.3.2, exactly the bug
+/// alef #152 reported — reachable regardless of dependency-key spelling, because
+/// nothing here ever called `patch_workspace_dep_versions` at all, in either form.
+/// ~keep
 pub(super) fn sync_rust_test_app_version(
     config: &ResolvedCrateConfig,
     version: &str,
@@ -25,23 +45,31 @@ pub(super) fn sync_rust_test_app_version(
     let Some(e2e_config) = config.e2e.as_ref() else {
         return;
     };
+    let core_member: HashSet<String> = std::iter::once(config.name.clone()).collect();
     for output_dir in [e2e_config.output.as_str(), e2e_config.registry.output.as_str()] {
-        sync_rust_harness_cargo_toml(output_dir, version, updated, any_cargo_toml_modified);
+        sync_rust_harness_cargo_toml(output_dir, version, &core_member, updated, any_cargo_toml_modified);
     }
 }
 
 fn sync_rust_harness_cargo_toml(
     output_dir: &str,
     version: &str,
+    core_member: &HashSet<String>,
     updated: &mut Vec<String>,
     any_cargo_toml_modified: &mut bool,
 ) {
     let path = Path::new(output_dir).join("rust/Cargo.toml");
-    let path_string = path.to_string_lossy().to_string();
-    if !path.exists() || write_version_to_cargo_toml(&path_string, version).is_err() {
+    if !path.exists() {
         return;
     }
-    if !updated.contains(&path_string) {
+    let path_string = path.to_string_lossy().to_string();
+    let mut changed = write_version_to_cargo_toml(&path_string, version).is_ok();
+    match patch_workspace_dep_versions(&path_string, version, core_member) {
+        Ok(true) => changed = true,
+        Ok(false) => {}
+        Err(e) => debug!("Could not patch self dep pin in {path_string}: {e}"),
+    }
+    if changed && !updated.contains(&path_string) {
         updated.push(path_string);
         *any_cargo_toml_modified = true;
     }

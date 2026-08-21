@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sync-versions` (without `--regen`, the default — regenerating code is opt-in) bumped
+  `[package] version` in the Rust e2e harness manifest (`<e2e.output>/rust/Cargo.toml`,
+  `<e2e.registry.output>/rust/Cargo.toml`) but never touched the manifest's own
+  self-referential dependency pin, leaving it stuck on the pre-bump version (alef #152).**
+  `sync_rust_test_app_version`/`sync_rust_harness_cargo_toml`
+  (`src/cli/pipeline/version_workspace.rs`) called `write_version_to_cargo_toml` (patches
+  `[package] version` only) but never called `patch_workspace_dep_versions` (patches the
+  dependency pin) — unlike the sibling `packages/ruby/ext/*/native/Cargo.toml` block in
+  `version.rs`, which already pairs both calls for exactly this reason. This was initially
+  reported as a `package = "..."` rename discriminator (crawlberg 1.3.2's plain-form
+  `crawlberg = { version = "1.3.1", ... }` stayed stale while sibling releases' renamed-form
+  pins, e.g. liter-llm's `liter_llm = { package = "liter-llm", version = "...", ... }`, looked
+  correctly bumped in their committed trees) — but reproducing against crawlberg's actual
+  alef.toml and source tree showed the rename spelling was never the deciding factor: neither
+  spelling was ever patched by `sync-versions` itself; the sibling releases' pins were correct
+  only because a later, separate full regen (`alef generate`/`alef all`, which does run
+  `render_cargo_toml`) happened to land before crawlberg's did. The downstream consequence:
+  the stale requirement leaves `cargo update --offline -w` unable to resolve against the crate's
+  newly-bumped (not-yet-published) version, and `blocked_on_publish` detection — which keys off
+  the *expected* version matching the requirement — doesn't recognize the mismatch as "blocked
+  on this release," so the release gate fails with a confusing message instead of the intended
+  graceful skip. `sync_rust_harness_cargo_toml` now calls `patch_workspace_dep_versions` with
+  the crate's own name for every Rust e2e harness manifest it owns, alongside the existing
+  `[package] version` write — `patch_workspace_dep_versions`'s membership check already covers
+  both the plain form and the `package = "..."` renamed form, so one call fixes both spellings.
+  Regression coverage: `sync_versions_bumps_registry_dep_pin_with_package_rename` and
+  `sync_versions_bumps_registry_dep_pin_without_package_rename`
+  (`src/cli/pipeline/version_tests/registry_dep_pin.rs`), both run with `no_regen: true` to
+  match the real, default `sync-versions` invocation that reproduced the bug.
+
 ## [0.62.10] - 2026-08-21
 
 ### Fixed

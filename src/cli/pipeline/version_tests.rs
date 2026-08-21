@@ -24,6 +24,8 @@ mod manifests;
 mod native_cargo_manifest;
 #[path = "version_tests/readme_regen.rs"]
 mod readme_regen;
+#[path = "version_tests/registry_dep_pin.rs"]
+mod registry_dep_pin;
 #[path = "version_tests/swift_checksum.rs"]
 mod swift_checksum;
 #[path = "version_tests/swift_placeholder.rs"]
