@@ -29,6 +29,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`sync-versions` now bumps the `[package] version` field itself in every alef-owned Cargo.toml
+  it touches, not just dependency pins.** Two manifests kept their pre-bump version after
+  `alef sync-versions --bump`: the Ruby native (Magnus) crate manifest at
+  `packages/ruby/ext/<gem>_rb/native/Cargo.toml` only ever ran `patch_workspace_dep_versions`
+  (which walks dependency tables and never touches the file's own `[package].version`), and the
+  e2e Rust harness manifest at `<e2e.output>/rust/Cargo.toml` (default `"e2e"`) was skipped
+  entirely because `sync_rust_test_app_version` only checked `e2e.registry.output` (default
+  `"test_apps"`) — a different directory used only by registry-mode e2e. Both manifests now get
+  a direct `write_version_to_cargo_toml` call against their own `[package]`/`[workspace.package]`
+  version key, which — being scoped to that key via `toml_edit` — cannot touch a dependency pin
+  whose version string coincidentally matches the old project version. Separately, the catch-all
+  rewrite guard's "skipping a stampable file that carries no alef marker" warning is now logged
+  at `debug` instead of `warn` when the refused file has no semver-shaped substring at all (e.g.
+  a workspace member using `version.workspace = true`) — refusing it changed nothing on disk
+  either way, so it was never the alarming case the warning is for.
+
 - **The publish workflow's GitHub-release guard now checks the release's *assets*, not the
   release object.** `check-github-release` passed `asset-prefix: alef-`, which the homebrew
   bottles (`alef-<version>.<bottle_tag>.bottle.tar.gz`) also match — so the v0.62.6 re-run, on a

@@ -47,6 +47,20 @@ fn catch_all_rewrite_is_permitted(path: &std::path::Path, content: &str) -> bool
     if crate::core::hash::content_has_alef_marker(content) {
         return true;
     }
+    // A refusal here changed nothing on disk if the file never had a semver-shaped
+    // substring to begin with (e.g. a Cargo.toml member using `version.workspace =
+    // true`, which has no literal version field for either the catch-all or the
+    // named-filename branches to touch). That case is expected and not worth an
+    // alarming `warn!` — only a file that actually had a rewrite candidate and got
+    // refused anyway is the surprising, worth-a-warning case. ~keep
+    if !SEMVER_RE.is_match(content) {
+        debug!(
+            path = %path.display(),
+            "version-sync: skipping a catch-all rewrite of a stampable file that carries no alef \
+             marker and no semver-shaped substring — nothing to rewrite either way"
+        );
+        return false;
+    }
     warn!(
         path = %path.display(),
         "version-sync: skipping a catch-all rewrite of a stampable file that carries no alef marker — \
@@ -201,6 +215,13 @@ pub fn sync_versions(
         let core_member: std::collections::HashSet<String> = std::iter::once(config.name.clone()).collect();
         for entry in writable.glob("packages/ruby/ext/*/native/Cargo.toml") {
             let path_str = entry.to_string_lossy().to_string();
+            // This manifest is not a workspace member, so `sync_workspace_cargo_toml_versions`
+            // never reaches it: its own `[package].version` needs the same direct write the
+            // dep-pin patch below gets, or the crate's declared version drifts from the
+            // workspace version on every bump. ~keep
+            if write_version_to_cargo_toml(&path_str, &version).is_ok() && !updated.contains(&path_str) {
+                updated.push(path_str.clone());
+            }
             match patch_workspace_dep_versions(&path_str, &version, &core_member) {
                 Ok(true) => {
                     if !updated.contains(&path_str) {

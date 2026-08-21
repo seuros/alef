@@ -7,6 +7,15 @@ use crate::core::config::ResolvedCrateConfig;
 
 use super::version_core::{patch_cargo_crates_io_version, patch_workspace_dep_versions, write_version_to_cargo_toml};
 
+/// Sync `[package] version` in every Rust e2e harness manifest alef owns.
+///
+/// `alef e2e generate` writes the local/path-mode harness under `<e2e.output>/rust`
+/// (default `"e2e"`) and, separately, the registry-mode harness under
+/// `<e2e.registry.output>/rust` (default `"test_apps"`) — two distinct directories
+/// that can both exist for the same consumer. Both were previously collapsed into
+/// one lookup that only ever checked `e2e.registry.output`, so a consumer using the
+/// (default) local/path e2e harness had its `e2e/rust/Cargo.toml` silently skipped
+/// on every version bump. ~keep
 pub(super) fn sync_rust_test_app_version(
     config: &ResolvedCrateConfig,
     version: &str,
@@ -16,7 +25,18 @@ pub(super) fn sync_rust_test_app_version(
     let Some(e2e_config) = config.e2e.as_ref() else {
         return;
     };
-    let path = Path::new(&e2e_config.registry.output).join("rust/Cargo.toml");
+    for output_dir in [e2e_config.output.as_str(), e2e_config.registry.output.as_str()] {
+        sync_rust_harness_cargo_toml(output_dir, version, updated, any_cargo_toml_modified);
+    }
+}
+
+fn sync_rust_harness_cargo_toml(
+    output_dir: &str,
+    version: &str,
+    updated: &mut Vec<String>,
+    any_cargo_toml_modified: &mut bool,
+) {
+    let path = Path::new(output_dir).join("rust/Cargo.toml");
     let path_string = path.to_string_lossy().to_string();
     if !path.exists() || write_version_to_cargo_toml(&path_string, version).is_err() {
         return;
