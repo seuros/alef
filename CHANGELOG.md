@@ -152,6 +152,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/e2e_equals_assertion_exact_no_trim.rs` (14 of the other 15 consumed backends were
   covered) — added so a future one-sided-trim regression in the Rust path is caught here instead
   of only by its own per-backend unit tests.
+- **`not_error` combined with `is_empty` emitted a presence assertion for a fixture whose
+  contract is absence (alef #165).** `render_assertion`'s `not_error` arm (shared by the
+  `node`/`typescript` and `wasm` e2e generators) unconditionally emitted
+  `expect(result).toBeDefined();` as a stand-in for "the call succeeded", even when a sibling
+  `is_empty` assertion declared the same call's success path can legitimately return nothing —
+  e.g. detecting a language from empty content, which maps Rust's `Option::None` to JS. WASM
+  (`wasm-bindgen`) maps `None` to `undefined`, so the fallback contradicted the fixture and failed
+  every run; NAPI's `None` -> `null` mapping only passed by accident, since `null !== undefined`
+  for `toBeDefined()`. `not_error` now yields to any sibling assertion instead of asserting
+  presence, so both backends derive the same, correct behavior from one code path. Regression
+  coverage: `not_error_paired_with_is_empty_does_not_assert_presence`
+  (`src/e2e/codegen/typescript/assertions.rs`).
 
 ## [0.62.8] - 2026-08-21
 

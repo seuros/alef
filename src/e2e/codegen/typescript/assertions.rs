@@ -21,6 +21,7 @@ pub(super) fn render_assertion(
     lang: &str,
     is_streaming: bool,
     returns_void: bool,
+    has_other_assertions: bool,
 ) {
     // An uncaught throw already fails the test, but the caller (`test_case.rs`)
     // only ever used a separate `has_usable_assertion` predicate to decide
@@ -41,6 +42,17 @@ pub(super) fn render_assertion(
             // `expect(callExpr()).resolves.not.toThrow()` instead, so nothing renders here.
         } else if is_streaming {
             out.push_str("    expect(chunks).toBeDefined();\n");
+        } else if has_other_assertions {
+            // `toBeDefined()` here is a stand-in for "the call succeeded", used only to
+            // avoid a vacuous test when `not_error` is the fixture's sole assertion. It is
+            // wrong whenever a sibling assertion exists: a fixture can legitimately pair
+            // `not_error` with `is_empty` on an `Option<T>`-returning call whose success
+            // path returns nothing (e.g. detecting a language from empty content ->
+            // `None`). wasm-bindgen maps `None` to JS `undefined`, so `toBeDefined()`
+            // would contradict the fixture's own `is_empty` contract and fail every time —
+            // NAPI's `None` -> `null` mapping happened to dodge this because
+            // `null !== undefined`. A sibling assertion already gives the test real,
+            // non-vacuous coverage, so this fallback only fires when nothing else will. ~keep
         } else {
             out.push_str(&format!("    expect({result_var}).toBeDefined();\n"));
         }
@@ -1029,6 +1041,7 @@ mod tests {
             "typescript",
             false,
             false,
+            false,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -1067,6 +1080,7 @@ mod tests {
             "typescript",
             false,
             false,
+            false,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -1091,6 +1105,7 @@ mod tests {
                 true,
                 &HashMap::new(),
                 lang,
+                false,
                 false,
                 false,
             );
@@ -1122,6 +1137,7 @@ mod tests {
                     true,
                     &HashMap::new(),
                     lang,
+                    false,
                     false,
                     false,
                 );
@@ -1157,6 +1173,7 @@ mod tests {
             "node",
             false,
             false,
+            false,
         );
         assert!(out.contains(".length"), "got: {out}");
     }
@@ -1175,6 +1192,7 @@ mod tests {
             &HashMap::new(),
             "node",
             true,
+            false,
             false,
         );
         assert!(!out.contains("toBeTruthy"), "got: {out}");
@@ -1197,6 +1215,7 @@ mod tests {
             "node",
             false,
             false,
+            false,
         );
         assert!(!out.contains(".trim()"), "equals must not trim either side; got: {out}");
     }
@@ -1214,6 +1233,7 @@ mod tests {
             false,
             &std::collections::HashMap::new(),
             "node",
+            false,
             false,
             false,
         );
@@ -1237,6 +1257,7 @@ mod tests {
             false,
             &std::collections::HashMap::new(),
             "node",
+            false,
             false,
             false,
         );
@@ -1270,6 +1291,7 @@ mod tests {
             "node",
             false,
             false,
+            false,
         );
         assert_eq!(out, "    expect(result).toBeDefined();\n");
     }
@@ -1289,8 +1311,50 @@ mod tests {
             "node",
             true,
             false,
+            false,
         );
         assert_eq!(out, "    expect(chunks).toBeDefined();\n");
+    }
+
+    /// Regression test for alef task #165: tslp's WASM e2e gate failed on
+    /// `error_detect_content_empty` and its extension/path siblings — fixtures whose title
+    /// says "returns null" but paired `not_error` with `is_empty` on an `Option<T>`-returning
+    /// call. `not_error` used to emit an unconditional `expect(result).toBeDefined();`
+    /// regardless of sibling assertions, which wasm-bindgen's `None` -> `undefined` mapping
+    /// genuinely fails (NAPI's `None` -> `null` mapping only passed by accident, since
+    /// `null !== undefined`). `not_error` must yield to a sibling assertion instead of
+    /// asserting presence on a call whose success path can legitimately be absent — the same
+    /// rendering path is shared by "node" and "wasm", so both must agree. ~keep
+    #[test]
+    fn not_error_paired_with_is_empty_does_not_assert_presence() {
+        for lang in ["node", "wasm"] {
+            let resolver = empty_resolver();
+            let not_error = make_assertion("not_error", None, None);
+            let is_empty = make_assertion("is_empty", None, None);
+            let mut out = String::new();
+            for assertion in [&not_error, &is_empty] {
+                render_assertion(
+                    &mut out,
+                    assertion,
+                    "result",
+                    &resolver,
+                    false,
+                    &std::collections::HashMap::new(),
+                    lang,
+                    false,
+                    false,
+                    true,
+                );
+            }
+            assert!(
+                !out.contains("toBeDefined()"),
+                "[{lang}] not_error must not assert presence alongside is_empty; got: {out}"
+            );
+            assert!(
+                out.contains("(result ?? \"\").length"),
+                "[{lang}] is_empty must still render its own nullish-safe check; got: {out}"
+            );
+        }
     }
 }
 
@@ -1323,6 +1387,7 @@ mod wildcard_tests {
             false,
             &HashMap::new(),
             "typescript",
+            false,
             false,
             false,
         );

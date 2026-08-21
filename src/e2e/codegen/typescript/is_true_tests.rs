@@ -50,6 +50,7 @@ fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
         "node",
         false,
         false,
+        false,
     );
     out
 }
