@@ -25,6 +25,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   committed, alef-processed bridge untouched
   (`src/backends/dart/templates/rust_build_rs.rs.jinja`).
 
+- **alef's own bare `flutter_rust_bridge_codegen` invocation could silently degrade to the
+  same broken output as `build.rs` (alef #140, second cause).** `flutter_rust_bridge_codegen`
+  treats the presence of `CARGO_MANIFEST_DIR` in its environment as proof it is nested inside
+  an already-running `cargo` process (Cargo sets that variable only for processes it spawns
+  itself) and, to avoid deadlocking on that process's jobserver, silently skips its
+  `cargo-expand` macro/cfg-expansion pass, falling back to a raw `syn` parse that emits a
+  binding for every `pub fn` regardless of whether its `#[cfg(feature = ...)]` gate is active
+  for the crate — this is what let a consumer's committed bridge keep missing feature-gated
+  functions across repeated `alef generate` runs. Confirmed by bisecting a real build script's
+  captured environment down to this one variable: with it present, a bare, non-nested
+  invocation reproduces the degraded output; without it, the same invocation runs a real
+  `cargo-expand` and correctly includes/excludes feature-gated functions. alef's post-build
+  `RunCommand` step now strips `CARGO_MANIFEST_DIR` from the environment it spawns
+  `flutter_rust_bridge_codegen` in, so alef's own invocation always takes the full, cfg-aware
+  path regardless of how alef itself was launched (`src/cli/pipeline/commands/build/frb_cache.rs`).
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed
