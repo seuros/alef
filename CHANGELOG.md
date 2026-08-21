@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated Java no longer carries a dead `import java.util.List;`.** `ffi_imports.jinja`'s
+  import gate decides whether to emit the import by substring-matching `body.contains("List<")`,
+  which fires identically on a genuine bare `List<...>` and on an already-qualified
+  `java.util.List<...>`. The visitor-cleanup failure aggregator spelled its own declaration
+  fully qualified, so a main class whose only function is visitor-bridged tripped the gate on
+  text that never uses the import — and checkstyle's `UnusedImports` flagged it, failing 283
+  snippet checks in a consumer. The three affected templates now declare `cleanupFailures` as a
+  bare `List<Throwable>`, matching the convention `opaque_handle_header.jinja` already used, so
+  the gate and the body agree.
+
+- **A generated Kotlin test file no longer imports `assertNotNull` when nothing spells it.**
+  The import was written unconditionally, but only `not_error`'s non-streaming branch emits that
+  identifier — the streaming branch asserts on the drained `chunks` list via `assertTrue`. Files
+  with no `not_error` fixture, or only streaming ones, got an import they never used.
+
+- **A docs-stage failure no longer blames the ownership guard for unrelated refusals.** The error
+  context fired whenever *any* write anywhere in the run was refused, so a refused scaffold or
+  README write attached an "ownership guard" excuse to a validation failure it had nothing to do
+  with — wrong attribution that sent investigators chasing the guard for a plain checkstyle
+  defect. It now fires only on refusals inside the crate's `docs.snippets` roots, matching the
+  `Ok` arm.
+
 - **A `not_error` assertion on a call that returns void no longer renders a test body that
   asserts nothing.** This is the void half of the vacuous-`not_error` defect whose non-void half
   was closed in `dc8f5ff75`: with no result value to assert on, nine backends either rendered an

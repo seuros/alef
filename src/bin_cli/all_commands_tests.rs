@@ -235,6 +235,37 @@ fn all_correlates_a_docs_stage_failure_with_pending_write_refusals() {
     );
 }
 
+/// Regression: the docs-stage `Err` arm used to blame "the ownership guard" whenever
+/// `refusals.refused_count() > 0` -- the count of *every* write refused anywhere in the run,
+/// including scaffold/README writes with no relationship to `docs.snippets` roots. A run with
+/// one unrelated refusal elsewhere would then misattribute an unrelated snippet-validation
+/// failure (a genuine checkstyle/compiler defect in freshly generated content) to the ownership
+/// guard, sending an investigator chasing a refusal that never touched the failing snippet. The
+/// `Ok` arm already scopes its correlation to `refused_snippet_dir_paths`; the `Err` arm must use
+/// that same scoped set, not the run-wide count. ~keep
+#[test]
+fn all_scopes_the_docs_stage_failure_blame_to_snippet_dir_refusals_not_the_run_wide_count() {
+    let source = include_str!("all_commands.rs");
+    let err_arm_start = source
+        .find("Err(error) => {")
+        .expect("the docs-stage match must have an Err arm");
+    let err_arm = &source[err_arm_start..];
+
+    assert!(
+        !err_arm[..2000.min(err_arm.len())].contains("refusals.refused_count() > 0"),
+        "the docs-stage Err arm must not gate its ownership-guard blame on the run-wide \
+         `refusals.refused_count()` -- that blames refusals with no relationship to the snippet \
+         tree that actually failed validation"
+    );
+    assert!(
+        err_arm[..2000.min(err_arm.len())].contains("!snippet_refusals.is_empty()"),
+        "the docs-stage Err arm must gate its ownership-guard blame on `snippet_refusals` -- the \
+         same `docs.snippets`-scoped set the Ok arm above it already consults via \
+         `refused_snippet_dir_paths` -- so a validation failure and a validation pass attribute \
+         refusals identically"
+    );
+}
+
 #[test]
 fn snippet_validation_needs_build_artifacts_is_true_only_for_toolchain_levels() {
     assert!(snippet_validation_needs_build_artifacts(Some("typecheck")));
