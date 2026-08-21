@@ -36,6 +36,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `backends_csharp_native_method_declaration_coverage` checks only the opposite direction
   (every call site has a declaration), so a declared-but-uncalled extern passed it trivially.
 
+- **The C FFI backend never exported `{prefix}_{enum}_from_json` for a data-carrying enum
+  reached only through a method parameter, the mirror image of the C# bug fixed above.**
+  `enum_pointer_param` in `src/backends/ffi/gen_bindings/lib_rs.rs`, which decides which enums
+  need a `_from_json`/`_free` companion pair, was built solely from `api.functions[].params`.
+  Its sibling `enum_pointer_return` already walked free-function returns, method returns, and
+  struct fields, but the param-side set never walked `TypeDef::methods[].params`. An enum
+  passed only as a method parameter (never a free-function parameter) got no `_from_json`
+  export, even though the C# backend already declares the DllImport for any `has_serde`
+  parameter-position enum regardless of whether a free function or a method carries it — a
+  live `EntryPointNotFoundException`. `enum_pointer_param` now walks method parameters too,
+  guarded by the same `scalar_c_abi_named_types` exclusion so fieldless `Copy` enums stay
+  correctly omitted (confirmed by extending
+  `tests/backends_csharp_ffi_symbol_subset.rs` with a data-carrying, method-only-parameter
+  fixture alongside the existing scalar one).
+
+  Regression coverage: `src/backends/ffi/gen_bindings/tests/method_param_enums.rs` (new file,
+  kept separate from `regressions.rs` to avoid growing it past the file-modularization line
+  cap) and a fourth test in `tests/backends_csharp_ffi_symbol_subset.rs` asserting the FFI
+  export and the C# P/Invoke agree for a method-only-parameter data-carrying enum.
+
 ## [0.62.10] - 2026-08-21
 
 ### Fixed
