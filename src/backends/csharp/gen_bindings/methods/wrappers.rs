@@ -1289,27 +1289,39 @@ mod tests {
         );
     }
 
-    /// Control: a fieldless-only enum return is left exactly as it was — `enum_data_variant_names`
-    /// does not contain it, so it keeps taking the direct-`nativeResult` branch. This is not
-    /// asserted to be *correct* (see the residual noted in the task report — fieldless-enum
-    /// returns are unverified against the FFI crate's actual ABI) but it proves the fix is scoped
-    /// to data-carrying enums only and does not change behavior for the fieldless case. ~keep
+    /// Regression for alef task #155: `liter-llm` v1.17.3's real `RefreshOutcome` is
+    /// fieldless-only (`Disabled`, `FromCache`, `Fetched`), not the data-carrying fixture the
+    /// tests above use. `gen_owned_value_to_c` in the FFI crate has no fieldless-vs-data-carrying
+    /// branch for owned return conversion — *every* enum return boxes as `AlefHandle` — so a
+    /// fieldless-only enum needs the exact same `{Pascal}ToJson`/`{Pascal}Free` round trip. Before
+    /// this fix, `enum_names_with_data_variants` (`marshalling.rs`) excluded fieldless enums from
+    /// `enum_data_variant_names`, so this case fell through to the direct-`nativeResult`
+    /// `Marshal.PtrToStringUTF8` branch and produced the exact `ulong`-to-`nint` CS1503 the bug
+    /// report measured. ~keep
     #[test]
-    fn fieldless_only_enum_return_keeps_the_pre_fix_direct_pointer_shape() {
+    fn fieldless_only_enum_return_now_uses_the_to_json_round_trip() {
         let enum_names: HashSet<String> = ["Status".to_string()].into_iter().collect();
         let func = func_returning("get_status", TypeRef::Named("Status".into()));
+        // Mirrors the post-fix `enum_names_with_data_variants`, which no longer filters by
+        // variant shape: it now equals `enum_names` for every real enum.
+        let enum_data_variant_names = enum_names.clone();
 
-        let body = wrap_enum(&func, &enum_names, &HashSet::new());
+        let body = wrap_enum(&func, &enum_names, &enum_data_variant_names);
 
         assert!(
-            body.contains("Marshal.PtrToStringUTF8(nativeResult)"),
-            "a fieldless-only enum return must keep its pre-existing direct-pointer shape \
-             unchanged by this fix:\n{body}"
+            body.contains("NativeMethods.StatusToJson(nativeResult)"),
+            "a fieldless-only enum return must exchange the handle for JSON via the ToJson \
+             companion, matching a data-carrying enum return:\n{body}"
         );
         assert!(
-            !body.contains("StatusToJson"),
-            "a fieldless-only enum return must not gain a ToJson round trip it did not have \
-             before:\n{body}"
+            body.contains("NativeMethods.StatusFree(nativeResult)"),
+            "a fieldless-only enum return must free the handle after extracting JSON:\n{body}"
+        );
+        assert!(
+            !body.contains("Marshal.PtrToStringUTF8(nativeResult)"),
+            "a fieldless-only enum return must never pass the `ulong` handle `nativeResult` \
+             straight to `Marshal.PtrToStringUTF8` (expects `nint`) — that is the CS1503 \
+             defect:\n{body}"
         );
     }
 }

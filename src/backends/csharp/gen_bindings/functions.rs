@@ -24,12 +24,11 @@ fn ffi_handle_type_names(api: &ApiSurface) -> HashSet<&str> {
         .filter(|typ| !typ.is_trait)
         .map(|typ| typ.name.as_str())
         .collect();
-    names.extend(
-        api.enums
-            .iter()
-            .filter(|enum_def| enum_def.variants.iter().any(|variant| !variant.fields.is_empty()))
-            .map(|enum_def| enum_def.name.as_str()),
-    );
+    // Every enum boxes as `AlefHandle` on return, fieldless or data-carrying alike — see
+    // `enum_names_with_data_variants` in `marshalling.rs` for the FFI-side evidence. Filtering
+    // this by variant shape (as a prior revision did) silently dropped the `{Pascal}ToJson`/
+    // `{Pascal}Free` P/Invoke declarations for fieldless-only enum returns. ~keep
+    names.extend(api.enums.iter().map(|enum_def| enum_def.name.as_str()));
     names
 }
 
@@ -174,13 +173,15 @@ pub(super) fn gen_native_methods(
         }
     }
     // Enum-named returns are NOT excluded at insertion time below (in any of the three sites
-    // that feed `opaque_return_types`): a data-carrying enum boxes as `AlefHandle` exactly like
-    // a struct (`gen_owned_value_to_c` in the FFI crate has no enum-ness branch for owned return
-    // conversion) and needs the same `{Pascal}ToJson`/`{Pascal}Free` P/Invoke declarations. The
+    // that feed `opaque_return_types`): every enum boxes as `AlefHandle` exactly like a struct
+    // (`gen_owned_value_to_c` in the FFI crate has no enum-ness branch for owned return
+    // conversion, and no fieldless-vs-data-carrying branch either) and needs the same
+    // `{Pascal}ToJson`/`{Pascal}Free` P/Invoke declarations. The
     // `retain(|name| ffi_handle_type_names.contains(name))` below is the single place that keeps
-    // only genuine handle types (structs plus data-carrying enums, per `ffi_handle_type_names`)
-    // and drops fieldless-only enums — blanket-excluding all enums here too made that retain
-    // step a no-op for data-carrying enum returns, which is the CS1503/CS0117 root cause. ~keep
+    // only genuine handle types (structs plus every enum, per `ffi_handle_type_names`) — it must
+    // not filter enums by variant shape, since that previously dropped these declarations for
+    // fieldless-only enum returns (e.g. `RefreshOutcome` in `liter-llm`), which is the CS1503
+    // root cause. ~keep
     for func in api.functions.iter().filter(|f| !exclude_functions.contains(&f.name)) {
         for param in &func.params {
             if let TypeRef::Named(name) = &param.ty {
@@ -895,8 +896,12 @@ mod tests {
         );
     }
 
+    /// Traits are excluded (no C ABI handle for a vtable-only type); every enum is included
+    /// regardless of variant shape, fieldless (`NodeKind`) or data-carrying (`CrawlEvent`) alike
+    /// — see `ffi_handle_type_names`'s doc comment for why filtering enums by variant shape was
+    /// the CS1503 root cause for `liter-llm`'s fieldless-only `RefreshOutcome`. ~keep
     #[test]
-    fn ffi_handle_types_exclude_traits_and_enums() {
+    fn ffi_handle_types_exclude_traits_but_include_every_enum() {
         let api = ApiSurface {
             types: vec![type_def("RenderOptions", false), type_def("MarkupVisitor", true)],
             enums: vec![
@@ -921,7 +926,10 @@ mod tests {
 
         assert!(names.contains("RenderOptions"));
         assert!(!names.contains("MarkupVisitor"));
-        assert!(!names.contains("NodeKind"));
+        assert!(
+            names.contains("NodeKind"),
+            "a fieldless-only enum return must still get its ToJson/Free P/Invoke declarations"
+        );
         assert!(names.contains("CrawlEvent"));
     }
 
@@ -992,6 +1000,84 @@ mod tests {
             native_methods.contains("internal static extern void RefreshOutcomeFree(ulong ptr);"),
             "a data-carrying enum return must get a Free P/Invoke declaration, matching a \
              plain data struct return:\n{native_methods}"
+        );
+    }
+
+    /// Regression for alef task #155: `liter-llm` v1.17.3's real `RefreshOutcome` is a
+    /// *fieldless-only* enum (`Disabled`, `FromCache`, `Fetched` — no variant carries data), not
+    /// the data-carrying fixture the earlier `data_carrying_enum_return_gets_to_json_and_free_
+    /// pinvoke_declarations` test used. The FFI crate's `enum_pointer_return`/`gen_enum_to_json`
+    /// (`backends::ffi::gen_bindings::lib_rs`) gate `_to_json`/`_free` emission on "is this enum
+    /// ever returned by value" and `has_serde`, never on variant shape, so
+    /// `literllm_refresh_outcome_to_json`/`literllm_refresh_outcome_free` exist in the real FFI
+    /// header regardless. Filtering `ffi_handle_type_names` by variant shape (the pre-fix
+    /// behavior) silently dropped these C# P/Invoke declarations for the fieldless case, which is
+    /// exactly what shipped broken. ~keep
+    #[test]
+    fn fieldless_enum_return_gets_to_json_and_free_pinvoke_declarations() {
+        use crate::core::ir::{FunctionDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        let api = ApiSurface {
+            crate_name: "sample".to_string(),
+            enums: vec![EnumDef {
+                name: "RefreshOutcome".to_string(),
+                has_serde: true,
+                variants: vec![
+                    EnumVariant {
+                        name: "Disabled".to_string(),
+                        ..EnumVariant::default()
+                    },
+                    EnumVariant {
+                        name: "FromCache".to_string(),
+                        ..EnumVariant::default()
+                    },
+                    EnumVariant {
+                        name: "Fetched".to_string(),
+                        ..EnumVariant::default()
+                    },
+                ],
+                ..EnumDef::default()
+            }],
+            functions: vec![FunctionDef {
+                name: "refresh_catalog".to_string(),
+                rust_path: "sample::refresh_catalog".to_string(),
+                is_async: true,
+                return_type: TypeRef::Named("RefreshOutcome".to_string()),
+                ..FunctionDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+
+        let native_methods = super::gen_native_methods(
+            &api,
+            "Sample",
+            "sample",
+            "sample",
+            &HashSet::new(),
+            &HashSet::new(),
+            false,
+            &[],
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &[],
+            &HashMap::new(),
+        )
+        .expect("no trait bridges configured, so generation cannot fail");
+
+        assert!(
+            native_methods.contains("internal static extern ulong RefreshCatalog();"),
+            "a fieldless enum-returning function must declare the scalar AlefHandle, not IntPtr:\n{native_methods}"
+        );
+        assert!(
+            native_methods.contains("internal static extern IntPtr RefreshOutcomeToJson(ulong ptr);"),
+            "a fieldless-only enum return must still get a ToJson P/Invoke declaration:\n{native_methods}"
+        );
+        assert!(
+            native_methods.contains("internal static extern void RefreshOutcomeFree(ulong ptr);"),
+            "a fieldless-only enum return must still get a Free P/Invoke declaration:\n{native_methods}"
         );
     }
 
@@ -1361,17 +1447,20 @@ mod handle_predicate_agreement_tests {
     use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, TypeDef};
     use std::collections::HashSet;
 
-    /// AGREEMENT GUARD. "Which enums box as an `AlefHandle`" is one fact, and after the CS1503 fix
-    /// it is derived in two places that never meet: `ffi_handle_type_names` here decides which
-    /// names survive into `opaque_return_types` (and therefore which `{Pascal}ToJson`/`{Pascal}Free`
-    /// P/Invoke declarations are *emitted*), while `enum_names_with_data_variants` in
-    /// `marshalling.rs` decides which returns `errors.rs` routes *through* that round trip. Each
-    /// half is well-formed on its own, so a divergence produces no local failure — it produces C#
-    /// that calls a `NativeMethods` member nobody declared (CS0117), which is exactly the
-    /// half-landed state this fix was warned not to leave behind. Comparing them is the only thing
-    /// that can see it. If this fails, change both predicates or neither. ~keep
+    /// AGREEMENT GUARD. "Which enums box as an `AlefHandle`" is one fact, and it is derived in
+    /// two places that never meet: `ffi_handle_type_names` here decides which names survive into
+    /// `opaque_return_types` (and therefore which `{Pascal}ToJson`/`{Pascal}Free` P/Invoke
+    /// declarations are *emitted*), while `enum_names_with_data_variants` in `marshalling.rs`
+    /// decides which returns `errors.rs` routes *through* that round trip. Each half is
+    /// well-formed on its own, so a divergence produces no local failure — it produces C# that
+    /// calls a `NativeMethods` member nobody declared (CS0117), which is exactly the half-landed
+    /// state a prior fix (which filtered both predicates by variant shape) left behind for
+    /// fieldless-only enums such as `liter-llm`'s `RefreshOutcome` (alef task #155). Both
+    /// predicates now agree that *every* enum boxes as a handle, fieldless or data-carrying
+    /// alike — comparing them is the only thing that can catch a future re-divergence. If this
+    /// fails, change both predicates or neither. ~keep
     #[test]
-    fn the_two_data_carrying_enum_predicates_select_the_same_enums() {
+    fn the_two_enum_handle_predicates_select_the_same_enums() {
         let api = ApiSurface {
             crate_name: "sample".to_string(),
             types: vec![
@@ -1441,8 +1530,9 @@ mod handle_predicate_agreement_tests {
              two empty sets and proves nothing: {declared:?}"
         );
         assert!(
-            !declared.contains("NodeKind"),
-            "a fieldless-only enum must be in neither set: {declared:?}"
+            declared.contains("NodeKind"),
+            "a fieldless-only enum must be in both sets too — it boxes as `AlefHandle` exactly \
+             like a data-carrying enum: {declared:?}"
         );
         assert!(
             declared.contains("GraphQLOutcome") && !declared.contains("GraphQlOutcome"),

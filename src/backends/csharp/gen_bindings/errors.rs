@@ -107,13 +107,18 @@ pub(super) fn emit_return_marshalling_indented(
                 minijinja::context! { indent, pascal },
             ));
         } else if !enum_names.contains(&pascal) || enum_data_variant_names.contains(&pascal) {
-            // A data struct, or a data-carrying enum, is boxed by `insert_handle` exactly like
-            // any other `Named` return (`gen_owned_value_to_c` in the FFI crate has no
-            // enum-ness branch for owned conversion) — so `nativeResult` here is the
-            // `AlefHandle` scalar, not a pointer, and must be exchanged for the JSON string via
-            // the `{Pascal}ToJson` companion before it can be freed and deserialised. Passing
-            // `nativeResult` straight to `Marshal.PtrToStringUTF8` (the `else` branch below) is
-            // the CS1503 `ulong`-to-`nint` defect this condition exists to avoid. ~keep
+            // A data struct, or *any* enum (fieldless or data-carrying), is boxed by
+            // `insert_handle` exactly like any other `Named` return (`gen_owned_value_to_c` in
+            // the FFI crate has no enum-ness branch, and no fieldless-vs-data-carrying branch
+            // either, for owned conversion) — so `nativeResult` here is the `AlefHandle` scalar,
+            // not a pointer, and must be exchanged for the JSON string via the `{Pascal}ToJson`
+            // companion before it can be freed and deserialised. Passing `nativeResult` straight
+            // to `Marshal.PtrToStringUTF8` (the `else` branch below) is the CS1503
+            // `ulong`-to-`nint` defect this condition exists to avoid. `enum_data_variant_names`
+            // (see `enum_names_with_data_variants` in `marshalling.rs`) now covers every enum
+            // name, not just data-carrying ones, so this branch is always taken for a genuine
+            // enum return and the `else` below is unreachable for enums — kept only as a
+            // structural fallback, not because a live case still needs it. ~keep
             let to_json_method = format!("{pascal}ToJson");
             let free_method = format!("{pascal}Free");
             let cs_ty = csharp_type(return_type);
