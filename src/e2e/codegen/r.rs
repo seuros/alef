@@ -2,6 +2,7 @@
 
 mod args;
 mod assertions;
+mod not_error_assertion;
 mod project;
 mod stubs;
 mod test_case;

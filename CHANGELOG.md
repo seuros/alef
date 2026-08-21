@@ -74,23 +74,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus `let assert Ok(…)`, `.expect("call failed")`, Zig's `try`, and `expect { … }.not_to
   raise_error` respectively — so a wrapper there would be redundant, not missing.
 
-- **C e2e `returns_void` calls no longer discard the FFI status code.** `render_snippet_body`'s
-  void branch returned before `expects_error` was even computed, so a `returns_void`-configured
-  fixture skipped its whole assertion pipeline — `error` assertions as well as `not_error`. Worse,
-  the export is not actually void whenever the underlying Rust call is fallible:
-  `has_error && is_void_return` in `backends::ffi::orchestration` gives it a C ABI of
-  `int32_t fn(...)` (`0` success, `-1` failure), and that status was being called and thrown away.
-  The void snippet path now consults the core IR's `FunctionDef`/`MethodDef::error_type` (new
-  `IrSignature::error_type` in `call_ir.rs`) to tell a genuinely void export apart from a fallible
-  one, and for the fallible case captures the status into a typed `int32_t` and asserts it —
-  `!= 0` for a declared `error`, `== 0` otherwise (new `c/void_call_status.rs`,
-  `c/snippet_status_call.jinja`). A genuinely void (infallible) call keeps its prior bare-call
-  rendering unchanged.
-
-  Also audited: neither the C nor the Zig e2e backend calls `inert_example::inert_verdict` at
-  all, unlike csharp, typescript, kotlin, java, php, swift, and ruby — the vacuous-assertion net
-  does not cover either backend's generated tests. Flagged for separate follow-up; out of scope
-  for this fix.
+- **R's non-void `not_error` no longer emits `expect_true(TRUE)`**, an expectation that can
+  never fail. The obvious fix, `expect_true(!is.null(result))`, is itself unsafe for a
+  `result_is_simple` extendr scalar return or a bare `result_is_option` (`Option<T>`) result:
+  `Result<Option<T>, E>::Ok(None)` is a successful call whose result is legitimately R
+  `NULL`/`NA`, and asserting non-null there would fail correct behaviour (the same trap Swift's
+  `bare_result_is_option` documents). For those two shapes the real, failable check now moves to
+  the call site instead: `r/test_case.rs` wraps the fallible call itself in testthat's
+  `expect_no_error(...)`, verified to both propagate the call's return value on success and to
+  fail the test when the call raises. Every other result shape gets a real
+  `expect_true(!is.null(result))` check. New `r/not_error_assertion.rs` holds the shape decision
+  and its regression coverage, split out of the already-oversized `r/assertions.rs`.
 
 ### Changed
 

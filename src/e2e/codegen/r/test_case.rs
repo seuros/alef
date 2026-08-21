@@ -8,7 +8,7 @@ use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use std::fmt::Write as FmtWrite;
 
-use super::{args, assertions, visitor};
+use super::{args, assertions, not_error_assertion, visitor};
 
 /// Render the R `expect_error(...)`/`tryCatch` block for an `error`-asserting test.
 ///
@@ -101,6 +101,7 @@ pub(super) fn render_test_case(
     } else {
         default_result_is_r_list
     };
+    let result_is_option = call_config.result_is_option || r_override.is_some_and(|o| o.result_is_option);
 
     let test_name = sanitize_ident(&fixture.id);
     let description = fixture.description.replace('"', "\\\"");
@@ -195,17 +196,37 @@ pub(super) fn render_test_case(
     // has nothing to assert a value against. testthat's `expect_no_error(...)` IS a real,
     // failable expectation for exactly this shape, so wrap the call in it rather than emitting
     // a bare `invisible(...)` beside an `expect_true(TRUE)` that can never fail. ~keep
-    let void_not_error = call_config.returns_void
-        && fixture
-            .assertions
-            .iter()
-            .any(|assertion| assertion.assertion_type == "not_error");
+    let has_not_error_assertion = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "not_error");
+    let void_not_error = call_config.returns_void && has_not_error_assertion;
+    // A `result_is_simple`/`result_is_option` result may legitimately be R `NULL`/`NA` on a
+    // *successful* call (`Result<Option<T>, E>::Ok(None)` is not an error), so `not_error`
+    // cannot assert non-null on it the way the ordinary-shape case does -- see
+    // `not_error_assertion`'s module doc. The real, failable check moves here instead: wrap
+    // the call itself in `expect_no_error(...)`, exactly like the void case above, rather than
+    // asserting on a value whose emptiness is sometimes the correct outcome. Still binds
+    // `result_var` (unlike the void case), since other assertions on the same fixture may
+    // still need it. ~keep
+    let option_not_error = !call_config.returns_void
+        && not_error_assertion::unsafe_for_null_check(result_is_simple, result_is_option)
+        && has_not_error_assertion;
     if void_not_error {
         let _ = writeln!(out, "  expect_no_error({function_name}({final_args}))");
     } else if call_config.returns_void {
         let _ = writeln!(out, "  invisible({function_name}({final_args}))");
     } else if result_is_simple || result_is_r_list {
-        let _ = writeln!(out, "  {result_var} <- {function_name}({final_args})");
+        if option_not_error {
+            let _ = writeln!(out, "  {result_var} <- expect_no_error({function_name}({final_args}))");
+        } else {
+            let _ = writeln!(out, "  {result_var} <- {function_name}({final_args})");
+        }
+    } else if option_not_error {
+        let _ = writeln!(
+            out,
+            "  {result_var} <- jsonlite::fromJSON(expect_no_error({function_name}({final_args})), simplifyVector = FALSE)"
+        );
     } else {
         let _ = writeln!(
             out,
@@ -235,6 +256,7 @@ pub(super) fn render_test_case(
             result_is_bytes,
             assert_enum_fields,
             returns_void: call_config.returns_void,
+            result_is_option,
         };
         assertions::render_assertion(out, assertion, result_var, &context);
     }
@@ -244,6 +266,7 @@ pub(super) fn render_test_case(
         !fixture.assertions.is_empty(),
         call_config.returns_void,
         result_var,
+        option_not_error,
     );
     crate::e2e::codegen::fail_on_unavailable_field_markers(
         &out[assertions_start..],
@@ -265,23 +288,32 @@ pub(super) fn render_test_case(
 /// executable statement — every field assertion resolved to a "skipped: ..."
 /// comment because the field is unavailable on the result type — inject a
 /// real assertion instead of leaving the test vacuous. `not_error` already
-/// renders a real `expect_true(TRUE)` on its own (see
-/// `assertions::render_assertion`'s `not_error` arm), so this only fires on
-/// the remaining gap: declared field assertions that all turned out
-/// unavailable. Fixtures that declare NO assertions at all are left
-/// untouched — a deliberate "just call it" smoke test, matching every other
-/// backend in this defect class (mirrors typescript's
-/// `apply_vacuous_assertion_fallback`). `returns_void` calls never bind
-/// `result_var` (see the `invisible(...)` branch above), so this must never
-/// fire for them — referencing an unbound variable would not compile. ~keep
+/// renders a real `expect_true(!is.null(...))` on its own for ordinary result
+/// shapes (see `not_error_assertion::render`), so this only fires on the
+/// remaining gap: declared field assertions that all turned out unavailable.
+/// Fixtures that declare NO assertions at all are left untouched — a
+/// deliberate "just call it" smoke test, matching every other backend in this
+/// defect class (mirrors typescript's `apply_vacuous_assertion_fallback`).
+/// `returns_void` calls never bind `result_var` (see the `invisible(...)`
+/// branch above), so this must never fire for them — referencing an unbound
+/// variable would not compile. ~keep
+///
+/// `option_not_error` must also suppress this fallback: when it is `true`, the call site
+/// already wrapped the call in `expect_no_error(...)` as `not_error`'s real check for a
+/// `result_is_simple`/`result_is_option` shape, and that assertion renders nothing in the
+/// per-assertion loop by design (see `not_error_assertion::render`). Without this guard the
+/// fallback would see an all-blank rendered body and re-inject the exact unsafe
+/// `expect_true(!is.null(result))` check `not_error_assertion` exists to avoid for that
+/// shape, undoing the fix one call frame up. ~keep
 fn apply_vacuous_assertion_fallback(
     out: &mut String,
     assertions_start: usize,
     has_declared_assertions: bool,
     returns_void: bool,
     result_var: &str,
+    option_not_error: bool,
 ) {
-    if returns_void || !has_declared_assertions {
+    if returns_void || !has_declared_assertions || option_not_error {
         return;
     }
     let has_real_assertion = out[assertions_start..]
@@ -498,6 +530,56 @@ mod vacuous_assertion_fallback_tests {
         assert!(
             !out.contains("invisible("),
             "the call must not also be emitted unasserted, got:\n{out}"
+        );
+    }
+
+    /// Regression test for issue #122: before this fix, a non-void fixture whose only
+    /// assertion was `not_error` rendered a bare `expect_true(TRUE)` -- a testthat
+    /// expectation that can never fail, the same vacuous shape the void case above was
+    /// already fixed for. The obvious replacement (`expect_true(!is.null(result))`) is
+    /// itself unsafe for a `result_is_option` call: `Result<Option<T>, E>::Ok(None)` is a
+    /// successful call whose result is legitimately R `NULL`, so a non-null check would
+    /// reject correct behaviour. The real, failable check must move to the call site
+    /// instead (`expect_no_error(...)` around the fallible call), the same pattern already
+    /// used for `returns_void`.
+    #[test]
+    fn option_not_error_wraps_the_call_in_expect_no_error_instead_of_a_false_null_check() {
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.function = "get_embedding_preset".to_string();
+        e2e_config.call.result_var = "result".to_string();
+        e2e_config.call.result_is_option = true;
+
+        let fixture = Fixture {
+            id: "get_embedding_preset_missing".to_string(),
+            description: "test".to_string(),
+            assertions: vec![Assertion {
+                assertion_type: "not_error".to_string(),
+                ..Assertion::default()
+            }],
+            ..Fixture::default()
+        };
+
+        let config = ResolvedCrateConfig {
+            name: "sample".into(),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let mut out = String::new();
+        render_test_case(&mut out, &fixture, &e2e_config, false, false, &config, &[], &[]);
+
+        assert!(
+            out.contains(
+                "result <- jsonlite::fromJSON(expect_no_error(get_embedding_preset()), simplifyVector = FALSE)"
+            ),
+            "expected the fallible call wrapped in expect_no_error while still binding result, got:\n{out}"
+        );
+        assert!(
+            !out.contains("expect_true(TRUE)"),
+            "must not emit an assertion that can never fail, got:\n{out}"
+        );
+        assert!(
+            !out.contains("!is.null(result)"),
+            "must not assert non-null on a result that may legitimately be NULL on success, got:\n{out}"
         );
     }
 
