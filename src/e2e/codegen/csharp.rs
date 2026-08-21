@@ -1159,6 +1159,8 @@ pub use stubs::emit_test_backend;
 #[cfg(test)]
 mod assertion_indentation_layout_tests;
 #[cfg(test)]
+mod collection_is_empty_tests;
+#[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
 mod fact_attribute_layout_tests;

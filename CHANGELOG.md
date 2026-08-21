@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `csharp.rs`) and skips the presence fallback whenever a sibling assertion already gives the
   test real coverage. Regression coverage:
   `csharp/not_error_presence_guard_tests.rs`.
+- **C# `is_empty` on a `List<T>` field fell back to a `ToString()`-based emptiness check that
+  could never pass.** `field_needs_json_serialize` (`csharp/assertions.rs`) only checked
+  `field_resolver.is_array(f)`, missing a collection field whose entries are tracked only via
+  their element paths in `fields_array` (e.g. `children[0]` for a recursive `List<DataNode>
+  Children`, never a bare `children` entry). Without `is_collection_root`, `csharp/assertion
+  .jinja`'s `is_empty` branch fell through to `Assert.True(string.IsNullOrEmpty(field
+  .ToString()))`: `List<T>.ToString()` returns the type name, a non-empty string, so the
+  assertion could never pass. Now checks `is_array`/`is_collection_root` against both the raw
+  and resolved field path, matching kotlin/swift's identical `field_is_collection` guard.
+  Regression coverage: `csharp/collection_is_empty_tests.rs`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

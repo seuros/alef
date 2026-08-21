@@ -424,7 +424,22 @@ pub(super) fn render_assertion(
         result_is_array
     } else {
         match &assertion.field {
-            Some(f) if !f.is_empty() => field_resolver.is_array(f),
+            // `is_array` alone misses a collection field whose entries are only tracked via
+            // their element paths in `fields_array` (e.g. `children[0]` for a recursive
+            // `List<DataNode> Children`, never a bare `children` entry) — `is_collection_root`
+            // catches that shape. Without it, `field_needs_json_serialize` stayed false for
+            // `Children`, so `is_empty`'s template branch fell through to
+            // `Assert.True(string.IsNullOrEmpty(field.ToString()))`: `List<T>.ToString()`
+            // returns the type name, a non-empty string, so the assertion could never pass.
+            // Checked against both the raw and resolved path, matching kotlin/swift's identical
+            // `field_is_collection` guard. ~keep
+            Some(f) if !f.is_empty() => {
+                let resolved = field_resolver.resolve(f);
+                field_resolver.is_array(f)
+                    || field_resolver.is_array(resolved)
+                    || field_resolver.is_collection_root(f)
+                    || field_resolver.is_collection_root(resolved)
+            }
             // No field specified — the whole result object; needs serialization when complex.
             _ => !result_is_simple,
         }
