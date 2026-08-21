@@ -13,6 +13,8 @@ pub mod vendor;
 pub mod workspace;
 
 #[cfg(test)]
+mod release_asset_guard_tests;
+#[cfg(test)]
 mod tests;
 mod validate;
 

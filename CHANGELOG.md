@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A release-asset upload whose glob matched zero files reported success, so a release could be
+  published carrying no CLI binaries with no red X anywhere.** `upload-release-assets` in
+  `.github/workflows/publish.yaml` downloaded the `cli-*` artifacts into `dist/cli` and handed
+  `artifacts: "dist/cli/*"` straight to the release action. `actions/download-artifact` has no
+  `if-no-files-found` input, so a pattern matching nothing leaves `dist/cli` empty and merely
+  warns; the upload action then publishes a release with zero assets and exits 0, and `finalize`
+  reports the job result as `success`. This is the same vacuous-green shape as the empty CLI
+  target matrix fixed in 72c7b055a, one job downstream. A `Verify CLI release assets are present`
+  step now expands the glob under `nullglob` and exits 1 naming `dist/cli/*` when it matched
+  nothing, before the upload step runs.
+
+  Regression coverage: `src/publish/release_asset_guard_tests.rs` parses the real
+  `.github/workflows/publish.yaml` and asserts that *every* glob handed to an upload action is
+  guarded — either by `if-no-files-found: error` on the step or by a same-job `run:` step that
+  names the glob and `exit 1`s. It fails on a new unguarded upload step, not just on this one,
+  and refuses to pass vacuously if the scan matches no upload steps at all. The sibling
+  homebrew-bottle upload already carried `if-no-files-found: error` and passes unchanged.
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it
