@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A void `not_error` fixture over a synchronous call emitted `await` inside a non-async arrow
+  function**, which is a TS/JS syntax error rather than a weak test. `render_test_case` froze
+  `async_kw` from `test_is_async` — which accounted for `call_is_async`, byte-file reads and trait
+  bridges — roughly two hundred lines before `void_not_error` was computed, and never folded the
+  latter back in. `typescript/test_function.jinja` then emitted
+  `await expect(..).resolves.not.toThrow()` into that non-async callback. Because `alef all`
+  formats every language in one phase, `oxfmt` rejecting the generated file aborted formatting for
+  *all* languages, leaving the whole tree unformatted and unstamped; the failure presented as a
+  repo-wide formatting error rather than as one bad test. `void_not_error` is now computed before
+  `async_kw` and folded into `test_is_async`. Affects the `wasm` backend too, which shares the
+  template. Regression coverage: `sync_void_not_error_marks_the_test_callback_async`.
+
 ## [0.62.7] - 2026-08-21
 
 ### Added

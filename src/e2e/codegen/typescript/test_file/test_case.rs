@@ -123,7 +123,16 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
 
     // Force test to async if we need to read files for bytes args or have trait bridge tests
     let has_trait_bridge = has_trait_bridge_args(args);
-    let test_is_async = call_is_async || has_bytes_file_reads(&fixture.input, args) || has_trait_bridge;
+    // ~keep `void_not_error` has to be known HERE, not only at its use site further down: the
+    // branch it selects in `test_function.jinja` emits `await expect(..).resolves.not.toThrow()`
+    // into the very `it(..)` callback whose `async` keyword is frozen into `async_kw` two lines
+    // below. For a `returns_void` + `not_error` fixture over a *synchronous* call, `call_is_async`
+    // is false, so without this term the callback renders without `async` while its body still
+    // carries `await` — a hard TS/JS syntax error that aborts the whole formatting phase (and with
+    // it every other language's formatting), not merely a bad test.
+    let void_not_error = call_config.returns_void && fixture.assertions.iter().any(|a| a.assertion_type == "not_error");
+    let test_is_async =
+        call_is_async || has_bytes_file_reads(&fixture.input, args) || has_trait_bridge || void_not_error;
     // Also force call to be treated as async for trait bridge tests so we await the calls
     let call_is_async = call_is_async || has_trait_bridge;
 
@@ -326,7 +335,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // wraps `call_expr` itself in `expect(...).resolves.not.toThrow()` instead, so the check is
     // a real, visible assertion rather than a bare `await call_expr;` relying only on an
     // unhandled rejection to fail the test. ~keep
-    let void_not_error = call_config.returns_void && declares_not_error;
+    debug_assert_eq!(void_not_error, call_config.returns_void && declares_not_error);
     // ~keep `void_not_error` is excluded here for the same reason `expects_error` is: its real
     // assertion is rendered by the call-wrapping branch in `test_function.jinja`, not spliced
     // into `assertions_body` — `inert_verdict` only sees `assertions_body` and would otherwise
@@ -617,6 +626,33 @@ mod void_not_error_tests {
         assert!(
             !out.contains("toBeDefined()"),
             "must not assert toBeDefined() on a void call's always-undefined result, got:\n{out}"
+        );
+    }
+
+    /// A void `not_error` fixture over a *synchronous* call still renders `await expect(..)` in
+    /// the body, so the `it(..)` callback it lives in must carry `async`. `async_kw` is derived
+    /// from `test_is_async`, which knew about `call_is_async`, byte-file reads and trait bridges
+    /// but not about this branch — so a sync void call emitted `await` inside a plain arrow
+    /// function. That is not a weak assertion, it is a TS/JS syntax error, and it aborted the
+    /// entire formatting phase of `alef all` (taking every other language's formatting with it)
+    /// rather than failing one test. `CallConfig::default()` is synchronous, which is exactly the
+    /// shape that reproduces it.
+    #[test]
+    fn sync_void_not_error_marks_the_test_callback_async() {
+        let out = render_void_call(vec![Assertion {
+            assertion_type: "not_error".to_string(),
+            ..Default::default()
+        }]);
+
+        assert!(
+            out.contains("async () => {"),
+            "a body containing `await` must live in an async callback, got:\n{out}"
+        );
+        let awaits_in_body = out.contains("await ");
+        let callback_is_async = out.contains("async () => {");
+        assert!(
+            !awaits_in_body || callback_is_async,
+            "`await` outside an async function is a syntax error, got:\n{out}"
         );
     }
 
