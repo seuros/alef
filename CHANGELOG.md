@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
+  exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
+  enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it
+  `from_i32`/`from_str` and deliberately emits no `{prefix}_{enum}_from_json`. The
+  `gen_native_methods` parameter loop (`src/backends/csharp/gen_bindings/functions.rs`) gated
+  its `FromJson` emission only on "is this an opaque struct", and emitted the paired `Free`
+  outside that guard entirely — so any enum reaching a parameter position got `{E}FromJson`
+  and `{E}Free` P/Invokes bound to non-existent symbols. Both are dead declarations until
+  something calls them, at which point they throw `EntryPointNotFoundException`; they parse
+  cleanly, so every parse-based gate passed. The loop now skips scalar-crossing named types
+  outright, using `backends::ffi::type_map::scalar_c_abi_named_types` — the module whose own
+  documentation already designates it the single source for this decision and names the C#
+  `[DllImport]` emitters as required consumers. A scalar type that is also *returned* still
+  gets its `Free` from the return loop, which mirrors the FFI's returned-enum condition.
+
+  Surfaced by html-to-markdown, where the 0.62.9 regen re-introduced a
+  `htm_node_type_from_json` P/Invoke (`NodeType` is a fieldless `Copy` enum) and broke the
+  repo's export-vs-caller CI gate. That same symbol had been allowlisted and retired once
+  before, making this a re-regression.
+
+  Regression coverage: `tests/backends_csharp_ffi_symbol_subset.rs`. Beyond pinning the two
+  specific symbols, it asserts generically that the C# `EntryPoint` set is a subset of the
+  FFI crate's `extern "C" fn` set — the cross-backend check that was missing. Nothing in the
+  repo previously diffed the two symbol sets;
+  `backends_csharp_native_method_declaration_coverage` checks only the opposite direction
+  (every call site has a declaration), so a declared-but-uncalled extern passed it trivially.
+
 ## [0.62.10] - 2026-08-21
 
 ### Fixed

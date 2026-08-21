@@ -281,6 +281,15 @@ pub(super) fn gen_native_methods(
     sorted_param_types.sort();
     for type_name in sorted_param_types {
         let snake = type_name.to_snake_case();
+        // A scalar-crossing named type (a `Copy` enum or struct) is passed as `int32_t`, never as
+        // an `AlefHandle`, so it has no handle lifecycle in a parameter position: the C FFI
+        // backend emits `from_i32`/`from_str` for it and neither `from_json` nor a param-driven
+        // `free`. Declaring either here would bind a symbol the native library does not export.
+        // A scalar type that is also *returned* still gets its `free` from the return loop below,
+        // which mirrors the FFI's own returned-enum condition. ~keep
+        if scalar_named_types.contains(type_name.as_str()) {
+            continue;
+        }
         if !true_opaque_types.contains(type_name) {
             let from_json_entry = format!("{prefix}_{snake}_from_json");
             let from_json_cs = format!("{}FromJson", csharp_type_name(type_name));
