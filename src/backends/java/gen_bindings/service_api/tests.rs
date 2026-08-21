@@ -371,7 +371,11 @@ fn java_finalize_returns_opaque_handle_and_consumes_owner() {
 
 #[test]
 fn generated_service_owner_gate_compiles_and_blocks_close_until_release() {
-    if std::process::Command::new("javac").arg("-version").output().is_err() {
+    if crate::test_support::spawn_from_stable_dir("javac")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
         return;
     }
     let surface = make_fixture_surface();

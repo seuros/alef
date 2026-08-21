@@ -696,7 +696,7 @@ fn write_dotnet_allocator_fixture(directory: &std::path::Path) {
 }
 
 fn dotnet_target_framework() -> String {
-    let output = std::process::Command::new("dotnet")
+    let output = crate::test_support::spawn_from_stable_dir("dotnet")
         .arg("--version")
         .output()
         .expect("query dotnet SDK version");

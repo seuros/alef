@@ -318,9 +318,11 @@ fn test_scaffold_python_emits_configured_pyrefly_sub_configs() {
 /// and breaks `alef verify`. Skips when the `pyproject-fmt` binary is unavailable.
 #[test]
 fn test_scaffold_python_pyproject_is_pyproject_fmt_clean() {
-    use std::process::Command;
-
-    if Command::new("pyproject-fmt").arg("--version").output().is_err() {
+    if crate::test_support::spawn_from_stable_dir("pyproject-fmt")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         eprintln!("skipping: pyproject-fmt not installed");
         return;
     }
@@ -352,7 +354,10 @@ keywords = ["zebra", "apple", "banana"]
     let path = dir.path().join("pyproject.toml");
     std::fs::write(&path, content).unwrap();
 
-    let spawn = Command::new("pyproject-fmt").arg(&path).output();
+    let spawn = std::process::Command::new("pyproject-fmt")
+        .arg(&path)
+        .current_dir(dir.path())
+        .output();
     let Ok(output) = spawn else {
         eprintln!("skipping: pyproject-fmt failed to spawn");
         return;

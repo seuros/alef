@@ -50,6 +50,25 @@ impl Drop for CwdGuard {
     }
 }
 
+/// Build a [`std::process::Command`] for `program`, pre-pinned to [`std::env::temp_dir`].
+///
+/// `cargo test` runs every test as a thread in one process (see the module docs), so a spawn
+/// that never calls `.current_dir(..)` inherits whatever the process-wide cwd happens to be at
+/// that instant -- including a tempdir another test entered via [`CwdGuard`] and has since
+/// deleted. The unpinned spawn then fails with an OS-level "Could not locate working directory"
+/// that has nothing to do with the code under test (see `commands::test::get_host_target` and
+/// 22baa34ac for two prior instances of exactly this failure). Start every test-only subprocess
+/// through this helper instead of `Command::new` directly, so a future call site can't be
+/// written unpinned by omission. The system temp directory is a safe default for any spawn that
+/// does not itself care what directory it runs in (a `--version` probe, or a tool invoked with
+/// only absolute-path arguments); a caller that needs a specific working directory can still
+/// chain `.current_dir(..)` again afterward to override this default. ~keep
+pub(crate) fn spawn_from_stable_dir(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.current_dir(std::env::temp_dir());
+    command
+}
+
 /// `cargo sort --check` conformance for the table ORDER of a generated `Cargo.toml`.
 ///
 /// Consumers gate CI on `cargo sort --check --workspace`, so every manifest alef emits has to

@@ -615,6 +615,7 @@ fn scaffold_zig_example_passes_zig_ast_check() {
     let output = std::process::Command::new("zig")
         .arg("ast-check")
         .arg(path)
+        .current_dir(dir.path())
         .output()
         .expect("Zig must be installed to verify scaffold compatibility");
 
@@ -638,6 +639,7 @@ fn scaffold_zig_test_seed_passes_zig_ast_check() {
     let output = std::process::Command::new("zig")
         .arg("ast-check")
         .arg(path)
+        .current_dir(dir.path())
         .output()
         .expect("Zig must be installed to verify scaffold compatibility");
 

@@ -45,6 +45,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `resolve_accepts_valid_trait_bridge_exclude_languages` in
   `src/core/config/new_config/tests.rs`.
 
+- **`commands::test::get_host_target` spawned `rustc --version --verbose` without pinning a
+  working directory, so it could intermittently fail with "Could not locate working directory"
+  when it raced another test's `CwdGuard`.** `cargo test` runs every `#[test]` as a thread in one
+  process, so a spawn that never calls `.current_dir(..)` inherits whatever the process-wide cwd
+  happens to be, including a tempdir another test entered and has since deleted — the same race
+  class fixed for twelve compile-harness spawns in 22baa34ac, missed for this one because it is
+  production code (`src/cli/pipeline/commands/test.rs`) rather than a test file, and because this
+  crate's own e2e-phase unit tests (`before_hook_runs_before_e2e_command` and friends) call it
+  unconditionally whenever `e2e = true`, regardless of target language. Pinned to
+  `std::env::temp_dir()`, which needs no case-by-case tempdir since the call reads nothing
+  relative to its cwd.
+
+  A sweep of `Command::new` in test code beyond the twelve already-pinned sites found nine more
+  unpinned spawns with the identical shape (`javac -version`/`mvn --version`/`dotnet
+  --version`/`dart --version`/`pyproject-fmt --version` availability probes, plus `gofmt`, `zig
+  ast-check`, and two `cargo`/`--manifest-path` invocations). Rather than a thirteenth-through-
+  twenty-first manual `.current_dir` fix, added `test_support::spawn_from_stable_dir`, a
+  `Command::new` wrapper pre-pinned to the system temp directory, and migrated the version-probe
+  call sites to it; the sites with a natural test-owned tempdir already in scope were pinned to
+  that tempdir directly, matching the existing 22baa34ac pattern.
+
+  Regression coverage: `get_host_target_survives_a_deleted_ambient_cwd` in
+  `src/cli/pipeline/commands/test.rs` deterministically reproduces the race (enter a tempdir as
+  cwd, delete it, call `get_host_target`) rather than relying on true thread interleaving.
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it

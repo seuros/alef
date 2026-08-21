@@ -100,7 +100,7 @@ fn borrowed_value_receiver_marshalling_is_valid_go() {
 fn assert_go_syntax_is_valid(generated: &str) {
     use std::io::Write as _;
 
-    let Ok(mut child) = std::process::Command::new("gofmt")
+    let Ok(mut child) = crate::test_support::spawn_from_stable_dir("gofmt")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
