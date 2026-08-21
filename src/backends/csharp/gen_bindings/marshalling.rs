@@ -20,23 +20,26 @@ pub(super) fn is_handle_type(ty: &TypeRef) -> bool {
     }
 }
 
-/// C# names (already run through [`csharp_type_name`]) of enums that carry at least one
-/// data-carrying variant.
+/// C# names (already run through [`csharp_type_name`]) of every enum that needs the
+/// `{Type}ToJson`/`{Type}Free` round trip on return.
 ///
-/// An enum in this set is boxed exactly like a plain data struct: the FFI crate's
+/// Every enum in `api.enums` is boxed exactly like a plain data struct: the FFI crate's
 /// `gen_owned_value_to_c` (`backends::ffi::gen_bindings::helpers`) has no enum-ness branch at
-/// all for owned return conversion, so *every* `TypeRef::Named` return — enum or struct —
-/// crosses via `insert_handle` and is declared [`HANDLE_PINVOKE_TYPE`]. A fieldless-only enum
-/// is deliberately excluded here: it mirrors the FFI crate's own
-/// `LibSetupContext::ffi_param_enums` split (`backends::ffi::gen_bindings::lib_setup`) and the
-/// parity fix in commit `420504797` (`ffi_handle_type_names` in `functions.rs`), which keeps
-/// treating fieldless enums as the pre-existing, untouched shape. Only the data-carrying half
-/// needs the `{Type}ToJson`/`{Type}Free` round trip a return-marshalling emitter would otherwise
-/// skip by mistake. ~keep
+/// all for owned return conversion, so *every* `TypeRef::Named` return — enum or struct,
+/// fieldless or data-carrying — crosses via `insert_handle` and is declared
+/// [`HANDLE_PINVOKE_TYPE`]. A prior revision of this function excluded fieldless-only enums,
+/// reasoning by analogy with the FFI crate's `LibSetupContext::ffi_param_enums`
+/// (`backends::ffi::gen_bindings::lib_setup`) — but that set governs *parameter*-position
+/// scalar-discriminant passing only, not return-position boxing, and the two never agreed on
+/// return values. `liter-llm`'s `RefreshOutcome` (a fieldless-only enum: `Disabled`,
+/// `FromCache`, `Fetched`) is a real instance: its FFI header exports
+/// `literllm_refresh_outcome_to_json`/`literllm_refresh_outcome_free` unconditionally on
+/// return-position boxing, but the excluded-fieldless filter here routed its C# wrapper straight
+/// to `Marshal.PtrToStringUTF8(nativeResult)` on the raw `ulong` handle — the CS1503
+/// `ulong`-to-`nint` defect that broke `liter-llm` v1.17.3's C# NuGet build. ~keep
 pub(super) fn enum_names_with_data_variants(api: &ApiSurface) -> HashSet<String> {
     api.enums
         .iter()
-        .filter(|enum_def| enum_def.variants.iter().any(|variant| !variant.fields.is_empty()))
         .map(|enum_def| csharp_type_name(&enum_def.name))
         .collect()
 }

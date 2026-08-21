@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fieldless-only enum return broke the C# build with CS1503 (`ulong` to `nint`), same family
+  as the JNI/FFI cast bugs fixed in 0.62.7 (alef #155).** `liter-llm` v1.17.3's `RefreshCatalog`
+  free function returns `RefreshOutcome`, a fieldless-only enum (`Disabled`, `FromCache`,
+  `Fetched` — no variant carries data). The FFI crate's `gen_owned_value_to_c`
+  (`backends::ffi::gen_bindings::helpers`) has no enum-ness branch, and no
+  fieldless-vs-data-carrying branch either, for owned return conversion: *every* enum return boxes
+  as `AlefHandle` via `insert_handle`, exactly like a struct, and its FFI header unconditionally
+  exports `{prefix}_{enum}_to_json`/`{prefix}_{enum}_free`. Two C# backend predicates disagreed
+  with that reality by filtering enums to "has at least one data-carrying variant":
+  `marshalling::enum_names_with_data_variants` (which decides which returns `errors.rs`'s
+  `emit_return_marshalling_indented` routes through the `{Pascal}ToJson`/`{Pascal}Free` round
+  trip) and `functions::ffi_handle_type_names` (which decides which `{Pascal}ToJson`/`{Pascal}Free`
+  P/Invoke declarations `gen_native_methods` emits at all). For a fieldless-only enum return, both
+  predicates excluded it, so the generated wrapper passed the `ulong`-declared `nativeResult`
+  handle straight to `Marshal.PtrToStringUTF8`/`NativeMethods.FreeString` (both `nint`-typed) —
+  the CS1503 defect that broke `Build C# NuGet package` and skipped `Publish NuGet` entirely for
+  that release. Both predicates now include every enum, fieldless or data-carrying alike.
+  (`src/backends/csharp/gen_bindings/marshalling.rs`, `src/backends/csharp/gen_bindings/functions.rs`)
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed
