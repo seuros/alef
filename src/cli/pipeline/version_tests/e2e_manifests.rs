@@ -367,6 +367,22 @@ fn sync_versions_regenerates_test_apps_pins() {
 /// and other manifests but left them stale, causing Go consumers to pull the previous
 /// release's native library (or, for the sentinel, to reference an identifier that no
 /// longer matches `moduleVersion`).
+///
+/// This is also the regression test for alef#159 / html-to-markdown#463: `moduleVersion`
+/// alone was fixed by the rc.13/rc.14 fix above, but `cmd/setup/main.go` carries a
+/// *second*, independent version-derived const -- `versionIdent` -- that `renderShim`
+/// bakes into the `RequireNativeSetup_<versionIdent>` reference the generated shim writes
+/// at `cmd/setup` runtime. That const was never patched by sync-versions at all, so it
+/// silently fell behind `native_setup.go`'s sentinel (which WAS re-derived from the
+/// version on every run) after a few sync-versions-only releases -- exactly h2m's
+/// `3_11_1` vs `3_11_2` skew. The fixture below seeds `versionIdent` at its own stale
+/// (but internally self-consistent) value, `1_9_0_rc_13`, matching the stale
+/// `moduleVersion`. The assertions below do not simply compare two hardcoded literals:
+/// they extract the identifier `cmd/setup/main.go` and `native_setup.go` actually carry
+/// after the sync, and cross-check both extracted values against each other AND against
+/// `to_go_version_ident` computed independently in the test -- so this fails the moment
+/// the two files' identifiers are computed by two different call sites again, not just
+/// when a specific literal string changes.
 #[test]
 fn sync_versions_updates_go_module_version_in_cmd_setup() {
     let _guard = CWD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -388,6 +404,7 @@ fn sync_versions_updates_go_module_version_in_cmd_setup() {
         "package main\n\nconst (\n",
         "\tmoduleVersion = \"1.9.0-rc.13\"\n",
         "\trepoURL       = \"https://github.com/example/mylib\"\n",
+        "\tversionIdent  = \"1_9_0_rc_13\"\n",
         ")\n",
     );
     std::fs::write(setup_dir.join("main.go"), stale_main_go).expect("write main.go");
@@ -444,6 +461,48 @@ fn sync_versions_updates_go_module_version_in_cmd_setup() {
         !updated_native_setup.contains("1_9_0_rc_13") && !updated_native_setup.contains("1.9.0-rc.13"),
         "stale rc.13 sentinel must be gone from native_setup.go:\n{updated_native_setup}"
     );
+
+    // Structural check for alef#159 / html-to-markdown#463: extract the identifier each
+    // file actually carries and cross-check both against a THIRD, independent
+    // `to_go_version_ident` call in this test, and against each other. A regression that
+    // reintroduces two separate computation paths (e.g. `versionIdent` reverting to a
+    // no-op, or being derived from a stale intermediate) fails this even if it happens to
+    // still contain the literal "1_9_0_rc_14" substring somewhere by coincidence, because
+    // the extraction is anchored to each const's own regex, not a substring search.
+    let main_go_ident = extract_go_const(&updated_main, "versionIdent")
+        .unwrap_or_else(|| panic!("cmd/setup/main.go must declare versionIdent:\n{updated_main}"));
+    let native_setup_ident = extract_sentinel_ident(&updated_native_setup).unwrap_or_else(|| {
+        panic!("native_setup.go must declare a RequireNativeSetup_<ident> sentinel:\n{updated_native_setup}")
+    });
+    let expected_ident = crate::core::version::to_go_version_ident("1.9.0-rc.14");
+    assert_eq!(
+        main_go_ident, expected_ident,
+        "cmd/setup/main.go's versionIdent must equal to_go_version_ident(new_version)"
+    );
+    assert_eq!(
+        native_setup_ident, expected_ident,
+        "native_setup.go's sentinel identifier must equal to_go_version_ident(new_version)"
+    );
+    assert_eq!(
+        main_go_ident, native_setup_ident,
+        "cmd/setup/main.go's versionIdent and native_setup.go's sentinel identifier must be \
+         byte-identical -- a mismatch here is exactly the alef#159 / html-to-markdown#463 defect"
+    );
+}
+
+/// Extract the quoted value of a `<name> = "..."` Go const declaration. Used to pull
+/// `versionIdent`'s value out of `cmd/setup/main.go` without assuming anything about
+/// surrounding whitespace/alignment.
+fn extract_go_const(content: &str, name: &str) -> Option<String> {
+    let pattern = regex::Regex::new(&format!(r#"{name}\s*=\s*"([^"]*)""#)).expect("valid regex");
+    pattern.captures(content).map(|caps| caps[1].to_string())
+}
+
+/// Extract the `<ident>` suffix from a `const RequireNativeSetup_<ident> = "..."`
+/// declaration in `native_setup.go`.
+fn extract_sentinel_ident(content: &str) -> Option<String> {
+    let pattern = regex::Regex::new(r#"RequireNativeSetup_(\w+)\s*=\s*"[^"]*""#).expect("valid regex");
+    pattern.captures(content).map(|caps| caps[1].to_string())
 }
 
 /// Regression test: after `sync-versions` bumps the workspace version, the

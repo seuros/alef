@@ -18,10 +18,10 @@ use super::version_text::{
     read_workspace_license, remove_stale_kotlin_android_plugin, render_citation_cff, replace_citation_version,
     replace_gradle_project_version, replace_version_pattern, restore_gleam_dep_ranges, sync_cargo_lock_path_versions,
     sync_docs_version_badges, sync_e2e_dart_pubspec_lock, sync_e2e_go_mod, sync_e2e_java_pom, sync_gemfile_lock,
-    sync_go_native_setup_sentinel, sync_swift_binary_release_url,
+    sync_go_cmd_setup_version_ident, sync_go_native_setup_sentinel, sync_swift_binary_release_url,
 };
 use super::version_workspace::{sync_rust_test_app_version, sync_workspace_cargo_toml_versions};
-use crate::core::version::{to_r_version, to_rubygems_prerelease};
+use crate::core::version::{to_go_version_ident, to_r_version, to_rubygems_prerelease};
 
 /// Regex for matching semantic version strings.
 static SEMVER_RE: LazyLock<regex::Regex> =
@@ -412,17 +412,35 @@ pub fn sync_versions(
         updated.push("packages/go/ffi_loader.go".to_string());
     }
 
+    // `cmd/setup/main.go`'s `versionIdent` const and `native_setup.go`'s
+    // `RequireNativeSetup_<ident>` sentinel must always carry the identical identifier --
+    // both are derived from this single `to_go_version_ident` call, so a sync-versions run
+    // can never move one file's identifier without moving the other's. See
+    // `sync_go_native_setup_sentinel`'s doc for the alef#159 / html-to-markdown#463
+    // incident this single-source computation closes.
+    let go_version_ident = to_go_version_ident(&version);
+
     for entry in writable.glob("packages/go/cmd/setup/main.go") {
-        if let Ok(content) = std::fs::read_to_string(&entry)
-            && let Some(new_content) = replace_version_pattern(&content, r#"moduleVersion\s*=\s*"[^"]*""#, &version)
-        {
-            std::fs::write(&entry, &new_content).with_context(|| format!("failed to write {}", entry.display()))?;
-            updated.push(entry.to_string_lossy().to_string());
+        if let Ok(content) = std::fs::read_to_string(&entry) {
+            let mut new_content = content.clone();
+            let mut changed = false;
+            if let Some(c) = replace_version_pattern(&new_content, r#"moduleVersion\s*=\s*"[^"]*""#, &version) {
+                new_content = c;
+                changed = true;
+            }
+            if let Some(c) = sync_go_cmd_setup_version_ident(&new_content, &go_version_ident) {
+                new_content = c;
+                changed = true;
+            }
+            if changed {
+                std::fs::write(&entry, &new_content).with_context(|| format!("failed to write {}", entry.display()))?;
+                updated.push(entry.to_string_lossy().to_string());
+            }
         }
     }
 
     if let Ok(content) = std::fs::read_to_string("packages/go/native_setup.go")
-        && let Some(new_content) = sync_go_native_setup_sentinel(&content, &version)
+        && let Some(new_content) = sync_go_native_setup_sentinel(&content, &go_version_ident, &version)
     {
         std::fs::write("packages/go/native_setup.go", &new_content)
             .context("failed to write packages/go/native_setup.go")?;
