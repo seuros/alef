@@ -23,4 +23,3 @@ mod template_env;
 pub mod trait_bridge;
 
 pub use gen_shims::JniBackend;
-pub(crate) use gen_shims::jni_capsule_types;
