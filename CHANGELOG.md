@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
+  `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
+  derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**
+  Three releases (tree-sitter-language-pack 1.15.3, liter-llm 1.17.2, crawlberg 1.3.1) were
+  tagged and pushed with a stale lockfile in directories like `e2e/rust`, `test_apps/rust`,
+  `fuzz`, and a Ruby native-extension crate, failed validation, and never reached crates.io.
+  `sync_versions` now relocks every `Cargo.lock` immediately after bumping the manifests it
+  pins, via a new `cargo update --offline -w` step
+  (`src/cli/pipeline/version_lockfiles.rs::relock_cargo_lockfiles`) that skips locks
+  `blocked_on_publish` (a registry dependency pinned at the version being released, which cannot
+  resolve until that release is live). Both the write side and `alef validate versions` now call
+  the same discovery function,
+  `src/cli/commands/version_manifests.rs::discover_cargo_locks`, so the write set and the
+  validate set can no longer diverge into checking a different set of lockfiles. Regression
+  coverage: `sync_versions_relocks_a_nested_lockfile_so_validate_versions_then_passes` and
+  `sync_versions_does_not_touch_a_lockfile_blocked_on_the_pending_release`.
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed

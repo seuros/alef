@@ -9,6 +9,7 @@ use super::version_core::{
     write_version_to_cargo_toml,
 };
 use super::version_csharp::sync_csharp_project_versions;
+use super::version_lockfiles::relock_cargo_lockfiles;
 use super::version_python::sync_python_versions;
 use super::version_regen::{regenerate_readmes, regenerate_scaffold_after_sync, regenerate_test_apps_after_sync};
 use super::version_registry::sync_registry_package_versions;
@@ -697,7 +698,10 @@ pub fn sync_versions(
         run_optional("pnpm", &["install", "--no-frozen-lockfile", "--ignore-scripts", "-w"]);
     }
     if any_cargo_toml_modified {
-        run_optional("cargo", &["update", "--workspace", "--offline"]);
+        // Relocks every `Cargo.lock` `alef validate versions` will check (not just the root
+        // workspace's), sharing that command's exact discovery so the write set and the
+        // validate set can never diverge again. See alef #148.
+        relock_cargo_lockfiles(&version);
     }
     if any_composer_json_modified {
         run_optional("composer", &["update", "--lock", "--no-interaction"]);
