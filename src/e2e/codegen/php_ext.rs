@@ -2,7 +2,10 @@
 //!
 //! Generates a registry-mode-only test_app at `test_apps/php_ext/` that
 //! installs the configured PHP native extension via PIE and exercises
-//! the raw C extension functions when e2e call config is available.
+//! the configured e2e call's facade static method when e2e call config is available.
+//! The php-ext backend places crate-level free functions on a namespaced facade class
+//! rather than emitting global functions, so the smoke call goes through that class
+//! (see `backends::php::naming::php_ext_api_class_name`).
 //!
 //! Emits three files:
 //!
@@ -83,7 +86,7 @@ impl E2eCodegen for PhpExtCodegen {
             .unwrap_or_else(|| "0.1.0".to_string());
 
         let extension_name = config.php_extension_name();
-        let smoke_call = resolve_smoke_call(e2e_config, &extension_name);
+        let smoke_call = resolve_smoke_call(e2e_config, config, &extension_name);
 
         Ok(vec![
             GeneratedFile {
@@ -170,11 +173,24 @@ fn render_run_tests(pkg_name: &str, version: &str, extension_name: &str) -> Stri
 }
 
 struct PhpExtSmokeCall {
-    function_name: String,
+    /// Fully-qualified PHP class name (namespace + facade class, no leading backslash).
+    class_name: String,
+    /// The static method's PHP name (lowerCamelCase).
+    method_name: String,
     argument: Option<String>,
 }
 
-fn resolve_smoke_call(e2e_config: &E2eConfig, extension_name: &str) -> Option<PhpExtSmokeCall> {
+/// Resolve the configured e2e call into a facade static-method reference.
+///
+/// The php-ext backend never emits crate-level free functions as global `#[php_function]`
+/// items — it always places them as static methods on a namespaced facade class instead (see
+/// `backends::php::naming::php_ext_api_class_name`). The smoke call must be routed the same
+/// way, or it probes a symbol the generated extension can never provide.
+fn resolve_smoke_call(
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    extension_name: &str,
+) -> Option<PhpExtSmokeCall> {
     let configured_name = e2e_config
         .call
         .overrides
@@ -189,11 +205,10 @@ fn resolve_smoke_call(e2e_config: &E2eConfig, extension_name: &str) -> Option<Ph
         })
         .or_else(|| (!e2e_config.call.function.is_empty()).then_some(e2e_config.call.function.as_str()))?;
 
-    let function_name = if configured_name.starts_with(extension_name) {
-        configured_name.to_string()
-    } else {
-        format!("{extension_name}_{configured_name}")
-    };
+    let namespace = crate::backends::php::naming::php_autoload_namespace(config);
+    let api_class = crate::backends::php::naming::php_ext_api_class_name(extension_name);
+    let class_name = format!("{namespace}\\{api_class}");
+    let method_name = crate::codegen::naming::to_php_name(configured_name);
 
     let argument = e2e_config
         .call
@@ -205,7 +220,8 @@ fn resolve_smoke_call(e2e_config: &E2eConfig, extension_name: &str) -> Option<Ph
         });
 
     Some(PhpExtSmokeCall {
-        function_name,
+        class_name,
+        method_name,
         argument,
     })
 }
@@ -228,20 +244,26 @@ fn render_main_php(extension_name: &str, smoke_call: Option<&PhpExtSmokeCall>) -
     let _ = writeln!(out, "    exit(1);");
     let _ = writeln!(out, "}}");
     if let Some(call) = smoke_call {
-        let function_name = &call.function_name;
+        let class_name = &call.class_name;
+        let method_name = &call.method_name;
+        let call_label = format!("{class_name}::{method_name}");
         let _ = writeln!(out);
-        let _ = writeln!(out, "// Verify the configured function exists.");
-        let _ = writeln!(out, "if (!function_exists('{function_name}')) {{");
-        let _ = writeln!(out, "    fwrite(STDERR, \"FAIL: {function_name}() not found\\n\");");
+        let _ = writeln!(out, "// Verify the configured facade method exists.");
+        let _ = writeln!(out, "if (!class_exists('{class_name}')) {{");
+        let _ = writeln!(out, "    fwrite(STDERR, \"FAIL: class {class_name} not found\\n\");");
+        let _ = writeln!(out, "    exit(1);");
+        let _ = writeln!(out, "}}");
+        let _ = writeln!(out, "if (!method_exists('{class_name}', '{method_name}')) {{");
+        let _ = writeln!(out, "    fwrite(STDERR, \"FAIL: {call_label}() not found\\n\");");
         let _ = writeln!(out, "    exit(1);");
         let _ = writeln!(out, "}}");
         let _ = writeln!(out);
-        let _ = writeln!(out, "// Smoke-test the configured function.");
+        let _ = writeln!(out, "// Smoke-test the configured facade method.");
         if let Some(argument) = &call.argument {
             let escaped = argument.replace('\\', "\\\\").replace('\'', "\\'");
-            let _ = writeln!(out, "$result = {function_name}('{escaped}');");
+            let _ = writeln!(out, "$result = {call_label}('{escaped}');");
         } else {
-            let _ = writeln!(out, "$result = {function_name}();");
+            let _ = writeln!(out, "$result = {call_label}();");
         }
         let _ = writeln!(out);
         let _ = writeln!(out, "if ($result === null) {{");
@@ -249,7 +271,7 @@ fn render_main_php(extension_name: &str, smoke_call: Option<&PhpExtSmokeCall>) -
         let _ = writeln!(out, "    exit(1);");
         let _ = writeln!(out, "}}");
         let _ = writeln!(out);
-        let _ = writeln!(out, "echo \"PASS: {function_name}() returned a non-null result\\n\";");
+        let _ = writeln!(out, "echo \"PASS: {call_label}() returned a non-null result\\n\";");
     } else {
         let _ = writeln!(out);
         let _ = writeln!(
@@ -309,16 +331,19 @@ mod tests {
     }
 
     #[test]
-    fn main_php_with_call_config_checks_configured_function() {
+    fn main_php_with_call_config_checks_configured_facade_method() {
         let smoke_call = PhpExtSmokeCall {
-            function_name: "demo_ext_render".to_string(),
+            class_name: "Demo\\Ext\\DemoExtApi".to_string(),
+            method_name: "render".to_string(),
             argument: Some("smoke test".to_string()),
         };
 
         let content = render_main_php("demo_ext", Some(&smoke_call));
 
-        assert!(content.contains("function_exists('demo_ext_render')"));
-        assert!(content.contains("$result = demo_ext_render('smoke test');"));
+        assert!(content.contains("class_exists('Demo\\Ext\\DemoExtApi')"));
+        assert!(content.contains("method_exists('Demo\\Ext\\DemoExtApi', 'render')"));
+        assert!(content.contains("$result = Demo\\Ext\\DemoExtApi::render('smoke test');"));
         assert!(content.contains("expected non-null result"));
+        assert!(!content.contains("function_exists("));
     }
 }

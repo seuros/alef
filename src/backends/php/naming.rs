@@ -26,6 +26,22 @@ pub fn php_autoload_namespace(config: &ResolvedCrateConfig) -> String {
     }
 }
 
+/// Get the ext-php-rs facade class name that exposes crate-level free functions as static
+/// methods (e.g. `html_to_markdown` -> `HtmlToMarkdownApi`).
+///
+/// The php-ext backend never emits free functions as global `#[php_function]` items: ext-php-rs's
+/// `#[php_impl]` registration derive walks every method in a fixed `impl` block and unconditionally
+/// references it by Rust identifier, so free functions are placed as static methods on this facade
+/// class instead (see `gen_bindings/rust_bindings.rs`). Callers that need to invoke a free function
+/// through the generated extension — including the php_ext e2e smoke-app generator — must go
+/// through `{php_autoload_namespace}\{php_ext_api_class_name}::{method}`, never a bare global
+/// function name.
+pub fn php_ext_api_class_name(extension_name: &str) -> String {
+    use heck::ToPascalCase;
+
+    format!("{}Api", extension_name.to_pascal_case())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

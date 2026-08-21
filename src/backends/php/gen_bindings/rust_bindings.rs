@@ -12,7 +12,7 @@ use crate::backends::php::gen_bindings::types::{
     self, gen_enum_constants, gen_flat_data_enum, gen_flat_data_enum_from_impls, gen_flat_data_enum_methods,
     gen_php_struct, is_tagged_data_enum, is_untagged_data_enum,
 };
-use crate::backends::php::naming::php_autoload_namespace;
+use crate::backends::php::naming::{php_autoload_namespace, php_ext_api_class_name};
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::conversions::ConversionConfig;
@@ -22,7 +22,7 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig, detect_serde_available, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::{AHashMap, AHashSet};
-use heck::{ToLowerCamelCase, ToPascalCase};
+use heck::ToLowerCamelCase;
 use minijinja::context;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -405,14 +405,15 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         }
     }
 
-    // `#[php_function]` items. Standalone functions rely on the `inventory` crate for
+    // Free functions never become `#[php_function]` globals here — see `php_ext_api_class_name`
+    // for why they are placed on the facade class instead. ~keep
     let included_functions: Vec<_> = api
         .functions
         .iter()
         .filter(|f| !exclude_functions.contains(&f.name))
         .collect();
     if !included_functions.is_empty() || !config.trait_bridges.is_empty() {
-        let facade_class_name = extension_name.to_pascal_case();
+        let php_api_class_name = php_ext_api_class_name(&extension_name);
         // Build each static method body (no #[php_function] attribute — they live inside
         // a #[php_impl] block which handles registration via the class machinery).
         // Deliberately not cfg-gated: `#[php_impl]`'s derive (ext-php-rs) walks every
@@ -534,11 +535,10 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
             })
             .collect::<Vec<_>>()
             .join("\n\n");
-        let php_api_class_name = format!("{facade_class_name}Api");
         let ns_escaped_facade = php_namespace.replace('\\', "\\\\");
         let php_name_attr = format!("php(name = \"{}\\\\{}\")", ns_escaped_facade, php_api_class_name);
         let facade_struct = format!(
-            "#[php_class]\n#[{php_name_attr}]\npub struct {facade_class_name}Api;\n\n#[php_impl]\nimpl {facade_class_name}Api {{\n{methods_joined}\n}}"
+            "#[php_class]\n#[{php_name_attr}]\npub struct {php_api_class_name};\n\n#[php_impl]\nimpl {php_api_class_name} {{\n{methods_joined}\n}}"
         );
         builder.add_item(&facade_struct);
 
@@ -767,10 +767,9 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         ));
     }
     if api.functions.iter().any(|f| !exclude_functions.contains(&f.name)) || !config.trait_bridges.is_empty() {
-        let facade_class_name = extension_name.to_pascal_case();
         class_registrations.push_str(&crate::backends::php::template_env::render(
             "php_class_registration.jinja",
-            context! { class_name => &format!("{facade_class_name}Api") },
+            context! { class_name => &php_ext_api_class_name(&extension_name) },
         ));
     }
     for enum_def in api.enums.iter() {
