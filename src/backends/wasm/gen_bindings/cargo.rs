@@ -117,8 +117,12 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
         .unwrap_or_else(|| "wasm-opt = false".to_string());
 
     // Derived from the same layout that decides where this manifest is written, so the depth of
-    // `..` always matches the emitted tree instead of assuming a `crates/` sibling pair. ~keep
-    let core_dep_path = config.core_crate_dep_path(&super::wasm_output_layout(config).root);
+    // `..` always matches the emitted tree instead of assuming a `crates/` sibling pair.
+    // Override-aware: when `[wasm].core_crate_override` is set, `core_crate_root()` (built from
+    // `sources`) names the wrong crate entirely -- the override targets an unrelated sibling
+    // crate `sources` never describes. ~keep
+    let core_dep_path =
+        config.core_crate_dep_path_for_language(&super::wasm_output_layout(config).root, Language::Wasm);
 
     let header = hash::header(CommentStyle::Hash);
 

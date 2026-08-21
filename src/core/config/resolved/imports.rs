@@ -93,6 +93,37 @@ impl ResolvedCrateConfig {
         relative_slash_path(binding_root, &self.core_crate_root())
     }
 
+    /// [`Self::core_crate_dep_path`], but honoring a language's
+    /// `core_crate_override` when one is set.
+    ///
+    /// The override names an entirely different crate than the one [`Self::core_crate_root`]
+    /// derives from `sources` -- e.g. a wasm-safe sub-crate the umbrella crate cannot target.
+    /// That crate is not on the path `sources` describes, so deriving its location from
+    /// `core_crate_root()` (as the override-blind [`Self::core_crate_dep_path`] does) silently
+    /// points at the wrong directory instead of the override. The override crate is assumed to
+    /// sit beside the binding crate, i.e. as `<binding_root's parent>/<override>`, matching the
+    /// `crates/{name}-<lang>` sibling-of-`crates/{override}` convention every backend's default
+    /// output layout uses. ~keep
+    pub fn core_crate_dep_path_for_language(&self, binding_root: &Path, lang: Language) -> String {
+        let override_name = match lang {
+            Language::Wasm => self.wasm.as_ref().and_then(|c| c.core_crate_override.as_deref()),
+            Language::Dart => self.dart.as_ref().and_then(|c| c.core_crate_override.as_deref()),
+            Language::Swift => self.swift.as_ref().and_then(|c| c.core_crate_override.as_deref()),
+            _ => None,
+        };
+        match override_name {
+            Some(name) => {
+                let sibling_root = binding_root
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| binding_root.to_path_buf())
+                    .join(name);
+                relative_slash_path(binding_root, &sibling_root)
+            }
+            None => self.core_crate_dep_path(binding_root),
+        }
+    }
+
     /// Resolve the core Cargo dependency name (and matching directory) for a
     /// language's binding crate.
     ///
@@ -322,6 +353,41 @@ sources = ["crates/my-core/src/lib.rs"]
             workspace.core_crate_dep_path(std::path::Path::new("crates/test-lib-ffi")),
             "../my-core",
             "workspace: core crate is a `crates/` sibling of the binding crate"
+        );
+    }
+
+    #[test]
+    fn core_crate_dep_path_for_language_targets_the_override_sibling_not_sources() {
+        use crate::core::config::extras::Language;
+        // `sources` describes a root-flat core crate (project root), but the wasm override
+        // names an unrelated sub-crate that must resolve to a `crates/` sibling of the binding
+        // crate instead -- not to wherever `sources` points. ~keep
+        let r = resolved_one(
+            r#"
+[workspace]
+languages = ["wasm"]
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+
+[crates.wasm]
+core_crate_override = "mylib-core"
+"#,
+        );
+        assert_eq!(
+            r.core_crate_dep_path_for_language(std::path::Path::new("crates/mylib-wasm"), Language::Wasm),
+            "../mylib-core"
+        );
+    }
+
+    #[test]
+    fn core_crate_dep_path_for_language_falls_back_without_an_override() {
+        use crate::core::config::extras::Language;
+        let r = minimal();
+        assert_eq!(
+            r.core_crate_dep_path_for_language(std::path::Path::new("crates/test-lib-wasm"), Language::Wasm),
+            r.core_crate_dep_path(std::path::Path::new("crates/test-lib-wasm")),
         );
     }
 

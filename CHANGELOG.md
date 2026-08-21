@@ -40,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/publish_workflow_cli_asset_guard.rs` extracts and executes the workflow's own steps to
   hold that invariant.
 
+- **WASM `Cargo.toml` honors `[wasm].core_crate_override` again when computing the core
+  dependency's `path = "..."`.** Routing that path through `core_crate_dep_path` (shared with
+  every other backend) fixed the general `crates/`-vs-root-flat depth bug, but the shared helper
+  derives the path from `sources` via `core_crate_root()` — which is the wrong crate entirely
+  once an override names a different, unrelated sibling crate `sources` never describes. In a
+  root-flat project this silently emitted `path = "../.."` (the umbrella crate) instead of
+  `path = "../<override>"`, so `alef build` produced a wasm manifest depending on the wrong Rust
+  crate — a config that compiles clean until the override crate's exclusive types are referenced
+  and cargo can't resolve them, or a stale duplicate compiles instead. New
+  `ResolvedCrateConfig::core_crate_dep_path_for_language` resolves the override to a `crates/`
+  sibling of the binding crate before falling back to `core_crate_dep_path`; `wasm`'s
+  `gen_cargo_toml` now calls it. Dart and Swift, which also honor `core_crate_override`, compute
+  their manifest paths independently and were not affected. JNI has no `core_crate_override`
+  concept, so its use of the shared (override-blind) helper was already correct.
+
 - **Generated Java no longer carries a dead `import java.util.List;`.** `ffi_imports.jinja`'s
   import gate decides whether to emit the import by substring-matching `body.contains("List<")`,
   which fires identically on a genuine bare `List<...>` and on an already-qualified
