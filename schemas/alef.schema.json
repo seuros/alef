@@ -2566,7 +2566,7 @@
           "type": "string"
         },
         "into_raw_type": {
-          "description": "Fully-qualified Rust pointee type produced by `value.into_raw()`.\nThe generated body casts to `*const {into_raw_type}`.\n**Required** — there is no default.",
+          "description": "Fully-qualified Rust pointee type of the `*const {into_raw_type}` that\n`value.into_raw()` already returns. The generated body calls `value.into_raw()`\nas-is (no cast is added): since this field IS the declared return type of\n`into_raw()`, and the exported function's return type is declared as the same\n`*const {into_raw_type}`, an `as` cast would be a no-op and trip\n`clippy::unnecessary_cast`.\n**Required** — there is no default.",
           "type": "string"
         },
         "package": {
