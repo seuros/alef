@@ -27,6 +27,8 @@
 //! 3. For each `field<N>` parameter, derive its new name from the payload type
 //!    using the payload-derived helper (see [`payload_param_name`]).
 
+#[path = "frb_rewrite/bridge_coverage.rs"]
+mod bridge_coverage;
 #[path = "frb_rewrite/cfg_gates.rs"]
 mod cfg_gates;
 #[path = "frb_rewrite/external_library_loader.rs"]
@@ -41,6 +43,7 @@ mod tests;
 #[path = "frb_rewrite/text_transformations.rs"]
 mod text_transformations;
 
+pub use bridge_coverage::missing_bridge_functions;
 pub use cfg_gates::{carry_lib_rs_cfg_gates_into_frb_generated, cfg_gated_free_functions, inject_frb_cfg_gates};
 pub use sealed_variants::rewrite_frb_sealed_variants;
 pub use text_transformations::{

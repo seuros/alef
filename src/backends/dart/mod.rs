@@ -23,7 +23,8 @@ mod plugin_trait_stubs_test;
 pub use frb_rewrite::{
     carry_lib_rs_cfg_gates_into_frb_generated, cfg_gated_free_functions, filter_excluded_functions,
     fix_handler_executor_calls, inject_display_as_text_methods, inject_frb_cfg_gates,
-    make_struct_fields_with_defaults_optional, rewrite_frb_sealed_variants, strip_trailing_whitespace,
+    make_struct_fields_with_defaults_optional, missing_bridge_functions, rewrite_frb_sealed_variants,
+    strip_trailing_whitespace,
 };
 pub use gen_bindings::DartBackend;
 pub(crate) use gen_bindings::config_param_is_named_optional;

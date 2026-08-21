@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dart FRB post-build could patch a stale bridge and silently drop newly added functions
+  (alef #135).** `PostBuildStep::RunCommand`'s `flutter_rust_bridge_codegen` invocation treats a
+  missing tool or `ALEF_SKIP_COMMANDS` as a non-fatal skip (`run_run_command`,
+  `src/cli/pipeline/commands/build.rs:995`), and every `PostProcessFile` step that follows it in
+  Dart's post-build sequence (`src/backends/dart/gen_bindings/mod.rs`) patched whatever bridge
+  `lib.dart` was already on disk regardless of whether frb actually regenerated it that run. When
+  the FRB facade gained new `pub fn`s while `flutter_rust_bridge_codegen` was unavailable, the
+  bridge stayed stale for those functions while still receiving alef's other patches (e.g.
+  extension injection) — an internally inconsistent, silently "successful" build. A new
+  `PostBuildStep::VerifyFrbBridgeCoverage` step now runs immediately after the `RunCommand` step
+  and before any `PostProcessFile` rewrite: it compares every free function declared in the
+  facade against the bridge and fails the build loudly, naming the missing functions, instead of
+  letting later steps patch a bridge that disagrees with the facade. New
+  `src/backends/dart/frb_rewrite/bridge_coverage.rs` (`missing_bridge_functions`) and
+  `src/cli/pipeline/commands/build/frb_bridge_coverage.rs` (`verify`).
+
 - **A void `not_error` fixture over a synchronous call emitted `await` inside a non-async arrow
   function**, which is a TS/JS syntax error rather than a weak test. `render_test_case` froze
   `async_kw` from `test_is_async` — which accounted for `call_is_async`, byte-file reads and trait

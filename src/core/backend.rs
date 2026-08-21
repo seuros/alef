@@ -135,6 +135,30 @@ pub enum PostBuildStep {
         /// The desired `"name"` field value (`config.wasm_package_name()`).
         package_name: String,
     },
+    /// Verify that every free function declared in `facade_path` (the FRB source crate's
+    /// `lib.rs`) has a matching function in `bridge_path` (the flutter_rust_bridge-generated
+    /// `lib.dart`), and fail loudly if not.
+    ///
+    /// Placed immediately after the `RunCommand` step that invokes
+    /// `flutter_rust_bridge_codegen`, before any `PostProcessFile` rewrite of `bridge_path` —
+    /// see alef #135. That `RunCommand`'s runner treats a missing `flutter_rust_bridge_codegen`
+    /// tool (or `ALEF_SKIP_COMMANDS`) as a non-fatal skip, falling back to whatever bridge
+    /// source is already on disk — deliberate, so a host without the tool installed can still
+    /// regenerate the facade. But the `PostProcessFile` steps that follow run unconditionally,
+    /// patching whatever is on disk regardless of whether frb actually produced it this run. If
+    /// the facade gained functions since the bridge was last regenerated and frb did not
+    /// actually run this pass, those patches land on a stale bridge that looks freshly
+    /// post-processed while silently missing the new functions. This step turns that silent,
+    /// internally-inconsistent output into a loud build failure instead. ~keep
+    VerifyFrbBridgeCoverage {
+        /// The FRB source crate's `lib.rs`, relative to the binding crate dir.
+        facade_path: PathBuf,
+        /// The flutter_rust_bridge-generated `lib.dart`, relative to the binding crate dir.
+        bridge_path: PathBuf,
+        /// Facade functions expected to be absent from the bridge (stripped post-frb by
+        /// `PostProcessor::FrbDartExcludeFunctions`) — never reported as a coverage gap.
+        exclude_functions: Vec<String>,
+    },
 }
 
 impl PostBuildStep {
@@ -199,7 +223,8 @@ impl PostBuildStep {
             | PostBuildStep::PostProcessFile { .. }
             | PostBuildStep::StageDartNatives { .. }
             | PostBuildStep::CarryFrbCfgGates { .. }
-            | PostBuildStep::RewriteWasmPackageName { .. } => Vec::new(),
+            | PostBuildStep::RewriteWasmPackageName { .. }
+            | PostBuildStep::VerifyFrbBridgeCoverage { .. } => Vec::new(),
         }
     }
 }
@@ -521,6 +546,11 @@ mod post_build_step_owned_paths_tests {
             PostBuildStep::RewriteWasmPackageName {
                 package_json_path: PathBuf::from("packages/wasm/pkg/package.json"),
                 package_name: "@sample/lib".to_string(),
+            },
+            PostBuildStep::VerifyFrbBridgeCoverage {
+                facade_path: PathBuf::from("packages/dart/rust/src/lib.rs"),
+                bridge_path: PathBuf::from("packages/dart/lib/src/sample_bridge_generated/lib.dart"),
+                exclude_functions: vec![],
             },
         ];
         for step in &steps {

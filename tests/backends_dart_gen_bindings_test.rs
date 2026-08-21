@@ -2204,6 +2204,7 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             PostBuildStep::StageDartNatives { .. } => "StageDartNatives",
             PostBuildStep::MaterializeSwiftBridge { .. } => "MaterializeSwiftBridge",
             PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName",
+            PostBuildStep::VerifyFrbBridgeCoverage { .. } => "VerifyFrbBridgeCoverage",
         })
         .collect();
 
@@ -2211,6 +2212,7 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
         steps,
         vec![
             "RunCommand",
+            "VerifyFrbBridgeCoverage",
             "PostProcessFile",
             "PostProcessFile",
             "PostProcessFile",
@@ -2222,7 +2224,9 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             "CarryFrbCfgGates",
             "StageDartNatives"
         ],
-        "RunCommand must come before all PostProcessFile steps in post_build steps"
+        "RunCommand must come before VerifyFrbBridgeCoverage, which must come before every \
+         PostProcessFile step in post_build steps (alef #135: a PostProcessFile step must never \
+         patch a bridge that VerifyFrbBridgeCoverage has not yet cleared as fresh)"
     );
 }
 
@@ -2338,6 +2342,7 @@ skip_frb = true
                     format!("MaterializeSwiftBridge({binding_crate_name})")
                 }
                 PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName".to_string(),
+                PostBuildStep::VerifyFrbBridgeCoverage { .. } => "VerifyFrbBridgeCoverage".to_string(),
             })
             .collect::<Vec<_>>()
     );

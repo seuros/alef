@@ -335,6 +335,10 @@ impl DartBackend {
 
                 let skip_frb = config.dart.as_ref().map(|c| c.skip_frb).unwrap_or(false);
 
+                let rust_crate_dir = resolve_output_dir(None, &config.name, "packages/dart/rust");
+                let rust_lib_rs_path = PathBuf::from(format!("{rust_crate_dir}/src/lib.rs"));
+                let rust_frb_generated_path = PathBuf::from(format!("{rust_crate_dir}/src/frb_generated.rs"));
+
                 let mut post_build_steps: Vec<PostBuildStep> = if skip_frb {
                     vec![]
                 } else {
@@ -347,6 +351,15 @@ impl DartBackend {
                         ],
                     }]
                 };
+
+                // Gate every post-processor below on the facade/bridge actually agreeing --
+                // see `PostBuildStep::VerifyFrbBridgeCoverage`'s doc for why this must run before
+                // any `PostProcessFile` rewrite of `lib_dart_path` (alef #135). ~keep
+                post_build_steps.push(PostBuildStep::VerifyFrbBridgeCoverage {
+                    facade_path: rust_lib_rs_path.clone(),
+                    bridge_path: lib_dart_path.clone(),
+                    exclude_functions: exclude_functions.clone(),
+                });
 
                 post_build_steps.push(PostBuildStep::PostProcessFile {
                     path: lib_dart_path.clone(),
@@ -387,9 +400,6 @@ impl DartBackend {
                     });
                 }
 
-                let rust_crate_dir = resolve_output_dir(None, &config.name, "packages/dart/rust");
-                let rust_lib_rs_path = PathBuf::from(format!("{rust_crate_dir}/src/lib.rs"));
-                let rust_frb_generated_path = PathBuf::from(format!("{rust_crate_dir}/src/frb_generated.rs"));
                 post_build_steps.push(PostBuildStep::CarryFrbCfgGates {
                     source_path: rust_lib_rs_path,
                     target_path: rust_frb_generated_path,

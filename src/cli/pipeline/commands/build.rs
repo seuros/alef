@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
+mod frb_bridge_coverage;
 mod frb_cache;
 mod observability;
 
@@ -914,6 +915,15 @@ pub fn run_post_build(
                     }
                 }
                 info!("Re-materialized swift-bridge files for '{binding_crate_name}' from fresh build output");
+            }
+            PostBuildStep::VerifyFrbBridgeCoverage {
+                facade_path,
+                bridge_path,
+                exclude_functions,
+            } => {
+                let facade_file = base_dir.join(crate_dir).join(facade_path);
+                let bridge_file = base_dir.join(crate_dir).join(bridge_path);
+                frb_bridge_coverage::verify(&facade_file, &bridge_file, exclude_functions)?;
             }
             PostBuildStep::RewriteWasmPackageName {
                 package_json_path,

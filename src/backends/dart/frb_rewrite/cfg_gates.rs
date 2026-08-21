@@ -93,7 +93,11 @@ fn paren_delta(line: &str) -> i32 {
 
 /// Returns the function name if `line` is a top-level (`col 0`) `pub fn` or
 /// `pub async fn` declaration.
-fn free_pub_fn_name(line: &str) -> Option<String> {
+///
+/// `pub(super)`: also used by [`super::bridge_coverage::free_function_names`] to enumerate
+/// every free function the FRB facade declares, not just the cfg-gated subset this module
+/// itself cares about.
+pub(super) fn free_pub_fn_name(line: &str) -> Option<String> {
     let rest = line
         .strip_prefix("pub async fn ")
         .or_else(|| line.strip_prefix("pub fn "))?;
