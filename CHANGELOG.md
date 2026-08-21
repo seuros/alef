@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The FFI backend's crate-level clippy allow list carried `dropping_references`, a dead
+  entry.** Every `drop(...)` call the FFI templates emit drops an owned value (`free_bytes.jinja`,
+  `free_string.jinja`, `handle_registry.rs.jinja`'s `self.take::<T>(..)` and `guard`, and
+  `orchestration.rs`'s `std::mem::drop(obj)` for a method named `drop`, always bound owned via
+  `null_check_self_owned.jinja`), never a reference, so the lint had nothing left to allow.
+  Confirmed dead with a real `cargo clippy --all-targets -- -D warnings` run over the gate
+  fixture with the entry removed. Removed from `src/backends/ffi/gen_bindings/lib_rs.rs` and
+  pinned in `clippy_allowlist.rs`'s dead-entry test. Added
+  `tests/generated_output_downstream_gate/ffi_allowlist_gate.rs`, a real-clippy-backed check for
+  the direction the existing allow-list tests never covered: an allow entry with no matching
+  generated pattern now fails the gate instead of sitting there silently.
+
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

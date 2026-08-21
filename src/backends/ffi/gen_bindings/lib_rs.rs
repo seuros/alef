@@ -26,7 +26,7 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
     let mut builder = RustFileBuilder::new().with_generated_header();
     builder.add_inner_attribute("allow(dead_code, unused_imports, unused_mut, noop_method_call)");
     builder.add_inner_attribute("allow(unsafe_op_in_unsafe_fn, unsafe_attr_outside_unsafe)");
-    builder.add_inner_attribute("allow(clippy::let_unit_value, clippy::needless_borrow, clippy::redundant_locals, dropping_references, clippy::unused_unit, clippy::unwrap_or_default, clippy::derivable_impls, clippy::needless_borrows_for_generic_args, clippy::unnecessary_fallible_conversions, clippy::type_complexity, clippy::clone_on_copy, clippy::collapsible_if)");
+    builder.add_inner_attribute("allow(clippy::let_unit_value, clippy::needless_borrow, clippy::redundant_locals, clippy::unused_unit, clippy::unwrap_or_default, clippy::derivable_impls, clippy::needless_borrows_for_generic_args, clippy::unnecessary_fallible_conversions, clippy::type_complexity, clippy::clone_on_copy, clippy::collapsible_if)");
     builder.add_inner_attribute(
         "allow(clippy::missing_safety_doc, clippy::doc_lazy_continuation, clippy::doc_overindented_list_items)",
     );

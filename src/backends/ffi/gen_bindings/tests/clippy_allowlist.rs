@@ -75,6 +75,23 @@ prefix = "sample"
         "every cast this backend emits converts a bool or a Named enum to a different \
          primitive type, which clippy's same-type check can never flag as redundant:\n{header}"
     );
+    // `dropping_references` fires only when `drop(...)`'s argument is itself a reference
+    // (`&T`/`&mut T`); dropping a reference is a no-op the lint exists to catch. Every explicit
+    // `drop(...)` this backend emits drops an owned value instead: `free_bytes.jinja`'s
+    // `Box::<[u8]>::from_raw(..)`, `free_string.jinja`'s `CString::from_raw(..)`,
+    // `handle_registry.rs.jinja`'s `self.take::<T>(handle)?` and `guard` (an owned
+    // `MutexGuard`, not a borrow of one), and `orchestration.rs`'s `std::mem::drop(obj)` for a
+    // method literally named `drop`, where `obj` comes from `null_check_self_owned.jinja`'s
+    // `take_handle::<T>(this)` -- an owned `T`, never a reference binding. No template or
+    // generator path in this backend ever passes a reference to `drop(...)`, so the entry never
+    // had anything to allow. Confirmed with a real `cargo clippy --all-targets -- -D warnings`
+    // run over the gate fixture (`tests/generated_output_downstream_gate.rs`) with the entry
+    // removed: no new warning appeared. Removed and pinned here per this test's own contract. ~keep
+    assert!(
+        !header.contains("dropping_references"),
+        "every drop(...) this backend emits drops an owned value, never a reference, so the \
+         crate-level allow was a no-op:\n{header}"
+    );
 }
 
 /// The paired positive: the narrow per-item allow this audit added actually reaches the

@@ -270,6 +270,13 @@ const POLY: GateTool = GateTool {
 mod poly_fmt_exclusions;
 use poly_fmt_exclusions::poly_fmt_check_args;
 
+// The reverse-direction check for the FFI crate's crate-level clippy allow list (an entry that
+// no longer corresponds to any generated pattern) lives in its own submodule for the same
+// reason: this file is already over the 1,000-line cap, so a new concern gets a new file
+// instead of more lines here. See that module's doc for the full rationale. ~keep
+#[path = "generated_output_downstream_gate/ffi_allowlist_gate.rs"]
+mod ffi_allowlist_gate;
+
 const CARGO: GateTool = GateTool {
     program: "cargo",
     display: "cargo clippy",
