@@ -18,7 +18,7 @@
                 conversionFailure = failure;
                 throw failure;
             } finally {
-                java.util.List<Throwable> cleanupFailures = new java.util.ArrayList<>();
+                List<Throwable> cleanupFailures = new java.util.ArrayList<>();
                 try {
                     if (!jsonPtr.equals(MemorySegment.NULL)) NativeLib.{{ prefix_upper }}_FREE_STRING.invoke(jsonPtr);
                 } catch (Throwable failure) {
