@@ -130,6 +130,14 @@ impl Status {
         }
     }
 }
+#[allow(dead_code)]
+fn __alef_status_from_swift_string(value: &str) -> demo::Status {
+    match value {
+        "Active" => demo::Status::Active,
+        "Inactive" => demo::Status::Inactive,
+        _ => panic!("unknown Status variant: {}", value),
+    }
+}
 
 pub fn process(input: String, count: u32) -> Result<String, String> {
     demo::process(input, count).map_err(|e| e.to_string()).map(|s| s.to_string())

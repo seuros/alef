@@ -163,6 +163,14 @@ impl FlowDecision {
         }
     }
 }
+#[allow(dead_code)]
+fn __alef_flow_decision_from_swift_string(value: &str) -> demo::callbacks::FlowDecision {
+    match value {
+        "Accept" => demo::callbacks::FlowDecision::Accept,
+        "Stop" => demo::callbacks::FlowDecision::Stop,
+        _ => panic!("unknown FlowDecision variant: {}", value),
+    }
+}
 
 pub struct MarkupCallbackBox(pub Box<dyn demo::callbacks::MarkupCallback + Send + Sync>);
 #[doc(hidden)]
