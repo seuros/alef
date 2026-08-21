@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`alef verify --exit-code` could never pass on a tree that had just been cleanly
+  regenerated: its disk walk descended into gitignored dependency-fetch caches and
+  build-output directories, claiming content it neither generated nor manages.**
+  `collect_alef_hashes` (`src/bin_cli/helpers.rs`) only pruned a small, hand-maintained list of
+  build/cache directory names (`target/`, `node_modules/`, ...), which cannot know about a
+  consumer's own package-manager fetch cache or a build tool's own output directory. Observed in
+  html-to-markdown: a zig package manager's local dependency cache
+  (`test_apps/zig/zig-pkg/<fetched-package>/src/*.zig`) carried old `alef:hash:` headers from
+  whichever alef version generated the upstream package release at fetch time, and
+  `wasm-pack build` copies the crate's own alef-marked `README.md` into
+  `crates/<crate>-wasm/pkg/<target>/README.md` as part of packaging — both directories are
+  gitignored, untracked, and not part of this run's generation input or output, yet `alef
+  verify` opened them anyway and reported the fetched/copied files stale and orphaned on every
+  run, regardless of how many times `alef all` had just regenerated the tree. Added
+  `verify_gitignore::gitignored_dirs` (`src/bin_cli/verify_gitignore.rs`), which asks git
+  directly (`git ls-files --others --ignored --exclude-standard --directory`) which directories
+  are ignored and prunes them from the walk — generalizing the hand-maintained skip list to
+  "whatever this repo itself says is ignored" instead of adding one more magic directory name
+  per incident. Falls back to an empty set outside a git work tree or without `git` on `$PATH`,
+  so the walk's existing hand-maintained baseline is unaffected there. Regression coverage:
+  `gitignored_dirs_reports_a_nested_dependency_cache_directory` and its siblings
+  (`src/bin_cli/verify_gitignore/tests.rs`), and
+  `verify_passes_with_zero_findings_despite_a_gitignored_dependency_cache_directory`
+  (`src/bin_cli/core_commands/tests.rs`), which drives a real `alef all` + `alef verify` through
+  the CLI dispatch path against a fixture carrying a gitignored, alef-marked-but-foreign file.
+
 ## [0.62.10] - 2026-08-21
 
 ### Fixed
