@@ -85,6 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus `let assert Ok(…)`, `.expect("call failed")`, Zig's `try`, and `expect { … }.not_to
   raise_error` respectively — so a wrapper there would be redundant, not missing.
 
+- **`MaterializeSwiftBridge`'s ownership manifest no longer claims swift-bridge files it never
+  wrote.** `PostBuildStep::owned_paths` predicted the full `SwiftBridgeCore.swift` /
+  `{binding_crate_name}.swift` / `RustBridgeC.h` trio unconditionally, but the step's actual
+  write (`emit_swift_bridge_files`) only produces that trio once it finds a real swift-bridge
+  build output directory (or a header already carrying its marker from an earlier real build) —
+  before that, it writes the placeholder header alone. On a project's first successful
+  generation, before any real `cargo build` output exists, the ownership manifest ended up
+  naming two paths that were never written, which `alef verify` and the orphan sweep could
+  never find on disk. `owned_paths` now filters its prediction to paths that actually exist,
+  which every caller only inspects after the post-build step already ran, so a real trio
+  already on disk from an earlier run still stays protected from the orphan sweep.
+
 ### Changed
 
 - The `Publish` workflow no longer gates on a green `CI` run for the released commit. The gate

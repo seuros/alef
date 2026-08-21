@@ -170,11 +170,29 @@ impl PostBuildStep {
                 let package_root = base_dir.join(package_root);
                 let sources_rust_bridge = package_root.join("Sources").join("RustBridge");
                 let sources_rust_bridge_c = package_root.join("Sources").join("RustBridgeC");
+                // `emit_swift_bridge_files` (the function this step actually calls) only
+                // writes the full `SwiftBridgeCore.swift` / `{binding_crate_name}.swift` /
+                // `RustBridgeC.h` trio once it finds a real swift-bridge build output
+                // directory (or a header already carrying its marker from an earlier real
+                // build); until then it writes the placeholder header alone. Predicting the
+                // full trio unconditionally -- as this used to -- claims two files that were
+                // never written on a project's first successful generation, so the ownership
+                // manifest names paths `alef verify`/the orphan sweep can never find on disk.
+                // Every caller of this method runs it after the post-build step it describes
+                // has already executed (`bin_cli::core_commands`'s generate handler calls it
+                // once `complete_generated_artifacts` returns; `alef verify` inspects a tree a
+                // prior `alef generate` already built), so filtering to what is actually
+                // present keeps both the alef #B protection (a real trio already on disk from
+                // an earlier run stays claimed even when this run's build left it untouched)
+                // and manifest accuracy (a path never written is never claimed). ~keep
                 vec![
                     sources_rust_bridge_c.join("RustBridgeC.h"),
                     sources_rust_bridge.join("SwiftBridgeCore.swift"),
                     sources_rust_bridge.join(format!("{binding_crate_name}.swift")),
                 ]
+                .into_iter()
+                .filter(|path| path.is_file())
+                .collect()
             }
             PostBuildStep::PatchFile { .. }
             | PostBuildStep::RunCommand { .. }
@@ -412,26 +430,72 @@ mod post_build_step_owned_paths_tests {
     /// The regression this guards: the orphan sweep in `bin_cli::core_commands` claims a
     /// path as generation-owned via `generation_owned_paths`, built from *this run's*
     /// `owned_paths()` union across every configured post-build step. If
-    /// `MaterializeSwiftBridge` ever stopped naming all three paths it actually writes,
+    /// `MaterializeSwiftBridge` ever stopped naming every path it actually left on disk,
     /// the missing one would read as "alef no longer generates this" on the very next run
-    /// and get deleted -- the alef #B incident this whole mechanism exists to prevent. ~keep
+    /// and get deleted -- the alef #B incident this whole mechanism exists to prevent.
+    /// Every caller of `owned_paths` runs it after the post-build step already executed, so
+    /// this test writes the real trio to a tempdir first to prove the claim is still made
+    /// once the files genuinely exist. ~keep
     #[test]
     fn materialize_swift_bridge_claims_all_three_files_it_writes_unguarded() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let base_dir = base.path();
         let step = PostBuildStep::MaterializeSwiftBridge {
             binding_crate_name: "sample-lib-swift".to_string(),
             package_root: "packages/swift".to_string(),
         };
-        let base_dir = Path::new("/repo");
+        let sources_rust_bridge = base_dir.join("packages/swift/Sources/RustBridge");
+        let sources_rust_bridge_c = base_dir.join("packages/swift/Sources/RustBridgeC");
+        std::fs::create_dir_all(&sources_rust_bridge).expect("create RustBridge dir");
+        std::fs::create_dir_all(&sources_rust_bridge_c).expect("create RustBridgeC dir");
+        std::fs::write(sources_rust_bridge_c.join("RustBridgeC.h"), "// header\n").expect("write header");
+        std::fs::write(sources_rust_bridge.join("SwiftBridgeCore.swift"), "// core\n").expect("write core");
+        std::fs::write(sources_rust_bridge.join("sample-lib-swift.swift"), "// crate\n").expect("write crate swift");
+
         let mut owned = step.owned_paths(base_dir);
         owned.sort();
 
         let mut expected = vec![
-            PathBuf::from("/repo/packages/swift/Sources/RustBridgeC/RustBridgeC.h"),
-            PathBuf::from("/repo/packages/swift/Sources/RustBridge/SwiftBridgeCore.swift"),
-            PathBuf::from("/repo/packages/swift/Sources/RustBridge/sample-lib-swift.swift"),
+            sources_rust_bridge_c.join("RustBridgeC.h"),
+            sources_rust_bridge.join("SwiftBridgeCore.swift"),
+            sources_rust_bridge.join("sample-lib-swift.swift"),
         ];
         expected.sort();
         assert_eq!(owned, expected);
+    }
+
+    /// The bug this guards: before this fix, `owned_paths` predicted the full swift-bridge
+    /// trio unconditionally, even though `emit_swift_bridge_files` only writes
+    /// `SwiftBridgeCore.swift`/`{binding_crate_name}.swift` once it finds real build output
+    /// (or an already-materialized header) -- on a project's first successful generation,
+    /// before any real `cargo build` output exists, it writes the placeholder header alone.
+    /// That mismatch put two never-written paths in the generation ownership manifest, which
+    /// `cli_generate_atomicity`'s `failed_swift_post_build_preserves_owned_files_and_finalizes_written_outputs`
+    /// catches as "the first successful generation must leave every owned output on disk".
+    /// Only the header that actually exists must be claimed; the two paths that were never
+    /// written must not be. ~keep
+    #[test]
+    fn materialize_swift_bridge_does_not_claim_trio_members_it_never_wrote() {
+        let base = tempfile::tempdir().expect("tempdir");
+        let base_dir = base.path();
+        let step = PostBuildStep::MaterializeSwiftBridge {
+            binding_crate_name: "sample-lib-swift".to_string(),
+            package_root: "packages/swift".to_string(),
+        };
+        let sources_rust_bridge_c = base_dir.join("packages/swift/Sources/RustBridgeC");
+        std::fs::create_dir_all(&sources_rust_bridge_c).expect("create RustBridgeC dir");
+        // Only the placeholder header exists -- as `emit_swift_bridge_files` leaves it before
+        // any real swift-bridge build output has ever been found.
+        std::fs::write(sources_rust_bridge_c.join("RustBridgeC.h"), "// placeholder header\n")
+            .expect("write placeholder header");
+
+        let owned = step.owned_paths(base_dir);
+
+        assert_eq!(
+            owned,
+            vec![sources_rust_bridge_c.join("RustBridgeC.h")],
+            "only the header that was actually written must be claimed; got: {owned:?}"
+        );
     }
 
     #[test]
