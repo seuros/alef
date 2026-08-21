@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The JNI manifest declared a capsule-backing crate (e.g. `tree-sitter`) as a direct dependency
+  it never actually used, so `cargo machete` correctly stripped it and fought every subsequent
+  `alef generate` (alef #145).** `scaffold_jni` added the capsule type's `package` (from
+  `[crates.ffi.capsule_types]`, intersected with `[crates.kotlin_android.capsule_types]`) to
+  `[dependencies]` on the premise that the JNI shim emitted an
+  `value.into_raw() as *const {into_raw_type}` cast referencing it. That cast was already removed
+  from `method_capsule_return.rs.jinja` as a same-type cast tripping `clippy::unnecessary_cast`
+  (see `capsule_returns_transfer_the_pointer_without_a_redundant_cast`); the JNI shim now
+  transfers a capsule return through `.into_raw()` type inference alone and never spells the
+  capsule crate's path, so the dependency the manifest declared was genuinely unused. `scaffold_jni`
+  (`src/scaffold/languages/jni.rs`) no longer adds a capsule package dependency to the JNI
+  manifest. Regression coverage: `scaffold_jni_never_declares_a_capsule_package_dependency`.
+
 ## [0.62.8] - 2026-08-21
 
 ### Fixed
