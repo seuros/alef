@@ -267,6 +267,7 @@ fn main() {{ assert_eq!(convert(1), 0); }}
     let binary_path = directory.path().join("scalar-handle-constructor-test");
     std::fs::write(&source_path, source).expect("write compile harness");
     let compile = std::process::Command::new("rustc")
+        .current_dir(directory.path())
         .args(["--edition=2024", "-o"])
         .arg(&binary_path)
         .arg(&source_path)

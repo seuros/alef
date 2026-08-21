@@ -82,6 +82,7 @@ fn main() {
     let binary_path = directory.path().join("registry-test");
     std::fs::write(&source_path, source).expect("write harness");
     let compile = std::process::Command::new("rustc")
+        .current_dir(directory.path())
         .args(["--edition=2024", "-o"])
         .arg(&binary_path)
         .arg(&source_path)
@@ -89,6 +90,7 @@ fn main() {
         .expect("run rustc");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
     let run = std::process::Command::new(&binary_path)
+        .current_dir(directory.path())
         .output()
         .expect("run registry harness");
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));

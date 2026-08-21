@@ -308,6 +308,7 @@ fn main() {{
     let binary_path = directory.path().join("service-registration-test");
     std::fs::write(&source_path, source).expect("write compile harness");
     let compile = std::process::Command::new("rustc")
+        .current_dir(directory.path())
         .args(["--edition=2024", "-o"])
         .arg(&binary_path)
         .arg(&source_path)
@@ -355,6 +356,7 @@ fn main() {{
     let binary_path = directory.path().join("entrypoint-result-status-test");
     std::fs::write(&source_path, source).expect("write compile harness");
     let compile = std::process::Command::new("rustc")
+        .current_dir(directory.path())
         .args(["--edition=2024", "-o"])
         .arg(&binary_path)
         .arg(&source_path)
@@ -362,6 +364,7 @@ fn main() {{
         .expect("run rustc");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
     let run = std::process::Command::new(&binary_path)
+        .current_dir(directory.path())
         .output()
         .expect("run compiled harness");
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
@@ -412,6 +415,7 @@ fn main() {{
     let binary_path = directory.path().join("entrypoint-opaque-result-test");
     std::fs::write(&source_path, source).expect("write compile harness");
     let compile = std::process::Command::new("rustc")
+        .current_dir(directory.path())
         .args(["--edition=2024", "-o"])
         .arg(&binary_path)
         .arg(&source_path)
@@ -419,6 +423,7 @@ fn main() {{
         .expect("run rustc");
     assert!(compile.status.success(), "{}", String::from_utf8_lossy(&compile.stderr));
     let run = std::process::Command::new(&binary_path)
+        .current_dir(directory.path())
         .output()
         .expect("run compiled harness");
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
