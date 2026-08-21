@@ -414,8 +414,12 @@ pub fn filter_excluded_functions(source: &str, exclude_functions: &std::collecti
     result
 }
 
-/// Convert Rust snake_case to Dart lowerCamelCase
-fn snake_to_camel(name: &str) -> String {
+/// Convert Rust snake_case to Dart lowerCamelCase.
+///
+/// `pub(super)`: also used by [`super::bridge_coverage::missing_bridge_functions`], which
+/// needs the identical name-matching convention to look up a facade function's Dart name in
+/// bridge output.
+pub(super) fn snake_to_camel(name: &str) -> String {
     let mut result = String::new();
     let mut capitalize_next = false;
 
