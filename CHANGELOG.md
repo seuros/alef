@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Snippet validation passed `-I` to `zig build`, which rejects it, failing every zig snippet
+  routed through a real zig package (one with `build.zig` and `build.zig.zon` next to the
+  binding module).** `ZigValidator::validate_in_session` (`src/snippets/validators/zig.rs`)
+  reconstructs the command as `zig build --summary none --build-file ...` when
+  `zig_package_root` finds a real package, but the include-path application that follows
+  (`apply_include_paths`, which emits `-I`) ran unconditionally for both that path and the
+  `zig build-exe` path — and `-I` is a `build-exe`-only flag, so `zig build` fails outright with
+  `unrecognized argument: '-I'` before compiling a line. The build-system path needs no
+  `-I` at all: the snippet imports only the binding module, and the package's own `build.zig`
+  already declares its include directories, reaching the compilation through the dependency.
+  Guarded both `apply_include_paths` calls behind a `uses_build_system` flag set only on the
+  `zig build-exe` path. This was a field regression from the `build-exe` include-path fix
+  (0.61.0's `ca830e3fc`); its own 25 tests all construct a bare manifest with no
+  `build.zig.zon`, so none of them ever drove `zig_package_root` to `Some` and exercised the
+  `zig build --build-file` branch. Regression coverage:
+  `session_include_paths_are_not_forwarded_to_the_build_system_command`
+  (`src/snippets/validators/zig/session_command_tests.rs`), a new sibling test module (`zig.rs`
+  is already at the 1,000-line file cap).
+
 ## [0.62.9] - 2026-08-21
 
 ### Fixed

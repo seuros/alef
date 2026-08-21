@@ -7,6 +7,8 @@ use crate::snippets::validators::{BatchValidation, SnippetValidator, run_command
 pub struct ZigValidator;
 
 mod batch;
+#[cfg(test)]
+mod session_command_tests;
 
 impl SnippetValidator for ZigValidator {
     fn language(&self) -> Language {
@@ -70,6 +72,7 @@ impl SnippetValidator for ZigValidator {
             command.args(["build-exe", "-fno-emit-bin"]);
         }
         let mut declared_include_paths = Vec::new();
+        let mut uses_build_system = false;
         if level == ValidationLevel::Syntax {
             command.arg(&file);
         } else if let Some(manifest) = session.manifest.as_deref() {
@@ -79,6 +82,13 @@ impl SnippetValidator for ZigValidator {
                 command = std::process::Command::new("zig");
                 command.args(["build", "--summary", "none", "--build-file"]);
                 command.arg(build_file);
+                // `-I` is a `zig build-exe` flag; `zig build` rejects it outright with
+                // `unrecognized argument: '-I'` and fails the snippet before it compiles a line.
+                // This path does not need one: the snippet's only import is the binding module,
+                // and the package's own `build.zig` already declares its include directories, so
+                // they reach the compilation through the dependency rather than the command line.
+                // ~keep
+                uses_build_system = true;
             } else {
                 command
                     .args(["--dep", &module_name])
@@ -97,8 +107,10 @@ impl SnippetValidator for ZigValidator {
         } else {
             command.arg(&file);
         }
-        apply_include_paths(&mut command, &session.include_paths);
-        apply_include_paths(&mut command, &declared_include_paths);
+        if !uses_build_system {
+            apply_include_paths(&mut command, &session.include_paths);
+            apply_include_paths(&mut command, &declared_include_paths);
+        }
         apply_cache_dirs(&mut command, dir.path());
         session.apply(&mut command);
         let (success, output) = run_command(&mut command, timeout_secs)?;
