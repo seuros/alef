@@ -209,7 +209,7 @@ pub(super) fn compute_sha256_hex(bytes: &[u8]) -> String {
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());
 
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut w = [Wrapping(0u32); 64];
         for i in 0..16 {
             w[i] = Wrapping(u32::from_be_bytes([

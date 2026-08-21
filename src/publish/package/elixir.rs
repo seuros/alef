@@ -199,9 +199,9 @@ impl Sha256 {
         self.buf.extend_from_slice(&orig_len_bits.to_be_bytes());
 
         let k: [u32; 64] = SHA256_K;
-        for block in self.buf.chunks_exact(64) {
+        for block in self.buf.as_chunks::<64>().0 {
             let mut w = [0u32; 64];
-            for (i, chunk) in block.chunks_exact(4).enumerate().take(16) {
+            for (i, chunk) in block.as_chunks::<4>().0.iter().enumerate().take(16) {
                 w[i] = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             }
             for i in 16..64 {
