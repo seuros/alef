@@ -16,11 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero-entry matrix as zero job legs and reports the job as a vacuous success rather than a
   failure — the same "SKIPPED reads as PASSED" shape that produced a false-premise bug report
   in html-to-markdown. The step now hard-fails when the target list is empty, before ever
-  writing `matrix=`/`assets=` to `$GITHUB_OUTPUT`. Added
-  `src/publish/cli_release_matrix.rs::{parse_cli_release_targets, cli_release_matrix_outputs}`
-  as the typed, tested mirror of the same non-empty invariant, with table-driven regression
-  tests covering an empty list (errors), a populated list (succeeds), and malformed JSON
-  (errors).
+  writing `matrix=`/`assets=` to `$GITHUB_OUTPUT`.
 - **`sync-versions` bumped every `Cargo.toml` it owned but never refreshed the sibling
   `Cargo.lock`, so `alef validate versions` — which discovers lockfiles through a separately
   derived, broader enumeration — found the stale pin and failed the release gate (alef #148).**

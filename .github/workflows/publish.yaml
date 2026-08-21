@@ -71,8 +71,7 @@ jobs:
       # zero-entry matrix, and GitHub Actions reports that as a silent job success, not a
       # failure -- a release with no CLI binaries and no red X anywhere. That is the same
       # "SKIPPED reads as PASSED" shape that caused a false-premise bug report in
-      # html-to-markdown; `src/publish/cli_release_matrix.rs` carries the tested Rust
-      # mirror of this same non-empty invariant.
+      # html-to-markdown.
       - name: Resolve CLI target matrix
         id: cli-targets
         shell: bash
