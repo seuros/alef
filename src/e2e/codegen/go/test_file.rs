@@ -1,7 +1,6 @@
 //! Go e2e test file rendering.
 
 use crate::core::hash::{self, CommentStyle};
-use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Fixture;
 use std::fmt::Write as FmtWrite;
 
@@ -160,12 +159,6 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
 
     let needs_base64 = false;
 
-    let call_result_is_simple = |cc: &crate::core::config::e2e::CallConfig| -> bool {
-        cc.overrides.get("go").is_some_and(|o| o.result_is_simple)
-            || cc.result_is_simple
-            || cc.overrides.get("rust").map(|o| o.result_is_simple).unwrap_or(false)
-    };
-
     let needs_fmt = fixtures.iter().any(|f| {
         f.visitor.as_ref().is_some_and(|v| {
             v.callbacks.values().any(|action| {
@@ -185,44 +178,6 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 .iter()
                 .any(|a| a.field.as_deref().is_some_and(|field| field.contains("[].")))
         });
-
-    let needs_strings = fixtures.iter().any(|f| {
-        if !emits_executable_test(f) {
-            return false;
-        }
-        let cc =
-            e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        if cc.args.iter().any(|arg| arg.arg_type == "mock_url_list") {
-            return true;
-        }
-        let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) =
-            FieldResolver::ir_field_sets(type_defs);
-        let per_call_resolver = FieldResolver::new(
-            e2e_config.effective_fields(cc),
-            e2e_config.effective_fields_optional(cc),
-            e2e_config.effective_result_fields(cc),
-            e2e_config.effective_fields_array(cc),
-            &std::collections::HashSet::new(),
-        )
-        .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
-        f.assertions.iter().any(|a| {
-            let type_needs_strings = if a.assertion_type == "equals" {
-                a.value.as_ref().is_some_and(|v| v.is_string())
-            } else {
-                matches!(
-                    a.assertion_type.as_str(),
-                    "contains" | "contains_all" | "contains_any" | "not_contains" | "starts_with" | "ends_with"
-                )
-            };
-            let simple_result = call_result_is_simple(cc);
-            let field_valid = a
-                .field
-                .as_ref()
-                .map(|f| f.is_empty() || simple_result || per_call_resolver.is_valid_for_result(f))
-                .unwrap_or(true);
-            type_needs_strings && field_valid
-        })
-    });
 
     let has_http_fixtures = fixtures.iter().any(|f| f.is_http_test());
     let needs_http = has_http_fixtures;
@@ -272,14 +227,20 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
     }
 
     let needs_assert = body.contains("assert.");
-    // ~keep Both flags above are fixture-level heuristics ("some assertion is of a kind that
-    // might want this package"), deliberately a superset: an assertion can be skipped, degraded
-    // to a stub, or rendered without ever naming the package. Go rejects an unused import, so
-    // the rendered body is the only sound authority — `||` let the heuristic alone force the
-    // import and emitted `"strings" imported and not used`. Matches how needs_fmt/needs_pkg
-    // below already narrow their own heuristics.
+    // ~keep needs_os is a fixture-level heuristic ("some assertion is of a kind that might want
+    // this package"), deliberately a superset: an assertion can be skipped, degraded to a stub,
+    // or rendered without ever naming the package. Go rejects an unused import, so the rendered
+    // body is the only sound authority — `||` let the heuristic alone force the import and
+    // emitted `"os" imported and not used`. Matches how needs_fmt/needs_pkg below already narrow
+    // their own heuristics.
     let needs_os = needs_os && body.contains("os.");
-    let needs_strings = needs_strings && body.contains("strings.");
+    // ~keep `strings.` is emitted from several independent sites (equality/contains/prefix/
+    // suffix assertions, declared-error-value checks, HTTP header/body assertions, mock URL
+    // list setup) that drift out of sync with any hand-maintained enumeration — a prior
+    // heuristic here missed the declared-error-value path and dropped the import for
+    // `error_test.go`. The rendered body is the only sound and complete authority, so this
+    // reads it directly instead of re-deriving which assertion kinds need the package.
+    let needs_strings = body.contains("strings.");
     let needs_pkg = needs_pkg && body.contains(&format!("{import_alias}."));
     // Even when a fixture *could* need fmt (a CustomTemplate), it might be
     // emitted as a panic stub instead. Require the body to actually reference

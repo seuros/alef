@@ -7,8 +7,8 @@ use crate::core::config::e2e::ArgMapping;
 use crate::e2e::config::{CallConfig, E2eConfig};
 use crate::e2e::fixture::{Assertion, Fixture};
 
-fn render_equals_fixture(value: serde_json::Value) -> String {
-    let e2e_config = E2eConfig {
+fn e2e_config_for_describe() -> E2eConfig {
+    E2eConfig {
         call: CallConfig {
             function: "describe".to_string(),
             module: "github.com/example/mylib".to_string(),
@@ -29,18 +29,15 @@ fn render_equals_fixture(value: serde_json::Value) -> String {
             ..CallConfig::default()
         },
         ..E2eConfig::default()
-    };
+    }
+}
 
+fn render_fixture(e2e_config: &E2eConfig, assertions: Vec<Assertion>) -> String {
     let fixture = Fixture {
         id: "describe_plain".to_string(),
         description: "Describe a value".to_string(),
         input: serde_json::json!({"data": "hello"}),
-        assertions: vec![Assertion {
-            assertion_type: "equals".to_string(),
-            field: Some("result".to_string()),
-            value: Some(value),
-            ..Default::default()
-        }],
+        assertions,
         ..Fixture::default()
     };
 
@@ -55,7 +52,7 @@ fn render_equals_fixture(value: serde_json::Value) -> String {
         GoTestFileContext {
             go_module_path: "github.com/example/mylib",
             import_alias: "sample_crate",
-            e2e_config: &e2e_config,
+            e2e_config,
             adapters: &[],
             data_enum_names: &std::collections::HashSet::new(),
             config: &config,
@@ -63,6 +60,18 @@ fn render_equals_fixture(value: serde_json::Value) -> String {
             enums: &enums,
             errors: &errors,
         },
+    )
+}
+
+fn render_equals_fixture(value: serde_json::Value) -> String {
+    render_fixture(
+        &e2e_config_for_describe(),
+        vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("result".to_string()),
+            value: Some(value),
+            ..Default::default()
+        }],
     )
 }
 
@@ -91,3 +100,31 @@ fn string_equals_does_not_emit_an_unused_strings_import() {
 // The positive direction — an import IS emitted when the body references the package — is
 // already covered by `tests::test_result_is_simple_contains_binds_result_and_emits_imports`,
 // which asserts the `strings` import for a `contains` assertion that renders `strings.Contains`.
+
+/// A declared `error` assertion value renders through `strings.Contains(err.Error(), ...)`
+/// (`test_function.rs::emit_declared_error_value_assertion`) regardless of assertion kind, but
+/// the fixture-level `needs_strings` heuristic only ever inspected `equals`/`contains`-family
+/// assertion types — never `error`. Combining that heuristic with `body.contains("strings.")`
+/// via `&&` meant a real `strings.` reference in the body was silently dropped from the import list,
+/// producing a Go file that fails to compile (`undefined: strings`), exactly as observed in
+/// crawlberg's `error_test.go:210:7: undefined: strings`.
+#[test]
+fn declared_error_value_assertion_emits_strings_import() {
+    let out = render_fixture(
+        &e2e_config_for_describe(),
+        vec![Assertion {
+            assertion_type: "error".to_string(),
+            value: Some(serde_json::Value::String("SomeExpectedError".to_string())),
+            ..Default::default()
+        }],
+    );
+
+    assert!(
+        out.contains("strings.Contains(err.Error()"),
+        "expected declared error value to render a strings.Contains check; got:\n{out}"
+    );
+    assert!(
+        out.contains("\t\"strings\""),
+        "body references `strings.` but the import was not emitted; got:\n{out}"
+    );
+}
