@@ -114,6 +114,7 @@ impl E2eCodegen for KotlinE2eCodegen {
                 &kotlin_version,
                 e2e_config.dep_mode,
                 has_http_fixtures,
+                &e2e_config.test_documents_relative_from(0),
             ),
             generated_header: false,
         });

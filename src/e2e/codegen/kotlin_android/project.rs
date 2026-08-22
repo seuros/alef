@@ -12,7 +12,8 @@ use std::path::PathBuf;
 
 use super::enum_fixtures::is_enum_typed;
 use super::gradle::{
-    render_build_gradle_kotlin_android, render_gradle_properties, render_settings_gradle_kotlin_android,
+    KotlinAndroidBuildGradleInputs, render_build_gradle_kotlin_android, render_gradle_properties,
+    render_settings_gradle_kotlin_android,
 };
 use super::gradle_wrapper::{
     GRADLE_WRAPPER_UNIX, GRADLE_WRAPPER_WINDOWS, get_gradle_wrapper_jar_base64, render_gradle_wrapper_properties,
@@ -161,16 +162,16 @@ pub(super) fn generate(
         .unwrap_or_default();
     files.push(GeneratedFile {
         path: output_base.join("build.gradle.kts"),
-        content: render_build_gradle_kotlin_android(
-            &kotlin_pkg_id,
-            &maven_coordinate,
-            e2e_config.dep_mode,
-            &jni_lib_name,
-            &jni_crate_path,
-            &e2e_config.env,
-            &capsule_types,
-            &e2e_config.test_documents_relative_from(0),
-        ),
+        content: render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: &kotlin_pkg_id,
+            maven_coordinate: &maven_coordinate,
+            dep_mode: e2e_config.dep_mode,
+            jni_lib_name: &jni_lib_name,
+            jni_crate_path: &jni_crate_path,
+            e2e_env: &e2e_config.env,
+            capsule_types: &capsule_types,
+            test_documents_path: &e2e_config.test_documents_relative_from(0),
+        }),
         generated_header: false,
     });
 

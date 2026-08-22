@@ -1192,6 +1192,7 @@ fn registry_dep_uses_group_artifact_version_coordinate() {
         "0.15.6-rc.3",
         crate::e2e::config::DependencyMode::Registry,
         false,
+        "../../test_documents",
     );
     assert!(
         out.contains(r#"testImplementation("dev.sample_router:sample_router-kotlin:0.15.6-rc.3")"#),
@@ -1210,6 +1211,7 @@ fn registry_dep_does_not_double_the_group_prefix() {
         "0.15.6-rc.3",
         crate::e2e::config::DependencyMode::Registry,
         false,
+        "../../test_documents",
     );
     assert!(
         out.contains(r#"testImplementation("dev.sample_router:sample_router-kotlin:0.15.6-rc.3")"#),
@@ -1232,10 +1234,47 @@ fn local_dep_references_built_jar_by_base_name() {
         "0.15.6-rc.3",
         crate::e2e::config::DependencyMode::Local,
         false,
+        "../../test_documents",
     );
     assert!(
         out.contains("packages/kotlin/build/libs/sample_router-0.15.6-rc.3.jar"),
         "expected local jar reference, got:\n{out}"
+    );
+}
+
+/// Regression: the test-documents directory name in the generated `workingDir` must
+/// come from `E2eConfig::test_documents_dir` (via `test_documents_relative_from`), not
+/// a hard-coded `"test_documents"` literal -- see CLAUDE.md's `project-agnostic-codegen`
+/// rule. A consumer that configures a non-default `test_documents_dir` must see that
+/// name reflected in the generated build.gradle.kts. Mirrors the kotlin_android
+/// regression (`kotlin_android::project::build_gradle_local_mode_working_dir_uses_configured_test_documents_dir`).
+#[test]
+fn build_gradle_working_dir_uses_configured_test_documents_dir() {
+    use crate::e2e::codegen::E2eCodegen;
+
+    let config = ResolvedCrateConfig::default();
+    let e2e_config = E2eConfig {
+        test_documents_dir: "fixture_files".to_string(),
+        ..E2eConfig::default()
+    };
+
+    let files = super::KotlinE2eCodegen
+        .generate(&[], &e2e_config, &config, &[], &[], &[], &[])
+        .expect("kotlin e2e generation succeeds on an empty fixture set");
+
+    let build_gradle = files
+        .iter()
+        .find(|f| f.path.ends_with("build.gradle.kts"))
+        .expect("build.gradle.kts must be generated");
+    assert!(
+        build_gradle.content.contains("../../fixture_files"),
+        "workingDir must resolve the configured test_documents_dir, got:\n{}",
+        build_gradle.content
+    );
+    assert!(
+        !build_gradle.content.contains("../../test_documents"),
+        "must not hard-code the literal `test_documents`, got:\n{}",
+        build_gradle.content
     );
 }
 
@@ -1500,6 +1539,7 @@ fn build_gradle_kotlin_declares_junit_platform_launcher_when_http_fixtures_prese
         "0.1.0",
         crate::e2e::config::DependencyMode::Local,
         true,
+        "../../test_documents",
     );
     assert!(
         out.contains(r#"testImplementation("org.junit.platform:junit-platform-launcher:"#),
@@ -1517,6 +1557,7 @@ fn build_gradle_kotlin_omits_junit_platform_launcher_without_http_fixtures() {
         "0.1.0",
         crate::e2e::config::DependencyMode::Local,
         false,
+        "../../test_documents",
     );
     assert!(
         !out.contains("junit-platform-launcher"),
