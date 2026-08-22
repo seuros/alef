@@ -1,72 +1,29 @@
 //! C# e2e test-backend stub emission.
 
+use crate::backends::csharp::trait_bridge::csharp_type_visible_pub;
+use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::e2e::codegen::TestBackendEmission;
 use crate::e2e::escape::sanitize_ident;
 use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use std::fmt::Write as FmtWrite;
 
-/// Map an IR `TypeRef` to a C# type string for stub method signatures.
+/// Collect every `Named` type name referenced within `ty`, at any nesting depth.
 ///
-/// Used only by `emit_test_backend` — not the full production type-map used by
-/// the C# backend generator.  Keeps stub generation self-contained and avoids
-/// a dependency on the private `backends::csharp::type_map` module.
-pub(super) fn csharp_type_for_stub(ty: &crate::core::ir::TypeRef) -> String {
-    use crate::core::ir::{PrimitiveType, TypeRef};
-    match ty {
-        TypeRef::Primitive(p) => match p {
-            PrimitiveType::Bool => "bool".to_string(),
-            PrimitiveType::U8 => "byte".to_string(),
-            PrimitiveType::U16 => "ushort".to_string(),
-            PrimitiveType::U32 => "uint".to_string(),
-            PrimitiveType::U64 => "ulong".to_string(),
-            PrimitiveType::I8 => "sbyte".to_string(),
-            PrimitiveType::I16 => "short".to_string(),
-            PrimitiveType::I32 => "int".to_string(),
-            PrimitiveType::I64 => "long".to_string(),
-            PrimitiveType::F32 => "float".to_string(),
-            PrimitiveType::F64 => "double".to_string(),
-            PrimitiveType::Usize => "ulong".to_string(), // usize maps to ulong in C# (not long!)
-            PrimitiveType::Isize => "long".to_string(),
-        },
-        TypeRef::String | TypeRef::Char | TypeRef::Path => "string".to_string(),
-        TypeRef::Bytes => "byte[]".to_string(),
-        TypeRef::Unit => "void".to_string(),
-        TypeRef::Optional(inner) => format!("{}?", csharp_type_for_stub(inner)),
-        TypeRef::Vec(inner) => format!("List<{}>", csharp_type_for_stub(inner)),
-        TypeRef::Map(k, v) => format!("Dictionary<{}, {}>", csharp_type_for_stub(k), csharp_type_for_stub(v)),
-        TypeRef::Named(name) => name.clone(),
-        TypeRef::Json => "object".to_string(),
-        TypeRef::Duration => "ulong?".to_string(),
-    }
-}
-
-fn csharp_type_for_stub_visible(
-    ty: &crate::core::ir::TypeRef,
-    excluded_types: &std::collections::HashSet<&str>,
-) -> String {
+/// Scopes [`csharp_type_visible_pub`]'s visibility set to exactly the types a given
+/// signature can reference, without needing the full crate-wide type universe: a name
+/// is visible if it is referenced here and not present in the caller's excluded set.
+pub(super) fn collect_named_types<'a>(ty: &'a crate::core::ir::TypeRef, out: &mut std::collections::HashSet<&'a str>) {
     use crate::core::ir::TypeRef;
     match ty {
         TypeRef::Named(name) => {
-            if excluded_types.contains(name.as_str()) {
-                "string".to_string()
-            } else {
-                name.clone()
-            }
+            out.insert(name.as_str());
         }
-        TypeRef::Optional(inner) => {
-            let inner_str = csharp_type_for_stub_visible(inner, excluded_types);
-            format!("{}?", inner_str)
-        }
-        TypeRef::Vec(inner) => {
-            let inner_str = csharp_type_for_stub_visible(inner, excluded_types);
-            format!("List<{}>", inner_str)
-        }
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => collect_named_types(inner, out),
         TypeRef::Map(k, v) => {
-            let key_str = csharp_type_for_stub_visible(k, excluded_types);
-            let val_str = csharp_type_for_stub_visible(v, excluded_types);
-            format!("Dictionary<{}, {}>", key_str, val_str)
+            collect_named_types(k, out);
+            collect_named_types(v, out);
         }
-        _ => csharp_type_for_stub(ty),
+        _ => {}
     }
 }
 
@@ -77,22 +34,24 @@ fn emit_csharp_stub_default(
     original_type: &crate::core::ir::TypeRef,
     visible_type: &str,
     defaults: &dyn crate::codegen::defaults::LanguageDefaults,
-    excluded_types: &std::collections::HashSet<&str>,
+    visible_type_names: &std::collections::HashSet<&str>,
 ) -> String {
     use crate::core::ir::TypeRef;
 
     // Check if this type or its inner types are non-visible
-    fn contains_non_visible(ty: &TypeRef, excluded_types: &std::collections::HashSet<&str>) -> bool {
+    fn contains_non_visible(ty: &TypeRef, visible_type_names: &std::collections::HashSet<&str>) -> bool {
         match ty {
-            TypeRef::Named(name) => excluded_types.contains(name.as_str()),
-            TypeRef::Optional(inner) => contains_non_visible(inner, excluded_types),
-            TypeRef::Vec(inner) => contains_non_visible(inner, excluded_types),
-            TypeRef::Map(k, v) => contains_non_visible(k, excluded_types) || contains_non_visible(v, excluded_types),
+            TypeRef::Named(name) => !visible_type_names.contains(name.as_str()),
+            TypeRef::Optional(inner) => contains_non_visible(inner, visible_type_names),
+            TypeRef::Vec(inner) => contains_non_visible(inner, visible_type_names),
+            TypeRef::Map(k, v) => {
+                contains_non_visible(k, visible_type_names) || contains_non_visible(v, visible_type_names)
+            }
             _ => false,
         }
     }
 
-    if contains_non_visible(original_type, excluded_types) {
+    if contains_non_visible(original_type, visible_type_names) {
         // Type contains non-visible parts, map to string default
         if visible_type.contains("?") {
             "null".to_string()
@@ -150,15 +109,17 @@ fn emit_csharp_stub_method(
     method_cs: &str,
     method: &crate::core::ir::MethodDef,
     defaults: &dyn crate::codegen::defaults::LanguageDefaults,
-    excluded_types: &std::collections::HashSet<&str>,
+    visible_type_names: &std::collections::HashSet<&str>,
     fixture: &crate::e2e::fixture::Fixture,
 ) {
     use crate::core::ir::TypeRef;
 
     // C# trait bridge interfaces expose synchronous methods even though Rust traits are async.
     // The bridge implementation blocks on the async Rust call. So stubs must always be sync
-    // (never emit `async Task<T>`). Always use the actual return type.
-    let ret_ty = csharp_type_for_stub_visible(&method.return_type, excluded_types);
+    // (never emit `async Task<T>`). Always use the actual return type. Routed through the same
+    // `csharp_type_visible_pub` the production interface uses, so stub signatures cannot drift
+    // from the interface they implement. ~keep
+    let ret_ty = csharp_type_visible_pub(&method.return_type, visible_type_names);
     // Use the visible type to determine the default value, not the original type
     // (e.g., HiddenRecord → string → "")
     // Try to extract a value from fixture.input.backend first; fall back to language defaults.
@@ -173,10 +134,10 @@ fn emit_csharp_stub_method(
             // properties that have validation requirements.
             match method.name.to_lowercase().as_str() {
                 "dimensions" | "embedding_dimensions" | "model_dimensions" => "1".to_string(),
-                _ => emit_csharp_stub_default(&method.return_type, &ret_ty, defaults, excluded_types),
+                _ => emit_csharp_stub_default(&method.return_type, &ret_ty, defaults, visible_type_names),
             }
         } else {
-            emit_csharp_stub_default(&method.return_type, &ret_ty, defaults, excluded_types)
+            emit_csharp_stub_default(&method.return_type, &ret_ty, defaults, visible_type_names)
         }
     });
 
@@ -188,7 +149,7 @@ fn emit_csharp_stub_method(
         .map(|p| {
             format!(
                 "{} {}",
-                csharp_type_for_stub_visible(&p.ty, excluded_types),
+                csharp_type_visible_pub(&p.ty, visible_type_names),
                 p.name.to_lower_camel_case()
             )
         })
@@ -224,9 +185,9 @@ fn emit_csharp_stub_method(
 ///   then lifecycle methods (Initialize, Shutdown) are emitted with default bodies.
 /// - Required methods are emitted with return-type defaults produced by `CSharpDefaults`.
 /// - Async methods return `Task<T>` and are `async`; sync methods are plain.
-/// - Type names come from `csharp_type_for_stub()` — no crate-domain names
-///   are hardcoded here. Non-visible types
-///   are NOT referenced in test stubs.
+/// - Type names come from [`csharp_type_visible_pub`] — the same seam the production
+///   `I{TraitName}` interface is generated from — so stub signatures cannot drift from
+///   the interface they implement. Non-visible types are NOT referenced in test stubs.
 pub fn emit_test_backend(
     trait_bridge: &crate::core::config::TraitBridgeConfig,
     methods: &[&crate::core::ir::MethodDef],
@@ -255,9 +216,26 @@ pub(super) fn emit_test_backend_with_class_name(
     // Derive a safe C# class identifier from the fixture id.
     let stub_class = format!("TestStub_{}", sanitize_ident(&fixture.id).to_upper_camel_case());
 
-    // Interface name: I{TraitName} following C# convention.
-    let trait_pascal = trait_bridge.trait_name.to_upper_camel_case();
+    // Interface name: I{TraitName}, spelled with `csharp_type_name` so it matches the
+    // production interface the binding backend emits (`trait_bridge.rs`), including
+    // initialism folding (e.g. `UuidPair` -> `UUIDPair`, `XMLBackend` -> `IXMLBackend`).
+    let trait_pascal = csharp_type_name(&trait_bridge.trait_name);
     let iface_name = format!("I{trait_pascal}");
+
+    // Scope the visibility set to exactly the Named types these methods reference, minus
+    // the caller's excluded (non-public) type names — matching the production interface's
+    // `visible_type_names` semantics without needing the full crate-wide type universe.
+    let mut referenced_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for method in methods.iter() {
+        collect_named_types(&method.return_type, &mut referenced_names);
+        for param in &method.params {
+            collect_named_types(&param.ty, &mut referenced_names);
+        }
+    }
+    let visible_type_names: std::collections::HashSet<&str> = referenced_names
+        .into_iter()
+        .filter(|name| !excluded_types.contains(name))
+        .collect();
 
     let plugin_name = fixture
         .input
@@ -294,8 +272,8 @@ pub(super) fn emit_test_backend_with_class_name(
             .iter()
             .filter(|m| m.trait_source.as_deref() == Some(super_trait))
         {
-            let method_cs = method.name.to_upper_camel_case();
-            emit_csharp_stub_method(&mut setup, &method_cs, method, &*defaults, excluded_types, fixture);
+            let method_cs = to_csharp_name(&method.name);
+            emit_csharp_stub_method(&mut setup, &method_cs, method, &*defaults, &visible_type_names, fixture);
             emitted_methods.insert(method.name.clone());
         }
     }
@@ -307,8 +285,8 @@ pub(super) fn emit_test_backend_with_class_name(
         if emitted_methods.contains(&method.name) {
             continue;
         }
-        let method_cs = method.name.to_upper_camel_case();
-        emit_csharp_stub_method(&mut setup, &method_cs, method, &*defaults, excluded_types, fixture);
+        let method_cs = to_csharp_name(&method.name);
+        emit_csharp_stub_method(&mut setup, &method_cs, method, &*defaults, &visible_type_names, fixture);
     }
 
     let _ = writeln!(setup, "    }}");

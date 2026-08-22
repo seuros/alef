@@ -1179,4 +1179,6 @@ mod not_error_presence_guard_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod trait_bridge_stub_interface_seam_tests;
+#[cfg(test)]
 mod void_not_error_call_tests;
