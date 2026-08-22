@@ -13,7 +13,7 @@ use crate::e2e::escape::sanitize_filename;
 use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
 use heck::ToUpperCamelCase;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::E2eCodegen;
@@ -224,7 +224,7 @@ impl E2eCodegen for PhpCodegen {
         // property. This covers DTOs where `getContent()` is a true accessor
         // without forcing getter syntax for scalar fields where the method does
         // not exist.
-        let php_enum_names: HashSet<String> = enums.iter().map(|e| e.name.clone()).collect();
+        let php_enum_lowering = enum_variant_access::PhpEnumLowering::from_enums(enums);
 
         for group in groups {
             let active: Vec<&Fixture> = group
@@ -249,7 +249,8 @@ impl E2eCodegen for PhpCodegen {
                 &class_name,
                 &test_class,
                 type_defs,
-                &php_enum_names,
+                enums,
+                &php_enum_lowering,
                 enum_fields,
                 result_is_simple,
                 php_client_factory,
@@ -313,6 +314,7 @@ fn default_php_pkg_path(config: &ResolvedCrateConfig) -> String {
 
 mod args;
 mod assertions;
+mod enum_variant_access;
 mod http;
 mod project;
 mod snippet;
