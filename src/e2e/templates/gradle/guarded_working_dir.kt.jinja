@@ -1,0 +1,9 @@
+    // Resolve fixture paths (e.g. "docx/fake.docx") against test_documents/ when
+    // the consumer ships such fixtures. Guard on existence: Gradle test workers
+    // fail to fork if workingDir points at a directory that does not exist --
+    // Gradle reports a misleading "Gradle Test Executor N ... not in started or
+    // detached state" with no assertion text at all. ~keep
+    val testDocuments = file("${rootDir}/{{ test_documents_path }}")
+    if (testDocuments.isDirectory) {
+        workingDir = testDocuments
+    }

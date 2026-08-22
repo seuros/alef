@@ -7,6 +7,8 @@
 
 mod enum_fixtures;
 mod gradle;
+#[cfg(test)]
+mod gradle_tests;
 mod gradle_wrapper;
 mod project;
 mod stubs;

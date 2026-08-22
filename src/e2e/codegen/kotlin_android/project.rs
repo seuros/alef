@@ -169,6 +169,7 @@ pub(super) fn generate(
             &jni_crate_path,
             &e2e_config.env,
             &capsule_types,
+            &e2e_config.test_documents_relative_from(0),
         ),
         generated_header: false,
     });
@@ -492,6 +493,68 @@ features = ["serde"]
         assert!(
             !files.iter().any(|f| f.path.ends_with("ExcludedBindingsTest.kt")),
             "no fixture should be excluded once the gating feature is enabled"
+        );
+    }
+
+    /// Regression: local-mode build.gradle.kts's `workingDir` assignment must be guarded
+    /// on the test_documents directory's existence, the same way the plain-Kotlin
+    /// generator (`kotlin::project::render_build_gradle`) already is. Gradle test workers
+    /// fail to fork ("Gradle Test Executor N ... not in started or detached state", with
+    /// the real fork `IOException` masked and no assertion text at all) when `workingDir`
+    /// points at a directory that does not exist -- reproduced against a consumer whose
+    /// `test_documents/` fixture directory has zero tracked files in a fresh checkout.
+    #[test]
+    fn build_gradle_local_mode_guards_working_dir_on_existence() {
+        let config = ResolvedCrateConfig::default();
+        let e2e_config = E2eConfig::default();
+
+        let files = generate(&[], &e2e_config, &config, &[], &[], &[]).expect("generation succeeds");
+
+        let build_gradle = files
+            .iter()
+            .find(|f| f.path.ends_with("build.gradle.kts"))
+            .expect("build.gradle.kts must be generated");
+        assert!(
+            build_gradle.content.contains(".isDirectory"),
+            "workingDir must be guarded on directory existence (mirrors \
+             kotlin::project::render_build_gradle), got:\n{}",
+            build_gradle.content
+        );
+        assert!(
+            build_gradle.content.contains("workingDir = testDocuments"),
+            "expected a guarded `workingDir = testDocuments` assignment, got:\n{}",
+            build_gradle.content
+        );
+    }
+
+    /// Regression: the test-documents directory name in the generated `workingDir` must
+    /// come from `E2eConfig::test_documents_dir` (via `test_documents_relative_from`), not
+    /// a hard-coded `"test_documents"` literal -- see CLAUDE.md's `project-agnostic-codegen`
+    /// rule. A consumer that configures a non-default `test_documents_dir` must see that
+    /// name reflected in the generated build.gradle.kts.
+    #[test]
+    fn build_gradle_local_mode_working_dir_uses_configured_test_documents_dir() {
+        let config = ResolvedCrateConfig::default();
+        let e2e_config = E2eConfig {
+            test_documents_dir: "fixture_files".to_string(),
+            ..E2eConfig::default()
+        };
+
+        let files = generate(&[], &e2e_config, &config, &[], &[], &[]).expect("generation succeeds");
+
+        let build_gradle = files
+            .iter()
+            .find(|f| f.path.ends_with("build.gradle.kts"))
+            .expect("build.gradle.kts must be generated");
+        assert!(
+            build_gradle.content.contains("../../fixture_files"),
+            "workingDir must resolve the configured test_documents_dir, got:\n{}",
+            build_gradle.content
+        );
+        assert!(
+            !build_gradle.content.contains("../../test_documents"),
+            "must not hard-code the literal `test_documents`, got:\n{}",
+            build_gradle.content
         );
     }
 }
