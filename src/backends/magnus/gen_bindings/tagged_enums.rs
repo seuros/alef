@@ -42,6 +42,7 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
     let class_name = &enum_def.name;
     let variant_names: Vec<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("kind");
+    let tag_field_symbol = crate::backends::magnus::ruby_symbol_literal(tag_field);
 
     let mut doc_comment = String::new();
     if !enum_def.doc.is_empty() {
@@ -77,6 +78,7 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
             class_name => class_name,
             doc_comment => doc_comment,
             tag_field => tag_field,
+            tag_field_symbol => tag_field_symbol,
             dispatch_arms => dispatch_arms,
         },
     ));

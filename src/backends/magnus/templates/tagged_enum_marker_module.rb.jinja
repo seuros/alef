@@ -10,7 +10,7 @@ module {{ module_name }}
     # @return [variant_class] an instance of the appropriate variant
     sig { params(hash: T::Hash[T.untyped, T.untyped]).returns(T.untyped) }
     def self.from_hash(hash)
-      discriminator = hash[:{{ tag_field }}] || hash["{{ tag_field }}"]
+      discriminator = hash[{{ tag_field_symbol }}] || hash["{{ tag_field }}"]
       case discriminator
 {{ dispatch_arms }}      else raise "Unknown discriminator: #{discriminator}"
       end
