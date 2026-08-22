@@ -242,6 +242,7 @@ fn verify_command_reports_and_fails_on_a_real_orphaned_generated_file() {
             clobber_create_once_seeds: false,
             strict: false,
             skip_frb: true,
+            skip_snippet_validation: false,
         },
         &context,
     )
@@ -350,6 +351,7 @@ fn verify_passes_with_zero_findings_despite_a_gitignored_dependency_cache_direct
             clobber_create_once_seeds: false,
             strict: false,
             skip_frb: true,
+            skip_snippet_validation: false,
         },
         &context,
     )
@@ -366,5 +368,85 @@ fn verify_passes_with_zero_findings_despite_a_gitignored_dependency_cache_direct
         "alef verify must pass with zero findings on a freshly regenerated tree, even with a \
          gitignored dependency-cache directory containing a stale, alef-marked file sitting \
          alongside it",
+    );
+}
+
+/// THE STRUCTURAL PROOF that `alef docs --skip-snippet-validation` actually reaches
+/// `docs::generate_docs_stage_without_snippet_compile_validation` through the real CLI
+/// dispatch path (`core_commands::handle` -> `core_commands::docs::handle`), not merely
+/// that the flag parses.
+///
+/// Mirrors `generate_docs_stage_without_snippet_compile_validation_never_runs_the_validator`
+/// in `docs/tests/generated_stage.rs`, which proves the same thing one layer down for the
+/// function directly; this test is the CLI-surface half of that proof. Deliberately uses a
+/// syntactically invalid JSON snippet under `validation_level = "syntax"`: `JsonValidator`
+/// never spawns a process, so the assertion holds identically on a machine with every
+/// referenced toolchain missing -- the same false-green class `alef adopt`'s 90-minute
+/// regression fell into (see `generate_docs_stage_without_snippet_compile_validation`'s doc
+/// comment).
+///
+/// Without `--skip-snippet-validation`, `alef docs` must fail on the invalid snippet --
+/// that failure is what proves this fixture genuinely reaches the validator, so a pass with
+/// the flag on can only mean the compile-validation step was skipped, never that it ran and
+/// happened to pass. ~keep
+#[test]
+fn docs_skip_snippet_validation_flag_bypasses_the_real_validator() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_diff_fixture_workspace(&root);
+    std::fs::create_dir_all(root.join("docs/snippets/json")).expect("create snippet directory");
+    std::fs::write(
+        root.join("docs/snippets/json/example.md"),
+        "```json\n{ this is not valid json\n```\n",
+    )
+    .expect("write invalid JSON snippet");
+    std::fs::write(
+        root.join("alef.toml"),
+        format!(
+            "{DIFF_FIXTURE_ALEF_TOML}\n[workspace.docs.snippets]\ndirs = [\"docs/snippets\"]\nvalidation_level = \"syntax\"\n"
+        ),
+    )
+    .expect("overwrite fixture alef.toml with a docs.snippets section");
+    let _cwd = crate::test_support::CwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    // `Commands` derives only `clap::Subcommand`, not `Debug`, so `Result::expect_err` (which
+    // needs `Debug` on the `Ok` side to build its panic message) cannot be used directly on a
+    // `Result<Option<Commands>, _>` -- match by hand instead. ~keep
+    let validated_err = match super::handle(
+        Commands::Docs {
+            lang: None,
+            output: None,
+            skip_snippet_validation: false,
+        },
+        &context,
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!(
+            "the invalid JSON snippet must fail validation when `alef docs` runs it -- if this \
+             passes, the fixture never reaches the validator and the assertion below proves nothing"
+        ),
+    };
+    assert!(
+        validated_err.to_string().contains("snippet validation failed"),
+        "expected a snippet-validation failure naming the invalid JSON, got: {validated_err:#}"
+    );
+
+    super::handle(
+        Commands::Docs {
+            lang: None,
+            output: None,
+            skip_snippet_validation: true,
+        },
+        &context,
+    )
+    .expect(
+        "`alef docs --skip-snippet-validation` must never invoke the same invalid-JSON \
+         snippet's validator -- its failure above proves this fixture reaches the validator \
+         when it runs, so success here can only mean the compile-validation step was skipped",
     );
 }

@@ -97,6 +97,7 @@ fn widget_lib_all_command() -> Commands {
         clobber_create_once_seeds: false,
         strict: false,
         skip_frb: false,
+        skip_snippet_validation: false,
     }
 }
 

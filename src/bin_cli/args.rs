@@ -96,6 +96,15 @@ pub(crate) enum Commands {
         /// Override reference output directory.
         #[arg(long)]
         output: Option<String>,
+        /// Skip compile/type-check/run snippet validation (`docs.snippets.validation_level`).
+        ///
+        /// Snippet discovery, the reference-page audit, and gap detection still run; only
+        /// the step that spawns a compiler, interpreter, or type-checker per snippet is
+        /// skipped. Useful when the language toolchains or built artifacts that snippet
+        /// validation depends on are not present yet (e.g. before `alef build`, or on a
+        /// clean checkout with no build cache), so docs stay cheap to regenerate.
+        #[arg(long)]
+        skip_snippet_validation: bool,
     },
     /// Sync version from Cargo.toml to all package manifests.
     ///
@@ -259,6 +268,16 @@ pub(crate) enum Commands {
         /// or `[crates.dart] skip_frb = true` in alef.toml.
         #[arg(long)]
         skip_frb: bool,
+        /// Skip compile/type-check/run snippet validation (`docs.snippets.validation_level`)
+        /// in the docs stage.
+        ///
+        /// Snippet discovery, the reference-page audit, and gap detection still run; only
+        /// the step that spawns a compiler, interpreter, or type-checker per snippet is
+        /// skipped. `alef all` never builds the full per-language artifacts that
+        /// `typecheck`/`compile`/`run` validation levels need (only `alef build` does), so
+        /// this flag is useful whenever those artifacts are not already present.
+        #[arg(long)]
+        skip_snippet_validation: bool,
     },
     /// Initialize a new alef.toml config.
     Init {

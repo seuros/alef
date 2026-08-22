@@ -6,7 +6,7 @@ use crate::cli::{cache, dispatch, pipeline, version_pin};
 use super::args::*;
 use super::dispatch::DispatchContext;
 use super::helpers::*;
-
+mod docs_stage;
 /// Surface registry-mode dependency resolution that was deferred to a post-publish pass.
 ///
 /// Deliberately not an error. Registry-mode manifests pin the version the current
@@ -157,6 +157,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             clobber_create_once_seeds,
             skip_frb,
             strict,
+            skip_snippet_validation,
         } => {
             if skip_frb {
                 let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
@@ -777,8 +778,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // (snippet validation, CLI/MCP adoption, llms/skills) fails, specifically so a
                 // strict-mode bail never discards already-rendered API reference pages. Write and
                 // hash `doc_files` before propagating `doc_result`, not after. ~keep
-                let (doc_files, doc_result) =
-                    crate::docs::generate_docs_stage(&docs_api, resolved_cfg, &doc_languages, None, &base_dir);
+                let (doc_files, doc_result) = docs_stage::generate(
+                    skip_snippet_validation,
+                    &docs_api,
+                    resolved_cfg,
+                    &doc_languages,
+                    &base_dir,
+                );
                 // Inert today and kept honest on purpose: `docs::generate_docs_stage` forces
                 // `generated_header = true` on every reference page and every extra
                 // (`cli.md`, `mcp.md`, `llms.txt`, `SKILL.md`) it emits, so `can_skip` cannot
