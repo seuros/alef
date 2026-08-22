@@ -7,24 +7,19 @@ use super::args::*;
 use super::dispatch::DispatchContext;
 use super::helpers::*;
 mod docs_stage;
-/// Surface registry-mode dependency resolution that was deferred to a post-publish pass.
+/// Surface formatting steps that did not run: registry-mode dependency resolution deferred
+/// to a post-publish pass, and formatters whose executable is absent.
 ///
-/// Deliberately not an error. Registry-mode manifests pin the version the current
-/// run produces, so these steps cannot succeed until that version is published --
-/// failing here would mean every release run fails on a precondition that is
-/// required to be false at that moment. Local-mode e2e, which is what actually
-/// gates correctness, still hard-fails on any formatter error. ~keep
+/// Deliberately not an error, and deliberately routed through the same reporter the
+/// standalone stage commands use (`e2e::format::warn_deferred`) rather than classifying the
+/// entries a second time here -- this copy used to blame every entry, including a missing
+/// formatter, on an unpublished version. Registry-mode manifests pin the version the current
+/// run produces, so those steps cannot succeed until that version is published; failing here
+/// would mean every release run fails on a precondition required to be false at that moment.
+/// Local-mode e2e, which is what actually gates correctness, still hard-fails on any
+/// formatter error. ~keep
 fn report_deferred_formatting(crate_name: &str, deferred: &[crate::e2e::format::DeferredFormatting]) {
-    if deferred.is_empty() {
-        return;
-    }
-    tracing::warn!(
-        "[{crate_name}] {} dependency-resolution step(s) deferred until the pinned version is published:",
-        deferred.len()
-    );
-    for entry in deferred {
-        tracing::warn!("  {entry}");
-    }
+    crate::e2e::format::warn_deferred_for_crate(crate_name, deferred);
 }
 
 /// Whether `docs.snippets.validation_level` runs snippets against a built
