@@ -322,12 +322,16 @@ pub(super) fn render_sealed_display(
         let display = if has_format_field {
             "i.value().format()".to_string()
         } else {
-            let serde_name = variant
-                .serde_rename
-                .as_deref()
-                .unwrap_or(variant_name.as_str())
-                .to_lowercase();
-            format!("\"{serde_name}\"")
+            // Routed through the same seam the production discriminator uses
+            // (`backends/java/gen_bindings/types/serializers.rs`), so this display value
+            // cannot drift from `serde_rename_all` or fall back to lowercasing an explicit
+            // `serde_rename`.
+            let wire_name = crate::codegen::naming::wire_variant_value(
+                variant_name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            format!("\"{wire_name}\"")
         };
 
         let binding = if has_format_field {
