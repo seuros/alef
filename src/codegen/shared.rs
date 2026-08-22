@@ -1,6 +1,32 @@
 use crate::core::ir::{DefaultValue, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 use ahash::AHashSet;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
+
+/// Matches a bare zero-argument path call — `a::b::c()` — and nothing else: no trailing
+/// `.into()`, no trailing field access, no arguments inside the parens. Anchored at both ends
+/// so `crawlberg::SsrfPolicy::from_env().into()` and
+/// `serde_json::from_str::<T>(r#"{}"#).field` (both of which need the closure to stay, the
+/// former for its conversion and the latter for its side-effecting expect/deserialize call)
+/// never match. ~keep
+static BARE_ZERO_ARG_CALL: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*\(\)$").expect("valid regex")
+});
+
+/// `unwrap_or_else(|| default_val)` is redundant when `default_val` is exactly a bare
+/// zero-argument path call: `unwrap_or_else(path::to::fn)` passes the function itself, which
+/// clippy's `redundant_closure` lint requires. Any other shape (arguments, a trailing `.into()`
+/// or field access) must keep the closure, since only a call expression is a valid function-item
+/// substitute for `unwrap_or_else`. ~keep
+fn unwrap_or_else_default(binding_name: &str, field_name: &str, default_val: &str) -> String {
+    if BARE_ZERO_ARG_CALL.is_match(default_val) {
+        let path = default_val
+            .strip_suffix("()")
+            .expect("BARE_ZERO_ARG_CALL guarantees a `()` suffix");
+        return format!("{binding_name}: {field_name}.unwrap_or_else({path})");
+    }
+    format!("{binding_name}: {field_name}.unwrap_or_else(|| {default_val})")
+}
 
 /// Recursively replace `Named(n)` references where `n` is excluded from the binding's public surface
 /// (e.g. `InternalDocument`) with `TypeRef::Json`. An excluded type is never emitted as a binding
@@ -788,9 +814,7 @@ fn config_constructor_parts_inner(
                             | DefaultValue::FloatLiteral(_) => {
                                 format!("{}: {}.unwrap_or({})", binding_name, f.name, default_val)
                             }
-                            _ => {
-                                format!("{}: {}.unwrap_or_else(|| {})", binding_name, f.name, default_val)
-                            }
+                            _ => unwrap_or_else_default(binding_name, &f.name, &default_val),
                         }
                     }
                 }
@@ -1183,6 +1207,39 @@ mod tests {
         assert!(
             !assignments.contains("default_archive_depth()"),
             "the private source-crate function must never be emitted as a bare callable: {assignments}"
+        );
+    }
+
+    /// End-to-end check of the exact CI failure shape: a *public*, zero-argument, non-`Named`
+    /// field default (`max_archive_depth: i64` with `#[serde(default =
+    /// "xberg::ExtractionConfig::default_archive_depth")]`) must not wrap the call in a closure
+    /// — `unwrap_or_else(|| path())` trips `clippy::redundant_closure` under `-D warnings` on
+    /// every backend that reaches `config_constructor_parts_inner` (wasm directly; pyo3 and
+    /// extendr via `gen_constructor_with_renames`). `unwrap_or_else(path)` passes the function
+    /// item directly and is the only form clippy accepts here.
+    #[test]
+    fn config_constructor_parts_bare_zero_arg_default_drops_redundant_closure() {
+        let field = FieldDef {
+            name: "max_archive_depth".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::I64),
+            typed_default: Some(DefaultValue::PublicFunctionCall(
+                "xberg::ExtractionConfig::default_archive_depth".to_string(),
+            )),
+            ..Default::default()
+        };
+        let fields = vec![field.clone()];
+        let type_mapper = |_: &TypeRef| "i64".to_string();
+        let typ = owning_type("xberg::ExtractionConfig", "ExtractionConfig", vec![field]);
+
+        let (_, _, assignments) = config_constructor_parts_with_options(&fields, &type_mapper, true, &typ);
+
+        assert!(
+            assignments.contains("max_archive_depth.unwrap_or_else(xberg::ExtractionConfig::default_archive_depth)"),
+            "expected the redundant closure dropped in favor of a bare function reference, got: {assignments}"
+        );
+        assert!(
+            !assignments.contains("unwrap_or_else(|| xberg::ExtractionConfig::default_archive_depth())"),
+            "clippy::redundant_closure: a bare zero-arg call must never stay wrapped in a closure, got: {assignments}"
         );
     }
 }
