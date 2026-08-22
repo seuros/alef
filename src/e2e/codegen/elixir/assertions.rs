@@ -28,7 +28,7 @@ pub(super) fn render_assertion(
     result_is_simple: bool,
     is_streaming: bool,
     returns_void: bool,
-    has_other_assertions: bool,
+    not_error_may_assert_presence: bool,
 ) {
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct field accesses on the result.
@@ -651,18 +651,16 @@ pub(super) fn render_assertion(
             // same way Rust's `.expect()` and Gleam's `let assert Ok(...)` already are for
             // their own void calls. ~keep
             //
-            // `refute is_nil(result)` is only a stand-in for "the call succeeded", needed
-            // solely to avoid the unused-variable warning above when `not_error` is the
-            // fixture's sole assertion. It is wrong whenever a sibling assertion exists: a
-            // fixture can legitimately pair `not_error` with `is_empty` on an
-            // Option<T>-returning call whose success path returns nothing (None -> Elixir
-            // `nil`) — `is_empty`'s own `assert is_nil(field_expr) or ...` (this same match,
-            // above) directly contradicts `refute is_nil(result)` on the identical variable.
-            // The sibling assertion already references `result_var` (avoiding the unused-
-            // variable warning) and gives the test real, non-vacuous coverage, so this
-            // fallback only fires when nothing else will — same reasoning as TypeScript's
-            // `has_other_assertions` guard (alef #165). ~keep
-            if !returns_void && !has_other_assertions {
+            // WHETHER `refute is_nil(...)` may render at all is decided once, centrally, by
+            // `not_error_presence::may_assert_presence` — a sibling assertion or an
+            // `Option<T>` result both make it unsafe (e.g. a bare `Option<T>`-returning call
+            // whose success path legitimately returns `None` -> Elixir `nil` would make this
+            // arm directly contradict a sibling `is_empty`'s `assert is_nil(...)` on the same
+            // variable). The caller (`test_case.rs`) already underscore-prefixes
+            // `actual_result_var` when this is `false` for a `not_error`-only fixture, so the
+            // unused-variable warning this arm used to dodge by asserting is dodged there
+            // instead. This arm only decides how. ~keep
+            if !returns_void && not_error_may_assert_presence {
                 let _ = writeln!(out, "      refute is_nil({result_var})");
             }
         }
@@ -1162,7 +1160,7 @@ mod tests {
             false,
             false,
             false,
-            false,
+            true,
         );
         assert_eq!(out, "      refute is_nil(result)\n");
     }
@@ -1192,7 +1190,7 @@ mod tests {
             false,
             true,
             false,
-            false,
+            true,
         );
         assert_eq!(out, "      refute is_nil(chunks)\n");
     }

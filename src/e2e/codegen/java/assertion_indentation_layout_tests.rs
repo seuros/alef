@@ -42,6 +42,7 @@ fn render(assertion: &Assertion) -> String {
         &std::collections::HashMap::new(),
         false,
         &std::collections::HashSet::new(),
+        true,
     );
     out
 }

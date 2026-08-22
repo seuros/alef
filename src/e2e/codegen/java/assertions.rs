@@ -1,3 +1,12 @@
+//! Java assertion rendering helpers.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification (routing `not_error` through
+//! `not_error_presence::may_assert_presence`) added one parameter to `render_assertion`,
+//! required at every call site, plus removed the old ad hoc `result_is_option && bare_field`
+//! special case for `not_error` (now folded into the general arm) — a net small growth of
+//! wiring and doc comments, not new unrelated functionality.
+
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
@@ -25,11 +34,17 @@ pub(super) fn render_assertion(
     assert_enum_types: &std::collections::HashMap<String, String>,
     returns_void: bool,
     fractional_fields: &std::collections::HashSet<String>,
+    not_error_may_assert_presence: bool,
 ) {
     // Bare-result is_empty / not_empty on Option<T> returns: the Java facade exposes
     // these as `@Nullable T` (via `.orElse(null)`) rather than `Optional<T>`, so the
     // template's `.isEmpty()` call would not compile for record types. Emit a
     // null-check instead — mirrors the kotlin / zig codegen behaviour.
+    //
+    // `not_error` is deliberately absent from this match: WHETHER it may assert presence is
+    // decided once, centrally, by the caller via `not_error_presence::may_assert_presence`
+    // (which already accounts for `result_is_option`) and handled in the general `not_error`
+    // arm below, alongside every other backend's identical decision point. ~keep
     let bare_field = assertion.field.as_deref().is_none_or(str::is_empty);
     if result_is_option && bare_field {
         match assertion.assertion_type.as_str() {
@@ -43,17 +58,6 @@ pub(super) fn render_assertion(
                 out.push_str(&format!(
                     "        assertNotNull({result_var}, \"expected non-empty value\");\n"
                 ));
-                return;
-            }
-            "not_error" => {
-                // A bare `@Nullable T` result may legitimately be `null` on success (e.g.
-                // detecting a language from empty content returning `null` is not an
-                // error). The general `not_error` arm below emits `assertNotNull`
-                // unconditionally, which directly contradicts a paired `is_empty`
-                // assertion on the same bare result (the arm just above, which correctly
-                // emits `assertNull`). Stay inert here instead — the uncaught-exception-
-                // fails-the-test behavior alone covers `not_error` for this shape, mirroring
-                // swift's `bare_result_is_option` guard (`swift/not_error_assertion.rs`). ~keep
                 return;
             }
             _ => {}
@@ -124,14 +128,16 @@ pub(super) fn render_assertion(
     // handled at the call-emission site instead: `test_method.rs`'s `void_not_error`
     // flag wraps `call_expr` itself in `assertDoesNotThrow(() -> ...)`, so this arm
     // stays a no-op purely because the real assertion lives one level up, not because
-    // nothing is asserted. ~keep
+    // nothing is asserted. WHETHER the plain (non-void, non-streaming) case below may
+    // assert presence at all is decided once, centrally, by
+    // `not_error_presence::may_assert_presence` — this arm only decides how. ~keep
     if assertion.assertion_type == "not_error" {
         if returns_void {
             // Handled by `test_method.rs`'s `void_not_error` wrapping the call in
             // assertDoesNotThrow — nothing to render into assertions_body here.
         } else if is_streaming {
             out.push_str("        assertNotNull(chunks, \"expected drained chunks list\");\n");
-        } else {
+        } else if not_error_may_assert_presence {
             out.push_str(&format!(
                 "        assertNotNull({result_var}, \"expected non-null response\");\n"
             ));
@@ -952,6 +958,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         out
     }
@@ -975,6 +982,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         out
     }
@@ -1131,6 +1139,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -1170,6 +1179,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -1199,6 +1209,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert!(
             out.contains("Objects::toString"),
@@ -1237,6 +1248,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert!(
             out.contains(".map(v -> v.text()).orElse(\"\")"),
@@ -1279,6 +1291,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert_eq!(out, "        assertNotNull(result, \"expected non-null response\");\n");
     }
@@ -1303,6 +1316,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert_eq!(
             out,
@@ -1335,6 +1349,7 @@ mod tests {
             &HashMap::new(),
             true,
             &HashSet::new(),
+            true,
         );
         assert!(
             out.is_empty(),
@@ -1381,6 +1396,7 @@ mod tests {
             &HashMap::new(),
             false,
             &fractional,
+            true,
         );
         assert!(
             out.contains("Number::doubleValue"),
@@ -1418,6 +1434,7 @@ mod tests {
             &HashMap::new(),
             false,
             &HashSet::new(),
+            true,
         );
         assert!(
             out.contains("Number::longValue"),

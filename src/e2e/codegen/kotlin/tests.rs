@@ -1,3 +1,11 @@
+//! Kotlin codegen unit tests.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification added one parameter to `render_assertion`,
+//! required at every call site here — 17 pre-existing, unrelated (non-`not_error`) tests each
+//! needed one added `true` argument to keep compiling. That mechanical churn, not new
+//! functionality, is the entire growth in this file.
+
 use super::args::{KotlinArgsContext, build_args_and_setup};
 use super::assertions::render_assertion;
 use super::project::render_build_gradle;
@@ -62,6 +70,7 @@ fn kotlin_ir_reachable_field_absent_from_result_fields_is_not_skipped() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(!out.contains("skipped"), "got: {out}");
 }
@@ -109,6 +118,7 @@ fn kotlin_ir_excluded_field_present_in_result_fields_is_still_skipped() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(out.contains("skipped"), "got: {out}");
 }
@@ -146,6 +156,7 @@ fn assertion_enum_optional_uses_safe_get_value_then_or_empty() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(
         out.contains("result.choices().first().finishReason()?.getValue().orEmpty()"),
@@ -335,6 +346,7 @@ fn not_empty_is_type_aware_for_nullable_values() {
             &HashMap::new(),
             false,
             false,
+            true,
         );
         assert!(out.contains(expected), "field {field}: {out}");
         assert!(!out.contains("toString"), "field {field}: {out}");
@@ -375,6 +387,7 @@ fn assertion_json_scalar_optional_field_stringifies_before_or_empty() {
         &json_scalar_fields,
         &HashMap::new(),
         false,
+        true,
         true,
     );
     assert!(
@@ -421,6 +434,7 @@ fn assertion_json_scalar_matches_configured_array_wildcard() {
         &HashMap::new(),
         false,
         true,
+        true,
     );
     assert!(output.contains("data?.toString().orEmpty().contains"), "got: {output}");
     assert!(!output.contains("data.orEmpty()"), "got: {output}");
@@ -460,6 +474,7 @@ fn assertion_json_scalar_and_nullable_root_are_stringified_for_contains() {
         &HashMap::new(),
         false,
         true,
+        true,
     );
     assert!(
         field_output.contains("result?.toString().orEmpty().contains(\"needle\")"),
@@ -481,6 +496,7 @@ fn assertion_json_scalar_and_nullable_root_are_stringified_for_contains() {
         &HashSet::new(),
         &HashMap::new(),
         false,
+        true,
         true,
     );
     assert!(
@@ -519,6 +535,7 @@ fn assertion_string_optional_field_still_uses_plain_or_empty() {
         &HashSet::new(),
         &HashMap::new(),
         false,
+        true,
         true,
     );
     assert!(
@@ -571,6 +588,7 @@ fn assertion_enum_non_optional_uses_plain_get_value() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(
         out.contains("result.choices().first().finishReason().getValue()"),
@@ -626,6 +644,7 @@ fn per_call_enum_field_override_routes_through_get_value() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(
         !out_no_merge.contains(".getValue()"),
@@ -647,6 +666,7 @@ fn per_call_enum_field_override_routes_through_get_value() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(
         out_merged.contains(".getValue()"),
@@ -816,6 +836,7 @@ fn auto_detected_enum_fields_from_type_defs_route_through_get_value() {
         &HashMap::new(),
         false,
         false,
+        true,
     );
     assert!(
         out.contains(".getValue()"),
@@ -1547,6 +1568,7 @@ fn assertion_json_scalar_matches_namespace_stripped_path() {
         &HashMap::new(),
         false,
         true,
+        true,
     );
     assert!(
         !out.contains(".data.orEmpty()"),
@@ -1597,6 +1619,7 @@ fn assertion_namespace_stripped_string_field_still_uses_plain_or_empty() {
         &HashSet::from(["action_results[].data".to_string()]),
         &HashMap::new(),
         false,
+        true,
         true,
     );
     assert!(
@@ -1652,6 +1675,7 @@ fn assertion_json_scalar_accepts_both_bracket_and_dotted_spellings() {
             &HashMap::new(),
             false,
             true,
+            true,
         );
         assert!(
             out.contains(".data?.toString().orEmpty().contains"),
@@ -1691,6 +1715,7 @@ fn render_wildcard(field: &str, kotlin_android_style: bool) -> String {
         &HashMap::new(),
         false,
         kotlin_android_style,
+        true,
     );
     out
 }

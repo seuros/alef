@@ -297,7 +297,13 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // outright for some calls, but `render_assertion`'s own `not_error` arm was
     // *also* a no-op regardless of that condition, so the guard was a distinction
     // without a difference: both branches produced the same (vacuous) result.
-    let has_other_assertions = fixture.assertions.len() > 1;
+    // WHETHER `not_error` may assert presence is decided once, centrally — see
+    // `not_error_presence::may_assert_presence`'s doc for why a sibling assertion or an
+    // `Option<T>` result both make an unconditional presence check unsafe. ~keep
+    let not_error_result_is_option =
+        call_config.result_is_option || call_config.overrides.get(lang).is_some_and(|o| o.result_is_option);
+    let not_error_may_assert_presence =
+        crate::e2e::codegen::not_error_presence::may_assert_presence(fixture, not_error_result_is_option);
     let mut assertions_body = String::new();
     for assertion in &fixture.assertions {
         render_assertion(
@@ -310,7 +316,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
             lang,
             is_streaming,
             call_config.returns_void,
-            has_other_assertions,
+            not_error_may_assert_presence,
         );
     }
 

@@ -5,19 +5,20 @@
 //! returning call whose success path returns nothing (e.g. detecting a language from empty
 //! content -> `None`). The Java facade maps that to `@Nullable T` (`.orElse(null)`), and
 //! `assertions.rs`'s `result_is_option && bare_field` block already special-cases `is_empty`
-//! (`assertNull`) and `not_empty` (`assertNotNull`) for this shape — but `not_error` fell
-//! through to the general arm below, which unconditionally emits `assertNotNull(result, ...)`
-//! regardless of that sibling. A fixture asserting both `not_error` and `is_empty` on the same
-//! bare Option<T> result produced `assertNull(result, ...)` followed by
-//! `assertNotNull(result, ...)` — a pair that can never both pass. Mirrors the fix already
-//! shipped for swift (`swift/not_error_assertion.rs`).
+//! (`assertNull`) and `not_empty` (`assertNotNull`) for this shape; `not_error` itself is
+//! handled by the general `not_error` arm further down, gated by a `not_error_may_assert_presence`
+//! boolean computed once, centrally, by `not_error_presence::may_assert_presence` (shared with
+//! typescript, csharp, elixir, kotlin — see that module's doc for why this was reinvented
+//! independently seven times). These tests drive `render_assertion` — the real generator, not a
+//! hand-written mirror of it — with flags produced by the real shared function.
 //!
 //! Lives in its own file rather than growing `assertions.rs`: that file is already over the
 //! repo's 1,000-line cap (see `file-modularization` in CLAUDE.md).
 
 use super::assertions::render_assertion;
+use crate::e2e::codegen::not_error_presence::may_assert_presence;
 use crate::e2e::field_access::FieldResolver;
-use crate::e2e::fixture::Assertion;
+use crate::e2e::fixture::{Assertion, Fixture};
 use std::collections::{HashMap, HashSet};
 
 fn empty_resolver() -> FieldResolver {
@@ -30,7 +31,15 @@ fn empty_resolver() -> FieldResolver {
     )
 }
 
-fn render(assertion: &Assertion, result_is_option: bool) -> String {
+fn fixture_with(assertions: Vec<Assertion>) -> Fixture {
+    Fixture {
+        assertions,
+        ..Default::default()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render(assertion: &Assertion, result_is_option: bool, not_error_may_assert_presence: bool) -> String {
     let resolver = empty_resolver();
     let mut out = String::new();
     render_assertion(
@@ -48,6 +57,7 @@ fn render(assertion: &Assertion, result_is_option: bool) -> String {
         &HashMap::new(),
         false,
         &HashSet::new(),
+        not_error_may_assert_presence,
     );
     out
 }
@@ -70,7 +80,9 @@ fn is_empty_assertion() -> Assertion {
 /// emit `assertNotNull` — it must stay inert, exactly like the swift fix.
 #[test]
 fn not_error_on_bare_option_result_emits_no_assert_not_null() {
-    let out = render(&not_error_assertion(), true);
+    let fixture = fixture_with(vec![not_error_assertion()]);
+    let may_assert = may_assert_presence(&fixture, true);
+    let out = render(&not_error_assertion(), true, may_assert);
     assert!(
         !out.contains("assertNotNull(result"),
         "bare Option<T> result must not assert non-null from not_error: got {out}"
@@ -81,9 +93,11 @@ fn not_error_on_bare_option_result_emits_no_assert_not_null() {
 /// `assertNull` + `assertNotNull` pair on the same variable.
 #[test]
 fn not_error_paired_with_is_empty_does_not_contradict_it() {
+    let fixture = fixture_with(vec![not_error_assertion(), is_empty_assertion()]);
+    let may_assert = may_assert_presence(&fixture, true);
     let mut out = String::new();
     for assertion in [not_error_assertion(), is_empty_assertion()] {
-        out.push_str(&render(&assertion, true));
+        out.push_str(&render(&assertion, true, may_assert));
     }
     assert!(
         !out.contains("assertNotNull(result"),
@@ -100,7 +114,9 @@ fn not_error_paired_with_is_empty_does_not_contradict_it() {
 /// null on success.
 #[test]
 fn not_error_on_non_option_result_still_asserts_not_null() {
-    let out = render(&not_error_assertion(), false);
+    let fixture = fixture_with(vec![not_error_assertion()]);
+    let may_assert = may_assert_presence(&fixture, false);
+    let out = render(&not_error_assertion(), false, may_assert);
     assert!(
         out.contains("assertNotNull(result, \"expected non-null response\");"),
         "got: {out}"

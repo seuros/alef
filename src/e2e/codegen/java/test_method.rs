@@ -1,3 +1,11 @@
+//! Java test-method rendering.
+//!
+//! ~keep This file is already over the repo's 1,000-line file-modularization cap. The
+//! `not_error_may_assert_presence` unification (routing `not_error` through
+//! `not_error_presence::may_assert_presence`) added one call-site argument to
+//! `render_assertion` plus the shared computation feeding it — a small, bounded amount of
+//! production wiring, not new unrelated functionality.
+
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::extras::AdapterConfig;
 use crate::e2e::config::E2eConfig;
@@ -420,6 +428,11 @@ pub(super) fn render_test_method(
     let streaming_item_type =
         crate::e2e::codegen::recipe::streaming_item_type(call_config, adapters, &adapter_lookup_names);
     let fractional_fields = fractional_scalar_fields(type_defs);
+    // WHETHER `not_error` may assert presence is decided once, centrally — see
+    // `not_error_presence::may_assert_presence`'s doc for why a sibling assertion or an
+    // `Option<T>` result both make an unconditional presence check unsafe. ~keep
+    let not_error_may_assert_presence =
+        crate::e2e::codegen::not_error_presence::may_assert_presence(fixture, effective_result_is_option);
 
     for assertion in &fixture.assertions {
         render_assertion(
@@ -437,6 +450,7 @@ pub(super) fn render_test_method(
             &assert_enum_types,
             call_config.returns_void,
             &fractional_fields,
+            not_error_may_assert_presence,
         );
         ensure_assertion_line_ending(&mut assertions_body);
     }
