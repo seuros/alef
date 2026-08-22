@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.65.0] - 2026-08-22
+
+### Changed (BREAKING)
+
+These change the code alef GENERATES. Regenerate with `alef all` (which already covers the
+test-apps stage) and review the diff before releasing a consumer package.
+
+- **Swift / Elixir / Dart / Kotlin / Java `is_empty` on a collection.** This defect shape has now
+  been fixed in six backends, each of which was wrong differently, and each of which silently
+  emitted an assertion that could never pass:
+  - **Swift**: `is_empty`/`not_empty` on a non-optional array reached through an optional PARENT
+    (`data.children` where `data: Option<Data>` but `children: Vec<T>` is not) emitted a `Bool?`
+    into `XCTAssertTrue`, which does not typecheck at all -- so the Swift e2e gate never ran.
+    Both arms now coalesce (`?? true` / `== false`) when the accessor is optional.
+  - **Elixir**: `is_empty` had NO collection branch, only `nil`/`""`. An empty `Vec<T>` (Elixir
+    `[]`) satisfied neither, so the assertion was simply false. It now mirrors `not_empty`'s
+    membership form, `in [nil, "", [], %{}]`.
+  - **Dart**: collection fields were classified from config alone, degrading to a
+    `.toString()`-based check that compares against Dart's `List.toString()` (`'[]'`) and can
+    never pass. Classification now comes from the IR. Separately, a freezed union field's
+    `toString()` is case-sensitive and never matched the expected variant name; the union branch
+    now compares `.runtimeType.toString()`.
+  - **Kotlin**: `isEmpty()` was called without a null check on an optional collection.
+  - **Java**: a `serde(default)` collection field now defaults to `List.of()`.
+- **C e2e / doc snippets**: the "none" sentinel for an omitted optional argument is now selected
+  from the core IR's declared parameter type rather than the fixture's `arg_type` label (which
+  defaults to `"string"` when never set). A handle-typed optional parameter previously rendered
+  `NULL` against an `AlefHandle` (`unsigned long long`) parameter -- an incompatible
+  pointer-to-integer conversion -- instead of `0`. The decision now lives in one seam,
+  `resolve_optional_sentinel`, consulted by all three C surfaces that previously disagreed. A
+  `const char *` optional argument still renders `NULL`; this is type-directed, not a blanket swap.
+- **TypeScript / node (napi-rs)**: an internally-tagged data enum's payload is now nested under
+  its synthesized per-variant field instead of being flattened alongside the discriminant.
+  napi's own `index.d.ts` declares such an enum as a discriminated union (`{ role: 'user'; user:
+  UserMessage }`), so the flattened literal type-checked against no member of that union and
+  every affected snippet failed `tsc` with TS2353. The array-argument path -- the site of most
+  failures, since chat-message lists are array arguments -- previously bypassed the enum-aware
+  builder entirely.
+- **rustler / extendr**: `alef generate` could emit a different byte sequence for the same
+  unchanged IR depending on the incoming order of `ApiSurface.types`/`.enums`/`.functions`/
+  `.errors`. Roughly a dozen emission loops in both backends iterated the raw `Vec` fields
+  directly; all now sort by name, so output depends only on IR content, never Vec order. Note a
+  generate-twice-in-one-process test does NOT catch this -- the guard that does is
+  order-invariance (generate twice, once with the collections reversed).
+- **Python / pyo3**: generated snippets imported a base exception class name that does not
+  exist, and streaming stub methods were emitted as `async def` rather than plain `def`.
+- **C# e2e**: a streaming call in a snippet is now iterated with `await foreach` instead of being
+  awaited directly.
+- **Dart e2e**: error-path snippets now print a bound result, so the binding is actually used.
+- **e2e snippets**: a `mock_url`/`mock_url_list` argument whose fixture DECLARED a relative path
+  (`"batch_urls": ["/seed1"]`) still leaked `MOCK_SERVER_URL` into its published documentation
+  snippet and was rejected by the mock-harness leak guard. Declared bare paths are now rewritten
+  under the same illustrative `https://example.com` base as undeclared ones. A declared value
+  carrying an explicit scheme (an SSRF fixture's loopback literal) is still left untouched.
+  Python's `mock_url_list` handler also emitted its `MOCK_SERVER_URL` setup line before checking
+  `preserve_input_urls`, unlike every sibling backend; it now checks first.
+
+### Fixed
+
+- `alef verify`'s frozen-file report and `alef adopt`'s refusal no longer contradict each other.
+  Every frozen path used to be reported with one remedy ("run `alef adopt <path>`") regardless of
+  whether it was a create-once seed -- which `alef adopt --write` refuses by design. The printed
+  remedy therefore failed for exactly the paths it was pointed at: 85 of 85 frozen paths refused
+  in one consumer repo, 99 of 99 in another. `FrozenFile` now carries a `create_once` field
+  computed by calling `is_create_once_seed` directly rather than re-deriving the classification,
+  so report and remedy cannot drift apart again. Create-once seeds print under their own heading
+  naming `--clobber-create-once-seeds`.
+- `alef verify`'s EXIT CODE is now gated on adoptable frozen files only. A repo whose only frozen
+  paths are create-once seeds could not reach exit 0 by any available action.
+- `alef adopt` no longer manufactures a phantom "content differs" diff for a self-marking,
+  non-Markdown backend (custom Swift/Kotlin/Dart/Gleam/Zig headers) whose body is unchanged.
+  Adoption stamped the generic default header instead of the backend's own marker, so `classify`
+  compared two header spellings and called the file Drifted though every body line was identical
+  -- training an operator to consent to a diff with nothing real to review.
+- `alef test-apps run` now warns when a target's generated output is stale, checked against the
+  same embedded `alef:hash:` stamp `finalize_hashes` writes (no second staleness signal
+  invented). Previously a stale test app failed with no indication the "regression" was actually
+  stale generated sources.
+- Snippet validation cache entries are now keyed by the alef version that computed them, and
+  session claims resolve by language. A cache written by an older alef could otherwise replay a
+  stale classification.
+- A fixture that declares a scheme-carrying `mock_url` literal without setting
+  `preserve_input_urls` now logs a warning naming the fixture and field. That literal was already
+  being silently discarded in favour of the mock-server address, with no signal that the author's
+  declared value had no effect.
+
+### Changed
+
+- `src/bin_cli/helpers.rs`'s frozen-file logic moved to `src/bin_cli/helpers/frozen.rs` with its
+  own test module, splitting the file back under the repository's line-count cap.
+
 ## [0.64.0] - 2026-08-22
 
 ### Fixed
