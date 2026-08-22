@@ -4,7 +4,7 @@ mod heading_levels;
 
 #[cfg(test)]
 pub(crate) use heading_levels::check_monotonic_headings;
-pub(crate) use heading_levels::{demote_headings, demote_headings_to_start_at};
+pub(crate) use heading_levels::demote_headings_to_start_at;
 
 /// Rust doc section headers that should be stripped for all non-Rust output.
 const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "fields"];

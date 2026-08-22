@@ -98,17 +98,6 @@ fn rewrite_heading_levels(doc: &str, remap: impl Fn(usize) -> usize) -> String {
     out.trim_end().to_string()
 }
 
-/// Demote all markdown headings by a given number of levels.
-///
-/// For example, with `levels=2`, all `#` become `###`, `##` become `####`, etc.
-/// Headings inside code blocks are not modified.
-pub(crate) fn demote_headings(doc: &str, levels: usize) -> String {
-    if levels == 0 || doc.is_empty() {
-        return doc.to_string();
-    }
-    rewrite_heading_levels(doc, |level| std::cmp::min(level + levels, 6))
-}
-
 /// Re-level `doc`'s headings so they nest under a parent heading at `target_level - 1`.
 ///
 /// The doc's distinct heading levels are mapped, shallowest first, onto consecutive levels

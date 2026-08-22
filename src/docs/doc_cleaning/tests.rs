@@ -542,60 +542,6 @@ fn test_wrap_bare_urls_empty_string() {
 }
 
 #[test]
-fn test_demote_headings_single_level() {
-    let doc = "# Heading 1\n\nSome text.\n\n## Heading 2";
-    let demoted = demote_headings(doc, 1);
-    assert!(demoted.contains("## Heading 1"), "H1 should become H2");
-    assert!(demoted.contains("### Heading 2"), "H2 should become H3");
-}
-
-#[test]
-fn test_demote_headings_multiple_levels() {
-    let doc = "# Heading 1\n## Heading 2\n### Heading 3";
-    let demoted = demote_headings(doc, 2);
-    assert!(demoted.contains("### Heading 1"), "H1 should become H3");
-    assert!(demoted.contains("#### Heading 2"), "H2 should become H4");
-    assert!(demoted.contains("##### Heading 3"), "H3 should become H5");
-}
-
-#[test]
-fn test_demote_headings_skips_code_blocks() {
-    let doc = "# Heading\n\n```rust\n# Not a heading\n```\n\nMore text.";
-    let demoted = demote_headings(doc, 1);
-    assert!(demoted.contains("## Heading"), "H1 outside code should become H2");
-    assert!(
-        demoted.contains("# Not a heading"),
-        "content inside code block should not be modified"
-    );
-}
-
-#[test]
-fn test_demote_headings_zero_levels_unchanged() {
-    let doc = "# Heading\n## Subheading";
-    let demoted = demote_headings(doc, 0);
-    assert_eq!(demoted, doc, "zero demotion should return unchanged");
-}
-
-#[test]
-fn test_demote_headings_caps_at_h6() {
-    let doc = "##### Heading 5";
-    let demoted = demote_headings(doc, 5);
-    assert!(demoted.contains("###### Heading 5"), "should not exceed H6");
-    let h6 = demote_headings("###### Heading 6", 1);
-    assert!(h6.contains("###### Heading 6"), "H6 should stay at H6");
-}
-
-#[test]
-fn test_demote_headings_preserves_trailing_content() {
-    let doc = "# Title\n\nParagraph text.\n\n## Section\n\nMore text.";
-    let demoted = demote_headings(doc, 1);
-    assert!(demoted.contains("## Title"));
-    assert!(demoted.contains("Paragraph text."));
-    assert!(demoted.contains("### Section"));
-    assert!(demoted.contains("More text."));
-}
-
-#[test]
 fn test_demote_headings_to_start_at_demotes_h1_to_target() {
     let doc = "# Details\n\n## More Details";
     let demoted = demote_headings_to_start_at(doc, 5);
@@ -652,7 +598,7 @@ fn test_check_monotonic_headings_ignores_code_blocks() {
 #[test]
 fn test_demote_headings_maintains_monotonic_increments() {
     let doc = "## Sub-page\n\n### Section\n\n#### Item";
-    let demoted = demote_headings(doc, 2);
+    let demoted = demote_headings_to_start_at(doc, 4);
     assert!(
         check_monotonic_headings(&demoted).is_ok(),
         "demoted headings should maintain monotonic increments"
@@ -660,10 +606,40 @@ fn test_demote_headings_maintains_monotonic_increments() {
 }
 
 #[test]
+fn should_renumber_gapped_heading_levels_onto_consecutive_levels() {
+    let doc = "# Overview\n\n##### Detail";
+    let demoted = demote_headings_to_start_at(doc, 4);
+    assert_eq!(
+        demoted, "#### Overview\n\n##### Detail",
+        "a source gap of four levels must collapse to one so the result stays MD001-clean"
+    );
+}
+
+#[test]
+fn should_pin_shallowest_heading_to_target_even_when_it_is_not_first() {
+    let doc = "##### Detail\n\n# Overview";
+    let demoted = demote_headings_to_start_at(doc, 5);
+    assert_eq!(
+        demoted, "###### Detail\n\n##### Overview",
+        "anchoring on the first heading would leave `# Overview` at H1, above its own section"
+    );
+}
+
+#[test]
+fn should_leave_headings_alone_when_all_are_already_deep_enough() {
+    let doc = "##### Detail\n\n###### Deeper";
+    assert_eq!(
+        demote_headings_to_start_at(doc, 5),
+        doc,
+        "re-levelling must never promote a heading"
+    );
+}
+
+#[test]
 fn test_doc_comment_with_internal_headings_demoted() {
     let doc_comment = "Main description.\n\n## Stream Limits\n\nDetailed info about limits.";
     let cleaned = clean_doc(doc_comment, Language::Python);
-    let demoted = demote_headings(&cleaned, 2);
+    let demoted = demote_headings_to_start_at(&cleaned, 4);
     assert!(
         demoted.contains("#### Stream Limits"),
         "internal heading should be demoted to #### (was ##)"
