@@ -268,6 +268,8 @@ mod collection_field_classification_tests;
 #[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
+mod is_empty_optional_array_tests;
+#[cfg(test)]
 mod is_true_tests;
 #[cfg(test)]
 mod tests;

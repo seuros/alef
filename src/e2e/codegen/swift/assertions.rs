@@ -570,9 +570,21 @@ pub(super) fn render_assertion(
                     minijinja::context! { predicate => format!("{field_expr} != nil") },
                 ));
             } else if field_is_array {
+                // `field_is_optional` covers `Option<Vec<T>>` (the field's own accessor call
+                // returns Optional, so an explicit `?.` is needed to reach `.isEmpty`). This
+                // arm covers a non-optional array reached through an optional PARENT
+                // (`data.children`, `data: Option<Data>`): Swift's earlier `?.` already
+                // propagates optionality through the rest of the chain, so `field_expr` needs
+                // NO extra `?` before `.isEmpty` -- `!Bool?` doesn't typecheck, so compare
+                // against `false` instead of negating, mirroring the sibling arm above. ~keep
+                let predicate = if accessor_is_optional {
+                    format!("{field_expr}.isEmpty == false")
+                } else {
+                    format!("!{field_expr}.isEmpty")
+                };
                 out.push_str(&crate::e2e::template_env::render(
                     "swift/not_empty_assertion.swift.jinja",
-                    minijinja::context! { predicate => format!("!{field_expr}.isEmpty") },
+                    minijinja::context! { predicate => predicate },
                 ));
             } else if result_is_simple {
                 // result_is_simple: result is a primitive (Data, String, etc.) — use .isEmpty directly.
@@ -622,10 +634,16 @@ pub(super) fn render_assertion(
             } else if field_is_optional {
                 let _ = writeln!(out, "        XCTAssertNil({field_expr}, \"expected nil value\")");
             } else if field_is_array {
-                let _ = writeln!(
-                    out,
-                    "        XCTAssertTrue({field_expr}.isEmpty, \"expected empty value\")"
-                );
+                // Mirrors not_empty above: `data.children` (`data: Option<Data>`) renders
+                // `result.data()?.children()`, whose bare `.isEmpty` is already `Bool?`
+                // (no extra `?` needed) and can't feed `XCTAssertTrue` directly. `?? true`
+                // treats an absent parent as vacuously empty. ~keep
+                let is_empty_expr = if accessor_is_optional {
+                    format!("({field_expr}.isEmpty ?? true)")
+                } else {
+                    format!("{field_expr}.isEmpty")
+                };
+                let _ = writeln!(out, "        XCTAssertTrue({is_empty_expr}, \"expected empty value\")");
             } else {
                 // Symmetric with not_empty: use .count == 0 on first-class Swift types.
                 // Wrap opaque method-call accessors (`result.id()`) with `.toString()` so
