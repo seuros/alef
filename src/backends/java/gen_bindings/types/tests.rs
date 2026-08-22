@@ -949,18 +949,20 @@ fn empty_default_collection_field_still_emits_the_empty_collection_literal() {
 /// Regression: a non-optional `Vec` field carrying the bare `#[serde(default)]` MARKER (not an
 /// `impl Default` literal — `field.default` is the `"/* serde(default) */"` sentinel and
 /// `typed_default` is unset, exactly what extraction records for
-/// `#[serde(default, skip_serializing_if = "Vec::is_empty")] children: Vec<DataNode>`) must
-/// build its builder default as the empty-collection literal `List.of()`, the same outcome the
-/// plain non-defaulted `TypeRef::Vec` arm already emits below. Before this fix, the marker
-/// branch fell through to a bare `"null"` regardless of field type, so a builder-constructed
-/// instance whose wire JSON omitted the key (because `skip_serializing_if` suppressed it) left
-/// the field genuinely `null` — `NullPointerException` on `.isEmpty()` downstream, tslp's
-/// `DataNode.children()` regression. ~keep
+/// `#[serde(default, skip_serializing_if = "Vec::is_empty")] children: Vec<DataNode>`) AND
+/// `serde_skip_serializing_if` must build its builder default as the empty-collection literal
+/// `List.of()`, the same outcome the plain non-defaulted `TypeRef::Vec` arm already emits below.
+/// Before this fix, the marker branch fell through to a bare `"null"` regardless of field type,
+/// so a builder-constructed instance whose wire JSON omitted the key (because
+/// `skip_serializing_if` suppressed it) left the field genuinely `null` —
+/// `NullPointerException` on `.isEmpty()` downstream, tslp's `DataNode.children()` regression.
+/// ~keep
 #[test]
 fn serde_default_marker_collection_field_builds_the_empty_collection_literal() {
     let mut tags_field = impl_default_field("tags", TypeRef::Vec(Box::new(TypeRef::String)), DefaultValue::Empty);
     tags_field.typed_default = None;
     tags_field.default = Some("/* serde(default) */".to_string());
+    tags_field.serde_skip_serializing_if = true;
     let typ = impl_default_record(vec![tags_field]);
 
     let out = render_impl_default_record(&typ);
@@ -973,6 +975,34 @@ fn serde_default_marker_collection_field_builds_the_empty_collection_literal() {
     assert!(
         !out.contains("private List<String> tags = null"),
         "the builder field must not default to null:\n{out}"
+    );
+}
+
+/// Negative control: a non-optional `Vec` field carrying only the bare `#[serde(default)]`
+/// marker, with no `skip_serializing_if`, must stay `@Nullable` with no eager initializer —
+/// the nullable-without-eager-default contract `is_serde_default_marker`'s doc describes for
+/// every other `#[serde(default)]` field. `skip_serializing_if` is what makes the wire key
+/// actually go missing on an empty collection (the failure mode the sibling test above pins);
+/// without it there is no such gap, and defaulting to `List.of()` here would silently ship a
+/// non-null value for a field the caller never set. ~keep
+#[test]
+fn serde_default_marker_collection_field_without_skip_serializing_if_stays_nullable() {
+    let mut tags_field = impl_default_field("tags", TypeRef::Vec(Box::new(TypeRef::String)), DefaultValue::Empty);
+    tags_field.typed_default = None;
+    tags_field.default = Some("/* serde(default) */".to_string());
+    let typ = impl_default_record(vec![tags_field]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        out.contains("@Nullable private List<String> tags;"),
+        "a bare serde(default) collection field without skip_serializing_if must stay nullable \
+         with no eager collection initializer, but got:\n{out}"
+    );
+    assert!(
+        !out.contains("List.of()"),
+        "a bare serde(default) collection field without skip_serializing_if must not get an \
+         eager List.of() initializer:\n{out}"
     );
 }
 

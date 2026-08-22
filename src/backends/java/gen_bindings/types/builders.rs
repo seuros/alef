@@ -202,20 +202,31 @@ pub(super) fn gen_builder_nested_class(
                             .unwrap_or_else(|| "null".to_string()),
                         _ => "null".to_string(),
                     }
-                } else {
-                    // Non-optional, non-enum field with #[serde(default)]. A `Vec`/`Map` field
-                    // (e.g. `#[serde(default, skip_serializing_if = "Vec::is_empty")] children:
-                    // Vec<T>`) must build the same empty collection the plain non-defaulted arm
-                    // below already emits for `TypeRef::Vec`/`TypeRef::Map` — a bare `"null"`
-                    // here made every such builder default the field to `null`, so
-                    // `skip_serializing_if` omitting the wire key on an empty collection left the
-                    // Java DTO's `children` genuinely null instead of an empty list, throwing
-                    // `NullPointerException` on `.isEmpty()`. ~keep
+                } else if field.serde_skip_serializing_if {
+                    // Non-optional, non-enum field with `#[serde(default, skip_serializing_if =
+                    // "...")]` (e.g. `#[serde(default, skip_serializing_if = "Vec::is_empty")]
+                    // children: Vec<T>`). `skip_serializing_if` is what makes the wire key
+                    // actually go missing on an empty collection, so this arm must build the same
+                    // empty collection the plain non-defaulted arm below already emits for
+                    // `TypeRef::Vec`/`TypeRef::Map` — a bare `"null"` here made every such
+                    // builder default the field to `null`, leaving the Java DTO's `children`
+                    // genuinely null instead of an empty list and throwing
+                    // `NullPointerException` on `.isEmpty()`.
+                    //
+                    // A bare `#[serde(default)]` with no `skip_serializing_if` has no such
+                    // failure mode — the field stays `@Nullable` with no eager initializer here,
+                    // matching the nullable-without-eager-default contract this backend uses for
+                    // every other `#[serde(default)]` field (see `is_serde_default_marker`'s
+                    // doc). Applying `List.of()`/`Map.of()` unconditionally would silently ship a
+                    // non-null value for a field callers never set, which
+                    // `@JsonInclude(NON_ABSENT)` would then never drop from the wire. ~keep
                     match &field.ty {
                         TypeRef::Vec(_) => "List.of()".to_string(),
                         TypeRef::Map(_, _) => "Map.of()".to_string(),
                         _ => "null".to_string(),
                     }
+                } else {
+                    "null".to_string()
                 }
             } else {
                 match &field.ty {
