@@ -673,6 +673,12 @@ fn unmarkable_unclaimed_files(
 #[derive(Default)]
 pub(crate) struct MissingAndFrozenFiles {
     pub(crate) missing: Vec<String>,
+    /// The subset of what would otherwise be in `missing` that git also reports ignored --
+    /// split out by [`super::verify_gitignore::split_missing_by_gitignore`] because the remedy
+    /// differs: `alef generate` writes these paths and the ignore rule discards them again
+    /// before commit, so it can never close this gap the way it closes a plain `missing`
+    /// entry. See that function's doc. ~keep
+    pub(crate) missing_gitignored: Vec<String>,
     pub(crate) frozen: Vec<FrozenFile>,
     /// Absolute paths of every file this crate's configuration would produce this run, from the
     /// same `surface` `missing`/`frozen` are derived from -- deliberately every path, not only
@@ -741,8 +747,11 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     managed_paths.extend(super::verify_orphans::post_build_owned_paths(
         languages, config, base_dir,
     ));
+    let (missing, missing_gitignored) =
+        super::verify_gitignore::split_missing_by_gitignore(base_dir, &missing_managed_paths(&surface, base_dir));
     let mut result = MissingAndFrozenFiles {
-        missing: missing_managed_paths(&surface, base_dir),
+        missing,
+        missing_gitignored,
         frozen: frozen_managed_paths(&surface, base_dir),
         managed_paths,
         stage_failures: stage_failures
@@ -752,6 +761,8 @@ pub(crate) fn find_missing_and_frozen_generated_files(
     };
     result.missing.sort();
     result.missing.dedup();
+    result.missing_gitignored.sort();
+    result.missing_gitignored.dedup();
     result.frozen.sort_by(|a, b| a.path.cmp(&b.path));
     result.frozen.dedup_by(|a, b| a.path == b.path);
     result.stage_failures.sort();
