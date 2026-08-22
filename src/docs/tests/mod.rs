@@ -39,6 +39,7 @@ fn empty_type(name: &str) -> TypeDef {
     }
 }
 
+mod function_dedup;
 mod generate_docs;
 mod generated_stage;
 mod headings;

@@ -34,7 +34,13 @@ pub(super) fn generate_lang_doc(
     // must not appear in its reference docs. ~keep
     let effective_features = effective_docs_features(api, config, lang);
     let enabled_features: HashSet<&str> = effective_features.iter().map(String::as_str).collect();
-    let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
+    // A reference page renders one section per public function, so it is an emitting consumer in
+    // the sense `codegen::fn_dedup` describes: the extractor deliberately keeps one `FunctionDef`
+    // per `cfg` gate a function is reachable through, and every consumer that emits a single
+    // artefact per name must OR-merge those groups itself. Skipping this printed the same function
+    // twice, byte-identical, because `render_function` never reads `cfg` — the only field that
+    // differed between the two entries. ~keep
+    let filtered_api = api.with_cfg_filtered_deep(&enabled_features).with_deduped_functions();
     let api = &filtered_api;
 
     let lang_display = lang_display_name(lang);
