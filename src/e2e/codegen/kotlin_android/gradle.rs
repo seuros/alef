@@ -1,5 +1,19 @@
 use crate::core::template_versions::{maven, toolchain};
 
+/// Inputs for [`render_build_gradle_kotlin_android`], grouped into one struct so the
+/// call stays under clippy's argument threshold. Mirrors the precedent in
+/// `src/cli/commands/snippets.rs::ConfiguredCheckInputs`.
+pub(super) struct KotlinAndroidBuildGradleInputs<'a> {
+    pub(super) kotlin_pkg_id: &'a str,
+    pub(super) maven_coordinate: &'a str,
+    pub(super) dep_mode: crate::e2e::config::DependencyMode,
+    pub(super) jni_lib_name: &'a str,
+    pub(super) jni_crate_path: &'a str,
+    pub(super) e2e_env: &'a std::collections::HashMap<String, String>,
+    pub(super) capsule_types: &'a std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    pub(super) test_documents_path: &'a str,
+}
+
 /// Render build.gradle.kts for the kotlin_android e2e project.
 ///
 /// In local mode: sources from `../../packages/kotlin-android/` are compiled
@@ -11,20 +25,16 @@ use crate::core::template_versions::{maven, toolchain};
 /// the `android { }` DSL — including Gradle Managed Devices — resolves at
 /// Kotlin script compile time. The host-JVM test sources live in
 /// `src/test/kotlin/` and run against the shared native library via JNA.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "template-rendering entry point: every parameter is an independent scalar forwarded               once into the Jinja context, so a params struct would exist only to satisfy the               argument counter. Revisit if this grows behaviour beyond forwarding. ~keep"
-)]
-pub(super) fn render_build_gradle_kotlin_android(
-    kotlin_pkg_id: &str,
-    maven_coordinate: &str,
-    dep_mode: crate::e2e::config::DependencyMode,
-    jni_lib_name: &str,
-    jni_crate_path: &str,
-    e2e_env: &std::collections::HashMap<String, String>,
-    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
-    test_documents_path: &str,
-) -> String {
+pub(super) fn render_build_gradle_kotlin_android(inputs: &KotlinAndroidBuildGradleInputs<'_>) -> String {
+    let kotlin_pkg_id = inputs.kotlin_pkg_id;
+    let maven_coordinate = inputs.maven_coordinate;
+    let dep_mode = inputs.dep_mode;
+    let jni_lib_name = inputs.jni_lib_name;
+    let jni_crate_path = inputs.jni_crate_path;
+    let e2e_env = inputs.e2e_env;
+    let capsule_types = inputs.capsule_types;
+    let test_documents_path = inputs.test_documents_path;
+
     // Forward `[crates.e2e.env]` vars into the Gradle test worker's *process*
     // environment via `environment(...)`. The worker is a forked JVM, and the
     // JNI-loaded native library reads these via libc `getenv` — e.g. a downstream

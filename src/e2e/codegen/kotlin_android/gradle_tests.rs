@@ -6,7 +6,9 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::gradle::{render_build_gradle_kotlin_android, render_settings_gradle_kotlin_android};
+    use super::super::gradle::{
+        KotlinAndroidBuildGradleInputs, render_build_gradle_kotlin_android, render_settings_gradle_kotlin_android,
+    };
 
     /// Regression: the kotlin-android build.gradle.kts must declare
     /// `jackson-module-kotlin` so that Jackson can deserialize Kotlin data
@@ -15,16 +17,16 @@ mod tests {
     /// `InvalidDefinitionException: No suitable constructor found`.
     #[test]
     fn build_gradle_kotlin_android_includes_jackson_module_kotlin() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate.samplellm.android",
-            "dev.sample_crate:demo-client-android:1.0.0",
-            crate::e2e::config::DependencyMode::Local,
-            "demo_client_jni",
-            "../../crates/demo-client-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate.samplellm.android",
+            maven_coordinate: "dev.sample_crate:demo-client-android:1.0.0",
+            dep_mode: crate::e2e::config::DependencyMode::Local,
+            jni_lib_name: "demo_client_jni",
+            jni_crate_path: "../../crates/demo-client-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
         assert!(
             output.contains("jackson-module-kotlin"),
             "build.gradle.kts must depend on jackson-module-kotlin, got:\n{output}"
@@ -41,16 +43,16 @@ mod tests {
     /// needing the test classpath resolved) fails before Kotlin compilation starts.
     #[test]
     fn build_gradle_kotlin_android_pins_jackson_annotations_to_its_own_version_scheme() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate.samplellm.android",
-            "dev.sample_crate:demo-client-android:1.0.0",
-            crate::e2e::config::DependencyMode::Local,
-            "demo_client_jni",
-            "../../crates/demo-client-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate.samplellm.android",
+            maven_coordinate: "dev.sample_crate:demo-client-android:1.0.0",
+            dep_mode: crate::e2e::config::DependencyMode::Local,
+            jni_lib_name: "demo_client_jni",
+            jni_crate_path: "../../crates/demo-client-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
         let annotations_line = output
             .lines()
             .find(|line| line.contains("jackson-annotations"))
@@ -80,16 +82,16 @@ mod tests {
             crate::e2e::config::DependencyMode::Registry,
             crate::e2e::config::DependencyMode::Local,
         ] {
-            let output = render_build_gradle_kotlin_android(
-                "dev.sample_crate",
-                "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+                kotlin_pkg_id: "dev.sample_crate",
+                maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
                 dep_mode,
-                "sample_crate_jni",
-                "../../crates/sample_crate-jni",
-                &env,
-                &std::collections::HashMap::new(),
-                "../../test_documents",
-            );
+                jni_lib_name: "sample_crate_jni",
+                jni_crate_path: "../../crates/sample_crate-jni",
+                e2e_env: &env,
+                capsule_types: &std::collections::HashMap::new(),
+                test_documents_path: "../../test_documents",
+            });
             assert!(
                 output.contains(r#"environment("MY_SERVICE_ALLOW_PRIVATE_NETWORK", "true")"#),
                 "build.gradle.kts ({dep_mode:?}) must forward e2e env vars to the test worker, got:\n{output}"
@@ -110,16 +112,16 @@ mod tests {
             crate::e2e::config::DependencyMode::Registry,
             crate::e2e::config::DependencyMode::Local,
         ] {
-            let output = render_build_gradle_kotlin_android(
-                "dev.sample_crate",
-                "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+                kotlin_pkg_id: "dev.sample_crate",
+                maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
                 dep_mode,
-                "sample_crate_jni",
-                "../../crates/sample_crate-jni",
-                &std::collections::HashMap::new(),
-                &std::collections::HashMap::new(),
-                "../../test_documents",
-            );
+                jni_lib_name: "sample_crate_jni",
+                jni_crate_path: "../../crates/sample_crate-jni",
+                e2e_env: &std::collections::HashMap::new(),
+                capsule_types: &std::collections::HashMap::new(),
+                test_documents_path: "../../test_documents",
+            });
             assert!(
                 output.contains(r#"testImplementation("org.junit.platform:junit-platform-launcher:"#),
                 "build.gradle.kts ({dep_mode:?}) must declare junit-platform-launcher as testImplementation, got:\n{output}"
@@ -152,16 +154,16 @@ mod tests {
                 ..Default::default()
             },
         );
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate",
-            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
-            crate::e2e::config::DependencyMode::Local,
-            "sample_crate_jni",
-            "../../crates/sample_crate-jni",
-            &std::collections::HashMap::new(),
-            &capsule_types,
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate",
+            maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            dep_mode: crate::e2e::config::DependencyMode::Local,
+            jni_lib_name: "sample_crate_jni",
+            jni_crate_path: "../../crates/sample_crate-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &capsule_types,
+            test_documents_path: "../../test_documents",
+        });
         assert!(
             output.contains(r#"testImplementation("io.github.tree-sitter:ktreesitter:0.25.0")"#),
             "local-mode build.gradle.kts must declare a testImplementation for the capsule host package, got:\n{output}"
@@ -187,16 +189,16 @@ mod tests {
                 ..Default::default()
             },
         );
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate",
-            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
-            crate::e2e::config::DependencyMode::Registry,
-            "sample_crate_jni",
-            "../../crates/sample_crate-jni",
-            &std::collections::HashMap::new(),
-            &capsule_types,
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate",
+            maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            dep_mode: crate::e2e::config::DependencyMode::Registry,
+            jni_lib_name: "sample_crate_jni",
+            jni_crate_path: "../../crates/sample_crate-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &capsule_types,
+            test_documents_path: "../../test_documents",
+        });
         assert!(
             !output.contains("io.github.tree-sitter:ktreesitter"),
             "registry-mode build.gradle.kts must not duplicate the capsule host package testImplementation, got:\n{output}"
@@ -211,16 +213,16 @@ mod tests {
     /// the fully-qualified coordinate (e.g., `dev.sample_core:sample_core-android:5.0.0-rc.1`).
     #[test]
     fn build_gradle_kotlin_android_registry_mode_emits_full_maven_coordinate() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate",
-            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
-            crate::e2e::config::DependencyMode::Registry,
-            "sample_crate_jni",
-            "../../crates/sample_crate-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate",
+            maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            dep_mode: crate::e2e::config::DependencyMode::Registry,
+            jni_lib_name: "sample_crate_jni",
+            jni_crate_path: "../../crates/sample_crate-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
         assert!(
             output.contains(r#"implementation("dev.sample_crate:sample_crate-android:5.0.0-rc.1")"#),
             "build.gradle.kts must emit full Maven coordinate with groupId:artifactId:version, got:\n{output}"
@@ -282,16 +284,16 @@ mod tests {
     /// AAR content correctness without requiring JNI loading on the host JVM.
     #[test]
     fn build_gradle_kotlin_android_registry_mode_includes_aar_verification_task() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate",
-            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
-            crate::e2e::config::DependencyMode::Registry,
-            "sample_crate_jni",
-            "../../crates/sample_crate-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate",
+            maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            dep_mode: crate::e2e::config::DependencyMode::Registry,
+            jni_lib_name: "sample_crate_jni",
+            jni_crate_path: "../../crates/sample_crate-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
         assert!(
             output.contains("verifyAarPublished"),
             "registry-mode build.gradle.kts must include verifyAarPublished task, got:\n{output}"
@@ -321,16 +323,16 @@ mod tests {
             crate::e2e::config::DependencyMode::Registry,
             crate::e2e::config::DependencyMode::Local,
         ] {
-            let output = render_build_gradle_kotlin_android(
-                "dev.sample_crate",
-                "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+                kotlin_pkg_id: "dev.sample_crate",
+                maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
                 dep_mode,
-                "sample_crate_jni",
-                "../../crates/sample_crate-jni",
-                &std::collections::HashMap::new(),
-                &std::collections::HashMap::new(),
-                "../../test_documents",
-            );
+                jni_lib_name: "sample_crate_jni",
+                jni_crate_path: "../../crates/sample_crate-jni",
+                e2e_env: &std::collections::HashMap::new(),
+                capsule_types: &std::collections::HashMap::new(),
+                test_documents_path: "../../test_documents",
+            });
             assert!(
                 output.contains("jvmToolchain(17)"),
                 "build.gradle.kts ({dep_mode:?}) must pin jvmToolchain(17) so JDK 25 hosts pick up JDK 17 for gradle, got:\n{output}"
@@ -342,16 +344,16 @@ mod tests {
     /// task — it tests against workspace sources, not published artifacts.
     #[test]
     fn build_gradle_kotlin_android_local_mode_excludes_aar_verification_task() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate.samplellm.android",
-            "dev.sample_crate:demo-client-android:1.0.0",
-            crate::e2e::config::DependencyMode::Local,
-            "demo_client_jni",
-            "../../crates/demo-client-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate.samplellm.android",
+            maven_coordinate: "dev.sample_crate:demo-client-android:1.0.0",
+            dep_mode: crate::e2e::config::DependencyMode::Local,
+            jni_lib_name: "demo_client_jni",
+            jni_crate_path: "../../crates/demo-client-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
         assert!(
             !output.contains("verifyAarPublished"),
             "local-mode build.gradle.kts must not include verifyAarPublished task, got:\n{output}"
@@ -367,16 +369,16 @@ mod tests {
             crate::e2e::config::DependencyMode::Registry,
             crate::e2e::config::DependencyMode::Local,
         ] {
-            let output = render_build_gradle_kotlin_android(
-                "dev.sample_crate",
-                "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+                kotlin_pkg_id: "dev.sample_crate",
+                maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
                 dep_mode,
-                "sample_crate_jni",
-                "../../crates/sample_crate-jni",
-                &std::collections::HashMap::new(),
-                &std::collections::HashMap::new(),
-                "../../test_documents",
-            );
+                jni_lib_name: "sample_crate_jni",
+                jni_crate_path: "../../crates/sample_crate-jni",
+                e2e_env: &std::collections::HashMap::new(),
+                capsule_types: &std::collections::HashMap::new(),
+                test_documents_path: "../../test_documents",
+            });
 
             assert!(
                 output.contains(r#"tasks.register("buildHostJni", Exec::class)"#),
@@ -401,16 +403,16 @@ mod tests {
     /// and build the JNI library for the host platform.
     #[test]
     fn build_gradle_kotlin_android_build_host_jni_uses_parameterized_jni_crate_path() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate",
-            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
-            crate::e2e::config::DependencyMode::Local,
-            "sample_crate_jni",
-            "../../crates/sample_crate-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate",
+            maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            dep_mode: crate::e2e::config::DependencyMode::Local,
+            jni_lib_name: "sample_crate_jni",
+            jni_crate_path: "../../crates/sample_crate-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
 
         assert!(
             output.contains("../../crates/sample_crate-jni/Cargo.toml"),
@@ -426,16 +428,16 @@ mod tests {
     /// when mapping platform-specific filenames (libsample_crate_jni.dylib, etc).
     #[test]
     fn build_gradle_kotlin_android_copy_host_jni_uses_parameterized_jni_lib_name() {
-        let output = render_build_gradle_kotlin_android(
-            "dev.sample_crate",
-            "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
-            crate::e2e::config::DependencyMode::Registry,
-            "sample_crate_jni",
-            "../../crates/sample_crate-jni",
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
-            "../../test_documents",
-        );
+        let output = render_build_gradle_kotlin_android(&KotlinAndroidBuildGradleInputs {
+            kotlin_pkg_id: "dev.sample_crate",
+            maven_coordinate: "dev.sample_crate:sample_crate-android:5.0.0-rc.1",
+            dep_mode: crate::e2e::config::DependencyMode::Registry,
+            jni_lib_name: "sample_crate_jni",
+            jni_crate_path: "../../crates/sample_crate-jni",
+            e2e_env: &std::collections::HashMap::new(),
+            capsule_types: &std::collections::HashMap::new(),
+            test_documents_path: "../../test_documents",
+        });
 
         assert!(
             output.contains("libsample_crate_jni.dylib"),
