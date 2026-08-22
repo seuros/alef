@@ -63,6 +63,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            java_wrapper_enum_names: HashSet::new(),
         }
     }
 
@@ -95,6 +96,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            java_wrapper_enum_names: HashSet::new(),
         }
     }
 
@@ -137,6 +139,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            java_wrapper_enum_names: HashSet::new(),
         }
     }
 
@@ -185,6 +188,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            java_wrapper_enum_names: HashSet::new(),
         }
     }
 
@@ -217,6 +221,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            java_wrapper_enum_names: HashSet::new(),
         }
     }
 
@@ -264,6 +269,15 @@ impl FieldResolver {
     pub fn with_ir_enum_map(mut self, mut map: IrEnumMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.ir_enum_map = map;
+        self
+    }
+
+    /// Attach the set of IR enum type names for which the Java binding backend does NOT emit a
+    /// plain `enum` with a `getValue()` accessor (tagged/untagged-union wrapper classes
+    /// instead). Java e2e codegen is the only caller; every other backend's resolver leaves
+    /// this empty. See `java_wrapper_enum_names`'s field doc for the source of truth.
+    pub fn with_java_wrapper_enum_names(mut self, names: HashSet<String>) -> Self {
+        self.java_wrapper_enum_names = names;
         self
     }
 

@@ -26,6 +26,11 @@ use types::{
     gen_opaque_handle_class, gen_record_type,
 };
 
+/// Re-exported so e2e assertion codegen can ask "did the Java binding backend emit this enum
+/// with a `getValue()` accessor" from the same source the binding backend itself uses, instead
+/// of re-deriving the tagged/untagged-union split by hand. ~keep
+pub(crate) use types::emits_get_value;
+
 /// True if any non-opaque type in `api` has a `Duration`-typed struct field.
 ///
 /// Decides whether the generated package needs `DurationMillisSerializer.java` /

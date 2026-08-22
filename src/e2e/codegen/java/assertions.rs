@@ -445,13 +445,27 @@ pub(super) fn render_assertion(
     // `.equals()` an enum constant. ~keep
     // NOTE: Sealed-interface types (those in assert_enum_types) are not Java enums
     // and do not have a .getValue() method — exclude them from enum field treatment.
+    //
+    // A third shape needs the same exclusion: an IR enum with data-carrying variants (e.g. a
+    // `#[serde(untagged)]` union) is still an "enum" in the IR, but the Java binding backend
+    // renders it as a wrapper class (`gen_java_tagged_union` / `gen_java_untagged_wrapper`),
+    // neither of which declares `getValue()`. `java_enum_emits_get_value` answers from the
+    // exact predicate the binding backend itself branches on
+    // (`backends::java::gen_bindings::emits_get_value`), so this can never disagree with what
+    // was actually emitted; it answers `None` when the IR doesn't resolve a concrete enum type
+    // for the field (e.g. a `fields_enum`-only config entry), in which case the pre-existing
+    // behaviour (assume `getValue()` is available) is kept. ~keep
     let field_is_enum = assertion.field.as_deref().is_some_and(|f| {
         let resolved = field_resolver.resolve(f);
         let in_enum_fields = enum_fields.get(f).is_some()
             || enum_fields.get(resolved).is_some()
             || field_resolver.is_enum(f)
             || field_resolver.is_enum(resolved);
-        in_enum_fields && !is_sealed_display_field
+        let emits_get_value = field_resolver
+            .java_enum_emits_get_value(f)
+            .or_else(|| field_resolver.java_enum_emits_get_value(resolved))
+            .unwrap_or(true);
+        in_enum_fields && !is_sealed_display_field && emits_get_value
     });
 
     // Determine if this field is an array (List<T>) — needed to choose .toString() for

@@ -127,6 +127,15 @@ pub(super) fn render_test_method(
         lang,
         crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
     );
+    // Enum types the Java binding backend renders as a tagged/untagged-union wrapper class
+    // rather than a plain `enum` with `getValue()` — the exact predicate `gen_enum_class` uses
+    // to pick its branch, reused here so `field_is_enum` in `assertions.rs` can never disagree
+    // with what the binding backend actually emitted (see `emits_get_value`'s doc). ~keep
+    let java_wrapper_enum_names: std::collections::HashSet<String> = enums
+        .iter()
+        .filter(|enum_def| !crate::backends::java::gen_bindings::emits_get_value(enum_def))
+        .map(|enum_def| enum_def.name.clone())
+        .collect();
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -137,6 +146,7 @@ pub(super) fn render_test_method(
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
+    .with_java_wrapper_enum_names(java_wrapper_enum_names)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let effective_enum_fields = e2e_config.effective_fields_enum(call_config);

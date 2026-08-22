@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Java e2e assertion generator (`src/e2e/codegen/java/assertions.rs`) emitted a
+  non-compiling `.getValue()` accessor on data-carrying IR enum fields (e.g. a
+  `#[serde(untagged)]` union), a regression from 0.62.11's `field_is_enum` broadening
+  (cd866bfdc).** `getValue()` only exists on the plain Java `enum` the Java binding backend
+  emits for a non-data-carrying enum; a data-carrying enum still classifies as "enum" in the
+  IR, but the Java binding backend renders it as a tagged/untagged-union wrapper class with no
+  such method. `field_is_enum` now also checks
+  `backends::java::gen_bindings::emits_get_value` — the exact predicate the Java binding
+  backend itself uses to choose between a plain enum and a wrapper class
+  (`src/backends/java/gen_bindings/types/enums.rs`) — via a new IR-derived
+  `FieldResolver::java_enum_emits_get_value` lookup, so the two can never disagree again.
+  Regression coverage: `src/e2e/codegen/java/assertion_union_enum_field_classification_tests.rs`.
+
 ## [0.62.11] - 2026-08-22
 
 ### Fixed
