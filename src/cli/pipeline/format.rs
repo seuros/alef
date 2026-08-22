@@ -1,4 +1,4 @@
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::{Language, OutputLayout, ResolvedCrateConfig};
 use crate::e2e::format::DeferredFormatting;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -441,14 +441,28 @@ pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
 /// every directory each changed language generates into (existing dirs only, deduped,
 /// with nested entries collapsed into their enclosing directory).
 ///
-/// Both `package_dir(lang)` and `output_for(lang)`, deliberately: this is the same span
-/// `generate_sweep_roots` reclaims orphans across and the same span `finalize_hashes`
-/// stamps, and a formatting scope narrower than the stamping scope means alef stamps bytes
-/// it never canonicalised. For most languages the two coincide or nest -- but
-/// `package_dir(Python)` is the wheel at `packages/python` while the PyO3 glue crate is
-/// generated into `crates/<name>-py/src`, so `alef generate --lang python` used to stamp a
-/// Rust file no formatter had touched, and the next whole-tree pass immediately made that
-/// stamp stale. Format scope must equal stamp scope. ~keep
+/// `package_dir(lang)`, `output_for(lang)`, *and* the binding crate root implied by
+/// `output_for(lang)`, deliberately: this is the same span `generate_sweep_roots` reclaims
+/// orphans across and the same span `finalize_hashes` stamps, and a formatting scope narrower
+/// than the stamping scope means alef stamps bytes it never canonicalised. For most languages
+/// all three coincide or nest -- but `package_dir(Python)` is the wheel at `packages/python`
+/// while the PyO3 glue crate is generated into `crates/<name>-py/src`, so `alef generate --lang
+/// python` used to stamp a Rust file no formatter had touched, and the next whole-tree pass
+/// immediately made that stamp stale.
+///
+/// `output_for(lang)` alone is not enough either: it names the *source* directory
+/// (`crates/<name>-py/src`), one level below the crate root that actually holds the binding
+/// crate's own `Cargo.toml`. Any language whose default output template is
+/// `<crate-root>/src` (see [`crate::core::config::resolve_helpers::default_binding_crate_root`]
+/// -- today python, ffi, and php, alongside node/wasm whose `package_dir` already resolves to
+/// the same crate root) generates a manifest that lived outside every formatting pass on a
+/// partial regen: `poly fmt` never saw it, so it shipped non-canonical from generation, and
+/// `alef verify` only caught the drift the first time something else reformatted the file.
+/// [`crate::core::config::OutputLayout::from_output_dir`] is the same root-vs-src split the FFI
+/// and Wasm backends already use to locate their own manifests, so recovering the crate root
+/// through it here (rather than hard-coding which languages have a `<root>/src` shape) keeps
+/// this generic across every current and future binding-crate language. Format scope must
+/// equal stamp scope. ~keep
 fn poly_paths(
     config: &ResolvedCrateConfig,
     base_dir: &Path,
@@ -462,8 +476,12 @@ fn poly_paths(
             let mut dirs = Vec::new();
             for &lang in poly_langs {
                 let package_dir = base_dir.join(config.package_dir(lang));
-                let output_dir = config.output_for(&lang.to_string()).map(|out| base_dir.join(out));
-                for dir in std::iter::once(package_dir).chain(output_dir) {
+                let output_path = config.output_for(&lang.to_string());
+                let output_dir = output_path.map(|out| base_dir.join(out));
+                let crate_root = output_path
+                    .map(|out| OutputLayout::from_output_dir(&out.to_string_lossy()).root)
+                    .map(|root| base_dir.join(root));
+                for dir in std::iter::once(package_dir).chain(output_dir).chain(crate_root) {
                     if seen.insert(dir.clone()) && dir.exists() {
                         dirs.push(dir);
                     }
