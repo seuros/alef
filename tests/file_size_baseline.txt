@@ -35,7 +35,6 @@ src/backends/wasm/gen_bindings/mod.rs 1137
 src/backends/wasm/gen_bindings/tests.rs 1114
 src/backends/wasm/trait_bridge.rs 1187
 src/backends/zig/gen_bindings/functions.rs 1498
-src/bin_cli/core_commands.rs 1215
 src/bin_cli/helpers.rs 1105
 src/cli/cache.rs 2392
 src/cli/commands/snippets.rs 1023
@@ -44,7 +43,7 @@ src/cli/pipeline/commands/build.rs 1961
 src/cli/pipeline/extract/tests.rs 1383
 src/cli/pipeline/generate/header_freshness.rs 1622
 src/cli/pipeline/generate/orphans.rs 1066
-src/cli/pipeline/generate/scaffold.rs 1070
+src/cli/pipeline/generate/scaffold.rs 1067
 src/cli/pipeline/generate/tests.rs 2453
 src/cli/pipeline/version_tests/sync_versions.rs 1278
 src/codegen/config_gen/tests/defaults.rs 1223

@@ -7,6 +7,7 @@ mod manifest_reconciliation_tests;
 mod normalization;
 mod orphans;
 mod scaffold;
+mod scaffold_drift;
 #[cfg(test)]
 mod scaffold_write_finalize_idempotency_tests;
 #[cfg(test)]
@@ -26,6 +27,7 @@ pub use scaffold::{
     readme, reconcile_managed_scaffold_manifests, scaffold, write_scaffold_files, write_scaffold_files_report,
     write_scaffold_files_with_overwrite,
 };
+pub use scaffold_drift::find_create_once_template_drift;
 pub use write::{WriteReport, report_refused_writes};
 pub(crate) use write::{
     apply_shebang_chmod, atomic_write, ensure_generated_header, is_owned_by_ownership_record, marker_comment_style,
