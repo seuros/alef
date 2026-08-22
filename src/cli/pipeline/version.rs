@@ -728,6 +728,29 @@ pub fn sync_versions(
         run_optional("mix", &["deps.get"]);
     }
 
+    // `sync_registry_package_versions` must run *before* `finalize_hashes` below, not after it.
+    // `finalize_hashes` re-derives `inputs_hash` by reading `config_path` (`alef.toml`) off disk
+    // right before stamping — so whatever bytes are on disk at that moment become the hash every
+    // file in `finalize_paths` is stamped against. `[crates.e2e.registry.packages.*].version` is a
+    // real generation input (it feeds registry-mode test_apps content via
+    // `E2eConfig::effective_package_for`), so it is correctly folded into `inputs_hash` — but only
+    // if the bump has already landed on disk before that hash is computed. Running this after
+    // `finalize_hashes` stamped every rewritten file against the *pre-bump* `inputs_hash`, so the
+    // files this very run just wrote were born stale: the next `alef verify` recomputes
+    // `inputs_hash` from the (by-then bumped) `alef.toml` and finds a mismatch immediately. ~keep
+    match sync_registry_package_versions(config_path, &version) {
+        Ok(true) => {
+            info!("Updated registry package versions in {}", config_path.display());
+        }
+        Ok(false) => {}
+        Err(e) => {
+            warn!(
+                "Could not sync registry package versions in {}: {e}",
+                config_path.display()
+            );
+        }
+    }
+
     let mut finalize_paths: std::collections::HashSet<std::path::PathBuf> =
         updated.iter().map(std::path::PathBuf::from).collect();
     finalize_paths.extend(text_replacement_paths);
@@ -774,19 +797,6 @@ pub fn sync_versions(
 
     let _ = std::fs::create_dir_all(".alef");
     let _ = std::fs::write(&last_path, &version);
-
-    match sync_registry_package_versions(config_path, &version) {
-        Ok(true) => {
-            info!("Updated registry package versions in {}", config_path.display());
-        }
-        Ok(false) => {}
-        Err(e) => {
-            warn!(
-                "Could not sync registry package versions in {}: {e}",
-                config_path.display()
-            );
-        }
-    }
 
     if !no_regen {
         if let Some(e2e_config) = config.e2e.as_ref() {

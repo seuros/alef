@@ -26,6 +26,8 @@ mod manifests;
 mod native_cargo_manifest;
 #[path = "version_tests/readme_regen.rs"]
 mod readme_regen;
+#[path = "version_tests/registry_bump_hash_ordering.rs"]
+mod registry_bump_hash_ordering;
 #[path = "version_tests/registry_dep_pin.rs"]
 mod registry_dep_pin;
 #[path = "version_tests/swift_checksum.rs"]
