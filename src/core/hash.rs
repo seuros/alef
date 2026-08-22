@@ -383,7 +383,17 @@ pub const fn deepest_hash_line() -> usize {
 /// in-memory string. **Not used for the embedded `alef:hash:` header** — that
 /// is computed by [`compute_file_hash`].
 pub fn hash_content(content: &str) -> String {
-    blake3::hash(content.as_bytes()).to_hex().to_string()
+    hash_bytes(content.as_bytes())
+}
+
+/// Blake3 hash of arbitrary bytes, returned as hex.
+///
+/// The binary twin of [`hash_content`], for output alef emits base64-encoded and writes
+/// as bytes (`cli::pipeline::generate::binary`). Such a file can hold no `alef:hash:`
+/// marker and has no line diff, so a digest of both sides is the only reviewable
+/// statement that can be made about it — see `cli::commands::adopt::BinaryFacts`. ~keep
+pub fn hash_bytes(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
 }
 
 /// Compute a stable hash over the Rust source files that alef extracts.

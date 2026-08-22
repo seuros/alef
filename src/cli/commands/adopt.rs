@@ -117,6 +117,43 @@ pub struct AdoptCandidate {
     pub stamped: Option<String>,
     /// Mirrors [`ManagedOutput::create_once`] — alef emits this path only when absent.
     pub create_once: bool,
+    /// Present when this candidate's bytes are not text ([`BinaryFacts`]); `existing`
+    /// and `generated` are then empty and carry no meaning.
+    pub binary: Option<BinaryFacts>,
+}
+
+/// What can be reviewed about a binary candidate, standing in for the line diff a text
+/// candidate gets.
+///
+/// Adoption of a drifted path is only ever taken after the operator reads what is at
+/// risk, and for bytes there is nothing to read line by line — which is why these paths
+/// were previously refused outright. Refusal was the wrong conclusion: alef's *writers*
+/// already own binaries, guarding them with `is_scaffold_owned_path` and recording them
+/// with `record_scaffold_owned_path` (see `generate::scaffold::write_scaffold_files_report`
+/// and `generate::write::write_files_report`). The ownership rail for binary output
+/// exists and is load-bearing; the only thing missing was a door into it for a file alef
+/// did not itself create, leaving such a path refused by the guard forever with no
+/// command able to fix it. Size and digest on both sides are the reviewable unit that
+/// bytes actually have, and they are enough to answer the question adoption asks: is the
+/// artifact on disk the one alef would put there, or a different one you are consenting
+/// to lose? ~keep
+#[derive(Debug, Clone)]
+pub struct BinaryFacts {
+    pub existing_len: usize,
+    pub existing_digest: String,
+    pub generated_len: usize,
+    pub generated_digest: String,
+}
+
+impl BinaryFacts {
+    fn new(existing: &[u8], generated: &[u8]) -> Self {
+        Self {
+            existing_len: existing.len(),
+            existing_digest: crate::core::hash::hash_bytes(existing),
+            generated_len: generated.len(),
+            generated_digest: crate::core::hash::hash_bytes(generated),
+        }
+    }
 }
 
 pub struct AdoptOptions {
@@ -201,14 +238,20 @@ pub struct AdoptReport {
     /// in a *different* file, which the operator has to commit for the adoption to mean
     /// anything anywhere else. ~keep
     pub recorded_unstampable: Vec<PathBuf>,
-    /// Matches whose bytes are not valid UTF-8, in path order.
+    /// Matches alef can make no statement about at all, in path order.
     ///
-    /// Skipped rather than adopted, and reported rather than dropped. Adoption of a drifted
-    /// path is only ever taken after printing its diff, and a binary artifact has no diff to
-    /// print -- so neither adopting it nor staying silent about it is available. One such file
-    /// used to abort the entire target: a single `gradle-wrapper.jar` inside `packages/**`
-    /// ended the run with "stream did not contain valid UTF-8" before any of the hundreds of
-    /// adoptable text files beside it were stamped. ~keep
+    /// Two shapes reach this list, and both are alef failing rather than the operator
+    /// having a decision to make: bytes that are not valid UTF-8 on a path alef does not
+    /// emit as binary, and a [`crate::cli::pipeline::is_base64_binary_output`] path whose
+    /// generated content did not decode as base64. Skipped rather than adopted, and
+    /// reported rather than dropped -- one such file used to abort the entire target: a
+    /// single `gradle-wrapper.jar` inside `packages/**` ended the run with "stream did not
+    /// contain valid UTF-8" before any of the hundreds of adoptable text files beside it
+    /// were stamped.
+    ///
+    /// A jar is no longer one of them. It is classified on its decoded bytes and adopted
+    /// through the ownership record like any other unstampable format -- see
+    /// [`BinaryFacts`] for why refusing it was wrong. ~keep
     pub unreadable: Vec<PathBuf>,
     /// Full, untruncated diffs for every drifted candidate, in path order.
     pub diffs: Vec<AdoptDiff>,
@@ -258,6 +301,18 @@ pub fn managed_outputs(files: &[crate::core::backend::GeneratedFile], base_dir: 
         .iter()
         .map(|file| {
             let full_path = base_dir.join(&file.path);
+            if crate::cli::pipeline::is_base64_binary_output(&file.path) {
+                // Verbatim, because the writers decode `file.content` verbatim. Running the
+                // text normalizer over base64 appends the trailing newline every text output
+                // gets, and the decoder then rejects the whole payload -- so the artifact alef
+                // would actually write becomes unrepresentable here, and every binary match
+                // classifies as "alef cannot read this" rather than by its bytes. ~keep
+                return ManagedOutput {
+                    relative: file.path.clone(),
+                    content: file.content.clone(),
+                    create_once: is_create_once_seed(file),
+                };
+            }
             let normalized = crate::cli::pipeline::normalize_content(&full_path, &file.content);
             let content = if file.generated_header {
                 crate::cli::pipeline::ensure_generated_header(&full_path, &normalized)
@@ -385,7 +440,58 @@ pub fn classify(
         state,
         stamped,
         create_once,
+        binary: None,
     }
+}
+
+/// Classify a [`crate::cli::pipeline::is_base64_binary_output`] match against the bytes
+/// alef would decode onto it.
+///
+/// `stamped` is `None` by construction: a jar can carry no comment, so adoption goes
+/// through the committed `.alef-ownership.toml` record — which is *already* the proof
+/// route both writers consult for binary paths, not a new one invented here. [`apply`]'s
+/// existing `None` arm therefore needs no binary-specific branch.
+///
+/// [`AdoptionState::AlreadyOwned`] is read off that same record rather than off the file,
+/// mirroring the text rail exactly: a path alef has already proven it owns has no consent
+/// left to give, whatever its current bytes.
+///
+/// Returns `None` when the generated content is not decodable base64 — an alef bug rather
+/// than an operator decision, and one that must not abort the hundreds of adoptable files
+/// under the same glob. The path is reported through [`AdoptReport::unreadable`] instead.
+fn classify_binary(
+    base_dir: &Path,
+    full_path: &Path,
+    output: &ManagedOutput,
+    existing: &[u8],
+) -> Option<AdoptCandidate> {
+    let generated = match crate::cli::pipeline::decode_base64_binary(&output.relative, &output.content) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(
+                path = %output.relative.display(),
+                "cannot be adopted: alef's own generated content for this binary path did not decode: {error:#}"
+            );
+            return None;
+        }
+    };
+    let state = if crate::cli::cache::is_scaffold_owned_path(base_dir, full_path) {
+        AdoptionState::AlreadyOwned
+    } else if existing == generated.as_slice() {
+        AdoptionState::Converged
+    } else {
+        AdoptionState::Drifted
+    };
+    Some(AdoptCandidate {
+        relative: output.relative.clone(),
+        full_path: full_path.to_path_buf(),
+        existing: String::new(),
+        generated: String::new(),
+        state,
+        stamped: None,
+        create_once: output.create_once,
+        binary: Some(BinaryFacts::new(existing, &generated)),
+    })
 }
 
 /// Render the complete line-by-line diff between what is on disk and what alef would
@@ -396,6 +502,22 @@ pub fn classify(
 pub fn render_diff(candidate: &AdoptCandidate) -> String {
     let spelled = candidate.relative.display();
     let mut body = format!("--- {spelled} (on disk)\n+++ {spelled} (alef generate output)\n");
+    if let Some(facts) = &candidate.binary {
+        // Deliberately shaped like the line diff above -- same header, same `-`/`+`
+        // sides -- because it is answering the same question and lands in the same
+        // reviewed output. Saying only "binary file differs" would name a fact the
+        // operator already knows from the path and give them nothing to decide with. ~keep
+        body.push_str("Binary output: no line diff exists. The bytes on each side:\n");
+        body.push_str(&format!(
+            "-{:>12} bytes  blake3:{}\n",
+            facts.existing_len, facts.existing_digest
+        ));
+        body.push_str(&format!(
+            "+{:>12} bytes  blake3:{}\n",
+            facts.generated_len, facts.generated_digest
+        ));
+        return body;
+    }
     let diff = similar::TextDiff::from_lines(candidate.existing.as_str(), candidate.generated.as_str());
     for change in diff.iter_all_changes() {
         let prefix = match change.tag() {
@@ -412,8 +534,8 @@ pub fn render_diff(candidate: &AdoptCandidate) -> String {
     body
 }
 
-/// What [`collect_candidates`] found: the classifiable matches, plus the matches whose
-/// bytes are not text and so can be neither stamped nor diffed.
+/// What [`collect_candidates`] found: the classifiable matches, plus the matches alef
+/// could neither read as text nor decode as one of its own binary outputs.
 struct CollectedCandidates {
     candidates: Vec<AdoptCandidate>,
     unreadable: Vec<PathBuf>,
@@ -449,6 +571,13 @@ fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Resu
         }
         let bytes =
             std::fs::read(&full_path).with_context(|| format!("failed to read existing {}", full_path.display()))?;
+        if crate::cli::pipeline::is_base64_binary_output(&output.relative) {
+            match classify_binary(&options.base_dir, &full_path, output, &bytes) {
+                Some(candidate) => candidates.push(candidate),
+                None => unreadable.push(output.relative.clone()),
+            }
+            continue;
+        }
         let Ok(existing) = String::from_utf8(bytes) else {
             unreadable.push(output.relative.clone());
             continue;
