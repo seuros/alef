@@ -105,18 +105,19 @@ pub(super) fn build_args_and_setup(
 
         if arg.arg_type == "mock_url_list" {
             let fixture_id = &fixture.id;
-            let base_url_expr = if fixture.has_host_root_route() {
-                format!(
-                    "os.environ.get('MOCK_SERVER_{}', os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}')",
-                    fixture_id.to_uppercase()
-                )
-            } else {
-                format!("os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'")
-            };
-            arg_bindings.push(format!("    {var_name}_base = {base_url_expr}"));
 
             // Extract path strings from fixture input array.
             // Try both the declared field and common aliases (batch_urls, urls, etc.)
+            //
+            // ~keep The preserved-list check must run BEFORE the `{var_name}_base` line
+            // below is pushed, not after: every other backend's `mock_url_list` handler
+            // (go/setup.rs, java/args.rs, csharp/setup.rs, ...) computes that env-var
+            // literal only on the non-preserved path, but this one used to push it
+            // unconditionally and just `continue` past it once preserved. A doc snippet
+            // never executes the unused `_base` assignment, but it IS published verbatim
+            // -- `os.environ['MOCK_SERVER_URL']` in the body is exactly the mock-harness
+            // leak `reject_mock_harness_scaffolding` exists to catch, so a fully
+            // preserved (docs-safe) fixture still failed the guard on this arg type alone.
             let field_value = crate::e2e::codegen::resolve_urls_field(&fixture.input, &arg.field);
             if let Some(urls) = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, field_value) {
                 let urls = urls
@@ -128,6 +129,17 @@ pub(super) fn build_args_and_setup(
                 kwarg_exprs.push(var_name.to_string());
                 continue;
             }
+
+            let base_url_expr = if fixture.has_host_root_route() {
+                format!(
+                    "os.environ.get('MOCK_SERVER_{}', os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}')",
+                    fixture_id.to_uppercase()
+                )
+            } else {
+                format!("os.environ['MOCK_SERVER_URL'] + '/fixtures/{fixture_id}'")
+            };
+            arg_bindings.push(format!("    {var_name}_base = {base_url_expr}"));
+
             let paths: Vec<String> = if let Some(arr) = field_value.as_array() {
                 arr.iter()
                     .filter_map(|v| {
