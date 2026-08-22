@@ -350,6 +350,31 @@ fn every_frozen_path_is_actually_accepted_by_the_adopt_invocation_its_create_onc
     );
 }
 
+/// The paired control for the create-once-only case: a single genuinely adoptable
+/// (non-create-once) frozen file must still be reported, even sitting alongside a create-once
+/// seed that must not. Mixing both shapes in one fixture proves `has_adoptable_frozen_files`
+/// reads each entry's own `create_once` flag rather than, say, checking only the first element
+/// or the list length. Salvaged from a superseded branch whose fix landed by another route. ~keep
+#[test]
+fn has_adoptable_frozen_files_is_true_when_one_of_several_frozen_files_is_adoptable() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("seed.zzz"), "old seed content\n").unwrap();
+    std::fs::write(dir.path().join("SomeType.java"), "final class SomeType {}\n").unwrap();
+    let files = vec![
+        gen_file_unheadered("seed.zzz", "fresh seed content\n"),
+        gen_file("SomeType.java", "final class SomeType {}\n"),
+    ];
+
+    let frozen = frozen_managed_paths(&files, dir.path());
+    assert_eq!(frozen.len(), 2, "fixture precondition: both paths must be frozen");
+
+    assert!(
+        has_adoptable_frozen_files(&frozen),
+        "a genuinely adoptable frozen file must still be detected even alongside a \
+         create-once seed that must not gate the exit code on its own"
+    );
+}
+
 /// Base case: nothing frozen means nothing to adopt.
 #[test]
 fn has_adoptable_frozen_files_is_false_for_an_empty_list() {
