@@ -59,16 +59,6 @@ static __ALEF_KEEP_FFI_LINKED: unsafe extern "C" fn() -> *const ::std::ffi::c_ch
 #[swift_bridge::bridge]
 mod ffi {
     extern "Rust" {
-        type Span;
-        #[swift_bridge(init)]
-        fn new(start_byte: usize, end_byte: usize) -> Span;
-        #[swift_bridge(swift_name = "startByte")]
-        fn start_byte(&self) -> usize;
-        #[swift_bridge(swift_name = "endByte")]
-        fn end_byte(&self) -> usize;
-    }
-
-    extern "Rust" {
         type Diagnostic;
         #[swift_bridge(init)]
         fn new(message: String, span: Span) -> Diagnostic;
@@ -86,10 +76,20 @@ mod ffi {
     }
 
     extern "Rust" {
-        #[swift_bridge(swift_name = "spanFromJson")]
-        fn span_from_json(json: String) -> Result<Span, String>;
+        type Span;
+        #[swift_bridge(init)]
+        fn new(start_byte: usize, end_byte: usize) -> Span;
+        #[swift_bridge(swift_name = "startByte")]
+        fn start_byte(&self) -> usize;
+        #[swift_bridge(swift_name = "endByte")]
+        fn end_byte(&self) -> usize;
+    }
+
+    extern "Rust" {
         #[swift_bridge(swift_name = "diagnosticFromJson")]
         fn diagnostic_from_json(json: String) -> Result<Diagnostic, String>;
+        #[swift_bridge(swift_name = "spanFromJson")]
+        fn span_from_json(json: String) -> Result<Span, String>;
     }
     extern "Rust" {
         #[swift_bridge(swift_name = "processResultFromJson")]
@@ -105,37 +105,19 @@ mod ffi {
         // trying to construct or manipulate Vec<T> of opaque types.
         //
         // These declarations are paired with phantom_impl functions below the bridge module.
-        fn __alef_phantom_vec_span() -> Vec<Span>;
         fn __alef_phantom_vec_diagnostic() -> Vec<Diagnostic>;
         fn __alef_phantom_vec_process_result() -> Vec<ProcessResult>;
+        fn __alef_phantom_vec_span() -> Vec<Span>;
     }
 
 }
 
-#[doc(hidden)]
-pub fn __alef_phantom_vec_span() -> Vec<Span> { Vec::new() }
 #[doc(hidden)]
 pub fn __alef_phantom_vec_diagnostic() -> Vec<Diagnostic> { Vec::new() }
 #[doc(hidden)]
 pub fn __alef_phantom_vec_process_result() -> Vec<ProcessResult> { Vec::new() }
-
-pub struct Span(pub demo::Span);
-impl Span {
-    #[allow(clippy::needless_update)]
-    pub fn new(start_byte: usize, end_byte: usize) -> Span {
-        Span(demo::Span {
-            start_byte,
-            end_byte,
-            ..Default::default()
-        })
-    }
-    pub fn start_byte(&self) -> usize {
-        ::serde_json::to_value(&self.0.start_byte).ok().and_then(|j| ::serde_json::from_value(j).ok()).unwrap_or_default()
-    }
-    pub fn end_byte(&self) -> usize {
-        ::serde_json::to_value(&self.0.end_byte).ok().and_then(|j| ::serde_json::from_value(j).ok()).unwrap_or_default()
-    }
-}
+#[doc(hidden)]
+pub fn __alef_phantom_vec_span() -> Vec<Span> { Vec::new() }
 
 pub struct Diagnostic(pub demo::Diagnostic);
 impl Diagnostic {
@@ -191,14 +173,32 @@ impl ProcessResult {
     }
 }
 
-pub fn span_from_json(json: String) -> Result<Span, String> {
-    serde_json::from_str::<demo::Span>(&json)
-        .map(Span)
-        .map_err(|e| e.to_string())
+pub struct Span(pub demo::Span);
+impl Span {
+    #[allow(clippy::needless_update)]
+    pub fn new(start_byte: usize, end_byte: usize) -> Span {
+        Span(demo::Span {
+            start_byte,
+            end_byte,
+            ..Default::default()
+        })
+    }
+    pub fn start_byte(&self) -> usize {
+        ::serde_json::to_value(&self.0.start_byte).ok().and_then(|j| ::serde_json::from_value(j).ok()).unwrap_or_default()
+    }
+    pub fn end_byte(&self) -> usize {
+        ::serde_json::to_value(&self.0.end_byte).ok().and_then(|j| ::serde_json::from_value(j).ok()).unwrap_or_default()
+    }
 }
+
 pub fn diagnostic_from_json(json: String) -> Result<Diagnostic, String> {
     serde_json::from_str::<demo::Diagnostic>(&json)
         .map(Diagnostic)
+        .map_err(|e| e.to_string())
+}
+pub fn span_from_json(json: String) -> Result<Span, String> {
+    serde_json::from_str::<demo::Span>(&json)
+        .map(Span)
         .map_err(|e| e.to_string())
 }
 pub fn process_result_from_json(json: String) -> Result<ProcessResult, String> {

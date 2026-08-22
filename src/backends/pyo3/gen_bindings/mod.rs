@@ -60,7 +60,7 @@ impl Backend for Pyo3Backend {
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         // to the core crate — which resolves the cfg itself — and emits no `#[cfg]` gate on the
         // wrapper, so two same-named entries would otherwise produce duplicate `#[pyfunction]`
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         let api = &deduped_api;
 
         // should store them as `Option<Py<PyAny>>` with `#[serde(skip)]` so the visitor can
@@ -755,7 +755,7 @@ impl Backend for Pyo3Backend {
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
         // Rust binding does — Python has no `#[cfg]`, so two same-named defs in the `.pyi`
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         public_files::generate_type_stubs(&deduped_api, config)
     }
 
@@ -764,7 +764,7 @@ impl Backend for Pyo3Backend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         public_files::generate_public_api(&deduped_api, config)
     }
 
@@ -773,7 +773,7 @@ impl Backend for Pyo3Backend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        service_api::generate(api, config)
+        service_api::generate(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {
