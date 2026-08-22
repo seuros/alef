@@ -388,6 +388,22 @@ pub(in crate::backends::rustler::gen_bindings) fn is_flat_data_enum(enum_def: &c
             .all(|v| v.is_tuple)
 }
 
+/// The discriminator field name a flat data enum carries when the source enum has no explicit
+/// `#[serde(tag = "...")]`. `"type"` mirrors the fallback the wasm backend already uses for the
+/// same concept (`src/backends/wasm/gen_bindings/enums.rs`) and serde's own `tag = "type"`
+/// convention -- not a domain word borrowed from any one consumer crate.
+///
+/// Every emitter that names this field -- the Rust `NifStruct` field
+/// (`gen_rustler_flat_data_enum` and its `From` impls in `gen_bindings/types.rs`), the Elixir
+/// `@type` alias, and the Elixir `wire_value/1` map clause (both below) -- must call this
+/// function instead of hard-coding the fallback independently, or the emitted sides can disagree
+/// on the key like the `@type` alias and `wire_value/1` once did. ~keep
+pub(in crate::backends::rustler::gen_bindings) fn flat_data_enum_discriminator(
+    enum_def: &crate::core::ir::EnumDef,
+) -> &str {
+    enum_def.serde_tag.as_deref().unwrap_or("type")
+}
+
 /// Escape a wire value for embedding in a double-quoted Elixir string literal.
 fn escape_elixir_string_literal(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
@@ -534,6 +550,11 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
         }
         out.push_str("  @type t :: term()\n");
         out.push('\n');
+        // The discriminator key documented in each variant's `@type` alias below must be the
+        // exact same key `wire_value/1`'s map clause reads (see `flat_data_enum_discriminator`)
+        // -- both are computed once, here, from the same function so the doc and the runtime
+        // dispatch cannot disagree on the key name. ~keep
+        let struct_type_discriminator = elixir_safe_atom(flat_data_enum_discriminator(enum_def));
         for variant in &enum_def.variants {
             let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
             let variant_atom = format!(":{}", elixir_safe_atom(&snake_name));
@@ -605,6 +626,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
                     "elixir_data_enum_struct_type.jinja",
                     minijinja::context! {
                         type_name => &type_name,
+                        discriminator => &struct_type_discriminator,
                         variant_atom => &variant_atom,
                         field_types => field_types.join(", "),
                     },
@@ -677,7 +699,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
             minijinja::context! {},
         ));
         if is_flat_data_enum(enum_def) {
-            let discriminator = elixir_safe_atom(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
+            let discriminator = elixir_safe_atom(flat_data_enum_discriminator(enum_def));
             out.push_str(&template_env::render(
                 "elixir_enum_wire_value_map_clause.jinja",
                 minijinja::context! {

@@ -451,7 +451,7 @@ fn gen_elixir_enum_module_flat_data_enum_exposes_wire_value_and_string_chars() {
     let result = gen_elixir_enum_module(&def, "SampleCrate");
 
     assert!(
-        result.contains("def wire_value(value) when is_map(value), do: Map.fetch!(value, :format_type)"),
+        result.contains("def wire_value(value) when is_map(value), do: Map.fetch!(value, :type)"),
         "the flat-struct shape's discriminator field already holds the wire value; reading it \
          beats calling to_string on a struct with no String.Chars impl; got:\n{result}"
     );
@@ -466,6 +466,57 @@ fn gen_elixir_enum_module_flat_data_enum_exposes_wire_value_and_string_chars() {
         result.contains("SampleCrate.FormatMetadata.wire_value(value)"),
         "String.Chars must delegate to the same wire_value/1 the enum module exposes, not \
          re-derive the wire string; got:\n{result}"
+    );
+}
+
+/// The `@type` alias documents the flat-struct shape as `%{DISCRIMINATOR: variant_atom, ...}`,
+/// and `wire_value/1`'s map clause reads `Map.fetch!(value, :DISCRIMINATOR)` off the exact same
+/// real runtime term. Both descriptions must name the same key -- extracted here from the
+/// rendered output rather than pinned as two independent hard-coded literals, so a future
+/// regression that reintroduces two independently-hard-coded fallbacks (the bug this guards)
+/// would fail this assertion even if both literals happened to still be spelled the same way. ~keep
+#[test]
+fn gen_elixir_enum_module_flat_data_enum_typespec_and_wire_value_discriminator_agree() {
+    fn extract_discriminator<'a>(result: &'a str, needle: &str, terminator: char) -> &'a str {
+        let after_needle = result
+            .split_once(needle)
+            .unwrap_or_else(|| panic!("expected to find `{needle}` in:\n{result}"))
+            .1;
+        after_needle
+            .split(terminator)
+            .next()
+            .unwrap_or_else(|| panic!("expected `{terminator}` after `{needle}` in:\n{result}"))
+    }
+
+    let def = EnumDef {
+        name: "Payload".to_string(),
+        serde_tag: Some("custom_tag".to_string()),
+        variants: vec![EnumVariant {
+            name: "Pdf".to_string(),
+            fields: vec![FieldDef {
+                name: "_0".to_string(),
+                ty: TypeRef::Named("PdfMetadata".to_string()),
+                ..FieldDef::default()
+            }],
+            is_tuple: true,
+            ..EnumVariant::default()
+        }],
+        ..EnumDef::default()
+    };
+
+    let result = gen_elixir_enum_module(&def, "SampleCrate");
+
+    let typespec_discriminator = extract_discriminator(&result, "@type pdf :: %{", ':');
+    let wire_value_discriminator = extract_discriminator(&result, "Map.fetch!(value, :", ')');
+
+    assert_eq!(
+        typespec_discriminator, wire_value_discriminator,
+        "the @type alias and wire_value/1 must key the flat-struct discriminator identically; \
+         got:\n{result}"
+    );
+    assert_eq!(
+        typespec_discriminator, "custom_tag",
+        "an explicit serde_tag override must thread into both emitters; got:\n{result}"
     );
 }
 

@@ -143,10 +143,6 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         "  def {{ fn_name }}({{ params }}), do: {:{{ atom }}, %{{ '{' }}{{ map_entries }}{{ '}' }}}\n",
     ),
     (
-        "elixir_data_enum_type.jinja",
-        "  @type {{ type_name }} :: {%- if is_unit %} {{ variant_atom }}\n{%- else %} %{type: {{ variant_atom }}, {{ field_types | join(\", \") }}}\n{%- endif %}",
-    ),
-    (
         "elixir_opaque_struct.jinja",
         "pub struct {{ struct_name }} {\n    inner: Arc<std::sync::RwLock<{{ core_path }}>>,\n}\n\n// SAFETY: See gen_opaque_resource in alef-backend-rustler for rationale.\n\nimpl std::panic::RefUnwindSafe for {{ struct_name }} {}\n\nimpl rustler::Resource for {{ struct_name }} {}\n",
     ),
@@ -180,7 +176,7 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
     ),
     (
         "elixir_data_enum_struct_type.jinja",
-        "  @type {{ type_name }} :: %{type: {{ variant_atom }}, {{ field_types }}}\n",
+        "  @type {{ type_name }} :: {{ \"%{\" }}{{ discriminator }}: {{ variant_atom }}, {{ field_types }}}\n",
     ),
     (
         "rust_opaque_struct.jinja",

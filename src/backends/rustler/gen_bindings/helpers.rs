@@ -10,8 +10,8 @@ pub(super) use conversions::gen_elixir_enum_module;
 #[cfg(test)]
 pub(super) use conversions::gen_elixir_opaque_module;
 pub(super) use conversions::{
-    gen_elixir_enum_module_with_known_types, gen_elixir_opaque_module_with_types, gen_elixir_struct_module,
-    is_flat_data_enum,
+    flat_data_enum_discriminator, gen_elixir_enum_module_with_known_types, gen_elixir_opaque_module_with_types,
+    gen_elixir_struct_module, is_flat_data_enum,
 };
 pub(super) use json_values::{elixir_safe_param_name, elixir_typespec};
 pub(super) use nif_service::{collect_types_for_nif_derives, gen_native_ex};
