@@ -498,11 +498,6 @@ pub(super) fn render_assertion(
             if is_numeric {
                 let _ = writeln!(out, "      assert {field_expr} == 0");
             } else {
-                // Mirrors `not_empty` above: that arm already treats `[]`/`%{}` as empty via
-                // list membership, but this arm had no collection branch at all -- only
-                // nil/"" -- so an empty `Vec<T>` (Elixir `[]`) was neither nil nor "" and the
-                // assertion was simply false. `in`/`not in` against the same four-element list
-                // keeps both arms symmetric. ~keep
                 let _ = writeln!(out, "      assert {coerced_field_expr} in [nil, \"\", [], %{{}}]");
             }
         }
