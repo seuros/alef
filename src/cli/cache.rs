@@ -158,33 +158,7 @@ pub fn write_ir_cache(crate_name: &str, api: &crate::core::ir::ApiSurface, sourc
     Ok(())
 }
 
-/// Return a string representing the running alef binary's identity: mtime_nanos + file size.
-/// Used to salt cache keys so that a locally-rebuilt binary always invalidates stale caches.
-fn binary_identity() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| fs::metadata(&p).ok())
-        .map(|m| {
-            let mtime = m
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0);
-            format!("{mtime}:{}", m.len())
-        })
-        .unwrap_or_default()
-}
-
-/// Compute hash for a language's output (IR + language-specific config + binary identity).
-pub fn compute_lang_hash(ir_json: &str, lang: &str, config_toml: &str) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(ir_json.as_bytes());
-    hasher.update(lang.as_bytes());
-    hasher.update(config_toml.as_bytes());
-    hasher.update(binary_identity().as_bytes());
-    hasher.finalize().to_hex().to_string()
-}
+pub use crate::cli::cache_identity::{compute_lang_hash, compute_stage_hash};
 
 /// Per-crate hashes directory: `.alef/<crate>/hashes/`.
 fn hashes_dir(crate_name: &str) -> PathBuf {
@@ -1011,22 +985,6 @@ pub fn write_toml_merge_provenance(
         );
     }
     Ok(())
-}
-
-/// Compute hash for a generation stage (stubs, docs, readme, scaffold, e2e).
-/// `extra` allows including additional content (e.g., fixture files for e2e).
-/// The alef binary's identity is included so that locally rebuilt binaries
-/// always invalidate stale caches without requiring a version bump.
-pub fn compute_stage_hash(ir_json: &str, stage: &str, config_toml: &str, extra: &[u8]) -> String {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(ir_json.as_bytes());
-    hasher.update(stage.as_bytes());
-    hasher.update(config_toml.as_bytes());
-    if !extra.is_empty() {
-        hasher.update(extra);
-    }
-    hasher.update(binary_identity().as_bytes());
-    hasher.finalize().to_hex().to_string()
 }
 
 /// Check if a stage's output is cached for the given crate.
