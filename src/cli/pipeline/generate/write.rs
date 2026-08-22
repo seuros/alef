@@ -805,5 +805,10 @@ fn log_disk_scan_only_restamps(
     }
 }
 
+mod tree_stamp;
+pub use tree_stamp::finalize_hashes_after_tree_format;
+
 #[cfg(test)]
 mod marker_syntax_tests;
+#[cfg(test)]
+mod tree_format_stamp_tests;

@@ -58,7 +58,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             pipeline::format_generated(&managed_bindings, resolved_cfg, &base_dir, None);
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-            pipeline::finalize_hashes(&all_paths, &sources_hash, &alef_toml_bytes)?;
+            pipeline::finalize_hashes_after_tree_format(&all_paths, &base_dir, &sources_hash, &alef_toml_bytes)?;
 
             pipeline::install_poly_hooks(&base_dir);
 

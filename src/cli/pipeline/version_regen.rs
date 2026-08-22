@@ -118,7 +118,7 @@ pub(super) fn regenerate_test_apps_after_sync(
     let alef_toml_bytes = super::super::cache::read_alef_toml_bytes(config_path);
     let path_set: std::collections::HashSet<std::path::PathBuf> =
         managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
-    super::generate::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
+    super::generate::finalize_hashes_after_tree_format(&path_set, &base_dir, &sources_hash, &alef_toml_bytes)?;
 
     if let Some(error) = generator_error {
         return Err(error);
@@ -196,7 +196,7 @@ pub(super) fn regenerate_scaffold_after_sync(
     let alef_toml_bytes = super::super::cache::read_alef_toml_bytes(config_path);
     let path_set: std::collections::HashSet<std::path::PathBuf> =
         managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
-    super::generate::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
+    super::generate::finalize_hashes_after_tree_format(&path_set, &base_dir, &sources_hash, &alef_toml_bytes)?;
 
     Ok(count)
 }
