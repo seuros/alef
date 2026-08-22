@@ -113,9 +113,14 @@ pub(super) fn render_snippet_body_with_ir(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    // Same import, same reason as `simple_class_name`: this name is derived by suffixing the facade
-    // class, so it is in the configured package by construction and the wildcard import covers it. ~keep
-    let exception_class = format!("{simple_class_name}Exception");
+    // The checked-exception class the Java backend actually declares is named by
+    // `backends::java::naming::exception_class_name`, not by suffixing the facade class:
+    // `simple_class_name` has its `Rs` marker stripped, but the exception class keeps it, so
+    // suffixing the facade names a class that does not exist. Every docs site
+    // (`docs/signatures.rs`, `docs/formatting.rs`) already calls this function for the same
+    // reason -- both sides must name the class the backend really emits, not re-derive a
+    // spelling of their own. ~keep
+    let exception_class = crate::backends::java::naming::exception_class_name(&config.name);
     let api_key_var = FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
 
     crate::e2e::template_env::render(
@@ -405,14 +410,14 @@ mod tests {
             .find("try (var client = Sample.createClient")
             .expect("expects-error snippet still constructs the client via try-with-resources");
         let catch_clause = body
-            .find("catch (SampleException error)")
+            .find("catch (SampleRsException error)")
             .expect("catch clause present");
         assert!(
             try_with_resources < catch_clause,
             "the catch must follow the try-with-resources that declares the client:\n{body}"
         );
         assert!(
-            !body.contains("} catch (SampleException error)"),
+            !body.contains("} catch (SampleRsException error)"),
             "the try-with-resources closes on its own line before catch, not on the same brace:\n{body}"
         );
     }
@@ -444,7 +449,7 @@ mod tests {
             "the plain expects_error try block must be unchanged:\n{body}"
         );
         assert!(
-            body.contains("        } catch (SampleException error) {\n"),
+            body.contains("        } catch (SampleRsException error) {\n"),
             "the plain expects_error catch must still close the try on the same line:\n{body}"
         );
     }
@@ -546,7 +551,7 @@ mod tests {
         };
         let body = render_snippet_body(&fixture, &E2eConfig::default(), &config, &[]);
 
-        assert!(body.contains("catch (SampleException error)"), "{body}");
+        assert!(body.contains("catch (SampleRsException error)"), "{body}");
         assert!(!body.contains("AssertionError"), "{body}");
     }
 
@@ -781,5 +786,36 @@ mod tests {
         let continuation_line = line_containing(&body, "Files.readAllBytes(java.nio.file.Path.of(\"document.pdf\"))");
         assert_eq!(leading_spaces(open_line), 8, "{body}");
         assert_eq!(leading_spaces(continuation_line), 12, "{body}");
+    }
+
+    /// Regression: the snippet generator used to build the checked-exception class name by
+    /// suffixing `simple_class_name` (the public facade, which has its `Rs` marker stripped)
+    /// with `Exception` -- a re-derivation that drifts from
+    /// `backends::java::naming::exception_class_name`, the function that actually names the
+    /// class the Java backend declares (`<MainClass>Exception`, where `MainClass` keeps the `Rs`
+    /// suffix). For any crate name that does not already end in `Rs` -- i.e. nearly every crate --
+    /// the two spellings disagree and the snippet's `catch` clause names a class that does not
+    /// exist. Deriving `expected` from the canonical function (instead of a hardcoded literal)
+    /// means a future change to the naming policy keeps this test in sync automatically. ~keep
+    #[test]
+    fn exception_class_matches_the_backends_canonical_derivation() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "invalid_input", "description": "Reject invalid input", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let config = ResolvedCrateConfig {
+            name: "sample-multi-word".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        let body = render_snippet_body(&fixture, &E2eConfig::default(), &config, &[]);
+
+        let expected = crate::backends::java::naming::exception_class_name(&config.name);
+        assert!(
+            body.contains(&format!("catch ({expected} error)")),
+            "the snippet's catch clause must name the exception class the Java backend actually \
+             declares (via `backends::java::naming::exception_class_name`), not a spelling \
+             re-derived from the facade class name:\n{body}"
+        );
     }
 }
