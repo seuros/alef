@@ -112,6 +112,13 @@ releasing a consumer package.
   it named, was classified as a fatal `AuthoringGap` that no consumer could close, and hard-coded
   one consumer crate's type path. It is now a non-fatal `LanguageLimitation`, and the new
   `enum_variant_access` walks the same IR type graph the accessor renderer walks.
+- **e2e snippets**: a call declaring `skip_languages` is now honoured by the documentation-snippet
+  generator, not only by the executable e2e suite. A call declaring `skip_languages = ["c"]` was
+  correctly excluded from the executable C suite but still reached the snippet generator's built-in
+  C recipe, which rendered mock-harness scaffolding and tripped `reject_mock_harness_scaffolding`.
+  Both sides now resolve through one `call_skip_reason` seam rather than deriving the check twice.
+  This stays deliberately narrower than a fixture-level `skip` directive, which opts a fixture out
+  of the executable harness only and must not suppress a documentation snippet.
 - **php/e2e**: property access is no longer emitted for data-enum-typed struct fields. The e2e
   getter map was built from a local copy of the binding's scalar predicate fed with ALL enum
   names, so a tagged or untagged data enum field was rendered as a property when the binding
