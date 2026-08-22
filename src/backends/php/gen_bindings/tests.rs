@@ -181,51 +181,51 @@ fn php_self_ref_builder_shares_arc_instead_of_cloning_returned_ref() {
 }
 
 /// Regression: Cargo replaces EVERY hyphen in a crate name with `_` for the cdylib output
-/// filename (crate `liter-llm-php` -> `libliter_llm_php.{dylib,so}`), so the generated
+/// filename (crate `demo-ext-php` -> `libdemo_ext_php.{dylib,so}`), so the generated
 /// `config.m4` must probe for a fully-underscored stem. It must also keep crate-directory
-/// paths hyphenated (`crates/liter-llm-php/...`) and use the (possibly overridden) extension
+/// paths hyphenated (`crates/demo-ext-php/...`) and use the (possibly overridden) extension
 /// name, not the crate name, for the `modules/*.so` output filename.
 #[test]
 fn config_m4_uses_underscored_cdylib_stem_and_hyphenated_crate_dir() {
     use super::rust_items::generate_config_m4;
 
-    let m4 = generate_config_m4("liter_llm", "liter-llm");
+    let m4 = generate_config_m4("demo_ext", "demo-ext");
 
     assert!(
-        m4.contains("crates/liter-llm-php/Cargo.toml"),
+        m4.contains("crates/demo-ext-php/Cargo.toml"),
         "crate directory path must keep hyphens, got:\n{m4}"
     );
     assert!(
-        m4.contains("cd crates/liter-llm-php"),
+        m4.contains("cd crates/demo-ext-php"),
         "cd target must keep hyphens, got:\n{m4}"
     );
     assert!(
-        m4.contains("crates/liter-llm-php/target/release/libliter_llm_php.dylib"),
+        m4.contains("crates/demo-ext-php/target/release/libdemo_ext_php.dylib"),
         "dylib stem must be fully underscored, got:\n{m4}"
     );
     assert!(
-        m4.contains("crates/liter-llm-php/target/release/libliter_llm_php.so"),
+        m4.contains("crates/demo-ext-php/target/release/libdemo_ext_php.so"),
         "so stem must be fully underscored, got:\n{m4}"
     );
     assert!(
-        !m4.contains("liter-llm_php"),
+        !m4.contains("demo-ext_php"),
         "must never mix a hyphenated crate name with the `_php` suffix, got:\n{m4}"
     );
     assert!(
-        m4.contains(r#"cp "$cargo_lib" "modules/liter_llm.so""#),
+        m4.contains(r#"cp "$cargo_lib" "modules/demo_ext.so""#),
         "module output filename must use the extension name, got:\n{m4}"
     );
     assert!(
-        m4.contains("crates/liter-llm-php/target/release\" >&2"),
+        m4.contains("crates/demo-ext-php/target/release\" >&2"),
         "not-found error message must reference the hyphenated crate directory, got:\n{m4}"
     );
     assert!(
-        m4.contains("crates/liter-llm-php/Cargo.toml not found"),
+        m4.contains("crates/demo-ext-php/Cargo.toml not found"),
         "missing-Cargo.toml error message must reference the hyphenated crate directory, got:\n{m4}"
     );
 }
 
-/// Positive-control companion to the above: `liter-llm` carries only one hyphen, so
+/// Positive-control companion to the above: `demo-ext` carries only one hyphen, so
 /// "replace the first hyphen" and "replace every hyphen" produce an identical dylib stem and
 /// cannot distinguish the two derivations. A crate name with multiple hyphens can: Cargo
 /// underscores ALL of them in the cdylib filename while the source directory keeps every one. ~keep

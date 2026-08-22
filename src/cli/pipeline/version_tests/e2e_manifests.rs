@@ -368,13 +368,13 @@ fn sync_versions_regenerates_test_apps_pins() {
 /// release's native library (or, for the sentinel, to reference an identifier that no
 /// longer matches `moduleVersion`).
 ///
-/// This is also the regression test for alef#159 / html-to-markdown#463: `moduleVersion`
+/// This is also the regression test for alef#159: `moduleVersion`
 /// alone was fixed by the rc.13/rc.14 fix above, but `cmd/setup/main.go` carries a
 /// *second*, independent version-derived const -- `versionIdent` -- that `renderShim`
 /// bakes into the `RequireNativeSetup_<versionIdent>` reference the generated shim writes
 /// at `cmd/setup` runtime. That const was never patched by sync-versions at all, so it
 /// silently fell behind `native_setup.go`'s sentinel (which WAS re-derived from the
-/// version on every run) after a few sync-versions-only releases -- exactly h2m's
+/// version on every run) after a few sync-versions-only releases -- exactly the
 /// `3_11_1` vs `3_11_2` skew. The fixture below seeds `versionIdent` at its own stale
 /// (but internally self-consistent) value, `1_9_0_rc_13`, matching the stale
 /// `moduleVersion`. The assertions below do not simply compare two hardcoded literals:
@@ -462,7 +462,7 @@ fn sync_versions_updates_go_module_version_in_cmd_setup() {
         "stale rc.13 sentinel must be gone from native_setup.go:\n{updated_native_setup}"
     );
 
-    // Structural check for alef#159 / html-to-markdown#463: extract the identifier each
+    // Structural check for alef#159: extract the identifier each
     // file actually carries and cross-check both against a THIRD, independent
     // `to_go_version_ident` call in this test, and against each other. A regression that
     // reintroduces two separate computation paths (e.g. `versionIdent` reverting to a
@@ -486,7 +486,7 @@ fn sync_versions_updates_go_module_version_in_cmd_setup() {
     assert_eq!(
         main_go_ident, native_setup_ident,
         "cmd/setup/main.go's versionIdent and native_setup.go's sentinel identifier must be \
-         byte-identical -- a mismatch here is exactly the alef#159 / html-to-markdown#463 defect"
+         byte-identical -- a mismatch here is exactly the alef#159 defect"
     );
 }
 

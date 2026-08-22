@@ -350,7 +350,7 @@ fn finalize_result_still_flags_a_real_missing_module_as_unresolved_dependency() 
     );
 }
 
-/// Alef defect #127: two configured sessions target the same language (a real consumer's
+/// Alef defect #127: two configured sessions target the same language (a consumer's real
 /// `[docs.snippets.sessions.typescript]` + `[docs.snippets.sessions.wasm]`, both TypeScript) and
 /// a hand-written snippet carries no explicit `target:` to break the tie. Before this fix, the
 /// fallback was a literal `sessions.get("typescript")` lookup: whichever session happened to be

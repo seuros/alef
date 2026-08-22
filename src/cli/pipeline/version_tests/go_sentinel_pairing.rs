@@ -3,7 +3,7 @@
 //! `const RequireNativeSetup_<version_ident>`. Two files, two rewriters, one symbol: if the
 //! identifiers ever disagree the shim names a symbol that does not exist and the consumer's Go
 //! build fails after `cmd/setup` runs — with no local cause, because each file is internally
-//! consistent. That is html-to-markdown#463 / alef#159, where `versionIdent` stayed at `3_11_1`
+//! consistent. That is alef#159, where `versionIdent` stayed at `3_11_1`
 //! while the sentinel advanced to `3_11_2`.
 //!
 //! `version::sync_versions` closes it structurally by calling `to_go_version_ident` exactly once
@@ -32,7 +32,7 @@ fn version_ident_const(content: &str) -> Option<String> {
 }
 
 fn native_setup_at(ident: &str, version: &str) -> String {
-    format!("package htmltomarkdown\n\nconst RequireNativeSetup_{ident} = \"{version}\"\n")
+    format!("package samplepack\n\nconst RequireNativeSetup_{ident} = \"{version}\"\n")
 }
 
 fn cmd_setup_at(ident: &str, version: &str) -> String {
@@ -60,7 +60,7 @@ fn a_version_bump_moves_the_shim_ident_and_the_sentinel_to_the_same_identifier()
 
 #[test]
 fn the_pairing_assertion_detects_the_two_identifiers_drifting_apart() {
-    // Negative control: reproduce html-to-markdown#463 by rewriting only ONE side, and prove the
+    // Negative control: reproduce alef#159 by rewriting only ONE side, and prove the
     // assertion above would have caught it. Without this, that test could pass vacuously. ~keep
     let sentinel = sync_go_native_setup_sentinel(&native_setup_at("3_11_1", "3.11.1"), "3_11_2", "3.11.2")
         .expect("the sentinel changed");
@@ -70,7 +70,7 @@ fn the_pairing_assertion_detects_the_two_identifiers_drifting_apart() {
     assert_ne!(
         sentinel_identifier(&sentinel).as_deref(),
         version_ident_const(&untouched_shim).as_deref(),
-        "this is the #463 defect itself; if these compare equal the pairing test proves nothing"
+        "this is the alef#159 defect itself; if these compare equal the pairing test proves nothing"
     );
 }
 

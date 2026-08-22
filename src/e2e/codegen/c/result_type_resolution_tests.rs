@@ -530,7 +530,7 @@ fn trait_bridge_clear_e2e_test_asserts_a_zero_status_and_emits_no_cleanup() {
 }
 
 /// The other half of the gap this module documents: `ApiSurface::functions` holds free
-/// `pub fn`s only, so a call naming an inherent or trait method — liter-llm's `chat`, the
+/// `pub fn`s only, so a call naming an inherent or trait method — a consumer's `chat`, the
 /// motivating case — is absent from it no matter how well `functions` is threaded. The
 /// method lives on `TypeDef::methods`, which the C generator already had in hand.
 #[test]

@@ -1,5 +1,5 @@
 //! Regression coverage for the `client_factory` ("default_client") call path's optional-arg
-//! sentinel selection -- the shape reported against liter-llm's `list_files(client, NULL)`:
+//! sentinel selection -- the shape reported against a consumer's `list_files(client, NULL)`:
 //! a handle-typed optional parameter with no configured `arg_type` (which defaults to
 //! `"string"`) rendered `NULL` instead of `0`, which does not compile
 //! (`incompatible pointer to integer conversion`) against the `AlefHandle`

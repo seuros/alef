@@ -3,7 +3,7 @@
 //! code therefore decide what that line looks like: the template owns the alignment column, the
 //! rewriter owns the quoted value. When the rewriter's replacement hard-coded a single space
 //! around `=`, every regenerated consumer shipped a `cmd/setup/main.go` that failed `gofmt -l`
-//! (observed in tree-sitter-language-pack at alef 0.63.0) — a lint failure with no local cause,
+//! (observed in a consumer repo at alef 0.63.0) — a lint failure with no local cause,
 //! because the template it was generated from was correctly aligned.
 //!
 //! These tests pin both halves of that contract against the REAL template text rather than a

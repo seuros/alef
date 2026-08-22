@@ -109,7 +109,7 @@ fn wildcard_leaf_returns_a_quantifier_outcome_not_a_broken_scalar_accessor() {
 /// The decisive assertion-generation check: a `contains` assertion against `items[].kind` must
 /// render a loop that can pass when SOME element's `kind` contains the expected substring, not
 /// a single scalar `strstr` call that can never succeed. Matches the shape reported in
-/// tree-sitter-language-pack's generated `test_process.c` (alef task #59).
+/// a consumer's generated `test_process.c` (alef task #59).
 #[test]
 fn contains_on_a_wildcard_field_renders_a_per_element_quantifier() {
     let assertion = Assertion {

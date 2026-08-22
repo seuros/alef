@@ -6,7 +6,7 @@
 //! empty `Vec<T>` field (Elixir `[]`) is neither `nil` nor `""`, so `is_empty` on such a field
 //! was simply false and could never pass.
 //!
-//! Reproduces tree-sitter-language-pack's `data_extraction_properties_empty` /
+//! Reproduces a consumer's `data_extraction_properties_empty` /
 //! `data_extraction_json_empty_object` fixtures (`is_empty` on `data.children`, a
 //! `Vec<DataNode>` reached through the `data` struct):
 //!

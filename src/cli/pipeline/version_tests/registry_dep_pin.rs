@@ -8,24 +8,25 @@ use super::*;
 /// used when the Cargo package name has no hyphen so the dependency key already equals the
 /// crate name and no `package = "..."` rename is required).
 ///
-/// Real-world symptom (crawlberg 1.3.2): a plain `alef sync-versions --bump patch` (no
+/// Real-world symptom (a consumer at 1.3.2): a plain `alef sync-versions --bump patch` (no
 /// `--regen` — the default; regenerating code is opt-in, see `SyncVersions::regen`'s doc)
 /// bumped `[package] version` in `test_apps/rust/Cargo.toml` to 1.3.2 and re-stamped
-/// `alef:hash:`, but left `crawlberg = { version = "1.3.1", ... }` untouched. This was
-/// initially misdiagnosed as a `package = "..."` rename discriminator (tslp/liter-llm's
-/// renamed-form pins looked correctly bumped in their committed trees) — but reproducing
-/// against crawlberg's actual alef.toml and source tree showed the rename spelling was never
-/// the deciding factor: `sync_rust_test_app_version`/`sync_rust_harness_cargo_toml`
+/// `alef:hash:`, but left `samplewidget = { version = "1.3.1", ... }` untouched. This was
+/// initially misdiagnosed as a `package = "..."` rename discriminator (the hyphenated
+/// consumers' renamed-form pins looked correctly bumped in their committed trees) — but
+/// reproducing against that consumer's actual alef.toml and source tree showed the rename
+/// spelling was never the deciding factor:
+/// `sync_rust_test_app_version`/`sync_rust_harness_cargo_toml`
 /// (`src/cli/pipeline/version_workspace.rs`) called `write_version_to_cargo_toml` (patches
 /// `[package] version` only) but never called `patch_workspace_dep_versions` (patches the
 /// dependency pin) at all, in either spelling — unlike the sibling
 /// `packages/ruby/ext/*/native/Cargo.toml` block in `version.rs`, which already pairs both
-/// calls for exactly this reason. tslp/liter-llm's committed pins were correct only because a
-/// later, separate full regen (`alef generate`/`alef all`, which does run
-/// `render_cargo_toml`) happened to land before crawlberg's did — not because `sync-versions`
-/// itself distinguished the two spellings. Both spellings are exercised here so a regression
-/// narrowed to only one of `patch_workspace_dep_versions`' two match arms (bare key vs.
-/// `package = "..."` key) cannot silently return. ~keep
+/// calls for exactly this reason. The hyphenated consumers' committed pins were correct only
+/// because a later, separate full regen (`alef generate`/`alef all`, which does run
+/// `render_cargo_toml`) happened to land before the plain-form one's did — not because
+/// `sync-versions` itself distinguished the two spellings. Both spellings are exercised here
+/// so a regression narrowed to only one of `patch_workspace_dep_versions`' two match arms
+/// (bare key vs. `package = "..."` key) cannot silently return. ~keep
 fn run_registry_dep_pin_case(package_name: &str, expect_package_rename: bool) {
     use crate::core::config::NewAlefConfig;
 
@@ -126,13 +127,13 @@ fn run_registry_dep_pin_case(package_name: &str, expect_package_rename: bool) {
 #[test]
 fn sync_versions_bumps_registry_dep_pin_with_package_rename() {
     // Hyphenated crate name: dependency key differs from the crate name, so the pin uses the
-    // `package = "..."` rename form (tree-sitter-language-pack, liter-llm shape).
-    run_registry_dep_pin_case("tree-sitter-language-pack", true);
+    // `package = "..."` rename form (hyphenated multi-segment crate shape).
+    run_registry_dep_pin_case("sample-widget-lib", true);
 }
 
 #[test]
 fn sync_versions_bumps_registry_dep_pin_without_package_rename() {
     // Crate name has no hyphen: the dependency key already equals the crate name, so the pin
-    // uses the plain form with no `package = "..."` key (crawlberg shape, alef #152).
-    run_registry_dep_pin_case("crawlberg", false);
+    // uses the plain form with no `package = "..."` key (unhyphenated crate shape, alef #152).
+    run_registry_dep_pin_case("samplewidget", false);
 }

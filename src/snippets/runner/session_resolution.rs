@@ -7,7 +7,7 @@
 //! front matter or from a generated snippet's coverage ledger), so before this module existed the
 //! fallback was a literal string lookup: `sessions.get(&snippet.language.to_string())`, i.e. "is
 //! there a configured session target spelled exactly like the bare language name". That only ever
-//! matched by naming coincidence. A real consumer's `alef.toml` configures both
+//! matched by naming coincidence. One consumer's `alef.toml` configures both
 //! `[docs.snippets.sessions.typescript]` (its Node bindings) and `[docs.snippets.sessions.wasm]`
 //! (its WASM bindings) -- both targeting `Language::TypeScript`. Every hand-written TypeScript
 //! snippet silently landed on the session literally named `typescript` (an accident of naming,
@@ -141,7 +141,7 @@ mod tests {
         );
     }
 
-    /// The other headline case: two sessions share a language (a real consumer's
+    /// The other headline case: two sessions share a language (a consumer's real
     /// `[sessions.typescript]` + `[sessions.wasm]`, both targeting TypeScript) and the snippet
     /// gives no explicit target to break the tie. The old fallback picked whichever session
     /// happened to be spelled like the bare language -- an accident of naming that silently

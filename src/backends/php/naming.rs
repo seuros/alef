@@ -27,7 +27,7 @@ pub fn php_autoload_namespace(config: &ResolvedCrateConfig) -> String {
 }
 
 /// Get the ext-php-rs facade class name that exposes crate-level free functions as static
-/// methods (e.g. `html_to_markdown` -> `HtmlToMarkdownApi`).
+/// methods (e.g. `sample_crate` -> `SampleCrateApi`).
 ///
 /// The php-ext backend never emits free functions as global `#[php_function]` items: ext-php-rs's
 /// `#[php_impl]` registration derive walks every method in a fixed `impl` block and unconditionally

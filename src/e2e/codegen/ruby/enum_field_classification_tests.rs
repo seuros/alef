@@ -238,7 +238,7 @@ fn render_spec_file_emits_a_real_assertion_for_the_unconfigured_enum_field() {
 /// The smoke test above uses a fixture value of `"key_value"`, which happens to already be
 /// snake_case — it never exercised the shape a real, unconfigured `#[serde(rename_all)]`-less
 /// enum actually produces on the wire. `DataNodeKind`'s real contract (see its rustdoc in
-/// tree-sitter-language-pack) is "unit variants serialize as a bare string (`"KeyValue"`)" —
+/// the consumer crate) is "unit variants serialize as a bare string (`"KeyValue"`)" —
 /// verbatim PascalCase, not snake_case. `render_spec_file` must embed that fixture literal
 /// exactly as written, with no case-folding of its own: the assertion codegen layer only knows
 /// how to coerce the *actual* value via `.to_s`, never to normalize the *expected* value's

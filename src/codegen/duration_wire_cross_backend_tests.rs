@@ -7,7 +7,7 @@
 //! convention writes a bare millisecond integer) never goes through that derive at all. Every
 //! backend below must make the same call, sourced from the single predicate
 //! `crate::codegen::naming::field_uses_duration_map_wire`, so a future backend — or a future edit
-//! to one of these three — cannot silently reintroduce the divergence that made crawlberg's C#
+//! to one of these three — cannot silently reintroduce the divergence that made a consumer's C#
 //! and Java bindings fail Rust deserialization with `invalid type: map, expected u64` while Go
 //! (which already consulted `serde_with`) kept working.
 

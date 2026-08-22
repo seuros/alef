@@ -11,7 +11,7 @@ use tracing::debug;
 /// `String` into both this function and [`sync_go_cmd_setup_version_ident`], so the
 /// identifier this sentinel gets and the identifier `cmd/setup/main.go`'s `versionIdent`
 /// const gets can never be computed by two different call sites and drift apart. That
-/// drift is exactly what alef#159 / html-to-markdown#463 reported: `cmd/setup/main.go`'s
+/// drift is exactly what alef#159 reported: `cmd/setup/main.go`'s
 /// `moduleVersion` value was patched on every sync-versions run, but its separate
 /// `versionIdent` const was never touched, while this sentinel's identifier WAS derived
 /// fresh from the version on every run — so after a few sync-versions-only releases the
@@ -43,7 +43,7 @@ pub(super) fn sync_go_native_setup_sentinel(content: &str, new_ident: &str, new_
 /// link shim at `cmd/setup` runtime — that reference must name a symbol that actually
 /// exists in `native_setup.go`. See [`sync_go_native_setup_sentinel`]'s doc for why
 /// `new_ident` is a caller-supplied, single-computed value rather than derived
-/// independently here: that pairing is the fix for alef#159 / html-to-markdown#463.
+/// independently here: that pairing is the fix for alef#159.
 ///
 /// Returns `Some(new_content)` when the const's value changed, `None` when it already
 /// matches `new_ident` (idempotent).

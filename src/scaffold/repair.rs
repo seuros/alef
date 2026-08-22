@@ -19,7 +19,7 @@
 //! `generated_header: true` and also derives `[features]` from `collect_cfg_features` on the
 //! same `ApiSurface` used for its `lib.rs`, so a cfg-gated free function reexported into that
 //! `lib.rs` after the manifest was first scaffolded hits the identical guard-refusal gap (alef
-//! #154: liter-llm's committed `packages/dart/rust/Cargo.toml` never picked up the `tokenizer`/
+//! #154: a consumer's committed `packages/dart/rust/Cargo.toml` never picked up the `tokenizer`/
 //! `tower` features `lib.rs` already forwards for `count_tokens`/`count_request_tokens`/
 //! `record_cost_usd`, producing `unexpected cfg condition value` once `frb_generated.rs`
 //! re-emits those same gates). Dart was simply never added to `managed_manifests` below when
