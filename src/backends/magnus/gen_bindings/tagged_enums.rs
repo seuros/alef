@@ -59,7 +59,7 @@ pub(super) fn gen_tagged_enum_ruby_classes(enum_def: &crate::core::ir::EnumDef, 
         let wire_name = crate::codegen::naming::wire_variant_value(
             &variant.name,
             variant.serde_rename.as_deref(),
-            enum_def.serde_rename_all.as_deref().or(Some("snake_case")),
+            enum_def.serde_rename_all.as_deref(),
         );
         let variant_const = format!("{}{}", class_name, variant.name);
         dispatch_arms.push_str(&crate::backends::magnus::template_env::render(
@@ -254,4 +254,44 @@ pub(super) fn magnus_variant_wrapper_constructor(
         "impl {name} {{\n    {fn_sig} {{\n        {body}\n    }}\n}}\n",
         name = typ.name,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gen_tagged_enum_ruby_classes;
+    use crate::core::ir::{EnumDef, EnumVariant};
+
+    fn variant(name: &str) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Serde's real default (no `#[serde(rename_all = "...")]` on the enum) serializes unit
+    /// variants verbatim under their Rust name, e.g. `"KeyValue"` — not snake_cased. The
+    /// generated Ruby dispatch must match that wire value exactly, or a Ruby caller building
+    /// the discriminator from real JSON payloads (e.g. `"type": "KeyValue"`) never matches any
+    /// `when` arm.
+    #[test]
+    fn dispatch_arm_uses_verbatim_variant_name_when_no_rename_all_declared() {
+        let enum_def = EnumDef {
+            name: "DataNodeKind".to_string(),
+            serde_tag: Some("kind".to_string()),
+            serde_rename_all: None,
+            variants: vec![variant("KeyValue"), variant("Array")],
+            ..Default::default()
+        };
+
+        let code = gen_tagged_enum_ruby_classes(&enum_def, "TestLib");
+
+        assert!(
+            code.contains("when \"KeyValue\" then"),
+            "expected verbatim wire value \"KeyValue\" in dispatch, got:\n{code}"
+        );
+        assert!(
+            !code.contains("when \"key_value\" then"),
+            "must not fabricate a snake_case rename_all that the Rust enum never declared, got:\n{code}"
+        );
+    }
 }

@@ -55,13 +55,22 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
                 })
                 .collect();
 
+            let snake_name = crate::codegen::naming::pascal_to_snake(&variant.name);
+            let wire_name = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+
             minijinja::context! {
                 name => &variant.name,
                 serde_rename => &variant.serde_rename,
                 fields => &fields,
                 is_tuple => variant.is_tuple,
                 emits_as_tuple => emits_tuple_variant(enum_def, variant),
-                snake_name => crate::codegen::naming::pascal_to_snake(&variant.name),
+                snake_name => &snake_name,
+                wire_name => &wire_name,
+                accepted_input_values => accepted_unit_variant_input_spellings(&variant.name, &snake_name, &wire_name),
             }
         })
         .collect();
@@ -81,6 +90,22 @@ pub fn gen_enum(enum_def: &EnumDef) -> String {
             first_variant_default => &first_variant_default,
         },
     )
+}
+
+/// Distinct string spellings a unit enum's `TryConvert` accepts for one variant, in priority
+/// order: the real serde wire value first (the canonical round-trip spelling now that
+/// `IntoValue` emits it), then the always-snake_case symbol Magnus used to emit unconditionally
+/// (kept for backward compatibility with existing consumer code), then the verbatim PascalCase
+/// Rust name. Deduplicated so `rename_all = "snake_case"` (where all three often coincide)
+/// does not produce a Rust "unreachable pattern" warning from repeated match-arm literals.
+fn accepted_unit_variant_input_spellings(variant_name: &str, snake_name: &str, wire_name: &str) -> Vec<String> {
+    let mut spellings = vec![wire_name.to_string()];
+    for candidate in [snake_name, variant_name] {
+        if !spellings.iter().any(|existing| existing == candidate) {
+            spellings.push(candidate.to_string());
+        }
+    }
+    spellings
 }
 
 fn emits_tuple_variant(enum_def: &EnumDef, variant: &crate::core::ir::EnumVariant) -> bool {

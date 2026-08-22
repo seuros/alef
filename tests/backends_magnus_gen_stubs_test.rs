@@ -289,8 +289,8 @@ fn test_basic_rbs_stubs() {
 
     assert!(content.contains("class Backend"), "Should contain Backend enum class");
     assert!(
-        content.contains("type value = :tesseract | :paddle_ocr"),
-        "Should have symbol union for Backend variants"
+        content.contains("type value = :Tesseract | :PaddleOcr"),
+        "no rename_all declared, so the stub's symbol union must be verbatim wire values"
     );
 
     assert!(content.contains("end"), "Should have module closing");
@@ -504,8 +504,8 @@ fn test_enum_stubs() {
     );
 
     assert!(
-        content.contains("type value = :pending | :processing | :complete | :failed"),
-        "Should have symbol union for Status variants in order"
+        content.contains("type value = :Pending | :Processing | :Complete | :Failed"),
+        "no rename_all declared, so the stub's symbol union must be verbatim wire values, in order"
     );
 }
 

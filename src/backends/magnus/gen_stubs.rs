@@ -547,7 +547,14 @@ fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool) -> String {
         let symbol_variants: Vec<String> = enum_def
             .variants
             .iter()
-            .map(|v| format!(":{}", crate::codegen::naming::pascal_to_snake(&v.name)))
+            .map(|v| {
+                let wire_name = crate::codegen::naming::wire_variant_value(
+                    &v.name,
+                    v.serde_rename.as_deref(),
+                    enum_def.serde_rename_all.as_deref(),
+                );
+                format!(":{wire_name}")
+            })
             .collect();
         lines.push(format!("    type value = {}", symbol_variants.join(" | ")));
     } else if enum_def.serde_tag.is_none() {
