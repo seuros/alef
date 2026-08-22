@@ -13,11 +13,11 @@ use super::assertions::TargetParams;
 use super::docs_input::render_c_docs_json;
 use super::ffi_constructors::is_std_type_without_ffi_constructor;
 use super::{
-    FieldConfigSources, LeafFieldCheck, build_args_string_c, c_optional_sentinel, classify_nested_leaf,
-    emit_nested_accessor, ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
-    json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
-    render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
-    resolve_c_streaming_adapter, try_emit_enum_accessor, validate_c_snippet_metadata,
+    FieldConfigSources, LeafFieldCheck, build_args_string_c, classify_nested_leaf, emit_nested_accessor,
+    ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, json_to_c,
+    render_assertion, render_bytes_test_function, render_c_diagnostic_skip, render_engine_factory_test_function,
+    render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter,
+    resolve_optional_sentinel, try_emit_enum_accessor, validate_c_snippet_metadata,
 };
 
 /// Emit the C error-path epilogue every `expects_error` return site shares: the declared `error`
@@ -403,72 +403,6 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
     ))
 }
 
-/// Back-compat entry point for callers that cannot supply a [`TargetParams`] -- namely the
-/// main e2e test-file emitter in `c.rs`, which calls this directly (not through
-/// [`render_snippet_body`]) and has no `CallIr` in scope at that call site to resolve one.
-/// Renders the legacy (non-client) call's empty-`args` case as [`TargetParams::IrAbsent`],
-/// which is what this entry point genuinely is: no IR was consulted, so nothing was learned,
-/// and it keeps the pre-existing behaviour rather than refusing every call on a path that
-/// never had a signature to check. Refusing here would have failed generation for every
-/// IR-less caller -- a far wider blast radius than the defect being fixed.
-/// [`render_snippet_body`] calls [`render_test_function_impl`] directly instead, since it
-/// does have a `CallIr` to resolve a real signature from. ~keep
-#[allow(clippy::too_many_arguments)]
-pub(super) fn render_test_function(
-    out: &mut String,
-    fixture: &Fixture,
-    prefix: &str,
-    function_name: &str,
-    result_var: &str,
-    args: &[crate::e2e::config::ArgMapping],
-    field_resolver: &FieldResolver,
-    fields_c_types: &HashMap<String, String>,
-    fields_enum: &HashSet<String>,
-    result_type_name: &super::ResultTypeName,
-    options_type_name: &str,
-    client_factory: Option<&str>,
-    raw_c_result_type: Option<&str>,
-    c_free_fn: Option<&str>,
-    c_engine_factory: Option<&str>,
-    result_is_option: bool,
-    result_is_bytes: bool,
-    streaming: Option<bool>,
-    extra_args: &[String],
-    config: &ResolvedCrateConfig,
-    type_defs: &[crate::core::ir::TypeDef],
-    errors: &[crate::core::ir::ErrorDef],
-    documentation_snippet: bool,
-    config_sources: &FieldConfigSources,
-) -> anyhow::Result<()> {
-    render_test_function_impl(
-        out,
-        fixture,
-        prefix,
-        function_name,
-        result_var,
-        args,
-        field_resolver,
-        fields_c_types,
-        fields_enum,
-        result_type_name,
-        options_type_name,
-        client_factory,
-        raw_c_result_type,
-        c_free_fn,
-        c_engine_factory,
-        result_is_option,
-        result_is_bytes,
-        streaming,
-        extra_args,
-        config,
-        type_defs,
-        errors,
-        documentation_snippet,
-        config_sources,
-        TargetParams::IrAbsent,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_test_function_impl(
     out: &mut String,
@@ -761,8 +695,12 @@ pub(super) fn render_test_function_impl(
         // method call (e.g. literal C strings for `string` args, `NULL` for
         // optional pointer args). Order matches the position in `args`.
         let mut inline_method_args: Vec<String> = Vec::new();
+        // ~keep IR-checked, not just `arg_type` -- see `c::optional_arg`'s module doc.
+        let sentinel_for = |arg: &crate::e2e::config::ArgMapping, index: usize| {
+            resolve_optional_sentinel(target_params, &arg.name, index, &arg.arg_type).to_string()
+        };
 
-        for arg in args {
+        for (index, arg) in args.iter().enumerate() {
             if arg.arg_type == "json_object" {
                 // Prefer options_type from the C override when set, since the result
                 // type isn't always a clean strip-Response/append-Request transform
@@ -836,7 +774,7 @@ pub(super) fn render_test_function_impl(
                         inline_method_args.push(format!("\"{escaped}\""));
                     }
                     Some(serde_json::Value::Null) | None if arg.optional => {
-                        inline_method_args.push("NULL".to_string());
+                        inline_method_args.push(sentinel_for(arg, index));
                     }
                     None => {
                         inline_method_args.push("\"\"".to_string());
@@ -849,9 +787,8 @@ pub(super) fn render_test_function_impl(
                 }
             } else if arg.optional {
                 // ~keep Optional non-string, non-json_object arg: pass the type-appropriate
-                // "none" sentinel — `0` for a scalar `AlefHandle` (`arg_type == "handle"`),
-                // `NULL` for a real pointer.
-                inline_method_args.push(c_optional_sentinel(&arg.arg_type).to_string());
+                // "none" sentinel — `0` for a scalar `AlefHandle`, `NULL` for a real pointer.
+                inline_method_args.push(sentinel_for(arg, index));
             }
         }
 
@@ -1114,15 +1051,19 @@ pub(super) fn render_test_function_impl(
         let args_str = if args.is_empty() {
             String::new()
         } else {
+            let optional_sentinel = |index: usize, arg: &crate::e2e::config::ArgMapping| {
+                resolve_optional_sentinel(target_params, &arg.name, index, &arg.arg_type).to_string()
+            };
             let parts: Vec<String> = args
                 .iter()
-                .filter_map(|arg| {
+                .enumerate()
+                .filter_map(|(index, arg)| {
                     let field = arg.field.strip_prefix("input.").unwrap_or(&arg.field);
                     let val = fixture.input.get(field);
                     match val {
-                        None if arg.optional => Some(c_optional_sentinel(&arg.arg_type).to_string()),
+                        None if arg.optional => Some(optional_sentinel(index, arg)),
                         None => None,
-                        Some(v) if v.is_null() && arg.optional => Some(c_optional_sentinel(&arg.arg_type).to_string()),
+                        Some(v) if v.is_null() && arg.optional => Some(optional_sentinel(index, arg)),
                         Some(v) => Some(json_to_c(v)),
                     }
                 })

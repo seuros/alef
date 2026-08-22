@@ -76,28 +76,11 @@ fn enum_fields_from_ir(
         .collect()
 }
 
-/// The C ABI represents every opaque/named type (`TypeRef::Named`) as the
-/// scalar generational handle `AlefHandle` (`typedef uint64_t {PREFIX}AlefHandle`)
-/// — see `src/backends/ffi/type_map.rs::c_param_optional`/`c_return_optional`.
-/// An absent optional argument of that kind must therefore use `0` as its
-/// "none" sentinel, matching the FFI bridge codegen's own convention
-/// (`src/backends/ffi/gen_bindings/helpers.rs::ffi_null_return_value`,
-/// `Some("AlefHandle") => "0"`). Every other arg kind (`string`, `mock_url`,
-/// `bytes`, ...) is a genuine C pointer (`const char *`, `void *`) and keeps
-/// the `NULL` sentinel.
-///
-/// `"json_object"` args are handle-typed here because the C e2e codegen always
-/// materializes them via a `{prefix}_{type}_from_json(...)` call that returns
-/// an `AlefHandle`. `"handle"` args (used by other language codegens for an
-/// argument that is already a pre-built handle) are handle-typed for the same
-/// reason: the parameter they fill is declared `AlefHandle`, never a pointer.
-fn c_optional_sentinel(arg_type: &str) -> &'static str {
-    if matches!(arg_type, "json_object" | "handle") {
-        "0"
-    } else {
-        "NULL"
-    }
-}
+/// The single seam deciding the C "none" sentinel for an omitted optional argument -- `0`
+/// for the scalar `AlefHandle` handle representation, `NULL` for a real pointer. See
+/// `c::optional_arg` for the full rationale; re-exported here (rather than imported at every
+/// use site) so the submodules keep naming it `super::c_optional_sentinel`. ~keep
+use optional_arg::{c_optional_sentinel, resolve_optional_sentinel};
 
 /// Infer the opaque-handle PascalCase return type for a bare-field accessor.
 ///
@@ -492,7 +475,7 @@ struct ResolvedCallInfo {
 /// These lived here until each backend needed them; the definitions and their rationale are now
 /// in [`super::call_ir`]. Re-exported rather than re-imported at every use site so the `c`
 /// submodules keep naming them `super::CallIr` / `super::named_type`. ~keep
-pub(super) use super::call_ir::{CallIr, named_type};
+pub(super) use super::call_ir::{CallIr, TargetParams, named_type};
 
 fn resolve_call_info(
     call: &CallConfig,
@@ -1044,11 +1027,14 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, i
 mod assertions;
 mod call_patterns;
 #[cfg(test)]
+mod client_factory_optional_arg_tests;
+#[cfg(test)]
 mod collection_empty_assertion_tests;
 mod collection_wildcard;
 mod docs_input;
 mod enum_field_inference;
 mod ffi_constructors;
+mod optional_arg;
 mod primitive_field_inference;
 mod project;
 mod return_shape;
@@ -1085,7 +1071,7 @@ use streaming::{
     render_c_diagnostic_skip, render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter,
     validate_c_snippet_metadata,
 };
-use test_function::render_test_function;
+use test_function::render_test_function_impl;
 use visitor::render_visitor_test_file;
 
 #[allow(clippy::too_many_arguments)]
@@ -1208,7 +1194,16 @@ fn render_test_file(
         // own render appended — scanning the whole buffer would misattribute an
         // earlier fixture's skip comment to this fixture's id.
         let fixture_start = out.len();
-        render_test_function(
+        // What the core IR says about this fixture's target parameters -- the identical
+        // resolution `render_snippet_body` performs, so the doc-snippet path and the real
+        // e2e-test-file emitter (which also drives `test_apps/`) agree on one call's declared
+        // signature instead of this path always rendering `IrAbsent`. See `c::optional_arg`. ~keep
+        let target_params = if crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture).is_some() {
+            TargetParams::Known(&[])
+        } else {
+            TargetParams::resolve(fixture_call, lang, ir)
+        };
+        render_test_function_impl(
             &mut out,
             fixture,
             prefix,
@@ -1233,6 +1228,7 @@ fn render_test_file(
             errors,
             false,
             &config_sources,
+            target_params,
         )?;
         crate::e2e::codegen::fail_on_unavailable_field_markers(
             &out[fixture_start..],
@@ -1953,7 +1949,7 @@ mod snippet_tests {
 
     #[test]
     fn raw_result_test_function_asserts_failure_per_result_type() {
-        // Direct test of the real e2e-test-file emitter (render_test_function),
+        // Direct test of the real e2e-test-file emitter (render_test_function_impl),
         // which is where the defect lived: for raw_c_result_type functions
         // (char*/int32_t/uintptr_t), an "error"-only fixture previously emitted
         // no assertion at all, so a call that unexpectedly SUCCEEDED still made
@@ -1989,7 +1985,7 @@ mod snippet_tests {
             );
 
             let mut out = String::new();
-            render_test_function(
+            render_test_function_impl(
                 &mut out,
                 &fixture,
                 "sample",
@@ -2017,6 +2013,7 @@ mod snippet_tests {
                     result_fields: EffectiveConfigSource::Global,
                     fields: EffectiveConfigSource::Global,
                 },
+                TargetParams::IrAbsent,
             )
             .expect("test fixture renders");
 
@@ -2060,7 +2057,7 @@ mod snippet_tests {
             );
 
             let mut out = String::new();
-            render_test_function(
+            render_test_function_impl(
                 &mut out,
                 &fixture,
                 "sample",
@@ -2088,6 +2085,7 @@ mod snippet_tests {
                     result_fields: EffectiveConfigSource::Global,
                     fields: EffectiveConfigSource::Global,
                 },
+                TargetParams::IrAbsent,
             )
             .expect("test fixture renders");
 
@@ -2125,7 +2123,7 @@ mod snippet_tests {
         );
         let mut out = String::new();
         let _ = crate::e2e::codegen::take_skip_records();
-        render_test_function(
+        render_test_function_impl(
             &mut out,
             &fixture,
             "sample",
@@ -2153,6 +2151,7 @@ mod snippet_tests {
                 result_fields: EffectiveConfigSource::Global,
                 fields: EffectiveConfigSource::Global,
             },
+            TargetParams::IrAbsent,
         )
         .expect("test fixture renders");
         out
