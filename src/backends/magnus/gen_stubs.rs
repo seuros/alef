@@ -553,7 +553,7 @@ fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool) -> String {
                     v.serde_rename.as_deref(),
                     enum_def.serde_rename_all.as_deref(),
                 );
-                format!(":{wire_name}")
+                crate::backends::magnus::ruby_symbol_literal(&wire_name)
             })
             .collect();
         lines.push(format!("    type value = {}", symbol_variants.join(" | ")));
