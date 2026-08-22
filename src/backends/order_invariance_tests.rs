@@ -255,43 +255,26 @@ fn reversed(api: &ApiSurface) -> ApiSurface {
     reversed
 }
 
-/// How many times to retry a backend whose two generations were not taken under a stable
-/// environment. Three attempts is generous: the observed interference window is milliseconds wide.
-const STABILITY_ATTEMPTS: usize = 3;
-
-/// Compares forward-order output against reversed-order output, but only from a *bracketed* window
-/// in which the forward output was reproducible.
+/// Compares forward-order output against reversed-order output.
 ///
-/// Some backends read repo-relative filesystem state while generating — the swift backend picks its
-/// output path prefix by probing for a `Sources/` layout on disk — and the rest of the test suite
-/// creates and removes those very directories as it runs. A bare forward-vs-reversed comparison
-/// therefore fails intermittently for reasons that have nothing to do with IR ordering (observed:
-/// swift emitting `Sources/RustBridge/...` on one call and `packages/swift/Sources/RustBridge/...`
-/// on the next). Regenerating the forward surface after the reversed one and requiring the two
-/// forward runs to agree proves the environment did not move across the comparison; only then is a
-/// forward-vs-reversed difference attributable to ordering. A real ordering leak reproduces in
-/// every attempt, so this cannot hide one. ~keep
-fn difference_under_stable_environment(
+/// A backend whose output is a pure function of (IR, config) agrees on every call regardless of
+/// what else is running concurrently. This used to retry across a "stable environment" bracket to
+/// tolerate the swift backend picking its output path prefix by probing the filesystem for a
+/// `Sources/` layout on disk -- nondeterministic under the rest of the test suite churning those
+/// directories (observed: swift emitting `Sources/RustBridge/...` on one call and
+/// `packages/swift/Sources/RustBridge/...` on the next). Swift's package root is now derived only
+/// from config (see `swift_package_root` in `backends::swift::gen_bindings`), so a direct
+/// comparison is the real check again: any remaining flake here means some backend still reads
+/// state outside the IR, and that is exactly the bug this test exists to catch. ~keep
+fn describe_order_difference(
     backend: &dyn Backend,
     forward: &ApiSurface,
     backwards: &ApiSurface,
     config: &ResolvedCrateConfig,
-) -> Result<Option<String>, String> {
-    for _ in 0..STABILITY_ATTEMPTS {
-        let before = generated_files_sorted(backend, forward, config);
-        let reversed_files = generated_files_sorted(backend, backwards, config);
-        let after = generated_files_sorted(backend, forward, config);
-        if before != after {
-            continue;
-        }
-        return Ok(describe_first_difference(&before, &reversed_files));
-    }
-    Err(format!(
-        "{}: generating the same IR twice never agreed across {STABILITY_ATTEMPTS} attempts, so \
-         order invariance could not be judged. Either the backend reads mutable state outside the \
-         IR while generating, or a concurrent test is churning the directories it probes.",
-        backend.name()
-    ))
+) -> Option<String> {
+    let forward_files = generated_files_sorted(backend, forward, config);
+    let reversed_files = generated_files_sorted(backend, backwards, config);
+    describe_first_difference(&forward_files, &reversed_files)
 }
 
 fn covered_languages() -> Vec<Language> {
@@ -312,10 +295,8 @@ fn every_covered_backend_is_invariant_to_ir_collection_order() {
     let mut failures: Vec<String> = Vec::new();
     for language in covered_languages() {
         let backend = crate::cli::registry::try_get_backend(language).expect("filtered to registered backends");
-        match difference_under_stable_environment(backend.as_ref(), &forward, &backwards, &config) {
-            Ok(None) => {}
-            Ok(Some(difference)) => failures.push(format!("=== {language:?} ===\n{difference}")),
-            Err(unstable) => failures.push(format!("=== {language:?} ===\n{unstable}")),
+        if let Some(difference) = describe_order_difference(backend.as_ref(), &forward, &backwards, &config) {
+            failures.push(format!("=== {language:?} ===\n{difference}"));
         }
     }
 
