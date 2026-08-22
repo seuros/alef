@@ -97,9 +97,10 @@ fn warn_refused_matches(surface: &str, pattern: &str, refused: usize) {
 /// pins in generated files (pyproject.toml, mix.exs, build.zig.zon, Package.swift,
 /// etc.) always match the workspace version atomically.
 ///
-/// Pass `no_regen = true` to opt out of the automatic regeneration — useful when
-/// this function is called from within another codegen pass that owns `test_apps/`
-/// itself (e.g. `alef generate`).
+/// Pass `no_regen = true` to opt out of the automatic regeneration. `alef generate`
+/// passes it not because it owns `test_apps/` — it does not write that tree at all —
+/// but because regenerating test apps is deliberately excluded from that command.
+/// `alef all` and `alef test-apps generate` are the two commands that write there. ~keep
 pub fn sync_versions(
     config: &ResolvedCrateConfig,
     config_path: &std::path::Path,
