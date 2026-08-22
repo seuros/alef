@@ -248,7 +248,8 @@ impl SnippetValidator for DartValidator {
     }
 
     fn is_dependency_error(&self, output: &str) -> bool {
-        output.contains("uri_does_not_exist") || output.contains("undefined_identifier")
+        let lower = output.to_ascii_lowercase();
+        lower.contains("uri_does_not_exist") || lower.contains("undefined_identifier")
     }
 }
 
@@ -432,6 +433,21 @@ mod tests {
                 ),
                 (SnippetStatus::Pass, None),
             ]
+        );
+    }
+
+    /// `--format=machine` upper-cases the CODE field (proven by the fixture in
+    /// `batch_results_attribute_a_machine_diagnostic_to_the_file_it_names` above), so the
+    /// dependency-error classifier must match case-insensitively or a missing-dependency batch
+    /// diagnostic is misreported as a genuine snippet defect. ~keep
+    #[test]
+    fn is_dependency_error_matches_the_upper_cased_machine_format_code() {
+        let output = "ERROR|COMPILE_TIME_ERROR|URI_DOES_NOT_EXIST|/tmp/scratch/snippet_batch_0.dart|1|8|20|\
+                       Target of URI doesn't exist: 'package:missing_dep/missing_dep.dart'.";
+
+        assert!(
+            DartValidator.is_dependency_error(output),
+            "machine-format URI_DOES_NOT_EXIST must be recognized as a dependency error: {output:?}"
         );
     }
 
