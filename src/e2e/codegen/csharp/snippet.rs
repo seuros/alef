@@ -818,4 +818,75 @@ mod tests {
             "a snippet that constructs no client must not declare one:\n{body}"
         );
     }
+
+    /// Render the C# snippet for an async call, with streaming forced on or off.
+    fn streaming_snippet(streaming: bool) -> String {
+        let fixture = Fixture {
+            id: "stream_document".into(),
+            description: "Stream a document".into(),
+            input: serde_json::Value::Null,
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "stream_document".into(),
+            result_var: "chunks".into(),
+            r#async: true,
+            streaming: Some(crate::core::config::e2e::StreamingConfig::Enabled(streaming)),
+            ..CallConfig::default()
+        };
+        call.overrides.insert("csharp".into(), CallOverride::default());
+        let config = ResolvedCrateConfig {
+            name: "sample_core".into(),
+            ..ResolvedCrateConfig::default()
+        };
+        render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &config,
+            &[],
+            &[],
+        )
+        .expect("snippet renders")
+    }
+
+    /// A streaming C# binding returns `IAsyncEnumerable<T>` *synchronously* -- it is the
+    /// iteration that is async, not the call. The docs-snippet path never consulted streaming
+    /// classification at all, so it fell through to the plain `var x = await client.Method(...)`
+    /// shape every other async call uses, and `IAsyncEnumerable<T>` has no `GetAwaiter`: CS1061.
+    /// Classification comes from the shared `streaming_assertions::resolve_is_streaming` seam the
+    /// e2e test path already uses, so snippet and test cannot disagree about what streams. ~keep
+    #[test]
+    fn a_streaming_call_is_iterated_with_await_foreach_not_awaited_directly() {
+        let body = streaming_snippet(true);
+
+        assert!(body.contains("await foreach"), "streaming must iterate:\n{body}");
+        assert!(
+            !body.contains("await SampleCoreConverter.StreamDocumentAsync()"),
+            "awaiting the bare call is CS1061 on IAsyncEnumerable<T>:\n{body}"
+        );
+        assert!(
+            !body.contains("var chunks ="),
+            "a streaming call must not bind its result as a plain value:\n{body}"
+        );
+    }
+
+    /// Negative control. Without it the assertions above would pass just as well if the template
+    /// had been changed to emit `await foreach` unconditionally, which would break every ordinary
+    /// async call in exactly the opposite direction. ~keep
+    #[test]
+    fn a_non_streaming_async_call_is_still_awaited_directly() {
+        let body = streaming_snippet(false);
+
+        assert!(
+            !body.contains("await foreach"),
+            "a plain async call must not iterate:\n{body}"
+        );
+        assert!(
+            body.contains("await SampleCoreConverter.StreamDocumentAsync()"),
+            "a plain async call is awaited directly:\n{body}"
+        );
+    }
 }
