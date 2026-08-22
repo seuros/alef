@@ -130,7 +130,12 @@ pub fn package_swift(
     if root_manifest.exists() {
         fs::copy(&root_manifest, staging.join("Package.swift")).context("copying root Swift Package.swift")?;
     }
-    patch_root_package_manifest(&staging, version).context("patching root Swift Package.swift")?;
+    // Resolved here rather than inside `patch_root_package_manifest` so that function stays a
+    // pure transform over its explicit inputs -- see its doc comment. ~keep
+    let checksum = std::env::var("ALEF_SWIFT_CHECKSUM")
+        .or_else(|_| std::env::var("SWIFT_ARTIFACT_CHECKSUM"))
+        .ok();
+    patch_root_package_manifest(&staging, version, checksum.as_deref()).context("patching root Swift Package.swift")?;
 
     let xcframework_dir = staging.join("xcframework");
     fs::create_dir_all(&xcframework_dir).context("creating xcframework placeholder directory")?;
@@ -158,7 +163,17 @@ pub fn package_swift(
     })
 }
 
-fn patch_root_package_manifest(staging: &Path, version: &str) -> Result<()> {
+/// Replace the release placeholders in a staged root `Package.swift`.
+///
+/// `checksum` is resolved by the caller ([`package_swift`], from `ALEF_SWIFT_CHECKSUM` /
+/// `SWIFT_ARTIFACT_CHECKSUM`) rather than read from the environment here. Reading it internally
+/// would make this function -- and any test calling it directly -- depend on process-global
+/// state shared with every other test in the binary, the same "locally serialized, globally not"
+/// shape `f968767b6`/`227942b4b` fixed for other process-global env/cwd dependencies in this
+/// crate's tests. Threading it through as a parameter keeps this a pure transform over its
+/// inputs and lets tests exercise the "checksum present" and "checksum missing" branches with an
+/// explicit value instead of mutating `std::env`. ~keep
+fn patch_root_package_manifest(staging: &Path, version: &str, checksum: Option<&str>) -> Result<()> {
     let manifest = staging.join("Package.swift");
     if !manifest.exists() {
         return Ok(());
@@ -166,10 +181,9 @@ fn patch_root_package_manifest(staging: &Path, version: &str) -> Result<()> {
     let mut content = fs::read_to_string(&manifest).context("reading staged Package.swift")?;
     content = content.replace("__ALEF_SWIFT_VERSION__", version);
     if content.contains("__ALEF_SWIFT_CHECKSUM__") {
-        let checksum = std::env::var("ALEF_SWIFT_CHECKSUM")
-            .or_else(|_| std::env::var("SWIFT_ARTIFACT_CHECKSUM"))
-            .context("ALEF_SWIFT_CHECKSUM must be set when Package.swift contains __ALEF_SWIFT_CHECKSUM__")?;
-        content = content.replace("__ALEF_SWIFT_CHECKSUM__", &checksum);
+        let checksum =
+            checksum.context("ALEF_SWIFT_CHECKSUM must be set when Package.swift contains __ALEF_SWIFT_CHECKSUM__")?;
+        content = content.replace("__ALEF_SWIFT_CHECKSUM__", checksum);
     }
     fs::write(&manifest, content).context("writing staged Package.swift")?;
     Ok(())
@@ -265,13 +279,7 @@ checksum: "__ALEF_SWIFT_CHECKSUM__"
         )
         .unwrap();
 
-        unsafe {
-            std::env::set_var("ALEF_SWIFT_CHECKSUM", "abc123");
-        }
-        patch_root_package_manifest(tmp.path(), "1.2.3").unwrap();
-        unsafe {
-            std::env::remove_var("ALEF_SWIFT_CHECKSUM");
-        }
+        patch_root_package_manifest(tmp.path(), "1.2.3", Some("abc123")).unwrap();
 
         let content = fs::read_to_string(manifest).unwrap();
         assert!(
@@ -285,6 +293,24 @@ checksum: "__ALEF_SWIFT_CHECKSUM__"
         assert!(
             !content.contains("__ALEF_SWIFT_"),
             "no Swift placeholders should remain: {content}"
+        );
+    }
+
+    /// A manifest carrying the checksum placeholder with no checksum supplied must fail with a
+    /// clear message, not silently ship a literal `__ALEF_SWIFT_CHECKSUM__` in the release
+    /// manifest. Exercised with `checksum: None` directly -- now that
+    /// `patch_root_package_manifest` takes the checksum as a parameter rather than reading
+    /// `ALEF_SWIFT_CHECKSUM` itself, this branch no longer needs `std::env` at all.
+    #[test]
+    fn patch_root_package_manifest_errors_when_checksum_placeholder_has_no_checksum() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let manifest = tmp.path().join("Package.swift");
+        fs::write(&manifest, r#"checksum: "__ALEF_SWIFT_CHECKSUM__""#).unwrap();
+
+        let error = patch_root_package_manifest(tmp.path(), "1.2.3", None).unwrap_err();
+        assert!(
+            error.to_string().contains("ALEF_SWIFT_CHECKSUM must be set"),
+            "unexpected error: {error}"
         );
     }
 }
