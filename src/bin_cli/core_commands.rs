@@ -518,7 +518,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     })
                     .collect();
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
-                pipeline::finalize_hashes(&stub_paths, &sources_hash, &alef_toml_bytes)?;
+                pipeline::finalize_hashes_after_tree_format(&stub_paths, &base_dir, &sources_hash, &alef_toml_bytes)?;
                 grand_total += count;
             }
             tracing::info!("Generated {grand_total} stub files");

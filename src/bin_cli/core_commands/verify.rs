@@ -136,6 +136,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     let has_adoptable_frozen_files =
         crate::bin_cli::helpers::frozen::has_adoptable_frozen_files(&frozen_generated_files);
     // Report-only: see `verify_orphans`'s module doc for why this never deletes.
+    log_managed_surface(&all_managed_paths);
     let orphan_generated_files = verify_orphans::find_orphaned_generated_files(&base_dir, &all_managed_paths);
     let has_orphan_files = !orphan_generated_files.is_empty();
 
@@ -378,6 +379,36 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     super::ensure_required_records_tracked(&untracked_records, report_only)?;
     ensure_configured_snippet_directories_exist(&missing_snippet_roots, report_only)?;
     Ok(None)
+}
+
+/// Dump, at debug level, the exact path set the orphan report is diffed against.
+///
+/// An orphan finding is a *difference* between two sets, and only one of them is printed: the
+/// report names the files on disk and says nothing about the surface they were missing from.
+/// That makes the two most common explanations indistinguishable from the output alone -- a
+/// genuinely dropped emit, versus a managed surface that came back short because a stage failed
+/// or because the run was language-filtered -- and it is why an orphan report and `alef generate`'s
+/// own "unrecorded alef-marked file" warning can name different files without either being wrong:
+/// they are diffs against different sets (`collect_managed_surface` over every configured
+/// language here, versus this run's recorded output under one sweep root there, git-tracked-only
+/// and manifest-gated).
+///
+/// Printing the surface is what makes that difference checkable instead of arguable: run
+/// `alef verify -vv`, diff this list against the paths `alef generate` reports, and the gap names
+/// itself. Debug level, not info: it is one line per managed file on a consumer tree. ~keep
+fn log_managed_surface(managed_paths: &std::collections::HashSet<std::path::PathBuf>) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+    let mut paths: Vec<&std::path::PathBuf> = managed_paths.iter().collect();
+    paths.sort();
+    tracing::debug!(
+        "managed surface the orphan report is diffed against: {} path(s)",
+        paths.len()
+    );
+    for path in paths {
+        tracing::debug!("  managed: {}", path.display());
+    }
 }
 
 /// The crate's configured `docs.snippets` roots that are not on disk, as
