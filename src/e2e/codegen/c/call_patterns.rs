@@ -99,10 +99,25 @@ pub(super) fn render_engine_factory_test_function(
     // `input.url` directly, the same way it already reads `input.config` and
     // `input.actions` above. `url` stays a `char[2048]` in both branches so nothing
     // downstream has to care which one produced it.
+    //
+    // Batch/list fixtures (e.g. `batch_crawl_*`) carry no `url` key at all -- their
+    // addresses live in a list field (`batch_urls`, aliased via `resolve_urls_field`
+    // the same way every other backend's `mock_url_list` handling resolves it). The
+    // engine-factory ABI takes a single positional `url`, and C's own comment above
+    // (`kcrawl_scrape() doesn't replicate batch/validation error semantics`) already
+    // establishes that this pattern only ever smoke-tests one address for these
+    // fixtures, so the first list entry is that address. Falling through the shared
+    // `resolve_urls_field`/`preserved_url_list` seam here (rather than re-deriving the
+    // `batch_urls` alias locally) keeps the alias list defined in exactly one place.
     let preserved_url = crate::e2e::codegen::preserved_url_literal(
         fixture.preserve_input_urls,
         crate::e2e::codegen::resolve_field(&fixture.input, "input.url"),
-    );
+    )
+    .or_else(|| {
+        let urls_value = crate::e2e::codegen::resolve_urls_field(&fixture.input, "input.urls");
+        crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, urls_value)
+            .and_then(|urls| urls.into_iter().next())
+    });
     if let Some(url) = preserved_url {
         // The fixture's own address is the subject of the test; the mock server
         // lookup is skipped entirely so no env var can override it.
