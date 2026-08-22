@@ -260,3 +260,92 @@ fn a_genuinely_broken_snippet_stays_a_real_failure() {
     assert_eq!(outcome.status, SnippetStatus::Fail);
     assert!(!outcome.unresolved_dependency);
 }
+
+/// task #130: a `tsc` toolchain that ran to completion and reported a genuine type error
+/// (TS2322 "not assignable") must come back through `finalize_result` as `Fail` with the
+/// compiler's own message, never `Unavailable` captioned "toolchain ran but reported a missing
+/// dependency or build artifact -- run `alef build` first". That caption sent the reader to
+/// rebuild toolchains for a defect no rebuild could fix, and `Unavailable` is an incomplete
+/// status that fails a `--strict` run for a reason it had misnamed. This drives the real
+/// `TypeScriptValidator::is_dependency_error`, not a stub, through `finalize_result` directly. ~keep
+#[test]
+fn finalize_result_keeps_a_real_type_error_as_fail_with_the_compiler_message() {
+    let validator = crate::snippets::validators::typescript::TypeScriptValidator;
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        ..RunnerConfig::default()
+    };
+    let diagnostic = "snippet.ts(1,7): error TS2322: Type 'number' is not assignable to type 'string'.";
+    let outcome = ValidationOutcome {
+        status: SnippetStatus::Fail,
+        message: Some(diagnostic.to_string()),
+        duration_ms: 5,
+    };
+
+    let result = finalize_result(
+        &typescript_snippet(),
+        &validator,
+        &config,
+        None,
+        ValidationLevel::Compile,
+        outcome,
+    );
+
+    assert_eq!(result.status, SnippetStatus::Fail, "got: {result:?}");
+    assert!(
+        !result.unresolved_dependency,
+        "a real type error must not be flagged as a dependency gap"
+    );
+    assert_eq!(
+        result.message.as_deref(),
+        Some(diagnostic),
+        "a real type error's message must stay the compiler's own text verbatim, not be recaptioned \
+         as a missing dependency"
+    );
+    assert!(
+        !result.message.as_deref().unwrap_or_default().contains("alef build"),
+        "a real type error must never tell the reader to rebuild toolchains: {result:?}"
+    );
+}
+
+/// The complementary case: a genuinely unresolved module (`tsc` could not locate it at all) must
+/// still classify as `unresolved_dependency` -- proving the narrowed pattern set didn't
+/// overcorrect into treating every `tsc` failure as a snippet defect.
+#[test]
+fn finalize_result_still_flags_a_real_missing_module_as_unresolved_dependency() {
+    let validator = crate::snippets::validators::typescript::TypeScriptValidator;
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        ..RunnerConfig::default()
+    };
+    let outcome = ValidationOutcome {
+        status: SnippetStatus::Fail,
+        message: Some("snippet.ts(1,1): error TS2307: Cannot find module 'widgets'.".to_string()),
+        duration_ms: 5,
+    };
+
+    let result = finalize_result(
+        &typescript_snippet(),
+        &validator,
+        &config,
+        None,
+        ValidationLevel::Compile,
+        outcome,
+    );
+
+    assert_eq!(result.status, SnippetStatus::Unavailable, "got: {result:?}");
+    assert!(
+        result.unresolved_dependency,
+        "a genuinely unresolved module must still be flagged: {result:?}"
+    );
+    assert!(
+        result
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Cannot find module 'widgets'"),
+        "the original diagnostic must still be included, not replaced: {result:?}"
+    );
+}

@@ -392,11 +392,28 @@ impl SnippetValidator for TypeScriptValidator {
         ValidationLevel::Run
     }
 
+    // Only codes tsc emits when it could not *locate* a module, namespace, or declaration file
+    // -- the shape that actually means "this run's environment lacks a dependency or build
+    // artifact." Ordinary type errors (TS2322 not-assignable, TS2345 argument mismatch, TS2339
+    // missing property, TS2304/TS2552 unresolved name, TS7006 implicit any, TS1005/TS1128 syntax,
+    // TS18046/TS18047/TS2531/TS2532 nullability, TS2451 redeclaration, ...) report a real defect
+    // in the snippet or its own types and must stay `Fail` with the compiler's own text, not get
+    // relabeled as an environment problem the reader is told `alef build` will fix. The previous,
+    // much broader list caught genuine TS2322/TS2304 type errors under the "missing dependency or
+    // build artifact" caption, which sent the reader to rebuild toolchains for a defect no rebuild
+    // could fix -- see task #130. When a run's error lines don't unanimously match this narrow
+    // set, `finalize_result` leaves `status` as `Fail` and the message as the compiler's own
+    // output verbatim, so an unrecognized failure is always shown, never re-captioned by guess.
+    // ~keep
     fn is_dependency_error(&self, output: &str) -> bool {
         let patterns = [
-            "TS2307", "TS2304", "TS2305", "TS2306", "TS2322", "TS2345", "TS2339", "TS2351", "TS2552", "TS2314",
-            "TS2391", "TS2693", "TS7016", "TS2371", "TS2580", "TS1375", "TS2792", "TS2503", "TS7006", "TS2769",
-            "TS1128", "TS1005", "TS18046", "TS18047", "TS2531", "TS2532", "TS2451",
+            "TS2307", // Cannot find module 'X' or its corresponding type declarations.
+            "TS2305", // Module 'X' has no exported member 'Y' -- stale/missing build artifact.
+            "TS2306", // File 'X' is not a module.
+            "TS7016", // Could not find a declaration file for module 'X'.
+            "TS2792", // Cannot find module 'X'. Did you mean to set the 'moduleResolution' option?
+            "TS2503", // Cannot find namespace 'X'.
+            "TS2580", // Cannot find name 'X'. Do you need to install type definitions for it?
         ];
 
         let error_lines: Vec<&str> = output.lines().filter(|line| line.contains("error TS")).collect();
@@ -674,6 +691,72 @@ mod tests {
             Some("snippet_batch_0.ts(2,1): error TS2345: Argument mismatch.\n  Types of property 'id' differ.")
         );
         assert_eq!(results[1], (SnippetStatus::Pass, None));
+    }
+
+    /// task #130: a genuine type error (TS2322 "not assignable") must never be classified as a
+    /// missing dependency -- the reader was told to `run alef build first` for a defect no
+    /// rebuild could fix. ~keep
+    #[test]
+    fn is_dependency_error_rejects_a_type_mismatch() {
+        let output = "snippet.ts(1,7): error TS2322: Type 'number' is not assignable to type 'string'.\n";
+
+        assert!(
+            !TypeScriptValidator.is_dependency_error(output),
+            "TS2322 is a type error, not a missing dependency: {output:?}"
+        );
+    }
+
+    /// task #130: TS2304 "cannot find name" is ambiguous -- it fires just as often for a typo or
+    /// an undefined local as for a missing import, so it must not be guessed as a dependency
+    /// failure either. ~keep
+    #[test]
+    fn is_dependency_error_rejects_an_unresolved_name() {
+        let output = "snippet.ts(1,1): error TS2304: Cannot find name 'totallyUndefinedLocal'.\n";
+
+        assert!(
+            !TypeScriptValidator.is_dependency_error(output),
+            "TS2304 is ambiguous and must not be classified as a missing dependency: {output:?}"
+        );
+    }
+
+    /// A genuinely missing dependency (an import tsc could not locate at all) must still
+    /// classify as one -- narrowing the pattern set must not overcorrect into treating every
+    /// tsc failure as a snippet defect. ~keep
+    #[test]
+    fn is_dependency_error_accepts_an_unresolved_module() {
+        let output = "snippet.ts(1,1): error TS2307: Cannot find module 'missing-package' or its corresponding \
+                       type declarations.\n";
+
+        assert!(
+            TypeScriptValidator.is_dependency_error(output),
+            "TS2307 is an unresolved module and must classify as a missing dependency: {output:?}"
+        );
+    }
+
+    /// A missing `.d.ts` (the classic "toolchain built, artifact not generated yet" shape) must
+    /// still classify as a missing dependency. ~keep
+    #[test]
+    fn is_dependency_error_accepts_a_missing_declaration_file() {
+        let output = "snippet.ts(1,1): error TS7016: Could not find a declaration file for module 'binding-pkg'.\n";
+
+        assert!(
+            TypeScriptValidator.is_dependency_error(output),
+            "TS7016 is a missing declaration file and must classify as a missing dependency: {output:?}"
+        );
+    }
+
+    /// A mix of an unresolved module and a genuine type error is not confidently a dependency
+    /// failure end to end -- `is_dependency_error` requires every error line to match, so this
+    /// stays `Fail` with the raw compiler text rather than being relabeled. ~keep
+    #[test]
+    fn is_dependency_error_declines_a_mixed_batch() {
+        let output = "snippet_batch_0.ts(1,1): error TS2307: Cannot find module 'missing-package'.\n\
+                       snippet_batch_1.ts(2,7): error TS2322: Type 'number' is not assignable to type 'string'.\n";
+
+        assert!(
+            !TypeScriptValidator.is_dependency_error(output),
+            "a run mixing a real type error must not be classified as a missing dependency: {output:?}"
+        );
     }
 
     fn snippet(code: &str) -> Snippet {
