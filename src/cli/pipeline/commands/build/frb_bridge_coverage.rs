@@ -122,22 +122,24 @@ mod tests {
     }
 
     /// End-to-end proof that `run_post_build` itself refuses to patch a stale bridge: when the
-    /// `RunCommand` step for `flutter_rust_bridge_codegen` is skipped (here via
-    /// `ALEF_SKIP_COMMANDS`, standing in for "tool not on PATH") and the facade has since gained
-    /// a function the committed bridge lacks, the whole post-build sequence must error out
-    /// before the `PostProcessFile` step that follows ever touches the bridge file.
+    /// `RunCommand` step for the frb codegen tool is skipped (here because the configured
+    /// command name does not exist on `PATH` -- `run_run_command` reports that as `Ok(false)`
+    /// deterministically, with no process-global state involved) and the facade has since
+    /// gained a function the committed bridge lacks, the whole post-build sequence must error
+    /// out before the `PostProcessFile` step that follows ever touches the bridge file.
+    ///
+    /// Deliberately does not use the real `flutter_rust_bridge_codegen` command name gated by
+    /// `ALEF_SKIP_COMMANDS`: that env var is process-global, and a test-local lock around
+    /// setting it only serializes against other holders of that *same* lock instance -- it does
+    /// nothing against the crate's other test modules that set the same variable under their own
+    /// separate lock (see `run_command_tests::env_lock` in `build.rs`), so two lock instances
+    /// guarding one process resource race exactly like the unguarded `current_dir()` callers did
+    /// for `CWD_LOCK`. A command name that is simply never installed sidesteps the shared
+    /// resource entirely. ~keep
     #[test]
     fn run_post_build_aborts_before_patching_a_stale_bridge_when_frb_is_skipped() {
         use crate::core::backend::{BuildConfig, BuildDependency, PostBuildStep, PostProcessor};
         use crate::core::config::{Language, ResolvedCrateConfig};
-
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
-        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
-        // SAFETY: serialized by ENV_LOCK; no other test in this process sets this var concurrently.
-        unsafe {
-            std::env::set_var("ALEF_SKIP_COMMANDS", "flutter_rust_bridge_codegen");
-        }
 
         let dir = tempfile::tempdir().expect("temp dir");
         let facade_rel = std::path::PathBuf::from("lib.rs");
@@ -160,7 +162,10 @@ mod tests {
             build_dep: BuildDependency::None,
             post_build: vec![
                 PostBuildStep::RunCommand {
-                    cmd: "flutter_rust_bridge_codegen",
+                    // Never installed on any PATH -- `run_run_command` reports a missing tool as
+                    // `Ok(false)` (skipped) deterministically, standing in for "frb was skipped
+                    // this run" without touching real process-global state.
+                    cmd: "alef-frb-codegen-intentionally-not-on-path-xyz789",
                     args: vec!["generate"],
                 },
                 PostBuildStep::VerifyFrbBridgeCoverage {
@@ -183,11 +188,6 @@ mod tests {
             &ResolvedCrateConfig::default(),
             dir.path(),
         );
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", value) },
-            None => unsafe { std::env::remove_var("ALEF_SKIP_COMMANDS") },
-        }
 
         let error = result.expect_err("a stale bridge behind a skipped frb run must fail the build");
         assert!(
