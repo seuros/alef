@@ -406,6 +406,35 @@ mod tests {
         assert!(!body.contains("expected call to fail"), "{body}");
     }
 
+    /// Regression: a non-void call inside an `expects_error` try block must still print its
+    /// result, exactly as the non-error branch already does. Before this fix the presentation/
+    /// print block was nested entirely under `{% else %}` of `expects_error`, so `result` was
+    /// bound (`final result = ...`) but never referenced anywhere in the error-path body — a
+    /// `UNUSED_LOCAL_VARIABLE` warning `dart analyze` treats as a hard failure at the
+    /// `typecheck` validation level, tslp/liter-llm's `edge_batch_already_cancelled`-shaped
+    /// snippets among them. ~keep
+    #[test]
+    fn error_path_snippet_still_prints_a_bound_non_void_result() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "cancel_already_cancelled", "description": "Cancel an already-cancelled batch", "input": null,
+            "assertions": [{"type": "error"}]
+        }))
+        .expect("fixture");
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig::default(),
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+        )
+        .expect("snippet");
+
+        assert!(
+            body.contains("stdout.writeln(result)"),
+            "a bound non-void result inside the error-path try block must be printed, got:\n{body}"
+        );
+    }
+
     #[test]
     fn renders_http_request_without_test_harness_assertions() {
         let fixture: Fixture = serde_json::from_value(serde_json::json!({
