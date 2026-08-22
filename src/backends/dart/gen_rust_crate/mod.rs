@@ -6,6 +6,8 @@ use crate::core::ir::{ApiSurface, EnumDef, TypeDef};
 use std::collections::HashSet;
 
 mod bridge_fn;
+#[cfg(test)]
+mod build_rs_cfg_gates_tests;
 mod cargo;
 mod conversions;
 mod enum_conversions;
