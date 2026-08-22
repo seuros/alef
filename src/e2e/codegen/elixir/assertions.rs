@@ -498,7 +498,7 @@ pub(super) fn render_assertion(
             if is_numeric {
                 let _ = writeln!(out, "      assert {field_expr} == 0");
             } else {
-                let _ = writeln!(out, "      assert is_nil({field_expr}) or {coerced_field_expr} == \"\"");
+                let _ = writeln!(out, "      assert {coerced_field_expr} in [nil, \"\", [], %{{}}]");
             }
         }
         "contains_any" => {
@@ -1009,7 +1009,7 @@ mod tests {
             "is_empty must not trim the actual value; got: {out}"
         );
         assert_eq!(
-            out, "      assert is_nil(result) or result == \"\"\n",
+            out, "      assert result in [nil, \"\", [], %{}]\n",
             "emitted is_empty check drifted: {out}"
         );
     }
