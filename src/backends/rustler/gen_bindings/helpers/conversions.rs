@@ -372,6 +372,27 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module(
     gen_elixir_enum_module_with_known_types(enum_def, app_module, &AHashSet::new())
 }
 
+/// Whether `enum_def`'s data variants all carry a single tuple field of a Named type -- the
+/// exact gate `gen_rustler_flat_data_enum` (`gen_bindings/types.rs`) uses to choose a flat
+/// `NifStruct` (one discriminator field + one optional field per variant) over a
+/// `NifTaggedEnum` tuple. The Elixir-side `wire_value/1` dispatch (below) must agree with this
+/// gate exactly, so both sides call this single function instead of keeping the condition in
+/// sync by hand. ~keep
+pub(in crate::backends::rustler::gen_bindings) fn is_flat_data_enum(enum_def: &crate::core::ir::EnumDef) -> bool {
+    let has_data = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    has_data
+        && enum_def
+            .variants
+            .iter()
+            .filter(|v| !v.fields.is_empty())
+            .all(|v| v.is_tuple)
+}
+
+/// Escape a wire value for embedding in a double-quoted Elixir string literal.
+fn escape_elixir_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_known_types(
     enum_def: &crate::core::ir::EnumDef,
     app_module: &str,
@@ -475,6 +496,34 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
                 minijinja::context! {
                     atom_name => &safe_name,
                     attr_name => &attr_name,
+                },
+            ));
+        }
+
+        out.push_str(&template_env::render(
+            "elixir_enum_wire_value_header.jinja",
+            minijinja::context! {},
+        ));
+        for variant in &enum_def.variants {
+            // The runtime atom Rustler actually produces is always
+            // `pascal_to_snake(variant.name)` -- serde_rename never influences it (serde and
+            // rustler attributes are independent proc macros over the same variant; see
+            // `emit_tagged_enum_encoder` in `public_api_args.rs`, which relies on the exact
+            // same fact to build its Elixir-input-to-wire-JSON encoder). Matching a
+            // serde_rename-derived atom here would leave a variant's true runtime atom with no
+            // wire_value/1 clause, raising FunctionClauseError instead of returning the wire
+            // string. ~keep
+            let atom_literal = elixir_safe_atom(&crate::codegen::naming::pascal_to_snake(&variant.name));
+            let wire = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            out.push_str(&template_env::render(
+                "elixir_enum_wire_value_atom_clause.jinja",
+                minijinja::context! {
+                    atom_literal => &atom_literal,
+                    wire => &escape_elixir_string_literal(&wire),
                 },
             ));
         }
@@ -586,6 +635,67 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_elixir_enum_module_with_kn
                     },
                 ));
             }
+        }
+
+        // `wire_value/1` must dispatch on every runtime shape this enum can arrive in from
+        // Rustler: a bare atom (a unit variant, or the discriminator of a `NifTaggedEnum`
+        // tuple), a `{atom, ...}` tuple (`NifTaggedEnum`), or a map/struct with a discriminator
+        // field (the flat `NifStruct` `is_flat_data_enum` emits) whose value is already the
+        // exact `wire_variant_value` string -- see `flat_enum_from_core_variant_*.jinja`. The
+        // atom clauses below cover the unit case AND the tuple case (the tuple clause recurses
+        // into them via `elem(value, 0)`), so a single function works for both `NifTaggedEnum`
+        // shapes without needing a separate branch here. ~keep
+        out.push_str(&template_env::render(
+            "elixir_enum_wire_value_header.jinja",
+            minijinja::context! {},
+        ));
+        for variant in &enum_def.variants {
+            // The runtime atom Rustler actually produces is always
+            // `pascal_to_snake(variant.name)` -- serde_rename never influences it (serde and
+            // rustler attributes are independent proc macros over the same variant; see
+            // `emit_tagged_enum_encoder` in `public_api_args.rs`, which relies on the exact
+            // same fact to build its Elixir-input-to-wire-JSON encoder). Matching a
+            // serde_rename-derived atom here would leave a variant's true runtime atom with no
+            // wire_value/1 clause, raising FunctionClauseError instead of returning the wire
+            // string. ~keep
+            let atom_literal = elixir_safe_atom(&crate::codegen::naming::pascal_to_snake(&variant.name));
+            let wire = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
+            out.push_str(&template_env::render(
+                "elixir_enum_wire_value_atom_clause.jinja",
+                minijinja::context! {
+                    atom_literal => &atom_literal,
+                    wire => &escape_elixir_string_literal(&wire),
+                },
+            ));
+        }
+        out.push_str(&template_env::render(
+            "elixir_enum_wire_value_tuple_clause.jinja",
+            minijinja::context! {},
+        ));
+        if is_flat_data_enum(enum_def) {
+            let discriminator = elixir_safe_atom(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
+            out.push_str(&template_env::render(
+                "elixir_enum_wire_value_map_clause.jinja",
+                minijinja::context! {
+                    discriminator => &discriminator,
+                },
+            ));
+
+            // Only the flat-struct shape decodes to a real `%Module{}`/map term with a
+            // `__struct__` key, so only it can dispatch a `String.Chars` protocol impl.
+            // Atoms and tuples have no per-value dispatch target -- `wire_value/1` above is
+            // the only mechanism that works for those shapes. ~keep
+            out.push_str(&template_env::render(
+                "elixir_enum_string_chars_impl.jinja",
+                minijinja::context! {
+                    app_module => app_module,
+                    enum_name => &enum_def.name,
+                },
+            ));
         }
     }
 

@@ -425,12 +425,7 @@ pub(super) fn gen_enum(enum_def: &EnumDef, module_prefix: &str) -> String {
 
     let has_data = enum_def.variants.iter().any(|v| !v.fields.is_empty());
 
-    let use_flat_struct = has_data
-        && enum_def
-            .variants
-            .iter()
-            .filter(|v| !v.fields.is_empty())
-            .all(|v| v.is_tuple);
+    let use_flat_struct = super::helpers::is_flat_data_enum(enum_def);
 
     if use_flat_struct {
         return gen_rustler_flat_data_enum(enum_def, module_prefix);

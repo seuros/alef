@@ -374,6 +374,101 @@ fn test_gen_elixir_enum_module_resolves_known_payload_types() {
     );
 }
 
+/// The Elixir binding used to have no way to recover a unit enum's serde wire value at all --
+/// `to_string(:key_value)` returns the atom's own Elixir spelling ("key_value"), never the wire
+/// value ("KeyValue") a fixture literal carries. `wire_value/1` must map every variant atom to
+/// `wire_variant_value`, and a bare atom has no per-value dispatch target, so no
+/// `defimpl String.Chars` is emitted for this shape.
+#[test]
+fn gen_elixir_enum_module_unit_enum_exposes_wire_value_not_atom_spelling() {
+    let def = EnumDef {
+        name: "DataNodeKind".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "KeyValue".to_string(),
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Sequence".to_string(),
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    };
+
+    let result = gen_elixir_enum_module(&def, "SampleCrate");
+
+    assert!(
+        result.contains("def wire_value(:key_value), do: \"KeyValue\""),
+        "unit enum must expose the serde wire value (PascalCase), not the atom's own \
+         snake_case spelling; got:\n{result}"
+    );
+    assert!(
+        result.contains("def wire_value(:sequence), do: \"Sequence\""),
+        "got:\n{result}"
+    );
+    assert!(
+        !result.contains("defimpl String.Chars"),
+        "a bare-atom unit enum has no per-value dispatch target for String.Chars; got:\n{result}"
+    );
+}
+
+/// A data-carrying enum whose data variants are all single-field tuples of Named types uses
+/// Rustler's flat `NifStruct` shape (`gen_rustler_flat_data_enum` in `gen_bindings/types.rs`):
+/// the discriminator field it decodes to already holds the exact `wire_variant_value` string
+/// (see `flat_enum_from_core_variant_*.jinja`), so `wire_value/1` need only read that field --
+/// and because the runtime value is a real map/struct term, a `defimpl String.Chars` can
+/// dispatch on it too, unlike the bare-atom unit case.
+#[test]
+fn gen_elixir_enum_module_flat_data_enum_exposes_wire_value_and_string_chars() {
+    let def = EnumDef {
+        name: "FormatMetadata".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "Pdf".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::Named("PdfMetadata".to_string()),
+                    ..FieldDef::default()
+                }],
+                is_tuple: true,
+                ..EnumVariant::default()
+            },
+            EnumVariant {
+                name: "Docx".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::Named("DocxMetadata".to_string()),
+                    ..FieldDef::default()
+                }],
+                is_tuple: true,
+                ..EnumVariant::default()
+            },
+        ],
+        ..EnumDef::default()
+    };
+
+    let result = gen_elixir_enum_module(&def, "SampleCrate");
+
+    assert!(
+        result.contains("def wire_value(value) when is_map(value), do: Map.fetch!(value, :format_type)"),
+        "the flat-struct shape's discriminator field already holds the wire value; reading it \
+         beats calling to_string on a struct with no String.Chars impl; got:\n{result}"
+    );
+    assert!(result.contains("def wire_value(:pdf), do: \"Pdf\""), "got:\n{result}");
+    assert!(result.contains("def wire_value(:docx), do: \"Docx\""), "got:\n{result}");
+    assert!(
+        result.contains("defimpl String.Chars, for: SampleCrate.FormatMetadata"),
+        "the flat-struct shape decodes to a real map/struct term, so (unlike a bare atom) it \
+         can dispatch a String.Chars impl; got:\n{result}"
+    );
+    assert!(
+        result.contains("SampleCrate.FormatMetadata.wire_value(value)"),
+        "String.Chars must delegate to the same wire_value/1 the enum module exposes, not \
+         re-derive the wire string; got:\n{result}"
+    );
+}
+
 mod variant_constructors {
     use super::*;
     use crate::core::ir::{MethodDef, PrimitiveType};
@@ -425,6 +520,32 @@ mod variant_constructors {
         assert!(
             result.contains("def rect(width, height), do: {:rect, %{width: width, height: height}}"),
             "{result}"
+        );
+    }
+
+    /// `Shape` has struct variants (`Circle { radius }`, `Rect { width, height }`), so it is
+    /// NOT the flat-struct shape (`is_flat_data_enum` requires every data variant to be a
+    /// single-field tuple) -- it stays a `NifTaggedEnum` `{atom, ...}` tuple. `wire_value/1`
+    /// must still resolve it via the same per-variant atom clauses the unit-enum shape uses
+    /// (the tuple clause just recurses on the tag), but has no discriminator field to read and
+    /// no struct/`__struct__` carrier to hang a `String.Chars` impl on.
+    #[test]
+    fn tagged_enum_wire_value_dispatches_atoms_and_tuples_but_has_no_struct_dispatch() {
+        let result = gen_elixir_enum_module(&shape_enum(), "SampleCrate");
+        assert!(result.contains("def wire_value(:circle), do: \"Circle\""), "{result}");
+        assert!(result.contains("def wire_value(:rect), do: \"Rect\""), "{result}");
+        assert!(
+            result.contains("def wire_value(value) when is_tuple(value), do: wire_value(elem(value, 0))"),
+            "a NifTaggedEnum variant is a `{{atom, ...}}` tuple; wire_value/1 must dispatch \
+             through the same atom clauses, got:\n{result}"
+        );
+        assert!(
+            !result.contains("defimpl String.Chars"),
+            "a NifTaggedEnum has no struct/__struct__ carrier to dispatch a protocol on; got:\n{result}"
+        );
+        assert!(
+            !result.contains("is_map(value)"),
+            "only the flat-struct shape has a discriminator field to read; got:\n{result}"
         );
     }
 
