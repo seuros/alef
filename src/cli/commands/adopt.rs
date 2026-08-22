@@ -421,7 +421,11 @@ fn embedded_regenerate_command(generated: &str) -> Option<String> {
 ///    with `existing` whenever the snippet body itself is unchanged); this route
 ///    remains for the drifted case, where route 0's suffix check cannot match. ~keep
 fn stamp_for(full_path: &Path, existing: &str, generated: &str) -> Option<String> {
-    if crate::core::hash::content_has_alef_marker(generated) && generated.ends_with(existing) {
+    if !existing.is_empty()
+        && crate::core::hash::content_has_alef_marker(generated)
+        && let Some(prefix) = generated.strip_suffix(existing)
+        && crate::core::hash::is_provenance_only_prefix(prefix)
+    {
         return Some(generated.to_owned());
     }
     if let Some(stamped) = crate::cli::pipeline::stamp_for_adoption(full_path, existing) {
