@@ -48,6 +48,68 @@ sources = ["src/lib.rs"]
     .expect("write alef.toml");
 }
 
+/// Writes a minimal `alef.toml` workspace fixture whose `docs.snippets.inline_dirs` points at a
+/// path that was never created, alongside one real, passing snippet in `dirs`.
+///
+/// `inline_dirs` is deliberately used here rather than `dirs`: `run_check`'s audit/gap pass
+/// (`run_configured_audit_and_gaps`) only ever sees `docs.snippets.dirs`, so a missing `dirs`
+/// entry happens to fail today through an unrelated coverage-ledger walk. `inline_dirs` is not
+/// passed to that pass at all, so a missing `inline_dirs` root previously reached only
+/// `discover_snippets`, which silently skipped it -- this is the exact shape of the bug: a
+/// snippets root that was repointed but never populated read as a clean run. ~keep
+fn write_fixture_with_missing_inline_dir(root: &Path) {
+    std::fs::create_dir_all(root.join("snippets")).expect("create snippets dir");
+
+    std::fs::write(root.join("snippets/hello.md"), "```json\n{\"hello\": \"world\"}\n```\n")
+        .expect("write snippet fixture");
+
+    std::fs::write(
+        root.join("alef.toml"),
+        r#"
+[workspace]
+languages = ["python"]
+
+[workspace.docs.snippets]
+dirs = ["snippets"]
+inline_dirs = ["generated-snippets-not-yet-produced"]
+
+[[crates]]
+name = "fixture-crate"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .expect("write alef.toml");
+}
+
+#[test]
+fn check_fails_when_an_inline_dirs_root_does_not_exist() {
+    let dir = tempfile::tempdir().expect("create temp workspace");
+    write_fixture_with_missing_inline_dir(dir.path());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_alef"))
+        .args(["snippets", "check", "--config"])
+        .arg(dir.path().join("alef.toml"))
+        .args(["--cache", "off"])
+        .env("RUST_LOG", "info")
+        .output()
+        .expect("run the alef binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let context = format!("stdout:\n{stdout}\nstderr:\n{stderr}");
+
+    assert!(
+        !output.status.success(),
+        "`check` must fail when a configured snippets root does not exist on disk — a repointed- \
+         but-never-populated directory must never read as an exhaustively validated one.\n{context}"
+    );
+    assert!(
+        stderr.contains("generated-snippets-not-yet-produced"),
+        "the diagnostic must name the missing directory so the misconfiguration is actionable, not \
+         just report a generic discovery failure.\n{context}"
+    );
+}
+
 #[test]
 fn check_fails_on_a_dangling_include_target() {
     let dir = tempfile::tempdir().expect("create temp workspace");

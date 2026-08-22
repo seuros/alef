@@ -14,8 +14,19 @@ pub fn discover_snippets(dirs: &[PathBuf], language_filter: Option<&[Language]>)
     let mut snippets = Vec::new();
 
     for dir in dirs {
+        // A configured directory that does not exist is almost always a typo or a path that
+        // generation has not populated yet -- never a legitimate "nothing to check" signal. Prior
+        // behaviour silently skipped it, which made a snippets root that was repointed but never
+        // populated indistinguishable from one that was fully validated: discovery would report
+        // zero snippets and every caller (`alef snippets list`, `check`, `gaps`) treated that as a
+        // clean run. A directory that exists but is empty is a different, legitimate case and is
+        // left alone -- it still contributes zero snippets, but callers can tell the two apart
+        // because this path only rejects a directory that is missing outright. ~keep
         if !dir.exists() {
-            continue;
+            return Err(crate::snippets::error::Error::Other(format!(
+                "configured snippet directory does not exist: {}",
+                dir.display()
+            )));
         }
         let ledger_metadata = load_ledger_metadata(dir)?;
 
@@ -290,6 +301,42 @@ mod tests {
         let base = Path::new("/repo/docs");
         let path = Path::new("/repo/docs/cli/usage.md");
         assert_eq!(infer_language_from_path(path, base), None);
+    }
+
+    /// A configured directory that does not exist on disk must fail discovery outright, not
+    /// silently contribute zero snippets. Prior behaviour (`if !dir.exists() { continue; }`)
+    /// made a snippets root that was repointed but never populated indistinguishable from one
+    /// that was fully validated: every caller (`alef snippets list`, `check`, `gaps`) saw an
+    /// empty `Ok(vec![])` and reported a clean run having examined nothing. ~keep
+    #[test]
+    fn a_missing_configured_directory_is_an_error_not_zero_snippets() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let missing = directory.path().join("does-not-exist");
+
+        let error = discover_snippets(std::slice::from_ref(&missing), None)
+            .expect_err("a configured directory that does not exist must fail discovery");
+
+        assert!(
+            error.to_string().contains(&missing.display().to_string()),
+            "the error must name the missing path so the misconfiguration is actionable: {error}"
+        );
+    }
+
+    /// The opposite case is distinct and must stay a legitimate, silent zero: a directory that
+    /// exists but genuinely holds no snippets (yet) is not a typo, and `discover_snippets` alone
+    /// cannot tell "not generated yet" from "intentionally empty" -- only `is_incomplete_status`
+    /// and callers with more context should decide whether that is a warning or a failure.
+    #[test]
+    fn an_existing_empty_directory_still_discovers_zero_snippets_without_erroring() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+
+        let discovered = discover_snippets(&[directory.path().to_path_buf()], None)
+            .expect("an existing, empty directory must not error");
+
+        assert!(
+            discovered.is_empty(),
+            "an empty directory legitimately contributes zero snippets"
+        );
     }
 
     #[test]
