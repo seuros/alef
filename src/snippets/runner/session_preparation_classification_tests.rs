@@ -349,3 +349,162 @@ fn finalize_result_still_flags_a_real_missing_module_as_unresolved_dependency() 
         "the original diagnostic must still be included, not replaced: {result:?}"
     );
 }
+
+/// Alef defect #127: two configured sessions target the same language (`liter-llm`'s real
+/// `[docs.snippets.sessions.typescript]` + `[docs.snippets.sessions.wasm]`, both TypeScript) and
+/// a hand-written snippet carries no explicit `target:` to break the tie. Before this fix, the
+/// fallback was a literal `sessions.get("typescript")` lookup: whichever session happened to be
+/// spelled like the bare language silently claimed every such snippet, validated it against that
+/// session's toolchain, and reported a normal `Pass`/`Fail` -- with no signal anywhere that the
+/// claim was an accident of naming, or that the sibling `wasm` session got no hand-written
+/// coverage at all. `UnreachableValidator` proves the ambiguity is caught before any validator
+/// ever runs, on both dispatch paths.
+fn two_same_language_sessions(node: &std::path::Path, wasm: &std::path::Path) -> HashMap<String, SessionSpec> {
+    let spec = |working_directory: &std::path::Path| SessionSpec {
+        language: crate::snippets::types::Language::TypeScript,
+        working_directory: working_directory.to_path_buf(),
+        manifest: None,
+        before: Vec::new(),
+        env: Default::default(),
+        include_paths: Vec::new(),
+        rust_features: Vec::new(),
+        rust_dependencies: Default::default(),
+    };
+    HashMap::from([("typescript".to_string(), spec(node)), ("wasm".to_string(), spec(wasm))])
+}
+
+#[test]
+fn an_ambiguous_session_claim_is_a_real_error_on_the_fail_fast_path() {
+    let node = tempfile::tempdir().expect("node session directory");
+    let wasm = tempfile::tempdir().expect("wasm session directory");
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(UnreachableValidator));
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        sessions: two_same_language_sessions(node.path(), wasm.path()),
+        fail_fast: true,
+        ..RunnerConfig::default()
+    };
+
+    let summary = run_validation(&[typescript_snippet()], &registry, &config).expect("validation completes");
+
+    assert_eq!(summary.total, 1);
+    assert_eq!(
+        summary.failed, 0,
+        "an ambiguous claim is a configuration gap, not a snippet defect"
+    );
+    assert_eq!(summary.errors, 1);
+    assert!(
+        summary.has_failures(),
+        "an ambiguous claim must fail every run, not just --strict"
+    );
+    let outcome = &summary.results[0];
+    assert_eq!(outcome.status, SnippetStatus::Error);
+    let message = outcome.message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains("typescript"),
+        "message must name every candidate session: {message}"
+    );
+    assert!(
+        message.contains("wasm"),
+        "message must name every candidate session: {message}"
+    );
+    assert!(
+        message.contains("target:"),
+        "message must tell the reader how to resolve it: {message}"
+    );
+}
+
+#[test]
+fn an_ambiguous_session_claim_is_a_real_error_on_the_parallel_path() {
+    let node = tempfile::tempdir().expect("node session directory");
+    let wasm = tempfile::tempdir().expect("wasm session directory");
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(UnreachableValidator));
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        sessions: two_same_language_sessions(node.path(), wasm.path()),
+        fail_fast: false,
+        ..RunnerConfig::default()
+    };
+
+    let summary = run_validation(&[typescript_snippet()], &registry, &config).expect("validation completes");
+
+    assert_eq!(summary.total, 1);
+    assert_eq!(summary.failed, 0);
+    assert_eq!(summary.errors, 1);
+    assert!(summary.has_failures());
+    let outcome = &summary.results[0];
+    assert_eq!(outcome.status, SnippetStatus::Error, "got: {outcome:?}");
+    // The message must name the ambiguity itself, not just any `SnippetStatus::Error` --
+    // `UnreachableValidator` never overrides `validate_in_session`, so if resolution ever slipped
+    // back to picking a session by naming coincidence (the pre-fix bug), the *default*
+    // `validate_in_session` would reject that session too and land on the same bare `Error`
+    // status for a completely different reason. Only the message tells the two apart.
+    let message = outcome.message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains("typescript"),
+        "message must name every candidate session: {message}"
+    );
+    assert!(
+        message.contains("wasm"),
+        "message must name every candidate session: {message}"
+    );
+    assert!(
+        message.contains("target:"),
+        "message must tell the reader how to resolve it: {message}"
+    );
+}
+
+/// A single configured session still claims a target-less snippet no matter what it is named --
+/// the other half of #127. Three of the four real consumer configs surveyed name their TypeScript
+/// sessions `node`/`wasm`, never `typescript`; before this fix the bare-language fallback missed
+/// every one of them and every hand-written snippet validated with no session at all.
+///
+/// `GenuinelyBrokenValidator` never overrides `validate_in_session`, so `SnippetValidator`'s
+/// default implementation is what actually runs: it rejects outright when handed `Some(session)`
+/// ("does not support binding-aware sessions") and only calls through to `validate` when handed
+/// `None`. That default is a precise discriminator here -- before this fix the `node`-named
+/// session never resolved for a target-less snippet, so validation fell through to `None` and
+/// `GenuinelyBrokenValidator::validate`'s own `Fail`. After the fix, `session_for` resolves the
+/// single same-language candidate regardless of its name, so the snippet reaches the validator
+/// *with* a session and the default rejection fires instead. ~keep
+#[test]
+fn a_single_differently_named_session_still_claims_a_target_less_snippet() {
+    let directory = tempfile::tempdir().expect("session directory");
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(GenuinelyBrokenValidator));
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        sessions: HashMap::from([(
+            "node".to_string(),
+            SessionSpec {
+                language: crate::snippets::types::Language::TypeScript,
+                working_directory: directory.path().to_path_buf(),
+                manifest: None,
+                before: Vec::new(),
+                env: Default::default(),
+                include_paths: Vec::new(),
+                rust_features: Vec::new(),
+                rust_dependencies: Default::default(),
+            },
+        )]),
+        ..RunnerConfig::default()
+    };
+
+    let summary = run_validation(&[typescript_snippet()], &registry, &config).expect("validation completes");
+
+    let outcome = &summary.results[0];
+    assert_eq!(outcome.status, SnippetStatus::Error, "got: {outcome:?}");
+    assert!(
+        outcome
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("binding-aware sessions"),
+        "the snippet must have reached the validator carrying the `node` session, not `None`: {outcome:?}"
+    );
+}

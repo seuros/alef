@@ -3,7 +3,28 @@ use crate::snippets::types::{Snippet, ValidationLevel, ValidationResult};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The `CacheEntry` struct's own on-disk shape, bumped only when that shape changes
+/// incompatibly (a field added, removed, or retyped). This is deliberately independent of
+/// [`ALEF_VALIDATOR_VERSION`] below -- it answers "can this JSON still deserialize", not "was
+/// this verdict computed by the classification logic running today". ~keep
 const CACHE_SCHEMA_VERSION: u32 = 2;
+
+/// Alef defect #138: the cache key used to cover only the snippet's own content (language,
+/// level, code, metadata) and the session fingerprint -- never anything that identifies *which
+/// alef* produced the verdict. A validator classification fix (a `Fail` pattern narrowed, a
+/// dependency-error heuristic corrected, an `achievable_level` gap reclassified) changes no byte
+/// this hash was built from, so `alef snippets check` replayed the previous release's verdict
+/// after every such fix, and the only working remedy consumers found was `--cache off` on every
+/// run -- a permanent admission the cache could not be trusted to invalidate itself.
+///
+/// This crate is single-binary and root-flat (`alef`, both bin and lib): the snippet validators
+/// under `src/snippets/validators/` ship at exactly the same version as everything else, so the
+/// crate's own release version is a complete, zero-maintenance proxy for "which classification
+/// logic computed this". Folding it into the hash means a stale entry from a different alef
+/// version is simply a cache miss under a different filename, not a stored verdict a version
+/// check has to remember to compare -- the same reasoning [`CACHE_SCHEMA_VERSION`] already uses
+/// for the entry's own shape, extended to cover the logic that filled it in. ~keep
+const ALEF_VALIDATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Debug, Serialize, Deserialize)]
 struct CacheEntry {
@@ -23,7 +44,21 @@ impl ValidationCache {
 
     #[must_use]
     pub fn key(snippet: &Snippet, level: ValidationLevel, session_fingerprint: Option<&str>) -> String {
+        Self::key_for_validator_version(snippet, level, session_fingerprint, ALEF_VALIDATOR_VERSION)
+    }
+
+    /// The actual hash, parameterized on the validator version so a test can prove two different
+    /// versions of alef never share a cache key without needing two real builds. Production code
+    /// only ever reaches this through [`Self::key`], which always passes
+    /// [`ALEF_VALIDATOR_VERSION`].
+    fn key_for_validator_version(
+        snippet: &Snippet,
+        level: ValidationLevel,
+        session_fingerprint: Option<&str>,
+        validator_version: &str,
+    ) -> String {
         let mut hasher = blake3::Hasher::new();
+        hasher.update(validator_version.as_bytes());
         hasher.update(snippet.language.to_string().as_bytes());
         hasher.update(level.to_string().as_bytes());
         hasher.update(snippet.code.as_bytes());
@@ -119,6 +154,44 @@ mod tests {
         assert_ne!(
             ValidationCache::key(&first, ValidationLevel::Run, Some("binding-a")),
             ValidationCache::key(&first, ValidationLevel::Run, Some("binding-b"))
+        );
+    }
+
+    /// Alef defect #138's load-bearing assertion: two different alef releases must never agree on
+    /// a cache key for the *same* snippet, content, level and session -- otherwise a validator
+    /// classification fix ships and `alef snippets check` keeps serving the previous release's
+    /// verdict for every snippet whose content never changed. Parameterized on the version string
+    /// directly (`key_for_validator_version`, not `key`) because this test cannot build two real
+    /// alef binaries; it instead pins the exact mechanism `key` delegates to. ~keep
+    #[test]
+    fn cache_key_changes_with_the_alef_version_that_computed_it() {
+        let snippet = snippet("fn main() {}");
+
+        let older = ValidationCache::key_for_validator_version(&snippet, ValidationLevel::Syntax, None, "0.64.0");
+        let newer = ValidationCache::key_for_validator_version(&snippet, ValidationLevel::Syntax, None, "0.64.1");
+
+        assert_ne!(
+            older, newer,
+            "a validator fix in a new alef release must invalidate every prior release's cache \
+             entries, not replay their verdicts"
+        );
+    }
+
+    /// `ValidationCache::key` (the production entry point every caller actually uses) must itself
+    /// be wired to the running binary's own version, not just the version-parameterized helper in
+    /// isolation -- this is what a hand-copied reimplementation of the fix would miss.
+    #[test]
+    fn the_public_key_function_is_pinned_to_this_build_own_alef_version() {
+        let snippet = snippet("fn main() {}");
+
+        assert_eq!(
+            ValidationCache::key(&snippet, ValidationLevel::Syntax, None),
+            ValidationCache::key_for_validator_version(
+                &snippet,
+                ValidationLevel::Syntax,
+                None,
+                env!("CARGO_PKG_VERSION")
+            )
         );
     }
 }

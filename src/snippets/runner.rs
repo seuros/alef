@@ -13,6 +13,7 @@ use std::time::Instant;
 
 mod batch;
 mod session_prep;
+mod session_resolution;
 
 use batch::validate_batches;
 use session_prep::{session_preparation_error, session_preparation_result};
@@ -103,7 +104,7 @@ fn fail_fast_results(
     let reporter = FailureReporter::new(snippets);
     let mut results = Vec::with_capacity(snippets.len());
     for snippet in snippets {
-        let preparation_error = session_preparation_error(snippet, sessions, session_errors);
+        let preparation_error = session_preparation_error(snippet, config, session_errors);
         let session = session_for(snippet, sessions);
         let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
         let result = validate_one(
@@ -112,7 +113,7 @@ fn fail_fast_results(
             config,
             session,
             lock,
-            preparation_error,
+            preparation_error.as_ref(),
             Some(&reporter),
         );
         reporter.record(&result);
@@ -514,35 +515,28 @@ fn structurally_unreachable(
         || (validator.achievable_level(requested) < requested && validator.achievable_level_is_structural(requested))
 }
 
+/// The single resolution `fail_fast_results`, `parallel_results` and
+/// `batch::group_batchable_snippets` all share for "which configured session does this snippet
+/// use" -- see `session_resolution` for why the resolver, not a per-caller string lookup, is what
+/// keeps a snippet's session and its batch key from ever disagreeing. ~keep
 fn session_for<'a>(
     snippet: &Snippet,
     sessions: &'a HashMap<String, crate::snippets::session::ValidationSession>,
 ) -> Option<&'a crate::snippets::session::ValidationSession> {
-    snippet
-        .metadata
-        .target
-        .as_ref()
-        .and_then(|target| sessions.get(&crate::snippets::types::Language::normalize_session_target(target)))
-        .or_else(|| sessions.get(&snippet.language.to_string()))
+    match session_resolution::resolve_session_claim(snippet, sessions, |session| session.language) {
+        session_resolution::SessionClaim::Claimed(key) => sessions.get(key),
+        session_resolution::SessionClaim::Unclaimed | session_resolution::SessionClaim::Ambiguous(_) => None,
+    }
 }
 
 fn session_key<'a>(
     snippet: &Snippet,
     sessions: &'a HashMap<String, crate::snippets::session::ValidationSession>,
 ) -> Option<&'a str> {
-    let target = snippet
-        .metadata
-        .target
-        .as_ref()
-        .map(|target| crate::snippets::types::Language::normalize_session_target(target));
-    if let Some(target) = target.as_deref()
-        && sessions.contains_key(target)
-    {
-        return sessions.get_key_value(target).map(|(key, _)| key.as_str());
+    match session_resolution::resolve_session_claim(snippet, sessions, |session| session.language) {
+        session_resolution::SessionClaim::Claimed(key) => Some(key),
+        session_resolution::SessionClaim::Unclaimed | session_resolution::SessionClaim::Ambiguous(_) => None,
     }
-    sessions
-        .get_key_value(&snippet.language.to_string())
-        .map(|(key, _)| key.as_str())
 }
 
 fn validate_one(
@@ -1133,8 +1127,15 @@ mod tests {
         );
     }
 
+    /// `session_for` is a thin wrapper over `session_resolution::resolve_session_claim`
+    /// (exhaustively tested there); this pins the wrapper itself to the two outcomes a real
+    /// dispatch path actually observes. An explicit `target:` wins outright even when its
+    /// language has another same-language session configured. Once that explicit target is gone,
+    /// two sessions for one language (`liter-llm`'s real `[sessions.typescript]` +
+    /// `[sessions.wasm]`, both TypeScript -- see alef defect #127) must resolve to no session at
+    /// all, not to whichever one happens to be spelled like the bare language. ~keep
     #[test]
-    fn target_session_precedes_canonical_language_fallback() {
+    fn target_session_precedes_an_ambiguous_language_fallback() {
         let mut snippet = network_snippet();
         snippet.language = crate::snippets::types::Language::TypeScript;
         snippet.metadata.target = Some("wasm".into());
@@ -1174,7 +1175,7 @@ mod tests {
         snippet.metadata.target = None;
         assert_eq!(
             session_for(&snippet, &sessions).map(|session| session.fingerprint.as_str()),
-            Some("node")
+            None
         );
     }
 
