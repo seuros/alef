@@ -8,7 +8,9 @@
 {% endif %}
 {% if expects_error %}    try:
 {% for line in body %}        {{ line }}
-{% endfor %}    except {{ error_type }} as error:
+{% endfor %}{% if typed_error_type %}    except {{ typed_error_type }} as error:
+        print(f"{{ typed_error_type }}: {error}")
+{% endif %}    except {{ error_type }} as error:
         print(f"{type(error).__name__}: {error}")
 {% else %}{% for line in body %}    {{ line }}
 {% endfor %}
