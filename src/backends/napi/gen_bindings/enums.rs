@@ -133,17 +133,45 @@ pub(super) fn string_enum_js_values(enum_def: &EnumDef) -> Option<Vec<String>> {
     )
 }
 
+/// Applies the same case transform `napi-derive-backend` applies to a `#[napi(string_enum)]`
+/// variant name, so the value alef believes a variant serializes to never drifts from what
+/// napi-rs's own macro actually emits at runtime.
+///
+/// napi-rs computes this with the `convert_case` crate, not `heck`: the two libraries agree on
+/// letter-only identifiers but disagree whenever a variant name has a letter-to-digit boundary
+/// (`Bm25` -> heck's `snake_case` gives `"bm25"`, convert_case's gives `"bm_25"`). Using `heck`
+/// here silently produced a TypeScript `ts_type` literal the Rust side would then reject at
+/// runtime. `convert_case::Casing::to_case` is the exact function napi-derive-backend calls
+/// (`napi-derive-backend/src/util.rs::to_case`), including its leading-underscore trim.
+///
+/// ~keep Verified against the shipped sources, not inferred: `napi-derive`'s `string_enum`
+/// branch resolves each variant to `to_case(v.ident.to_string(), case)`
+/// (`napi-derive-3.6.3/src/parser/mod.rs`), and `convert_case` 0.11 lists `LowerDigit` among
+/// `Boundary::defaults()`, which is what splits `Bm` from `25`. A consumer's checked-in
+/// `index.d.ts` may still show the old `heck` spelling — that file is a generated artifact and
+/// is stale until the binding is rebuilt, so it is not evidence about current runtime behavior.
 fn apply_napi_case(name: &str, case: Option<&str>) -> String {
-    use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
+    use convert_case::Casing;
+    let Some(case) = case.and_then(napi_convert_case) else {
+        return name.to_string();
+    };
+    match name.strip_prefix('_') {
+        Some(trimmed) => trimmed.to_case(case),
+        None => name.to_case(case),
+    }
+}
+
+fn napi_convert_case(case: &str) -> Option<convert_case::Case<'static>> {
+    use convert_case::Case;
     match case {
-        Some("snake_case") => name.to_snake_case(),
-        Some("camelCase") => name.to_lower_camel_case(),
-        Some("kebab-case") => name.to_kebab_case(),
-        Some("UPPER_SNAKE") => name.to_shouty_snake_case(),
-        Some("lowercase") => name.to_lowercase(),
-        Some("UPPERCASE") => name.to_uppercase(),
-        Some("PascalCase") => name.to_pascal_case(),
-        _ => name.to_string(),
+        "snake_case" => Some(Case::Snake),
+        "camelCase" => Some(Case::Camel),
+        "kebab-case" => Some(Case::Kebab),
+        "UPPER_SNAKE" => Some(Case::UpperSnake),
+        "lowercase" => Some(Case::Flat),
+        "UPPERCASE" => Some(Case::UpperFlat),
+        "PascalCase" => Some(Case::Pascal),
+        _ => None,
     }
 }
 
@@ -522,7 +550,7 @@ pub(super) fn tagged_enum_binding_struct_fields<'a>(
 #[cfg(test)]
 #[allow(clippy::print_stderr)] // test-only debug output ~keep
 mod tests {
-    use super::gen_enum;
+    use super::{apply_napi_case, gen_enum, string_enum_js_values};
     use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeRef};
 
     fn make_simple_enum(name: &str, variants: &[&str]) -> EnumDef {
@@ -967,6 +995,71 @@ mod tests {
         assert!(
             !custom_fn.contains("..Default::default()"),
             "Custom sets both type_tag and output, i.e. every field on JsVisitResult; a spread here is a needless_update clippy denial:\n{custom_fn}"
+        );
+    }
+
+    /// `apply_napi_case` must derive its output from `convert_case` — the exact crate and
+    /// algorithm `napi-derive-backend` uses to compute a `#[napi(string_enum)]` variant's
+    /// runtime wire string — rather than reimplementing the transform with a different case
+    /// library. Comparing against `convert_case::Casing::to_case` directly (the canonical
+    /// oracle, not a hard-coded literal) is what would have caught alef using `heck` instead:
+    /// `heck` and `convert_case` agree on letter-only identifiers but diverge on any name with
+    /// a letter-to-digit boundary, e.g. `Bm25`.
+    #[test]
+    fn apply_napi_case_matches_convert_case_for_every_supported_case() {
+        use convert_case::{Case, Casing};
+
+        let cases: &[(&str, Case)] = &[
+            ("snake_case", Case::Snake),
+            ("camelCase", Case::Camel),
+            ("kebab-case", Case::Kebab),
+            ("UPPER_SNAKE", Case::UpperSnake),
+            ("lowercase", Case::Flat),
+            ("UPPERCASE", Case::UpperFlat),
+            ("PascalCase", Case::Pascal),
+        ];
+        let names = ["Bm25", "Utf8", "Sha256", "Md5", "Bfs", "BestFirst", "HttpV2Client"];
+
+        for (napi_case, canonical_case) in cases {
+            for name in names {
+                let actual = apply_napi_case(name, Some(napi_case));
+                let expected = name.to_case(*canonical_case);
+                assert_eq!(
+                    actual, expected,
+                    "apply_napi_case({name:?}, {napi_case:?}) = {actual:?}, but convert_case \
+                     (napi-rs's own algorithm) gives {expected:?}"
+                );
+            }
+        }
+    }
+
+    /// Regression test: a single-variant `#[napi(string_enum = "snake_case")]` enum whose lone
+    /// variant name has a letter-to-digit boundary (mirrors crawlberg's
+    /// `JsContentFilterKind::Bm25`) must report the wire value napi-rs's own macro actually
+    /// emits at runtime (`"bm_25"`), not the value `heck::ToSnakeCase` would compute
+    /// (`"bm25"`). Before this fix, `string_enum_js_values` fed `"bm25"` into the generated
+    /// `ts_type` union literal, so TypeScript accepted a string the Rust `FromNapiValue`
+    /// conversion rejected at runtime.
+    #[test]
+    fn string_enum_js_values_matches_napi_runtime_wire_value_for_digit_boundary_variant() {
+        let enum_def = EnumDef {
+            name: "ContentFilterKind".to_string(),
+            rust_path: "test::ContentFilterKind".to_string(),
+            variants: vec![EnumVariant {
+                name: "Bm25".to_string(),
+                ..Default::default()
+            }],
+            serde_rename_all: Some("snake_case".to_string()),
+            ..Default::default()
+        };
+
+        let values = string_enum_js_values(&enum_def).expect("plain string enum must yield wire values");
+
+        assert_eq!(
+            values,
+            vec!["bm_25".to_string()],
+            "napi-rs's convert_case-based macro emits \"bm_25\" for variant Bm25 under snake_case; \
+             alef must report the same value or the generated ts_type literal accepts a string Rust rejects"
         );
     }
 }
