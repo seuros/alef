@@ -288,6 +288,18 @@ fn covered_languages() -> Vec<Language> {
 
 #[test]
 fn every_covered_backend_is_invariant_to_ir_collection_order() {
+    // Several backends resolve `version_from` (default "Cargo.toml") with a relative-path
+    // `std::fs::read_to_string` -- resolved against the process's current directory, which is
+    // shared mutable state across every test thread in this binary. Without this lock, a sibling
+    // test that legitimately chdirs mid-run (via `test_support::CwdGuard`) can make the forward
+    // and reversed calls below observe two different `Cargo.toml`s -- or the repo's real one vs.
+    // none at all -- producing a spurious content diff that has nothing to do with IR order. Hold
+    // the one lock every cwd-mutating test already shares so no other test can move the process
+    // cwd out from under these two calls. See `test_support` module docs. ~keep
+    let _cwd_lock = crate::test_support::CWD_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
     let config = every_language_config();
     let forward = determinism_api();
     let backwards = reversed(&forward);
@@ -313,6 +325,12 @@ fn every_covered_backend_is_invariant_to_ir_collection_order() {
 /// fixed it must be moved out of `NOT_YET_ORDER_INVARIANT` and into the asserted set.
 #[test]
 fn excluded_backends_are_still_actually_failing() {
+    // Same cwd-race guard as `every_covered_backend_is_invariant_to_ir_collection_order` above --
+    // see that test's comment. ~keep
+    let _cwd_lock = crate::test_support::CWD_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
     let config = every_language_config();
     let forward = determinism_api();
     let backwards = reversed(&forward);
