@@ -1410,8 +1410,16 @@ pub(super) fn render_assertion(
                         c_val
                     };
                     // For optional numeric fields, treat 0 as "not set" and allow it.
-                    // This mirrors Go's nil-pointer check for optional fields.
-                    let is_numeric = field_primitive_type.as_deref().map(|t| t != "bool").unwrap_or(false);
+                    // This mirrors Go's nil-pointer check for optional fields. Excludes a
+                    // boolean equals-assertion even when `field_primitive_type` spells the
+                    // field's real C type as `int32_t` rather than the literal string `bool`
+                    // (bool crosses the FFI ABI as `int32_t`, and `primitive_field_inference`'s
+                    // IR-derived entries record that exact spelling): `false` (`0`) is a real,
+                    // legitimate value for a boolean field, not an "unset" sentinel, so a
+                    // `equals: false` assertion against an optional bool field must never pass
+                    // merely because 0 also means "not set" for an unrelated numeric optional. ~keep
+                    let is_numeric =
+                        field_primitive_type.as_deref().map(|t| t != "bool").unwrap_or(false) && !expected.is_boolean();
                     if assertion_field_is_optional && is_numeric {
                         let _ = writeln!(
                             out,

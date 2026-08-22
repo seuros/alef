@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `bool` (or any other scalar-primitive) e2e result field with no explicit `fields_c_types`
+  entry lowered its `equals` assertion into `strcmp` against a value the FFI actually returns as
+  `int32_t`, segfaulting the generated C test.** `fields_c_types` is an operator-declared map in
+  `alef.toml`; a field the operator never listed there fell through
+  `emit_nested_accessor`'s/`render_test_function`'s leaf lookup to the `char*` default, so the
+  local was declared `char* field = accessor(...)` for a value that is really a scalar, and
+  `render_assertion`'s `equals` arm compared it with `strcmp(field, 1)` — passing an `int`
+  literal where `strcmp` requires a `const char*`. Reproduced by crawlberg's generated
+  `test_browser.c`: `browser_used: bool` (`int32_t cberg_crawl_result_browser_used(...)` in the
+  header) asserted `== true` crashed with `make: *** [Makefile:97] Error 139`.
+
+  Added `src/e2e/codegen/c/primitive_field_inference.rs`
+  (`primitive_fields_c_types_from_ir`), mirroring the enum-field IR inference
+  (`enum_field_inference.rs`) already unioned into `effective_fields_c_types`: every field whose
+  declared Rust type (after peeling `Option`) is a scalar primitive gets an inferred
+  `fields_c_types` entry — the real ABI/header spelling (`bool` -> `int32_t`, `u32` ->
+  `uint32_t`, ...) via the same Rust-type -> C-header mapping the trait-bridge test-backend
+  stubs already use (`trait_bridge_snippet::c_type`, now `pub(super)`). An explicit operator
+  `fields_c_types` entry still wins.
+
+  Fixing this also surfaced a second, narrower defect in the same `equals` arm: once a `bool`
+  field's inferred type spells `int32_t` rather than the literal string `"bool"`, an *optional*
+  bool field's `equals` assertion degraded into the "0 means unset" numeric-optional widening
+  (`assert(field == 0 || field == 1)`) — vacuously true for either boolean value. `is_numeric`
+  now also excludes any assertion whose fixture value is a JSON boolean, regardless of which
+  type-string spelling produced `field_is_primitive`.
+
+  Audited every other e2e backend for the same class of bug (config-only field-type
+  classification causing a numeric/boolean field to route through a string-comparison path): C
+  is uniquely affected because it alone is stringly-typed at the FFI ABI boundary (everything
+  crosses as `char*` unless overridden); every other backend (Go, Java, Kotlin, C#, Swift, PHP,
+  Ruby, Python, Dart, Rust, TypeScript, Zig, Elixir, Gleam) derives the "primitive vs string"
+  decision from the fixture's own JSON value type against a statically/IR-typed accessor, not
+  from a hand-maintained per-field type override map.
+
+  Regression coverage: `src/e2e/codegen/c/primitive_field_inference.rs`'s `tests` module —
+  asserts on the C TEXT `render_test_file` actually emits (not a hand-written mirror of the
+  intended semantics), including the optional-bool-widening regression.
 - **The PHP php_ext e2e smoke-app generator probed a global `<extension>_<function>()` symbol
   for crate-level free functions, but the PHP ext backend never emits one.** The php-ext
   backend (`src/backends/php/gen_bindings/rust_bindings.rs`) always places free functions as
@@ -326,6 +364,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and could not have caught a bug anywhere else in `write_files_report` or `finalize_hashes`.
   Confirmed this new test fails (8 files rewritten) against the pre-0.62.2 hash formula and
   passes against the current one.
+
 ### Changed
 
 - **Centralized the `not_error`-must-not-assert-presence-beside-a-sibling-assertion decision
