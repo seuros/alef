@@ -48,10 +48,14 @@ pub(super) fn sync_go_native_setup_sentinel(content: &str, new_ident: &str, new_
 /// Returns `Some(new_content)` when the const's value changed, `None` when it already
 /// matches `new_ident` (idempotent).
 pub(super) fn sync_go_cmd_setup_version_ident(content: &str, new_ident: &str) -> Option<String> {
+    // The alignment padding around `=` is captured and replayed verbatim: `versionIdent` sits in
+    // a gofmt-aligned `const (...)` block in `cmd_setup_main.go.jinja`, and collapsing it to a
+    // single space here left the regenerated file failing `gofmt -l`. The template owns the
+    // column; this rewriter only owns the quoted value. ~keep
     static VERSION_IDENT_RE: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r#"versionIdent\s*=\s*"[^"]*""#).expect("valid regex"));
+        LazyLock::new(|| regex::Regex::new(r#"(versionIdent[ \t]*=[ \t]*)"[^"]*""#).expect("valid regex"));
 
-    let replacement = format!(r#"versionIdent = "{new_ident}""#);
+    let replacement = format!(r#"${{1}}"{new_ident}""#);
     let new_content = VERSION_IDENT_RE.replace(content, replacement.as_str()).into_owned();
     (new_content != content).then_some(new_content)
 }

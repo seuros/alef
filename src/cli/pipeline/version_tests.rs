@@ -16,6 +16,8 @@ mod e2e_manifests;
 mod e2e_rust_manifest;
 #[path = "version_tests/git_ignored_discovery.rs"]
 mod git_ignored_discovery;
+#[path = "version_tests/go_const_alignment.rs"]
+mod go_const_alignment;
 #[path = "version_tests/lockfile_relock.rs"]
 mod lockfile_relock;
 #[path = "version_tests/manifests.rs"]
