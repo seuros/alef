@@ -1,5 +1,5 @@
 use crate::core::backend::GeneratedFile;
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::ResolvedCrateConfig;
 use anyhow::Context as _;
 
 use super::{extract, format_generated, readme};
@@ -19,20 +19,18 @@ use super::{extract, format_generated, readme};
 /// gate failed. Running the same formatter here makes the two paths produce
 /// byte-identical output.
 ///
-/// `format_generated` keys off the language tag on each `(Language, files)`
-/// group to decide which formatter to run, but the formatters themselves operate
-/// per-directory / per-extension, so grouping every written file under each
-/// configured language is sufficient (and matches the generate path, which
-/// formats whole package directories rather than an exact file list). Formatter
-/// failures are best-effort warnings inside `format_generated` and never abort
-/// the sync.
+/// `format_generated`'s `None` argument selects its whole-tree convergence pass, which formats
+/// every generated package under `base_dir` regardless of which files this call actually wrote
+/// -- so nothing here needs to repackage `files` by language the way earlier versions of this
+/// function did. `files`/`config.languages` remain solely to decide whether there is anything to
+/// format at all: an empty write, or a crate with no configured languages, has nothing under
+/// `base_dir` this pass would usefully touch. Formatter failures are best-effort warnings inside
+/// `format_generated` and never abort the sync.
 fn format_regenerated_files(config: &ResolvedCrateConfig, files: &[GeneratedFile], base_dir: &std::path::Path) {
     if files.is_empty() || config.languages.is_empty() {
         return;
     }
-    let grouped: Vec<(Language, Vec<GeneratedFile>)> =
-        config.languages.iter().map(|lang| (*lang, files.to_vec())).collect();
-    format_generated(&grouped, config, base_dir, None);
+    format_generated(config, base_dir, None);
 }
 
 /// Regenerate registry-mode test_apps scaffold files after a version sync so

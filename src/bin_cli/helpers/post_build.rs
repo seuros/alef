@@ -50,6 +50,27 @@ pub(crate) fn languages_have_post_build_steps(
         .any(|&language| language_has_post_build_steps(language, config))
 }
 
+/// The subset of `languages` that have at least one post-build step configured for `config`.
+///
+/// `languages_have_post_build_steps` answers "does formatting need to run again at all"; this
+/// answers "which package directories does it need to cover". A caller that re-scopes a
+/// per-language formatting pass (`Some(&changed_languages)`, not the whole-tree `None`
+/// convergence `alef all` always uses) after post-build has run needs the language list, not
+/// just the bool -- post-build steps that write straight to disk (Swift's
+/// `MaterializeSwiftBridge` for `RustBridgeC.h`, Dart's `flutter_rust_bridge_codegen`) leave no
+/// `WriteReport` entry, so the language they touched is otherwise invisible to a
+/// `changed_languages` set built purely from write reports. ~keep
+pub(crate) fn languages_with_post_build_steps(
+    languages: &[crate::core::config::Language],
+    config: &crate::core::config::ResolvedCrateConfig,
+) -> Vec<crate::core::config::Language> {
+    languages
+        .iter()
+        .copied()
+        .filter(|&language| language_has_post_build_steps(language, config))
+        .collect()
+}
+
 pub(super) fn run_required_post_builds(
     languages: &[crate::core::config::Language],
     config: &crate::core::config::ResolvedCrateConfig,
@@ -176,6 +197,13 @@ mod tests {
 
     #[test]
     fn required_post_build_failure_is_propagated_with_language_context() {
+        // Swift's post-build genuinely `cargo build`s the missing project below and must fail
+        // for real, so this must hold `SKIP_COMMANDS_LOCK` for its whole duration -- otherwise a
+        // concurrent test elsewhere in the suite that sets `ALEF_SKIP_COMMANDS=cargo` (any test
+        // exercising a Swift/Dart post-build without a real toolchain) can skip this cargo
+        // invocation instead of letting it fail, turning this into a false pass or, as measured,
+        // a spurious failure of the OTHER test's own assertions. See `SKIP_COMMANDS_LOCK`'s doc. ~keep
+        let _skip_guard = crate::test_support::SkipCommandsGuard::set("");
         let directory = tempfile::tempdir().expect("temporary project");
         let error = run_required_post_builds(
             &[Language::Swift],
@@ -220,6 +248,12 @@ mod tests {
         use crate::core::backend::PostBuildStep;
         use crate::core::config::ResolvedCrateConfig;
 
+        // Swift's post-build genuinely `cargo build`s the missing project below and must fail
+        // for real -- see `required_post_build_failure_is_propagated_with_language_context`'s
+        // identical guard for why this must hold `SKIP_COMMANDS_LOCK`, not just avoid setting
+        // the var itself: a concurrent test elsewhere in the suite setting
+        // `ALEF_SKIP_COMMANDS=cargo` would skip this same invocation regardless. ~keep
+        let _skip_guard = crate::test_support::SkipCommandsGuard::set("");
         let directory = tempfile::tempdir().expect("temporary project");
         let config = ResolvedCrateConfig::default();
 

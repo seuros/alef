@@ -526,7 +526,7 @@ fn all_docs_stage_failure_does_not_return_before_formatting_and_hash_stamping() 
     );
 
     let format_generated = source
-        .find("pipeline::format_generated_reporting(&files_to_format, resolved_cfg, &base_dir, None, strict)?")
+        .find("pipeline::format_generated_reporting(resolved_cfg, &base_dir, None, strict)?")
         .expect("the converging whole-tree formatting pass must still run after the docs stage");
     let finalize_hashes_sweeping = source
         .find("pipeline::finalize_hashes_sweeping(")

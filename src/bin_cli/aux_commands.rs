@@ -51,15 +51,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
 
             tracing::info!("  Formatting...");
-            let managed_bindings: Vec<_> = bindings
-                .iter()
-                .map(|(language, files)| (*language, pipeline::managed_generated_files(files)))
-                .collect();
             // `alef init` bootstraps a fresh clone, which is precisely the machine least likely
             // to have every formatter installed, so it exposes no `--strict` flag and always
             // takes the lenient default. It still goes through the reporting entry point so the
             // skipped steps are named rather than swallowed. ~keep
-            pipeline::format_generated_reporting(&managed_bindings, resolved_cfg, &base_dir, None, false)?;
+            pipeline::format_generated_reporting(resolved_cfg, &base_dir, None, false)?;
 
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
             pipeline::finalize_hashes_after_tree_format(&all_paths, &base_dir, &sources_hash, &alef_toml_bytes)?;

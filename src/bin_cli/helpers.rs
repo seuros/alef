@@ -5,8 +5,8 @@ pub(crate) use frozen::FrozenFile;
 use frozen::frozen_managed_paths;
 
 mod post_build;
-pub(crate) use post_build::languages_have_post_build_steps;
 use post_build::run_required_post_builds;
+pub(crate) use post_build::{languages_have_post_build_steps, languages_with_post_build_steps};
 
 /// Complete every generated artifact that depends on a backend build and then
 /// enforce FFI source/header parity. Keeping these operations together prevents
