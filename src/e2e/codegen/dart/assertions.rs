@@ -132,13 +132,31 @@ pub(super) fn render_assertion_dart(
             field_resolver.accessor(array_part, "dart", result_var)
         };
         let elem_accessor = field_to_dart_accessor(elem_part);
+        // A data-carrying Rust enum (e.g. `StructureKind::Other(String)`) has no `wireValue`
+        // extension in Dart — alef only emits `wireValue` for unit-only enums — so this
+        // traversal has no wire-value accessor to fall back on the way the non-array `equals`
+        // branch above does. flutter_rust_bridge/freezed's generated `toString()` for the
+        // element's enum field yields the LOWER-CAMEL-CASE constructor call
+        // (`'StructureKind.function()'`), which a fixture's PascalCase variant name
+        // (`'Function'`) never case-sensitively matches. `.runtimeType.toString()` instead
+        // yields alef's own generated concrete subclass name — `{EnumName}_{VariantName}` in
+        // the variant's original (PascalCase) casing, e.g. `'StructureKind_Function'` — which
+        // does. Restricted to enum-typed element fields only: a scalar field (e.g. a `String`
+        // element) must keep comparing its actual `.toString()` content, not its Dart runtime
+        // type name. ~keep
+        let elem_is_enum = field_resolver.is_enum(f) || field_resolver.is_enum(&resolved_full);
+        let elem_to_string = if elem_is_enum {
+            format!("e.{elem_accessor}.runtimeType.toString()")
+        } else {
+            format!("e.{elem_accessor}.toString()")
+        };
         match assertion.assertion_type.as_str() {
             "contains" => {
                 if let Some(expected) = &assertion.value {
                     let dart_val = dart_format_value(expected);
                     let _ = writeln!(
                         out,
-                        "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isTrue);"
+                        "    expect({array_accessor}.any((e) => {elem_to_string}.contains({dart_val})), isTrue);"
                     );
                 }
             }
@@ -148,7 +166,7 @@ pub(super) fn render_assertion_dart(
                         let dart_val = dart_format_value(val);
                         let _ = writeln!(
                             out,
-                            "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isTrue);"
+                            "    expect({array_accessor}.any((e) => {elem_to_string}.contains({dart_val})), isTrue);"
                         );
                     }
                 }
@@ -158,14 +176,14 @@ pub(super) fn render_assertion_dart(
                     let dart_val = dart_format_value(expected);
                     let _ = writeln!(
                         out,
-                        "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isFalse);"
+                        "    expect({array_accessor}.any((e) => {elem_to_string}.contains({dart_val})), isFalse);"
                     );
                 } else if let Some(values) = &assertion.values {
                     for val in values {
                         let dart_val = dart_format_value(val);
                         let _ = writeln!(
                             out,
-                            "    expect({array_accessor}.any((e) => e.{elem_accessor}.toString().contains({dart_val})), isFalse);"
+                            "    expect({array_accessor}.any((e) => {elem_to_string}.contains({dart_val})), isFalse);"
                         );
                     }
                 }
@@ -441,9 +459,18 @@ pub(super) fn render_assertion_dart(
             // strings, maps). For struct-shaped fields (e.g. `document: DocumentStructure`)
             // we instead assert the value is non-null — those types have no notion of
             // "empty" and the fixture intent is "the field is present".
+            // `is_array` alone misses a collection field whose entries are only tracked via
+            // their element paths in `fields_array` (e.g. `children[0]` for a recursive
+            // `Option<Vec<DataNode>> Children`, never a bare `children` entry) —
+            // `is_collection_root` catches that shape from the IR instead of config alone.
+            // Checked against both the raw and resolved path, matching csharp/kotlin/swift's
+            // identical `field_is_collection` guard. ~keep
             let is_collection = assertion.field.as_deref().is_some_and(|f| {
                 let resolved = field_resolver.resolve(f);
-                field_resolver.is_array(f) || field_resolver.is_array(resolved)
+                field_resolver.is_array(f)
+                    || field_resolver.is_array(resolved)
+                    || field_resolver.is_collection_root(f)
+                    || field_resolver.is_collection_root(resolved)
             });
             if is_collection {
                 let _ = writeln!(out, "    expect({field_accessor}, isNotEmpty);");
@@ -463,9 +490,18 @@ pub(super) fn render_assertion_dart(
             // this arm calls it directly. Stringify first, the same way `not_empty`'s
             // non-collection branch does, and fall back to `''` for `null` so the "null counts
             // as empty" intent above still holds.
+            // `is_array` alone misses a collection field whose entries are only tracked via
+            // their element paths in `fields_array` (e.g. `children[0]` for a recursive
+            // `Option<Vec<DataNode>> Children`, never a bare `children` entry) —
+            // `is_collection_root` catches that shape from the IR instead of config alone.
+            // Checked against both the raw and resolved path, matching csharp/kotlin/swift's
+            // identical `field_is_collection` guard. ~keep
             let is_collection = assertion.field.as_deref().is_some_and(|f| {
                 let resolved = field_resolver.resolve(f);
-                field_resolver.is_array(f) || field_resolver.is_array(resolved)
+                field_resolver.is_array(f)
+                    || field_resolver.is_array(resolved)
+                    || field_resolver.is_collection_root(f)
+                    || field_resolver.is_collection_root(resolved)
             });
             if is_collection {
                 let _ = writeln!(out, "    expect({field_accessor}, anyOf(isNull, isEmpty));");
@@ -881,6 +917,46 @@ mod wildcard_tests {
     fn single_wildcard_still_quantifies_over_every_element() {
         let out = render_contains(&array_resolver("links"), "links[].url", "example.test");
         assert!(out.contains("result.links.any((e) => e.url"), "got: {out}");
+    }
+
+    fn array_resolver_with_enum_field(field: &str) -> FieldResolver {
+        array_resolver(field.split("[].").next().unwrap_or(field)).with_enum_fields([field.to_string()].into())
+    }
+
+    /// Regression: `structure[].kind` is a data-carrying Rust enum. flutter_rust_bridge/freezed
+    /// stringifies it as `'StructureKind.function()'` (lowerCamelCase constructor call), which a
+    /// fixture's PascalCase variant name (`'Function'`) never case-sensitively matches — and
+    /// there is no `wireValue` extension for a data-carrying enum to fall back on (alef only
+    /// emits `wireValue` for unit-only enums). `.runtimeType.toString()` instead yields alef's
+    /// generated concrete subclass name in the variant's original casing
+    /// (`'StructureKind_Function'`), which does contain the fixture's PascalCase value. ~keep
+    #[test]
+    fn contains_on_an_enum_typed_array_element_field_compares_the_runtime_type_name() {
+        let out = render_contains(
+            &array_resolver_with_enum_field("structure[].kind"),
+            "structure[].kind",
+            "Function",
+        );
+        assert!(
+            out.contains("e.kind.runtimeType.toString().contains"),
+            "an enum-typed element field must compare against the runtime type name, not \
+             toString(), got:\n{out}"
+        );
+        assert!(!out.contains("e.kind.toString().contains"), "got: {out}");
+    }
+
+    /// Negative control: a plain (non-enum) element field, e.g. a `String`, must keep comparing
+    /// its actual stringified content — `.runtimeType.toString()` on a `String` yields the type
+    /// name `'String'`, not the value, so switching this field too would break every
+    /// currently-passing `imports[].source`-style assertion.
+    #[test]
+    fn contains_on_a_non_enum_array_element_field_still_compares_the_stringified_value() {
+        let out = render_contains(&array_resolver("imports"), "imports[].source", "example.test");
+        assert!(
+            out.contains("e.source.toString().contains"),
+            "a non-enum element field must keep comparing its stringified content, got:\n{out}"
+        );
+        assert!(!out.contains("runtimeType"), "got: {out}");
     }
 
     /// The evidence that Dart's inner collapse was never even index-0-shaped: the element

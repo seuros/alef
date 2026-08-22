@@ -90,7 +90,30 @@ pub(super) fn render_snippet_body(
         }
         None => body,
     };
-    let error_type = config.error_type_name();
+    // `config.error_type_name()` names the *Rust-side* error type (`ResolvedCrateConfig::
+    // error_type`, used elsewhere for `error_constructor_expr`'s `Crate::Error::from(msg)`
+    // pattern) — a config surface nobody sets to name a Python class, and unrelated to what
+    // pyo3 actually exports. The pyo3 backend's own base-exception class name
+    // (`gen_pyo3_error_types` in `src/codegen/error_gen/pyo3.rs`) comes straight from the IR's
+    // `ErrorDef::name` — the real Rust error enum's name verbatim, with no config indirection
+    // and no crate-name prefixing. Asking the same `errors` slice this function already
+    // receives (for `typed_branch` just below) is what keeps this import in sync with the
+    // class pyo3 actually generates; falling back to the config-derived bare "Error" only when
+    // the IR has no error type at all preserves the pre-existing no-error-type behavior. ~keep
+    // `config.error_type_name()` names the *Rust-side* error type (`ResolvedCrateConfig::
+    // error_type`, used elsewhere for `error_constructor_expr`'s `Crate::Error::from(msg)`
+    // pattern) — a config surface nobody sets to name a Python class, and unrelated to what
+    // pyo3 actually exports. The pyo3 backend's own base-exception class name
+    // (`gen_pyo3_error_types` in `src/codegen/error_gen/pyo3.rs`) comes straight from the IR's
+    // `ErrorDef::name` — the real Rust error enum's name verbatim, with no config indirection
+    // and no crate-name prefixing. Asking the same `errors` slice this function already
+    // receives (for `typed_branch` just below) is what keeps this import in sync with the
+    // class pyo3 actually generates; falling back to the config-derived bare "Error" only when
+    // the IR has no error type at all preserves the pre-existing no-error-type behavior. ~keep
+    let error_type = errors
+        .first()
+        .map(|error| error.name.clone())
+        .unwrap_or_else(|| config.error_type_name());
     let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
     if body.iter().any(|line| line.contains("os.environ")) && !imports.iter().any(|line| line == "import os") {
         imports.push("import os".to_string());
@@ -232,12 +255,16 @@ args = [{ name = "prompt", field = "prompt", type = "string" }]
         let typed = rendered
             .find("except AuthenticationError as error:")
             .unwrap_or_else(|| panic!("no typed catch branch in:\n{rendered}"));
+        // The base class comes from `errors_with`'s real `ErrorDef` IR (named "ApiError"), not
+        // the config-derived bare "Error" fallback — the same seam the pyo3 backend's
+        // `gen_pyo3_error_types` uses to name the class it actually exports (see the
+        // cross-generator test below pinning the two together). ~keep
         let generic = rendered
-            .find("except Error as error:")
+            .find("except ApiError as error:")
             .unwrap_or_else(|| panic!("no catch-all branch in:\n{rendered}"));
         assert!(typed < generic, "typed branch must precede the catch-all:\n{rendered}");
         assert!(
-            rendered.contains("from example_api import AuthenticationError, Error"),
+            rendered.contains("from example_api import ApiError, AuthenticationError"),
             "both exception classes must be imported:\n{rendered}"
         );
     }
@@ -272,6 +299,49 @@ args = [{ name = "prompt", field = "prompt", type = "string" }]
             )
             .expect("snippet renders");
         assert_eq!(rendered.matches("except ").count(), 1, "{rendered}");
-        assert!(rendered.contains("except Error as error:"), "{rendered}");
+        assert!(rendered.contains("except ApiError as error:"), "{rendered}");
+    }
+
+    /// Cross-generator guard: the pyo3 backend's own base-exception generator
+    /// (`gen_pyo3_error_types`) and this e2e snippet generator must name the SAME class for the
+    /// SAME `ErrorDef`, driven through both real production entry points on one shared fixture
+    /// — never a hand-copied re-derivation of one side. This is the exact defect shape a
+    /// consumer repo hit: `error_type_name()` (a config surface nobody sets to name a Python
+    /// class) defaulted to a fabricated bare `"Error"`, while pyo3 actually exports the base
+    /// class under the real Rust enum's name (`LiterLlmError`-shaped), so every generated
+    /// snippet's `from pkg import Error` failed pyright/ruff's `missing-module-attribute`
+    /// check — the class it imports has never existed. ~keep
+    #[test]
+    fn snippet_base_exception_name_agrees_with_the_pyo3_stub_generator() {
+        let errors = errors_with("Authentication");
+
+        let mut seen_exceptions = ahash::AHashSet::default();
+        let backend_output =
+            crate::codegen::error_gen::gen_pyo3_error_types(&errors[0], "example_api", &mut seen_exceptions);
+        assert!(
+            backend_output.contains("pyo3::create_exception!(example_api, ApiError, pyo3::exceptions::PyException);"),
+            "the backend must export the base exception under the real ErrorDef name:\n{backend_output}"
+        );
+
+        let (e2e, resolved) = config();
+        let rendered = PythonE2eCodegen
+            .render_snippet_body_with_functions(
+                &error_fixture("Authentication"),
+                &e2e,
+                &resolved,
+                &[],
+                &[],
+                &[],
+                &errors,
+            )
+            .expect("snippet renders");
+        assert!(
+            rendered.contains("except ApiError as error:"),
+            "the snippet must catch the exact class the backend exports, got:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("except Error as error:"),
+            "the snippet must not import a class the backend never generates:\n{rendered}"
+        );
     }
 }
