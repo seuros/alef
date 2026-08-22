@@ -1,0 +1,9 @@
+{% if negate -%}
+{{ field_expr }} != NULL && strlen({{ field_expr }}) > 0 && strcmp({{ field_expr }}, "[]") != 0 && strcmp({{ field_expr }}, "{}") != 0
+{%- else -%}
+{%- if allow_null -%}
+({{ field_expr }} == NULL || strlen({{ field_expr }}) == 0 || strcmp({{ field_expr }}, "[]") == 0 || strcmp({{ field_expr }}, "{}") == 0)
+{%- else -%}
+(strlen({{ field_expr }}) == 0 || strcmp({{ field_expr }}, "[]") == 0 || strcmp({{ field_expr }}, "{}") == 0)
+{%- endif -%}
+{%- endif -%}

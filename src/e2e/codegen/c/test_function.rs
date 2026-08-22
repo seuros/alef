@@ -13,11 +13,11 @@ use super::assertions::TargetParams;
 use super::docs_input::render_c_docs_json;
 use super::ffi_constructors::is_std_type_without_ffi_constructor;
 use super::{
-    FieldConfigSources, LeafFieldCheck, build_args_string_c, c_optional_sentinel, emit_nested_accessor,
-    ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, json_to_c,
-    render_assertion, render_bytes_test_function, render_c_diagnostic_skip, render_engine_factory_test_function,
-    render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter, try_emit_enum_accessor,
-    validate_c_snippet_metadata,
+    FieldConfigSources, LeafFieldCheck, build_args_string_c, c_optional_sentinel, classify_nested_leaf,
+    emit_nested_accessor, ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field,
+    json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
+    render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
+    resolve_c_streaming_adapter, try_emit_enum_accessor, validate_c_snippet_metadata,
 };
 
 /// Emit the C error-path epilogue every `expects_error` return site shares: the declared `error`
@@ -942,6 +942,9 @@ pub(super) fn render_test_function_impl(
         // Locals declared as opaque struct handles (e.g. SAMPLELLMUsage*).
         // Keyed by local_var, value is the snake_case type name used for free().
         let mut opaque_handle_locals: HashMap<String, String> = HashMap::new();
+        // `field[].key` wildcard leaves: local_var -> (array json var, key to extract per
+        // element). See `collection_wildcard.rs`.
+        let mut wildcard_locals: HashMap<String, (String, String)> = HashMap::new();
 
         for assertion in &fixture.assertions {
             if let Some(f) = &assertion.field
@@ -965,7 +968,7 @@ pub(super) fn render_test_function_impl(
                 let local_var = f.replace(['.', '['], "_").replace(']', "");
                 let has_map_access = resolved.contains('[');
                 if resolved.contains('.') {
-                    let leaf_primitive = emit_nested_accessor(
+                    let leaf_result = emit_nested_accessor(
                         out,
                         prefix,
                         resolved,
@@ -979,8 +982,14 @@ pub(super) fn render_test_function_impl(
                         type_defs,
                         config_sources,
                     )?;
-                    if let Some(prim) = leaf_primitive {
-                        primitive_locals.insert(local_var.clone(), prim);
+                    if let Some(outcome) = leaf_result {
+                        classify_nested_leaf(
+                            outcome,
+                            &local_var,
+                            &mut primitive_locals,
+                            &mut opaque_handle_locals,
+                            &mut wildcard_locals,
+                        );
                     }
                 } else {
                     let result_type_snake = result_type_name.to_snake_case();
@@ -1053,11 +1062,17 @@ pub(super) fn render_test_function_impl(
                 &accessed_fields,
                 &primitive_locals,
                 &opaque_handle_locals,
+                &wildcard_locals,
             );
         }
 
         for (_f, local_var, from_json) in &accessed_fields {
             if primitive_locals.contains_key(local_var) {
+                continue;
+            }
+            // No scalar local was declared for a wildcard leaf — the array json var it
+            // reads is freed separately, below, via `intermediate_handles`.
+            if wildcard_locals.contains_key(local_var) {
                 continue;
             }
             if let Some(snake_type) = opaque_handle_locals.get(local_var) {
@@ -1432,6 +1447,9 @@ pub(super) fn render_test_function_impl(
     let mut primitive_locals: HashMap<String, String> = HashMap::new();
     // Locals declared as opaque struct handles (e.g. SAMPLELLMUsage*).
     let mut opaque_handle_locals: HashMap<String, String> = HashMap::new();
+    // `field[].key` wildcard leaves: local_var -> (array json var, key to extract per
+    // element). See `collection_wildcard.rs`.
+    let mut wildcard_locals: HashMap<String, (String, String)> = HashMap::new();
 
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field
@@ -1470,14 +1488,14 @@ pub(super) fn render_test_function_impl(
                     type_defs,
                     config_sources,
                 )?;
-                if let Some(returned_type) = leaf_result {
-                    // Could be a primitive type (primitive_locals) or opaque handle type
-                    if is_primitive_c_type(&returned_type) {
-                        primitive_locals.insert(local_var.clone(), returned_type);
-                    } else {
-                        // Opaque handle returned — register for cleanup
-                        opaque_handle_locals.insert(local_var.clone(), returned_type);
-                    }
+                if let Some(outcome) = leaf_result {
+                    classify_nested_leaf(
+                        outcome,
+                        &local_var,
+                        &mut primitive_locals,
+                        &mut opaque_handle_locals,
+                        &mut wildcard_locals,
+                    );
                 }
             } else {
                 let result_type_snake = result_type_name.to_snake_case();
@@ -1546,12 +1564,18 @@ pub(super) fn render_test_function_impl(
             &accessed_fields,
             &primitive_locals,
             &opaque_handle_locals,
+            &wildcard_locals,
         );
     }
 
     // Free extracted leaf strings.
     for (_f, local_var, from_json) in &accessed_fields {
         if primitive_locals.contains_key(local_var) {
+            continue;
+        }
+        // No scalar local was declared for a wildcard leaf — the array json var it reads
+        // is freed separately, below, via `intermediate_handles`.
+        if wildcard_locals.contains_key(local_var) {
             continue;
         }
         if let Some(snake_type) = opaque_handle_locals.get(local_var) {

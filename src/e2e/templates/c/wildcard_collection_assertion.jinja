@@ -1,0 +1,22 @@
+    {
+        int found = 0;
+        int _wc_count = alef_json_array_count({{ array_var }});
+        for (int _wc_i = 0; _wc_i < _wc_count; _wc_i++) {
+            char* _wc_elem = alef_json_array_get_index({{ array_var }}, _wc_i);
+            char* _wc_val = alef_json_get_string(_wc_elem, "{{ key_snake }}");
+{% for needle in needles %}
+{% if compare_mode == "equals" %}
+            if (_wc_val != NULL && strcmp(_wc_val, {{ needle }}) == 0) { found = 1; }
+{% else %}
+            if (_wc_val != NULL && strstr(_wc_val, {{ needle }}) != NULL) { found = 1; }
+{% endif %}
+{% endfor %}
+            free(_wc_val);
+            free(_wc_elem);
+        }
+{% if negate %}
+        assert(!found && "{{ message }}");
+{% else %}
+        assert(found && "{{ message }}");
+{% endif %}
+    }

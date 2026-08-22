@@ -9,8 +9,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
 use super::{
-    FieldConfigSources, LeafFieldCheck, c_optional_sentinel, emit_nested_accessor, ensure_leaf_field_exists,
-    infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, render_assertion, try_emit_enum_accessor,
+    FieldConfigSources, LeafFieldCheck, c_optional_sentinel, classify_nested_leaf, emit_nested_accessor,
+    ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, render_assertion,
+    try_emit_enum_accessor,
 };
 
 /// Emit a test function using the engine-factory pattern:
@@ -218,6 +219,10 @@ pub(super) fn render_engine_factory_test_function(
     let mut accessed_fields: Vec<(String, String, bool)> = Vec::new();
     let mut primitive_locals: HashMap<String, String> = HashMap::new();
     let mut opaque_handle_locals: HashMap<String, String> = HashMap::new();
+    // `field[].key` wildcard leaves: local_var -> (array json var, key to extract per element).
+    // No scalar C local exists for these; `render_assertion` renders a per-element quantifier
+    // from this instead. See `collection_wildcard.rs`.
+    let mut wildcard_locals: HashMap<String, (String, String)> = HashMap::new();
 
     for assertion in &fixture.assertions {
         if let Some(f) = &assertion.field
@@ -256,14 +261,14 @@ pub(super) fn render_engine_factory_test_function(
                     type_defs,
                     config_sources,
                 )?;
-                if let Some(returned_type) = leaf_result {
-                    // Could be a primitive type (primitive_locals) or opaque handle type
-                    if is_primitive_c_type(&returned_type) {
-                        primitive_locals.insert(local_var.clone(), returned_type);
-                    } else {
-                        // Opaque handle returned — register for cleanup
-                        opaque_handle_locals.insert(local_var.clone(), returned_type);
-                    }
+                if let Some(outcome) = leaf_result {
+                    classify_nested_leaf(
+                        outcome,
+                        &local_var,
+                        &mut primitive_locals,
+                        &mut opaque_handle_locals,
+                        &mut wildcard_locals,
+                    );
                 }
             } else {
                 let result_type_snake = result_type_name.to_snake_case();
@@ -333,12 +338,18 @@ pub(super) fn render_engine_factory_test_function(
             &accessed_fields,
             &primitive_locals,
             &opaque_handle_locals,
+            &wildcard_locals,
         );
     }
 
     // --- free locals ---
     for (_f, local_var, from_json) in &accessed_fields {
         if primitive_locals.contains_key(local_var) {
+            continue;
+        }
+        // No scalar local was ever declared for a wildcard leaf — the array json var it
+        // reads is freed separately, below, via `intermediate_handles`.
+        if wildcard_locals.contains_key(local_var) {
             continue;
         }
         if let Some(snake_type) = opaque_handle_locals.get(local_var) {
