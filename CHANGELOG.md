@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.12] - 2026-08-22
+
 ### Fixed
 
 - **The Java e2e assertion generator (`src/e2e/codegen/java/assertions.rs`) emitted a
@@ -21,6 +23,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`src/backends/java/gen_bindings/types/enums.rs`) — via a new IR-derived
   `FieldResolver::java_enum_emits_get_value` lookup, so the two can never disagree again.
   Regression coverage: `src/e2e/codegen/java/assertion_union_enum_field_classification_tests.rs`.
+
+- **A `bool` (or any other scalar-primitive) e2e result field with no explicit `fields_c_types`
+  entry lowered its `equals` assertion into `strcmp` against a value the FFI actually returns as
+  `int32_t`, segfaulting the generated C test.** `fields_c_types` is an operator-declared map in
+  `alef.toml`; a field the operator never listed there fell through
+  `emit_nested_accessor`'s/`render_test_function`'s leaf lookup to the `char*` default, so the
+  local was declared `char* field = accessor(...)` for a value that is really a scalar, and
+  `render_assertion`'s `equals` arm compared it with `strcmp(field, 1)` — passing an `int`
+  literal where `strcmp` requires a `const char*`. Reproduced by crawlberg's generated
+  `test_browser.c`: `browser_used: bool` (`int32_t cberg_crawl_result_browser_used(...)` in the
+  header) asserted `== true` crashed with `make: *** [Makefile:97] Error 139`.
+
+  Added `src/e2e/codegen/c/primitive_field_inference.rs`
+  (`primitive_fields_c_types_from_ir`), mirroring the enum-field IR inference
+  (`enum_field_inference.rs`) already unioned into `effective_fields_c_types`: every field whose
+  declared Rust type (after peeling `Option`) is a scalar primitive gets an inferred
+  `fields_c_types` entry — the real ABI/header spelling (`bool` -> `int32_t`, `u32` ->
+  `uint32_t`, ...) via the same Rust-type -> C-header mapping the trait-bridge test-backend
+  stubs already use (`trait_bridge_snippet::c_type`, now `pub(super)`). An explicit operator
+  `fields_c_types` entry still wins.
+
+  Fixing this also surfaced a second, narrower defect in the same `equals` arm: once a `bool`
+  field's inferred type spells `int32_t` rather than the literal string `"bool"`, an *optional*
+  bool field's `equals` assertion degraded into the "0 means unset" numeric-optional widening
+  (`assert(field == 0 || field == 1)`) — vacuously true for either boolean value. `is_numeric`
+  now also excludes any assertion whose fixture value is a JSON boolean, regardless of which
+  type-string spelling produced `field_is_primitive`.
+
+  Audited every other e2e backend for the same class of bug (config-only field-type
+  classification causing a numeric/boolean field to route through a string-comparison path): C
+  is uniquely affected because it alone is stringly-typed at the FFI ABI boundary (everything
+  crosses as `char*` unless overridden); every other backend (Go, Java, Kotlin, C#, Swift, PHP,
+  Ruby, Python, Dart, Rust, TypeScript, Zig, Elixir, Gleam) derives the "primitive vs string"
+  decision from the fixture's own JSON value type against a statically/IR-typed accessor, not
+  from a hand-maintained per-field type override map.
+
+  Regression coverage: `src/e2e/codegen/c/primitive_field_inference.rs`'s `tests` module —
+  asserts on the C TEXT `render_test_file` actually emits (not a hand-written mirror of the
+  intended semantics), including the optional-bool-widening regression.
+
+- **A collection-typed e2e result field with no per-element path declared anywhere in the
+  fixture suite (nothing ever indexes into it, e.g. a recursive `List<DataNode> Children`) had
+  no config signal telling `FieldResolver::is_array`/`is_collection_root` it was a collection at
+  all, so C#/Kotlin/Swift/Rust each emitted broken generated code for it.** `is_array`/
+  `is_collection_root` are both derived purely from `fields_array`/`fields_optional` — sets
+  populated from element-traversal paths like `choices[0].message`, not from the bare collection
+  accessor itself — so a field nothing ever indexes into has no such entry. Four distinct
+  manifestations of the same missing classification:
+  - **C#**: `is_empty` fell through to `Assert.True(string.IsNullOrEmpty(Children.ToString()))`
+    — `List<T>.ToString()` returns the type name, so the assertion could never pass.
+  - **Kotlin**: `not_empty` on an `Option<List<T>>` field degraded to a bare
+    `{field} != null` check, which also passes for an empty-but-non-null collection.
+  - **Swift**: `not_empty` on an `Optional<[T]>` field degraded the same way (`{field} != nil`).
+  - **Rust**: `contains` emitted the scalar `{field}.contains(&expected)` shape, which requires
+    the collection's own element type and does not compile against `Vec<DataNode>`.
+
+  Added an IR-derived collection classification, `IrCollectionMap`
+  (`src/e2e/field_access/ir_collection.rs`), mirroring `IrEnumMap`/`ir_enum.rs` exactly: keyed
+  by `(owner_type, field_name)`, anchored at the call's declared Rust return type, answering
+  whether a field's declared type (after peeling `Option`) is `Vec<T>`. `FieldResolver::
+  is_collection_root` now consults it as a fallback after the hand-maintained config, via the
+  new `FieldResolver::ir_collection_fields`/`with_ir_collection_map` (mirroring
+  `ir_enum_fields`/`with_ir_enum_map`'s precedence: an explicit config entry still wins). Wired
+  into all four affected backends' per-call `FieldResolver` construction
+  (`src/e2e/codegen/csharp.rs`, `kotlin/test_method.rs`, `swift/test_method.rs`,
+  `rust/test_file/test_function.rs`) alongside their existing `with_ir_enum_map` calls.
+
+  Audited every other e2e backend consulting `is_array`/`is_collection_root` for a type-
+  sensitive rendering decision (Go, Java, PHP, Ruby, Python, Dart, Gleam, Elixir, TypeScript,
+  Zig): none share this shape — each derives the field's collection-ness from a per-language
+  binding signature or a different IR-backed check already anchored per call, not from
+  `is_array`/`is_collection_root` alone. `segment_name`, previously duplicated in `ir_enum.rs`,
+  was extracted into `parse.rs` and shared by both IR path-walkers.
+
+  Regression coverage, one file per affected backend, each driving the real per-fixture render
+  entry point with zero `fields_array`/`fields_optional` config, mirroring
+  `enum_field_classification_tests.rs`: `csharp/collection_field_classification_tests.rs`,
+  `kotlin/collection_field_classification_tests.rs`,
+  `swift/collection_field_classification_tests.rs` (all three exercise the real
+  `render_test_method`/`render_engine_factory_test_function`-style entry point), and
+  `rust/collection_field_classification_tests.rs` (drives `render_assertion` directly with an
+  IR-anchored resolver, matching `assertion_containment_tests.rs`'s existing style for that
+  backend). A second, narrower unit test in `csharp/collection_is_empty_tests.rs` covers
+  `is_collection_root`'s IR fallback directly.
 
 ## [0.62.11] - 2026-08-22
 
