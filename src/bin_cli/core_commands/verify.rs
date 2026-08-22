@@ -73,9 +73,19 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     // see `collect_managed_surface`'s doc for why dropping this list is exactly
     // the bug this return shape exists to prevent. ~keep
     let mut stage_failures: Vec<String> = Vec::new();
+    // Informational only -- see `pipeline::generate::scaffold_drift`'s module doc for what
+    // this checks, its stated false-positive/false-negative shape, and why it never
+    // contributes to `has_stage_failures` or any other hard-fail condition below. ~keep
+    let mut create_once_template_drift: Vec<String> = Vec::new();
     for resolved_cfg in &crates_to_process {
         let languages = resolve_languages(resolved_cfg, None)?;
         let api = pipeline::extract(resolved_cfg, config_path, false)?;
+        let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
+        create_once_template_drift.extend(
+            pipeline::find_create_once_template_drift(&scaffold_files, &base_dir)
+                .into_iter()
+                .map(|path| format!("[{}] {}", resolved_cfg.name, path.display())),
+        );
         let found = find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
         missing_generated_files.extend(found.missing);
         missing_gitignored_generated_files.extend(found.missing_gitignored);
@@ -110,6 +120,8 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     frozen_generated_files.dedup_by(|a, b| a.path == b.path);
     stage_failures.sort();
     stage_failures.dedup();
+    create_once_template_drift.sort();
+    create_once_template_drift.dedup();
     let has_stage_failures = !stage_failures.is_empty();
     let has_missing_files = !missing_generated_files.is_empty();
     let has_missing_gitignored_files = !missing_gitignored_generated_files.is_empty();
@@ -166,6 +178,23 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         );
         for directory in &missing_snippet_roots {
             crate::bin_cli::output::line(format_args!("  {directory}"));
+        }
+    }
+
+    // Informational only, printed unconditionally and never folded into the "up to
+    // date"/failure gates below: see `pipeline::generate::scaffold_drift`'s module doc.
+    // A create-once file differing from its template is the expected steady state for a
+    // hand-maintained file -- this only fires when the file's own git history rules out a
+    // consumer edit as the explanation, and even then there is no rerun that fixes it;
+    // only a human reviewing the current template can decide what to do. ~keep
+    if !create_once_template_drift.is_empty() {
+        crate::bin_cli::output::line(
+            "Create-once scaffold files that predate a template fix (informational -- these are \
+             user-owned after their first write, so alef never rewrites them; review the current \
+             template and hand-port the fix if it applies to your copy):",
+        );
+        for path in &create_once_template_drift {
+            crate::bin_cli::output::line(format_args!("  {path}"));
         }
     }
 
