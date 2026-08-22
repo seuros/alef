@@ -109,7 +109,8 @@ pub(super) fn render_test_method(
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_enum_fields(e2e_config.effective_fields_enum(call_config).clone())
-    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let enum_fields = e2e_config.effective_fields_enum(call_config);

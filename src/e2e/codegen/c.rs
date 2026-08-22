@@ -1048,6 +1048,7 @@ mod collection_wildcard;
 mod docs_input;
 mod enum_field_inference;
 mod ffi_constructors;
+mod primitive_field_inference;
 mod project;
 mod return_shape;
 mod runner;
@@ -1076,6 +1077,7 @@ use collection_wildcard::{NestedLeafOutcome, classify_nested_leaf, render_wildca
 use assertions::EffectiveConfigSource;
 use call_patterns::{render_bytes_test_function, render_engine_factory_test_function};
 use enum_field_inference::enum_fields_c_types_from_ir;
+use primitive_field_inference::primitive_fields_c_types_from_ir;
 use project::{render_download_script, render_gitignore, render_makefile};
 use runner::{render_main_c, render_test_runner_header};
 use streaming::{
@@ -1121,6 +1123,11 @@ fn render_test_file(
     // deliberately names a different accessor shape (e.g. `"skip"` or `"char*"`). ~keep
     let mut effective_fields_c_types = e2e_config.fields_c_types.clone();
     for (key, type_name) in enum_fields_c_types_from_ir(type_defs, enums) {
+        effective_fields_c_types.entry(key).or_insert(type_name);
+    }
+    // Same precedence for plain scalar leaf fields (`bool`/`u32`/`f64`/...) that never got a
+    // `fields_c_types` entry either — see `primitive_field_inference` module docs. ~keep
+    for (key, type_name) in primitive_fields_c_types_from_ir(type_defs) {
         effective_fields_c_types.entry(key).or_insert(type_name);
     }
 

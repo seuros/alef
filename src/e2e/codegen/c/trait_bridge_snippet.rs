@@ -163,7 +163,12 @@ fn method_callback(method: &MethodDef) -> Callback {
     }
 }
 
-fn c_type(ty: &TypeRef) -> String {
+/// The real C header type a `TypeRef` crosses the FFI as (`bool` -> `int32_t`, `Vec<_>` -> a
+/// JSON `char*`, ...). Composes the ABI-level Rust type name (`FfiBridgeGenerator::c_param_type`)
+/// with the stdint header spelling below, so callers never guess a type the header doesn't
+/// declare. Used both for this module's test-backend callback signatures and, via
+/// `primitive_field_inference`, for `fields_c_types` inference on plain scalar leaf fields. ~keep
+pub(super) fn c_type(ty: &TypeRef) -> String {
     c_rust_type(&crate::backends::ffi::trait_bridge::FfiBridgeGenerator::c_param_type(
         ty,
     ))

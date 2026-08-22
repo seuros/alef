@@ -68,3 +68,62 @@ fn is_empty_on_collection_root_field_uses_assert_empty_not_tostring() {
         "collection field must not fall back to the ToString()-based empty check; got: {out}"
     );
 }
+
+/// The gap the config-only predicates above still leave open: a collection field with NO
+/// per-element path declared ANYWHERE in the fixture suite (nothing ever indexes into it) has
+/// no config signal at all — `array_fields`/`optional_fields` are both empty. `is_array` and
+/// `is_collection_root` are both purely config-derived, so with zero config they answer
+/// `false` for every field, and `is_empty` falls through to the same broken `ToString()` check
+/// the test above exists to prevent. The IR already knows `SampleClass.children: Vec<DataNode>`
+/// without any operator declaration; `is_collection_root` must consult that IR-derived
+/// classification (`with_ir_collection_map`) as a fallback, exactly as `is_enum` already
+/// consults `with_ir_enum_map`.
+#[test]
+fn is_empty_on_an_undeclared_collection_root_field_uses_ir_classification_not_tostring() {
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    let type_defs = vec![TypeDef {
+        name: "SampleClass".into(),
+        fields: vec![FieldDef {
+            name: "children".into(),
+            ty: TypeRef::Vec(Box::new(TypeRef::Named("DataNode".into()))),
+            ..FieldDef::default()
+        }],
+        ..TypeDef::default()
+    }];
+    let resolver = FieldResolver::new(
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+    )
+    .with_ir_collection_map(
+        FieldResolver::ir_collection_fields(&type_defs),
+        Some("SampleClass".to_string()),
+    );
+    let assertion = is_empty_on_field("children");
+    let mut out = String::new();
+    render_assertion(
+        &mut out,
+        &assertion,
+        "result",
+        "SampleClass",
+        "SampleException",
+        &resolver,
+        false,
+        false,
+        false,
+        false,
+        &std::collections::HashMap::new(),
+        false,
+    );
+    assert!(
+        out.contains("Assert.Empty("),
+        "expected Assert.Empty for an IR-proven collection-root field with zero config; got: {out}"
+    );
+    assert!(
+        !out.contains("ToString()"),
+        "an undeclared collection field must not fall back to the ToString()-based empty check; got: {out}"
+    );
+}

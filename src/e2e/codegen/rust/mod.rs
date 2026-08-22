@@ -15,6 +15,8 @@ mod args;
 mod assertion_containment_tests;
 mod assertion_helpers;
 mod assertion_synthetic;
+#[cfg(test)]
+mod collection_field_classification_tests;
 
 pub use cargo_config::render_cargo_config;
 pub use cargo_toml::render_cargo_toml;
