@@ -238,27 +238,37 @@ fn compute_pdfium_dir() -> Option<String> {
     None
 }
 
-/// Get the current host Rust target triple by parsing rustc output.
+/// Build the `rustc --version --verbose` command used by [`get_host_target`], pinned to
+/// [`std::env::temp_dir`] rather than left to inherit the ambient process working directory.
 ///
-/// Parses `rustc --version --verbose` to extract the `host:` line,
-/// returning the target triple (e.g. `aarch64-apple-darwin`).
-///
-/// Pinned to [`std::env::temp_dir`] rather than left to inherit the ambient process working
-/// directory: this crate's test binary runs every `#[test]` as a thread in one process, and
-/// other tests move the process-wide cwd into a tempdir that is later deleted (see
+/// This crate's test binary runs every `#[test]` as a thread in one process, and other tests
+/// move the process-wide cwd into a tempdir that is later deleted (see
 /// `crate::test_support::CwdGuard`). An unpinned `rustc` spawn that races one of those inherits
 /// a deleted directory and fails with "Could not locate working directory" -- a failure with
 /// nothing to do with the code under test. `rustc --version --verbose` reads nothing relative to
 /// its cwd, so any directory guaranteed to exist for the process lifetime works; the system temp
 /// directory decouples this call from process-global state entirely, matching 22baa34ac's fix
-/// for the same race in the compile-harness tests. ~keep
-fn get_host_target() -> anyhow::Result<RustTarget> {
-    use std::process::Command;
-
-    let output = Command::new("rustc")
+/// for the same race in the compile-harness tests. Split out from [`get_host_target`] so the
+/// pin can be asserted directly on the built [`std::process::Command`] (see
+/// `tests::rustc_version_command_is_pinned_to_a_stable_directory`) instead of by reproducing a
+/// deleted ambient cwd against the live process -- that reproduction corrupted
+/// `std::env::current_dir()` for every other thread in the shared test binary, not just this
+/// one, which is its own instance of the same race class this pin exists to prevent. ~keep
+fn rustc_version_command() -> std::process::Command {
+    let mut command = std::process::Command::new("rustc");
+    command
         .arg("--version")
         .arg("--verbose")
-        .current_dir(std::env::temp_dir())
+        .current_dir(std::env::temp_dir());
+    command
+}
+
+/// Get the current host Rust target triple by parsing rustc output.
+///
+/// Parses `rustc --version --verbose` to extract the `host:` line,
+/// returning the target triple (e.g. `aarch64-apple-darwin`).
+fn get_host_target() -> anyhow::Result<RustTarget> {
+    let output = rustc_version_command()
         .output()
         .context("failed to run rustc --version --verbose")?;
 
@@ -284,21 +294,34 @@ mod tests {
     #[cfg(unix)]
     use crate::core::config::NewAlefConfig;
 
-    /// Reproduces the exact race class fixed for the compile-harness tests in 22baa34ac,
-    /// deterministically rather than by racing a real thread: enter a tempdir as the process
-    /// cwd, delete it out from under that cwd (as `CwdGuard::drop` in another test would once
-    /// that test's own scope ends), then call `get_host_target`. Before the fix, the unpinned
-    /// `rustc` spawn inherited the now-deleted directory and failed with "Could not locate
-    /// working directory"; pinning to `std::env::temp_dir` makes the call independent of the
-    /// ambient cwd entirely.
+    /// Guards the fix for the exact race class fixed for the compile-harness tests in
+    /// 22baa34ac: an unpinned `rustc` spawn that inherits a deleted ambient cwd fails with
+    /// "Could not locate working directory", a failure with nothing to do with the code under
+    /// test.
+    ///
+    /// Asserts the pin directly on the built [`std::process::Command`] rather than by
+    /// reproducing a deleted ambient cwd against the live process (entering a tempdir as the
+    /// process cwd, deleting it out from under that cwd, then calling `get_host_target`, as an
+    /// earlier version of this test did). `std::env::set_current_dir` and
+    /// `std::env::current_dir` are process-global, not per-thread: deleting the directory that
+    /// backs the live process cwd makes `current_dir()` fail for *every* thread in this shared
+    /// test binary for as long as the deletion is in effect, not just the thread running this
+    /// test. `crate::test_support::CwdGuard`'s lock only serializes against other lock-holders;
+    /// it does not, and structurally cannot, protect the crate's many unguarded
+    /// `std::env::current_dir()` readers (for example
+    /// `commands::test_apps::start_mock_server`) from observing that corruption. The earlier
+    /// version of this test was therefore itself an instance of the very race class it existed
+    /// to guard against. Inspecting `Command::get_current_dir()` proves the same property --
+    /// that the spawn does not depend on the ambient cwd -- without ever mutating process-global
+    /// state. ~keep
     #[test]
-    fn get_host_target_survives_a_deleted_ambient_cwd() {
-        let directory = tempfile::tempdir().expect("temporary directory");
-        let path = directory.path().to_path_buf();
-        let _cwd = crate::test_support::CwdGuard::enter(&path);
-        std::fs::remove_dir_all(&path).expect("delete the entered directory out from under cwd");
-
-        get_host_target().expect("get_host_target must not depend on the ambient (possibly deleted) cwd");
+    fn rustc_version_command_is_pinned_to_a_stable_directory() {
+        let command = rustc_version_command();
+        assert_eq!(
+            command.get_current_dir(),
+            Some(std::env::temp_dir().as_path()),
+            "the rustc spawn must be pinned to std::env::temp_dir(), not inherit the ambient cwd"
+        );
     }
 
     /// Build a ResolvedCrateConfig that has `before` and `e2e` wired for `python`
