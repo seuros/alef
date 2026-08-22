@@ -1142,6 +1142,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!("Computing diff of generated bindings...");
             let base_dir = std::env::current_dir()?;
             let mut all_diffs: Vec<String> = Vec::new();
+            // Unioned across every crate before the orphan diff runs below, exactly like
+            // `Commands::Verify` above -- see that arm's `all_managed_paths` for why a file
+            // legitimately owned by crate B must never look orphaned merely because crate A's
+            // own managed surface doesn't mention it. ~keep
+            let mut all_managed_paths: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
                 let api = pipeline::extract(resolved_cfg, config_path, false)?;
@@ -1163,14 +1168,40 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     &[(crate::core::config::Language::Rust, scaffold)],
                     &base_dir,
                 )?);
+                // `alef diff` is documented as a preview of what `alef generate` would do, and a
+                // real generate also sweeps orphans (`pipeline::generate_sweep_roots`,
+                // `src/cli/pipeline/generate/orphans.rs`) -- a file the current run's backends
+                // would no longer produce. Before this, `alef diff` had no way to preview that
+                // impending removal at all: it only ever unioned `pipeline::diff_files` over
+                // bindings/stubs/scaffold, never the orphan sweep `alef verify` already runs. This
+                // reuses `find_missing_and_frozen_generated_files` purely for its `managed_paths`
+                // side effect -- the same full-surface regeneration `Commands::Verify` above pays
+                // for the identical reason -- and reports through
+                // `verify_orphans::find_orphaned_generated_files`, never a second orphan-finding
+                // implementation. ~keep
+                let found =
+                    find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
+                all_managed_paths.extend(found.managed_paths);
             }
+            let orphan_generated_files = verify_orphans::find_orphaned_generated_files(&base_dir, &all_managed_paths);
 
-            if all_diffs.is_empty() {
+            if all_diffs.is_empty() && orphan_generated_files.is_empty() {
                 crate::bin_cli::output::line("No changes detected.");
             } else {
-                crate::bin_cli::output::line("Files that would change:");
-                for diff in &all_diffs {
-                    crate::bin_cli::output::line(format_args!("  {diff}"));
+                if !all_diffs.is_empty() {
+                    crate::bin_cli::output::line("Files that would change:");
+                    for diff in &all_diffs {
+                        crate::bin_cli::output::line(format_args!("  {diff}"));
+                    }
+                }
+                if !orphan_generated_files.is_empty() {
+                    crate::bin_cli::output::line(
+                        "Files that would be removed (orphaned generated files a regeneration would sweep -- \
+                         alef never deletes automatically; review each and delete by hand if genuinely stale):",
+                    );
+                    for path in &orphan_generated_files {
+                        crate::bin_cli::output::line(format_args!("  {path}"));
+                    }
                 }
                 if exit_code {
                     process::exit(1);

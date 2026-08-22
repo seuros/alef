@@ -1189,4 +1189,5 @@ fn near_miss_marker_only_scans_the_leading_window() {
     );
 }
 
+mod marker_negation;
 mod marker_spellings;

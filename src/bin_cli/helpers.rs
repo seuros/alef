@@ -603,9 +603,21 @@ fn marker_line(content: &str) -> Option<&str> {
 /// added later by `write_files_report`'s `ensure_generated_header` pass — does
 /// this fall back to reconstructing it from the path via
 /// [`crate::cli::pipeline::provenance_header_for_path`]. ~keep
+///
+/// Runs over two candidate sets, not only [`crate::cli::pipeline::managed_generated_files`]'s
+/// marker-carrying subset: `carries_alef_marker()` is `generated_header ||
+/// content_has_alef_marker`, so a file emitted with `generated_header: false` whose content
+/// embeds no marker at all — the PHP backend's `config.m4`
+/// (`backends::php::gen_bindings::rust_items::generate_config_m4`) is the shipped case —
+/// never reaches the ownership-record fallback a few lines below, even though
+/// `write_files_report`'s guard already refuses to overwrite that exact path once it exists
+/// without a committed `.alef-ownership.toml` record. [`unmarkable_unclaimed_files`] recovers
+/// that second set: it is deliberately narrower than "every `generated_header: false` file" —
+/// see its own doc for why only the genuinely unmarkable ones qualify. ~keep
 fn frozen_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir: &std::path::Path) -> Vec<FrozenFile> {
     crate::cli::pipeline::managed_generated_files(files)
         .into_iter()
+        .chain(unmarkable_unclaimed_files(files, base_dir))
         .filter_map(|file| {
             let full_path = base_dir.join(&file.path);
             let existing = std::fs::read_to_string(&full_path).ok()?;
@@ -627,6 +639,32 @@ fn frozen_managed_paths(files: &[crate::core::backend::GeneratedFile], base_dir:
                 near_miss,
             })
         })
+        .collect()
+}
+
+/// Every file in `files` that [`crate::cli::pipeline::managed_generated_files`] excludes
+/// (`carries_alef_marker()` is false — no `generated_header: true` claim, no marker baked
+/// into `content`) but that is genuinely incapable of ever carrying one
+/// ([`crate::cli::pipeline::marker_comment_style`] answers `None` for its path).
+///
+/// Scoped this narrowly on purpose: widening it to every `generated_header: false` file
+/// would also pull in a markable file a backend simply forgot to self-mark, which
+/// `write_files_report`'s guard treats differently — a markable path with no marker is
+/// refused regardless of any ownership record (see that function's `owned` computation),
+/// so folding it into this ownership-record-checked set would wrongly clear it once a
+/// record existed. Only the genuinely unmarkable subset is where alef's write guard has
+/// ever accepted an ownership record as proof, and this mirrors exactly that. ~keep
+fn unmarkable_unclaimed_files(
+    files: &[crate::core::backend::GeneratedFile],
+    base_dir: &std::path::Path,
+) -> Vec<crate::core::backend::GeneratedFile> {
+    files
+        .iter()
+        .filter(|file| {
+            !file.carries_alef_marker()
+                && crate::cli::pipeline::marker_comment_style(&base_dir.join(&file.path)).is_none()
+        })
+        .cloned()
         .collect()
 }
 

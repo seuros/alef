@@ -565,6 +565,64 @@ fn frozen_managed_paths_offers_a_real_remedy_for_clang_format() {
     );
 }
 
+/// Defect: `carries_alef_marker()` is `generated_header || content_has_alef_marker`, so a
+/// `GeneratedFile` with `generated_header: false` whose content embeds no marker at all --
+/// exactly the PHP backend's `config.m4` (`generate_config_m4`,
+/// `src/backends/php/gen_bindings/rust_items.rs`, emitted with `generated_header: false`
+/// alongside `.m4` content that carries no alef marker text) -- is filtered out by
+/// `managed_generated_files` before `frozen_managed_paths` ever runs its own
+/// ownership-record fallback (`is_owned_by_ownership_record`) over it. The write guard
+/// (`write_files_report`, `src/cli/pipeline/generate/write.rs`) still refuses to overwrite
+/// such a path once it exists without a committed ownership record -- so this was a real
+/// write refusal `alef generate` reports but `alef verify` had no way to see, because the
+/// candidate never reached the frozen check at all. ~keep
+#[test]
+fn frozen_managed_paths_reports_an_unmarkable_generated_header_false_file_with_no_ownership_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("config.m4"), "dnl old content\n").unwrap();
+    let files = vec![gen_file_unheadered(
+        "config.m4",
+        "dnl Configuration for Rust-based PHP extension via ext-php-rs.\n",
+    )];
+
+    let frozen = frozen_managed_paths(&files, dir.path());
+
+    assert_eq!(
+        frozen.len(),
+        1,
+        "an unmarkable, generated_header: false, unmarked-content file the write guard would \
+         refuse must be surfaced by alef verify too"
+    );
+    assert_eq!(frozen[0].path, dir.path().join("config.m4").display().to_string());
+    assert_eq!(
+        frozen[0].remedy, None,
+        "`.m4` has no comment syntax alef stamps, so there is no literal marker line to hand back"
+    );
+}
+
+/// The paired positive control: once `.alef-ownership.toml` durably records this exact
+/// path -- what `alef generate`'s writer itself does on the run that first authors it
+/// (`write_files_report`'s `record_scaffold_owned_path` call) -- the write guard would
+/// happily accept the file again, so `alef verify` must agree and stay silent.
+#[test]
+fn frozen_managed_paths_reports_nothing_for_an_unmarkable_generated_header_false_file_with_a_committed_ownership_record()
+ {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("config.m4");
+    std::fs::write(&path, "dnl old content\n").unwrap();
+    crate::cli::cache::record_scaffold_owned_path(dir.path(), &path).expect("record ownership");
+    let files = vec![gen_file_unheadered(
+        "config.m4",
+        "dnl Configuration for Rust-based PHP extension via ext-php-rs.\n",
+    )];
+
+    assert!(
+        frozen_managed_paths(&files, dir.path()).is_empty(),
+        "a path the committed ownership record already proves alef owns must agree with the \
+         write guard, which would happily overwrite it"
+    );
+}
+
 #[test]
 fn verify_walk_detects_an_edited_generated_file() {
     let directory = tempfile::tempdir().expect("tempdir");
