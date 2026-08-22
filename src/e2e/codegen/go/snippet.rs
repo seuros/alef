@@ -1169,8 +1169,10 @@ mod tests {
         );
         assert!(rendered.contains("opts := &pkg.ConversionOptions{}"), "{rendered}");
         assert!(rendered.contains("opts.Visitor = visitor"), "{rendered}");
+        // `struct {` with the space gofmt requires -- this assertion previously pinned the
+        // unformatted `struct{`, so it protected the defect instead of the behaviour. ~keep
         assert!(
-            rendered.contains("type testVisitorVisitorLinkRewrite struct{"),
+            rendered.contains("type testVisitorVisitorLinkRewrite struct {"),
             "{rendered}"
         );
     }

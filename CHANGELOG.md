@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Generated Go is gofmt-clean in two more places. The e2e visitor-struct emitter wrote
+  `type X struct{` without the space gofmt requires and left no blank line after the closing
+  brace (gofmt separates consecutive top-level declarations), and the Go visitor preamble ran the
+  `import (...)` block straight into the next declaration with no blank line. Both surfaced as
+  `gofmt -l` failures in consumers with no local cause, since the files are generated.
+
 ## [0.63.1] - 2026-08-22
 
 ### Fixed

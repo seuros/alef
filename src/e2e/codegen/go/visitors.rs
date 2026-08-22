@@ -33,9 +33,14 @@ pub(super) fn emit_go_visitor_struct(
     import_alias: &str,
     binding: Option<&GoVisitorBinding>,
 ) {
-    let _ = writeln!(out, "type {struct_name} struct{{");
+    // `struct {` with a space, and a blank line after the closing brace: gofmt requires both
+    // (it separates consecutive top-level declarations), and every consumer lints generated Go
+    // with `gofmt -l`. Emitting `struct{` here left html-to-markdown's e2e visitor tests failing
+    // formatting with no local cause. ~keep
+    let _ = writeln!(out, "type {struct_name} struct {{");
     let _ = writeln!(out, "\t{import_alias}.BaseVisitor");
     let _ = writeln!(out, "}}");
+    out.push('\n');
     for (method_name, action) in &visitor_spec.callbacks {
         let method = binding.and_then(|binding| binding.method(method_name));
         emit_go_visitor_method(out, struct_name, method_name, action, import_alias, method);
