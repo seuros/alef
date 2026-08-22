@@ -216,13 +216,13 @@ impl Backend for CsharpBackend {
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
         // The surface as the FFI backend sees it, kept alongside the C#-filtered one so the
         // trait-bridge block can prove C#'s vtable matches the Rust vtable struct. ~keep
-        let source_api = api;
-        let exclude_types = effective_exclude_types(api, config);
+        let source_api = &crate::backends::ir_order::with_sorted_items(api);
+        let exclude_types = effective_exclude_types(source_api, config);
         let filtered_api;
         let api = if exclude_types.is_empty() {
-            api
+            source_api
         } else {
-            filtered_api = api_without_excluded_types(api, &exclude_types);
+            filtered_api = api_without_excluded_types(source_api, &exclude_types);
             &filtered_api
         };
         let deduped_api = api.with_deduped_functions();
@@ -675,7 +675,7 @@ impl Backend for CsharpBackend {
             .iter()
             .map(String::as_str)
             .collect();
-        let filtered_api = api.with_cfg_filtered_deep(&enabled_features);
+        let filtered_api = crate::backends::ir_order::with_sorted_items(api).with_cfg_filtered_deep(&enabled_features);
         service_api::generate(&filtered_api, config)
     }
 

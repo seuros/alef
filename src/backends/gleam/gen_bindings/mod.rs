@@ -45,6 +45,10 @@ impl Backend for GleamBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         let module_name = gleam_module_name(&config.name);
         let nif_module = gleam_nif_module(config);
 

@@ -80,7 +80,7 @@ impl Backend for MagnusBackend {
         crate::codegen::config_gen::validate_rust_default_functions(api)?;
         // `#[cfg(feature = "X")]`, its `#[cfg(not(...))]` stub, AND an unconditional stub from a
         // separate `#[cfg(not(...))]` parent module whose gate did not propagate into the IR),
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         let api = &deduped_api;
 
         let mapper = MagnusMapper;
@@ -578,7 +578,7 @@ impl Backend for MagnusBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        let mut deduped_api = api.with_deduped_functions();
+        let mut deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         // The RBS stub must describe the surface the binding actually registers. Both
         // `generate_bindings` and the module-init emitter drop
         // `[crates.ruby].exclude_functions`, but this stub path read `api.functions`
@@ -644,7 +644,7 @@ impl Backend for MagnusBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        service_api::generate(api, config)
+        service_api::generate(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn generate_public_api(
@@ -652,7 +652,7 @@ impl Backend for MagnusBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         let api = &deduped_api;
 
         let gem_name = config.ruby_gem_name();

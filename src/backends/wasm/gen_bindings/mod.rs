@@ -344,8 +344,7 @@ impl Backend for WasmBackend {
         crate::codegen::config_gen::validate_rust_default_functions(api)?;
         // wrapper delegates to the core crate (which resolves the cfg) and emits no `#[cfg]` gate,
         // so two same-named entries would otherwise produce duplicate `#[wasm_bindgen]` fns.
-        let deduped_api = api.with_deduped_functions();
-        let api = &deduped_api;
+        let api = &crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
 
         let wasm_config = config.wasm.as_ref();
         let mut exclude_functions = wasm_config.map(|c| c.exclude_functions.clone()).unwrap_or_default();
@@ -1062,7 +1061,8 @@ impl Backend for WasmBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        Ok(service_api::gen_service_files(api, config))
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        Ok(service_api::gen_service_files(&sorted_api, config))
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

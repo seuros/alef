@@ -33,7 +33,7 @@ impl Backend for JniBackend {
         // make `jni` the only language that hard-fails generation for a config gap every
         // sibling accessor already treats as a soft default. ~keep
         let output_path = jni_output_path(config);
-        let content = emit_lib_rs(api, config);
+        let content = emit_lib_rs(&crate::backends::ir_order::with_sorted_items(api), config);
         Ok(vec![GeneratedFile {
             path: output_path,
             content,
@@ -46,7 +46,7 @@ impl Backend for JniBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        super::service_api::generate(api, config)
+        super::service_api::generate(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

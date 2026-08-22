@@ -40,6 +40,10 @@ impl Backend for FfiBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         api.validate_error_taxonomy()?;
         let prefix = config.ffi_prefix();
         let header_name = config.ffi_header_name();
@@ -100,6 +104,10 @@ impl Backend for FfiBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         service_api::generate(api, config)
     }
 
