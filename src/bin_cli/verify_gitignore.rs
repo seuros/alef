@@ -45,5 +45,108 @@ pub(crate) fn gitignored_dirs(base_dir: &Path) -> HashSet<PathBuf> {
         .collect()
 }
 
+/// Which of `paths` (absolute) git considers ignored, answered with one `git check-ignore`
+/// invocation for the whole list rather than one process per path.
+///
+/// [`gitignored_dirs`] answers a different question: it collapses a WHOLLY ignored subtree
+/// to its topmost ignored directory via `ls-files --directory`, so it only ever reports a
+/// directory that itself has nothing tracked inside it. A pattern like `e2e/c/test_*` ignores
+/// individual files one at a time inside a directory that stays tracked (it still holds
+/// `.gitignore`, `Makefile`, `main.c`) -- that directory never becomes wholly ignored, so
+/// `gitignored_dirs` reports nothing for it at all (see this module's tests for the proof,
+/// not an assumption). Answering "is this exact path ignored" needs `check-ignore` directly.
+///
+/// `--stdin -z` feeds every candidate through one process on a background writer thread
+/// (avoids a deadlock: with thousands of paths, both this process's stdin pipe and git's
+/// stdout pipe fill against their OS buffer limit before all input is written, so writing
+/// synchronously before reading any output can hang), which is what keeps this practical for
+/// a consumer repo with thousands of managed paths instead of thousands of subprocesses.
+///
+/// Falls back to an empty set -- never an error -- under the same conditions as
+/// `gitignored_dirs`: not a git work tree, git missing from `$PATH`, or any other reason git
+/// cannot answer (exit code 128, e.g. "not a git repository"). Exit code 1 ("ran fine, none of
+/// the given paths are ignored") is not a failure and is handled the same as exit code 0.
+/// Callers must read an empty result as "unknown" when git is unanswerable, not "confirmed
+/// clean" -- today's only caller only downgrades a report's wording, never anything
+/// destructive. ~keep
+pub(crate) fn gitignored_paths(base_dir: &Path, paths: &[PathBuf]) -> HashSet<PathBuf> {
+    if paths.is_empty() {
+        return HashSet::new();
+    }
+    let relative: Vec<(String, &PathBuf)> = paths
+        .iter()
+        .map(|path| {
+            let display = path
+                .strip_prefix(base_dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .into_owned();
+            (display, path)
+        })
+        .collect();
+
+    let Ok(mut child) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(base_dir)
+        .args(["check-ignore", "--stdin", "-z"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return HashSet::new();
+    };
+    let Some(mut stdin) = child.stdin.take() else {
+        return HashSet::new();
+    };
+    let input: Vec<u8> = relative
+        .iter()
+        .flat_map(|(rel, _)| rel.as_bytes().iter().copied().chain(std::iter::once(0u8)))
+        .collect();
+    let writer = std::thread::spawn(move || {
+        use std::io::Write;
+        let _ = stdin.write_all(&input);
+    });
+    let Ok(output) = child.wait_with_output() else {
+        let _ = writer.join();
+        return HashSet::new();
+    };
+    let _ = writer.join();
+    if !output.status.success() && output.status.code() != Some(1) {
+        return HashSet::new();
+    }
+
+    let by_relative: std::collections::HashMap<&str, &PathBuf> =
+        relative.iter().map(|(rel, abs)| (rel.as_str(), *abs)).collect();
+    output
+        .stdout
+        .split(|&byte| byte == 0)
+        .filter(|chunk| !chunk.is_empty())
+        .filter_map(|chunk| std::str::from_utf8(chunk).ok())
+        .filter_map(|rel| by_relative.get(rel).map(|abs| (*abs).clone()))
+        .collect()
+}
+
+/// Split `missing` -- absolute display paths of alef-managed files absent from disk, as
+/// [`super::helpers::missing_managed_paths`] produces -- into plainly absent paths (`alef
+/// generate` will write them) and absent-AND-gitignored paths, for which generation can never
+/// help: the file gets written, the ignore rule discards it again before commit, and the very
+/// next `alef verify` reports it missing again, forever. See [`gitignored_paths`] for why
+/// `gitignored_dirs` cannot answer this.
+pub(crate) fn split_missing_by_gitignore(base_dir: &Path, missing: &[String]) -> (Vec<String>, Vec<String>) {
+    let paths: Vec<PathBuf> = missing.iter().map(PathBuf::from).collect();
+    let ignored = gitignored_paths(base_dir, &paths);
+    let mut absent = Vec::new();
+    let mut absent_gitignored = Vec::new();
+    for (path, display) in paths.into_iter().zip(missing.iter()) {
+        if ignored.contains(&path) {
+            absent_gitignored.push(display.clone());
+        } else {
+            absent.push(display.clone());
+        }
+    }
+    (absent, absent_gitignored)
+}
+
 #[cfg(test)]
 mod tests;

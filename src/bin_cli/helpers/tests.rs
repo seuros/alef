@@ -905,3 +905,85 @@ fn a_post_build_owned_path_not_produced_in_band_is_not_reported_as_an_orphan() {
          because `alef verify` cannot run that step itself: {orphans:?}"
     );
 }
+
+/// THE DEFECT this closes: a managed path that is absent from disk AND excluded by a
+/// project-level `.gitignore` rule used to report exactly like an ordinary "never generated
+/// yet" absence -- same list, same `alef generate` remedy. Running generate can never close a
+/// gitignored gap: the file gets written, the ignore rule discards it again before it can be
+/// committed, and the very next `alef verify` (on a fresh clone or in CI, which never had the
+/// file to begin with) reports it missing again, forever. `find_missing_and_frozen_generated_files`
+/// must split such a path into `missing_gitignored` instead of leaving it in plain `missing`.
+///
+/// Runs the real `collect_managed_surface` pipeline (not a hand-built `GeneratedFile` list) so
+/// this is a true end-to-end proof that the split reaches this function's return value, not
+/// just `split_missing_by_gitignore` in isolation (already covered by
+/// `verify_gitignore::tests`).
+#[test]
+fn find_missing_and_frozen_generated_files_splits_out_a_gitignored_managed_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let config = swift_only_config();
+    let api = crate::core::ir::ApiSurface::default();
+    let config_path = dir.path().join("alef.toml");
+
+    let baseline = find_missing_and_frozen_generated_files(&[Language::Swift], &api, &config, &config_path, dir.path())
+        .expect("collect_managed_surface must succeed over a swift-only crate");
+    assert!(
+        !baseline.missing.is_empty(),
+        "fixture precondition: a fresh directory with no generated output must have at least one \
+         managed path outstanding, or this test cannot prove anything -- got: {:?}",
+        baseline.missing
+    );
+    assert!(
+        baseline.missing_gitignored.is_empty(),
+        "no .gitignore exists yet, so nothing should split out: {:?}",
+        baseline.missing_gitignored
+    );
+
+    let target = baseline.missing.first().cloned().expect("checked non-empty above");
+    let target_relative = std::path::Path::new(&target)
+        .strip_prefix(dir.path())
+        .expect("missing paths are joined onto base_dir")
+        .to_owned();
+
+    let git_init_status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["init", "--quiet"])
+        .status()
+        .expect("git init must run");
+    if !git_init_status.success() {
+        // No git on `$PATH` in this environment -- the fallback behavior itself is covered
+        // directly by `verify_gitignore::tests`'s own outside-a-work-tree fallback test.
+        return;
+    }
+    let ignore_parent = dir
+        .path()
+        .join(target_relative.parent().unwrap_or_else(|| std::path::Path::new(".")));
+    std::fs::create_dir_all(&ignore_parent).expect("create the target's parent directory");
+    std::fs::write(
+        ignore_parent.join(".gitignore"),
+        format!(
+            "{}\n",
+            target_relative
+                .file_name()
+                .expect("a managed path has a file name")
+                .to_string_lossy()
+        ),
+    )
+    .expect("write a .gitignore excluding exactly the chosen target");
+
+    let found = find_missing_and_frozen_generated_files(&[Language::Swift], &api, &config, &config_path, dir.path())
+        .expect("collect_managed_surface must succeed over a swift-only crate");
+
+    assert!(
+        found.missing_gitignored.contains(&target),
+        "the gitignored managed path must move to missing_gitignored, got: {:?}",
+        found.missing_gitignored
+    );
+    assert!(
+        !found.missing.contains(&target),
+        "the gitignored managed path must not remain in plain missing (its remedy differs -- \
+         `alef generate` cannot fix it), got: {:?}",
+        found.missing
+    );
+}

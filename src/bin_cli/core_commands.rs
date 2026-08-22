@@ -920,6 +920,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // can never be written by a plain `alef generate` (frozen; see
             // `FrozenFile`). ~keep
             let mut missing_generated_files: Vec<String> = Vec::new();
+            // Absent AND gitignored: `alef generate` cannot close this gap the way it closes a
+            // plain `missing_generated_files` entry -- see `MissingAndFrozenFiles::missing_gitignored`. ~keep
+            let mut missing_gitignored_generated_files: Vec<String> = Vec::new();
             let mut frozen_generated_files: Vec<FrozenFile> = Vec::new();
             // Unioned across every crate before the orphan diff runs below: a file legitimately
             // owned by crate B must never look orphaned merely because crate A's own managed
@@ -939,6 +942,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let found =
                     find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
                 missing_generated_files.extend(found.missing);
+                missing_gitignored_generated_files.extend(found.missing_gitignored);
                 frozen_generated_files.extend(found.frozen);
                 all_managed_paths.extend(found.managed_paths);
                 stage_failures.extend(
@@ -964,12 +968,15 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
             missing_generated_files.sort();
             missing_generated_files.dedup();
+            missing_gitignored_generated_files.sort();
+            missing_gitignored_generated_files.dedup();
             frozen_generated_files.sort_by(|a, b| a.path.cmp(&b.path));
             frozen_generated_files.dedup_by(|a, b| a.path == b.path);
             stage_failures.sort();
             stage_failures.dedup();
             let has_stage_failures = !stage_failures.is_empty();
             let has_missing_files = !missing_generated_files.is_empty();
+            let has_missing_gitignored_files = !missing_gitignored_generated_files.is_empty();
             let has_frozen_files = !frozen_generated_files.is_empty();
             // Report-only: see `verify_orphans`'s module doc for why this never deletes.
             let orphan_generated_files = verify_orphans::find_orphaned_generated_files(&base_dir, &all_managed_paths);
@@ -1031,6 +1038,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             if stale.is_empty()
                 && !has_missing_files
+                && !has_missing_gitignored_files
                 && !has_frozen_files
                 && !has_orphan_files
                 && !has_abi_disagreement
@@ -1055,6 +1063,23 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if has_missing_files {
                     crate::bin_cli::output::line("Missing generated files detected:");
                     for path in &missing_generated_files {
+                        crate::bin_cli::output::line(format_args!("  {path}"));
+                    }
+                }
+                // Distinct from `has_missing_files` above on purpose: `alef generate` is not a
+                // remedy here, it is the failure mode -- the file gets written, then discarded by
+                // the ignore rule before it can ever be committed, and the next `alef verify` finds
+                // it "missing" again. Naming the correct fix (narrow the .gitignore rule, then
+                // commit) is the entire point of splitting this out from plain "missing" instead of
+                // folding it into the same heading with the same generate-and-rerun remedy. ~keep
+                if has_missing_gitignored_files {
+                    crate::bin_cli::output::line(
+                        "Missing generated files that are also gitignored detected (running `alef generate` \
+                         cannot fix these -- the file would be written, then discarded by the matching \
+                         .gitignore rule before it can be committed; narrow the ignore rule for each path \
+                         below, then commit the file):",
+                    );
+                    for path in &missing_gitignored_generated_files {
                         crate::bin_cli::output::line(format_args!("  {path}"));
                     }
                 }
@@ -1125,6 +1150,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             super::verify_outcome::ensure_success(
                 !stale.is_empty()
                     || has_missing_files
+                    || has_missing_gitignored_files
                     || has_frozen_files
                     || has_orphan_files
                     || has_abi_disagreement
