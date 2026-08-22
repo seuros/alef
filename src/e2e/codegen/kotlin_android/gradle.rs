@@ -11,6 +11,10 @@ use crate::core::template_versions::{maven, toolchain};
 /// the `android { }` DSL — including Gradle Managed Devices — resolves at
 /// Kotlin script compile time. The host-JVM test sources live in
 /// `src/test/kotlin/` and run against the shared native library via JNA.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "template-rendering entry point: every parameter is an independent scalar forwarded               once into the Jinja context, so a params struct would exist only to satisfy the               argument counter. Revisit if this grows behaviour beyond forwarding. ~keep"
+)]
 pub(super) fn render_build_gradle_kotlin_android(
     kotlin_pkg_id: &str,
     maven_coordinate: &str,
