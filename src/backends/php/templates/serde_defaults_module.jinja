@@ -1,0 +1,5 @@
+mod serde_defaults {
+{% for function in functions %}
+    pub fn {{ function.name }}() -> {{ function.return_type }} { {{ function.body }} }
+{% endfor %}
+}

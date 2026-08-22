@@ -2,7 +2,6 @@ use crate::adapters::AdapterBodies;
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::ImplBuilder;
 use crate::codegen::generators::{self, RustBindingConfig};
-use crate::codegen::naming::pascal_to_snake;
 use crate::codegen::shared::{binding_fields, partition_methods};
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
@@ -93,53 +92,6 @@ pub(crate) fn ty_is_or_wraps_json(ty: &TypeRef) -> bool {
         TypeRef::Map(_, v) => matches!(v.as_ref(), TypeRef::Json),
         _ => false,
     }
-}
-
-fn serde_default_fn_name(type_name: &str, field_name: &str) -> String {
-    format!("{}_{}", pascal_to_snake(type_name), pascal_to_snake(field_name))
-}
-
-fn field_has_function_path_default(field: &FieldDef) -> bool {
-    let Some(default) = field.default.as_deref() else {
-        return false;
-    };
-    let marker = "serde(default = \"";
-    let Some(start) = default.find(marker) else {
-        return false;
-    };
-    default[start + marker.len()..].contains("::")
-}
-
-fn supports_serde_default_fn(field: &FieldDef) -> bool {
-    use crate::core::ir::DefaultValue;
-
-    matches!(
-        (&field.typed_default, &field.ty),
-        (
-            Some(DefaultValue::BoolLiteral(_)),
-            TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool)
-        ) | (
-            Some(DefaultValue::StringLiteral(_) | DefaultValue::EnumVariant(_)),
-            TypeRef::String
-        ) | (
-            Some(DefaultValue::IntLiteral(_)),
-            TypeRef::Primitive(
-                crate::core::ir::PrimitiveType::U8
-                    | crate::core::ir::PrimitiveType::U16
-                    | crate::core::ir::PrimitiveType::U32
-                    | crate::core::ir::PrimitiveType::U64
-                    | crate::core::ir::PrimitiveType::I8
-                    | crate::core::ir::PrimitiveType::I16
-                    | crate::core::ir::PrimitiveType::I32
-                    | crate::core::ir::PrimitiveType::I64
-                    | crate::core::ir::PrimitiveType::Usize
-                    | crate::core::ir::PrimitiveType::Isize
-            )
-        ) | (
-            Some(DefaultValue::FloatLiteral(_)),
-            TypeRef::Primitive(crate::core::ir::PrimitiveType::F32 | crate::core::ir::PrimitiveType::F64)
-        )
-    )
 }
 
 /// Returns `true` if the PHP-mapped type is `Copy`, meaning `.clone()` can be omitted.
@@ -379,12 +331,11 @@ pub(crate) fn gen_php_struct(
         if cfg.has_serde && matches!(field.ty, TypeRef::Duration) && !field.optional {
             attrs.push("serde(skip_serializing_if = \"Option::is_none\")".to_string());
         }
+        // The name comes from `serde_defaults`, the module that will emit the function, so the
+        // attribute can never reference a function that module decides not to generate. ~keep
         if cfg.has_serde
-            && typ.has_default
-            && !field.optional
-            && (field_has_function_path_default(field) || supports_serde_default_fn(field))
+            && let Some(fn_name) = super::super::serde_defaults::serde_default_fn_name(typ, field)
         {
-            let fn_name = serde_default_fn_name(&typ.name, &field.name);
             attrs.push(format!("serde(default = \"crate::serde_defaults::{fn_name}\")"));
         }
         if cfg.has_serde {

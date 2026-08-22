@@ -720,6 +720,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "php_final_class_stub_start.jinja",
         include_str!("templates/php_final_class_stub_start.jinja"),
     ),
+    (
+        "serde_defaults_module.jinja",
+        include_str!("templates/serde_defaults_module.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {
