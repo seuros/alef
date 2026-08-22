@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.62.11] - 2026-08-22
+
 ### Fixed
 
 - **The PHP php_ext e2e smoke-app generator probed a global `<extension>_<function>()` symbol
@@ -326,6 +328,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and could not have caught a bug anywhere else in `write_files_report` or `finalize_hashes`.
   Confirmed this new test fails (8 files rewritten) against the pre-0.62.2 hash formula and
   passes against the current one.
+
 ### Changed
 
 - **Centralized the `not_error`-must-not-assert-presence-beside-a-sibling-assertion decision
