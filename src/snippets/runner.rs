@@ -1131,7 +1131,7 @@ mod tests {
     /// (exhaustively tested there); this pins the wrapper itself to the two outcomes a real
     /// dispatch path actually observes. An explicit `target:` wins outright even when its
     /// language has another same-language session configured. Once that explicit target is gone,
-    /// two sessions for one language (`liter-llm`'s real `[sessions.typescript]` +
+    /// two sessions for one language (a real consumer's `[sessions.typescript]` +
     /// `[sessions.wasm]`, both TypeScript -- see alef defect #127) must resolve to no session at
     /// all, not to whichever one happens to be spelled like the bare language. ~keep
     #[test]

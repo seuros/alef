@@ -1,4 +1,4 @@
-//! Regression for the diagnostic-ordering defect behind a real-world liter-llm failure: a
+//! Regression for the diagnostic-ordering defect behind a real-world consumer failure: a
 //! Dart FRB facade (`packages/dart/rust/src/lib.rs`) self-marks and so always regenerates
 //! freely, but its sibling manifest (`packages/dart/rust/Cargo.toml`) predates alef's
 //! marker-stamping convention for `.toml` in an already-committed consumer tree. When a
