@@ -41,6 +41,42 @@ fn collect_rust_files(directory: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// Every file in `files` that some other file declares as `#[cfg(test)] mod <name>;`.
+///
+/// ~keep [`blank_test_modules`] only recognises a test module written INLINE as
+/// `#[cfg(test)] mod x { .. }`. A test module split into its own file — which is how this tree
+/// keeps oversized modules under the size cap, e.g. `unavailable_field_marker_tests.rs` — is
+/// still test code, but arrives here as an ordinary source file and every call it makes reads
+/// as a production call site. Resolving the declaration to `<dir>/<name>.rs` or
+/// `<dir>/<name>/mod.rs` rather than matching on the file's name keeps a *production* module
+/// that merely ends in `_tests` from being skipped by accident.
+fn test_only_files(files: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
+    let mut declared = std::collections::BTreeSet::new();
+    for path in files {
+        let source = std::fs::read_to_string(path).expect("a Rust source file must be readable");
+        let directory = match path.file_name().and_then(|name| name.to_str()) {
+            Some("mod.rs") => path.parent().map(Path::to_path_buf),
+            _ => Some(path.with_extension("")),
+        };
+        let Some(directory) = directory else { continue };
+        let mut saw_cfg_test = false;
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if saw_cfg_test {
+                saw_cfg_test = false;
+                if let Some(name) = trimmed.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';')) {
+                    declared.insert(directory.join(format!("{name}.rs")));
+                    declared.insert(directory.join(name).join("mod.rs"));
+                }
+            }
+            if trimmed == "#[cfg(test)]" {
+                saw_cfg_test = true;
+            }
+        }
+    }
+    declared
+}
+
 /// Blank out the body of every `#[cfg(test)] mod ... { .. }` block, preserving line count (and
 /// therefore line numbers) so callers can keep indexing into the original file by line.
 ///
@@ -107,6 +143,7 @@ fn every_production_field_skip_call_site_also_calls_the_assertion_type_funnel() 
 
     let mut field_site_count = 0usize;
     let mut unpaired: Vec<String> = Vec::new();
+    let test_only = test_only_files(&files);
 
     for path in &files {
         let relative = path
@@ -114,7 +151,7 @@ fn every_production_field_skip_call_site_also_calls_the_assertion_type_funnel() 
             .expect("every scanned file lives under the manifest directory")
             .to_string_lossy()
             .replace('\\', "/");
-        if relative == GUARD_FILE {
+        if relative == GUARD_FILE || test_only.contains(path) {
             continue;
         }
         let source = std::fs::read_to_string(path).expect("a Rust source file must be readable");
@@ -188,4 +225,31 @@ fn a_cfg_test_on_a_single_item_is_not_treated_as_a_test_module() {
     let source = "#[cfg(test)]\nuse super::Thing;\nfn a() { fail_on_unavailable_field_markers(); }\n";
     let stripped = blank_test_modules(source);
     assert!(stripped.join("\n").contains(FIELD_FUNNEL));
+}
+
+/// The split-file counterpart of `blanking_test_modules_hides_calls_inside_them_but_keeps_line_count`.
+/// Uses the real tree rather than a temp fixture, so it also fails if the tree stops using the
+/// pattern the skip is granted for.
+#[test]
+fn a_test_module_split_into_its_own_file_is_recognised_but_a_production_sibling_is_not() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    collect_rust_files(&root.join("src/e2e/codegen"), &mut files);
+    let test_only = test_only_files(&files);
+
+    let split_test_module = root.join("src/e2e/codegen/unavailable_field_marker_tests.rs");
+    assert!(
+        test_only.contains(&split_test_module),
+        "a module its parent declares `#[cfg(test)] mod ...;` must be recognised as test-only"
+    );
+
+    let production = root.join("src/e2e/codegen/declared_error_variant.rs");
+    assert!(
+        files.contains(&production),
+        "the fixture file for the negative control must exist"
+    );
+    assert!(
+        !test_only.contains(&production),
+        "a module declared without `#[cfg(test)]` must stay in the production scan"
+    );
 }
