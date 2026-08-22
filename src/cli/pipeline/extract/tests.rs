@@ -676,6 +676,11 @@ fn merge_external_type_roots_validates_qualified_roots_by_rust_path() {
 #[test]
 fn extract_with_external_type_roots_keeps_host_sources_and_field_type() {
     let dir = tempfile::tempdir().unwrap();
+    // `extract()` writes an IR cache under a CWD-RELATIVE `.alef/` (pipeline/extract.rs:94 ->
+    // `cache::write_ir_cache` -> `ir_cache_dir()`). Without this guard the write lands in
+    // whichever tempdir a concurrent `CwdGuard` holder installed, and fails with ENOENT or
+    // EEXIST when that tempdir is removed mid-write -- roughly 1 full-suite run in 3. ~keep
+    let _cwd = crate::test_support::CwdGuard::enter(dir.path());
     let manifest = dir.path().join("Cargo.toml");
     let host = dir.path().join("host.rs");
     let external = dir.path().join("external.rs");
