@@ -16,6 +16,19 @@ pub(super) fn is_numeric_expr(field_expr: &str) -> bool {
     field_expr.starts_with("length(")
 }
 
+/// Build a call to the generated enum module's `wire_value/1` function.
+///
+/// Enum submodules (`AppModule.EnumName`) live under the app's top-level Elixir module,
+/// regardless of which (possibly nested) module a given NIF call is dispatched through --
+/// see `enum_module_header.jinja` in the rustler backend, which always nests enum modules one
+/// level under `app_module`. `module_path` here is the *call's* module (`E2eConfig`'s
+/// `[crates.e2e.call] module`, e.g. `MyLib` or a nested `MyLib.Service`), so only its first
+/// dot-segment is the app root the enum module actually lives under. ~keep
+fn elixir_enum_wire_value_expr(module_path: &str, enum_type_name: &str, field_expr: &str) -> String {
+    let app_root = module_path.split('.').next().unwrap_or(module_path);
+    format!("{app_root}.{enum_type_name}.wire_value({field_expr})")
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_assertion(
     out: &mut String,
@@ -385,7 +398,26 @@ pub(super) fn render_assertion(
         // and provide empty string as fallback when nil
         format!("(({field_expr} && {field_expr}.text) || \"\")")
     } else if field_is_enum {
-        format!("to_string({field_expr})")
+        // The binding exposes the exact serde wire value via `<Enum>.wire_value/1` (see
+        // `gen_elixir_enum_module_with_known_types` in the rustler backend) rather than
+        // `to_string/1`: `to_string(:key_value)` returns the atom's own Elixir spelling
+        // ("key_value"), not the wire value ("KeyValue") the fixture literal carries, and a
+        // data-carrying enum's flat-struct/tuple runtime shape has no `String.Chars` impl at
+        // all. Compare the fixture literal verbatim -- no lowering on our side -- against
+        // whatever `wire_value/1` returns. `ir_enum_type_name` only resolves when the IR
+        // positively confirms the field's enum type (see `field_is_enum` above); a field
+        // classified as enum only through the hand-maintained `fields_enum`/`enum_fields`
+        // config (enum type name unknown) keeps the previous `to_string/1` behavior rather
+        // than guessing a module path. ~keep
+        match assertion
+            .field
+            .as_deref()
+            .filter(|f| !f.is_empty())
+            .and_then(|f| field_resolver.ir_enum_type_name(f))
+        {
+            Some(enum_type_name) => elixir_enum_wire_value_expr(module_path, &enum_type_name, &field_expr),
+            None => format!("to_string({field_expr})"),
+        }
     } else {
         field_expr.clone()
     };

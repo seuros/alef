@@ -238,4 +238,24 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         "elixir_visitor_helper_functions.jinja",
         include_str!("../templates/elixir_visitor_helper_functions.jinja"),
     ),
+    (
+        "elixir_enum_wire_value_header.jinja",
+        "\n  @doc \"Returns the serde wire value this variant carries on the JSON boundary (see `wire_variant_value` in alef's naming module) -- distinct from the atom's Elixir spelling.\"\n  @spec wire_value(t()) :: String.t()\n",
+    ),
+    (
+        "elixir_enum_wire_value_atom_clause.jinja",
+        "  def wire_value(:{{ atom_literal }}), do: \"{{ wire }}\"\n",
+    ),
+    (
+        "elixir_enum_wire_value_tuple_clause.jinja",
+        "  def wire_value(value) when is_tuple(value), do: wire_value(elem(value, 0))\n",
+    ),
+    (
+        "elixir_enum_wire_value_map_clause.jinja",
+        "  def wire_value(value) when is_map(value), do: Map.fetch!(value, :{{ discriminator }})\n",
+    ),
+    (
+        "elixir_enum_string_chars_impl.jinja",
+        "\n  defimpl String.Chars, for: {{ app_module }}.{{ enum_name }} do\n    @doc false\n    def to_string(value), do: {{ app_module }}.{{ enum_name }}.wire_value(value)\n  end\n",
+    ),
 ];
