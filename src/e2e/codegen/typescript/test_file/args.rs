@@ -327,7 +327,49 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                             parts.push(arg.name.clone());
                             continue;
                         }
-                        parts.push(json_to_js_camel(v));
+                        // A raw `json_to_js_camel` dump only camelCases keys — it does not know
+                        // that a node/napi element type can be a tagged-data enum whose payload
+                        // napi nests under a synthesized per-variant field (see
+                        // `build_node_tagged_enum_variant_literal`), nor that a string field
+                        // typed as an enum must reference the generated host identifier rather
+                        // than the bare wire string. Route each element through the same typed
+                        // builder single objects use so an array of e.g. `Message` matches the
+                        // shape napi's `.d.ts` union actually declares. ~keep
+                        let element_type = arg
+                            .element_type
+                            .as_deref()
+                            .map(|raw| canonical_ts_type_name(lang, raw, config));
+                        let is_known_element_type = element_type.as_deref().is_some_and(|name| {
+                            type_defs.iter().any(|t| t.name == name) || enums.iter().any(|e| e.name == name)
+                        });
+                        if lang == "node"
+                            && let Some(element_type) = element_type.filter(|_| is_known_element_type)
+                        {
+                            let items: Vec<String> = v
+                                .as_array()
+                                .expect("checked is_array above")
+                                .iter()
+                                .map(|item| match item.as_object() {
+                                    Some(item_obj) => ts_builder_expression(
+                                        item_obj,
+                                        &element_type,
+                                        nested_types,
+                                        lang,
+                                        enum_fields,
+                                        bigint_fields,
+                                        type_defs,
+                                        enums,
+                                        wasm_type_prefix,
+                                        &fixture.docs_files_for_arg(&arg.field),
+                                        &mut *referenced_enums,
+                                    ),
+                                    None => json_to_js(item),
+                                })
+                                .collect();
+                            parts.push(format!("[{}]", items.join(", ")));
+                        } else {
+                            parts.push(json_to_js_camel(v));
+                        }
                     } else if let Some(raw_type) =
                         crate::e2e::codegen::recipe::json_object_constructor_type(arg, options_type, v)
                     {
@@ -426,4 +468,98 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
     }
 
     (setup_lines, parts.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message_enum_def() -> EnumDef {
+        EnumDef {
+            name: "Message".into(),
+            serde_tag: Some("role".into()),
+            serde_rename_all: Some("snake_case".into()),
+            variants: vec![crate::core::ir::EnumVariant {
+                name: "User".into(),
+                is_tuple: true,
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "_0".into(),
+                    ty: TypeRef::Named("UserMessage".into()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn user_message_type_def() -> TypeDef {
+        TypeDef {
+            name: "UserMessage".into(),
+            fields: vec![crate::core::ir::FieldDef {
+                name: "content".into(),
+                ty: TypeRef::String,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn fixture() -> crate::e2e::fixture::Fixture {
+        crate::e2e::fixture::Fixture {
+            id: "chat".to_string(),
+            description: "Chat".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Regression for the E3 message-shape defect: an array-typed `json_object` arg (the real
+    /// site of the 108 x TS2353 failures, e.g. `messages: Message[]`) used to skip the typed
+    /// builder entirely and dump each element through `json_to_js_camel` — a pure key-casing
+    /// pass with no notion of a tagged-data enum's variant nesting. Each element must instead
+    /// go through `ts_builder_expression`, the same builder a single typed object uses, so an
+    /// array of `Message` gets the same `{ role: 'user', user: { content } }` nesting a lone
+    /// `Message` argument does.
+    #[test]
+    fn node_array_of_tagged_enum_elements_nests_each_payload() {
+        let enums = [message_enum_def()];
+        let type_defs = [user_message_type_def()];
+        let fixture = fixture();
+        let input = serde_json::json!({ "messages": [{ "role": "user", "content": "Hello" }] });
+        let args = [ArgMapping {
+            name: "messages".into(),
+            field: "input.messages".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: true,
+            element_type: Some("Message".into()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let (_setup_lines, call_args) = build_args_and_setup(
+            &input,
+            &args,
+            None,
+            &fixture,
+            &Default::default(),
+            "node",
+            &Default::default(),
+            &Default::default(),
+            None,
+            &type_defs,
+            &enums,
+            "",
+            &config,
+            true,
+            &mut Default::default(),
+        );
+
+        assert_eq!(
+            call_args, "[{ role: \"user\", user: { content: \"Hello\" } } as Message]",
+            "array element must nest the payload under the synthesized variant field, not flatten it"
+        );
+    }
 }

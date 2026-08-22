@@ -73,6 +73,85 @@ fn is_untagged_data_enum(enum_name: &str, enums: &[EnumDef]) -> bool {
         .any(|e| e.name == enum_name && e.serde_untagged && e.variants.iter().any(|v| !v.fields.is_empty()))
 }
 
+/// For a node-lang tagged-data enum whose matched variant wraps a single Named-type payload
+/// (`enum Message { User(UserMessage), .. }` with `#[serde(tag = "role")]`), napi's `.d.ts`
+/// union member nests that payload under a synthesized per-variant field
+/// (`{ role: 'user'; user: UserMessage }`) rather than flattening its fields alongside the
+/// tag (`{ role: 'user', content: '...' }`) — see `gen_tagged_enum_as_object`, which emits a
+/// dedicated `Option<{prefix}{inner}>` field for exactly this shape (one struct-payload tuple
+/// variant), keyed by `tagged_enum_binding_field_js_name` (variant/field `serde_rename`, else
+/// the lower-camel-case variant name). Building the flattened wire-shape object and casting it
+/// `as Message` type-checks against no union member, so `tsc` rejects it with TS2353.
+///
+/// Returns `None` for anything that doesn't need this treatment (unit variants, struct
+/// variants, multi-field tuple variants, or a tag value with no matching variant) so the
+/// caller falls back to the ordinary flatten path — still correct there, since napi keeps
+/// those variants' fields flattened on the shared binding struct. ~keep
+#[allow(clippy::too_many_arguments)]
+fn build_node_tagged_enum_variant_literal(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    type_name: &str,
+    enum_def: &EnumDef,
+    nested_types: &std::collections::HashMap<String, String>,
+    enum_fields: &std::collections::HashMap<String, String>,
+    bigint_fields: &std::collections::BTreeSet<String>,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    docs_files: &[crate::e2e::fixture::FixtureDocsFileInput],
+    pointer: &str,
+    depth: usize,
+    referenced_enums: &mut std::collections::BTreeSet<String>,
+) -> Option<String> {
+    let tag_field = enum_def.serde_tag.as_deref()?;
+    let tag_value_json = obj.get(tag_field)?;
+    let tag_value = tag_value_json.as_str()?;
+    let variant = enum_def.variants.iter().find(|v| {
+        crate::codegen::naming::wire_variant_value(
+            &v.name,
+            v.serde_rename.as_deref(),
+            enum_def.serde_rename_all.as_deref(),
+        ) == tag_value
+    })?;
+    if !variant.is_tuple || variant.fields.len() != 1 {
+        return None;
+    }
+    let field = &variant.fields[0];
+    let TypeRef::Named(inner_type_name) = &field.ty else {
+        return None;
+    };
+
+    let payload_key = field
+        .serde_rename
+        .clone()
+        .or_else(|| variant.serde_rename.clone())
+        .unwrap_or_else(|| crate::codegen::naming::to_node_name(&variant.name));
+
+    let mut remaining = obj.clone();
+    remaining.remove(tag_field);
+    let nested_with_cast = ts_builder_expression_inner(
+        &remaining,
+        inner_type_name,
+        nested_types,
+        "node",
+        enum_fields,
+        bigint_fields,
+        type_defs,
+        enums,
+        "",
+        docs_files,
+        pointer,
+        depth + 1,
+        referenced_enums,
+    );
+    let cast_suffix = format!(" as {inner_type_name}");
+    let nested_expr = nested_with_cast.strip_suffix(&cast_suffix).unwrap_or(&nested_with_cast);
+
+    Some(format!(
+        "{{ {tag_field}: {}, {payload_key}: {nested_expr} }} as {type_name}",
+        json_to_js(tag_value_json)
+    ))
+}
+
 /// Pre-process a JSON value so that napi-rs (node) binding can deserialize it.
 ///
 /// The napi-rs backend always emits `#[napi(js_name = "kind")]` for the
@@ -186,6 +265,27 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     // (() => { const _u = WasmOptions.default(); ... })()` triggers
     // oxlint `no-shadow` on every nested-options expression.
     let var = format!("_u{depth}");
+    if lang == "node"
+        && let Some(enum_def) = enums
+            .iter()
+            .find(|e| e.name == type_name && e.serde_tag.is_some() && e.variants.iter().any(|v| !v.fields.is_empty()))
+        && let Some(nested_literal) = build_node_tagged_enum_variant_literal(
+            obj,
+            type_name,
+            enum_def,
+            nested_types,
+            enum_fields,
+            bigint_fields,
+            type_defs,
+            enums,
+            docs_files,
+            pointer,
+            depth,
+            referenced_enums,
+        )
+    {
+        return nested_literal;
+    }
     if lang == "node" || (lang == "wasm" && is_tagged_data_enum(type_name, enums, wasm_type_prefix)) {
         // For node: if this type itself is a tagged-data enum, rename its serde_tag
         // key to "kind". The napi-rs backend hardcodes `#[napi(js_name = "kind")]`
@@ -535,243 +635,4 @@ fn json_pointer_child(pointer: &str, field: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn assert_strict_typescript_compiles(source: &str) {
-        let directory = tempfile::tempdir().expect("temporary TypeScript project");
-        let source_path = directory.path().join("snippet.ts");
-        std::fs::write(&source_path, source).expect("write TypeScript regression source");
-        let Ok(output) = std::process::Command::new("tsc")
-            .args([
-                "--strict",
-                "--noUncheckedIndexedAccess",
-                "--noEmit",
-                "--target",
-                "ES2022",
-            ])
-            .arg(&source_path)
-            .output()
-        else {
-            return;
-        };
-        assert!(
-            output.status.success(),
-            "strict TypeScript rejected generated snippet:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    #[test]
-    fn node_typed_objects_use_importable_enum_members() {
-        let expression = ts_builder_expression(
-            serde_json::json!({"kind": "uri"}).as_object().expect("object"),
-            "DocumentInput",
-            &Default::default(),
-            "node",
-            &[("kind".into(), "InputKind".into())].into_iter().collect(),
-            &Default::default(),
-            &[],
-            &[],
-            "",
-            &[],
-            &mut Default::default(),
-        );
-
-        assert_eq!(expression, "{ kind: InputKind.Uri } as DocumentInput");
-    }
-
-    #[test]
-    fn node_typed_objects_lower_bytes_and_enums_from_ir() {
-        let type_defs = [TypeDef {
-            name: "DocumentInput".into(),
-            fields: vec![
-                crate::core::ir::FieldDef {
-                    name: "bytes".into(),
-                    ty: crate::core::ir::TypeRef::Bytes,
-                    ..Default::default()
-                },
-                crate::core::ir::FieldDef {
-                    name: "kind".into(),
-                    ty: crate::core::ir::TypeRef::Named("InputKind".into()),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        }];
-        let enums = [EnumDef {
-            name: "InputKind".into(),
-            ..Default::default()
-        }];
-        let expression = ts_builder_expression(
-            serde_json::json!({"bytes": [72, 105], "kind": "bytes"})
-                .as_object()
-                .expect("object"),
-            "DocumentInput",
-            &Default::default(),
-            "node",
-            &Default::default(),
-            &Default::default(),
-            &type_defs,
-            &enums,
-            "",
-            &[],
-            &mut Default::default(),
-        );
-
-        assert_eq!(
-            expression,
-            "{ bytes: Uint8Array.from([72, 105]), kind: InputKind.Bytes } as DocumentInput"
-        );
-
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("content".to_string(), "results[0].content".to_string());
-        let optional = ["results".to_string()].into_iter().collect();
-        let resolver = crate::e2e::field_access::FieldResolver::new(
-            &fields,
-            &optional,
-            &Default::default(),
-            &Default::default(),
-            &Default::default(),
-        );
-        let accessor = resolver.accessor("content", "node", "result");
-        let source = format!(
-            "enum InputKind {{ Bytes }}\ninterface DocumentInput {{ bytes: Uint8Array; kind: InputKind }}\ninterface Output {{ results?: Array<{{ content: string }}> }}\nconst input: DocumentInput = {expression};\ndeclare const result: Output;\nconst content: string | undefined = {accessor};\nvoid input; void content;\n"
-        );
-        assert_strict_typescript_compiles(&source);
-    }
-
-    #[test]
-    fn wasm_typed_objects_lower_bytes_and_enums_from_ir() {
-        let type_defs = [TypeDef {
-            name: "ExtractInput".into(),
-            fields: vec![
-                crate::core::ir::FieldDef {
-                    name: "bytes".into(),
-                    ty: crate::core::ir::TypeRef::Bytes,
-                    ..Default::default()
-                },
-                crate::core::ir::FieldDef {
-                    name: "kind".into(),
-                    ty: crate::core::ir::TypeRef::Named("ExtractInputKind".into()),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        }];
-        let enums = [EnumDef {
-            name: "ExtractInputKind".into(),
-            ..Default::default()
-        }];
-        let expression = ts_builder_expression(
-            serde_json::json!({"bytes": [72, 105], "kind": "bytes"})
-                .as_object()
-                .expect("object"),
-            "WasmExtractInput",
-            &Default::default(),
-            "wasm",
-            &Default::default(),
-            &Default::default(),
-            &type_defs,
-            &enums,
-            "Wasm",
-            &[],
-            &mut Default::default(),
-        );
-        assert!(
-            expression.contains("_u0.bytes = Uint8Array.from([72, 105])"),
-            "{expression}"
-        );
-        assert!(
-            expression.contains("_u0.kind = WasmExtractInputKind.Bytes"),
-            "{expression}"
-        );
-        let source = format!(
-            "enum WasmExtractInputKind {{ Bytes }}\nclass WasmExtractInput {{ static default(): WasmExtractInput {{ return new WasmExtractInput(); }} bytes!: Uint8Array; kind!: WasmExtractInputKind; }}\nconst input: WasmExtractInput = {expression};\nvoid input;\n"
-        );
-        assert_strict_typescript_compiles(&source);
-    }
-
-    #[test]
-    fn wasm_untagged_data_enum_field_emits_raw_value_not_enum_member() {
-        // `EmbeddingInput` is an untagged data enum: on the wire it is the bare
-        // payload of whichever variant matched (here, a plain string), so the
-        // fixture value "" is real input data, not the name of a `WasmEmbeddingInput`
-        // member.
-        let type_defs = [TypeDef {
-            name: "EmbeddingRequest".into(),
-            fields: vec![crate::core::ir::FieldDef {
-                name: "input".into(),
-                ty: crate::core::ir::TypeRef::Named("EmbeddingInput".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }];
-        let enums = [EnumDef {
-            name: "EmbeddingInput".into(),
-            serde_untagged: true,
-            variants: vec![crate::core::ir::EnumVariant {
-                name: "Text".into(),
-                fields: vec![crate::core::ir::FieldDef {
-                    name: "0".into(),
-                    ty: crate::core::ir::TypeRef::String,
-                    ..Default::default()
-                }],
-                is_tuple: true,
-                ..Default::default()
-            }],
-            ..Default::default()
-        }];
-        let expression = ts_builder_expression(
-            serde_json::json!({"input": ""}).as_object().expect("object"),
-            "WasmEmbeddingRequest",
-            &Default::default(),
-            "wasm",
-            &Default::default(),
-            &Default::default(),
-            &type_defs,
-            &enums,
-            "Wasm",
-            &[],
-            &mut Default::default(),
-        );
-        assert!(expression.contains("_u0.input = \"\";"), "{expression}");
-        assert!(!expression.contains("WasmEmbeddingInput."), "{expression}");
-    }
-
-    #[test]
-    fn node_and_wasm_typed_objects_read_documented_files() {
-        let object = serde_json::json!({"bytes": "document.pdf"});
-        let object = object.as_object().expect("object");
-        let files = [crate::e2e::fixture::FixtureDocsFileInput {
-            field: "/bytes".into(),
-            path: "document.pdf".into(),
-        }];
-        for language in ["node", "wasm"] {
-            let expression = ts_builder_expression(
-                object,
-                "DocumentInput",
-                &Default::default(),
-                language,
-                &Default::default(),
-                &Default::default(),
-                &[],
-                &[],
-                "",
-                &files,
-                &mut Default::default(),
-            );
-            assert!(
-                expression.contains("readFile(\"document.pdf\")"),
-                "{language}: {expression}"
-            );
-            assert!(
-                !expression.contains("bytes: \"document.pdf\""),
-                "{language}: {expression}"
-            );
-            if language == "wasm" {
-                assert!(expression.starts_with("await (async () =>"), "{expression}");
-            }
-        }
-    }
-}
+mod tests;

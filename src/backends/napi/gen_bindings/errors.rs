@@ -342,40 +342,7 @@ pub(super) fn gen_dts(
                     }
                     lines.push("};".to_string());
                 } else if is_data_enum && e.variants.iter().any(|v| !v.fields.is_empty()) {
-                    // Internal tagging (`#[serde(tag = "...")]`) with at least one data-bearing
-                    // variant: each variant serializes to its own flat object on the wire —
-                    // `{"type":"basic","username":"...","password":"..."}` — with no other keys
-                    // present, so a discriminated union of per-variant shapes matches the wire
-                    // format exactly and gives callers real narrowing plus required fields. The
-                    // compiled napi struct behind this still stores every variant's fields as one
-                    // flattened `Option<T>` bag (`gen_tagged_enum_as_object`), but a constructed
-                    // instance only ever populates its own variant's fields, so the union type is
-                    // a faithful (if narrower) view of what a caller actually receives — the same
-                    // relationship the adjacent-tagging branch above already relies on. Field
-                    // naming reuses `tagged_enum_field_js_name` so a newtype variant's synthetic
-                    // `_0` field still gets its variant-derived name, not a bare `0`. (~keep)
-                    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
-                    let mut member_lines: Vec<String> = Vec::new();
-                    for variant in &e.variants {
-                        let tag_value = wire_variant_value(
-                            &variant.name,
-                            variant.serde_rename.as_deref(),
-                            e.serde_rename_all.as_deref(),
-                        );
-                        let mut obj_fields: Vec<String> = vec![format!("{tag_field}: '{tag_value}'")];
-                        for field in &variant.fields {
-                            let js_name = enums::tagged_enum_field_js_name(variant, field);
-                            let ts_ty = dts_type(&field.ty);
-                            if matches!(field.ty, TypeRef::Optional(_)) {
-                                obj_fields.push(format!("{js_name}?: {ts_ty}"));
-                            } else {
-                                obj_fields.push(format!("{js_name}: {ts_ty}"));
-                            }
-                        }
-                        member_lines.push(format!("  | {{ {} }}", obj_fields.join("; ")));
-                    }
-                    lines.push(format!("export type {ts_name} ="));
-                    lines.extend(member_lines);
+                    lines.extend(internal_tagged_union_dts_lines(e, ts_name));
                 } else if is_data_enum {
                     // Internal tagging, every variant a unit variant: `{"kind":"A"}` carries no
                     // payload fields to differentiate, so a single object with a union-valued tag
@@ -618,6 +585,48 @@ pub(super) fn dts_type(ty: &TypeRef) -> String {
         TypeRef::Map(k, v) => format!("Record<{}, {}>", dts_type(k), dts_type(v)),
         TypeRef::Named(name) => node_type_name(name).to_string(),
     }
+}
+
+/// `.d.ts` lines for an internally-tagged enum (`#[serde(tag = "...")]`) with at least one
+/// data-bearing variant: each variant serializes to its own flat object on the wire —
+/// `{"type":"basic","username":"...","password":"..."}` — with no other keys present, so a
+/// discriminated union of per-variant shapes matches the wire format exactly and gives callers
+/// real narrowing plus required fields. The compiled napi struct behind this still stores every
+/// variant's fields as one flattened `Option<T>` bag (`gen_tagged_enum_as_object`), but a
+/// constructed instance only ever populates its own variant's fields, so the union type is a
+/// faithful (if narrower) view of what a caller actually receives — the same relationship the
+/// adjacent-tagging branch relies on. Field naming reuses `tagged_enum_field_js_name` so a
+/// newtype variant's synthetic `_0` field still gets its variant-derived name, not a bare `0` —
+/// e.g. `Message::User(UserMessage)` renders as `{ role: 'user'; user: UserMessage }`, not a
+/// flattened `{ role: 'user'; content: string }`.
+///
+/// Exposed at `pub(crate)` (re-exported from `backends::napi`) so the TypeScript e2e snippet
+/// generator can typecheck a generated snippet's object literal against the exact union this
+/// function produces, rather than against a hand-guessed copy of it — see
+/// `e2e::codegen::typescript::test_file::builders`'s `node_tagged_enum_*` cross-generator
+/// tests. ~keep
+pub(crate) fn internal_tagged_union_dts_lines(e: &EnumDef, ts_name: &str) -> Vec<String> {
+    let tag_field = e.serde_tag.as_deref().unwrap_or("type");
+    let mut lines = vec![format!("export type {ts_name} =")];
+    for variant in &e.variants {
+        let tag_value = wire_variant_value(
+            &variant.name,
+            variant.serde_rename.as_deref(),
+            e.serde_rename_all.as_deref(),
+        );
+        let mut obj_fields: Vec<String> = vec![format!("{tag_field}: '{tag_value}'")];
+        for field in &variant.fields {
+            let js_name = enums::tagged_enum_field_js_name(variant, field);
+            let ts_ty = dts_type(&field.ty);
+            if matches!(field.ty, TypeRef::Optional(_)) {
+                obj_fields.push(format!("{js_name}?: {ts_ty}"));
+            } else {
+                obj_fields.push(format!("{js_name}: {ts_ty}"));
+            }
+        }
+        lines.push(format!("  | {{ {} }}", obj_fields.join("; ")));
+    }
+    lines
 }
 
 /// TypeScript shape of one variant of an `untagged` enum, as it actually appears on the wire:
