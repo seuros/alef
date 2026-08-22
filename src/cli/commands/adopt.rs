@@ -284,7 +284,17 @@ impl AdoptReport {
 /// artifact. [`crate::cli::cache::is_alef_derived_output`] is the one named property both
 /// sides ask instead, and its doc carries the admission criteria a candidate has to
 /// satisfy before it is added. ~keep
-fn is_create_once_seed(file: &crate::core::backend::GeneratedFile) -> bool {
+///
+/// `pub(crate)` so [`crate::bin_cli::helpers::frozen::frozen_managed_paths`] can classify
+/// a frozen path by the identical predicate this module gates
+/// `--clobber-create-once-seeds` on, rather than re-deriving its own notion of "seed".
+/// Before that sharing, `alef verify` reported every frozen create-once seed under the
+/// same heading and the same "run `alef adopt <path>`" remedy as a genuinely adoptable
+/// frozen file -- a remedy `alef adopt --write` then refused outright for every seed,
+/// naming a flag verify never mentioned. Two components computing the same fact
+/// independently is this codebase's most common defect shape; a single predicate both
+/// sides call is the fix, not a second copy kept in step by hand. ~keep
+pub(crate) fn is_create_once_seed(file: &crate::core::backend::GeneratedFile) -> bool {
     !file.carries_alef_marker() && !crate::cli::cache::is_alef_derived_output(&file.path)
 }
 
@@ -375,8 +385,25 @@ fn embedded_regenerate_command(generated: &str) -> Option<String> {
 /// The bytes adoption would leave on disk, or `None` when nothing can be stamped and
 /// ownership must go through the committed record instead.
 ///
-/// Two routes, tried in order:
+/// Three routes, tried in order:
 ///
+/// 0. **Self-marking content whose body already converged**, driven by the *generated*
+///    bytes rather than the path or a reconstructed header. A self-marking backend
+///    (custom Swift/Kotlin/Dart/Gleam/Zig headers, and Markdown via route 2 below) bakes
+///    its own marker text straight into `generated` -- wording route 1's generic
+///    `hash::header` never produces, because these paths are `generated_header: false`
+///    by design. Stamping `existing` with the generic header instead would then never
+///    equal `generated` byte-for-byte even when the body is identical, so [`classify`]
+///    would call a header-wording difference a body drift -- and the diff printed to
+///    justify that verdict shows no changed body line at all, which is exactly the
+///    signal an operator is told to read before consenting. When `generated` already
+///    ends with `existing` verbatim, its leading bytes *are* the exact marker a
+///    subsequent `alef generate` will (re)write for this self-marked path, so handing
+///    `generated` itself back as the stamped bytes is both correct and format-agnostic --
+///    no per-backend header table needed, and it changes no body byte because the body
+///    is `existing` by construction of the check. Gated on `content_has_alef_marker`
+///    too, so a coincidental byte-for-byte suffix match on an unmarked path can never
+///    fire this route and skip stamping a marker entirely. ~keep
 /// 1. [`crate::cli::pipeline::stamp_for_adoption`] — the generic path-driven header,
 ///    for every format `write::marker_header_syntax` knows a comment syntax for.
 /// 2. **Self-marking Markdown**, driven by the *generated* content rather than the
@@ -389,8 +416,14 @@ fn embedded_regenerate_command(generated: &str) -> Option<String> {
 ///    Without this route the ~12k frozen snippet `.md` files would each take an entry
 ///    in `.alef-ownership.toml` instead: a 12,000-line committed manifest standing in
 ///    for a marker the file can perfectly well hold, on a path where the marker is
-///    strictly better (it cannot be separated from the file it describes). ~keep
+///    strictly better (it cannot be separated from the file it describes). Route 0
+///    above already handles the common converged case for `.md` too (`generated` ends
+///    with `existing` whenever the snippet body itself is unchanged); this route
+///    remains for the drifted case, where route 0's suffix check cannot match. ~keep
 fn stamp_for(full_path: &Path, existing: &str, generated: &str) -> Option<String> {
+    if crate::core::hash::content_has_alef_marker(generated) && generated.ends_with(existing) {
+        return Some(generated.to_owned());
+    }
     if let Some(stamped) = crate::cli::pipeline::stamp_for_adoption(full_path, existing) {
         return Some(stamped);
     }
