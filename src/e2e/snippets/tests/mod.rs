@@ -331,6 +331,111 @@ fn capability_decision_reports_missing_requirements_deterministically() {
     );
 }
 
+/// A call declaring `skip_languages` for a target must be excluded identically by both real
+/// production consumers of that decision: [`crate::e2e::codegen::fixture_inclusion`] (the
+/// executable e2e suite generator) and the documentation-snippet generator
+/// (`generate_snippet_report_with_extensions`, exercised here through no extension at all so
+/// the fixture reaches the same skip check the loop in `super` applies before falling back to
+/// a built-in recipe). Before `call_skip_reason` was introduced, the snippet generator
+/// never consulted `call.skip_languages` at all and attempted a real C render for a call this
+/// backend cannot represent -- the built-in engine-factory recipe then fell back to raw
+/// `MOCK_SERVER_URL` scaffolding (no `url`/`batch_urls` is declared on the fixture below) and
+/// `reject_mock_harness_scaffolding` aborted the whole run. This test drives both real
+/// functions over one shared call config and asserts they agree: neither generator ever
+/// attempts to speak for a call the target language was explicitly told to skip. ~keep
+#[test]
+fn snippet_generator_and_executable_suite_agree_on_a_call_level_language_skip() {
+    let cfg_str = r#"
+[workspace]
+languages = ["c"]
+[[crates]]
+name = "example-core"
+sources = ["src/lib.rs"]
+[crates.ffi]
+prefix = "sample"
+[crates.e2e]
+fixtures = "fixtures"
+[crates.e2e.call]
+function = "scrape"
+module = "example_api"
+[crates.e2e.calls.batch_stream]
+function = "batch_stream"
+module = "example_api"
+select_when = { category = "batch" }
+skip_languages = ["c"]
+
+[crates.e2e.calls.batch_stream.overrides.c]
+function = "batch_stream"
+result_type = "BatchResults"
+raw_c_result_type = "BatchResults"
+c_engine_factory = "EngineConfig"
+"#;
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(cfg_str).expect("config parses");
+    let e2e = cfg.crates[0].e2e.clone().expect("e2e config");
+    let crate_config = cfg.resolve().expect("config resolves").remove(0);
+
+    let mut fixture = Fixture {
+        id: "batch_stream_basic".into(),
+        description: "Stream a batch of items".into(),
+        category: Some("batch".into()),
+        docs: Some(FixtureDocs {
+            topic: "batch".into(),
+            stem: Some("batch-stream-basic".into()),
+            paths: BTreeMap::new(),
+            title: None,
+            description: None,
+            input: None,
+            shows: Vec::new(),
+            error: None,
+            presentation: None,
+            client: None,
+            side_effects: SideEffectClass::Safe,
+            coverage_exceptions: BTreeMap::new(),
+        }),
+        input: serde_json::json!({}),
+        ..Fixture::default()
+    };
+    fixture.call = Some("batch_stream".into());
+
+    // Real production function #1: the executable e2e suite generator's inclusion check.
+    let suite_decision = crate::e2e::codegen::fixture_inclusion(&fixture, "c", &e2e);
+    assert_eq!(
+        suite_decision,
+        crate::e2e::codegen::InclusionDecision::Exclude("call skips language"),
+        "the executable suite must exclude a call-level language skip"
+    );
+
+    // Real production function #2: the documentation-snippet generator, unaided by any
+    // extension, so it falls through to the same built-in recipe real generation uses.
+    let snippet_config = SnippetConfig {
+        output: "docs/snippets".into(),
+        ..SnippetConfig::default()
+    };
+    let context = SnippetRenderContext {
+        e2e: &e2e,
+        crate_config: &crate_config,
+        type_defs: &[],
+        enums: &[],
+        functions: &[],
+        errors: &[],
+    };
+    let report =
+        generate_snippet_report_with_extensions(&[fixture], &["c".to_string()], &snippet_config, &context, &[])
+            .expect("a call-level language skip must not reach the mock-harness guard");
+
+    assert!(
+        report.snippets.is_empty(),
+        "a call skipped for `c` must never render a snippet: {:?}",
+        report.snippets
+    );
+    assert!(
+        report.coverage.expected.is_empty(),
+        "a call skipped for `c` must never enter the coverage ledger as expected: {:?}",
+        report.coverage.expected
+    );
+    assert!(report.guard_rejections.is_empty());
+}
+
 mod path_resolution;
 
 /// Controls for `generated_docs_use_validator_canonical_language_identity`.

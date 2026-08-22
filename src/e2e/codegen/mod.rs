@@ -97,6 +97,38 @@ impl InclusionDecision {
     }
 }
 
+/// Whether the resolved call declares `skip_languages` covering `language`.
+///
+/// This is deliberately narrower than "is this fixture skipped for this language": a
+/// fixture-level [`crate::e2e::fixture::SkipDirective`] opts a fixture out of the
+/// *executable test harness* only (see `documentation_rendering_is_independent_of_test_harness_skips`
+/// and the extension-owned-recipe carve-out in `e2e::snippets`), and a documentation
+/// snippet must keep rendering for it whenever a real recipe exists. `skip_languages` on a
+/// *call*, in contrast, declares that the target language cannot represent this call at
+/// all -- no recipe, extension-owned or built-in, can speak for it -- so both the
+/// executable suite ([`fixture_inclusion`]) and the documentation-snippet generator
+/// (`e2e::snippets::generate_snippet_report`) must treat it identically. Before this
+/// function existed, the snippet generator never checked `call.skip_languages` at all: a
+/// call declaring `skip_languages = ["c"]` (correctly excluded from the executable C
+/// suite) still reached the snippet generator's built-in C recipe, which rendered
+/// mock-harness scaffolding and tripped `reject_mock_harness_scaffolding`. Adding a
+/// second, independently-derived `skip_languages` check on the snippet side would only
+/// reproduce that drift under a new name, so both callers resolve through this one
+/// function instead. ~keep
+pub fn call_skip_reason(fixture: &Fixture, language: &str, e2e_config: &E2eConfig) -> Option<&'static str> {
+    let call_config = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    if call_config.skip_languages.iter().any(|l| l == language) {
+        return Some("call skips language");
+    }
+    None
+}
+
 pub fn fixture_inclusion(fixture: &Fixture, language: &str, e2e_config: &E2eConfig) -> InclusionDecision {
     if !e2e_config.exclude_categories.is_empty() && e2e_config.exclude_categories.contains(&fixture.resolved_category())
     {
@@ -107,6 +139,9 @@ pub fn fixture_inclusion(fixture: &Fixture, language: &str, e2e_config: &E2eConf
     {
         return InclusionDecision::Exclude("fixture skip directive");
     }
+    if let Some(reason) = call_skip_reason(fixture, language, e2e_config) {
+        return InclusionDecision::Exclude(reason);
+    }
     let call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
         &fixture.id,
@@ -114,10 +149,6 @@ pub fn fixture_inclusion(fixture: &Fixture, language: &str, e2e_config: &E2eConf
         &fixture.tags,
         &fixture.input,
     );
-    // Also respect skip_languages on the resolved call (e.g. batch_scrape skips elixir).
-    if call_config.skip_languages.iter().any(|l| l == language) {
-        return InclusionDecision::Exclude("call skips language");
-    }
     // HTTP/mock fixtures are exercised by issuing a request to the alef mock server
     // (`MOCK_SERVER_URL/fixtures/<id>`), not by invoking a binding function, so they are
     // includable even when no call `function` is resolved for the language. Function-call
