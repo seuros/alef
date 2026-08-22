@@ -48,7 +48,7 @@ const KNOWN_RAW_FUNCTION_READS: &[&str] = &[
     // Reads on `CallOverride::function` (an `Option<String>`, never the empty-base hazard) and
     // test assertions on an already-resolved call.
     "src/e2e/codegen/brew/category.rs\tif let Some(override_fn) = &brew_override.function {",
-    "src/e2e/snippets/mod.rs\tassert!(e2e.call.function.is_empty());",
+    "src/e2e/snippets/tests/coverage.rs\tassert!(e2e.call.function.is_empty());",
     "src/e2e/codegen/wasm/snippet.rs\tbase `function` nor `overrides.wasm.function` supplies one\",",
     "src/e2e/codegen/java/tests.rs\tassert_eq!(resolved_call.function, \"batchScrape\");",
     "src/e2e/codegen/java/tests.rs\tassert_eq!(resolved_default.function, \"scrape\");",
