@@ -562,6 +562,13 @@ run = "test \"$ALLOW_PRIVATE_NETWORK\" = true"
     /// silent and letting a stale-source failure masquerade as a real regression.
     #[test]
     fn stale_test_app_names_flags_outdated_target_and_clears_after_regeneration() {
+        // `sources_hash` and `read_alef_toml_bytes` resolve against the process cwd, so a
+        // concurrently-running cwd-mutating test changes what this computes between the stale
+        // and fresh halves and the fresh stamp stops matching. Passes alone, fails in the full
+        // suite. ~keep
+        let _guard = crate::test_support::CWD_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         let base = dir.path();
         let config = resolved_config();
