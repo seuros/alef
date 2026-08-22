@@ -152,7 +152,56 @@ fn gen_enum_unit_variants_emit_ruby_symbols() {
     let code = gen_enum(&enum_def);
     assert!(code.contains("enum Status"), "must emit enum definition");
     assert!(code.contains("to_symbol"), "unit enums use Ruby symbols");
-    assert!(code.contains("\"pending\""), "variant snake_case symbol key");
+    assert!(
+        code.contains("Status::Pending => \"Pending\","),
+        "no rename_all declared, so the IntoValue output is the verbatim wire value:\n{code}"
+    );
+}
+
+/// Serde's real default (no `#[serde(rename_all = "...")]` on the enum) serializes unit variants
+/// verbatim under their Rust name, e.g. `"KeyValue"` — not snake_cased. Regression for a Magnus
+/// `IntoValue` impl that unconditionally snake_cased every unit variant regardless of the
+/// enum's actual serde attributes, so a Ruby caller comparing the returned Symbol against a
+/// real JSON payload (e.g. `"kind": "KeyValue"`) never matched.
+#[test]
+fn gen_enum_unit_variant_wire_value_is_verbatim_without_rename_all() {
+    let enum_def = EnumDef {
+        name: "DataNodeKind".to_string(),
+        rust_path: "test_lib::DataNodeKind".to_string(),
+        variants: vec![make_variant("KeyValue", vec![]), make_variant("Sequence", vec![])],
+        ..Default::default()
+    };
+    let code = gen_enum(&enum_def);
+    assert!(
+        code.contains("DataNodeKind::KeyValue => \"KeyValue\","),
+        "serde's real default (no rename_all) serializes unit variants verbatim, not snake_cased:\n{code}"
+    );
+    assert!(
+        !code.contains("=> \"key_value\","),
+        "must not fabricate a snake_case wire value the Rust enum never declared:\n{code}"
+    );
+}
+
+/// Widening the `IntoValue` output to the real wire value must not narrow what `TryConvert`
+/// accepts on input — existing consumer code passing the old always-snake_case symbol
+/// (`:key_value`) must keep working alongside the new verbatim wire spelling (`"KeyValue"`).
+#[test]
+fn gen_enum_unit_variant_try_convert_still_accepts_the_legacy_snake_case_spelling() {
+    let enum_def = EnumDef {
+        name: "DataNodeKind".to_string(),
+        rust_path: "test_lib::DataNodeKind".to_string(),
+        variants: vec![make_variant("KeyValue", vec![])],
+        ..Default::default()
+    };
+    let code = gen_enum(&enum_def);
+    assert!(
+        code.contains("\"key_value\""),
+        "existing consumer code passing the old snake_case symbol must keep working:\n{code}"
+    );
+    assert!(
+        code.contains("\"KeyValue\""),
+        "the new verbatim wire value must also be accepted on input:\n{code}"
+    );
 }
 
 fn make_variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {

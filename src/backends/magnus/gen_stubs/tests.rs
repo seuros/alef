@@ -120,6 +120,22 @@ fn tagged_data_enum_emits_no_singleton_constructors() {
     );
 }
 
+/// The RBS `type value` union must match the actual `Symbol` the Magnus binding's `IntoValue`
+/// emits at runtime. Serde's real default (no `#[serde(rename_all = "...")]`) serializes unit
+/// variants verbatim, so a stub that always snake_cases the symbol lies about the runtime type.
+#[test]
+fn unit_enum_stub_type_value_matches_the_verbatim_wire_symbol_without_rename_all() {
+    let def = enum_def(
+        "DataNodeKind",
+        vec![variant("KeyValue", vec![]), variant("Sequence", vec![])],
+    );
+    let stub = gen_enum_stub(&def, false);
+    assert!(
+        stub.contains("type value = :KeyValue | :Sequence"),
+        "no rename_all declared, so the stub's symbol union must be verbatim: {stub}"
+    );
+}
+
 #[test]
 fn maps_named_dto_field_to_its_type() {
     let def = enum_def(

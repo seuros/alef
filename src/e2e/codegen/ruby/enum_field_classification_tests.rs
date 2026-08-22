@@ -234,3 +234,58 @@ fn render_spec_file_emits_a_real_assertion_for_the_unconfigured_enum_field() {
     );
     assert!(!out.contains("skipped"), "got:\n{out}");
 }
+
+/// The smoke test above uses a fixture value of `"key_value"`, which happens to already be
+/// snake_case — it never exercised the shape a real, unconfigured `#[serde(rename_all)]`-less
+/// enum actually produces on the wire. `DataNodeKind`'s real contract (see its rustdoc in
+/// tree-sitter-language-pack) is "unit variants serialize as a bare string (`"KeyValue"`)" —
+/// verbatim PascalCase, not snake_case. `render_spec_file` must embed that fixture literal
+/// exactly as written, with no case-folding of its own: the assertion codegen layer only knows
+/// how to coerce the *actual* value via `.to_s`, never to normalize the *expected* value's
+/// casing. (Whether the Magnus binding's runtime `Symbol` actually equals this verbatim string
+/// is proven at the backend level by
+/// `backends::magnus::gen_bindings::classes::tests::gen_enum_unit_variant_wire_value_is_verbatim_without_rename_all`
+/// — this test only proves the e2e-codegen layer is an honest pass-through for that value.)
+#[test]
+fn render_spec_file_embeds_the_verbatim_pascalcase_fixture_value_for_a_no_rename_all_enum() {
+    let (type_defs, enums, functions) = table_ir();
+    let call_config = call_config_for("process");
+    let mut e2e_config = E2eConfig::default();
+    e2e_config.calls.insert("process".to_string(), call_config);
+    let fixture = Fixture {
+        id: "kind_wire_shape".to_string(),
+        description: "Kind field matches the real no-rename_all wire contract".to_string(),
+        call: Some("process".to_string()),
+        assertions: vec![Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some("kind".to_string()),
+            value: Some(serde_json::Value::String("KeyValue".to_string())),
+            ..Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    let out = super::spec_file::render_spec_file(
+        "kind_wire_shape",
+        &[&fixture],
+        "Sample",
+        None,
+        "sample",
+        None,
+        &std::collections::HashMap::new(),
+        false,
+        &e2e_config,
+        false,
+        false,
+        &[],
+        &crate::core::config::ResolvedCrateConfig::default(),
+        &type_defs,
+        &[],
+        &enums,
+        &functions,
+    );
+    assert!(
+        out.contains("expect(result.kind.to_s).to eq('KeyValue')"),
+        "the expected literal must stay verbatim PascalCase, not be snake_cased by codegen:\n{out}"
+    );
+    assert!(!out.contains("skipped"), "got:\n{out}");
+}
