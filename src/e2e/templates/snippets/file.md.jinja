@@ -2,8 +2,8 @@
 id: {{ id }}
 language: {{ language }}
 target: {{ target }}
-level: {{ level }}
-requires: {{ requires }}
+{% if level %}level: {{ level }}
+{% endif %}requires: {{ requires }}
 side_effect: {{ side_effect }}
 ---
 

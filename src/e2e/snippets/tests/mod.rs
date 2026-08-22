@@ -464,7 +464,7 @@ fn generated_docs_use_validator_canonical_language_identity() {
         assert_eq!(
             rendered,
             format!(
-                "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nlevel: null\nrequires: []\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
+                "---\nid: fixture_{target_language}_extension_owned\nlanguage: {canonical_name}\ntarget: {target_language}\nrequires: []\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```{canonical_name} title=\"{}\"\nexample()\n```\n",
                 language.display_name()
             )
         );
@@ -535,12 +535,12 @@ fn frontmatter_fields_are_pinned_by_exact_equality() {
     assert_eq!(
         render(&required, SideEffectClass::Safe, "node"),
         format!(
-            "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nlevel: null\nrequires: [\"feature:json\",\"service:api\"]\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
+            "---\nid: fixture_node_extension_owned\nlanguage: typescript\ntarget: node\nrequires: [\"feature:json\",\"service:api\"]\nside_effect: safe\n---\n\n{SNIPPET_HEADER}Extension-owned example\n\n```typescript title=\"TypeScript\"\nexample()\n```\n"
         )
     );
 }
 
-/// `render_snippet_markdown` stamps `level: null` for `Safe` side effects instead of the
+/// `render_snippet_markdown` OMITS the `level:` key for `Safe` side effects instead of the
 /// unconditional `typecheck` `94d09809d` introduced, so `SnippetMetadata::level` resolves to
 /// `None` and `effective_validation_level` (`src/snippets/runner.rs`) has nothing of the
 /// front matter's own to fold the requested level down against.
@@ -569,8 +569,12 @@ fn safe_side_effects_snippet_is_not_level_capped() {
     );
 
     assert!(
-        rendered.contains("\nlevel: null\n"),
-        "safe snippet must not declare a level cap, got: {rendered}"
+        !rendered.contains("\nlevel:"),
+        "a safe snippet must declare no level cap at all -- the key is OMITTED rather than \
+         rendered `level: null`, because these are Astro content entries and Astro types \
+         `level` as an optional STRING: an absent key validates, an explicit YAML null does \
+         not. Both spellings deserialise to `SnippetMetadata::level == None` on alef's side. \
+         got: {rendered}"
     );
 
     let front_matter = rendered
@@ -667,6 +671,54 @@ fn rendered_snippet_without_header() -> String {
     stripped
 }
 
+/// No generated snippet may emit an explicit YAML `null` for ANY front-matter key.
+///
+/// These files are Astro content entries. Astro's collection schema types the optional keys as
+/// strings, and zod distinguishes "absent" from "present and null": an absent key validates, an
+/// explicit null does not (`level: Expected type "string", received "object"`). A SINGLE bad
+/// entry aborts the whole `astro build`, so one snippet takes the entire docs site down -- 810
+/// generated snippets in one consumer carried `level: null` and the build died on the first.
+///
+/// The four exact-equality front-matter pins nearby did NOT catch this: they all encoded the
+/// broken spelling as expected output, so they agreed with the bug. This asserts the PROPERTY
+/// the consumer actually depends on rather than a golden string. ~keep
+#[test]
+fn no_front_matter_key_renders_an_explicit_yaml_null() {
+    for side_effects in [SideEffectClass::Safe, SideEffectClass::Server] {
+        let docs = FixtureDocs {
+            topic: "api".into(),
+            stem: None,
+            paths: BTreeMap::new(),
+            title: None,
+            description: None,
+            input: None,
+            shows: Vec::new(),
+            error: None,
+            presentation: None,
+            client: None,
+            side_effects,
+            coverage_exceptions: BTreeMap::new(),
+        };
+        let rendered = render_snippet_markdown(
+            "example()",
+            &documented_fixture(),
+            &docs,
+            "python",
+            DocumentationLanguage::Binding(Language::Python),
+        );
+        let front_matter = rendered.split("---\n").nth(1).expect("front matter");
+        let offenders: Vec<&str> = front_matter
+            .lines()
+            .filter(|line| line.trim_end().ends_with(": null"))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "{side_effects:?} snippet emits an explicit YAML null, which Astro's content schema \
+             rejects and which fails the consumer's entire docs build: {offenders:?}"
+        );
+    }
+}
+
 /// The marker alef emits into a snippet must be one the read side matches.
 ///
 /// `content_has_alef_marker` is the single definition of "alef owns this file's
@@ -700,13 +752,32 @@ fn snippet_marker_lands_inside_the_read_side_scan_window() {
         .lines()
         .position(|line| line.contains("auto-generated by alef"))
         .expect("rendered snippet carries the marker");
-    assert_eq!(marker_index, 9, "marker must stay on the last line of the scan window");
+    assert_eq!(
+        marker_index, 8,
+        "a snippet that omits `level:` has a 7-line front matter, leaving one line of slack"
+    );
 
-    let widened = rendered.replacen("\nlevel: null\n", "\nlevel: null\nextra: value\n", 1);
+    // The zero-slack case is a snippet that DOES declare a level: 8 front-matter lines put the
+    // marker on index 9, the last line the window reads. That is the budget worth pinning. ~keep
+    let with_level = rendered.replacen("\ntarget: ", "\nlevel: typecheck\ntarget: ", 1);
+    let level_marker_index = with_level
+        .lines()
+        .position(|line| line.contains("auto-generated by alef"))
+        .expect("rendered snippet carries the marker");
+    assert_eq!(
+        level_marker_index, 9,
+        "a snippet declaring `level:` must still land on the last line of the scan window"
+    );
+    assert!(
+        crate::core::hash::content_has_alef_marker(&with_level),
+        "the zero-slack case must still be recognised"
+    );
+
+    let widened = with_level.replacen("\nlevel: typecheck\n", "\nlevel: typecheck\nextra: value\n", 1);
     assert!(
         !crate::core::hash::content_has_alef_marker(&widened),
-        "one extra front-matter line must push the marker out of the scan window -- \
-         the budget this test guards is exactly zero lines"
+        "one extra front-matter line beyond the level-carrying case must push the marker out \
+         of the scan window -- the budget this test guards is exactly zero lines"
     );
 }
 

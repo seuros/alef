@@ -688,10 +688,12 @@ const SNIPPET_REGENERATE_COMMAND: &str = "alef e2e generate";
 /// Placement is load-bearing and has no slack. `with_html_header` puts the marker after the
 /// YAML front matter (it must: Astro/Starlight imports these files as content and requires the
 /// opening `---` to be the first bytes) with one blank line between, so with
-/// `snippets/file.md.jinja`'s 8-line front matter the marker lands on line 10 — the last line
-/// `hash::content_has_alef_marker`'s 10-line scan window reads. **Adding a ninth front-matter
-/// line pushes the marker out of that window and silently restores the deadlock**; the marker
-/// would still be in the file and nothing would read it. `snippet_marker_lands_inside_the_read_side_scan_window`
+/// `snippets/file.md.jinja`'s front matter the marker lands on line 10 at worst — the last line
+/// `hash::content_has_alef_marker`'s 10-line scan window reads. **Adding a front-matter line
+/// beyond that budget pushes the marker out of the window and silently restores the deadlock**;
+/// the marker would still be in the file and nothing would read it. The front matter is 8 lines
+/// when `level:` is present and 7 when it is omitted, so the omitted case has one line of slack
+/// and the present case has none. `snippet_marker_lands_inside_the_read_side_scan_window`
 /// and its control fail if that budget is spent. ~keep
 fn render_snippet_markdown(
     body: &str,
@@ -754,14 +756,21 @@ fn snippet_requirements(fixture: &Fixture, target: &str, body: &str) -> Vec<Stri
 /// were being validated no deeper than syntax. That protection is still needed for exactly those
 /// fixtures. It was never needed for `Safe` ones, and stamping them anyway silently capped every
 /// generated snippet at `typecheck` regardless of what the workspace and the snippet's own
-/// capabilities could actually support. A `Safe` snippet renders `level: null` — parsed back as
-/// `SnippetMetadata::level == None` — so it has nothing to fold against `requested` and validates
-/// at whatever level the workspace and validator achieve on their own. ~keep
-fn level_stamp(side_effects: SideEffectClass) -> &'static str {
+/// capabilities could actually support. A `Safe` snippet OMITS the `level:` key entirely — an
+/// absent key deserialises to `SnippetMetadata::level == None` exactly as an explicit `null` did
+/// — so it has nothing to fold against `requested` and validates at whatever level the workspace
+/// and validator achieve on their own.
+///
+/// The key is omitted rather than rendered `level: null` because these files are Astro content
+/// entries, and Astro's collection schema types `level` as an optional STRING: an absent key
+/// validates, an explicit YAML null does not (`Expected type "string", received "object"`). One
+/// such entry fails the whole `astro build`, which took out 810 generated snippets in a consumer
+/// docs site. Alef's own parser treats the two spellings identically, so nothing here is lost. ~keep
+fn level_stamp(side_effects: SideEffectClass) -> Option<&'static str> {
     if side_effects == SideEffectClass::Safe {
-        "null"
+        None
     } else {
-        "typecheck"
+        Some("typecheck")
     }
 }
 
