@@ -185,6 +185,37 @@ field_skip_variants! {
         "enum variant accessor ",
         " not available on Ruby (serialized to Hash)",
     ),
+    /// ~keep PHP's counterpart, but reached by asking the binding backend rather than by matching
+    /// a path. `backends::php` lowers an IR enum three ways: an internally tagged data enum
+    /// becomes a flat `#[php_class]` whose variant payloads ARE readable properties, while a
+    /// unit-variant enum becomes a plain `string` and an `#[serde(untagged)]` data enum is
+    /// bridged as a JSON `string`. Only the last two are member-less, and only they produce this
+    /// skip — `php/enum_variant_access.rs` walks the same type graph the accessor renderer walks
+    /// to decide which one a path reached.
+    ///
+    /// This replaced a guard keyed on the literal path `metadata.format.` that emitted
+    /// [`FieldSkip::NotAvailableOnResultType`] — an `AuthoringGap`, therefore FATAL under the
+    /// strict gate — for a reason no consumer could ever act on. A PHP `string` does not grow a
+    /// variant accessor because someone edited `alef.toml`, so the verdict is a limitation.
+    EnumVariantAccessorNotAvailableInPhp: LanguageLimitation => (
+        "enum variant accessor ",
+        " not available in PHP (enum lowered to a string, not a class)",
+    ),
+    /// ~keep The flat class DOES expose this variant payload, as the read-only property ext-php-rs
+    /// registers from `#[php(getter)] pub fn get_<flat>` — under the RAW snake_case ident, with no
+    /// case conversion, unlike a struct's `#[php(prop, name = to_php_name(..))]`. The shared
+    /// accessor renderer (`field_access::optional_renderers::render_php_with_getters`) lowerCamel-
+    /// cases every path segment, which is right for struct props and wrong for these, so a
+    /// multi-word flat name would emit `->fictionBook` for a property called `fiction_book`.
+    ///
+    /// This is alef's debt, not the consumer's and not PHP's: the accessor exists and a renderer
+    /// that knew the difference could reach it. Bucketed as a generator gap so the summary names
+    /// the right owner, and refused rather than emitted wrong — a green assertion against a
+    /// property that does not exist is the failure mode this whole funnel exists to stop.
+    FlatEnumPropertyNotSpellableInPhp: GeneratorGap => (
+        "enum variant accessor ",
+        " not yet spellable in PHP (flat-class properties keep their snake_case name)",
+    ),
     /// ~keep Reworded from `metadata.format enum field serialization differs in Ruby`, which named
     /// no quoted field and so was structurally uncountable — the strict gate could never have seen
     /// it whatever patterns it matched. The reason is unchanged; only the field is now named.

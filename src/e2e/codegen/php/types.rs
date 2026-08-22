@@ -1,28 +1,31 @@
 //! PHP e2e helper types and type-classification helpers.
 //! These utilities were previously defined in `php.rs` during extractor phase.
 
+use super::enum_variant_access::PhpEnumLowering;
 use crate::core::config::e2e::CallConfig;
-use crate::core::ir::TypeRef;
+use crate::core::ir::{EnumDef, TypeRef};
 use crate::e2e::field_access::PhpGetterMap;
 use std::collections::{HashMap, HashSet};
 
-/// Compute the getter mapping for PHP result/fixture field traversal.
-///
-/// Returns true when a field is scalar-compatible for ext-php-rs `#[php(prop)]` — that
-/// is, the mapped Rust type implements `IntoZval` + `FromZval` automatically without
-/// a manual getter. Mirrors `is_php_prop_scalar_with_enums` from
-/// `alef-backend-php/src/gen_bindings/types.rs`.
-///
-/// Scalar-compatible: primitives, String, Char, Duration (→ u64), Path (→ String),
-/// Option<scalar>, Vec<primitive|String|Char>, unit-variant enums (mapped to String).
-/// Non-scalar: Named struct, Map, nested Vec<Named>, Json, Bytes.
 /// Build a per-`(owner_type, field_name)` PHP getter classification plus chain-resolution
-/// metadata from the IR's `TypeDef`s.
+/// metadata from the IR's `TypeDef`s and `EnumDef`s.
 ///
 /// For each type, marks fields as needing getter syntax when their mapped Rust type is
-/// non-scalar in PHP (`Named` struct, `Vec<Named>`, `Map`, `Json`, `Bytes`).
+/// non-scalar in PHP (`Named` struct, `Vec<Named>`, `Map`, `Json`, `Bytes`, a data enum).
 /// Also records each field's referenced `Named` inner type so the resolver can advance
 /// the current-type cursor as it walks multi-segment paths like `outer.inner.content`.
+///
+/// ~keep The scalar question is answered by [`crate::backends::php::is_php_prop_scalar`] — the
+/// binding backend's own predicate — rather than by a copy of it, and it is handed exactly the
+/// `enum_names` set the backend hands it: only the enums PHP lowers to a plain `string`. A
+/// local copy taking ALL enum names used to live here, which classified a tagged data enum
+/// field as a `#[php(prop)]` scalar and emitted `->format` for a field the binding exposes only
+/// as `getFormat()`.
+///
+/// Enums the backend lowers to a flat `#[php_class]` are registered as owner types too, so a
+/// path can keep walking into a variant payload. Their payload properties are `#[php(getter)]`
+/// backed, which ext-php-rs registers as read-only PHP *properties*, so they are recorded in
+/// `all_fields` but deliberately NOT in `getters`.
 ///
 /// `root_type` is derived (best-effort) from a `result_type` override on any backend
 /// (`c`, `csharp`, `java`, `kotlin`, `go`, `php`) and otherwise inferred by matching
@@ -31,10 +34,12 @@ use std::collections::{HashMap, HashSet};
 /// collide across types).
 pub(super) fn build_php_getter_map(
     type_defs: &[crate::core::ir::TypeDef],
-    enum_names: &HashSet<String>,
+    enums: &[EnumDef],
     call: &CallConfig,
     result_fields: &HashSet<String>,
 ) -> PhpGetterMap {
+    let lowering = PhpEnumLowering::from_enums(enums);
+    let prop_scalar_enums = lowering.php_prop_scalar_enum_names();
     let mut getters: HashMap<String, HashSet<String>> = HashMap::new();
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut all_fields: HashMap<String, HashSet<String>> = HashMap::new();
@@ -44,7 +49,7 @@ pub(super) fn build_php_getter_map(
         let mut td_all_fields: HashSet<String> = HashSet::new();
         for f in &td.fields {
             td_all_fields.insert(f.name.clone());
-            if !is_php_scalar(&f.ty, enum_names) {
+            if !crate::backends::php::is_php_prop_scalar(&f.ty, &prop_scalar_enums) {
                 getter_fields.insert(f.name.clone());
             }
             if let Some(named) = inner_named(&f.ty) {
@@ -55,6 +60,24 @@ pub(super) fn build_php_getter_map(
         all_fields.insert(td.name.clone(), td_all_fields);
         if !field_type_map.is_empty() {
             field_types.insert(td.name.clone(), field_type_map);
+        }
+    }
+    for enum_def in enums {
+        let Some(properties) = lowering.flat_class_properties(enum_def) else {
+            continue;
+        };
+        let mut field_type_map: HashMap<String, String> = HashMap::new();
+        let mut enum_all_fields: HashSet<String> = HashSet::new();
+        for property in properties {
+            if let Some(payload) = property.payload_type {
+                field_type_map.insert(property.name.clone(), payload);
+            }
+            enum_all_fields.insert(property.name);
+        }
+        getters.insert(enum_def.name.clone(), HashSet::new());
+        all_fields.insert(enum_def.name.clone(), enum_all_fields);
+        if !field_type_map.is_empty() {
+            field_types.insert(enum_def.name.clone(), field_type_map);
         }
     }
     let root_type = derive_root_type(call, type_defs, result_fields);
@@ -115,22 +138,4 @@ pub(super) fn derive_root_type(
         return Some(matches[0].name.clone());
     }
     None
-}
-
-pub(super) fn is_php_scalar(ty: &TypeRef, enum_names: &HashSet<String>) -> bool {
-    match ty {
-        TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char | TypeRef::Duration | TypeRef::Path => true,
-        TypeRef::Optional(inner) => is_php_scalar(inner, enum_names),
-        TypeRef::Vec(inner) => {
-            matches!(inner.as_ref(), TypeRef::Primitive(_) | TypeRef::String | TypeRef::Char)
-                || matches!(inner.as_ref(), TypeRef::Named(n) if enum_names.contains(n))
-        }
-        TypeRef::Named(n) if enum_names.contains(n) => true,
-        // Kept in sync with `is_php_prop_scalar_with_enums` in
-        // `backends/php/gen_bindings/types/structs.rs`: ext-php-rs 0.15's
-        // `HashMap<K, V>` conversions make a String-keyed map a real `#[php(prop)]` when its
-        // value type is itself scalar-compatible.
-        TypeRef::Map(k, v) => matches!(k.as_ref(), TypeRef::String) && is_php_scalar(v, enum_names),
-        TypeRef::Named(_) | TypeRef::Json | TypeRef::Bytes | TypeRef::Unit => false,
-    }
 }

@@ -4,7 +4,7 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
 use anyhow::{Result, bail};
 use heck::{ToLowerCamelCase, ToUpperCamelCase};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(super) fn render_snippet_body(
     fixture: &Fixture,
@@ -143,7 +143,6 @@ pub(super) fn render_snippet_body(
         .collect::<Vec<_>>();
     imported_types.sort_unstable();
     imported_types.dedup();
-    let php_enum_names: HashSet<String> = enums.iter().map(|value| value.name.clone()).collect();
     let field_resolver = crate::e2e::field_access::FieldResolver::new_with_php_getters(
         e2e_config.effective_fields(call),
         e2e_config.effective_fields_optional(call),
@@ -151,12 +150,7 @@ pub(super) fn render_snippet_body(
         e2e_config.effective_fields_array(call),
         e2e_config.effective_fields_method_calls(call),
         &HashMap::new(),
-        super::types::build_php_getter_map(
-            type_defs,
-            &php_enum_names,
-            call,
-            e2e_config.effective_result_fields(call),
-        ),
+        super::types::build_php_getter_map(type_defs, enums, call, e2e_config.effective_result_fields(call)),
     );
     let presentation = crate::e2e::codegen::presentation::resolve_with(fixture, e2e_config, lang, &field_resolver);
     let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());

@@ -3,7 +3,8 @@
    call config enables the matching assertion recipe.
    Context variables:
    - assertion_kind: "chunks_content", "chunks_embeddings", "embeddings", "embedding_dimensions",
-                     "embeddings_valid", "keywords", "skipped", "result_is_simple"
+                     "embeddings_valid", "keywords", "skipped", "result_is_simple",
+                     "enum_variant_accessor_unavailable", "enum_variant_accessor_unspellable"
    - assertion_type: assertion type ("is_true", "is_false", "count_equals", "equals", etc.)
    - pred: predicate expression for boolean assertions
    - field_name: synthetic field name (for error messages)
@@ -57,6 +58,10 @@
 {% endif %}
 {% elif assertion_kind == "keywords" %}
         // skipped: field '{{ field_name }}' not available on PHP result type
+{% elif assertion_kind == "enum_variant_accessor_unavailable" %}
+        // skipped: enum variant accessor '{{ field_name }}' not available in PHP (enum lowered to a string, not a class)
+{% elif assertion_kind == "enum_variant_accessor_unspellable" %}
+        // skipped: enum variant accessor '{{ field_name }}' not yet spellable in PHP (flat-class properties keep their snake_case name)
 {% elif assertion_kind == "skipped" %}
         // skipped: field '{{ field_name }}' not available on result type
 {% elif assertion_kind == "result_is_simple" %}

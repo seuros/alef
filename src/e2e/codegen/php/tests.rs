@@ -20,6 +20,8 @@ mod not_empty_tests {
             ..Default::default()
         };
         let mut out = String::new();
+        let getter_map = crate::e2e::field_access::PhpGetterMap::default();
+        let lowering = super::super::enum_variant_access::PhpEnumLowering::from_enums(&[]);
         render_assertion(
             &mut out,
             &assertion,
@@ -29,6 +31,7 @@ mod not_empty_tests {
             result_is_array,
             &BTreeMap::new(),
             false,
+            &super::super::enum_variant_access::PhpVariantAccess::new(&getter_map, &lowering),
         );
         out
     }

@@ -153,7 +153,8 @@ pub(super) fn render_test_method(
     namespace: &str,
     class_name: &str,
     type_defs: &[crate::core::ir::TypeDef],
-    php_enum_names: &HashSet<String>,
+    enums: &[crate::core::ir::EnumDef],
+    php_enum_lowering: &super::enum_variant_access::PhpEnumLowering,
     enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
     php_client_factory: Option<&str>,
@@ -175,13 +176,13 @@ pub(super) fn render_test_method(
     // Fallback: if the resolved call has required args missing from input,
     // try to find a better-matching call from the named calls.
     call_config = crate::e2e::codegen::select_best_matching_call(call_config, e2e_config, fixture);
-    // Build per-call PHP getter map and field resolver using the effective field sets.
     let per_call_getter_map = types::build_php_getter_map(
         type_defs,
-        php_enum_names,
+        enums,
         call_config,
         e2e_config.effective_result_fields(call_config),
     );
+    let variant_access = super::enum_variant_access::PhpVariantAccess::new(&per_call_getter_map, php_enum_lowering);
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
     let call_field_resolver = FieldResolver::new_with_php_getters(
         e2e_config.effective_fields(call_config),
@@ -190,7 +191,7 @@ pub(super) fn render_test_method(
         e2e_config.effective_fields_array(call_config),
         &HashSet::new(),
         &HashMap::new(),
-        per_call_getter_map,
+        per_call_getter_map.clone(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
@@ -381,7 +382,6 @@ pub(super) fn render_test_method(
     let is_streaming =
         crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call_config.streaming_enabled());
 
-    // For streaming fixtures, emit collect snippet after the result assignment.
     let collect_snippet = if is_streaming {
         crate::e2e::codegen::streaming_assertions::StreamingFieldResolver::collect_snippet("php", result_var, "chunks")
             .unwrap_or_default()
@@ -401,22 +401,17 @@ pub(super) fn render_test_method(
     let mut fields_array_bindings: std::collections::BTreeMap<String, (String, String)> =
         std::collections::BTreeMap::new();
     for assertion in &fixture.assertions {
-        if let Some(f) = &assertion.field {
-            // Skip enum variant accessor paths (metadata.format.excel etc.)
-            let is_enum_variant_accessor = f.contains("metadata.format.") && f.matches('.').count() >= 2;
-            if !f.is_empty()
-                && !is_enum_variant_accessor
-                && field_resolver.is_array(f)
-                // Only collect bindings for fields that are valid on the result type
-                && field_resolver.is_valid_for_result(f)
-            {
-                // Only emit binding if not already added
-                if !fields_array_bindings.contains_key(f.as_str()) {
-                    let accessor = field_resolver.accessor(f, "php", &format!("${result_var}"));
-                    let var_name = f.to_lower_camel_case();
-                    fields_array_bindings.insert(f.clone(), (var_name, accessor));
-                }
-            }
+        if let Some(f) = &assertion.field
+            && !f.is_empty()
+            && !variant_access.is_unavailable(f)
+            && field_resolver.is_array(f)
+            // Only collect bindings for fields that are valid on the result type
+            && field_resolver.is_valid_for_result(f)
+            && !fields_array_bindings.contains_key(f.as_str())
+        {
+            let accessor = field_resolver.accessor(f, "php", &format!("${result_var}"));
+            let var_name = f.to_lower_camel_case();
+            fields_array_bindings.insert(f.clone(), (var_name, accessor));
         }
     }
 
@@ -443,6 +438,7 @@ pub(super) fn render_test_method(
             call_config.result_is_array,
             &fields_array_bindings,
             is_streaming,
+            &variant_access,
         );
     }
 
@@ -809,7 +805,7 @@ mod visitor_options_type_tests {
     use crate::core::config::ResolvedCrateConfig;
     use crate::e2e::config::E2eConfig;
     use crate::e2e::fixture::{CallbackAction, Fixture, VisitorSpec};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     /// Regression test for alef task #86: a `visitor` fixture whose options type resolves
     /// from neither `[e2e.call]` nor any `[[crates.trait_bridges]]` entry used to re-render
@@ -853,7 +849,8 @@ mod visitor_options_type_tests {
             "Sample",
             "SampleClient",
             &[],
-            &HashSet::new(),
+            &[],
+            &super::super::enum_variant_access::PhpEnumLowering::from_enums(&[]),
             &HashMap::new(),
             false,
             None,
@@ -897,7 +894,8 @@ mod visitor_options_type_tests {
             "Sample",
             "SampleClient",
             &[],
-            &HashSet::new(),
+            &[],
+            &super::super::enum_variant_access::PhpEnumLowering::from_enums(&[]),
             &HashMap::new(),
             false,
             None,
@@ -1001,7 +999,8 @@ mod inert_example_refusal_tests {
             "Sample",
             "SampleClient",
             &[],
-            &HashSet::new(),
+            &[],
+            &super::super::enum_variant_access::PhpEnumLowering::from_enums(&[]),
             &HashMap::new(),
             false,
             None,

@@ -2,7 +2,7 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::Fixture;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::http;
 use super::test_method;
@@ -17,7 +17,8 @@ pub(super) fn render_test_file(
     class_name: &str,
     test_class: &str,
     type_defs: &[crate::core::ir::TypeDef],
-    php_enum_names: &HashSet<String>,
+    enums: &[crate::core::ir::EnumDef],
+    php_enum_lowering: &super::enum_variant_access::PhpEnumLowering,
     enum_fields: &HashMap<String, String>,
     result_is_simple: bool,
     php_client_factory: Option<&str>,
@@ -107,7 +108,8 @@ pub(super) fn render_test_file(
                 namespace,
                 class_name,
                 type_defs,
-                php_enum_names,
+                enums,
+                php_enum_lowering,
                 enum_fields,
                 result_is_simple,
                 php_client_factory,

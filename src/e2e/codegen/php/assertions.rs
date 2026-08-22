@@ -20,6 +20,7 @@ pub(super) fn render_assertion(
     result_is_array: bool,
     fields_array_bindings: &std::collections::BTreeMap<String, (String, String)>,
     is_streaming: bool,
+    variant_access: &super::enum_variant_access::PhpVariantAccess<'_>,
 ) {
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct property accesses on the result.
@@ -135,20 +136,23 @@ pub(super) fn render_assertion(
         }
     }
 
-    // Skip enum variant accessors (metadata.format.excel etc.) — PHP bindings
-    // serialize FormatMetadata to JSON, so variants are unavailable in PHP.
-    if let Some(f) = &assertion.field
-        && f.contains("metadata.format.")
-        && f.matches('.').count() >= 2
-    {
-        out.push_str(&crate::e2e::template_env::render(
-            "php/synthetic_assertion.jinja",
-            minijinja::context! {
-                assertion_kind => "skipped",
-                field_name => f,
-            },
-        ));
-        return;
+    // What the PHP binding offers for an enum-variant segment is asked of the binding backend's
+    // own enum lowering, not matched on the field's spelling — see `enum_variant_access`. ~keep
+    if let Some(f) = &assertion.field {
+        let assertion_kind = match variant_access.classify(f) {
+            super::enum_variant_access::VariantAccess::Available => None,
+            super::enum_variant_access::VariantAccess::NoAccessor => Some("enum_variant_accessor_unavailable"),
+            super::enum_variant_access::VariantAccess::UnspellableFlatProperty => {
+                Some("enum_variant_accessor_unspellable")
+            }
+        };
+        if let Some(assertion_kind) = assertion_kind {
+            out.push_str(&crate::e2e::template_env::render(
+                "php/synthetic_assertion.jinja",
+                minijinja::context! { assertion_kind => assertion_kind, field_name => f },
+            ));
+            return;
+        }
     }
 
     // Streaming virtual fields: intercept before is_valid_for_result so they are
@@ -557,6 +561,8 @@ mod tests {
 
     fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
         let mut out = String::new();
+        let getter_map = PhpGetterMap::default();
+        let lowering = super::super::enum_variant_access::PhpEnumLowering::from_enums(&[]);
         render_assertion(
             &mut out,
             assertion,
@@ -566,6 +572,7 @@ mod tests {
             false,
             &BTreeMap::new(),
             false,
+            &super::super::enum_variant_access::PhpVariantAccess::new(&getter_map, &lowering),
         );
         out
     }
@@ -655,6 +662,7 @@ mod tests {
             false,
             &BTreeMap::new(),
             false,
+            &super::super::enum_variant_access::PhpVariantAccess::none(),
         );
         assert!(!out.contains("skipped"), "got: {out}");
     }
@@ -693,6 +701,7 @@ mod tests {
             false,
             &BTreeMap::new(),
             false,
+            &super::super::enum_variant_access::PhpVariantAccess::none(),
         );
         assert!(out.contains("skipped"), "got: {out}");
     }
@@ -726,6 +735,7 @@ mod tests {
                 false,
                 &BTreeMap::new(),
                 false,
+                &super::super::enum_variant_access::PhpVariantAccess::none(),
             );
             out
         };
@@ -764,6 +774,7 @@ mod tests {
             false,
             &BTreeMap::new(),
             false,
+            &super::super::enum_variant_access::PhpVariantAccess::none(),
         );
         assert!(!out.contains("trim("), "equals must not trim either side; got: {out}");
         assert!(out.contains("assertEquals("), "got: {out}");
@@ -800,6 +811,7 @@ mod tests {
             false,
             &BTreeMap::new(),
             false,
+            &super::super::enum_variant_access::PhpVariantAccess::none(),
         );
         out
     }
