@@ -7,7 +7,8 @@ use crate::e2e::fixture::CallbackAction;
 use heck::ToLowerCamelCase;
 use std::fmt::Write as FmtWrite;
 
-use super::stubs::csharp_type_for_stub;
+use super::stubs::collect_named_types;
+use crate::backends::csharp::trait_bridge::csharp_type_visible_pub;
 
 // ---------------------------------------------------------------------------
 // Visitor generation
@@ -162,9 +163,13 @@ fn csharp_visitor_params(method: &MethodDef) -> String {
         .params
         .iter()
         .map(|param| {
+            // No exclusion set here — every named type this visitor signature references is
+            // treated as visible, matching the prior behavior of `csharp_type_for_stub`.
+            let mut visible_type_names = std::collections::HashSet::new();
+            collect_named_types(&param.ty, &mut visible_type_names);
             format!(
                 "{} {}",
-                csharp_type_for_stub(&param.ty),
+                csharp_type_visible_pub(&param.ty, &visible_type_names),
                 param.name.to_lower_camel_case()
             )
         })
