@@ -137,7 +137,7 @@ mod tests {
     /// is the exact Rust variant name -- PascalCase, not the lowerCamelCase Dart member name.
     #[test]
     fn emit_wire_value_extensions_uses_the_exact_wire_value_with_no_rename_all() {
-        let enums = vec![flat_enum(
+        let enums = [flat_enum(
             "DataNodeKind",
             vec![unit_variant("KeyValue"), unit_variant("Sequence")],
         )];
@@ -161,7 +161,7 @@ mod tests {
         let mut en = flat_enum("Status", vec![unit_variant("InProgress"), unit_variant("Done")]);
         en.serde_rename_all = Some("kebab-case".to_string());
         en.variants[1].serde_rename = Some("finished".to_string());
-        let enums = vec![en];
+        let enums = [en];
         let refs: Vec<&EnumDef> = enums.iter().collect();
         let mut out = String::new();
         emit_wire_value_extensions(&refs, &mut out);
