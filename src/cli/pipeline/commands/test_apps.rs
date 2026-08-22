@@ -1,8 +1,121 @@
+use crate::cli::cache;
 use crate::cli::pipeline::helpers::{check_precondition_named, run_command_streamed};
 use crate::core::config::ResolvedCrateConfig;
+use crate::core::hash;
 use anyhow::Context as _;
 use rayon::prelude::*;
+use std::path::Path;
 use tracing::{error, info, warn};
+
+/// Directory names never worth descending into while looking for alef-marked test-app
+/// source files: vendored/build output that is either huge (defeating the point of a
+/// cheap pre-flight check) or, for `.git`, never alef-managed. Deliberately small and
+/// local rather than shared with `format.rs`'s own skip list -- that list also excludes
+/// language-specific build dirs (`_build`, `zig-out`, ...) this check has no reason to
+/// walk into either, but the two lists are free to diverge without either one changing
+/// the other's behavior. ~keep
+const STALE_CHECK_SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    ".dart_tool",
+    ".gradle",
+    "build",
+    "dist",
+];
+
+/// Names in `names` whose `<registry output>/<name>/` tree contains at least one
+/// alef-marked, hash-stamped file whose embedded `alef:hash:` no longer matches what
+/// today's sources + `alef.toml` would stamp.
+///
+/// Reuses the exact stamp [`crate::cli::pipeline::generate::finalize_hashes`] embeds
+/// (`core::hash::compute_inputs_hash` + `compute_file_hash`) instead of deriving a
+/// second staleness signal, so this can never disagree with what `alef verify` or the
+/// next `alef test-apps generate` would find for the same file. A registry-mode test
+/// app that fails while running against stale generated sources reads exactly like a
+/// real regression; this exists so `test_apps_run` can name the actual cause up front
+/// instead of leaving an operator to chase a wrong-cause failure through the harness. A
+/// missing/unreadable registry directory or an unhashable config is not itself
+/// staleness — this only reports files it could actually compare, matching `verify`'s
+/// own "examined nothing" caution. ~keep
+fn stale_test_app_names(
+    config: &ResolvedCrateConfig,
+    config_path: &Path,
+    base_dir: &Path,
+    names: &[String],
+) -> Vec<String> {
+    let Some(e2e) = config.e2e.as_ref() else {
+        return Vec::new();
+    };
+    let Ok(sources_hash) = cache::sources_hash(&config.sources) else {
+        return Vec::new();
+    };
+    let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
+    let inputs_hash = hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
+    let output_root = base_dir.join(&e2e.registry.output);
+
+    names
+        .iter()
+        .filter(|name| directory_has_stale_marker(&output_root.join(name), &inputs_hash))
+        .cloned()
+        .collect()
+}
+
+/// Whether any alef-marked, hash-stamped file under `dir` disagrees with `inputs_hash`.
+/// See [`stale_test_app_names`] for what "disagrees" means and why it is safe to reuse
+/// the embedded stamp instead of regenerating.
+fn directory_has_stale_marker(dir: &Path, inputs_hash: &str) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    let walker = walkdir::WalkDir::new(dir).into_iter().filter_entry(|entry| {
+        !entry.file_type().is_dir()
+            || entry
+                .file_name()
+                .to_str()
+                .is_none_or(|name| !STALE_CHECK_SKIP_DIRS.contains(&name))
+    });
+    for entry in walker.filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if !hash::content_has_alef_marker(&content) {
+            continue;
+        }
+        let Some(embedded) = hash::extract_hash(&content) else {
+            continue;
+        };
+        let stripped = hash::strip_hash_line(&content);
+        if hash::compute_file_hash(inputs_hash, &stripped) != embedded {
+            return true;
+        }
+    }
+    false
+}
+
+/// Log one `tracing::warn!` per stale target named by [`stale_test_app_names`], naming the
+/// exact remedy command so a subsequent test-app failure is diagnosable at the top of the
+/// run instead of inferred from a confusing failure deep in the harness. Never blocks the
+/// run: a registry-mode test app pinned to an intentionally older tag is a legitimate use
+/// that must not be forced to regenerate first. ~keep
+fn warn_if_test_apps_stale(config: &ResolvedCrateConfig, config_path: &Path, names: &[String]) {
+    let Ok(base_dir) = std::env::current_dir() else {
+        return;
+    };
+    for name in stale_test_app_names(config, config_path, &base_dir, names) {
+        warn!(
+            "test-app '{name}' output looks stale: sources or alef.toml changed since these files \
+             were generated. A failure below may be this, not a real regression — run `alef \
+             test-apps generate` (or `alef all`) first, then re-run `alef test-apps run`."
+        );
+    }
+}
 
 /// Outcome of running a single language's registry-mode test app.
 ///
@@ -204,7 +317,12 @@ fn start_mock_server(config: &ResolvedCrateConfig) -> anyhow::Result<Option<Mock
 /// Targets run in parallel (mirroring `setup`/`clean`). A precondition skip — and
 /// a target with no `run` command (e.g. `ffi`) — is reported distinctly from a
 /// pass; the first failing target's error is returned so the process exits non-zero.
-pub fn test_apps_run(config: &ResolvedCrateConfig, names: &[String]) -> anyhow::Result<()> {
+///
+/// Before anything runs, each target's generated output is checked against the crate's
+/// current sources + `alef.toml` (see [`warn_if_test_apps_stale`]) and a stale target
+/// gets a loud warning naming the fix — this never blocks the run, only diagnoses it.
+pub fn test_apps_run(config: &ResolvedCrateConfig, config_path: &Path, names: &[String]) -> anyhow::Result<()> {
+    warn_if_test_apps_stale(config, config_path, names);
     let server = start_mock_server(config).context("failed to start e2e mock-server for test apps")?;
     let server_env: Vec<(String, String)> = server.as_ref().map(|h| h.env_vars.clone()).unwrap_or_default();
     let e2e_env: Vec<(String, String)> = config
@@ -274,6 +392,13 @@ pub fn test_apps_run(config: &ResolvedCrateConfig, names: &[String]) -> anyhow::
 mod test_apps_run_tests {
     use super::*;
 
+    /// A path guaranteed not to resolve to a real `alef.toml`, for tests that exercise
+    /// `test_apps_run` behavior unrelated to the staleness check (`read_alef_toml_bytes`
+    /// treats a missing file as empty bytes, which is a stable, harmless input here).
+    fn no_config_path() -> &'static Path {
+        Path::new("test_apps_run_tests_nonexistent_alef.toml")
+    }
+
     fn resolved_config() -> ResolvedCrateConfig {
         let cfg: crate::core::config::NewAlefConfig = toml::from_str(
             r#"
@@ -304,7 +429,7 @@ run = "false"
     #[test]
     fn failing_precondition_is_skipped_not_failed() {
         let config = resolved_config();
-        let result = test_apps_run(&config, &["python".to_string()]);
+        let result = test_apps_run(&config, no_config_path(), &["python".to_string()]);
         assert!(
             result.is_ok(),
             "a precondition skip must be reported as skipped, not failed: {result:?}"
@@ -337,7 +462,7 @@ run = "false"
         )
         .unwrap();
         let config = cfg.resolve().unwrap().remove(0);
-        let result = test_apps_run(&config, &["python".to_string()]);
+        let result = test_apps_run(&config, no_config_path(), &["python".to_string()]);
         assert!(result.is_err(), "a failing run command must propagate as an error");
     }
 
@@ -367,7 +492,7 @@ run = "true"
         )
         .unwrap();
         let config = cfg.resolve().unwrap().remove(0);
-        let result = test_apps_run(&config, &["python".to_string()]);
+        let result = test_apps_run(&config, no_config_path(), &["python".to_string()]);
         assert!(result.is_ok(), "a passing run command must succeed: {result:?}");
     }
 
@@ -399,10 +524,69 @@ run = "test \"$ALLOW_PRIVATE_NETWORK\" = true"
         )
         .unwrap();
         let config = cfg.resolve().unwrap().remove(0);
-        let result = test_apps_run(&config, &["python".to_string()]);
+        let result = test_apps_run(&config, no_config_path(), &["python".to_string()]);
         assert!(
             result.is_ok(),
             "a declared [crates.e2e.env] var must reach the run command: {result:?}"
+        );
+    }
+
+    /// Builds file content carrying a real alef header, marker, and an `alef:hash:` line
+    /// stamped for `inputs_hash` -- mirroring exactly what `finalize_hashes` writes, so the
+    /// staleness check under test reads a realistic file rather than a hand-rolled stand-in.
+    fn marked_file_with_hash(body: &str, inputs_hash: &str) -> String {
+        let with_header = format!("{}{body}", hash::header(hash::CommentStyle::DoubleSlash));
+        let file_hash = hash::compute_file_hash(inputs_hash, &with_header);
+        hash::inject_hash_line(&with_header, &file_hash)
+    }
+
+    #[test]
+    fn stale_marker_detects_hash_mismatch_and_clears_on_match() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let inputs_hash = "a".repeat(64);
+        let fresh = marked_file_with_hash("print('ok')\n", &inputs_hash);
+        std::fs::write(dir.path().join("app.py"), &fresh).expect("write");
+
+        assert!(
+            !directory_has_stale_marker(dir.path(), &inputs_hash),
+            "a stamp matching the given inputs hash must not be reported stale"
+        );
+        assert!(
+            directory_has_stale_marker(dir.path(), &"b".repeat(64)),
+            "a stamp computed against a different inputs hash must be reported stale"
+        );
+    }
+
+    /// Regression for #134: `test_apps_run` must be able to tell an operator that a target's
+    /// generated output predates the crate's current sources/config, rather than staying
+    /// silent and letting a stale-source failure masquerade as a real regression.
+    #[test]
+    fn stale_test_app_names_flags_outdated_target_and_clears_after_regeneration() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = dir.path();
+        let config = resolved_config();
+        let registry_output = &config.e2e.as_ref().expect("e2e config").registry.output;
+        let target_dir = base.join(registry_output).join("python");
+        std::fs::create_dir_all(&target_dir).expect("mkdir");
+        let target_file = target_dir.join("app.py");
+
+        // Stamped against an inputs hash that cannot match today's sources + alef.toml.
+        std::fs::write(&target_file, marked_file_with_hash("print('old')\n", &"0".repeat(64))).expect("write stale");
+        let stale = stale_test_app_names(&config, no_config_path(), base, &["python".to_string()]);
+        assert_eq!(
+            stale,
+            vec!["python".to_string()],
+            "an outdated stamp must be reported as a stale target"
+        );
+
+        // Stamped against exactly what today's sources_hash + alef.toml bytes produce.
+        let sources_hash = cache::sources_hash(&config.sources).expect("sources hash");
+        let inputs_hash = hash::compute_inputs_hash(&sources_hash, &cache::read_alef_toml_bytes(no_config_path()));
+        std::fs::write(&target_file, marked_file_with_hash("print('new')\n", &inputs_hash)).expect("write fresh");
+        let fresh = stale_test_app_names(&config, no_config_path(), base, &["python".to_string()]);
+        assert!(
+            fresh.is_empty(),
+            "a stamp matching current inputs must not be reported stale: {fresh:?}"
         );
     }
 }
