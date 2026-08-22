@@ -289,7 +289,17 @@ fn generate_snippet_report_with_extensions(
             // disagreement this check exists to prevent. See
             // `function_excluded_for_language`'s doc comment for why this reuses the
             // docs generator's exclusion accessor instead of re-deriving the rule. ~keep
-            if function_excluded_for_language(fixture, language, generator.language_name(), context)
+            // A call declaring `skip_languages` for this language is already excluded from
+            // the executable e2e suite by `crate::e2e::codegen::fixture_inclusion` --
+            // consulting the same `call_skip_reason` seam here, rather than re-deriving the
+            // check, is what keeps the snippet generator from attempting (and failing) a
+            // render for a call the target language cannot represent at all. This is
+            // deliberately narrower than a fixture-level `skip` directive, which opts a
+            // fixture out of the executable harness only and must NOT suppress a
+            // documentation snippet -- see `call_skip_reason`'s doc comment and
+            // `documentation_rendering_is_independent_of_test_harness_skips`. ~keep
+            if crate::e2e::codegen::call_skip_reason(fixture, language, context.e2e).is_some()
+                || function_excluded_for_language(fixture, language, generator.language_name(), context)
                 || visitor_excluded_for_language(fixture, generator.language_name(), context)
             {
                 continue;
