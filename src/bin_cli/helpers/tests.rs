@@ -651,10 +651,13 @@ fn a_post_build_owned_path_not_produced_in_band_is_not_reported_as_an_orphan() {
     let api = crate::core::ir::ApiSurface::default();
     let config_path = dir.path().join("alef.toml");
 
-    // Matches `SwiftBackend::build_config_with_config`'s `package_root` fallback when no prior
-    // build has populated `<package_root>/Sources` yet: `Sources/RustBridge/SwiftBridgeCore.swift`
-    // directly under `base_dir`.
-    let owned_path = dir.path().join("Sources/RustBridge/SwiftBridgeCore.swift");
+    // Matches `SwiftBackend::build_config_with_config`'s `package_root` for the default (no
+    // `[crates.output] swift` override) layout: `<base_dir>` IS the package root, so this is
+    // `packages/swift/Sources/RustBridge/SwiftBridgeCore.swift` regardless of what has or has not
+    // been built on disk yet -- see `swift_package_root` in `backends::swift::gen_bindings`.
+    let owned_path = dir
+        .path()
+        .join("packages/swift/Sources/RustBridge/SwiftBridgeCore.swift");
     std::fs::create_dir_all(owned_path.parent().unwrap()).expect("create Sources/RustBridge");
     let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
     let marked = crate::core::hash::inject_hash_line(&header, &"0".repeat(64));
