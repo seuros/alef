@@ -179,6 +179,7 @@ impl E2eCodegen for DartE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
         snippet::render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, functions)
     }

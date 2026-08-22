@@ -363,7 +363,7 @@ fn generate_e2e_with_extensions(
     // snippet stage behind them tripped. `Option::get_or_insert` leaves an earlier
     // generator failure in place rather than overwriting it with this one. ~keep
     if let Some(snippet_config) = &e2e_config.snippets {
-        match snippets::generate_snippet_report(
+        match snippets::generate_snippet_report_with_errors(
             &fixtures,
             snippet_config.languages_or(&resolved_languages),
             e2e_config,
@@ -372,6 +372,7 @@ fn generate_e2e_with_extensions(
             type_defs,
             enums,
             functions,
+            errors,
         ) {
             Ok(report) => {
                 report_snippet_coverage(&report.coverage);

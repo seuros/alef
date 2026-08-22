@@ -168,6 +168,7 @@ struct SnippetRenderContext<'a> {
     type_defs: &'a [TypeDef],
     enums: &'a [EnumDef],
     functions: &'a [crate::core::ir::FunctionDef],
+    errors: &'a [crate::core::ir::ErrorDef],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +235,37 @@ pub fn generate_snippet_report(
     enums: &[EnumDef],
     functions: &[crate::core::ir::FunctionDef],
 ) -> Result<SnippetGenerationReport> {
+    generate_snippet_report_with_errors(
+        fixtures,
+        languages,
+        e2e,
+        snippets,
+        crate_config,
+        type_defs,
+        enums,
+        functions,
+        &[],
+    )
+}
+
+/// [`generate_snippet_report`] with the crate's error registry threaded through.
+///
+/// ~keep Only callers that hold `ApiSurface::errors` can let a snippet name the exception class
+/// a specific error variant maps to (see `codegen::snippet_error_branch`). Callers that do not —
+/// the coverage-only paths, which never publish the rendered body — keep the errors-free entry
+/// point and get the generic catch-all, which is exactly what those paths rendered before.
+#[expect(clippy::too_many_arguments, reason = "preserves the public snippet generation API")]
+pub fn generate_snippet_report_with_errors(
+    fixtures: &[Fixture],
+    languages: &[String],
+    e2e: &E2eConfig,
+    snippets: &SnippetConfig,
+    crate_config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+    errors: &[crate::core::ir::ErrorDef],
+) -> Result<SnippetGenerationReport> {
     crate::with_extensions(|extensions| {
         let context = SnippetRenderContext {
             e2e,
@@ -241,6 +273,7 @@ pub fn generate_snippet_report(
             type_defs,
             enums,
             functions,
+            errors,
         };
         generate_snippet_report_with_extensions(fixtures, languages, snippets, &context, extensions)
     })
@@ -570,6 +603,7 @@ fn render_snippet_body(
             context.type_defs,
             context.enums,
             context.functions,
+            context.errors,
         )
         .map_err(|error| anyhow::anyhow!("built-in `{language}` snippet recipe is incompatible: {error:#}"))?;
     if body.trim().is_empty() {
@@ -1118,6 +1152,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
         let languages: Vec<String> = languages.iter().map(|language| (*language).to_string()).collect();
         generate_snippet_report_with_extensions(&[fixture], &languages, &snippet_config, &context, &extensions)
@@ -1992,6 +2027,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2057,6 +2093,7 @@ mod tests {
             type_defs: &type_defs,
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2100,6 +2137,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report =
@@ -2131,6 +2169,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2177,6 +2216,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report =
@@ -2216,6 +2256,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2298,6 +2339,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2361,6 +2403,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2412,6 +2455,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
@@ -2454,6 +2498,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report =
@@ -2501,6 +2546,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
@@ -2565,6 +2611,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(&[fixture], &["c".into()], &snippet_config, &context, &[])
@@ -2600,6 +2647,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2669,6 +2717,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report = generate_snippet_report_with_extensions(
@@ -2708,6 +2757,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report =
@@ -2735,6 +2785,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         for language in ["brew", "homebrew"] {
@@ -2773,6 +2824,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
 
         let report =
@@ -2832,6 +2884,7 @@ mod tests {
             type_defs: &[],
             enums: &[],
             functions: &[],
+            errors: &[],
         };
         generate_snippet_report_with_extensions(&[fixture], &["rust".into()], &snippet_config, &context, &[])
             .expect("rust snippet report renders")

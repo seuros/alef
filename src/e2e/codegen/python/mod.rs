@@ -10,6 +10,7 @@ mod enum_field_classification_tests;
 mod helpers;
 mod http;
 mod json;
+mod snippet;
 mod test_file;
 mod test_function;
 mod visitors;
@@ -155,121 +156,25 @@ impl super::E2eCodegen for PythonE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let mut call_fixture = fixture.docs_call_fixture();
-        let expects_error = call_fixture
-            .assertions
-            .iter()
-            .any(|assertion| assertion.assertion_type == "error");
-        call_fixture.assertions.clear();
-        call_fixture.mock_response = None;
-        // With `mock_response` cleared, `test_function`'s `client_factory` path falls through
-        // to its "declared env var" branch whenever `fixture.env.api_key_var` is set — which
-        // guards the read with `pytest.skip(...)` for the executable e2e suite's real-API-vs-mock
-        // dispatch. A docs snippet is not a pytest test function, so that guard renders as an
-        // undefined name. Clearing `env` here (the credential var name below still reads it from
-        // the *original* `fixture`) drops straight to the same bare `api_key="test-key"` shape the
-        // substitution just below already targets. ~keep
-        call_fixture.env = None;
-        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "python", type_defs);
-        let call = e2e_config.resolve_call_for_fixture(
-            call_fixture.call.as_deref(),
-            &call_fixture.id,
-            &call_fixture.resolved_category(),
-            &call_fixture.tags,
-            &call_fixture.input,
-        );
-        // Fixture assertions are cleared above because snippets do not render test
-        // assertions, so the usual assertion-driven binding heuristic cannot see that the
-        // reader-facing presentation consumes `result_var`. Bind every non-void successful
-        // call: the template either prints the result itself or presents fields from it. ~keep
-        let force_bind_result = !expects_error && !call.returns_void;
-        let test_file = render_test_file(
-            &fixture.resolved_category(),
-            &[&call_fixture],
-            e2e_config,
-            config,
-            type_defs,
-            enums,
-            &[],
-            force_bind_result,
-        );
-        let (imports, body, is_async) = extract_python_snippet(&test_file)?;
-        let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
-        let body = body
-            .into_iter()
-            .map(|line| {
-                line.replace(
-                    "api_key=\"test-key\"",
-                    &format!("api_key=os.environ[\"{api_key_var}\"]"),
-                )
-            })
-            .collect::<Vec<_>>();
-        // A `configuration/custom-base-url`-style topic documents `docs.client.base_url` so the
-        // reader sees the setting the topic is about, mirroring the Java/Rust/Elixir generators'
-        // `docs_client` handling. The client-construction line always ends in exactly this
-        // single-argument shape immediately after the substitution above, so targeting it here
-        // (rather than threading `docs_client` through `render_test_file`/`test_function`, which
-        // also serves the executable e2e suite) keeps this docs-only concern out of the shared
-        // test-rendering path entirely. ~keep
-        let body = match fixture.docs_client().and_then(|client| client.base_url.as_deref()) {
-            Some(base_url) => {
-                let bare_call = format!("api_key=os.environ[\"{api_key_var}\"])");
-                let with_base_url = format!(
-                    "api_key=os.environ[\"{api_key_var}\"], base_url=\"{}\")",
-                    crate::e2e::escape::escape_python(base_url)
-                );
-                body.into_iter()
-                    .map(|line| line.replace(&bare_call, &with_base_url))
-                    .collect::<Vec<_>>()
-            }
-            None => body,
-        };
-        let error_type = config.error_type_name();
-        let mut imports = imports.into_iter().map(str::to_string).collect::<Vec<_>>();
-        if body.iter().any(|line| line.contains("os.environ")) && !imports.iter().any(|line| line == "import os") {
-            imports.push("import os".to_string());
-        }
-        if expects_error {
-            imports.push(format!(
-                "from {} import {error_type}",
-                helpers::resolve_module(e2e_config)
-            ));
-        }
-        Ok(crate::e2e::template_env::render(
-            "python/snippet_body.py.jinja",
-            minijinja::context! {
-                imports => imports, body => body, is_async => is_async, presentation => presentation,
-                expects_error => expects_error,
-                error_type => error_type,
-                result_var => call.effective_result_var(),
-                returns_void => call.returns_void,
-            },
-        ))
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, &[])
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, errors)
     }
 
     fn language_name(&self) -> &'static str {
         "python"
     }
-}
-
-fn extract_python_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> {
-    let lines = rendered.lines().collect::<Vec<_>>();
-    let signature = lines
-        .iter()
-        .position(|line| line.starts_with("async def test_") || line.starts_with("def test_"))
-        .ok_or_else(|| anyhow::anyhow!("generated Python test did not contain a fixture function"))?;
-    let imports = lines[..signature]
-        .iter()
-        .copied()
-        .filter(|line| (line.starts_with("from ") || line.starts_with("import ")) && !line.contains("pytest"))
-        .collect();
-    let body = lines[signature + 1..]
-        .iter()
-        .copied()
-        .filter_map(|line| line.strip_prefix("    "))
-        .filter(|line| !line.trim_start().starts_with("\"\"\"") && !line.trim().is_empty())
-        .collect();
-    Ok((imports, body, lines[signature].starts_with("async def ")))
 }
 
 /// Render a minimal smoke test importing the published Python package.

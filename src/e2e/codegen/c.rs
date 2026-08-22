@@ -392,6 +392,7 @@ impl E2eCodegen for CCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
         functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
         render_c_snippet(fixture, e2e_config, config, type_defs, functions)
     }

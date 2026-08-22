@@ -68,15 +68,32 @@ pub(crate) fn classify<'a>(lang: &str, fixture: &'a Fixture, errors: &[ErrorDef]
     let Some(declared) = super::declared_error_value(fixture) else {
         return DeclaredErrorAssertion::Undeclared;
     };
-    let named_variant = errors
-        .iter()
-        .flat_map(|error| &error.variants)
-        .find(|variant| variant.name == declared);
-    match named_variant {
+    match declared_variant(fixture, errors) {
         None => DeclaredErrorAssertion::Assert(declared),
-        Some(variant) if substantiates_variant_identity(lang, variant) => DeclaredErrorAssertion::Assert(declared),
+        Some((_, variant)) if substantiates_variant_identity(lang, variant) => DeclaredErrorAssertion::Assert(declared),
         Some(_) => DeclaredErrorAssertion::Unsubstantiable(declared),
     }
+}
+
+/// The `ErrorDef`/`ErrorVariant` a fixture's declared `error` value names, if it names one.
+///
+/// ~keep The single IR-membership lookup behind both [`classify`] and
+/// [`super::snippet_error_branch::for_fixture`]. Returning the owning [`ErrorDef`] alongside the
+/// variant is what lets a caller name the variant's host-language type without re-deriving which
+/// error type it belongs to — the two backends' names for one variant (`AuthenticationError`,
+/// `ErrAuthentication`) are both functions of that pair.
+pub(crate) fn declared_variant<'a>(
+    fixture: &Fixture,
+    errors: &'a [ErrorDef],
+) -> Option<(&'a ErrorDef, &'a ErrorVariant)> {
+    let declared = super::declared_error_value(fixture)?;
+    errors.iter().find_map(|error| {
+        error
+            .variants
+            .iter()
+            .find(|variant| variant.name == declared)
+            .map(|variant| (error, variant))
+    })
 }
 
 /// Whether `lang`'s generated binding gives the thrown/returned error a way to differ, per
@@ -129,7 +146,7 @@ pub(crate) fn classify<'a>(lang: &str, fixture: &'a Fixture, errors: &[ErrorDef]
 ///
 /// Any language absent from this match keeps today's behaviour (`true`), so a backend this fix
 /// did not audit and rewrite is never silently weakened.
-fn substantiates_variant_identity(lang: &str, variant: &ErrorVariant) -> bool {
+pub(crate) fn substantiates_variant_identity(lang: &str, variant: &ErrorVariant) -> bool {
     match lang {
         "python" => true,
         "go" | "java" | "zig" => variant.error_code.is_some(),

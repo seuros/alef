@@ -51,6 +51,7 @@ pub mod r;
 pub mod recipe;
 pub mod ruby;
 pub mod rust;
+pub(crate) mod snippet_error_branch;
 pub mod streaming_assertions;
 #[cfg(test)]
 mod streaming_result_binding_tests;
@@ -1192,6 +1193,11 @@ pub trait E2eCodegen: Send + Sync {
         )
     }
 
+    /// ~keep `errors` is `ApiSurface::errors`. A snippet renderer needs it to name the exception
+    /// class a specific error variant maps to (see [`snippet_error_branch`]); the default
+    /// forwards to the errors-unaware [`Self::render_snippet_body`], which is what a backend that
+    /// cannot differentiate variants should keep doing.
+    #[allow(clippy::too_many_arguments)]
     fn render_snippet_body_with_functions(
         &self,
         fixture: &Fixture,
@@ -1200,6 +1206,7 @@ pub trait E2eCodegen: Send + Sync {
         type_defs: &[TypeDef],
         enums: &[EnumDef],
         _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
         self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
     }
