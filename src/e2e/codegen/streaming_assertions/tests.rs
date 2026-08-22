@@ -924,7 +924,7 @@ fn elixir_tool_calls_normalizes_nil_delta_before_flat_map() {
     );
     // The `Map.get(..., :tool_calls, [])` call must be immediately followed by a `|| []`
     // that normalizes a stored-but-nil value, not just an absent key, to an empty list --
-    // otherwise `Enum.flat_map`'s callback can return `nil` and crash.
+    // otherwise `Enum.flat_map`'s callback can return `nil` and crash. ~keep
     assert!(
         expr.contains("Map.get(:tool_calls, [])) || []"),
         "elixir tool_calls must normalize a nil Map.get result with `|| []` before flat_map \

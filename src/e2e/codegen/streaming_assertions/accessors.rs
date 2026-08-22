@@ -305,7 +305,7 @@ impl StreamingFieldResolver {
                     // when unset), so a content-only delta made `Map.get` return the
                     // stored `nil` instead of the `[]` default, and `Enum.flat_map`
                     // cannot enumerate `nil`. The trailing `|| []` normalizes that stored
-                    // `nil` to an empty list before flat_map ever sees it.
+                    // `nil` to an empty list before flat_map ever sees it. ~keep
                     format!(
                         "{chunks_var} |> Enum.flat_map(fn c -> ((List.first(c.choices) || %{{}}).delta |> Map.get(:tool_calls, [])) || [] end)"
                     )

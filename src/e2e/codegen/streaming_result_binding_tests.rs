@@ -61,7 +61,7 @@ fn streaming_call_config() -> CallConfig {
         // Both backends' streaming binding path only activates on the `Result`-returning
         // branch; `CallConfig::default()`'s `returns_result: false` would route Go's
         // codegen down the `err := call()` fire-and-forget path instead, never reaching
-        // the buggy loop this test exists to guard.
+        // the buggy loop this test exists to guard. ~keep
         returns_result: true,
         ..Default::default()
     }
