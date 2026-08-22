@@ -49,6 +49,17 @@ pub(super) fn render_snippet_body_with_ir(
         .unwrap_or(&call.function)
         .to_upper_camel_case();
     let is_async = overrides.and_then(|value| value.r#async).unwrap_or(call.r#async);
+    // Mirrors `csharp.rs`'s own dispatch (`resolve_is_streaming(fixture, call_config.
+    // streaming_enabled())`) — the same shared seam `streaming_assertions::resolve_is_streaming`
+    // every backend is documented to use. A streaming call's C# binding returns
+    // `IAsyncEnumerable<T>` synchronously (see `csharp/streaming.rs`'s `await foreach`
+    // emission for the full e2e test suite); it is the *iteration*, not the call, that is
+    // async. Without this, the docs snippet path (which never consulted streaming
+    // classification at all) fell through to the plain `var result = await
+    // client.Method(...)` shape every other async call uses — `IAsyncEnumerable<T>` has no
+    // `GetAwaiter`, so `await` on the bare call is CS1061. ~keep
+    let is_streaming =
+        crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call.streaming_enabled());
     if is_async && !function_name.ends_with("Async") {
         function_name.push_str("Async");
     }
@@ -171,6 +182,7 @@ pub(super) fn render_snippet_body_with_ir(
             result_var => call.effective_result_var(),
             returns_void => returns_void,
             is_async => is_async,
+            is_streaming => is_streaming,
             needs_json => needs_json,
             needs_system => needs_system,
             needs_collections => needs_collections,
