@@ -10,32 +10,58 @@
 //! three read as "validation failed". One function, used by both dispatch paths, is what keeps
 //! them from drifting apart again.
 
+use super::session_resolution::{SessionClaim, resolve_session_claim};
 use super::{RunnerConfig, result};
 use crate::snippets::session::SessionPreparationError;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationResult};
 use std::collections::HashMap;
 
-/// The preparation error (if any) that applies to `snippet`, looked up first by its explicit
-/// `target` metadata and falling back to its language's own session.
-pub(super) fn session_preparation_error<'a>(
+/// The preparation error (if any) that applies to `snippet`: a real failure of the session an
+/// explicit `target` names, or -- new with alef defect #127 -- a synthetic error when the
+/// snippet's language matches more than one configured session and no `target` breaks the tie.
+/// Both dispatch paths (`fail_fast_results`, `batch::group_batchable_snippets`) already
+/// short-circuit on `Some` here before `session_for`/`session_key` ever run, so an ambiguous
+/// claim never reaches a validator at all.
+///
+/// The no-explicit-target branch resolves against `config.sessions` -- every *configured*
+/// `SessionSpec`, prepared or not -- rather than only the sessions that prepared successfully.
+/// A language with exactly one configured session must still report that session's own
+/// preparation failure even though the failed session never made it into a `ValidationSession`
+/// map; resolving against successes only would make that single candidate vanish and let the
+/// snippet reach a validator with no session and no error, exactly the silent-success shape
+/// defect #142 already fixed once for a differently-shaped bug. ~keep
+pub(super) fn session_preparation_error(
     snippet: &Snippet,
-    sessions: &HashMap<String, crate::snippets::session::ValidationSession>,
-    errors: &'a HashMap<String, SessionPreparationError>,
-) -> Option<&'a SessionPreparationError> {
-    let target = snippet
-        .metadata
-        .target
-        .as_ref()
-        .map(|target| Language::normalize_session_target(target));
-    if let Some(target) = target.as_deref() {
-        if let Some(error) = errors.get(target) {
-            return Some(error);
-        }
-        if sessions.contains_key(target) {
-            return None;
-        }
+    config: &RunnerConfig,
+    errors: &HashMap<String, SessionPreparationError>,
+) -> Option<SessionPreparationError> {
+    if let Some(target) = snippet.metadata.target.as_deref() {
+        let normalized = Language::normalize_session_target(target);
+        return errors.get(&normalized).cloned();
     }
-    errors.get(&snippet.language.to_string())
+    match resolve_session_claim(snippet, &config.sessions, |spec| spec.language) {
+        SessionClaim::Ambiguous(candidates) => Some(ambiguous_session_error(snippet, &candidates)),
+        SessionClaim::Claimed(key) => errors.get(key).cloned(),
+        SessionClaim::Unclaimed => None,
+    }
+}
+
+/// The `SessionPreparationError` synthesized for an ambiguous claim -- not `ordering`, because
+/// this is a standing configuration gap (add an explicit `target:`), not a build the next run
+/// might resolve on its own. `session_preparation_result` turns a non-`ordering` error into
+/// `SnippetStatus::Error`, which fails every run regardless of `--strict`: a snippet alef cannot
+/// even decide which session to validate against must never read as a clean pass. ~keep
+fn ambiguous_session_error(snippet: &Snippet, candidates: &[&str]) -> SessionPreparationError {
+    SessionPreparationError {
+        message: format!(
+            "{} configured sessions validate `{}` snippets ({}) and no explicit `target:` names \
+             one of them; alef will not silently guess which session to use",
+            candidates.len(),
+            snippet.language,
+            candidates.join(", "),
+        ),
+        ordering: false,
+    }
 }
 
 /// Builds the `ValidationResult` for a snippet whose session never became usable.

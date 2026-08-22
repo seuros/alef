@@ -66,8 +66,8 @@ fn group_batchable_snippets(
     let mut results = vec![None; snippets.len()];
     let mut groups = BTreeMap::<BatchKey, Vec<usize>>::new();
     for (index, snippet) in snippets.iter().enumerate() {
-        if let Some(preparation_error) = session_preparation_error(snippet, sessions, session_errors) {
-            let failure = session_preparation_result(snippet, config, preparation_error);
+        if let Some(preparation_error) = session_preparation_error(snippet, config, session_errors) {
+            let failure = session_preparation_result(snippet, config, &preparation_error);
             reporter.record(&failure);
             results[index] = Some(failure);
             continue;
