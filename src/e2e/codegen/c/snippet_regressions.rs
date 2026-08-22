@@ -568,12 +568,10 @@ fn assert_no_mock_harness(rendered: &str, fixture_id: &str) {
 }
 
 /// The streaming and byte-buffer emitters each computed `has_mock` from
-/// `Fixture::needs_mock_server()` alone, unlike `test_function::render_test_function`,
-/// which ANDs it with `!documentation_snippet`. Their `else` arms then hardcoded the
-/// harness credential `"test-key"` — which the central
-/// `snippets::reject_mock_harness_scaffolding` guard does *not* list as a marker — so a
-/// streaming or bytes fixture published a snippet telling the reader to authenticate
-/// with the e2e suite's fake key. ~keep
+/// `Fixture::needs_mock_server()` alone, unlike `test_function::render_test_function_impl`,
+/// which ANDs it with `!documentation_snippet`. Their `else` arms then hardcoded the harness
+/// credential `"test-key"` -- which `snippets::reject_mock_harness_scaffolding` does *not* list
+/// as a marker -- so a streaming/bytes fixture told the reader to authenticate with the fake key. ~keep
 #[test]
 fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
     let streaming = mock_backed_fixture("chat_stream_basic");
@@ -620,7 +618,7 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
     let resolver = empty_field_resolver();
 
     let mut streaming_out = String::new();
-    render_test_function(
+    render_test_function_impl(
         &mut streaming_out,
         &mock_backed_fixture("chat_stream_basic"),
         "sample",
@@ -648,6 +646,7 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
             result_fields: EffectiveConfigSource::Global,
             fields: EffectiveConfigSource::Global,
         },
+        TargetParams::IrAbsent,
     )
     .expect("streaming test function renders");
 
@@ -665,7 +664,7 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
     );
 
     let mut bytes_out = String::new();
-    render_test_function(
+    render_test_function_impl(
         &mut bytes_out,
         &mock_backed_fixture("speech_basic"),
         "sample",
@@ -693,6 +692,7 @@ fn e2e_test_functions_still_point_the_client_at_the_mock_server() {
             result_fields: EffectiveConfigSource::Global,
             fields: EffectiveConfigSource::Global,
         },
+        TargetParams::IrAbsent,
     )
     .expect("bytes test function renders");
 

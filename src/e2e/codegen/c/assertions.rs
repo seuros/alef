@@ -10,6 +10,11 @@ use heck::{ToPascalCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 
+/// The IR type name a C parameter carries as an opaque `AlefHandle` rather than as a literal.
+/// Defined in `c::optional_arg` -- the single seam every C e2e call site checks a parameter's
+/// handle-ness through, so the free-function path here and the client-method path in
+/// `c/test_function.rs` cannot independently drift on the same question. ~keep
+use super::optional_arg::handle_param_type_name;
 use super::{
     NestedLeafOutcome, c_optional_sentinel, is_primitive_c_type, is_skipped_c_field, json_to_c,
     render_wildcard_assertion, try_emit_enum_accessor,
@@ -1044,25 +1049,6 @@ fn missing_args_unresolvable_signature_diagnostic(fixture: &Fixture, function_na
          an unresolvable name is why alef cannot confirm that on its own.",
         id = fixture.id,
     )
-}
-
-/// The IR type name a C parameter carries as an opaque `AlefHandle` rather than as a literal.
-///
-/// Mirrors `backends::ffi::type_map::c_param_type_with_paths_and_enums`, the mapper that
-/// actually spells the exported header: a bare `Named` and an `Optional<Named>` cross the C ABI
-/// as `AlefHandle`, and nothing else does. `Vec<Named>` and `Map<_, Named>` cross as a JSON
-/// `*const c_char`, so this deliberately does NOT unwrap through them the way `c.rs`'s
-/// `named_type` does for the `element_type` backfill -- unwrapping there would reject arguments
-/// whose JSON string literal is exactly what the parameter wants. ~keep
-fn handle_param_type_name(ty: &crate::core::ir::TypeRef) -> Option<&str> {
-    match ty {
-        crate::core::ir::TypeRef::Named(name) => Some(name),
-        crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
-            crate::core::ir::TypeRef::Named(name) => Some(name),
-            _ => None,
-        },
-        _ => None,
-    }
 }
 
 /// How much of the offending literal [`handle_param_type_mismatch_diagnostic`] quotes back.
