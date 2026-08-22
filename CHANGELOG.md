@@ -190,6 +190,11 @@ releasing a consumer package.
   cache-key identity moved to `src/cli/cache_identity.rs`, `preserve_input_urls` validation to
   `src/e2e/validate/url_preservation.rs`, frozen-file logic to `src/bin_cli/helpers/frozen.rs`,
   and trailing test modules out of eight further files into siblings.
+- `backends::order_invariance_tests` now holds the suite's shared `CWD_LOCK`. Several backends
+  resolve `version_from` (default `Cargo.toml`) with a relative-path read against the process
+  working directory, so a sibling test chdir'ing mid-run could make the forward and reversed
+  generation calls read two different manifests — a spurious diff with nothing to do with IR
+  order. Test-only; no production code changed, and no retry bracket was reintroduced.
 - Dependencies: `jsonschema` to v0.50.1, `freezed` to v4.
 
 ## [0.65.0] - 2026-08-22
