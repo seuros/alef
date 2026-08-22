@@ -83,11 +83,17 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_native_ex(
 
     let mut last_was_multiline = true;
     let mut emitted_nif_stubs: AHashSet<String> = AHashSet::new();
-    for func in api
+    // Sorted by name before emission, same rationale as `native.rs`'s `types_for_struct_emission`:
+    // `api.functions`' incoming order is not guaranteed stable across separate `alef` invocations,
+    // and every stub here is concatenated into the single `native.ex` file, so unsorted iteration
+    // would make that file's bytes depend on upstream ordering. ~keep
+    let mut functions_for_stub_emission: Vec<&crate::core::ir::FunctionDef> = api
         .functions
         .iter()
         .filter(|f| !exclude_functions.contains(f.name.as_str()))
-    {
+        .collect();
+    functions_for_stub_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for func in functions_for_stub_emission {
         let fn_name = if func.is_async {
             let n = func.name.as_str();
             if n.ends_with("_async") {
@@ -236,11 +242,14 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_native_ex(
         .filter_map(|a| a.owner_type.as_deref().map(|owner| format!("{owner}.{}", a.name)))
         .collect();
 
-    for typ in api
+    // Sorted by name, same rationale as above. ~keep
+    let mut types_for_method_stub_emission: Vec<&crate::core::ir::TypeDef> = api
         .types
         .iter()
         .filter(|typ| !typ.is_trait && !exclude_types.contains(typ.name.as_str()))
-    {
+        .collect();
+    types_for_method_stub_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for typ in types_for_method_stub_emission {
         for method in typ
             .methods
             .iter()
@@ -297,14 +306,21 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_native_ex(
     }
 
     let nif_wrapped_types = collect_types_for_nif_derives(api, exclude_types);
-    for typ in api.types.iter().filter(|t| {
-        !t.is_trait
-            && !t.is_opaque
-            && !t.fields.is_empty()
-            && t.has_serde
-            && !exclude_types.contains(t.name.as_str())
-            && nif_wrapped_types.contains(&t.name)
-    }) {
+    // Sorted by name, same rationale as above. ~keep
+    let mut types_for_from_json_stub_emission: Vec<&crate::core::ir::TypeDef> = api
+        .types
+        .iter()
+        .filter(|t| {
+            !t.is_trait
+                && !t.is_opaque
+                && !t.fields.is_empty()
+                && t.has_serde
+                && !exclude_types.contains(t.name.as_str())
+                && nif_wrapped_types.contains(&t.name)
+        })
+        .collect();
+    types_for_from_json_stub_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for typ in types_for_from_json_stub_emission {
         let from_json_fn_name = format!("{}_from_json", typ.name.to_snake_case());
         let params = vec!["_json".to_string()];
         if !out.is_empty() && !out.ends_with("\n\n") {

@@ -50,19 +50,24 @@ impl Backend for ExtendrBackend {
         let api = &r_cfg_api;
         let core_import = config.core_import_name();
         let type_paths = build_type_path_lookup(api);
-        let flat_data_enum_names_vec: Vec<String> = api
+        // Sorted by name: `api.enums`' incoming order reflects source-extraction order, which is
+        // not guaranteed stable across separate `alef` invocations, and this list drives the
+        // `extendr_module! { impl ...; }` registration order emitted into `lib.rs` below. ~keep
+        let mut flat_data_enum_names_vec: Vec<String> = api
             .enums
             .iter()
             .filter(|e| bridges::is_flat_data_enum(e))
             .map(|e| e.name.clone())
             .collect();
+        flat_data_enum_names_vec.sort();
         // `extendr_module!` so their `#[extendr] impl` block (with `default`,
-        let json_passthrough_enum_names_vec: Vec<String> = api
+        let mut json_passthrough_enum_names_vec: Vec<String> = api
             .enums
             .iter()
             .filter(|e| bridges::is_json_passthrough_data_enum(e))
             .map(|e| e.name.clone())
             .collect();
+        json_passthrough_enum_names_vec.sort();
         let cfg = Self::binding_config(&core_import, &flat_data_enum_names_vec);
 
         let adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::R)?;
@@ -259,7 +264,15 @@ impl Backend for ExtendrBackend {
             builder.add_import("std::sync::Arc");
         }
 
-        for typ in api.types.iter().filter(|typ| !typ.is_trait) {
+        // Sorted by name: `api.types`' incoming order reflects source-extraction order, which is
+        // not guaranteed stable across separate `alef` invocations (e.g. under parallel
+        // crate/file extraction). Every struct/impl block below is concatenated into the single
+        // `lib.rs`, so unsorted iteration would make that file's bytes depend on that upstream
+        // ordering. ~keep
+        let mut types_for_struct_emission: Vec<&crate::core::ir::TypeDef> =
+            api.types.iter().filter(|typ| !typ.is_trait).collect();
+        types_for_struct_emission.sort_by(|a, b| a.name.cmp(&b.name));
+        for typ in types_for_struct_emission {
             if typ.is_opaque {
                 if arc_incompatible_opaque.contains(&typ.name) {
                     continue;
@@ -408,7 +421,10 @@ impl Backend for ExtendrBackend {
             }
         }
 
-        for e in &api.enums {
+        // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+        let mut enums_for_struct_emission: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
+        enums_for_struct_emission.sort_by(|a, b| a.name.cmp(&b.name));
+        for e in enums_for_struct_emission {
             if bridges::is_flat_data_enum(e) {
                 // The #[extendr] attribute registers it as a class; the impl block satisfies
                 let flat_struct = bridges::gen_extendr_flat_data_enum_struct(e, self, &cfg);
@@ -487,7 +503,11 @@ impl Backend for ExtendrBackend {
             strip_cfg_fields_from_binding_struct: true,
             ..crate::codegen::conversions::ConversionConfig::default()
         };
-        for typ in api.types.iter().filter(|typ| !typ.is_trait) {
+        // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+        let mut types_for_conversion_emission: Vec<&crate::core::ir::TypeDef> =
+            api.types.iter().filter(|typ| !typ.is_trait).collect();
+        types_for_conversion_emission.sort_by(|a, b| a.name.cmp(&b.name));
+        for typ in types_for_conversion_emission {
             if input_types.contains(&typ.name)
                 && crate::codegen::conversions::can_generate_conversion(typ, &binding_to_core)
             {
@@ -506,7 +526,10 @@ impl Backend for ExtendrBackend {
                 ));
             }
         }
-        for e in &api.enums {
+        // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+        let mut enums_for_conversion_emission: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
+        enums_for_conversion_emission.sort_by(|a, b| a.name.cmp(&b.name));
+        for e in enums_for_conversion_emission {
             if bridges::is_flat_data_enum(e) {
                 if crate::codegen::conversions::can_generate_enum_conversion_from_core(e) {
                     builder.add_item(&bridges::gen_extendr_flat_data_enum_from_core(e, &core_import));
@@ -664,17 +687,31 @@ impl Backend for ExtendrBackend {
         }
 
         let module_name = config.r_package_name().replace('-', "_");
+        // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+        let mut types_for_module_registration: Vec<&crate::core::ir::TypeDef> = api
+            .types
+            .iter()
+            .filter(|t| {
+                !t.is_trait
+                    && !arc_incompatible_opaque.contains(&t.name)
+                    && !extendr_incompatible_types.contains(&t.name)
+            })
+            .collect();
+        types_for_module_registration.sort_by(|a, b| a.name.cmp(&b.name));
+        // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+        let mut functions_for_module_registration: Vec<&crate::core::ir::FunctionDef> = api
+            .functions
+            .iter()
+            .filter(|f| !bridge_fn_names.contains(&f.name))
+            .filter(|f| !r_exclude_functions.contains(&f.name))
+            .filter(|f| always_registered(f.cfg.as_deref()))
+            .collect();
+        functions_for_module_registration.sort_by(|a, b| a.name.cmp(&b.name));
         let module_items = format!(
             "extendr_module! {{\n    mod {module};\n{types}{flat_enums}{json_enums}{funcs}}}\n",
             module = module_name,
-            types = api
-                .types
+            types = types_for_module_registration
                 .iter()
-                .filter(|t| {
-                    !t.is_trait
-                        && !arc_incompatible_opaque.contains(&t.name)
-                        && !extendr_incompatible_types.contains(&t.name)
-                })
                 .map(|t| format!("    impl {};\n", t.name))
                 .collect::<String>(),
             flat_enums = flat_data_enum_names_vec
@@ -685,14 +722,10 @@ impl Backend for ExtendrBackend {
                 .iter()
                 .map(|n| format!("    impl {n};\n"))
                 .collect::<String>(),
-            funcs = api
-                .functions
+            // entries — it rejects any `#[cfg(...)]` attribute with "expected mod, fn or impl"
+            // registered. Feature-gated wrappers (whose `#[extendr]` `meta__`/`wrap__` symbols
+            funcs = functions_for_module_registration
                 .iter()
-                .filter(|f| !bridge_fn_names.contains(&f.name))
-                .filter(|f| !r_exclude_functions.contains(&f.name))
-                // entries — it rejects any `#[cfg(...)]` attribute with "expected mod, fn or impl"
-                // registered. Feature-gated wrappers (whose `#[extendr]` `meta__`/`wrap__` symbols
-                .filter(|f| always_registered(f.cfg.as_deref()))
                 .map(|f| format!("    fn {};\n", f.name))
                 .collect::<String>()
                 + &collect_trait_bridge_functions(config)

@@ -153,11 +153,18 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     }
 
     let empty_set: AHashSet<String> = AHashSet::new();
-    for typ in api
+    // Sorted by name before emission: `api.types` reflects source-extraction order, which is not
+    // guaranteed stable across separate `alef` invocations (e.g. under parallel crate/file
+    // extraction). Emitting structs in that order directly into the single concatenated `lib.rs`
+    // makes struct block order -- and therefore the file's bytes -- depend on that upstream
+    // ordering. Sorting here decouples this backend's output from it. ~keep
+    let mut types_for_struct_emission: Vec<&crate::core::ir::TypeDef> = api
         .types
         .iter()
         .filter(|typ| !typ.is_trait && types_to_emit.contains(&typ.name))
-    {
+        .collect();
+    types_for_struct_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for typ in types_for_struct_emission {
         if typ.is_opaque {
             builder.add_item(&gen_opaque_resource(typ, &core_import, &opaque_types));
             if let Some(ctor) = config.client_constructors.get(&typ.name) {
@@ -175,7 +182,11 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         }
     }
 
-    for enum_def in &api.enums {
+    // Same rationale as `types_for_struct_emission` above: sort by name so enum block order in
+    // the concatenated `lib.rs` does not depend on `api.enums`' incoming order. ~keep
+    let mut enums_for_emission: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
+    enums_for_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for enum_def in enums_for_emission {
         builder.add_item(&gen_enum(enum_def, &module_prefix));
     }
 
@@ -243,7 +254,12 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     // `#[rustler::nif]` items whose cfgs OVERLAP — rustler auto-discovers both and aborts `on_load`
     let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&api.functions);
     // whose enclosing cfg gate was dropped by extraction would emit a second `#[rustler::nif]`
-    let regated_functions = regate_ungated_same_name_functions(&deduped_functions);
+    let mut regated_functions = regate_ungated_same_name_functions(&deduped_functions);
+    // Same rationale as `types_for_struct_emission` above: sort by name (a stable sort, so
+    // same-named cfg-variant groups keep the relative order `regate_ungated_same_name_functions`
+    // depends on) so `#[rustler::nif]` block order in `lib.rs` does not depend on `api.functions`'
+    // incoming order. ~keep
+    regated_functions.sort_by(|a, b| a.name.cmp(&b.name));
 
     for func in regated_functions
         .iter()
@@ -426,11 +442,14 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         .map(|b| b.type_alias.as_deref().unwrap_or(&b.trait_name).to_string())
         .collect();
 
-    for typ in api
+    // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+    let mut types_for_conversion_emission: Vec<&crate::core::ir::TypeDef> = api
         .types
         .iter()
         .filter(|typ| !typ.is_trait && !exclude_types.contains(typ.name.as_str()) && types_to_emit.contains(&typ.name))
-    {
+        .collect();
+    types_for_conversion_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for typ in types_for_conversion_emission {
         let rustler_struct_cfg = crate::codegen::conversions::ConversionConfig {
             map_as_string: false,
             exclude_types: &bridge_conv_exclude_types,
@@ -455,7 +474,10 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
             ));
         }
     }
-    for e in &api.enums {
+    // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+    let mut enums_for_conversion_emission: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
+    enums_for_conversion_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for e in enums_for_conversion_emission {
         let has_data = e.variants.iter().any(|v| !v.fields.is_empty());
         let is_flat_data = has_data && e.variants.iter().filter(|v| !v.fields.is_empty()).all(|v| v.is_tuple);
 
@@ -488,14 +510,18 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         }
     }
 
-    for error in &api.errors {
+    // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+    let mut errors_for_emission: Vec<_> = api.errors.iter().collect();
+    errors_for_emission.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for &error in &errors_for_emission {
         builder.add_item(&crate::codegen::error_gen::gen_rustler_error_converter(
             error,
             &core_import,
         ));
     }
 
-    for error in &api.errors {
+    for &error in &errors_for_emission {
         for method in error.methods.iter().filter(|m| !m.sanitized) {
             let fn_name = format!("{}_{}", error.name.to_lowercase(), method.name);
             let return_type = mapper.map_type(&method.return_type);
@@ -515,14 +541,21 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         }
     }
 
-    for typ in api.types.iter().filter(|t| {
-        !t.is_trait
-            && !t.is_opaque
-            && !t.fields.is_empty()
-            && t.has_serde
-            && !exclude_types.contains(t.name.as_str())
-            && types_to_emit.contains(&t.name)
-    }) {
+    // Sorted by name, same rationale as `types_for_struct_emission` above. ~keep
+    let mut types_for_from_json_nif_emission: Vec<&crate::core::ir::TypeDef> = api
+        .types
+        .iter()
+        .filter(|t| {
+            !t.is_trait
+                && !t.is_opaque
+                && !t.fields.is_empty()
+                && t.has_serde
+                && !exclude_types.contains(t.name.as_str())
+                && types_to_emit.contains(&t.name)
+        })
+        .collect();
+    types_for_from_json_nif_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for typ in types_for_from_json_nif_emission {
         builder.add_item(&gen_from_json_nif(typ, &core_import));
     }
 
