@@ -33,6 +33,30 @@ pub(super) fn is_reserved_fn(name: &str) -> bool {
     MAGNUS_RESERVED_FN_NAMES.contains(&name)
 }
 
+/// The single predicate for "does this field use Magnus's hardcoded `default_timeout` fallback?".
+///
+/// Two call sites need this answer: the module-level pass below that decides whether to emit the
+/// free `fn default_timeout()` at all, and `classes::gen_struct`'s per-field pass that decides
+/// whether to attach `#[serde(default = "default_timeout")]` to a given field. They used to
+/// re-derive the check independently — the free-function side matched `FieldDef::ty` directly and
+/// never looked at `field.optional`, while the per-field side matched the *type-mapped* Rust
+/// string against the literal `"u64"`. Both landed on the same answer only because an
+/// `Option<u64>`/`Option<Duration>` `request_timeout`/`timeout` field never occurred in practice:
+/// the free-function side would still fire for one (it ignores `field.optional`), but the
+/// per-field side's mapped type is `"Option<u64>"`, so no field would ever reference the function
+/// the module emitted, leaving `default_timeout` generated and dead. Routing both sides through
+/// this one predicate makes that impossible instead of coincidentally rare. ~keep
+pub(super) fn field_wants_default_timeout(field: &crate::core::ir::FieldDef) -> bool {
+    let is_timeout_named = field.name == "request_timeout" || field.name == "timeout";
+    let is_bare_u64_or_duration = !field.optional
+        && matches!(
+            field.ty,
+            crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::U64)
+                | crate::core::ir::TypeRef::Duration
+        );
+    is_timeout_named && is_bare_u64_or_duration
+}
+
 /// Prepend `#[cfg(<pred>)]` to a code item when the source symbol carries a cfg predicate.
 fn prepend_cfg(cfg: Option<&str>, item: String) -> String {
     match cfg {
@@ -249,17 +273,11 @@ impl Backend for MagnusBackend {
             .map(|t| t.name.as_str())
             .collect();
 
-        let needs_default_timeout = api.types.iter().filter(|t| !t.is_trait && !t.is_opaque).any(|t| {
-            t.fields.iter().any(|f| {
-                let is_timeout_named = f.name == "request_timeout" || f.name == "timeout";
-                let is_u64_or_duration = matches!(
-                    f.ty,
-                    crate::core::ir::TypeRef::Primitive(crate::core::ir::PrimitiveType::U64)
-                        | crate::core::ir::TypeRef::Duration
-                );
-                is_timeout_named && is_u64_or_duration
-            })
-        });
+        let needs_default_timeout = api
+            .types
+            .iter()
+            .filter(|t| !t.is_trait && !t.is_opaque)
+            .any(|t| t.fields.iter().any(field_wants_default_timeout));
         if needs_default_timeout {
             builder.add_item("fn default_timeout() -> u64 {\n    30000\n}");
         }
@@ -793,3 +811,7 @@ impl Backend for MagnusBackend {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "default_timeout_pairing_tests.rs"]
+mod default_timeout_pairing_tests;

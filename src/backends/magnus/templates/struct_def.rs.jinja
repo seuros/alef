@@ -3,7 +3,7 @@
 {% endif %}#[magnus::wrap(class = "{{ class_path }}")]
 pub struct {{ struct_name }} {
 {% for field in fields %}
-{% if field.field_type == 'u64' and (field.name == 'request_timeout' or field.name == 'timeout') %}    #[serde(default = "default_timeout")]
+{% if field.wants_default_timeout %}    #[serde(default = "default_timeout")]
 {% endif %}    {{ field.name }}: {{ field.field_type }},
 {% endfor %}
 }

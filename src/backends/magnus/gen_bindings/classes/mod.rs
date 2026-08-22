@@ -421,9 +421,15 @@ pub(super) fn gen_struct(
             } else {
                 mapper.map_type(&field.ty)
             };
+            // ~keep Delegates to the same predicate the free `fn default_timeout()` emitter
+            // gates on (`super::field_wants_default_timeout`), so this attribute can never
+            // reference a function the module decided not to generate — see that function's
+            // doc comment for the disagreement this closes.
+            let wants_default_timeout = super::field_wants_default_timeout(field);
             minijinja::context! {
                 name => &field.name,
                 field_type => &field_type,
+                wants_default_timeout => wants_default_timeout,
             }
         })
         .collect();
