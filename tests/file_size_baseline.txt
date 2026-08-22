@@ -52,11 +52,11 @@ src/core/hash/tests.rs 1193
 src/docs/doc_cleaning.rs 1028
 src/docs/formatting.rs 2268
 src/docs/signatures.rs 1119
-src/e2e/codegen/c.rs 3029
+src/e2e/codegen/c.rs 2324
 src/e2e/codegen/c/assertions.rs 3407
 src/e2e/codegen/c/snippet_regressions.rs 1110
 src/e2e/codegen/c/test_function.rs 1931
-src/e2e/codegen/csharp.rs 1182
+src/e2e/codegen/csharp.rs 1159
 src/e2e/codegen/csharp/assertions.rs 1394
 src/e2e/codegen/csharp/setup.rs 1141
 src/e2e/codegen/csharp/tests.rs 1257
@@ -75,10 +75,9 @@ src/e2e/codegen/kotlin/assertions.rs 1033
 src/e2e/codegen/kotlin/snippet.rs 1150
 src/e2e/codegen/kotlin/test_method.rs 1337
 src/e2e/codegen/kotlin/tests.rs 1815
-src/e2e/codegen/mod.rs 1512
 src/e2e/codegen/php/test_method.rs 1121
 src/e2e/codegen/python/assertions.rs 1086
-src/e2e/codegen/python/mod.rs 1468
+src/e2e/codegen/python/mod.rs 1373
 src/e2e/codegen/python/test_file.rs 1093
 src/e2e/codegen/r/assertions.rs 1118
 src/e2e/codegen/ruby/assertions.rs 1044
@@ -93,7 +92,6 @@ src/e2e/codegen/typescript/test_file/tests.rs 1651
 src/e2e/codegen/zig/assertions.rs 1483
 src/e2e/field_access/tests.rs 1352
 src/e2e/fixture.rs 1759
-src/e2e/snippets/mod.rs 2892
 src/e2e/template_env.rs 1003
 src/e2e/validate.rs 1487
 src/extract/extractor/defaults.rs 2190
