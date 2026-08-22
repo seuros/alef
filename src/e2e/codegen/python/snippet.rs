@@ -107,10 +107,12 @@ pub(super) fn render_snippet_body(
         .filter(|branch| branch.host_type != error_type);
     if expects_error {
         let module = helpers::resolve_module(e2e_config);
-        match &typed_branch {
-            Some(branch) => imports.push(format!("from {module} import {}, {error_type}", branch.host_type)),
-            None => imports.push(format!("from {module} import {error_type}")),
-        }
+        // ~keep Sorted because a published snippet is linted in the consumer repo, where ruff's
+        // unsorted-imports rule fires on `from pkg import Error, AuthenticationError`.
+        let mut names = vec![error_type.clone()];
+        names.extend(typed_branch.as_ref().map(|branch| branch.host_type.clone()));
+        names.sort();
+        imports.push(format!("from {module} import {}", names.join(", ")));
     }
     Ok(crate::e2e::template_env::render(
         "python/snippet_body.py.jinja",
