@@ -1,0 +1,4 @@
+    if (b.build_root.handle.openDir("{{ test_documents_path }}", .{})) |*_test_documents_dir| {
+        _test_documents_dir.close();
+        {{ run_var }}.setCwd(b.path("{{ test_documents_path }}"));
+    } else |_| {}

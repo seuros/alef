@@ -548,10 +548,16 @@ fn push_run_step_config(
 ) {
     // Point the working directory at the repo-root `test_documents/` so fixtures
     // that read files (arg type `file_path`/`bytes`) resolve. Only emitted when
-    // file fixtures exist — Zig's RunStep chdirs before exec, and a missing dir
-    // fails the spawn with `FileNotFound`.
+    // file fixtures exist. Guarded on the directory's existence: Zig's RunStep
+    // chdirs before exec, and an unguarded `setCwd` into a directory that does
+    // not exist fails the spawn with `FileNotFound` -- the same unguarded-fork
+    // hazard already fixed for Gradle (`gradle/guarded_working_dir.kt.jinja`)
+    // and Maven Surefire (`java`'s profile-activated `<workingDirectory>`). ~keep
     if has_file_fixtures {
-        content.push_str(&format!("    {run_var}.setCwd(b.path(\"{test_documents_path}\"));\n"));
+        content.push_str(&crate::e2e::template_env::render(
+            "zig/guarded_set_cwd.zig.jinja",
+            minijinja::context! { run_var => run_var, test_documents_path => test_documents_path },
+        ));
     }
     for (key, value) in sorted_env {
         content.push_str(&format!(
