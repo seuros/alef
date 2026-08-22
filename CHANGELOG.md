@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.63.1] - 2026-08-22
+
+### Fixed
+
+- `packages/go/cmd/setup/main.go` is gofmt-clean again. The template emits `versionIdent` inside a
+  gofmt-aligned `const (...)` block, but the post-generation version rewriter
+  (`sync_go_cmd_setup_version_ident`) replaced the whole assignment with a hard-coded single space,
+  so every consumer regenerated at 0.63.0 shipped a `cmd/setup/main.go` that failed `gofmt -l` —
+  a lint failure with no local cause, since the file is generated. The rewriter now captures and
+  replays the alignment padding: the template owns the column, the rewriter owns the quoted value.
+- Rust e2e codegen: the "Option field unwrap bindings" loop is now guarded by `!is_streaming`,
+  matching the neighbouring array-binding loop. A streaming fixture asserting a string-typed
+  optional field (e.g. `finish_reason`) emitted `let _finish_reason = result.finish_reason...`
+  even though a streaming test never binds `result` — only `stream`/`chunks` — producing
+  `error[E0425]: cannot find value 'result' in this scope`.
+- Go e2e codegen: the "optional locals" loop is guarded the same way, for the same reason; it
+  built `<local> := result.<field>` unconditionally for streaming fixtures, failing generated
+  tests with `undefined: result`.
+- Go e2e generation derives the `strings` import from the rendered test body instead of a
+  fixture-level assertion-kind heuristic that never covered the declared-error-value path
+  (`strings.Contains(err.Error(), ...)`), producing files that failed with `undefined: strings`.
+- Elixir e2e codegen: the `tool_calls` streaming accessor no longer crashes on a content-only
+  delta chunk. `Map.get(_, :tool_calls, [])`'s default only substitutes for an *absent* key, so a
+  present-but-`nil` field returned `nil` into `Enum.flat_map`'s callback. Normalised with `|| []`.
+- NAPI string enums compute each variant's runtime wire value with the same `convert_case`
+  algorithm `napi-derive-backend` uses instead of `heck`, which diverges from it for variant names
+  with a letter-to-digit boundary (`Bm25` — `heck` gives `"bm25"`, napi-rs gives `"bm_25"`). The
+  mismatch surfaced as a generated `ts_type` literal TypeScript accepted but Rust rejected at
+  runtime.
+- NAPI plain string-enum `.d.ts` declarations derive their values from the canonical
+  `string_enum_js_values` helper rather than re-deriving serde's wire name, which disagreed with
+  napi's runtime value for the same letter-to-digit case.
+
 ## [0.63.0] - 2026-08-22
 
 ### Changed (BREAKING)
