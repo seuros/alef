@@ -201,7 +201,13 @@ pub(super) fn render_test_case(out: &mut String, fixture: &Fixture, context: Dar
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
     .with_dart_root_type(super::dart_call_result_type(call_config).or_else(|| dart_first_class_map.root_type.clone()))
     .with_enum_fields(effective_enum_fields)
-    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type)
+    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
+    // Mirrors csharp.rs/kotlin's identical `with_ir_collection_map` wiring: without it, a
+    // collection field with no per-element path anywhere in the fixture suite (nothing ever
+    // indexes into it — e.g. a recursive `Option<Vec<DataNode>> Children`) has no
+    // `fields_array` config signal at all, so `FieldResolver::is_collection_root` always
+    // returned false regardless of what `assertions.rs` checks it for. ~keep
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let mut function_name = call_overrides
