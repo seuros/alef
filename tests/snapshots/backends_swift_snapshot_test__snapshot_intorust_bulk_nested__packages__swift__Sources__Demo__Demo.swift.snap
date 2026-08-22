@@ -7,37 +7,6 @@ expression: "&file.content"
 
 import Foundation
 import RustBridge
-/// Source span.
-public struct Span: Codable, Sendable, Hashable {
-    public let startByte: UInt
-    public let endByte: UInt
-    public init(startByte: UInt, endByte: UInt) {
-        self.startByte = startByte
-        self.endByte = endByte
-    }
-    private enum CodingKeys: String, CodingKey {
-        case startByte = "start_byte"
-        case endByte = "end_byte"
-    }
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.startByte = try container.decodeIfPresent(UInt.self, forKey: .startByte) ?? 0
-        self.endByte = try container.decodeIfPresent(UInt.self, forKey: .endByte) ?? 0
-    }
-}
-
-// MARK: - Internal FFI conversions for Span
-internal extension Span {
-    init(_ rb: RustBridge.SpanRef) throws {
-        self.startByte = rb.startByte()
-        self.endByte = rb.endByte()
-    }
-
-    func intoRust() throws -> RustBridge.Span {
-        return RustBridge.Span(self.startByte, self.endByte)
-    }
-}
-
 /// Parse diagnostic.
 public struct Diagnostic: Codable, Sendable, Hashable {
     public let message: String
@@ -109,9 +78,36 @@ internal extension ProcessResult {
     }
 }
 
-public typealias SpanRef = RustBridge.SpanRef
+/// Source span.
+public struct Span: Codable, Sendable, Hashable {
+    public let startByte: UInt
+    public let endByte: UInt
+    public init(startByte: UInt, endByte: UInt) {
+        self.startByte = startByte
+        self.endByte = endByte
+    }
+    private enum CodingKeys: String, CodingKey {
+        case startByte = "start_byte"
+        case endByte = "end_byte"
+    }
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.startByte = try container.decodeIfPresent(UInt.self, forKey: .startByte) ?? 0
+        self.endByte = try container.decodeIfPresent(UInt.self, forKey: .endByte) ?? 0
+    }
+}
 
-public typealias SpanRefMut = RustBridge.SpanRefMut
+// MARK: - Internal FFI conversions for Span
+internal extension Span {
+    init(_ rb: RustBridge.SpanRef) throws {
+        self.startByte = rb.startByte()
+        self.endByte = rb.endByte()
+    }
+
+    func intoRust() throws -> RustBridge.Span {
+        return RustBridge.Span(self.startByte, self.endByte)
+    }
+}
 
 public typealias DiagnosticRef = RustBridge.DiagnosticRef
 
@@ -121,15 +117,15 @@ public typealias ProcessResultRef = RustBridge.ProcessResultRef
 
 public typealias ProcessResultRefMut = RustBridge.ProcessResultRefMut
 
+public typealias SpanRef = RustBridge.SpanRef
+
+public typealias SpanRefMut = RustBridge.SpanRefMut
+
 // MARK: - From-JSON Helpers
 // Public helpers that decode JSON into first-class Swift types.
 // First-class struct types (Codable) use JSONDecoder directly.
 // Opaque RustBridge types forward to RustBridge.
 
-public func spanFromJson(_ json: String) throws -> Span {
-    let data = json.data(using: .utf8) ?? Data()
-    return try JSONDecoder().decode(Span.self, from: data)
-}
 public func diagnosticFromJson(_ json: String) throws -> Diagnostic {
     let data = json.data(using: .utf8) ?? Data()
     return try JSONDecoder().decode(Diagnostic.self, from: data)
@@ -138,9 +134,13 @@ public func processResultFromJson(_ json: String) throws -> ProcessResult {
     let data = json.data(using: .utf8) ?? Data()
     return try JSONDecoder().decode(ProcessResult.self, from: data)
 }
-// swift-bridge opaque type used across Task.detached boundaries — Rust type is Send + Sync.
-extension RustBridge.Span: @unchecked Sendable {}
+public func spanFromJson(_ json: String) throws -> Span {
+    let data = json.data(using: .utf8) ?? Data()
+    return try JSONDecoder().decode(Span.self, from: data)
+}
 // swift-bridge opaque type used across Task.detached boundaries — Rust type is Send + Sync.
 extension RustBridge.Diagnostic: @unchecked Sendable {}
 // swift-bridge opaque type used across Task.detached boundaries — Rust type is Send + Sync.
 extension RustBridge.ProcessResult: @unchecked Sendable {}
+// swift-bridge opaque type used across Task.detached boundaries — Rust type is Send + Sync.
+extension RustBridge.Span: @unchecked Sendable {}

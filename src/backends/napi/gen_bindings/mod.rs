@@ -90,7 +90,7 @@ impl Backend for NapiBackend {
         // Collapse same-named cfg-variant functions into one canonical entry. The napi `#[napi]`
         // wrapper delegates to the core crate (which resolves the cfg) and emits no `#[cfg]` gate,
         // so two same-named entries would otherwise produce duplicate `#[napi]` fn definitions.
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         let api = &deduped_api;
 
         let prefix = config.node_type_prefix();
@@ -779,7 +779,7 @@ impl Backend for NapiBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        type_stubs::generate(api, config)
+        type_stubs::generate(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn generate_service_api(
@@ -787,7 +787,7 @@ impl Backend for NapiBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        service_api::generate(api, config)
+        service_api::generate(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {

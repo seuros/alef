@@ -66,6 +66,10 @@ impl Backend for GoBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         if let Some(go) = config.go.as_ref() {
             crate::core::config::languages::require_shared_native_runtime(
                 &go.capsule_types,
@@ -393,6 +397,10 @@ impl Backend for GoBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         let module_path = config.go_module();
         let pkg_name = config
             .go

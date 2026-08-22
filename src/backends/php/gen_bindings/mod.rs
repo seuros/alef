@@ -40,6 +40,10 @@ impl Backend for PhpBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         crate::codegen::config_gen::validate_rust_default_functions(api)?;
         rust_bindings::generate_bindings(api, config)
     }
@@ -49,6 +53,10 @@ impl Backend for PhpBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         public_api::generate_public_api(api, config)
     }
 
@@ -57,6 +65,10 @@ impl Backend for PhpBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         type_stubs::generate_type_stubs(api, config)
     }
 
@@ -65,6 +77,10 @@ impl Backend for PhpBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        // Order the IR once, before anything reads it: every emission loop below concatenates
+        // api.types/enums/functions/errors into a single generated file in Vec order. ~keep
+        let sorted_api = crate::backends::ir_order::with_sorted_items(api);
+        let api = &sorted_api;
         service_api::generate(api, config)
     }
 

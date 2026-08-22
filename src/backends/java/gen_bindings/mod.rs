@@ -181,8 +181,7 @@ impl Backend for JavaBackend {
             .iter()
             .map(String::as_str)
             .collect();
-        let cfg_filtered_api = api.with_cfg_filtered_deep(&java_features);
-        let api = &cfg_filtered_api;
+        let api = &crate::backends::ir_order::with_sorted_items(api).with_cfg_filtered_deep(&java_features);
         // The surface as the FFI backend sees it, kept alongside the Java-filtered one so
         // the trait-bridge loop can prove Java's vtable matches the Rust vtable struct. ~keep
         let source_api = api;
@@ -217,8 +216,7 @@ impl Backend for JavaBackend {
             java_filtered_api = api_without_java_excluded_functions(api, &java_excluded);
             &java_filtered_api
         };
-        let deduped_api = api.with_deduped_functions();
-        let api = &deduped_api;
+        let api = &api.with_deduped_functions();
         let package = config.java_package();
         let prefix = config.ffi_prefix();
         let main_class = Self::resolve_main_class(api);
@@ -565,6 +563,7 @@ impl Backend for JavaBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        let api = &crate::backends::ir_order::with_sorted_items(api);
         let exclude_types = effective_exclude_types(api, config);
         let type_filtered_api;
         let api = if should_filter_excluded_types(api, &exclude_types) {
@@ -655,6 +654,7 @@ impl Backend for JavaBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
+        let api = &crate::backends::ir_order::with_sorted_items(api);
         let exclude_types = effective_exclude_types(api, config);
         if should_filter_excluded_types(api, &exclude_types) {
             service_api::generate(&api_without_excluded_types(api, &exclude_types), config)

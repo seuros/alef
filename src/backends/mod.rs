@@ -2,6 +2,9 @@
 
 #[cfg(test)]
 mod default_agreement_tests;
+pub(crate) mod ir_order;
+#[cfg(test)]
+mod order_invariance_tests;
 
 pub mod csharp;
 pub mod dart;
