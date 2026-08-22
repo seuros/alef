@@ -347,11 +347,19 @@ fn collect_output(
     Ok(output)
 }
 
+/// `HOME` is the Unix counterpart of `USERPROFILE` below: cargo, gradle, `dart pub`, `gem`, `mix`,
+/// and npm all resolve their cache or config directory through it, and `env_clear` otherwise hands
+/// them none. It is passed through unmodified rather than pointed at a scratch directory -- like
+/// `PATH`, `TMPDIR`, and `USERPROFILE` it names a machine identity a toolchain expects to resolve
+/// structurally, not consumer-specific state the allowlist exists to withhold. Per-invocation
+/// isolation is already provided by `ScratchDir` and `command.current_dir`, so redirecting `HOME`
+/// as well would only cost every validated snippet its shared toolchain cache. ~keep
 const SANITIZED_ENVIRONMENT_VARIABLES: &[&str] = &[
     "PATH",
     "PATHEXT",
     "SYSTEMROOT",
     "WINDIR",
+    "HOME",
     "TMP",
     "TEMP",
     "TMPDIR",
@@ -503,6 +511,20 @@ mod environment_tests {
                 value.map(|value| (key.to_string_lossy().into_owned(), value.to_string_lossy().into_owned()))
             })
             .collect()
+    }
+
+    /// `HOME` is where cargo, gradle, `dart pub`, `gem`, and `mix` resolve their cache or config
+    /// directory; without it, `env_clear` leaves the validated snippet's toolchain unable to find
+    /// its own cache. ~keep
+    #[test]
+    fn home_survives_sanitisation_on_non_windows_hosts() {
+        let passed = sanitized(false);
+
+        assert_eq!(
+            passed.get("HOME").map(String::as_str),
+            Some("value-of-HOME"),
+            "HOME must survive sanitisation so toolchains can resolve their cache/config directory"
+        );
     }
 
     #[test]
