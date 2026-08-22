@@ -961,6 +961,8 @@ pub(super) fn ensure_required_records_tracked(untracked: &[&'static str], report
 }
 
 #[cfg(test)]
+mod format_scope_tests;
+#[cfg(test)]
 mod strict_formatting_tests;
 #[cfg(test)]
 mod tests;

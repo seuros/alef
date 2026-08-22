@@ -444,7 +444,17 @@ pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
 }
 
 /// Paths to hand to poly. Full regen → the repo root (one pass). Partial regen →
-/// the package directory of each changed language (existing dirs only, deduped).
+/// every directory each changed language generates into (existing dirs only, deduped,
+/// with nested entries collapsed into their enclosing directory).
+///
+/// Both `package_dir(lang)` and `output_for(lang)`, deliberately: this is the same span
+/// `generate_sweep_roots` reclaims orphans across and the same span `finalize_hashes`
+/// stamps, and a formatting scope narrower than the stamping scope means alef stamps bytes
+/// it never canonicalised. For most languages the two coincide or nest -- but
+/// `package_dir(Python)` is the wheel at `packages/python` while the PyO3 glue crate is
+/// generated into `crates/<name>-py/src`, so `alef generate --lang python` used to stamp a
+/// Rust file no formatter had touched, and the next whole-tree pass immediately made that
+/// stamp stale. Format scope must equal stamp scope. ~keep
 fn poly_paths(
     config: &ResolvedCrateConfig,
     base_dir: &Path,
@@ -457,14 +467,33 @@ fn poly_paths(
             let mut seen = HashSet::new();
             let mut dirs = Vec::new();
             for &lang in poly_langs {
-                let dir = base_dir.join(config.package_dir(lang));
-                if seen.insert(dir.clone()) && dir.exists() {
-                    dirs.push(dir);
+                let package_dir = base_dir.join(config.package_dir(lang));
+                let output_dir = config.output_for(&lang.to_string()).map(|out| base_dir.join(out));
+                for dir in std::iter::once(package_dir).chain(output_dir) {
+                    if seen.insert(dir.clone()) && dir.exists() {
+                        dirs.push(dir);
+                    }
                 }
             }
-            dirs
+            collapse_nested_paths(dirs)
         }
     }
+}
+
+/// Drop every path that lies inside another path in the list. poly walks each root it is
+/// given recursively, so handing it both `crates/x-node` and `crates/x-node/src` would
+/// format the same subtree twice -- and a formatter run twice in one pass is how
+/// non-idempotent engines produce output that differs from what a single `--check` expects.
+fn collapse_nested_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    paths
+        .iter()
+        .filter(|candidate| {
+            !paths
+                .iter()
+                .any(|other| other != *candidate && candidate.starts_with(other))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Glob patterns excluded from every poly `fmt` invocation, `--fix` and `--check`
@@ -890,6 +919,8 @@ fn resolve_crate_dir(output_path: &Path) -> PathBuf {
         .unwrap_or_else(|| output_path.to_path_buf())
 }
 
+#[cfg(test)]
+mod scope_tests;
 #[cfg(test)]
 mod strict_tests;
 #[cfg(test)]
