@@ -300,8 +300,14 @@ impl StreamingFieldResolver {
                     )
                 }
                 "elixir" => {
+                    // `Map.get(_, :tool_calls, [])`'s default only substitutes for an
+                    // ABSENT key -- a struct's `:tool_calls` field is always present (nil
+                    // when unset), so a content-only delta made `Map.get` return the
+                    // stored `nil` instead of the `[]` default, and `Enum.flat_map`
+                    // cannot enumerate `nil`. The trailing `|| []` normalizes that stored
+                    // `nil` to an empty list before flat_map ever sees it.
                     format!(
-                        "{chunks_var} |> Enum.flat_map(fn c -> (List.first(c.choices) || %{{}}).delta |> Map.get(:tool_calls, []) end)"
+                        "{chunks_var} |> Enum.flat_map(fn c -> ((List.first(c.choices) || %{{}}).delta |> Map.get(:tool_calls, [])) || [] end)"
                     )
                 }
                 // Zig: tool_calls count from all chunk deltas

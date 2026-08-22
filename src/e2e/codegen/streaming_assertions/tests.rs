@@ -908,6 +908,30 @@ fn ruby_tool_calls_uses_ruby_flat_map_block() {
     );
 }
 
+/// Regression test for a `Enum.flat_map`/`Protocol.UndefinedError` crash: `Map.get(_, :tool_calls,
+/// [])`'s default only substitutes for an ABSENT key. A struct's `:tool_calls` field is always
+/// present (`nil` when the delta carries no tool calls, e.g. a content-only chunk in a mixed
+/// stream), so `Map.get` returned the stored `nil` instead of the `[]` default, and
+/// `Enum.flat_map` cannot enumerate `nil`. Verified against a real `elixir` runtime: the
+/// pre-fix expression raised `Protocol.UndefinedError: protocol Enumerable not implemented for
+/// Atom` on a `%{tool_calls: nil}`-shaped delta.
+#[test]
+fn elixir_tool_calls_normalizes_nil_delta_before_flat_map() {
+    let expr = StreamingFieldResolver::accessor("tool_calls", "elixir", "chunks").unwrap();
+    assert!(
+        expr.contains("Enum.flat_map"),
+        "elixir tool_calls must use Enum.flat_map, got: {expr}"
+    );
+    // The `Map.get(..., :tool_calls, [])` call must be immediately followed by a `|| []`
+    // that normalizes a stored-but-nil value, not just an absent key, to an empty list --
+    // otherwise `Enum.flat_map`'s callback can return `nil` and crash.
+    assert!(
+        expr.contains("Map.get(:tool_calls, [])) || []"),
+        "elixir tool_calls must normalize a nil Map.get result with `|| []` before flat_map \
+         enumerates it, got: {expr}"
+    );
+}
+
 #[test]
 fn ruby_finish_reason_uses_to_s_not_get_value() {
     let expr = StreamingFieldResolver::accessor("finish_reason", "ruby", "chunks").unwrap();
