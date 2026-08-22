@@ -12,6 +12,8 @@ use std::path::{Component, Path, PathBuf};
 pub mod coverage;
 pub(crate) mod ledger_paths;
 pub mod migration;
+mod mock_harness_guard;
+mod mock_url_defaults;
 pub mod ownership;
 mod recipe_policy;
 
@@ -541,11 +543,10 @@ fn render_snippet_body(
     context: &SnippetRenderContext<'_>,
 ) -> Result<String> {
     let docs_fixture = fixture.docs_call_fixture();
-    let fixture = &docs_fixture;
     for extension in extensions {
         if let Some(body) = extension
             .render_e2e_snippet(
-                fixture,
+                &docs_fixture,
                 context.e2e,
                 context.crate_config,
                 language,
@@ -557,17 +558,19 @@ fn render_snippet_body(
             if body.trim().is_empty() {
                 bail!("extension `{}` returned an empty snippet body", extension.name());
             }
-            reject_mock_harness_scaffolding(&body, fixture, language)?;
+            mock_harness_guard::reject_mock_harness_scaffolding(&body, &docs_fixture, language)?;
             return Ok(body);
         }
     }
     let call = context.e2e.resolve_call_for_fixture(
-        fixture.call.as_deref(),
-        &fixture.id,
-        &fixture.resolved_category(),
-        &fixture.tags,
-        &fixture.input,
+        docs_fixture.call.as_deref(),
+        &docs_fixture.id,
+        &docs_fixture.resolved_category(),
+        &docs_fixture.tags,
+        &docs_fixture.input,
     );
+    let docs_fixture = mock_url_defaults::with_default_mock_url_literals(docs_fixture, call);
+    let fixture = &docs_fixture;
     if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
         bail!("{kind} fixture requires an extension-owned documentation recipe");
     }
@@ -609,47 +612,8 @@ fn render_snippet_body(
     if body.trim().is_empty() {
         bail!("built-in `{language}` snippet recipe returned an empty body");
     }
-    reject_mock_harness_scaffolding(&body, fixture, language)?;
+    mock_harness_guard::reject_mock_harness_scaffolding(&body, fixture, language)?;
     Ok(body)
-}
-
-/// Substrings that only ever appear in e2e mock-server wiring.
-///
-/// Each is a name the harness itself owns: the environment variables the mock server
-/// exports (`MOCK_SERVER_URL`, `MOCK_SERVERS`, the per-fixture `MOCK_SERVER_<ID>`) and
-/// the JVM system properties the Java/Kotlin suites read them through.
-const MOCK_HARNESS_MARKERS: &[&str] = &[
-    "MOCK_SERVER_URL",
-    "MOCK_SERVERS",
-    "MOCK_SERVER_",
-    "mockServerUrl",
-    "mockServer.",
-];
-
-/// Reject a snippet body that carries e2e mock-server scaffolding.
-///
-/// Snippet bodies are published verbatim into the docs site, so a body that still points
-/// at the mock server documents the test harness rather than the library. Every language
-/// — built-in or extension-supplied — funnels through [`render_snippet_body`], so placing
-/// the check here means a new backend inherits the guarantee instead of having to
-/// re-derive it. The `Err` carries a typed [`MockHarnessLeak`] so the caller can route it
-/// to a hard, attributed failure rather than to a coverage gap that a `coverage_exceptions`
-/// entry would silently absorb.
-fn reject_mock_harness_scaffolding(body: &str, fixture: &Fixture, language: &str) -> Result<()> {
-    let fixture_route = format!("/fixtures/{}", fixture.id);
-    let marker = MOCK_HARNESS_MARKERS
-        .iter()
-        .copied()
-        .chain(std::iter::once(fixture_route.as_str()))
-        .find(|marker| body.contains(marker));
-    if let Some(marker) = marker {
-        return Err(anyhow::Error::new(MockHarnessLeak {
-            marker: marker.to_string(),
-            fixture_id: fixture.id.clone(),
-            language: language.to_string(),
-        }));
-    }
-    Ok(())
 }
 
 /// Turn every guard rejection this run produced into one aborting, attributed error. ~keep
@@ -1120,7 +1084,7 @@ mod tests {
             "let url = \"https://api.example.com/fixtures/rate_limit_429\";",
         ];
         for leak in leaks {
-            let error = reject_mock_harness_scaffolding(leak, &fixture, "zig")
+            let error = mock_harness_guard::reject_mock_harness_scaffolding(leak, &fixture, "zig")
                 .expect_err("mock-server scaffolding must not reach a published snippet");
             let message = format!("{error:#}");
             assert!(message.contains("rate_limit_429"), "error omits the fixture: {message}");
@@ -1135,7 +1099,7 @@ mod tests {
             ..Fixture::default()
         };
         let body = "var apiKey = System.getenv(\"API_KEY\");\nvar client = Sample.createClient(apiKey, null);";
-        assert!(reject_mock_harness_scaffolding(body, &fixture, "java").is_ok());
+        assert!(mock_harness_guard::reject_mock_harness_scaffolding(body, &fixture, "java").is_ok());
     }
 
     fn snippet_report_for(fixture: Fixture, languages: &[&str], body: &'static str) -> Result<SnippetGenerationReport> {
