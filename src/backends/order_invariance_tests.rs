@@ -23,20 +23,10 @@ use crate::core::ir::{
 /// Languages this test does not yet assert on, each with the reason it is excluded. Every other
 /// language with a registered backend is covered. Shrinking this list is the goal; nothing should
 /// ever be added to it to make a failure go away. ~keep
-const NOT_YET_ORDER_INVARIANT: &[(Language, &str)] = &[
-    (
-        Language::Dart,
-        "dart's emission loops still iterate api.types/enums/functions/errors in raw Vec order",
-    ),
-    (
-        Language::Elixir,
-        "rustler sorts its type/enum loops but still leaks api.functions/api.errors order",
-    ),
-    (
-        Language::R,
-        "extendr sorts its type/enum loops but still leaks api.functions/api.errors order",
-    ),
-];
+const NOT_YET_ORDER_INVARIANT: &[(Language, &str)] = &[(
+    Language::Dart,
+    "dart's emission loops still iterate api.types/enums/functions/errors in raw Vec order",
+)];
 
 fn payload_type(name: &str, field: &str) -> TypeDef {
     TypeDef {

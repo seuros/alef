@@ -14,7 +14,10 @@
 use super::{RustlerBackend, test_api, test_config};
 use crate::core::backend::{Backend, GeneratedFile};
 use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{
+    ApiSurface, EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, ParamDef, PrimitiveType, TypeDef,
+    TypeRef, VersionAnnotation,
+};
 
 fn payload_type(name: &str, field: &str) -> TypeDef {
     TypeDef {
@@ -56,10 +59,49 @@ fn flat_data_enum(name: &str, tag: Option<&str>, variants: &[(&str, &str)]) -> E
     }
 }
 
+fn free_function(name: &str, param_type: &str) -> FunctionDef {
+    FunctionDef {
+        name: name.to_string(),
+        rust_path: format!("my_crate::{name}"),
+        params: vec![ParamDef {
+            name: "input".to_string(),
+            ty: TypeRef::Named(param_type.to_string()),
+            ..Default::default()
+        }],
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        ..Default::default()
+    }
+}
+
+fn error_def(name: &str, variants: &[&str]) -> ErrorDef {
+    ErrorDef {
+        name: name.to_string(),
+        rust_path: format!("my_crate::{name}"),
+        original_rust_path: String::new(),
+        variants: variants
+            .iter()
+            .map(|variant| ErrorVariant {
+                name: (*variant).to_string(),
+                message_template: Some(format!("{variant} failed")),
+                ..Default::default()
+            })
+            .collect(),
+        doc: String::new(),
+        methods: Vec::new(),
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: VersionAnnotation::default(),
+    }
+}
+
 /// Three flat data enums -- one explicitly tagged (mirroring the `format_type` case from the
 /// task's consumer-repo report) and two relying on the generic `"type"` fallback -- plus their
 /// payload struct types. Multiple untagged flat enums stress any shared-name/shared-fallback path
 /// that might resolve which enum "owns" a discriminator via an unordered lookup.
+///
+/// `functions` and `errors` are populated too, not just `types`/`enums`: a prior fix here sorted
+/// only the type/enum emission loops, and a test that reversed only `types`/`enums` passed without
+/// ever exercising the still-broken `api.functions`/`api.errors` order. See task #132 follow-up. ~keep
 fn determinism_api() -> ApiSurface {
     let mut api = test_api();
     api.types = vec![
@@ -86,6 +128,15 @@ fn determinism_api() -> ApiSurface {
             None,
             &[("Comment", "AnnotationDataA"), ("Highlight", "AnnotationDataB")],
         ),
+    ];
+    api.functions = vec![
+        free_function("summarize_pdf", "PdfMetadata"),
+        free_function("summarize_docx", "DocxMetadata"),
+        free_function("summarize_node", "NodeMetadata"),
+    ];
+    api.errors = vec![
+        error_def("ParseError", &["Malformed", "Truncated"]),
+        error_def("IoError", &["NotFound", "Denied"]),
     ];
     api
 }
@@ -127,15 +178,17 @@ fn rustler_generation_is_invariant_to_ir_collection_order() {
     let mut reversed = forward.clone();
     reversed.types.reverse();
     reversed.enums.reverse();
+    reversed.functions.reverse();
+    reversed.errors.reverse();
 
     let forward_files = generated_files_sorted(&forward, &config);
     let reversed_files = generated_files_sorted(&reversed, &config);
 
     assert_eq!(
         forward_files, reversed_files,
-        "reversing api.types/api.enums must not change any generated file's content; a diff here \
-         means codegen leaks Vec ordering (or an unordered collection built from it, e.g. a \
-         discriminator/name lookup) into emitted text -- exactly the class of bug that made two \
-         `alef all` runs disagree on an unchanged tree"
+        "reversing api.types/api.enums/api.functions/api.errors must not change any generated \
+         file's content; a diff here means codegen leaks Vec ordering (or an unordered collection \
+         built from it, e.g. a discriminator/name lookup) into emitted text -- exactly the class \
+         of bug that made two `alef all` runs disagree on an unchanged tree"
     );
 }

@@ -44,7 +44,7 @@ impl Backend for ExtendrBackend {
     }
 
     fn generate_bindings(&self, api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
-        let deduped_api = api.with_deduped_functions();
+        let deduped_api = crate::backends::ir_order::with_sorted_items(api).with_deduped_functions();
         let enabled_features = effective_r_cfg_features(&deduped_api, config);
         let r_cfg_api = apply_r_cfg_policy(&deduped_api, &enabled_features);
         let api = &r_cfg_api;
@@ -749,7 +749,7 @@ impl Backend for ExtendrBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        r_package::generate_public_api(api, config)
+        r_package::generate_public_api(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn generate_service_api(
@@ -757,7 +757,7 @@ impl Backend for ExtendrBackend {
         api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
-        service_api::generate(api, config)
+        service_api::generate(&crate::backends::ir_order::with_sorted_items(api), config)
     }
 
     fn build_config(&self) -> Option<BuildConfig> {
