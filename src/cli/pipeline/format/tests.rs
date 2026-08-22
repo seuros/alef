@@ -381,7 +381,7 @@ fn run_workspace_cargo_sort_sorts_every_member_regardless_of_language() {
     // `language_residuals` — the coverage gap this workspace-wide pass replaces.
     write_unsorted_workspace(base, "-py");
 
-    run_workspace_cargo_sort(base);
+    run_workspace_cargo_sort(base, &mut FormatPass::new(&is_tool_available));
 
     let py_toml = std::fs::read_to_string(base.join("crates/pkg-py/Cargo.toml")).unwrap();
     if is_tool_available("cargo-sort") {
@@ -416,7 +416,7 @@ fn run_workspace_cargo_sort_is_noop_without_root_cargo_toml() {
     let base = dir.path();
     std::fs::write(base.join("marker.txt"), "untouched").unwrap();
 
-    run_workspace_cargo_sort(base);
+    run_workspace_cargo_sort(base, &mut FormatPass::new(&is_tool_available));
 
     assert!(
         !base.join("Cargo.toml").exists(),
@@ -432,7 +432,7 @@ fn run_cargo_fmt_formats_workspace_rust_files_when_available() {
     let lib_path = base.join("crates/pkg-ffi/src/lib.rs");
     std::fs::write(&lib_path, "pub fn noop( ) {\nlet x=1;\nx;\n}\n").unwrap();
 
-    run_cargo_fmt(base);
+    run_cargo_fmt(base, &mut FormatPass::new(&is_tool_available));
 
     let formatted = std::fs::read_to_string(&lib_path).unwrap();
     if is_tool_available("cargo") && is_tool_available("rustfmt") {
@@ -455,7 +455,7 @@ fn run_cargo_fmt_is_noop_without_root_cargo_toml() {
     let file_path = base.join("orphan.rs");
     std::fs::write(&file_path, "fn noop( ) {}\n").unwrap();
 
-    run_cargo_fmt(base);
+    run_cargo_fmt(base, &mut FormatPass::new(&is_tool_available));
 
     assert_eq!(
         std::fs::read_to_string(&file_path).unwrap(),
@@ -490,7 +490,7 @@ fn run_elixir_mix_format_is_noop_without_packages_elixir() {
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path();
 
-    run_elixir_mix_format(base);
+    run_elixir_mix_format(base, &mut FormatPass::new(&is_tool_available));
 
     assert!(
         !base.join("packages/elixir").exists(),
@@ -508,7 +508,7 @@ fn run_elixir_mix_format_reformats_the_generated_package_when_mix_installed() {
     let elixir_dir = base.join("packages/elixir");
     write_minimal_mix_project(&elixir_dir, "defmodule Sample do\n  def noop, do:    :ok\nend\n");
 
-    run_elixir_mix_format(base);
+    run_elixir_mix_format(base, &mut FormatPass::new(&is_tool_available));
 
     assert_eq!(
         std::fs::read_to_string(elixir_dir.join("lib/sample.ex")).unwrap(),

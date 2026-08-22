@@ -74,6 +74,15 @@ pub(crate) enum Commands {
         /// or `[crates.dart] skip_frb = true` in alef.toml.
         #[arg(long)]
         skip_frb: bool,
+        /// Fail the run when a configured formatter's executable is not installed.
+        ///
+        /// Means exactly what `alef all --strict` means, for the same reason it exists
+        /// there: by default a missing formatter is recorded as a deferred step and the
+        /// run continues, because `poly`, `rustfmt`, `cargo-sort` and `mix` are host
+        /// toolchains a fresh clone may legitimately lack. A formatter that RUNS and
+        /// rejects the code always fails, with or without this.
+        #[arg(long)]
+        strict: bool,
     },
     /// Generate type stubs (.pyi, .rbs).
     Stubs {
