@@ -3209,15 +3209,15 @@ fn tagged_enum_dispatcher_emits_rubocop_clean_ruby() {
         "discriminator read must use double quotes:\n{content}"
     );
     assert!(
-        content.contains("when \"system\" then MessageSystem.from_hash(hash)"),
-        "dispatcher `when` arm must use double quotes:\n{content}"
+        content.contains("when \"System\" then MessageSystem.from_hash(hash)"),
+        "no rename_all declared, so the wire value is verbatim, and the dispatcher `when` arm must use double quotes:\n{content}"
     );
     assert!(
         content.contains("hash[:content] || hash[\"content\"]"),
         "variant field read must use double quotes:\n{content}"
     );
     assert!(
-        !content.contains("hash['role']") && !content.contains("when 'system'"),
+        !content.contains("hash['role']") && !content.contains("when 'System'"),
         "no single-quoted literals expected in dispatcher:\n{content}"
     );
     assert!(
