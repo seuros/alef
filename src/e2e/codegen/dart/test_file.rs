@@ -28,11 +28,10 @@ pub(super) fn render_test_file(
     // emitted for every test case; tests that only check for absence of errors
     // do not consume `result`, triggering this dart-analyze warning.
     //
-    // Suppress unused_element: the `_alefE2eText` and `_camelToSnake` helpers
-    // are emitted unconditionally so per-test bodies can call them, but some
-    // category-scoped files (download, smoke, ...) contain only fixtures whose
-    // assertions never reach an enum field, leaving the helpers technically
-    // unused in that file.
+    // Suppress unused_element: helpers like `_fixtureUrl`/`_setEnv`/`_withRetry` are
+    // emitted whenever their gating condition (e.g. `has_http_fixtures`) is met for the
+    // category, but not every fixture that triggers the gate ends up calling every helper
+    // it unlocks, leaving one technically unused in that file.
     out.push_str("// ignore_for_file: unused_local_variable, unused_element\n\n");
 
     // Check if any fixture needs the http package (HTTP server tests).
@@ -289,54 +288,6 @@ pub(super) fn render_test_file(
     }
 
     let _ = writeln!(out, "// E2e tests for category: {category}");
-    let _ = writeln!(out);
-
-    // Emit a helper function to normalize enum values to their serde wire format.
-    // Dart enums' .toString() returns "EnumName.variant" but fixtures use serde wire format
-    // (e.g. "stop" for FinishReason.stop, "tool_calls" for FinishReason.toolCalls).
-    // This helper handles enum-to-wire conversion by calling .name (which gives the Dart
-    // variant name like "toolCalls") and converting back to snake_case for multi-word variants.
-    let _ = writeln!(out, "String _alefE2eText(Object? value) {{");
-    let _ = writeln!(out, "  if (value == null) return '';");
-    let _ = writeln!(
-        out,
-        "  // Check if it's an enum by examining its toString representation."
-    );
-    let _ = writeln!(out, "  final str = value.toString();");
-    let _ = writeln!(out, "  if (str.contains('.')) {{");
-    let _ = writeln!(
-        out,
-        "    // Enum.toString() returns 'EnumName.variantName'. Extract the variant name."
-    );
-    let _ = writeln!(out, "    final parts = str.split('.');");
-    let _ = writeln!(out, "    if (parts.length == 2) {{");
-    let _ = writeln!(out, "      final variantName = parts[1];");
-    let _ = writeln!(
-        out,
-        "      // Convert camelCase variant names to snake_case for serde compatibility."
-    );
-    let _ = writeln!(out, "      // E.g. 'toolCalls' -> 'tool_calls', 'stop' -> 'stop'.");
-    let _ = writeln!(out, "      return _camelToSnake(variantName);");
-    let _ = writeln!(out, "    }}");
-    let _ = writeln!(out, "  }}");
-    let _ = writeln!(out, "  return str;");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-
-    // Helper to convert camelCase to snake_case.
-    let _ = writeln!(out, "String _camelToSnake(String camel) {{");
-    let _ = writeln!(out, "  final buffer = StringBuffer();");
-    let _ = writeln!(out, "  for (int i = 0; i < camel.length; i++) {{");
-    let _ = writeln!(out, "    final char = camel[i];");
-    let _ = writeln!(out, "    if (char.contains(RegExp(r'[A-Z]'))) {{");
-    let _ = writeln!(out, "      if (i > 0) buffer.write('_');");
-    let _ = writeln!(out, "      buffer.write(char.toLowerCase());");
-    let _ = writeln!(out, "    }} else {{");
-    let _ = writeln!(out, "      buffer.write(char);");
-    let _ = writeln!(out, "    }}");
-    let _ = writeln!(out, "  }}");
-    let _ = writeln!(out, "  return buffer.toString();");
-    let _ = writeln!(out, "}}");
     let _ = writeln!(out);
 
     // Only emit _parsePageAction if any fixture uses PageAction arrays.
