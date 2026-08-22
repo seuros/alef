@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use super::descriptions::{
     generate_enum_variant_description, generate_error_variant_description, generate_field_description,
 };
-use super::doc_cleaning::{clean_doc_inline, demote_headings};
+use super::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use super::formatting::{doc_type_with_optional, escape_table_cell, format_field_default};
 use super::sorting::is_update_type;
 use super::{clean_doc, template_env, version_labels};
@@ -39,7 +39,10 @@ pub(super) fn generate_configuration_doc(
             minijinja::context! { marker => "###", title => &ty.name },
         ));
         let doc = clean_doc(&ty.doc, Language::Python);
-        let doc = demote_headings(&doc, 1);
+        // Pin to the level below the `###` heading emitted just above, rather than shifting by a
+        // fixed amount: a fixed shift assumes the doc opens at `#`, and any doc that does not
+        // lands its headings above their own parent. ~keep
+        let doc = demote_headings_to_start_at(&doc, 4);
         if !doc.is_empty() {
             out.push_str(&doc);
             out.push('\n');
@@ -186,7 +189,7 @@ pub(super) fn generate_types_doc(api: &ApiSurface, output_dir: &str) -> anyhow::
             ));
 
             let doc = clean_doc(&ty.doc, Language::Python);
-            let doc = demote_headings(&doc, 2);
+            let doc = demote_headings_to_start_at(&doc, 5);
             if !doc.is_empty() {
                 out.push_str(&doc);
                 out.push('\n');
@@ -285,7 +288,7 @@ pub(super) fn render_enum_for_shared_doc(en: &EnumDef, lang: Language) -> String
     }
 
     let doc = clean_doc(&en.doc, lang);
-    let doc = demote_headings(&doc, 2);
+    let doc = demote_headings_to_start_at(&doc, 5);
     if !doc.is_empty() {
         out.push_str(&doc);
         out.push('\n');
@@ -418,7 +421,7 @@ pub(super) fn generate_errors_doc(api: &ApiSurface, output_dir: &str) -> anyhow:
         ));
 
         let doc = clean_doc(&err.doc, Language::Python);
-        let doc = demote_headings(&doc, 1);
+        let doc = demote_headings_to_start_at(&doc, 4);
         if !doc.is_empty() {
             out.push_str(&doc);
             out.push('\n');

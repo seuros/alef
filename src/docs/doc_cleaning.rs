@@ -1,121 +1,13 @@
 use crate::core::config::Language;
 
+mod heading_levels;
+
+#[cfg(test)]
+pub(crate) use heading_levels::check_monotonic_headings;
+pub(crate) use heading_levels::{demote_headings, demote_headings_to_start_at};
+
 /// Rust doc section headers that should be stripped for all non-Rust output.
 const RUST_ONLY_SECTIONS: &[&str] = &["example", "examples", "arguments", "fields"];
-
-/// Check if a markdown document has monotonic heading increments (no skips of >1 level).
-///
-/// Returns `Ok(())` if all headings increment by at most 1 level, or an error message
-/// describing the first violation found.
-#[cfg(test)]
-pub(crate) fn check_monotonic_headings(doc: &str) -> Result<(), String> {
-    let mut previous_level: Option<usize> = None;
-    let mut in_code_block = false;
-
-    for line in doc.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block || !line.starts_with('#') {
-            continue;
-        }
-
-        let heading_level = line.chars().take_while(|&c| c == '#').count();
-        if heading_level == 0 || heading_level > 6 {
-            continue;
-        }
-
-        if let Some(prev) = previous_level {
-            let increment = heading_level.saturating_sub(prev);
-            if increment > 1 {
-                let heading_text = line.trim_start_matches('#').trim();
-                return Err(format!(
-                    "Heading increment violation: H{} → H{} (skip of {})\nHeading: {}",
-                    prev, heading_level, increment, heading_text
-                ));
-            }
-        }
-
-        previous_level = Some(heading_level);
-    }
-
-    Ok(())
-}
-
-/// Demote all markdown headings by a given number of levels.
-///
-/// For example, with `levels=2`, all `#` become `###`, `##` become `####`, etc.
-/// Headings inside code blocks are not modified.
-pub(crate) fn demote_headings(doc: &str, levels: usize) -> String {
-    if levels == 0 || doc.is_empty() {
-        return doc.to_string();
-    }
-    let mut out = String::new();
-    let mut in_code_block = false;
-    for line in doc.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        if in_code_block || !line.starts_with('#') {
-            out.push_str(line);
-            out.push('\n');
-            continue;
-        }
-        let heading_level = line.chars().take_while(|&c| c == '#').count();
-        if heading_level > 0 && heading_level <= 6 {
-            let new_level = std::cmp::min(heading_level + levels, 6);
-            let demoted_hashes = "#".repeat(new_level);
-            let rest = &line[heading_level..];
-            out.push_str(&demoted_hashes);
-            out.push_str(rest);
-            out.push('\n');
-        } else {
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    out.trim_end().to_string()
-}
-
-/// Demote markdown headings so the first heading starts at `target_level`.
-///
-/// This keeps rustdoc headings nested under a generated parent heading without
-/// introducing skips when the source doc starts at `##` or deeper.
-pub(crate) fn demote_headings_to_start_at(doc: &str, target_level: usize) -> String {
-    let Some(first_level) = first_heading_level(doc) else {
-        return doc.to_string();
-    };
-    let target_level = target_level.clamp(1, 6);
-    if first_level >= target_level {
-        return doc.to_string();
-    }
-    demote_headings(doc, target_level - first_level)
-}
-
-fn first_heading_level(doc: &str) -> Option<usize> {
-    let mut in_code_block = false;
-
-    for line in doc.lines() {
-        if line.trim_start().starts_with("```") {
-            in_code_block = !in_code_block;
-            continue;
-        }
-        if in_code_block || !line.starts_with('#') {
-            continue;
-        }
-
-        let heading_level = line.chars().take_while(|&c| c == '#').count();
-        if heading_level > 0 && heading_level <= 6 {
-            return Some(heading_level);
-        }
-    }
-
-    None
-}
 
 /// Wrap bare `http://` and `https://` URLs in angle brackets to satisfy MD034.
 /// Skips URLs already inside markdown links `[...](url)` or angle brackets `<url>`.
