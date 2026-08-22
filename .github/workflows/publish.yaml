@@ -430,6 +430,18 @@ jobs:
           path: dist/cli
           merge-multiple: true
 
+      - name: Verify CLI release assets are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          matched=(dist/cli/*)
+          if [[ ${#matched[@]} -eq 0 ]]; then
+            echo "::error::release asset glob 'dist/cli/*' matched no files; refusing to publish a release with no CLI assets" >&2
+            exit 1
+          fi
+          echo "matched ${#matched[@]} CLI release asset(s) for 'dist/cli/*'"
+
       - name: Upload CLI artifacts to release
         uses: xberg-io/actions/publish-github-release@v1
         with:

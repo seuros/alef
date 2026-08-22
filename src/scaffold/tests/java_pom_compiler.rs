@@ -61,7 +61,11 @@ fn test_scaffold_java_compiler_plugin_excludes_test_scratch_and_target_dirs() {
 /// `mvn` is unavailable.
 #[test]
 fn test_scaffold_java_compiler_plugin_excludes_prevent_alef_scratch_duplicate_class_collision() {
-    if std::process::Command::new("mvn").arg("--version").output().is_err() {
+    if crate::test_support::spawn_from_stable_dir("mvn")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         return;
     }
 
@@ -145,7 +149,11 @@ fn test_scaffold_java_compiler_plugin_excludes_prevent_alef_scratch_duplicate_cl
 /// unavailable.
 #[test]
 fn test_scaffold_java_javadoc_plugin_source_file_includes_prevent_test_source_leak() {
-    if std::process::Command::new("mvn").arg("--version").output().is_err() {
+    if crate::test_support::spawn_from_stable_dir("mvn")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         return;
     }
 

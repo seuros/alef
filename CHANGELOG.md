@@ -91,6 +91,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `src/e2e/codegen/c/collection_empty_assertion_tests.rs` (two tests). Both new sibling
   modules, not additions to `assertions.rs`/`test_function.rs` (already over the 1,000-line
   file cap).
+- **A release-asset upload whose glob matched zero files reported success, so a release could be
+  published carrying no CLI binaries with no red X anywhere.** `upload-release-assets` in
+  `.github/workflows/publish.yaml` downloaded the `cli-*` artifacts into `dist/cli` and handed
+  `artifacts: "dist/cli/*"` straight to the release action. `actions/download-artifact` has no
+  `if-no-files-found` input, so a pattern matching nothing leaves `dist/cli` empty and merely
+  warns; the upload action then publishes a release with zero assets and exits 0, and `finalize`
+  reports the job result as `success`. This is the same vacuous-green shape as the empty CLI
+  target matrix fixed in 72c7b055a, one job downstream. A `Verify CLI release assets are present`
+  step now expands the glob under `nullglob` and exits 1 naming `dist/cli/*` when it matched
+  nothing, before the upload step runs.
+
+  Regression coverage: `src/publish/release_asset_guard_tests.rs` parses the real
+  `.github/workflows/publish.yaml` and asserts that *every* glob handed to an upload action is
+  guarded — either by `if-no-files-found: error` on the step or by a same-job `run:` step that
+  names the glob and `exit 1`s. It fails on a new unguarded upload step, not just on this one,
+  and refuses to pass vacuously if the scan matches no upload steps at all. The sibling
+  homebrew-bottle upload already carried `if-no-files-found: error` and passes unchanged.
+
+- **A typo in `[[crates.services.registrations.variants]].languages` or
+  `[[crates.trait_bridges]].exclude_languages` silently no-oped instead of failing.** Both
+  fields are `BTreeMap`/`Vec` of raw language-name strings, keyed or valued against the same
+  canonical names as `languages`, but neither was checked against `is_known_language` the way
+  the sibling `skip_languages` fields on adapters and services already are — an unknown name
+  like `variants.languages.knotln` or `exclude_languages = ["wasm32"]` just described a
+  language override or exclusion that never matched anything, with no error and no warning.
+  `NewAlefConfig::resolve_one` now validates both against `is_known_language` at config-resolve
+  time, mirroring the existing `skip_languages` check byte-for-byte in message shape, so a typo
+  is a hard `InvalidConfig` error naming the crate, the owner, and the bad name instead of dead
+  config.
+
+  Regression coverage: `resolve_rejects_unknown_language_in_registration_variant`,
+  `resolve_accepts_valid_language_in_registration_variant`,
+  `resolve_rejects_unknown_language_in_trait_bridge_exclude_languages`, and
+  `resolve_accepts_valid_trait_bridge_exclude_languages` in
+  `src/core/config/new_config/tests.rs`.
+
+- **`commands::test::get_host_target` spawned `rustc --version --verbose` without pinning a
+  working directory, so it could intermittently fail with "Could not locate working directory"
+  when it raced another test's `CwdGuard`.** `cargo test` runs every `#[test]` as a thread in one
+  process, so a spawn that never calls `.current_dir(..)` inherits whatever the process-wide cwd
+  happens to be, including a tempdir another test entered and has since deleted — the same race
+  class fixed for twelve compile-harness spawns in 22baa34ac, missed for this one because it is
+  production code (`src/cli/pipeline/commands/test.rs`) rather than a test file, and because this
+  crate's own e2e-phase unit tests (`before_hook_runs_before_e2e_command` and friends) call it
+  unconditionally whenever `e2e = true`, regardless of target language. Pinned to
+  `std::env::temp_dir()`, which needs no case-by-case tempdir since the call reads nothing
+  relative to its cwd.
+
+  A sweep of `Command::new` in test code beyond the twelve already-pinned sites found nine more
+  unpinned spawns with the identical shape (`javac -version`/`mvn --version`/`dotnet
+  --version`/`dart --version`/`pyproject-fmt --version` availability probes, plus `gofmt`, `zig
+  ast-check`, and two `cargo`/`--manifest-path` invocations). Rather than a thirteenth-through-
+  twenty-first manual `.current_dir` fix, added `test_support::spawn_from_stable_dir`, a
+  `Command::new` wrapper pre-pinned to the system temp directory, and migrated the version-probe
+  call sites to it; the sites with a natural test-owned tempdir already in scope were pinned to
+  that tempdir directly, matching the existing 22baa34ac pattern.
+
+  Regression coverage: `get_host_target_survives_a_deleted_ambient_cwd` in
+  `src/cli/pipeline/commands/test.rs` deterministically reproduces the race (enter a tempdir as
+  cwd, delete it, call `get_host_target`) rather than relying on true thread interleaving.
 
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`

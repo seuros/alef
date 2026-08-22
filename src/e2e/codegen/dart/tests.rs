@@ -457,7 +457,11 @@ fn dart_test_file_emits_wrapper_for_call_config_trait_argument() {
 
 #[test]
 fn dart_trait_stub_wrapper_compiles() {
-    if std::process::Command::new("dart").arg("--version").output().is_err() {
+    if crate::test_support::spawn_from_stable_dir("dart")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         return;
     }
     let method = make_method("doWork", true);

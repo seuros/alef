@@ -485,6 +485,7 @@ fn clean_room_registry_dep_resolves_without_workspace() {
         .arg("generate-lockfile")
         .arg("--manifest-path")
         .arg(crate_dir.join("Cargo.toml"))
+        .current_dir(&crate_dir)
         .status()
         .expect("running cargo generate-lockfile");
     assert!(
@@ -511,6 +512,7 @@ fn clean_room_bad_path_dep_fails_offline() {
         .arg("--manifest-path")
         .arg(crate_dir.join("Cargo.toml"))
         .env("CARGO_NET_OFFLINE", "true")
+        .current_dir(&crate_dir)
         .output()
         .expect("running cargo metadata");
     assert!(

@@ -187,6 +187,35 @@ impl NewAlefConfig {
                     )));
                 }
             }
+            for registration in &service.registrations {
+                for variant in &registration.variants {
+                    for lang in variant.languages.keys() {
+                        if !is_known_language(lang.as_str()) {
+                            return Err(ResolveError::InvalidConfig(format!(
+                                "crate `{}`: service `{}` registration `{}` variant `{}` has \
+                                 unknown language `{}` in languages; valid names are: python, \
+                                 node, ruby, php, elixir, wasm, ffi, go, java, csharp, r, rust, \
+                                 kotlin, kotlin_android, swift, dart, gleam, zig, c, jni",
+                                krate.name, service.owner_type, registration.method, variant.name, lang
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        for trait_bridge in &krate.trait_bridges {
+            for lang in &trait_bridge.exclude_languages {
+                if !is_known_language(lang.as_str()) {
+                    return Err(ResolveError::InvalidConfig(format!(
+                        "crate `{}`: trait bridge `{}` has unknown language `{}` in \
+                         exclude_languages; valid names are: python, node, ruby, php, elixir, \
+                         wasm, ffi, go, java, csharp, r, rust, kotlin, kotlin_android, swift, \
+                         dart, gleam, zig, c, jni",
+                        krate.name, trait_bridge.trait_name, lang
+                    )));
+                }
+            }
         }
 
         let contract_names: std::collections::HashSet<&str> = krate

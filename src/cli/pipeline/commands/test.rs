@@ -242,12 +242,23 @@ fn compute_pdfium_dir() -> Option<String> {
 ///
 /// Parses `rustc --version --verbose` to extract the `host:` line,
 /// returning the target triple (e.g. `aarch64-apple-darwin`).
+///
+/// Pinned to [`std::env::temp_dir`] rather than left to inherit the ambient process working
+/// directory: this crate's test binary runs every `#[test]` as a thread in one process, and
+/// other tests move the process-wide cwd into a tempdir that is later deleted (see
+/// `crate::test_support::CwdGuard`). An unpinned `rustc` spawn that races one of those inherits
+/// a deleted directory and fails with "Could not locate working directory" -- a failure with
+/// nothing to do with the code under test. `rustc --version --verbose` reads nothing relative to
+/// its cwd, so any directory guaranteed to exist for the process lifetime works; the system temp
+/// directory decouples this call from process-global state entirely, matching 22baa34ac's fix
+/// for the same race in the compile-harness tests. ~keep
 fn get_host_target() -> anyhow::Result<RustTarget> {
     use std::process::Command;
 
     let output = Command::new("rustc")
         .arg("--version")
         .arg("--verbose")
+        .current_dir(std::env::temp_dir())
         .output()
         .context("failed to run rustc --version --verbose")?;
 
@@ -272,6 +283,23 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use crate::core::config::NewAlefConfig;
+
+    /// Reproduces the exact race class fixed for the compile-harness tests in 22baa34ac,
+    /// deterministically rather than by racing a real thread: enter a tempdir as the process
+    /// cwd, delete it out from under that cwd (as `CwdGuard::drop` in another test would once
+    /// that test's own scope ends), then call `get_host_target`. Before the fix, the unpinned
+    /// `rustc` spawn inherited the now-deleted directory and failed with "Could not locate
+    /// working directory"; pinning to `std::env::temp_dir` makes the call independent of the
+    /// ambient cwd entirely.
+    #[test]
+    fn get_host_target_survives_a_deleted_ambient_cwd() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().to_path_buf();
+        let _cwd = crate::test_support::CwdGuard::enter(&path);
+        std::fs::remove_dir_all(&path).expect("delete the entered directory out from under cwd");
+
+        get_host_target().expect("get_host_target must not depend on the ambient (possibly deleted) cwd");
+    }
 
     /// Build a ResolvedCrateConfig that has `before` and `e2e` wired for `python`
     /// using the given shell commands.  `command` is intentionally absent so the
