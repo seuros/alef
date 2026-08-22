@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The PHP php_ext e2e smoke-app generator probed a global `<extension>_<function>()` symbol
+  for crate-level free functions, but the PHP ext backend never emits one.** The php-ext
+  backend (`src/backends/php/gen_bindings/rust_bindings.rs`) always places free functions as
+  static methods on a namespaced facade class (`{namespace}\{Extension}Api::{method}`) —
+  ext-php-rs's `#[php_impl]` registration derive walks every method in a fixed `impl` block and
+  unconditionally references it by Rust identifier, so a free function can never be a standalone
+  `#[php_function]` global there. The php_ext smoke-app generator
+  (`src/e2e/codegen/php_ext.rs`) instead assumed the C-ABI naming convention
+  (`{prefix}_{function}`), so it emitted a `function_exists()`/direct-call smoke test against a
+  symbol the generated extension could never provide. `resolve_smoke_call` now resolves the
+  facade class and static-method name the same way the backend derives them (via the new shared
+  `backends::php::naming::php_ext_api_class_name` helper, also adopted by the backend itself so
+  the two call sites cannot drift again), and `main.php` probes with
+  `class_exists()`/`method_exists()` and calls through the class.
+
+  Regression coverage: `tests/backends_php_ext_facade_symbol_subset.rs`. It diffs the facade
+  method set the php-ext backend actually emits against the callable the smoke-app generator
+  actually calls, rather than pinning one symbol name.
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it
