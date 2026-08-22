@@ -72,8 +72,13 @@ fn emit_sendable_conformance(out: &mut String, type_name: &str, mark: Option<&st
 /// `Sources/` directory ON DISK -- nondeterministic, since that directory is created and removed
 /// by this very build (and by concurrent scaffold/test runs), so the same config could resolve to
 /// a different package root depending on what else had run. Codegen output must be a pure
-/// function of (IR, config); this derivation reads neither `std::fs` nor `std::env`. ~keep
-fn swift_package_root(base_dir: &str, has_explicit_output: bool) -> PathBuf {
+/// function of (IR, config); this derivation reads neither `std::fs` nor `std::env`.
+///
+/// `pub(crate)` rather than private: `gen_rust_crate::emit` (a sibling module) derives the
+/// swift-bridge Rust crate's own directory -- `<package_root>/rust` -- from this same function,
+/// so the crate `build_config_with_config` tells `cargo build --manifest-path` to build is
+/// always the same crate `gen_rust_crate::emit` actually wrote to disk. ~keep
+pub(crate) fn swift_package_root(base_dir: &str, has_explicit_output: bool) -> PathBuf {
     let base_path = PathBuf::from(base_dir);
     if has_explicit_output {
         base_path
@@ -638,6 +643,12 @@ impl Backend for SwiftBackend {
     }
 
     fn build_config(&self) -> Option<BuildConfig> {
+        // This literal manifest path is only reachable when no `ResolvedCrateConfig` is
+        // available at all (the `Backend::build_config_with_config` default falls back to this
+        // method verbatim) -- every real caller in this codebase goes through
+        // `build_config_with_config` below, which replaces it with the config-derived path
+        // before any command actually runs. Kept as a reasonable single-crate default so this
+        // method still returns something sensible standalone. ~keep
         Some(BuildConfig {
             tool: "swift",
             crate_suffix: "-swift",
@@ -661,6 +672,25 @@ impl Backend for SwiftBackend {
 
         let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
         let package_root = swift_package_root(&base_dir, config.explicit_output.swift.is_some());
+
+        // The literal `--manifest-path` baked into `build_config()` above is only correct for a
+        // single, default-location crate. `gen_rust_crate::emit` writes the swift-bridge Rust
+        // crate to `<package_root>/rust` (see that function's own use of `swift_package_root`),
+        // so the manifest path the actual `cargo build` runs against must be derived from the
+        // SAME `package_root` rather than staying independent of `config.output_paths` -- a
+        // multi-crate workspace or an explicit `[crates.output] swift` override moves
+        // `package_root` away from the default `packages/swift`, and a manifest path that does
+        // not move with it points `cargo build` at a `Cargo.toml` that was never written there.
+        // `RunCommand::args` requires `&'static str`; the path is only known once `config` is in
+        // hand, so it is leaked once per process -- the same pattern
+        // `cli::pipeline::commands::build::build_languages` already uses for a comparable
+        // computed-crate-name case. ~keep
+        let manifest_path = package_root.join("rust").join("Cargo.toml");
+        let manifest_path: &'static str = Box::leak(manifest_path.to_string_lossy().into_owned().into_boxed_str());
+        build_config.post_build[0] = PostBuildStep::RunCommand {
+            cmd: "cargo",
+            args: vec!["build", "--manifest-path", manifest_path, "--release"],
+        };
 
         build_config.post_build.push(PostBuildStep::MaterializeSwiftBridge {
             binding_crate_name,
@@ -711,6 +741,61 @@ mod package_root_tests {
         assert!(
             !result.as_os_str().is_empty(),
             "package root must never be empty: {result:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod build_config_manifest_path_tests {
+    use super::SwiftBackend;
+    use crate::core::backend::{Backend, PostBuildStep};
+    use crate::core::config::NewAlefConfig;
+
+    /// alef #169: `build_config()`'s `--manifest-path` used to be the literal
+    /// `packages/swift/rust/Cargo.toml`, independent of `config.output_paths` -- wrong for any
+    /// consumer that sets an explicit `[crates.output] swift` path, since `gen_rust_crate::emit`
+    /// (see its own regression test) writes the crate `cargo build` needs to build under the
+    /// SAME config-derived `swift_package_root`, not under the fixed default location. This
+    /// proves `build_config_with_config`'s manifest path follows an explicit override rather
+    /// than staying pinned to the default.
+    #[test]
+    fn manifest_path_follows_an_explicit_swift_output_override() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.swift]
+
+[crates.output]
+swift = "custom/output/Sources/TestLib"
+"#,
+        )
+        .expect("test config must parse");
+        let config = cfg.resolve().expect("test config must resolve").remove(0);
+
+        let build_config = SwiftBackend
+            .build_config_with_config(&config)
+            .expect("swift backend must produce a build config");
+
+        let manifest_path_args: Vec<&str> = build_config
+            .post_build
+            .iter()
+            .find_map(|step| match step {
+                PostBuildStep::RunCommand { cmd, args } if *cmd == "cargo" => Some(args.clone()),
+                _ => None,
+            })
+            .expect("swift build config must have a cargo RunCommand post-build step");
+
+        assert_eq!(
+            manifest_path_args,
+            vec!["build", "--manifest-path", "custom/output/rust/Cargo.toml", "--release"],
+            "manifest path must follow the explicit [crates.output] swift override, not stay \
+             pinned to the packages/swift/rust default; got: {manifest_path_args:?}"
         );
     }
 }

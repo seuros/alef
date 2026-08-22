@@ -20,15 +20,15 @@ pub mod trait_bridge;
 pub(crate) mod type_bridge;
 pub(crate) mod wrappers;
 
+use crate::backends::swift::gen_bindings::swift_package_root;
 use crate::codegen::generators::type_paths::build_type_path_lookup;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::extras::Language;
-use crate::core::config::{BridgeBinding, ResolvedCrateConfig, TraitBridgeConfig};
+use crate::core::config::{BridgeBinding, ResolvedCrateConfig, TraitBridgeConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, EnumDef, FunctionDef, TypeDef};
 use crate::core::template_versions;
 use heck::AsSnakeCase;
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 /// Top-level entry point: emit all three files for the swift-bridge crate.
 pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<GeneratedFile>> {
@@ -36,7 +36,16 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
     let deduped_api = api.with_deduped_functions();
     let api = &deduped_api;
 
-    let base = PathBuf::from("packages/swift/rust");
+    // `rust/` is a sibling of `Sources/` under the SwiftPM package root -- the same root
+    // `generate_bindings`/`generate_service_api` derive via `swift_package_root` for the shared
+    // `Sources/RustBridge{,C}` targets, and the same root `build_config_with_config` points
+    // `cargo build --manifest-path` at. Deriving it independently here (as a hardcoded
+    // `packages/swift/rust` literal, as this used to) let this crate's actual on-disk location
+    // drift away from both of those -- a multi-crate workspace or an explicit
+    // `[crates.output] swift` override moves the package root, and only this call site's own
+    // literal used to stay behind. ~keep
+    let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
+    let base = swift_package_root(&base_dir, config.explicit_output.swift.is_some()).join("rust");
     let crate_name = &api.crate_name;
     let version = &api.version;
 
