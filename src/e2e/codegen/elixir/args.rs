@@ -521,22 +521,6 @@ pub(super) fn build_args_and_setup(
     (setup_lines, final_args.join(", "), teardown_block)
 }
 
-/// Apply a serde `rename_all` strategy to a PascalCase variant name to derive
-/// the wire-format tag value used in fixture inputs.
-fn apply_rename_all(name: &str, strategy: Option<&str>) -> String {
-    use heck::{ToKebabCase, ToLowerCamelCase, ToShoutyKebabCase, ToShoutySnakeCase, ToUpperCamelCase};
-    match strategy {
-        Some("snake_case") | None => name.to_snake_case(),
-        Some("camelCase") => name.to_lower_camel_case(),
-        Some("PascalCase") => name.to_upper_camel_case(),
-        Some("SCREAMING_SNAKE_CASE") | Some("UPPERCASE") => name.to_shouty_snake_case(),
-        Some("kebab-case") => name.to_kebab_case(),
-        Some("SCREAMING-KEBAB-CASE") => name.to_shouty_kebab_case(),
-        Some("lowercase") => name.to_lowercase(),
-        Some(_) => name.to_snake_case(),
-    }
-}
-
 fn render_struct_fields(
     obj: &serde_json::Map<String, serde_json::Value>,
     enum_fields: &HashMap<String, String>,
@@ -596,16 +580,17 @@ fn render_elixir_value(value: &serde_json::Value, mock_base_var: Option<&str>) -
 /// Match an input JSON value (string) against a unit-only enum and return the
 /// corresponding Rustler atom literal (e.g. `:down`). Returns None if the enum
 /// is not unit-only or the value does not match any variant.
-fn match_unit_enum_atom(value: &serde_json::Value, enum_def: &crate::core::ir::EnumDef) -> Option<String> {
+pub(super) fn match_unit_enum_atom(value: &serde_json::Value, enum_def: &crate::core::ir::EnumDef) -> Option<String> {
     let s = value.as_str()?;
     if enum_def.variants.iter().any(|v| !v.fields.is_empty()) {
         return None;
     }
     for variant in &enum_def.variants {
-        let wire_tag = variant
-            .serde_rename
-            .clone()
-            .unwrap_or_else(|| apply_rename_all(&variant.name, enum_def.serde_rename_all.as_deref()));
+        let wire_tag = crate::codegen::naming::wire_variant_value(
+            &variant.name,
+            variant.serde_rename.as_deref(),
+            enum_def.serde_rename_all.as_deref(),
+        );
         if wire_tag == s {
             return Some(format!(":{}", variant.name.to_snake_case()));
         }
@@ -638,10 +623,11 @@ fn emit_tagged_enum_array(
         };
         let tag_value = obj.get(tag_key).and_then(|v| v.as_str()).unwrap_or("");
         let matched = enum_def.variants.iter().find(|variant| {
-            let wire_tag = variant
-                .serde_rename
-                .clone()
-                .unwrap_or_else(|| apply_rename_all(&variant.name, enum_def.serde_rename_all.as_deref()));
+            let wire_tag = crate::codegen::naming::wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                enum_def.serde_rename_all.as_deref(),
+            );
             wire_tag == tag_value
         });
         let Some(variant) = matched else {

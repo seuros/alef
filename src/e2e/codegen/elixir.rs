@@ -264,4 +264,6 @@ mod not_error_bare_option_underscoring_tests;
 #[cfg(test)]
 mod not_error_sibling_assertion_tests;
 #[cfg(test)]
+mod rename_all_wire_value_tests;
+#[cfg(test)]
 mod tests;
