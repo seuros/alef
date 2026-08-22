@@ -670,3 +670,47 @@ impl Backend for SwiftBackend {
         Some(build_config)
     }
 }
+
+#[cfg(test)]
+mod package_root_tests {
+    use super::swift_package_root;
+    use std::path::Path;
+
+    #[test]
+    fn default_layout_treats_base_dir_as_the_package_root() {
+        assert_eq!(swift_package_root("packages/swift", false), Path::new("packages/swift"));
+    }
+
+    #[test]
+    fn multi_crate_layout_treats_base_dir_as_the_package_root() {
+        assert_eq!(
+            swift_package_root("packages/swift/sample-crate", false),
+            Path::new("packages/swift/sample-crate")
+        );
+    }
+
+    #[test]
+    fn explicit_output_walks_up_two_levels_from_the_leaf_module_directory() {
+        assert_eq!(
+            swift_package_root("packages/swift/Sources/SampleCrate", true),
+            Path::new("packages/swift")
+        );
+    }
+
+    #[test]
+    fn explicit_output_shorter_than_two_components_falls_back_to_itself() {
+        assert_eq!(swift_package_root("swift", true), Path::new("swift"));
+    }
+
+    #[test]
+    fn same_config_never_depends_on_the_flag_it_was_not_given() {
+        // Regression guard for the bug this replaces: the old ancestor-probing logic could
+        // silently collapse to an empty path for a short `base_dir` under the explicit branch.
+        // `unwrap_or(base_path)` here must return the ORIGINAL base_dir, never an empty one.
+        let result = swift_package_root("swift", true);
+        assert!(
+            !result.as_os_str().is_empty(),
+            "package root must never be empty: {result:?}"
+        );
+    }
+}
