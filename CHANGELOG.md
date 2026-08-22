@@ -47,6 +47,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Regression coverage: `src/e2e/codegen/c/primitive_field_inference.rs`'s `tests` module —
   asserts on the C TEXT `render_test_file` actually emits (not a hand-written mirror of the
   intended semantics), including the optional-bool-widening regression.
+- **A collection-typed e2e result field with no per-element path declared anywhere in the
+  fixture suite (nothing ever indexes into it, e.g. a recursive `List<DataNode> Children`) had
+  no config signal telling `FieldResolver::is_array`/`is_collection_root` it was a collection at
+  all, so C#/Kotlin/Swift/Rust each emitted broken generated code for it.** `is_array`/
+  `is_collection_root` are both derived purely from `fields_array`/`fields_optional` — sets
+  populated from element-traversal paths like `choices[0].message`, not from the bare collection
+  accessor itself — so a field nothing ever indexes into has no such entry. Four distinct
+  manifestations of the same missing classification:
+  - **C#**: `is_empty` fell through to `Assert.True(string.IsNullOrEmpty(Children.ToString()))`
+    — `List<T>.ToString()` returns the type name, so the assertion could never pass.
+  - **Kotlin**: `not_empty` on an `Option<List<T>>` field degraded to a bare
+    `{field} != null` check, which also passes for an empty-but-non-null collection.
+  - **Swift**: `not_empty` on an `Optional<[T]>` field degraded the same way (`{field} != nil`).
+  - **Rust**: `contains` emitted the scalar `{field}.contains(&expected)` shape, which requires
+    the collection's own element type and does not compile against `Vec<DataNode>`.
+
+  Added an IR-derived collection classification, `IrCollectionMap`
+  (`src/e2e/field_access/ir_collection.rs`), mirroring `IrEnumMap`/`ir_enum.rs` exactly: keyed
+  by `(owner_type, field_name)`, anchored at the call's declared Rust return type, answering
+  whether a field's declared type (after peeling `Option`) is `Vec<T>`. `FieldResolver::
+  is_collection_root` now consults it as a fallback after the hand-maintained config, via the
+  new `FieldResolver::ir_collection_fields`/`with_ir_collection_map` (mirroring
+  `ir_enum_fields`/`with_ir_enum_map`'s precedence: an explicit config entry still wins). Wired
+  into all four affected backends' per-call `FieldResolver` construction
+  (`src/e2e/codegen/csharp.rs`, `kotlin/test_method.rs`, `swift/test_method.rs`,
+  `rust/test_file/test_function.rs`) alongside their existing `with_ir_enum_map` calls.
+
+  Audited every other e2e backend consulting `is_array`/`is_collection_root` for a type-
+  sensitive rendering decision (Go, Java, PHP, Ruby, Python, Dart, Gleam, Elixir, TypeScript,
+  Zig): none share this shape — each derives the field's collection-ness from a per-language
+  binding signature or a different IR-backed check already anchored per call, not from
+  `is_array`/`is_collection_root` alone. `segment_name`, previously duplicated in `ir_enum.rs`,
+  was extracted into `parse.rs` and shared by both IR path-walkers.
+
+  Regression coverage, one file per affected backend, each driving the real per-fixture render
+  entry point with zero `fields_array`/`fields_optional` config, mirroring
+  `enum_field_classification_tests.rs`: `csharp/collection_field_classification_tests.rs`,
+  `kotlin/collection_field_classification_tests.rs`,
+  `swift/collection_field_classification_tests.rs` (all three exercise the real
+  `render_test_method`/`render_engine_factory_test_function`-style entry point), and
+  `rust/collection_field_classification_tests.rs` (drives `render_assertion` directly with an
+  IR-anchored resolver, matching `assertion_containment_tests.rs`'s existing style for that
+  backend). A second, narrower unit test in `csharp/collection_is_empty_tests.rs` covers
+  `is_collection_root`'s IR fallback directly.
 - **The PHP php_ext e2e smoke-app generator probed a global `<extension>_<function>()` symbol
   for crate-level free functions, but the PHP ext backend never emits one.** The php-ext
   backend (`src/backends/php/gen_bindings/rust_bindings.rs`) always places free functions as

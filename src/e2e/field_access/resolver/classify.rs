@@ -1,3 +1,4 @@
+use super::super::ir_collection::is_collection_path;
 use super::super::ir_enum::is_enum_path;
 use super::super::parse::{
     normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices,
@@ -344,11 +345,22 @@ impl FieldResolver {
     ///
     /// Returns `true` when any entry in `array_fields` or `optional_fields`
     /// starts with `{field}[`, indicating that `field` is the top-level
-    /// collection getter.
+    /// collection getter — and, when config is silent, falls back to the
+    /// IR-derived classification (`with_ir_collection_map`) the same way `is_enum` falls back
+    /// to `with_ir_enum_map`. A field with no per-element path declared anywhere in the fixture
+    /// suite (e.g. a recursive `List<T> Children` nothing ever indexes into) has no config
+    /// signal at all, so without this fallback a caller deciding whether to serialize the field
+    /// for `is_empty`/`contains` would wrongly fall through to a raw `ToString()`-style check.
+    /// ~keep
     pub fn is_collection_root(&self, field: &str) -> bool {
         let prefix = format!("{field}[");
-        self.array_fields.iter().any(|af| af.starts_with(&prefix))
+        if self.array_fields.iter().any(|af| af.starts_with(&prefix))
             || self.optional_fields.iter().any(|of| of.starts_with(&prefix))
+        {
+            return true;
+        }
+        let resolved = self.resolve(field);
+        is_collection_path(&self.ir_collection_map, resolved)
     }
 
     /// Check if a resolved field path traverses a tagged-union variant.

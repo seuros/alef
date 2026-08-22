@@ -4,6 +4,7 @@
 //! actual API struct paths (e.g., "metadata.document.title") and generates
 //! language-specific accessor expressions.
 
+mod ir_collection;
 mod ir_enum;
 mod optional_renderers;
 mod parse;
@@ -12,7 +13,8 @@ mod resolver;
 mod types;
 
 pub use types::{
-    DartFirstClassMap, FieldResolver, IrEnumMap, PhpGetterMap, StringyField, StringyFieldKind, SwiftFirstClassMap,
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, PhpGetterMap, StringyField, StringyFieldKind,
+    SwiftFirstClassMap,
 };
 
 #[cfg(test)]

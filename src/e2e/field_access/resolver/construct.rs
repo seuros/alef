@@ -1,5 +1,8 @@
+use super::super::ir_collection::build_ir_collection_map;
 use super::super::ir_enum::build_ir_enum_map;
-use super::super::types::{DartFirstClassMap, FieldResolver, IrEnumMap, PhpGetterMap, SwiftFirstClassMap};
+use super::super::types::{
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, PhpGetterMap, SwiftFirstClassMap,
+};
 use std::collections::{HashMap, HashSet};
 
 thread_local! {
@@ -63,6 +66,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            ir_collection_map: IrCollectionMap::default(),
         }
     }
 
@@ -95,6 +99,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            ir_collection_map: IrCollectionMap::default(),
         }
     }
 
@@ -137,6 +142,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            ir_collection_map: IrCollectionMap::default(),
         }
     }
 
@@ -185,6 +191,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            ir_collection_map: IrCollectionMap::default(),
         }
     }
 
@@ -217,6 +224,7 @@ impl FieldResolver {
             ir_known_excluded_fields: HashSet::new(),
             wire_optional_fields: HashSet::new(),
             ir_enum_map: IrEnumMap::default(),
+            ir_collection_map: IrCollectionMap::default(),
         }
     }
 
@@ -264,6 +272,28 @@ impl FieldResolver {
     pub fn with_ir_enum_map(mut self, mut map: IrEnumMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.ir_enum_map = map;
+        self
+    }
+
+    /// Compute the IR-derived collection-field classification for
+    /// [`Self::with_ir_collection_map`], mirroring [`Self::ir_enum_fields`]'s "compute once
+    /// from the crate's IR" shape. The returned map has no `root_type` set yet —
+    /// `with_ir_collection_map` anchors it to the specific call being rendered.
+    pub fn ir_collection_fields(type_defs: &[crate::core::ir::TypeDef]) -> IrCollectionMap {
+        build_ir_collection_map(type_defs)
+    }
+
+    /// Attach IR-derived collection classification to this resolver, anchored at `root_type` —
+    /// the IR type name backing the current call's result variable, if resolved.
+    ///
+    /// `map` should come from [`Self::ir_collection_fields`], computed once per crate IR and
+    /// reused across calls; only `root_type` varies per call. `is_collection_root` consults
+    /// this AFTER the hand-maintained `fields_array`/`fields_optional` config, so an explicit
+    /// config entry always wins and this only rescues fields the config never mentioned — the
+    /// same precedence [`Self::with_ir_enum_map`] already established for `is_enum`. ~keep
+    pub fn with_ir_collection_map(mut self, mut map: IrCollectionMap, root_type: Option<String>) -> Self {
+        map.root_type = root_type;
+        self.ir_collection_map = map;
         self
     }
 

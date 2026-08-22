@@ -92,6 +92,17 @@ pub(crate) fn normalize_indices_to_wildcards(path: &str) -> String {
     normalized
 }
 
+/// The field/array/map-access name carried by a path segment, or `None` for `.length`/`.count`
+/// pseudo-segments, which never name a real struct field. Shared by every IR path-walker
+/// (`ir_enum`, `ir_collection`) that has to advance a type cursor one segment at a time.
+pub(super) fn segment_name(segment: &PathSegment) -> Option<&str> {
+    match segment {
+        PathSegment::Field(name) | PathSegment::ArrayField { name, .. } => Some(name),
+        PathSegment::MapAccess { field, .. } => Some(field),
+        PathSegment::Length => None,
+    }
+}
+
 pub(super) fn parse_path(path: &str) -> Vec<PathSegment> {
     let mut segments = Vec::new();
     for part in path.split('.') {

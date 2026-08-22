@@ -78,6 +78,42 @@ pub struct FieldResolver {
     /// entirely to the hand-maintained `fields_enum` config. See [`IrEnumMap`] for why this
     /// is keyed by `(type, field)` rather than by bare field name.
     pub(super) ir_enum_map: IrEnumMap,
+    /// IR-derived collection-field classification (`crate_type -> field -> {is-Vec, next
+    /// type}`), anchored at the call's declared result type. Populated via
+    /// `with_ir_collection_map`; empty when a codegen call site hasn't wired IR data in, in
+    /// which case `is_collection_root` falls back entirely to the hand-maintained
+    /// `fields_array`/`fields_optional` config. Mirrors `ir_enum_map`'s precedence exactly —
+    /// see [`IrCollectionMap`] for why this is keyed by `(type, field)` rather than by bare
+    /// field name.
+    pub(super) ir_collection_map: IrCollectionMap,
+}
+
+/// IR-derived collection-field classification, keyed by owner type so a field named `items`
+/// that is `Vec<T>` on one struct and `String` on another is never conflated. Mirrors
+/// [`IrEnumMap`]'s shape exactly, but answers "is this field's declared type a `Vec`?" instead
+/// of "is this field's declared type a real IR enum?".
+///
+/// A bare collection field (e.g. a recursive `List<DataNode> Children` with no per-element path
+/// like `children[0]...` declared in `fields_array`/`fields_optional`) has no config signal at
+/// all: `FieldResolver::is_array`/`is_collection_root` answer `false` for every field the
+/// operator's `alef.toml` never mentioned, so backends checking `is_array(f) ||
+/// is_collection_root(f)` before deciding to serialize a collection for `is_empty`/`contains`
+/// fall through to `ToString()`/similar on the raw collection object — which returns the type
+/// name, not the contents, so the assertion can never pass. This map lets `is_collection_root`
+/// answer from the IR itself when config is silent, exactly as `ir_enum_map` already does for
+/// `is_enum`.
+///
+/// * `field_types[type_name][field_name]` — the IR-resolved named type that `field_name`
+///   traverses into, when that type is another struct the path can keep walking through.
+/// * `collection_fields[type_name]` — field names on `type_name` whose declared type (after
+///   unwrapping `Option`) is `Vec<T>`.
+/// * `root_type` — the IR type name backing the call's result variable, resolved the same way
+///   `IrEnumMap::root_type` is.
+#[derive(Debug, Clone, Default)]
+pub struct IrCollectionMap {
+    pub field_types: HashMap<String, HashMap<String, String>>,
+    pub collection_fields: HashMap<String, HashSet<String>>,
+    pub root_type: Option<String>,
 }
 
 /// IR-derived enum-field classification, keyed by owner type so a field named `kind` that is

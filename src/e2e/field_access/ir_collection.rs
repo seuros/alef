@@ -1,0 +1,117 @@
+//! Derives collection (`Vec<T>`)-field classification from the crate's own IR instead of
+//! trusting a hand-written `alef.toml` `fields_array`/`fields_optional` list to have named
+//! every collection-typed result field.
+//!
+//! Before this module existed, `FieldResolver::is_array`/`is_collection_root` answered purely
+//! from `array_fields`/`optional_fields` (`E2eConfig::effective_fields_array`/
+//! `effective_fields_optional`). Those sets are populated from element-traversal paths like
+//! `choices[0].message` — they tell a resolver a field IS a collection only when the operator
+//! also declared how one of its elements is accessed. A bare collection field with no per-
+//! element path in the fixture suite at all (e.g. a recursive `List<DataNode> Children` field
+//! nothing ever indexes into) has no config signal whatsoever, so `is_collection_root` answered
+//! `false` for it — the same gap `ir_enum` closed for enum-typed fields, but for `Vec<T>`.
+//!
+//! The fix has to be type-driven, not name-driven, for the identical reason `ir_enum` is:
+//! the same crate can declare `items: Vec<T>` on one struct and `items: String` on another, so
+//! a bare-field-name rule would misclassify one of them regardless of which way it defaults.
+//! [`build_ir_collection_map`] therefore keys its answer by `(owner_type, field_name)`, and
+//! [`is_collection_path`] only trusts that answer once it has walked the field path from a
+//! known root type through the IR's own struct graph to the exact type that owns the leaf
+//! segment — mirroring `ir_enum::is_enum_path` exactly.
+use std::collections::{HashMap, HashSet};
+
+use crate::core::ir::TypeDef;
+use crate::e2e::codegen::call_ir::named_type;
+
+use super::parse::{parse_path, segment_name};
+use super::types::IrCollectionMap;
+
+/// Build the `(type, field) -> is-Vec` / `(type, field) -> next type` maps [`IrCollectionMap`]
+/// needs, by inspecting every field of every `TypeDef` this crate declares.
+///
+/// A field is recorded as collection-typed on its owner when its declared type is `Vec<T>`
+/// (`Option<Vec<T>>` counts too — the FFI/binding layer already collapses "absent" into an
+/// empty/null collection, so optionality must not hide the field's real shape). A field whose
+/// [`named_type`]-resolved name matches another `TypeDef` is additionally recorded as a
+/// traversal edge, exactly as `ir_enum::build_ir_enum_map` records struct-to-struct edges, so a
+/// multi-segment path like `parent.children` can advance its type cursor one segment at a time
+/// before answering the collection question at the leaf.
+pub(super) fn build_ir_collection_map(type_defs: &[TypeDef]) -> IrCollectionMap {
+    let struct_names: HashSet<&str> = type_defs.iter().map(|t| t.name.as_str()).collect();
+
+    let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut collection_fields: HashMap<String, HashSet<String>> = HashMap::new();
+
+    for type_def in type_defs {
+        for field in &type_def.fields {
+            if is_vec_type(&field.ty) {
+                collection_fields
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone());
+            }
+            let Some(named) = named_type(&field.ty) else {
+                continue;
+            };
+            if struct_names.contains(named) {
+                field_types
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone(), named.to_string());
+            }
+        }
+    }
+
+    IrCollectionMap {
+        field_types,
+        collection_fields,
+        root_type: None,
+    }
+}
+
+/// `true` when `ty` is `Vec<T>`, seeing through an `Option` wrapper the same way
+/// `named_type` does.
+fn is_vec_type(ty: &crate::core::ir::TypeRef) -> bool {
+    match ty {
+        crate::core::ir::TypeRef::Vec(_) => true,
+        crate::core::ir::TypeRef::Optional(inner) => is_vec_type(inner),
+        _ => false,
+    }
+}
+
+/// Walk `path` from `map.root_type` through `map.field_types`, answering whether the leaf
+/// segment's declared type (per [`build_ir_collection_map`]) is a real `Vec<T>`.
+///
+/// Returns `false` — never "unknown" — whenever the root type is unresolved, a segment names
+/// something the IR does not recognize as a field on the current owner type, or `map` was
+/// never populated. Every one of those is the pre-existing behaviour for a field with no
+/// collection config entry, so this is purely additive: it can only turn a `false` into a
+/// `true` when the IR positively confirms the leaf is `Vec`-typed on the exact type the path
+/// reaches. Mirrors `ir_enum::is_enum_path` exactly.
+pub(super) fn is_collection_path(map: &IrCollectionMap, path: &str) -> bool {
+    let Some(root) = map.root_type.as_deref() else {
+        return false;
+    };
+    let segments = parse_path(path);
+    let Some((last, prefix)) = segments.split_last() else {
+        return false;
+    };
+
+    let mut owner = root;
+    for segment in prefix {
+        let Some(name) = segment_name(segment) else {
+            return false;
+        };
+        match map.field_types.get(owner).and_then(|fields| fields.get(name)) {
+            Some(next) => owner = next.as_str(),
+            None => return false,
+        }
+    }
+
+    let Some(name) = segment_name(last) else {
+        return false;
+    };
+    map.collection_fields
+        .get(owner)
+        .is_some_and(|fields| fields.contains(name))
+}

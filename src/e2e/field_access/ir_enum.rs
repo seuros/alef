@@ -19,8 +19,8 @@ use std::collections::{HashMap, HashSet};
 use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::codegen::call_ir::named_type;
 
-use super::parse::parse_path;
-use super::types::{IrEnumMap, PathSegment};
+use super::parse::{parse_path, segment_name};
+use super::types::IrEnumMap;
 
 /// Build the `(type, field) -> is-enum` / `(type, field) -> next type` maps [`IrEnumMap`]
 /// needs, by inspecting every field of every `TypeDef` this crate declares.
@@ -65,16 +65,6 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
         field_types,
         enum_fields,
         root_type: None,
-    }
-}
-
-/// The field/array/map-access name carried by a path segment, or `None` for `.length`/`.count`
-/// pseudo-segments, which never name a real struct field.
-fn segment_name(segment: &PathSegment) -> Option<&str> {
-    match segment {
-        PathSegment::Field(name) | PathSegment::ArrayField { name, .. } => Some(name),
-        PathSegment::MapAccess { field, .. } => Some(field),
-        PathSegment::Length => None,
     }
 }
 
