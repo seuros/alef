@@ -68,7 +68,19 @@ pub(super) fn run_required_post_builds(
         }
         tracing::info!("  [{language}] running post-build...");
         match crate::cli::pipeline::run_post_build(language, &build_config, config, base_dir) {
-            Ok(()) => tracing::info!("  [{language}] post-build processing complete"),
+            Ok(outcome) if outcome.skipped_missing_tools.is_empty() => {
+                tracing::info!("  [{language}] post-build processing complete");
+            }
+            // Non-fatal by design (falling back to committed generated output is the point --
+            // see `run_run_command`'s doc comment), but a build that never actually ran a
+            // required tool must not be reported identically to one that ran cleanly: that gap
+            // is exactly what let a Dart post-build's skipped `flutter_rust_bridge_codegen`
+            // masquerade as a passing run this fixes. ~keep
+            Ok(outcome) => tracing::warn!(
+                "  [{language}] post-build completed but skipped tool(s) not on PATH: {} -- \
+                 falling back to committed generated files",
+                outcome.skipped_missing_tools.join(", ")
+            ),
             Err(error) => {
                 tracing::warn!("[{language}] post-build failed, continuing with remaining languages: {error:#}");
                 failures.push(format!("[{language}] {error:#}"));
@@ -152,24 +164,83 @@ mod tests {
 
     /// One language's post-build failure used to abort the loop via `?` before any later
     /// language's post-build ran at all -- so a Swift codegen defect silently hid whatever
-    /// Dart's post-build (`flutter_rust_bridge_codegen`, a `RunCommand` step with no
-    /// precondition gate of its own, so it genuinely runs and fails rather than being skipped)
-    /// would have reported for the same run, the same shape `e2e::run_generators`'s doc comment
-    /// describes a consumer hitting for two days. Both languages here fail (no build project
-    /// exists in the temp dir for either -- Dart's default style is FRB, see
-    /// `dart_style_defaults_to_frb`), and both failures must be named -- proving the second
-    /// language was actually attempted, not just that the error text happens to mention it.
-    /// ~keep
+    /// Dart's post-build would have reported for the same run, the same shape
+    /// `e2e::run_generators`'s doc comment describes a consumer hitting for two days.
+    ///
+    /// Both languages here must fail regardless of host toolchains. Swift always fails because
+    /// no build project exists in the temp dir (`cargo` is always present in this repo's own
+    /// test environment). Dart's `RunCommand` step for `flutter_rust_bridge_codegen` is *not*
+    /// usable for this: whether it genuinely runs and errors, or is silently skipped because
+    /// the tool isn't on `PATH` (`run_run_command`'s `NotFound` arm returns `Ok(false)`, not an
+    /// error -- see `PostBuildOutcome`), depends entirely on the host. That gap is exactly what
+    /// made this test pass on a dev machine with `flutter_rust_bridge_codegen` installed and
+    /// fail in CI without it. So `ALEF_SKIP_COMMANDS` forces that step to skip deterministically
+    /// either way, and a stale FRB bridge -- pre-seeded at Dart's real, registry-derived
+    /// facade/bridge paths -- makes `VerifyFrbBridgeCoverage` (a pure-Rust check with no
+    /// external tool dependency) fail instead. Both failures must be named -- proving the
+    /// second language was actually attempted, not just that the error text happens to mention
+    /// it. ~keep
     #[test]
     fn a_failing_language_does_not_abort_the_remaining_post_builds() {
-        let directory = tempfile::tempdir().expect("temporary project");
-        let error = run_required_post_builds(
-            &[Language::Swift, Language::Dart],
-            &crate::core::config::ResolvedCrateConfig::default(),
-            directory.path(),
-        )
-        .expect_err("missing build projects for both languages must fail");
+        use crate::core::backend::PostBuildStep;
+        use crate::core::config::ResolvedCrateConfig;
 
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
+        // SAFETY: serialized by ENV_LOCK; no other test in this file sets this var concurrently.
+        unsafe {
+            std::env::set_var("ALEF_SKIP_COMMANDS", "flutter_rust_bridge_codegen");
+        }
+
+        let directory = tempfile::tempdir().expect("temporary project");
+        let config = ResolvedCrateConfig::default();
+
+        // Discover Dart's real facade/bridge paths from its own derived `BuildConfig` rather
+        // than duplicating that backend's internal path formula here.
+        let dart_build_config = crate::cli::registry::try_get_backend(Language::Dart)
+            .and_then(|backend| backend.build_config_with_config(&config))
+            .expect("Dart backend must produce a build config for the default crate config");
+        let (facade_path, bridge_path) = dart_build_config
+            .post_build
+            .iter()
+            .find_map(|step| match step {
+                PostBuildStep::VerifyFrbBridgeCoverage {
+                    facade_path,
+                    bridge_path,
+                    ..
+                } => Some((facade_path.clone(), bridge_path.clone())),
+                _ => None,
+            })
+            .expect("Dart's default post-build steps must include VerifyFrbBridgeCoverage");
+
+        // A facade that has grown a function the committed bridge never picked up -- the
+        // alef #135 shape `VerifyFrbBridgeCoverage` exists to catch.
+        let facade_file = directory.path().join(&facade_path);
+        std::fs::create_dir_all(facade_file.parent().expect("facade path must have a parent")).unwrap();
+        std::fs::write(
+            &facade_file,
+            "pub fn count_widgets(collection: String) -> Result<i64, String> {\n    Ok(0)\n}\n\
+             pub fn record_price(id: String, price_cents: i64) -> Result<(), String> {\n    Ok(())\n}\n",
+        )
+        .unwrap();
+        let bridge_file = directory.path().join(&bridge_path);
+        std::fs::create_dir_all(bridge_file.parent().expect("bridge path must have a parent")).unwrap();
+        std::fs::write(
+            &bridge_file,
+            "Future<int> countWidgets({required String collection}) => \
+             RustLib.instance.api.crateCountWidgets(collection: collection);\n",
+        )
+        .unwrap();
+
+        let result = run_required_post_builds(&[Language::Swift, Language::Dart], &config, directory.path());
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", value) },
+            None => unsafe { std::env::remove_var("ALEF_SKIP_COMMANDS") },
+        }
+
+        let error = result.expect_err("missing Swift build project and a stale Dart bridge must both fail");
         let message = error.to_string();
         assert!(message.contains("swift"), "got: {message}");
         assert!(message.contains("dart"), "got: {message}");
