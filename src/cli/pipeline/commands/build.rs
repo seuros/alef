@@ -1863,32 +1863,13 @@ sources = ["src/lib.rs"]
 #[cfg(all(test, unix))]
 mod run_command_tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    fn restore_skip_env(previous: Option<String>) {
-        unsafe {
-            match previous {
-                Some(value) => std::env::set_var("ALEF_SKIP_COMMANDS", value),
-                None => std::env::remove_var("ALEF_SKIP_COMMANDS"),
-            }
-        }
-    }
+    use crate::test_support::SkipCommandsGuard;
 
     #[test]
     fn run_run_command_succeeds_for_echo() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
-        unsafe {
-            std::env::remove_var("ALEF_SKIP_COMMANDS");
-        }
+        let _guard = SkipCommandsGuard::set("");
         let dir = std::env::temp_dir();
         let result = run_run_command("echo", &["alef-runcommand-ok"], &dir, "sample");
-        restore_skip_env(previous);
         assert!(
             matches!(result, Ok(true)),
             "echo should run and report Ok(true): {result:?}"
@@ -1897,14 +1878,9 @@ mod run_command_tests {
 
     #[test]
     fn run_run_command_fails_for_false() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
-        unsafe {
-            std::env::remove_var("ALEF_SKIP_COMMANDS");
-        }
+        let _guard = SkipCommandsGuard::set("");
         let dir = std::env::temp_dir();
         let result = run_run_command("false", &[], &dir, "sample");
-        restore_skip_env(previous);
         assert!(result.is_err(), "false should return Err");
         let msg = format!("{:?}", result.unwrap_err());
         assert!(
@@ -1915,23 +1891,18 @@ mod run_command_tests {
 
     #[test]
     fn run_run_command_honors_skip_env_var() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
         let dir = std::env::temp_dir();
-        unsafe {
-            std::env::set_var("ALEF_SKIP_COMMANDS", "noop,false , another");
+        {
+            let _guard = SkipCommandsGuard::set("noop,false , another");
+            let skipped = run_run_command("false", &[], &dir, "sample");
+            assert!(
+                matches!(skipped, Ok(false)),
+                "listed command must return Ok(false) without spawning: {skipped:?}"
+            );
         }
-        let skipped = run_run_command("false", &[], &dir, "sample");
-        assert!(
-            matches!(skipped, Ok(false)),
-            "listed command must return Ok(false) without spawning: {skipped:?}"
-        );
 
-        unsafe {
-            std::env::set_var("ALEF_SKIP_COMMANDS", "something-else");
-        }
+        let _guard = SkipCommandsGuard::set("something-else");
         let honored = run_run_command("false", &[], &dir, "sample");
-        restore_skip_env(previous);
         assert!(
             honored.is_err(),
             "unlisted command must still spawn and surface failure"
@@ -1945,14 +1916,9 @@ mod run_command_tests {
     /// down on its own. ~keep
     #[test]
     fn run_run_command_reports_false_when_the_tool_is_not_on_path() {
-        let _guard = env_lock().lock().expect("env lock poisoned");
-        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
-        unsafe {
-            std::env::remove_var("ALEF_SKIP_COMMANDS");
-        }
+        let _guard = SkipCommandsGuard::set("");
         let dir = std::env::temp_dir();
         let result = run_run_command("alef-definitely-not-a-real-binary-xyz123", &[], &dir, "sample");
-        restore_skip_env(previous);
         assert!(
             matches!(result, Ok(false)),
             "a missing tool must be reported as skipped, not silently equivalent to success: {result:?}"

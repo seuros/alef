@@ -174,13 +174,8 @@ pub fn warn_missing_formatters(languages: &[Language]) {
 /// Callers that expose a `--strict` flag must use [`format_generated_reporting`] instead:
 /// this entry point discards the skip records, which is exactly how the shipped bindings
 /// ended up being the one formatting surface `--strict` did not guard.
-pub fn format_generated(
-    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
-    config: &ResolvedCrateConfig,
-    base_dir: &Path,
-    only_languages: Option<&HashSet<Language>>,
-) {
-    let skipped = run_format_pass(files, config, base_dir, only_languages, &is_tool_available);
+pub fn format_generated(config: &ResolvedCrateConfig, base_dir: &Path, only_languages: Option<&HashSet<Language>>) {
+    let skipped = run_format_pass(config, base_dir, only_languages, &is_tool_available);
     crate::e2e::format::warn_deferred(&skipped);
 }
 
@@ -195,27 +190,25 @@ pub fn format_generated(
 /// with `--strict` escalating -- identical to the e2e formatter's own contract, down to
 /// the record type. ~keep
 pub fn format_generated_reporting(
-    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
     config: &ResolvedCrateConfig,
     base_dir: &Path,
     only_languages: Option<&HashSet<Language>>,
     strict: bool,
 ) -> anyhow::Result<Vec<DeferredFormatting>> {
-    format_generated_reporting_with(files, config, base_dir, only_languages, strict, &is_tool_available)
+    format_generated_reporting_with(config, base_dir, only_languages, strict, &is_tool_available)
 }
 
 /// Testable seam for [`format_generated_reporting`]: resolves executable presence through
 /// `is_available` instead of PATH, so the `--strict` escalation is provable without
 /// depending on which formatters the host running the suite happens to have. ~keep
 pub(crate) fn format_generated_reporting_with(
-    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
     config: &ResolvedCrateConfig,
     base_dir: &Path,
     only_languages: Option<&HashSet<Language>>,
     strict: bool,
     is_available: &dyn Fn(&str) -> bool,
 ) -> anyhow::Result<Vec<DeferredFormatting>> {
-    let skipped = run_format_pass(files, config, base_dir, only_languages, is_available);
+    let skipped = run_format_pass(config, base_dir, only_languages, is_available);
     crate::e2e::format::warn_deferred(&skipped);
     escalate_missing_toolchains(skipped, strict)
 }
@@ -244,7 +237,6 @@ fn escalate_missing_toolchains(
 }
 
 fn run_format_pass(
-    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
     config: &ResolvedCrateConfig,
     base_dir: &Path,
     only_languages: Option<&HashSet<Language>>,
@@ -252,25 +244,27 @@ fn run_format_pass(
 ) -> Vec<DeferredFormatting> {
     let mut pass = FormatPass::new(is_available);
     // `None` (full regen, the `alef all` path) always runs the whole-tree convergence pass
-    // below and never consults `poly_langs` at all: it formats every generated package under
-    // `base_dir` regardless of which languages happen to be represented in `files`. Gating it
-    // on `poly_langs.is_empty()` was itself an instance of the #119 bug -- `files` here is only
-    // ever `bindings` + `stubs` (see `alef all`'s call site), so a run where bindings generation
-    // was entirely skipped by the per-language lang-hash cache (nothing regenerated in-memory,
-    // so `bindings` comes back empty) and a crate with no stub-capable languages configured
-    // would have left `poly_langs` empty even though the caller had already decided -- from the
-    // full write set, not just bindings/stubs -- that formatting was needed. Only the `Some(_)`
-    // (partial regen) branch below genuinely needs a non-empty language list: it is what tells
-    // `poly_paths` which package directories to format at all. ~keep
+    // below, formatting every generated package under `base_dir` regardless of `only_languages`.
+    // The `Some(_)` (partial regen) branch below is what tells `poly_paths` which package
+    // directories to format -- see its own comment for why `poly_langs` is derived from `only`
+    // directly rather than from a `files` list. ~keep
     match only_languages {
         None => converge_full_regen(base_dir, &mut pass),
+        // `poly_langs` comes directly from the caller's `only` set, not from which languages
+        // happen to be keys in `files`. It used to be `files.iter().filter(|lang|
+        // only.contains(lang))` -- an intersection that silently dropped a language `only`
+        // named but `files` had no entry for at all. A post-build step that writes straight to
+        // disk (Swift's `MaterializeSwiftBridge` for `RustBridgeC.h`) is exactly that case on a
+        // run where nothing else regenerated: the caller adds the language to `only` precisely
+        // because that post-build output still needs formatting, but `files` (bindings + stubs)
+        // has no entry for it at all, so the old intersection produced an empty `poly_langs` and
+        // returned before ever calling `poly_paths` -- the caller's `only` decision was
+        // silently discarded and the post-build output shipped never formatted. `only` is
+        // already the caller's complete, authoritative answer to "what needs formatting this
+        // run"; re-deriving it from `files` a second time can only narrow it incorrectly, never
+        // usefully. ~keep
         Some(only) => {
-            let mut seen = HashSet::new();
-            let poly_langs: Vec<Language> = files
-                .iter()
-                .map(|(lang, _)| *lang)
-                .filter(|lang| seen.insert(*lang) && only.contains(lang))
-                .collect();
+            let poly_langs: Vec<Language> = only.iter().copied().collect();
             if poly_langs.is_empty() {
                 return pass.skipped;
             }

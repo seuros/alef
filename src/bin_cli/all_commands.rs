@@ -918,8 +918,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 if any_output_changed {
                     tracing::info!("Formatting generated files...");
-                    let mut files_to_format = bindings.clone();
-                    files_to_format.extend(stubs.clone());
                     // `None` selects the converging whole-tree pass, which is what a full regen needs
                     // and what `converge_full_regen_formatting` documents itself as serving. Passing
                     // `Some(&only_languages_that_wrote_bindings)` would take the single-pass branch
@@ -931,8 +929,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     // this run did not generate. ~keep
                     // `strict` must reach this pass too: until it did, `--strict` guarded the e2e
                     // tree while `packages/<lang>` -- the shipped bindings -- went unguarded. ~keep
-                    let skipped =
-                        pipeline::format_generated_reporting(&files_to_format, resolved_cfg, &base_dir, None, strict)?;
+                    let skipped = pipeline::format_generated_reporting(resolved_cfg, &base_dir, None, strict)?;
                     deferred_formatting.extend(skipped);
                 }
 

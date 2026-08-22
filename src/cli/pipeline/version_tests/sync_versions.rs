@@ -326,9 +326,7 @@ fn sync_versions_scaffold_regen_is_byte_identical_to_generate_path() {
         let scaffold_files = crate::cli::pipeline::scaffold(&api, &resolved_cfg, &languages, &alef_toml_path)?;
         let base_dir = std::path::PathBuf::from(".");
         crate::cli::pipeline::write_scaffold_files_with_overwrite(&scaffold_files, &base_dir, true)?;
-        let grouped: Vec<(crate::core::config::Language, Vec<crate::core::backend::GeneratedFile>)> =
-            languages.iter().map(|l| (*l, scaffold_files.clone())).collect();
-        crate::cli::pipeline::format_generated(&grouped, &resolved_cfg, &base_dir, None);
+        crate::cli::pipeline::format_generated(&resolved_cfg, &base_dir, None);
         Ok(std::fs::read_to_string(root.join("crates/mylib-node/package.json"))?)
     })();
     let generate_bytes = match generate_result {

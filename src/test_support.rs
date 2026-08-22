@@ -50,6 +50,52 @@ impl Drop for CwdGuard {
     }
 }
 
+/// The single lock serializing every test in this crate that mutates the process-global
+/// `ALEF_SKIP_COMMANDS` env var. Mirrors [`CWD_LOCK`]'s rationale exactly: before
+/// [`SkipCommandsGuard`] existed, `cli::pipeline::commands::build`'s `run_command_tests` module
+/// held its own private `env_lock()` `Mutex`, which correctly serialized tests within that one
+/// module but did nothing to stop a test in a different module (this crate's own `alef generate`
+/// regression coverage for the post-build/format ordering fix) from mutating the same env var
+/// concurrently -- the identical "two locks guarding one resource" shape `f968767b6` already had
+/// to fix once for `frb_bridge_coverage.rs`'s equivalent hazard. One shared lock closes it for
+/// every future caller instead of adding a third independent one. ~keep
+pub(crate) static SKIP_COMMANDS_LOCK: Mutex<()> = Mutex::new(());
+
+/// RAII guard that locks [`SKIP_COMMANDS_LOCK`], sets `ALEF_SKIP_COMMANDS` to `value` for its
+/// lifetime, and restores whatever the env var held before on drop -- including when the guarded
+/// scope panics. See [`SKIP_COMMANDS_LOCK`]'s doc for why every test that reads or writes this
+/// env var must go through the one shared lock.
+pub(crate) struct SkipCommandsGuard {
+    _lock: MutexGuard<'static, ()>,
+    previous: Option<String>,
+}
+
+impl SkipCommandsGuard {
+    /// Locks [`SKIP_COMMANDS_LOCK`] and sets `ALEF_SKIP_COMMANDS` to `value`, returning a guard
+    /// that restores the previous value (or absence) when dropped.
+    pub(crate) fn set(value: &str) -> Self {
+        let lock = SKIP_COMMANDS_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
+        // SAFETY: `_lock` is held for the guard's entire lifetime, so no other thread in this
+        // process can be reading or writing `ALEF_SKIP_COMMANDS` through this same guard type
+        // concurrently.
+        unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", value) };
+        Self { _lock: lock, previous }
+    }
+}
+
+impl Drop for SkipCommandsGuard {
+    fn drop(&mut self) {
+        // SAFETY: see `set`'s SAFETY comment -- `_lock` is still held here, during `Drop`.
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var("ALEF_SKIP_COMMANDS", value),
+                None => std::env::remove_var("ALEF_SKIP_COMMANDS"),
+            }
+        }
+    }
+}
+
 /// Build a [`std::process::Command`] for `program`, pre-pinned to [`std::env::temp_dir`].
 ///
 /// `cargo test` runs every test as a thread in one process (see the module docs), so a spawn

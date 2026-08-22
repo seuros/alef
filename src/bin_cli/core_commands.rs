@@ -354,27 +354,23 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
-                if any_written && !changed_languages.is_empty() {
-                    tracing::info!("Formatting generated files...");
-                    let mut files_to_format = files.clone();
-                    files_to_format.extend(stub_files.clone());
-                    // `strict`, not `false`: this pass formats `packages/<lang>` -- the SHIPPED
-                    // bindings -- and used to swallow every missing-formatter skip in a `warn!`
-                    // the caller never saw, so `--strict` guarded only the e2e formatter while
-                    // the more important surface went unguarded. ~keep
-                    pipeline::format_generated_reporting(
-                        &files_to_format,
-                        resolved_cfg,
-                        &base_dir,
-                        Some(&changed_languages),
-                        strict,
-                    )?;
-                }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
-
                 tracing::info!("Running post-build processing...");
-                // Surface refusals before a post-build error, not after -- see the identical
-                // guard (and its full rationale) on `all_commands.rs`'s "All" arm. ~keep
+                // Post-build MUST run before the format pass below, not after: several
+                // post-build steps (Swift's `MaterializeSwiftBridge`, Dart's
+                // `flutter_rust_bridge_codegen`) write straight to disk, unguarded by
+                // `write_files_report`, and a format pass that already ran before they wrote
+                // never sees their output at all -- the file this run ships is whatever the
+                // post-build tool produced, untouched by `poly fmt`. Stamping that output
+                // afterward (as this function used to) embeds `alef:hash:` over UNFORMATTED
+                // bytes: the moment anything reformats the file later -- this repo's own
+                // whole-tree `converge_full_regen` on a later `alef all` run, or a standalone
+                // `poly fmt --fix .` a consumer runs before committing -- the body no longer
+                // matches its own embedded hash and `alef verify` reports it stale, even though
+                // nothing about the *generation inputs* changed. `all_commands.rs`'s "All" arm
+                // already runs post-build before its own format pass for exactly this reason;
+                // this mirrors that ordering here. Surface refusals before a post-build error,
+                // not after -- see the identical guard (and its full rationale) on
+                // `all_commands.rs`'s "All" arm. ~keep
                 if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
                     pipeline::report_refused_writes(&refusals);
                     return Err(error);
@@ -387,10 +383,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // to emit for the same path this time -- that independence is the fix for the
                 // alef #B incident: without it, a run where the generator legitimately emits
                 // nothing for a path a post-build step still writes reads as "no longer
-                // generated" to the orphan sweep below. Also into `current_gen_paths` so a
-                // marker-carrying path a post-build step just wrote (`RustBridgeC.h`'s
-                // self-marked header) gets its `alef:hash:` line re-derived from what is
-                // actually on disk now, not left holding whatever `finalize_hashes` last saw. ~keep
+                // generated" to the orphan sweep below.
                 for &language in &languages {
                     let Some(backend) = crate::cli::registry::try_get_backend(language) else {
                         continue;
@@ -412,6 +405,41 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         .extend(owned.iter().cloned());
                     current_gen_paths.extend(owned);
                 }
+                // Deliberately NOT `finalize_hashes` here, unlike every other phase above: a
+                // post-build-owned path (`RustBridgeC.h`) must stay UNSTAMPED until it has been
+                // through the format pass below. Stamping it now -- over content the format pass
+                // has not touched yet -- would embed `alef:hash:` while the body is still
+                // whatever the post-build tool produced. `poly`'s built-in "hash-stamped
+                // generated file" skip then protects that stamp from ever being reformatted
+                // again (verified: once a file carries a well-formed `alef:hash:` line, `poly
+                // fmt --fix` leaves it untouched), so the file would ship non-canonical forever
+                // and never get a second chance to be formatted. The single `finalize_hashes`
+                // call after the format pass below is what actually stamps these paths. ~keep
+
+                // A post-build-owning language must be formatted even when nothing in
+                // `files`/`stub_files` changed this run: Swift's `RustBridgeC.h` and Dart's FRB
+                // bridge are written unguarded by post-build (see above), invisible to
+                // `any_written`/`changed_languages`, and would otherwise never reach
+                // `poly_paths`'s per-language directory scoping below. Mirrors
+                // `any_output_changed`'s `languages_have_post_build_steps` seed in
+                // `all_commands.rs`. ~keep
+                let post_build_languages = languages_with_post_build_steps(&languages, resolved_cfg);
+                if !post_build_languages.is_empty() {
+                    any_written = true;
+                    changed_languages.extend(post_build_languages);
+                }
+
+                if any_written && !changed_languages.is_empty() {
+                    tracing::info!("Formatting generated files...");
+                    // `strict`, not `false`: this pass formats `packages/<lang>` -- the SHIPPED
+                    // bindings -- and used to swallow every missing-formatter skip in a `warn!`
+                    // the caller never saw, so `--strict` guarded only the e2e formatter while
+                    // the more important surface went unguarded. ~keep
+                    pipeline::format_generated_reporting(resolved_cfg, &base_dir, Some(&changed_languages), strict)?;
+                }
+                // Final stamp, after post-build AND formatting have both settled every byte this
+                // run will ship -- see the ordering comment above `complete_generated_artifacts`
+                // for why an intermediate stamp before formatting is not enough. ~keep
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let previous_generation_owned: std::collections::HashMap<_, _> = languages
@@ -526,7 +554,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // default -- but it goes through the same reporting entry point as every other
                 // surface, so a skipped formatter is named in the run output instead of being
                 // dropped into a warning nothing collects. ~keep
-                pipeline::format_generated_reporting(&files, resolved_cfg, &base_dir, None, false)?;
+                pipeline::format_generated_reporting(resolved_cfg, &base_dir, None, false)?;
 
                 let stub_paths: std::collections::HashSet<PathBuf> = files
                     .iter()
@@ -962,6 +990,8 @@ pub(super) fn ensure_required_records_tracked(untracked: &[&'static str], report
 
 #[cfg(test)]
 mod format_scope_tests;
+#[cfg(test)]
+mod post_build_format_order_tests;
 #[cfg(test)]
 mod strict_formatting_tests;
 #[cfg(test)]

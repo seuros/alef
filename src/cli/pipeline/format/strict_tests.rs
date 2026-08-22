@@ -12,7 +12,6 @@
 //! nothing on the machine where it passes. ~keep
 
 use super::*;
-use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, NewAlefConfig, ResolvedCrateConfig};
 
 fn make_config() -> ResolvedCrateConfig {
@@ -39,17 +38,6 @@ fn write_tree(base: &Path) {
     std::fs::write(base.join("Cargo.toml"), "[workspace]\nmembers = []\n").expect("root manifest");
 }
 
-fn generated_files() -> Vec<(Language, Vec<GeneratedFile>)> {
-    vec![(
-        Language::Python,
-        vec![GeneratedFile {
-            path: PathBuf::from("packages/python/sample.py"),
-            content: "x=1".to_owned(),
-            generated_header: false,
-        }],
-    )]
-}
-
 /// Nothing installed, no `--strict`: the run must survive, and every step that did not run must
 /// come back to the caller as a record. Surviving is the point -- these are host toolchains a
 /// contributor may legitimately lack, and a default-fatal pass breaks every fresh clone. Being
@@ -60,10 +48,7 @@ fn an_uninstalled_package_formatter_is_recorded_and_survived_by_default() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_tree(dir.path());
 
-    let skipped =
-        format_generated_reporting_with(&generated_files(), &make_config(), dir.path(), None, false, &|_tool| {
-            false
-        })
+    let skipped = format_generated_reporting_with(&make_config(), dir.path(), None, false, &|_tool| false)
         .expect("a missing formatter must not fail the run without --strict");
 
     let steps: Vec<&str> = skipped.iter().map(|entry| entry.step.as_str()).collect();
@@ -92,10 +77,8 @@ fn an_uninstalled_package_formatter_aborts_the_run_under_strict() {
     let dir = tempfile::tempdir().expect("tempdir");
     write_tree(dir.path());
 
-    let error = format_generated_reporting_with(&generated_files(), &make_config(), dir.path(), None, true, &|_tool| {
-        false
-    })
-    .expect_err("--strict must fail the run when a configured formatter is not installed");
+    let error = format_generated_reporting_with(&make_config(), dir.path(), None, true, &|_tool| false)
+        .expect_err("--strict must fail the run when a configured formatter is not installed");
 
     let message = format!("{error:#}");
     assert!(
@@ -119,7 +102,6 @@ fn strict_is_inert_when_every_formatter_is_installed() {
     // A partial regen over a package dir that does not exist yet formats nothing and can
     // therefore skip nothing -- the case that must stay silent under `--strict`.
     let skipped = format_generated_reporting_with(
-        &generated_files(),
         &make_config(),
         &dir.path().join("absent"),
         Some(&only),
@@ -152,10 +134,9 @@ sources = ["src/lib.rs"]
     )
     .expect("valid config");
     let config = cfg.resolve().unwrap().remove(0);
-    let files: Vec<(Language, Vec<GeneratedFile>)> = vec![(Language::Elixir, vec![])];
     let only: HashSet<Language> = [Language::Elixir].into_iter().collect();
 
-    let skipped = format_generated_reporting_with(&files, &config, base, Some(&only), false, &|tool| tool != "mix")
+    let skipped = format_generated_reporting_with(&config, base, Some(&only), false, &|tool| tool != "mix")
         .expect("a missing residual must not fail the run without --strict");
 
     let mix = skipped
@@ -180,10 +161,7 @@ fn a_recorded_skip_is_classified_as_a_missing_toolchain() {
     write_tree(dir.path());
 
     let skipped =
-        format_generated_reporting_with(&generated_files(), &make_config(), dir.path(), None, false, &|_tool| {
-            false
-        })
-        .expect("lenient run");
+        format_generated_reporting_with(&make_config(), dir.path(), None, false, &|_tool| false).expect("lenient run");
 
     assert!(
         !skipped.is_empty(),

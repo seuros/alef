@@ -1,5 +1,4 @@
 use super::*;
-use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, NewAlefConfig, ResolvedCrateConfig};
 
 fn make_config(crate_name: &str) -> ResolvedCrateConfig {
@@ -312,16 +311,7 @@ sources = ["src/lib.rs"]
     .expect("valid config");
     let config = cfg.resolve().unwrap().remove(0);
 
-    let files: Vec<(Language, Vec<GeneratedFile>)> = vec![(
-        Language::Python,
-        vec![GeneratedFile {
-            path: PathBuf::from("packages/python/foo.py"),
-            content: "x=1".to_owned(),
-            generated_header: false,
-        }],
-    )];
-
-    format_generated(&files, &config, base, None);
+    format_generated(&config, base, None);
 
     let formatted = std::fs::read_to_string(&py_path).unwrap();
     if is_tool_available("poly") {
@@ -570,9 +560,8 @@ sources = ["src/lib.rs"]
          v == nil end)\n    |> Map.new()\n  end\nend\n";
     write_minimal_mix_project(&elixir_dir, correctly_formatted);
 
-    let files: Vec<(Language, Vec<GeneratedFile>)> = vec![(Language::Elixir, vec![])];
     let only: HashSet<Language> = [Language::Elixir].into_iter().collect();
-    format_generated(&files, &config, base, Some(&only));
+    format_generated(&config, base, Some(&only));
 
     assert_eq!(
         std::fs::read_to_string(elixir_dir.join("lib/sample.ex")).unwrap(),
@@ -715,12 +704,11 @@ fn format_generated_full_regen_routes_through_convergence_loop() {
     write_unsorted_workspace(base, "-py");
 
     let config = make_config("sample-model");
-    let files: Vec<(Language, Vec<GeneratedFile>)> = vec![(Language::Ffi, vec![])];
 
     // A full regen (`only_languages = None`) must go through
     // `converge_full_regen_formatting`, not the single-pass + per-language-residual
     // branch, so it also sorts the "-py" crate that has no residual entry.
-    format_generated(&files, &config, base, None);
+    format_generated(&config, base, None);
 
     if is_tool_available("cargo-sort") {
         let py_toml = std::fs::read_to_string(base.join("crates/pkg-py/Cargo.toml")).unwrap();
