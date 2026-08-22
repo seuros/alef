@@ -4,7 +4,7 @@
 //! to `swift/assertions.rs`, which is already over the repo's 1,000-line cap (see
 //! `file-modularization` in CLAUDE.md).
 //!
-//! Reproduces tree-sitter-language-pack's `data_extraction_properties_empty` /
+//! Reproduces a consumer's `data_extraction_properties_empty` /
 //! `data_extraction_json_empty_object` fixtures (`is_empty` on `data.children`), which
 //! failed to COMPILE:
 //!

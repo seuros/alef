@@ -7,7 +7,7 @@
 //! a scalar `alef_json_get_string(array_json, "key")` lookup against the ARRAY's own JSON
 //! text — a lookup that can never find a `"key"` property on a JSON array, so every
 //! "contains"-shaped assertion built from it asserted an unsatisfiable condition (see
-//! `structure[].kind` in tree-sitter-language-pack's generated `test_process.c`, alef task
+//! `structure[].kind` in a consumer's generated `test_process.c`, alef task
 //! #59). This module gives the leaf a real per-element quantifier instead, matching the
 //! `.iter().any(..)` / `Enum.any?` / `any(...)` shape every other e2e backend already uses for
 //! this fixture path shape (`rust/assertions.rs`, `python/assertions.rs`,

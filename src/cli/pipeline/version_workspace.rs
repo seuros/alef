@@ -27,12 +27,12 @@ use super::version_core::{patch_cargo_crates_io_version, patch_workspace_dep_ver
 /// same shape as the `packages/ruby/ext/*/native/Cargo.toml` gap below, which already
 /// pairs `write_version_to_cargo_toml` with `patch_workspace_dep_versions` for exactly
 /// this reason. `patch_workspace_dep_versions`'s membership check already covers both
-/// the plain form (`crawlberg = { version = "...", ... }`, dependency key == crate
-/// name, no `package = "..."` needed) and the renamed form (`liter_llm = { package =
-/// "liter-llm", version = "...", ... }`); this call just needed to exist. Confirmed by
-/// reproducing against crawlberg's actual alef.toml/source tree: a plain `alef
-/// sync-versions --bump patch` left `crawlberg = { version = "1.3.1", ... }` pinned to
-/// the pre-bump version while `[package] version` moved to 1.3.2, exactly the bug
+/// the plain form (`samplewidget = { version = "...", ... }`, dependency key == crate
+/// name, no `package = "..."` needed) and the renamed form (`sample_widget_lib =
+/// { package = "sample-widget-lib", version = "...", ... }`); this call just needed to
+/// exist. Confirmed by reproducing against a consumer's actual alef.toml/source tree: a
+/// plain `alef sync-versions --bump patch` left `samplewidget = { version = "1.3.1", ... }`
+/// pinned to the pre-bump version while `[package] version` moved to 1.3.2, exactly the bug
 /// alef #152 reported — reachable regardless of dependency-key spelling, because
 /// nothing here ever called `patch_workspace_dep_versions` at all, in either form.
 /// ~keep

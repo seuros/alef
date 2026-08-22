@@ -417,8 +417,8 @@ pub fn sync_versions(
     // `RequireNativeSetup_<ident>` sentinel must always carry the identical identifier --
     // both are derived from this single `to_go_version_ident` call, so a sync-versions run
     // can never move one file's identifier without moving the other's. See
-    // `sync_go_native_setup_sentinel`'s doc for the alef#159 / html-to-markdown#463
-    // incident this single-source computation closes.
+    // `sync_go_native_setup_sentinel`'s doc for the alef#159 incident this
+    // single-source computation closes.
     let go_version_ident = to_go_version_ident(&version);
 
     for entry in writable.glob("packages/go/cmd/setup/main.go") {

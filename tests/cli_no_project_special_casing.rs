@@ -150,7 +150,12 @@ fn enforced_files(workspace_root: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
+/// The file list is chunked only to stay under the OS argv limit, so every chunk must be run
+/// and every chunk's findings reported. Returning on the first failing chunk made a backlog of
+/// violations look like a single one: each fix revealed a different file, so the gate read as
+/// whack-a-mole instead of as a list you can work through in one pass. ~keep
 fn run_project_mention_hook(hook: &Path, strict: bool, files: &[PathBuf]) -> Result<(), String> {
+    let mut failures = Vec::new();
     for chunk in files.chunks(PROJECT_MENTION_HOOK_CHUNK_SIZE) {
         let mut command = Command::new("python3");
         command.arg(hook);
@@ -162,10 +167,14 @@ fn run_project_mention_hook(hook: &Path, strict: bool, files: &[PathBuf]) -> Res
             .output()
             .map_err(|error| format!("running {}: {error}", hook.display()))?;
         if !output.status.success() {
-            return Err(project_mention_hook_failure(&output));
+            failures.push(project_mention_hook_failure(&output));
         }
     }
-    Ok(())
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("\n"))
+    }
 }
 
 fn project_mention_hook_failure(output: &Output) -> String {

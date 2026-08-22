@@ -180,7 +180,7 @@ pub(super) fn gen_native_methods(
     // `retain(|name| ffi_handle_type_names.contains(name))` below is the single place that keeps
     // only genuine handle types (structs plus every enum, per `ffi_handle_type_names`) — it must
     // not filter enums by variant shape, since that previously dropped these declarations for
-    // fieldless-only enum returns (e.g. `RefreshOutcome` in `liter-llm`), which is the CS1503
+    // fieldless-only enum returns (e.g. a consumer's `RefreshOutcome`), which is the CS1503
     // root cause. ~keep
     for func in api.functions.iter().filter(|f| !exclude_functions.contains(&f.name)) {
         for param in &func.params {

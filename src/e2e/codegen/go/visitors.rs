@@ -35,7 +35,7 @@ pub(super) fn emit_go_visitor_struct(
 ) {
     // `struct {` with a space, and a blank line after the closing brace: gofmt requires both
     // (it separates consecutive top-level declarations), and every consumer lints generated Go
-    // with `gofmt -l`. Emitting `struct{` here left html-to-markdown's e2e visitor tests failing
+    // with `gofmt -l`. Emitting `struct{` here left a consumer's e2e visitor tests failing
     // formatting with no local cause. ~keep
     let _ = writeln!(out, "type {struct_name} struct {{");
     let _ = writeln!(out, "\t{import_alias}.BaseVisitor");

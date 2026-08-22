@@ -12,7 +12,7 @@
 //! `"[]"`/`"{}"`, not `""`. `strlen(field_expr) == 0` reads that as non-empty, so
 //! `is_empty`/`not_empty` against a collection-typed field asserted the wrong thing regardless
 //! of what the collection actually held — reproduced by
-//! `tree-sitter-language-pack/e2e/c/test_data_extraction.c`'s
+//! a consumer's generated `e2e/c/test_data_extraction.c`'s
 //! `data_extraction_json_empty_object` and `data_extraction_properties_empty` fixtures, both
 //! `is_empty` on `data.children` (a `Vec<DataNode>`).
 

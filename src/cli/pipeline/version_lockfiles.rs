@@ -4,8 +4,8 @@
 //! ~keep alef #148: `sync_versions` bumped every `Cargo.toml` it owned but never refreshed the
 //! sibling `Cargo.lock` files, so `alef validate versions` — which discovers lockfiles through
 //! a separate, broader enumeration — found the stale pin and failed the release gate. Three
-//! releases (tree-sitter-language-pack 1.15.3, liter-llm 1.17.2, crawlberg 1.3.1) were tagged
-//! and pushed with a stale lockfile, failed validation, and never reached crates.io. Discovery
+//! consumer releases, in three separate repos, were tagged and pushed with a stale lockfile,
+//! failed validation, and never reached crates.io. Discovery
 //! here is not re-derived: it calls the exact same
 //! `crate::cli::commands::version_manifests::discover_cargo_locks` the validator uses, so the
 //! write set and the validate set cannot drift into checking a different set of files again.

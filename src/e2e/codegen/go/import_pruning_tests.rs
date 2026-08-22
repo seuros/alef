@@ -107,7 +107,7 @@ fn string_equals_does_not_emit_an_unused_strings_import() {
 /// assertion types — never `error`. Combining that heuristic with `body.contains("strings.")`
 /// via `&&` meant a real `strings.` reference in the body was silently dropped from the import list,
 /// producing a Go file that fails to compile (`undefined: strings`), exactly as observed in
-/// crawlberg's `error_test.go:210:7: undefined: strings`.
+/// a consumer's `error_test.go:210:7: undefined: strings`.
 #[test]
 fn declared_error_value_assertion_emits_strings_import() {
     let out = render_fixture(
