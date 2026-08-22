@@ -1,6 +1,7 @@
 use crate::backends::extendr::gen_bindings::ExtendrBackend;
 use crate::backends::extendr::gen_bindings::bridges::{
     extendr_enum_variant_constructor_registrations, gen_extendr_enum_variant_constructors,
+    gen_extendr_flat_data_enum_from_core, gen_extendr_flat_data_enum_struct, gen_extendr_flat_data_enum_to_core,
     gen_extendr_json_passthrough_enum_struct,
 };
 use crate::core::ir::{EnumDef, EnumVariant, FieldDef, MethodDef, PrimitiveType, TypeRef};
@@ -316,5 +317,61 @@ fn r_wrapper_binds_variant_constructor_under_snake_name() {
     assert!(
         content.contains(".Call(\"wrap__Shape___factory_rect\", width, height"),
         "{content}"
+    );
+}
+
+/// The discriminator field name a flat data enum's struct declares (`gen_extendr_flat_data_enum_struct`)
+/// and the field its `From<core>`/`From<binding>` impls populate and read
+/// (`gen_extendr_flat_data_enum_from_core`/`gen_extendr_flat_data_enum_to_core`) must be the exact
+/// same string, whether it comes from the generic `"type"` fallback (`flat_data_enum_discriminator`
+/// in `gen_bindings/bridges/mod.rs`) or an explicit `serde_tag`. All three call sites read that one
+/// function instead of hard-coding the fallback independently, so a regression that reintroduces a
+/// second hard-coded literal would surface here as a field name mismatch. ~keep
+#[test]
+fn flat_data_enum_discriminator_is_consistent_across_struct_and_from_impls() {
+    let backend = ExtendrBackend;
+    let lossy_skip_types: Vec<String> = vec![];
+    let cfg = ExtendrBackend::binding_config("test_lib", &lossy_skip_types);
+
+    let default_enum = EnumDef {
+        name: "Payload".to_string(),
+        rust_path: "test_lib::Payload".to_string(),
+        variants: vec![variant("Text", vec![field("inner", TypeRef::String)])],
+        serde_tag: None,
+        ..Default::default()
+    };
+
+    let struct_src = gen_extendr_flat_data_enum_struct(&default_enum, &backend, &cfg);
+    assert!(
+        struct_src.contains("pub r#type: String"),
+        "no explicit serde_tag should fall back to the generic `type` discriminator, not a \
+         domain-specific default; got:\n{struct_src}"
+    );
+
+    let from_core = gen_extendr_flat_data_enum_from_core(&default_enum, "test_lib");
+    assert!(
+        from_core.contains("r#type: \"Text\".to_string()"),
+        "From<core> impl must populate the exact field the struct declares; got:\n{from_core}"
+    );
+
+    let to_core = gen_extendr_flat_data_enum_to_core(&default_enum, "test_lib");
+    assert!(
+        to_core.contains("val.r#type.as_str()"),
+        "From<binding> impl must dispatch on the exact field the struct declares; got:\n{to_core}"
+    );
+
+    let tagged_enum = EnumDef {
+        serde_tag: Some("kind".to_string()),
+        ..default_enum
+    };
+    let tagged_struct_src = gen_extendr_flat_data_enum_struct(&tagged_enum, &backend, &cfg);
+    assert!(
+        tagged_struct_src.contains("pub kind: String"),
+        "an explicit serde_tag must be used verbatim as the discriminator field name; got:\n{tagged_struct_src}"
+    );
+    let tagged_from_core = gen_extendr_flat_data_enum_from_core(&tagged_enum, "test_lib");
+    assert!(
+        tagged_from_core.contains("kind: \"Text\".to_string()"),
+        "an explicit serde_tag must thread into the From<core> impl too; got:\n{tagged_from_core}"
     );
 }

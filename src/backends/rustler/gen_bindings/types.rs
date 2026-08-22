@@ -159,8 +159,9 @@ fn variant_wire_name(variant: &crate::core::ir::EnumVariant, enum_def: &EnumDef)
 /// - A discriminator string field for the variant type
 /// - From impls that populate the appropriate field and set the discriminator
 ///
-/// Example: FormatMetadata enum with Excel(ExcelMetadata) → struct with
-/// `format_type: String` and `excel: Option<ExcelMetadata>`, with other optional fields.
+/// Example: Shape enum with Excel(ExcelMetadata) → struct with `type: String` and
+/// `excel: Option<ExcelMetadata>`, with other optional fields (see
+/// [`super::helpers::flat_data_enum_discriminator`] for the `"type"` fallback name).
 fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String {
     let name = &enum_def.name;
     let mut out = String::with_capacity(1024);
@@ -175,7 +176,7 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
     ));
 
     let discriminator_field =
-        crate::codegen::naming::internal_rust_identifier(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
+        crate::codegen::naming::internal_rust_identifier(super::helpers::flat_data_enum_discriminator(enum_def));
     out.push_str(&template_env::render(
         "flat_enum_discriminator_field.jinja",
         minijinja::context! {
@@ -243,7 +244,7 @@ fn gen_rustler_flat_data_enum(enum_def: &EnumDef, module_prefix: &str) -> String
 ///     fn from(val: core::FormatMetadata) -> Self {
 ///         match val {
 ///             core::FormatMetadata::Excel(_0) => Self {
-///                 format_type: "Excel".to_string(), excel: Some(_0.into()), ..Default::default()
+///                 r#type: "Excel".to_string(), excel: Some(_0.into()), ..Default::default()
 ///             },
 ///             ...
 ///         }
@@ -254,7 +255,7 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
     let name = &enum_def.name;
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let discriminator =
-        crate::codegen::naming::internal_rust_identifier(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
+        crate::codegen::naming::internal_rust_identifier(super::helpers::flat_data_enum_discriminator(enum_def));
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -349,7 +350,7 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
     let name = &enum_def.name;
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let discriminator =
-        crate::codegen::naming::internal_rust_identifier(enum_def.serde_tag.as_deref().unwrap_or("format_type"));
+        crate::codegen::naming::internal_rust_identifier(super::helpers::flat_data_enum_discriminator(enum_def));
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(

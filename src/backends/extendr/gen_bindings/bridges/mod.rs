@@ -45,6 +45,16 @@ pub(super) fn is_flat_data_enum(e: &EnumDef) -> bool {
             .all(|v| v.fields.len() == 1)
 }
 
+/// The discriminator field name a flat data enum's struct carries when the source enum has no
+/// explicit `#[serde(tag = "...")]`. `"type"` mirrors the fallback the wasm backend already uses
+/// for the same concept (`src/backends/wasm/gen_bindings/enums.rs`) and serde's own `tag = "type"`
+/// convention -- not a domain word borrowed from any one consumer crate. All three call sites
+/// that build a flat data enum's discriminator (the struct field, the `From<core>` impl, and the
+/// `From<binding>` impl) must read it from here so they cannot drift apart. ~keep
+pub(super) fn flat_data_enum_discriminator(enum_def: &EnumDef) -> &str {
+    enum_def.serde_tag.as_deref().unwrap_or("type")
+}
+
 /// Returns true if a flat data enum can safely generate a binding→core From impl.
 /// Only enums whose tuple variant data is String or Option<String> are safe — complex
 /// output-only struct types (DocxMetadata, PdfMetadata, etc.) have no reverse conversion.
@@ -322,9 +332,10 @@ pub(super) fn gen_extendr_bridge_field_function(
 
 /// Generate a flat Rust struct for a data enum with all-tuple variants.
 ///
-/// The struct has a discriminator field (from `serde_tag`, defaulting to `"format_type"`)
-/// plus one `Option<T>` field per data-carrying variant. The variant field name is the
-/// snake_case form of the variant name (e.g. `Excel` → `excel`).
+/// The struct has a discriminator field (from `serde_tag`, defaulting to `"type"` --
+/// see [`flat_data_enum_discriminator`]) plus one `Option<T>` field per data-carrying
+/// variant. The variant field name is the snake_case form of the variant name
+/// (e.g. `Excel` → `excel`).
 ///
 /// `#[derive(Default)]` is required so `From` impls can use `..Default::default()`.
 /// `serde::Serialize`/`Deserialize` are required so the JSON bridge produces and consumes
@@ -335,7 +346,7 @@ pub(super) fn gen_extendr_flat_data_enum_struct(
     cfg: &RustBindingConfig,
 ) -> String {
     let name = &enum_def.name;
-    let discriminator = enum_def.serde_tag.as_deref().unwrap_or("format_type");
+    let discriminator = flat_data_enum_discriminator(enum_def);
     let mut out = String::with_capacity(1024);
 
     let mut derives: Vec<&str> = cfg.struct_derives.to_vec();
@@ -400,7 +411,7 @@ pub(super) fn gen_extendr_flat_data_enum_struct(
 pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_import: &str) -> String {
     let name = &enum_def.name;
     let core_path = enum_core_path(enum_def, core_import);
-    let discriminator = enum_def.serde_tag.as_deref().unwrap_or("format_type");
+    let discriminator = flat_data_enum_discriminator(enum_def);
     let disc_ident = crate::core::keywords::rust_raw_ident(discriminator);
     let mut out = String::with_capacity(512);
 
@@ -483,7 +494,7 @@ pub(super) fn gen_extendr_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
 pub(super) fn gen_extendr_flat_data_enum_to_core(enum_def: &EnumDef, core_import: &str) -> String {
     let name = &enum_def.name;
     let core_path = enum_core_path(enum_def, core_import);
-    let discriminator = enum_def.serde_tag.as_deref().unwrap_or("format_type");
+    let discriminator = flat_data_enum_discriminator(enum_def);
     let disc_ident = crate::core::keywords::rust_raw_ident(discriminator);
     let mut out = String::with_capacity(512);
 
