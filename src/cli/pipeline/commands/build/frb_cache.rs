@@ -138,7 +138,10 @@ mod tests {
         let removed = command
             .get_envs()
             .any(|(key, value)| key == OsStr::new(CARGO_MANIFEST_DIR_ENV) && value.is_none());
-        assert!(removed, "CARGO_MANIFEST_DIR must be explicitly removed from the frb command's env");
+        assert!(
+            removed,
+            "CARGO_MANIFEST_DIR must be explicitly removed from the frb command's env"
+        );
     }
 
     /// `configure` only touches `flutter_rust_bridge_codegen` invocations (see the `cmd !=
@@ -152,7 +155,10 @@ mod tests {
         let touched = command
             .get_envs()
             .any(|(key, _)| key == OsStr::new(CARGO_MANIFEST_DIR_ENV));
-        assert!(!touched, "configure must not touch env for commands other than flutter_rust_bridge_codegen");
+        assert!(
+            !touched,
+            "configure must not touch env for commands other than flutter_rust_bridge_codegen"
+        );
     }
 
     #[test]

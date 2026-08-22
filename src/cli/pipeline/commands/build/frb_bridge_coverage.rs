@@ -30,10 +30,10 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
         return Ok(());
     }
 
-    let facade_source =
-        std::fs::read_to_string(facade_file).with_context(|| format!("failed to read FRB facade {}", facade_file.display()))?;
-    let bridge_source =
-        std::fs::read_to_string(bridge_file).with_context(|| format!("failed to read FRB bridge {}", bridge_file.display()))?;
+    let facade_source = std::fs::read_to_string(facade_file)
+        .with_context(|| format!("failed to read FRB facade {}", facade_file.display()))?;
+    let bridge_source = std::fs::read_to_string(bridge_file)
+        .with_context(|| format!("failed to read FRB bridge {}", bridge_file.display()))?;
 
     let missing = crate::backends::dart::missing_bridge_functions(&facade_source, &bridge_source, exclude_functions);
     if missing.is_empty() {
@@ -56,9 +56,9 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
 mod tests {
     use super::*;
 
-    const FACADE_ONE_FUNCTION: &str = "pub fn count_widgets(collection: String) -> Result<i64, String> {\n    Ok(0)\n}\n";
-    const BRIDGE_COVERING_IT: &str =
-        "Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);\n";
+    const FACADE_ONE_FUNCTION: &str =
+        "pub fn count_widgets(collection: String) -> Result<i64, String> {\n    Ok(0)\n}\n";
+    const BRIDGE_COVERING_IT: &str = "Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);\n";
 
     #[test]
     fn verify_passes_when_bridge_covers_every_facade_function() {
