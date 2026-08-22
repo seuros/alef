@@ -349,3 +349,63 @@ fn every_frozen_path_is_actually_accepted_by_the_adopt_invocation_its_create_onc
         vec![std::path::PathBuf::from("SomeType.java")]
     );
 }
+
+/// Base case: nothing frozen means nothing to adopt.
+#[test]
+fn has_adoptable_frozen_files_is_false_for_an_empty_list() {
+    assert!(!super::has_adoptable_frozen_files(&[]));
+}
+
+/// Drives the real `frozen_managed_paths` on a fixture whose only frozen path is a create-once
+/// seed -- `generated_header: false`, no self-marked content, no ownership record, and an
+/// extension `is_alef_derived_output` does not recognize (the `.csproj`/`.zon`/`.m4` shape two
+/// consumer repos hit, 85 of 85 and 99 of 99 frozen paths respectively). Before the exit-code
+/// fix the gate was "is the frozen list non-empty", which this fixture would have failed
+/// forever, since a plain `alef generate` deliberately never adds a seed's marker. ~keep
+#[test]
+fn has_adoptable_frozen_files_is_false_when_every_frozen_file_is_a_create_once_seed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("seed.zzz"), "old seed content\n").unwrap();
+    let files = vec![crate::core::backend::GeneratedFile {
+        path: std::path::PathBuf::from("seed.zzz"),
+        content: "fresh seed content\n".to_string(),
+        generated_header: false,
+    }];
+
+    let frozen = super::frozen_managed_paths(&files, dir.path());
+    assert_eq!(
+        frozen.len(),
+        1,
+        "fixture precondition: exactly one frozen create-once seed"
+    );
+    assert!(
+        frozen[0].create_once,
+        "fixture precondition: the seed must classify as create-once"
+    );
+    assert!(
+        !super::has_adoptable_frozen_files(&frozen),
+        "a frozen list of only create-once seeds has nothing `alef adopt --write` accepts, so \
+         verify must not gate its exit code on it"
+    );
+}
+
+/// Negative control: a genuinely adoptable frozen file MUST still gate. Without this the test
+/// above would pass just as well if the predicate always returned false. ~keep
+#[test]
+fn has_adoptable_frozen_files_is_true_when_a_real_adoptable_frozen_file_remains() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("binding.rs"), "fn hand_written() {}\n").unwrap();
+    let files = vec![crate::core::backend::GeneratedFile {
+        path: std::path::PathBuf::from("binding.rs"),
+        content: "fn generated() {}\n".to_string(),
+        generated_header: true,
+    }];
+
+    let frozen = super::frozen_managed_paths(&files, dir.path());
+    assert_eq!(frozen.len(), 1, "fixture precondition: exactly one frozen file");
+    assert!(
+        !frozen[0].create_once,
+        "fixture precondition: this one is on the marker rail"
+    );
+    assert!(super::has_adoptable_frozen_files(&frozen));
+}

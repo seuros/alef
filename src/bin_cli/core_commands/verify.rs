@@ -126,6 +126,15 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     let has_missing_files = !missing_generated_files.is_empty();
     let has_missing_gitignored_files = !missing_gitignored_generated_files.is_empty();
     let has_frozen_files = !frozen_generated_files.is_empty();
+    // Only a frozen file that `alef adopt --write` will actually ACCEPT may gate the exit code.
+    // A create-once seed's missing marker is deliberate, not drift: the write guard refuses it by
+    // design, a plain `alef generate` leaves it untouched, and adopting it needs the deliberate
+    // `--clobber-create-once-seeds`. Counting those made `alef verify` unable to reach exit 0 on
+    // repos carrying legacy pre-marker files -- no amount of regeneration cleared them -- which
+    // turned the release gate into something operators had to route around with a dangerous flag.
+    // `create_once_template_drift` is already informational-only for the same reason. ~keep
+    let has_adoptable_frozen_files =
+        crate::bin_cli::helpers::frozen::has_adoptable_frozen_files(&frozen_generated_files);
     // Report-only: see `verify_orphans`'s module doc for why this never deletes.
     let orphan_generated_files = verify_orphans::find_orphaned_generated_files(&base_dir, &all_managed_paths);
     let has_orphan_files = !orphan_generated_files.is_empty();
@@ -217,7 +226,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     if stale.is_empty()
         && !has_missing_files
         && !has_missing_gitignored_files
-        && !has_frozen_files
+        && !has_adoptable_frozen_files
         && !has_orphan_files
         && !has_abi_disagreement
         && !has_version_issues
@@ -358,7 +367,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         !stale.is_empty()
             || has_missing_files
             || has_missing_gitignored_files
-            || has_frozen_files
+            || has_adoptable_frozen_files
             || has_orphan_files
             || has_abi_disagreement
             || has_stage_failures,

@@ -151,3 +151,17 @@ fn unmarkable_unclaimed_files(
         .cloned()
         .collect()
 }
+
+/// Whether any frozen file is one `alef adopt --write` will actually ACCEPT.
+///
+/// A create-once seed is excluded on purpose. Its missing marker is deliberate, not drift: the
+/// write guard refuses it by design, a plain `alef generate` leaves it untouched, and adopting it
+/// requires the explicit `--clobber-create-once-seeds`. Gating `alef verify`'s exit code on the
+/// whole frozen list therefore made verify unable to reach exit 0 on any repo carrying legacy
+/// pre-marker files -- no amount of regeneration cleared them -- so the release gate could only be
+/// satisfied by reaching for a destructive flag. `create_once` comes from
+/// [`crate::cli::commands::adopt::is_create_once_seed`], the identical predicate `alef adopt` gates
+/// that flag on, so this and that refusal cannot drift apart. ~keep
+pub(crate) fn has_adoptable_frozen_files(frozen: &[FrozenFile]) -> bool {
+    frozen.iter().any(|file| !file.create_once)
+}

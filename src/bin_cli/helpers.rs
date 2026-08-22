@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-mod frozen;
+pub(crate) mod frozen;
 pub(crate) use frozen::FrozenFile;
 use frozen::frozen_managed_paths;
 
