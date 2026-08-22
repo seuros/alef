@@ -147,13 +147,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 };
 
                 if !report.unreadable.is_empty() {
-                    // Named, not counted, and on stdout beside the diffs: adoption of a drifted
-                    // path is only ever taken after printing its diff, and a binary artifact has
-                    // no diff to print, so this list is the whole result for these paths. ~keep
+                    // Named, not counted, and on stdout beside the diffs: this list is the whole
+                    // result for these paths, and it reports alef being unable to say anything --
+                    // not the operator having a decision left to make. A binary alef *does* emit
+                    // (a `.jar`) is no longer here: it is diffed by size and digest and adopted
+                    // through the ownership record like any other unstampable format. ~keep
                     crate::bin_cli::output::blank();
                     crate::bin_cli::output::line(
-                        "NOT ADOPTED -- not text. These matches are binary, so they can carry no \
-                         provenance marker and produce no diff to review. alef leaves them alone:",
+                        "NOT ADOPTED -- alef could not read these matches. Their bytes are neither valid \
+                         UTF-8 nor one of alef's own base64-encoded binary outputs, so alef can state \
+                         nothing about them and leaves them alone:",
                     );
                     for path in &report.unreadable {
                         crate::bin_cli::output::line(format_args!("  {}", path.display()));

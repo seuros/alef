@@ -3,7 +3,6 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::Language;
 use crate::core::hash;
 use anyhow::Context as _;
-use base64::Engine;
 use rayon::prelude::*;
 use std::path::Path;
 use tracing::{debug, warn};
@@ -513,13 +512,8 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
     let mut prepared = std::collections::BTreeMap::<std::path::PathBuf, (Vec<u8>, bool)>::new();
     for file in files.iter().flat_map(|(_, lang_files)| lang_files.iter()) {
         let full_path = base_dir.join(&file.path);
-        let (content, is_text) = if full_path.extension().is_some_and(|extension| extension == "jar") {
-            (
-                base64::engine::general_purpose::STANDARD
-                    .decode(&file.content)
-                    .with_context(|| format!("failed to decode base64 for {}", full_path.display()))?,
-                false,
-            )
+        let (content, is_text) = if super::binary::is_base64_binary_output(&full_path) {
+            (super::binary::decode_base64_binary(&full_path, &file.content)?, false)
         } else {
             let normalized = normalize_content(&full_path, &file.content);
             let normalized = if file.generated_header {

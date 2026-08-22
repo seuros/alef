@@ -4,7 +4,6 @@ use crate::core::backend::GeneratedFile;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use anyhow::Context as _;
-use base64::Engine;
 use std::path::Path;
 use tracing::{debug, warn};
 
@@ -224,13 +223,11 @@ pub fn write_scaffold_files_report(
             debug!("  skipped (already exists): {}", full_path.display());
             continue;
         }
-        let is_jar_file = full_path.extension().is_some_and(|ext| ext == "jar");
+        let is_jar_file = super::binary::is_base64_binary_output(&full_path);
         let is_poly_merge_target = file.path == Path::new(POLY_CONFIG) && full_path.exists();
 
         if is_jar_file {
-            let binary_content = base64::engine::general_purpose::STANDARD
-                .decode(&file.content)
-                .with_context(|| format!("failed to decode base64 for {}", full_path.display()))?;
+            let binary_content = super::binary::decode_base64_binary(&full_path, &file.content)?;
             let existing_binary = std::fs::read(&full_path).ok();
             if existing_binary.as_deref() == Some(binary_content.as_slice()) {
                 debug!("  unchanged: {}", full_path.display());
