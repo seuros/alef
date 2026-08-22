@@ -56,6 +56,8 @@ pub mod swift;
 mod swift_visitors;
 pub mod typescript;
 pub mod wasm;
+#[cfg(test)]
+mod working_directory_guard_tests;
 pub mod zig;
 mod zig_visitors;
 
