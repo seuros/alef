@@ -22,6 +22,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/kotlin_android/excluded_fixtures.kt.jinja"),
     ),
     (
+        "gradle/guarded_working_dir.kt.jinja",
+        include_str!("templates/gradle/guarded_working_dir.kt.jinja"),
+    ),
+    (
         "python/snippet_body.py.jinja",
         include_str!("templates/python/snippet_body.py.jinja"),
     ),
