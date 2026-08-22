@@ -8,8 +8,9 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 
 use super::accessors::{
-    materialise_vec_temporaries, swift_array_contains_expr, swift_array_count_expr, swift_count_target,
-    swift_stringy_aggregator_contains_assert, swift_traversal_contains_assert,
+    materialise_vec_temporaries, swift_array_contains_expr, swift_array_count_expr, swift_array_is_empty_expr,
+    swift_array_not_empty_predicate, swift_count_target, swift_stringy_aggregator_contains_assert,
+    swift_traversal_contains_assert,
 };
 use super::values::{escape_swift, json_to_swift, swift_numeric_literal_cast};
 
@@ -570,18 +571,7 @@ pub(super) fn render_assertion(
                     minijinja::context! { predicate => format!("{field_expr} != nil") },
                 ));
             } else if field_is_array {
-                // `field_is_optional` covers `Option<Vec<T>>` (the field's own accessor call
-                // returns Optional, so an explicit `?.` is needed to reach `.isEmpty`). This
-                // arm covers a non-optional array reached through an optional PARENT
-                // (`data.children`, `data: Option<Data>`): Swift's earlier `?.` already
-                // propagates optionality through the rest of the chain, so `field_expr` needs
-                // NO extra `?` before `.isEmpty` -- `!Bool?` doesn't typecheck, so compare
-                // against `false` instead of negating, mirroring the sibling arm above. ~keep
-                let predicate = if accessor_is_optional {
-                    format!("{field_expr}.isEmpty == false")
-                } else {
-                    format!("!{field_expr}.isEmpty")
-                };
+                let predicate = swift_array_not_empty_predicate(&field_expr, accessor_is_optional);
                 out.push_str(&crate::e2e::template_env::render(
                     "swift/not_empty_assertion.swift.jinja",
                     minijinja::context! { predicate => predicate },
@@ -634,15 +624,7 @@ pub(super) fn render_assertion(
             } else if field_is_optional {
                 let _ = writeln!(out, "        XCTAssertNil({field_expr}, \"expected nil value\")");
             } else if field_is_array {
-                // Mirrors not_empty above: `data.children` (`data: Option<Data>`) renders
-                // `result.data()?.children()`, whose bare `.isEmpty` is already `Bool?`
-                // (no extra `?` needed) and can't feed `XCTAssertTrue` directly. `?? true`
-                // treats an absent parent as vacuously empty. ~keep
-                let is_empty_expr = if accessor_is_optional {
-                    format!("({field_expr}.isEmpty ?? true)")
-                } else {
-                    format!("{field_expr}.isEmpty")
-                };
+                let is_empty_expr = swift_array_is_empty_expr(&field_expr, accessor_is_optional);
                 let _ = writeln!(out, "        XCTAssertTrue({is_empty_expr}, \"expected empty value\")");
             } else {
                 // Symmetric with not_empty: use .count == 0 on first-class Swift types.

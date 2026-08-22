@@ -481,6 +481,30 @@ pub(super) fn swift_count_target(
     Some(format!("{field_expr}.toString()"))
 }
 
+/// `is_empty` predicate for an array field. `field_is_optional` (`Option<Vec<T>>`) is handled
+/// by the caller before this is reached; this covers a non-optional array reached through an
+/// optional PARENT (`data.children`, `data: Option<Data>`). Swift's earlier `?.` already
+/// propagates optionality through the rest of the chain, so `field_expr` needs no extra `?`
+/// before `.isEmpty` -- only the `?? true` coalesce (an absent parent counts as vacuously
+/// empty), mirroring `swift_count_target`'s scalar `.count ?? 0` fallback. ~keep
+pub(super) fn swift_array_is_empty_expr(field_expr: &str, accessor_is_optional: bool) -> String {
+    if accessor_is_optional {
+        format!("({field_expr}.isEmpty ?? true)")
+    } else {
+        format!("{field_expr}.isEmpty")
+    }
+}
+
+/// `not_empty` counterpart to [`swift_array_is_empty_expr`]. `!Bool?` doesn't typecheck, so
+/// compare against `false` instead of negating when `accessor_is_optional`. ~keep
+pub(super) fn swift_array_not_empty_predicate(field_expr: &str, accessor_is_optional: bool) -> String {
+    if accessor_is_optional {
+        format!("{field_expr}.isEmpty == false")
+    } else {
+        format!("!{field_expr}.isEmpty")
+    }
+}
+
 #[cfg(test)]
 mod nested_wildcard_tests {
     use super::swift_traversal_contains_assert;
