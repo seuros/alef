@@ -144,6 +144,19 @@ assertion_type_skip_variants! {
         "declared error variant ",
         " not yet preserved as a distinct identity by this backend's generator",
     ),
+    /// ~keep A fixture commonly declares its error expectation as two `"error"`-type assertions
+    /// — a bare `{"type": "error"}` plus one carrying a message/type-name `value` — and every
+    /// backend's message check (via `declared_error_value`) renders exactly one such value. Both
+    /// of *those* assertions are fully rendered and neither is this variant. This variant is for
+    /// the shape no observed fixture actually uses: a THIRD `"error"` assertion (or a second one
+    /// also carrying a value), where the additional declared value has no second check to land
+    /// in. `GeneratorGap`, not `AuthoringGap`: a backend that checked every declared value instead
+    /// of only the first would render this fixture correctly, so a future alef release — not a
+    /// fixture edit — is what closes this gap.
+    AdditionalDeclaredErrorValueNotChecked: GeneratorGap => (
+        "assertion type ",
+        " has an additional declared value not checked by this backend",
+    ),
 }
 
 /// The `skipped:` line for a streaming assertion whose *type* this backend's streaming renderer

@@ -12,11 +12,12 @@ pub(super) fn emit_error_assertion(
     call_expr: &str,
     is_streaming_error_call: bool,
 ) {
-    let error_assertion = fixture.assertions.iter().find(|a| a.assertion_type == "error");
-    let has_message = error_assertion
-        .and_then(|a| a.value.as_ref())
-        .and_then(|v| v.as_str())
-        .is_some();
+    // ~keep Routed through the shared `declared_error_value` (see its own doc comment) rather
+    // than a local `.find(|a| a.assertion_type == "error")`: a fixture commonly declares two
+    // `"error"` assertions — a bare one, then one carrying the message/type-name value — and
+    // only the shared helper looks past the first to find the one that actually has a value.
+    let declared_value = crate::e2e::codegen::declared_error_value(fixture);
+    let has_message = declared_value.is_some();
 
     render_unrenderable_error_path_assertions(out, fixture);
 
@@ -45,7 +46,7 @@ pub(super) fn emit_error_assertion(
         } else {
             let _ = writeln!(out, "        {call_expr}");
         }
-        if let Some(msg) = error_assertion.and_then(|a| a.value.as_ref()).and_then(|v| v.as_str()) {
+        if let Some(msg) = declared_value {
             let escaped = escape_python(msg);
             // Match against EITHER the rendered exception message OR the
             // exception class name. Different crates use different
@@ -265,6 +266,44 @@ mod tests {
         assert!(
             crate::e2e::codegen::take_skip_records().is_empty(),
             "a rendered assertion must not be recognised as an assertion-type skip"
+        );
+    }
+
+    /// The exact shape observed live in `crawlberg`'s `validation_ssrf_*` fixtures: a bare
+    /// `{"type": "error"}` assertion FOLLOWED BY `{"type": "error", "value": "..."}`. Before the
+    /// fix, `emit_error_assertion` found only the first (bare) `"error"` assertion, so
+    /// `has_message` was always false for this shape and the generated test dropped the message
+    /// check entirely — `with pytest.raises(Exception):` with no `assert "..." in ...` line, so
+    /// `assert result.is_err()` could not tell an SSRF refusal from an unrelated failure. This
+    /// must render the message check exactly as it would if the fixture had declared the value on
+    /// its only `"error"` assertion.
+    #[test]
+    fn a_bare_check_followed_by_a_valued_one_still_renders_the_message_check() {
+        let fixture = fixture_with_assertions(vec![
+            assertion("error", None, None),
+            assertion(
+                "error",
+                None,
+                Some(serde_json::Value::String("ssrf_policy_violation".to_string())),
+            ),
+        ]);
+        let mut out = String::new();
+        emit_error_assertion(
+            &mut out,
+            &fixture,
+            "    url = \"http://127.0.0.1:9/\"\n",
+            "scrape(engine, url)",
+            false,
+        );
+
+        assert!(out.contains("with pytest.raises(Exception) as exc_info"), "got: {out}");
+        assert!(
+            out.contains(
+                "assert \"ssrf_policy_violation\" in str(exc_info.value) or \"ssrf_policy_violation\" in \
+                 type(exc_info.value).__name__"
+            ),
+            "the declared value on the second `error` assertion must still render a message \
+             check: got: {out}"
         );
     }
 }

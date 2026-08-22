@@ -214,12 +214,20 @@ pub(crate) fn mock_url_env_key(fixture_id: &str) -> String {
 /// in a type name, while API-error fixtures name a type prefix such as `Authentication`
 /// that never appears in the message. The disjunction is what lets one codegen path
 /// serve both, and narrowing it silently breaks whichever convention it drops.
+///
+/// ~keep Fixture authors routinely declare a fixture's error expectation as TWO `"error"`
+/// assertions: a bare `{"type": "error"}` documenting "the call must fail", followed by
+/// `{"type": "error", "value": "..."}` documenting the message/type-name to require. Selecting
+/// only the fixture's *first* `"error"` assertion — as this function did before — finds the bare
+/// one and returns `None`, silently discarding the declared value every caller of this function
+/// exists to check. Scanning every `"error"` assertion for the first one that actually carries a
+/// value is what makes both entries meaningful regardless of which is written first.
 pub(crate) fn declared_error_value(fixture: &crate::e2e::fixture::Fixture) -> Option<&str> {
     fixture
         .assertions
         .iter()
-        .find(|assertion| assertion.assertion_type == "error")
-        .and_then(|assertion| assertion.value.as_ref())
+        .filter(|assertion| assertion.assertion_type == "error")
+        .find_map(|assertion| assertion.value.as_ref())
         .and_then(serde_json::Value::as_str)
 }
 

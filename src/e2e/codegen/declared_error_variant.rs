@@ -220,6 +220,61 @@ mod tests {
         }
     }
 
+    /// A fixture that declares its error expectation the way real fixtures do — a bare
+    /// `{"type": "error"}` followed by a SECOND `{"type": "error", "value": "..."}` — rather than
+    /// [`fixture_with`]'s single-assertion shorthand.
+    fn fixture_with_bare_check_then_value(value: &str) -> Fixture {
+        Fixture {
+            id: "declares_error".to_string(),
+            assertions: vec![
+                Assertion {
+                    assertion_type: "error".to_string(),
+                    ..Assertion::default()
+                },
+                error_assertion(value),
+            ],
+            ..Fixture::default()
+        }
+    }
+
+    /// The cross-backend regression this module exists to close: `classify` sits behind
+    /// `declared_error_value`, which every one of these backends' error-assertion renderer calls
+    /// (`csharp.rs`, `java/test_method.rs`, `go/test_function.rs`, `zig/test_file.rs`,
+    /// `dart/test_case.rs`, `ruby/examples.rs`, `c/test_function.rs`, `php/test_method.rs`,
+    /// `swift/test_method.rs`, `gleam/test_case.rs`, `elixir/test_case.rs`,
+    /// `r/test_case.rs`, `typescript/test_file/test_case.rs`, `brew/category.rs`). Before the fix,
+    /// `declared_error_value` picked the fixture's positionally-first `"error"` assertion, found
+    /// it bare, and returned `None` for every one of these languages — so a fixture using the
+    /// bare-then-valued convention (observed live: `crawlberg`'s `validation_ssrf_*` fixtures)
+    /// silently lost its message check everywhere at once, not in one backend. Pinning the sweep
+    /// here means no single backend can regress this in isolation without the shared function
+    /// regressing with it.
+    #[test]
+    fn every_classify_backend_finds_a_value_declared_after_a_bare_check() {
+        let fixture = fixture_with_bare_check_then_value("ssrf_policy_violation");
+        for lang in [
+            "go",
+            "csharp",
+            "java",
+            "zig",
+            "dart",
+            "ruby",
+            "c",
+            "php",
+            "swift",
+            "gleam",
+            "elixir",
+            "r",
+            "typescript",
+        ] {
+            assert_eq!(
+                classify(lang, &fixture, &[]),
+                DeclaredErrorAssertion::Assert("ssrf_policy_violation"),
+                "lang={lang} must find the value declared on the second `error` assertion"
+            );
+        }
+    }
+
     #[test]
     fn no_declared_value_is_undeclared() {
         let fixture = Fixture {
