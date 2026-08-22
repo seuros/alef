@@ -5,9 +5,9 @@
 //! `reject_mock_harness_scaffolding` (`src/e2e/snippets/mock_harness_guard.rs`) exists to
 //! catch in a published documentation snippet.
 //!
-//! ~keep New module rather than growing `call_patterns.rs`, `test_function.rs`, or
-//! `snippet_regressions.rs` (the latter two already over the repo's 1,000-line cap; see
-//! `file-modularization` in CLAUDE.md).
+//! ~keep New submodule of `call_patterns` rather than growing `call_patterns.rs` itself,
+//! `test_function.rs`, or `snippet_regressions.rs` (the latter two already over the repo's
+//! 1,000-line cap; see `file-modularization` in CLAUDE.md).
 
 use std::collections::{HashMap, HashSet};
 
@@ -64,7 +64,7 @@ fn batch_url_list_fixture_does_not_fall_back_to_raw_mock_scaffolding() {
     let fixture = batch_fixture();
     let mut out = String::new();
 
-    crate::e2e::codegen::c::call_patterns::render_engine_factory_test_function(
+    super::render_engine_factory_test_function(
         &mut out,
         &fixture,
         "sample",
@@ -103,7 +103,7 @@ fn batch_url_list_fixture_without_preserve_flag_still_uses_mock_server() {
     fixture.preserve_input_urls = false;
     let mut out = String::new();
 
-    crate::e2e::codegen::c::call_patterns::render_engine_factory_test_function(
+    super::render_engine_factory_test_function(
         &mut out,
         &fixture,
         "sample",

@@ -638,3 +638,6 @@ pub(super) fn render_bytes_test_function(
     let _ = writeln!(out, "    {prefix}_default_client_free(client);");
     let _ = writeln!(out, "}}");
 }
+
+#[cfg(test)]
+mod batch_url_regression_tests;

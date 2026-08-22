@@ -1025,8 +1025,6 @@ fn c_visitor_fixture_has_typed_call(fixture: &Fixture, e2e_config: &E2eConfig, i
 }
 
 mod assertions;
-#[cfg(test)]
-mod batch_url_regression_tests;
 mod call_patterns;
 #[cfg(test)]
 mod client_factory_optional_arg_tests;
