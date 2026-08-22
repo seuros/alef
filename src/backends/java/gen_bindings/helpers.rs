@@ -1,7 +1,7 @@
 use crate::codegen::naming::to_java_name;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{DefaultValue, PrimitiveType, TypeRef};
-use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase};
+use heck::ToLowerCamelCase;
 use std::collections::HashSet;
 
 /// Placeholder the extractor stores in `FieldDef::default` for a bare
@@ -367,19 +367,11 @@ pub(crate) fn emit_javadoc_with_throws(out: &mut String, doc: &str, indent: &str
 /// Checkstyle enforces 120 chars; we split at 100 to leave headroom for indentation.
 pub(crate) const RECORD_LINE_WRAP_THRESHOLD: usize = 100;
 
+/// Thin wrapper over the canonical `rename_all` casing logic. Kept as a distinct name (rather
+/// than calling `naming::apply_serde_rename_all` at each call site) because
+/// `src/backends/java/gen_bindings/types/enums.rs` still calls it directly.
 pub(crate) fn java_apply_rename_all(name: &str, rename_all: Option<&str>) -> String {
-    match rename_all {
-        Some("snake_case") => crate::codegen::naming::pascal_to_snake(name),
-        Some("camelCase") => name.to_lower_camel_case(),
-        Some("PascalCase") => name.to_pascal_case(),
-        Some("SCREAMING_SNAKE_CASE") => crate::codegen::naming::pascal_to_screaming_snake(name),
-        Some("kebab-case") => name.to_kebab_case(),
-        Some("SCREAMING-KEBAB-CASE") => name.to_kebab_case().to_uppercase(),
-        Some("lowercase") => name.to_lowercase(),
-        Some("UPPERCASE") => name.to_uppercase(),
-        // Serde's default for enums (no #[serde(rename_all)]) is the variant name
-        _ => name.to_string(),
-    }
+    crate::codegen::naming::apply_serde_rename_all(name, rename_all)
 }
 
 pub(crate) fn format_optional_value(ty: &TypeRef, default: &str) -> String {
