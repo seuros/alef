@@ -9,6 +9,7 @@ pub(crate) fn render_build_gradle(
     pkg_version: &str,
     dep_mode: crate::e2e::config::DependencyMode,
     has_http_fixtures: bool,
+    test_documents_path: &str,
 ) -> String {
     let dep_block = match dep_mode {
         crate::e2e::config::DependencyMode::Registry => {
@@ -125,10 +126,10 @@ tasks.test {{
     // Gradle reports a misleading "Gradle Test Executor N ... not in started or
     // detached state". Mirrors the Maven surefire argLine.
     jvmArgs("--enable-preview", "--enable-native-access=ALL-UNNAMED")
-    // Resolve fixture paths (e.g. "docx/fake.docx") against test_documents/ when
-    // the consumer ships such fixtures. Guard on existence: Gradle test workers
-    // fail to fork if workingDir points at a directory that does not exist.
-    val testDocuments = file("${{rootDir}}/../../test_documents")
+    // Resolve fixture paths (e.g. "docx/fake.docx") against the configured
+    // test_documents dir. Guard on existence: Gradle test workers fail to fork if
+    // workingDir points at a directory that does not exist.
+    val testDocuments = file("${{rootDir}}/{test_documents_path}")
     if (testDocuments.isDirectory) {{
         workingDir = testDocuments
     }}
@@ -361,6 +362,7 @@ mod tests {
             "0.15.6-rc.3",
             crate::e2e::config::DependencyMode::Local,
             false,
+            "../../test_documents",
         );
         let annotations_line = out
             .lines()
