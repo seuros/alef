@@ -946,6 +946,36 @@ fn empty_default_collection_field_still_emits_the_empty_collection_literal() {
     );
 }
 
+/// Regression: a non-optional `Vec` field carrying the bare `#[serde(default)]` MARKER (not an
+/// `impl Default` literal — `field.default` is the `"/* serde(default) */"` sentinel and
+/// `typed_default` is unset, exactly what extraction records for
+/// `#[serde(default, skip_serializing_if = "Vec::is_empty")] children: Vec<DataNode>`) must
+/// build its builder default as the empty-collection literal `List.of()`, the same outcome the
+/// plain non-defaulted `TypeRef::Vec` arm already emits below. Before this fix, the marker
+/// branch fell through to a bare `"null"` regardless of field type, so a builder-constructed
+/// instance whose wire JSON omitted the key (because `skip_serializing_if` suppressed it) left
+/// the field genuinely `null` — `NullPointerException` on `.isEmpty()` downstream, tslp's
+/// `DataNode.children()` regression. ~keep
+#[test]
+fn serde_default_marker_collection_field_builds_the_empty_collection_literal() {
+    let mut tags_field = impl_default_field("tags", TypeRef::Vec(Box::new(TypeRef::String)), DefaultValue::Empty);
+    tags_field.typed_default = None;
+    tags_field.default = Some("/* serde(default) */".to_string());
+    let typ = impl_default_record(vec![tags_field]);
+
+    let out = render_impl_default_record(&typ);
+
+    assert!(
+        out.contains("List.of()"),
+        "a serde(default)-marked collection field's builder default must be the empty-collection \
+         literal, not null:\n{out}"
+    );
+    assert!(
+        !out.contains("private List<String> tags = null"),
+        "the builder field must not default to null:\n{out}"
+    );
+}
+
 /// Negative control, scalar case: `Empty` on a primitive must stay unboxed at the Java type-zero,
 /// the same outcome `defaults_equal_to_the_java_type_zero_stay_unboxed` pins for an explicit
 /// zero-valued literal — `Empty` is the variant real fixtures actually carry for this case.

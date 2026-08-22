@@ -203,8 +203,19 @@ pub(super) fn gen_builder_nested_class(
                         _ => "null".to_string(),
                     }
                 } else {
-                    // Non-optional, non-enum field with #[serde(default)].
-                    "null".to_string()
+                    // Non-optional, non-enum field with #[serde(default)]. A `Vec`/`Map` field
+                    // (e.g. `#[serde(default, skip_serializing_if = "Vec::is_empty")] children:
+                    // Vec<T>`) must build the same empty collection the plain non-defaulted arm
+                    // below already emits for `TypeRef::Vec`/`TypeRef::Map` — a bare `"null"`
+                    // here made every such builder default the field to `null`, so
+                    // `skip_serializing_if` omitting the wire key on an empty collection left the
+                    // Java DTO's `children` genuinely null instead of an empty list, throwing
+                    // `NullPointerException` on `.isEmpty()`. ~keep
+                    match &field.ty {
+                        TypeRef::Vec(_) => "List.of()".to_string(),
+                        TypeRef::Map(_, _) => "Map.of()".to_string(),
+                        _ => "null".to_string(),
+                    }
                 }
             } else {
                 match &field.ty {
