@@ -614,20 +614,32 @@ pub(super) fn render_assertion(
             let bare_result_is_option =
                 result_is_option && assertion.field.as_deref().filter(|f| !f.is_empty()).is_none();
             if bare_result_is_option && !kotlin_android_style {
-                let _ = writeln!(
-                    out,
-                    "        assertTrue({field_expr}.isEmpty, \"expected empty value\")"
-                );
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/is_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("{field_expr}.isEmpty") },
+                ));
+            } else if field_is_collection && (bare_result_is_option || field_is_optional) {
+                // Symmetric with `not_empty`'s `field_is_collection && (bare_result_is_option ||
+                // field_is_optional)` branch above: an optional collection reached through
+                // `field_is_optional` (e.g. `Option<Vec<T>>`) must null-check before calling
+                // `.isEmpty()`, or a genuinely-empty-but-present collection throws instead of
+                // asserting true. `?: true` treats a null (absent) collection as empty too,
+                // matching every other backend's "null counts as empty" semantics for this
+                // assertion type. ~keep
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/is_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("({field_expr}?.isEmpty() ?: true)") },
+                ));
             } else if bare_result_is_option || field_is_optional {
-                let _ = writeln!(
-                    out,
-                    "        assertTrue({field_expr} == null, \"expected empty value\")"
-                );
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/is_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("{field_expr} == null") },
+                ));
             } else {
-                let _ = writeln!(
-                    out,
-                    "        assertTrue({string_field_expr}.isEmpty(), \"expected empty value\")"
-                );
+                out.push_str(&crate::e2e::template_env::render(
+                    "kotlin/is_empty_assertion.kt.jinja",
+                    minijinja::context! { predicate => format!("{string_field_expr}.isEmpty()") },
+                ));
             }
         }
         "contains_any" => {

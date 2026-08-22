@@ -62,12 +62,16 @@ fn table_ir() -> (Vec<TypeDef>, Vec<FunctionDef>) {
 }
 
 fn fixture_calling(call: &str) -> Fixture {
+    fixture_calling_with_assertion(call, "not_empty")
+}
+
+fn fixture_calling_with_assertion(call: &str, assertion_type: &str) -> Fixture {
     Fixture {
         id: "children_smoke".to_string(),
         description: "Children field smoke".to_string(),
         call: Some(call.to_string()),
         assertions: vec![Assertion {
-            assertion_type: "not_empty".to_string(),
+            assertion_type: assertion_type.to_string(),
             field: Some("children".to_string()),
             ..Assertion::default()
         }],
@@ -150,6 +154,50 @@ fn a_same_named_optional_string_field_on_an_unrelated_type_is_not_misclassified_
     );
     assert!(
         !out.contains("isNotEmpty() == true"),
+        "a plain optional string field must not take the collection branch, got:\n{out}"
+    );
+}
+
+/// Regression: `is_empty` on an undeclared `Option<List<DataNode>> Children` field must render
+/// the null-tolerant collection check `?.isEmpty() ?: true`, never the bare `== null` check that
+/// fails for a present-but-genuinely-empty collection (e.g. an FFI layer that returns `[]`
+/// instead of omitting the field). This is `not_empty`'s existing
+/// `field_is_collection && (bare_result_is_option || field_is_optional)` guard, mirrored for
+/// `is_empty` — before this fix `is_empty` had no such branch at all. ~keep
+#[test]
+fn is_empty_on_an_undeclared_optional_collection_field_is_classified_via_the_ir() {
+    let (type_defs, functions) = table_ir();
+    let e2e_config = e2e_config_for("process");
+    let fixture = fixture_calling_with_assertion("process", "is_empty");
+    let out = render(&fixture, &e2e_config, &type_defs, &functions);
+    assert!(
+        out.contains("isEmpty() ?: true"),
+        "an undeclared optional collection field's is_empty must render a null-tolerant \
+         collection check, got:\n{out}"
+    );
+    assert!(
+        !out.contains("children() == null"),
+        "must not degrade to a bare null-check that fails for a present-but-empty collection, \
+         got:\n{out}"
+    );
+}
+
+/// The `is_empty` counterpart of
+/// `a_same_named_optional_string_field_on_an_unrelated_type_is_not_misclassified_as_a_collection`:
+/// a plain optional `String` field keeps the bare null-check, since `.isEmpty()` on a `String?`
+/// receiver already handles the empty-string case directly and never needed the collection arm.
+#[test]
+fn is_empty_on_a_same_named_optional_string_field_is_not_misclassified_as_a_collection() {
+    let (type_defs, functions) = table_ir();
+    let e2e_config = e2e_config_for("other");
+    let fixture = fixture_calling_with_assertion("other", "is_empty");
+    let out = render(&fixture, &e2e_config, &type_defs, &functions);
+    assert!(
+        out.contains("children() == null"),
+        "a plain optional string field's is_empty must keep the bare null-check, got:\n{out}"
+    );
+    assert!(
+        !out.contains("isEmpty() ?: true"),
         "a plain optional string field must not take the collection branch, got:\n{out}"
     );
 }

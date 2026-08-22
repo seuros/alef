@@ -6,6 +6,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/kotlin/not_empty_assertion.kt.jinja"),
     ),
     (
+        "kotlin/is_empty_assertion.kt.jinja",
+        include_str!("templates/kotlin/is_empty_assertion.kt.jinja"),
+    ),
+    (
         "swift/not_empty_assertion.swift.jinja",
         include_str!("templates/swift/not_empty_assertion.swift.jinja"),
     ),
