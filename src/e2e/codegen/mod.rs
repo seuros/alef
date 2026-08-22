@@ -52,6 +52,8 @@ pub mod recipe;
 pub mod ruby;
 pub mod rust;
 pub mod streaming_assertions;
+#[cfg(test)]
+mod streaming_result_binding_tests;
 pub mod swift;
 mod swift_visitors;
 pub mod typescript;

@@ -609,7 +609,11 @@ pub fn render_test_function(
     // Use FieldResolver to handle optional fields, including nested/aliased paths.
     // Skipped when the call returns Vec<T>: per-element iteration is emitted by
     // `render_assertion` itself, so the call-site has no single result struct
-    // to unwrap fields off of.
+    // to unwrap fields off of. Also skipped for streaming fixtures: `result_var` (e.g.
+    // "result") is never bound in the streaming arm above -- only `stream`/`chunks` are --
+    // so unconditionally unwrapping `result.<field>` here emitted a reference to an
+    // undeclared variable (E0425) whenever a streaming fixture asserted a string field.
+    // Mirrors the `!is_streaming` guard already on the array-binding loop just above. ~keep
     let string_assertion_types = [
         "equals",
         "contains",
@@ -623,7 +627,7 @@ pub fn render_test_function(
         "matches_regex",
     ];
     let mut unwrapped_fields: Vec<(String, String)> = Vec::new(); // (fixture_field, local_var)
-    if !result_is_vec {
+    if !result_is_vec && !is_streaming {
         for assertion in &fixture.assertions {
             if let Some(f) = &assertion.field
                 && !f.is_empty()

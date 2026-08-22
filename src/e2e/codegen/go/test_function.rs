@@ -570,8 +570,17 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         result_var.to_string()
     };
 
+    // Skipped entirely for streaming fixtures: `effective_result_var` (e.g. "result"/"value")
+    // is never bound in the streaming arm above -- only `stream`/`chunks` are -- so
+    // unconditionally building an `<local> := result.<field>` binding here referenced an
+    // undeclared variable (`undefined: result`) whenever a streaming fixture asserted a
+    // string-typed optional field. Streaming-virtual-field assertions (`finish_reason`,
+    // `tool_calls`, ...) are rendered separately by `render_assertion`'s streaming arm. ~keep
     let mut optional_locals: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for assertion in &fixture.assertions {
+        if is_streaming {
+            break;
+        }
         if let Some(f) = &assertion.field
             && !f.is_empty()
         {
