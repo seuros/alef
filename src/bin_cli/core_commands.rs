@@ -41,7 +41,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             }
             Ok(None)
         }
-        Commands::Generate { lang, clean, skip_frb } => {
+        Commands::Generate {
+            lang,
+            clean,
+            skip_frb,
+            strict,
+        } => {
             if skip_frb {
                 let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
                 let updated = if existing.is_empty() {
@@ -353,7 +358,17 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     tracing::info!("Formatting generated files...");
                     let mut files_to_format = files.clone();
                     files_to_format.extend(stub_files.clone());
-                    pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, Some(&changed_languages));
+                    // `strict`, not `false`: this pass formats `packages/<lang>` -- the SHIPPED
+                    // bindings -- and used to swallow every missing-formatter skip in a `warn!`
+                    // the caller never saw, so `--strict` guarded only the e2e formatter while
+                    // the more important surface went unguarded. ~keep
+                    pipeline::format_generated_reporting(
+                        &files_to_format,
+                        resolved_cfg,
+                        &base_dir,
+                        Some(&changed_languages),
+                        strict,
+                    )?;
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
@@ -507,7 +522,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let count = pipeline::write_files(&files, &base_dir)?;
                 let _ = cache::write_generation_hashes(&cache_key, &hashes);
 
-                pipeline::format_generated(&files, resolved_cfg, &base_dir, None);
+                // `alef stubs` exposes no `--strict` flag, so it always takes the lenient
+                // default -- but it goes through the same reporting entry point as every other
+                // surface, so a skipped formatter is named in the run output instead of being
+                // dropped into a warning nothing collects. ~keep
+                pipeline::format_generated_reporting(&files, resolved_cfg, &base_dir, None, false)?;
 
                 let stub_paths: std::collections::HashSet<PathBuf> = files
                     .iter()
@@ -941,5 +960,7 @@ pub(super) fn ensure_required_records_tracked(untracked: &[&'static str], report
     )
 }
 
+#[cfg(test)]
+mod strict_formatting_tests;
 #[cfg(test)]
 mod tests;

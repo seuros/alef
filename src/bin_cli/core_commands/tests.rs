@@ -160,6 +160,9 @@ fn diff_does_not_regress_a_language_manifest_generate_already_reconciled() {
             lang: None,
             clean: false,
             skip_frb: false,
+            // Lenient, deliberately: this fixture run must not depend on which formatters the
+            // machine running the suite has installed. ~keep
+            strict: false,
         },
         &context,
     )

@@ -526,7 +526,7 @@ fn all_docs_stage_failure_does_not_return_before_formatting_and_hash_stamping() 
     );
 
     let format_generated = source
-        .find("pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, None)")
+        .find("pipeline::format_generated_reporting(&files_to_format, resolved_cfg, &base_dir, None, strict)?")
         .expect("the converging whole-tree formatting pass must still run after the docs stage");
     let finalize_hashes_sweeping = source
         .find("pipeline::finalize_hashes_sweeping(")
@@ -550,15 +550,18 @@ fn all_docs_stage_failure_does_not_return_before_formatting_and_hash_stamping() 
     // Load-bearing ordering (see the `~keep` comments at each call site in all_commands.rs, each
     // written after a real bug): the orphan sweep must run before hash finalisation because
     // `finalize_hashes_sweeping` clones rather than mutates `current_gen_paths`, and `None` must
-    // stay the third argument to `format_generated` to keep the converging whole-tree pass instead
-    // of the single-pass branch. This restructure must not have disturbed either. ~keep
+    // stay the `only_languages` argument to `format_generated_reporting` to keep the converging
+    // whole-tree pass instead of the single-pass branch. This restructure must not have disturbed
+    // either. ~keep
     assert!(
         sweep_manifest_orphans < finalize_hashes_sweeping,
         "sweep_manifest_orphans must still run before finalize_hashes_sweeping"
     );
-    // The exact-literal search for `format_generated` above already pins its third argument to
-    // `None` (the converging whole-tree pass) -- a change to `Some(&changed_languages)` would have
-    // made that `.expect(...)` panic rather than let this test silently check the wrong call.
+    // The exact-literal search for `format_generated_reporting` above already pins its
+    // `only_languages` argument to `None` (the converging whole-tree pass) -- a change to
+    // `Some(&changed_languages)` would have made that `.expect(...)` panic rather than let this
+    // test silently check the wrong call. It also pins `strict`, so `alef all --strict` cannot
+    // quietly stop escalating a missing package formatter the way it used to.
 }
 
 /// The deferred docs-stage error must still fail the overall run, and only after every

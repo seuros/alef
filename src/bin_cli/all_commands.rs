@@ -929,7 +929,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     // settle, and stamp hashes over it. The language filter is also wrong for the
                     // workspace-wide `cargo sort -n -w` folded into that loop, which must cover crates
                     // this run did not generate. ~keep
-                    pipeline::format_generated(&files_to_format, resolved_cfg, &base_dir, None);
+                    // `strict` must reach this pass too: until it did, `--strict` guarded the e2e
+                    // tree while `packages/<lang>` -- the shipped bindings -- went unguarded. ~keep
+                    let skipped =
+                        pipeline::format_generated_reporting(&files_to_format, resolved_cfg, &base_dir, None, strict)?;
+                    deferred_formatting.extend(skipped);
                 }
 
                 tracing::info!("Finalising hashes...");

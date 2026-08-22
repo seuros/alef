@@ -1,8 +1,70 @@
 use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::e2e::format::DeferredFormatting;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use tracing::{debug, warn};
+
+/// Reason recorded when a formatting step could not run because its executable is not
+/// installed on this machine.
+///
+/// Written out verbatim rather than shared, because `e2e::format`'s constant of the same
+/// name is private to that module and [`DeferredFormatting::is_missing_toolchain`]
+/// classifies by exact string equality. An approximate copy would file every skipped
+/// package formatter under the reporter's "waiting for a publish" heading -- the precise
+/// false-heading bug that reporter's own split exists to prevent -- so
+/// `a_recorded_skip_is_classified_as_a_missing_toolchain` fails the moment the two
+/// spellings drift apart. ~keep
+const MISSING_TOOLCHAIN_REASON: &str = "the formatter's executable is not installed on this machine; generation \
+                                        continued so the run still reaches finalisation. Install the toolchain, or \
+                                        re-run with --strict to make this fatal";
+
+/// Scope recorded for a formatter that shapes the generated package tree as a whole
+/// (`poly fmt`, `cargo fmt --all`, the workspace-wide `cargo sort`) rather than one
+/// language's output. Per-language residuals record their own language instead.
+const PACKAGE_TREE_SCOPE: &str = "packages";
+
+/// One pass of [`format_generated`]: how it resolves executable presence, and every step
+/// it had to skip because that executable was absent.
+///
+/// Skips used to be a fire-and-forget `warn!` at each site, which made them invisible to
+/// the caller and therefore impossible for `--strict` to escalate -- the shipped bindings
+/// under `packages/<lang>` were the one formatting surface `--strict` did not actually
+/// guard. Recording them as the same [`DeferredFormatting`] the e2e stage already emits
+/// gives both surfaces one record type and one policy.
+///
+/// The probe is injectable so that policy is tested against a controlled toolchain rather
+/// than whatever the host running the suite happens to have installed. ~keep
+struct FormatPass<'probe> {
+    is_available: &'probe dyn Fn(&str) -> bool,
+    skipped: Vec<DeferredFormatting>,
+}
+
+impl<'probe> FormatPass<'probe> {
+    fn new(is_available: &'probe dyn Fn(&str) -> bool) -> Self {
+        Self {
+            is_available,
+            skipped: Vec::new(),
+        }
+    }
+
+    fn available(&self, tool: &str) -> bool {
+        (self.is_available)(tool)
+    }
+
+    /// Record that `step` did not run because `tool` is not installed. The tool name goes
+    /// into the step text because the reason field is a fixed literal -- it is what makes
+    /// the record classifiable -- and an operator still has to be told which binary to
+    /// install when a step names more than one (`cargo fmt --all` needs both `cargo` and
+    /// `rustfmt`). ~keep
+    fn record_missing(&mut self, scope: &str, tool: &str, step: &str) {
+        self.skipped.push(DeferredFormatting {
+            language: scope.to_owned(),
+            step: format!("{step} (missing: {tool})"),
+            reason: MISSING_TOOLCHAIN_REASON.to_owned(),
+        });
+    }
+}
 
 /// One residual formatter invocation poly cannot perform (project-wide tools that
 /// don't fit poly's per-file model): `cargo sort`, `mix format`, `dotnet format`.
@@ -108,12 +170,87 @@ pub fn warn_missing_formatters(languages: &[Language]) {
 ///
 /// Best-effort: a missing `poly` binary, a poly error, or a missing residual tool
 /// is logged as a warning and never aborts the generate command.
+///
+/// Callers that expose a `--strict` flag must use [`format_generated_reporting`] instead:
+/// this entry point discards the skip records, which is exactly how the shipped bindings
+/// ended up being the one formatting surface `--strict` did not guard.
 pub fn format_generated(
     files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
     config: &ResolvedCrateConfig,
     base_dir: &Path,
     only_languages: Option<&HashSet<Language>>,
 ) {
+    let skipped = run_format_pass(files, config, base_dir, only_languages, &is_tool_available);
+    crate::e2e::format::warn_deferred(&skipped);
+}
+
+/// [`format_generated`], returning every step that could not run because its executable is
+/// absent, and failing the run when `strict` asks for it.
+///
+/// This is the strict-aware entry point every command with a `--strict` flag calls, so
+/// `alef generate --strict` and `alef all --strict` give the same answer to the same
+/// question. `--strict` is deliberately not the default: `poly`, `rustfmt`, `cargo-sort`
+/// and `mix` are host toolchains a contributor may legitimately lack, and making a missing
+/// one fatal by default breaks every fresh clone. The sanctioned shape is warn + record,
+/// with `--strict` escalating -- identical to the e2e formatter's own contract, down to
+/// the record type. ~keep
+pub fn format_generated_reporting(
+    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
+    config: &ResolvedCrateConfig,
+    base_dir: &Path,
+    only_languages: Option<&HashSet<Language>>,
+    strict: bool,
+) -> anyhow::Result<Vec<DeferredFormatting>> {
+    format_generated_reporting_with(files, config, base_dir, only_languages, strict, &is_tool_available)
+}
+
+/// Testable seam for [`format_generated_reporting`]: resolves executable presence through
+/// `is_available` instead of PATH, so the `--strict` escalation is provable without
+/// depending on which formatters the host running the suite happens to have. ~keep
+pub(crate) fn format_generated_reporting_with(
+    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
+    config: &ResolvedCrateConfig,
+    base_dir: &Path,
+    only_languages: Option<&HashSet<Language>>,
+    strict: bool,
+    is_available: &dyn Fn(&str) -> bool,
+) -> anyhow::Result<Vec<DeferredFormatting>> {
+    let skipped = run_format_pass(files, config, base_dir, only_languages, is_available);
+    crate::e2e::format::warn_deferred(&skipped);
+    escalate_missing_toolchains(skipped, strict)
+}
+
+/// The single `--strict` policy shared by both formatting surfaces: a formatter that is
+/// merely absent is survived by default and fatal under `strict`. A formatter that RAN and
+/// rejected the code is not represented here at all -- that already fails regardless.
+fn escalate_missing_toolchains(
+    skipped: Vec<DeferredFormatting>,
+    strict: bool,
+) -> anyhow::Result<Vec<DeferredFormatting>> {
+    let missing: Vec<String> = skipped
+        .iter()
+        .filter(|entry| entry.is_missing_toolchain())
+        .map(|entry| format!("[{}] {}", entry.language, entry.step))
+        .collect();
+    if !strict || missing.is_empty() {
+        return Ok(skipped);
+    }
+    anyhow::bail!(
+        "--strict: {} formatting step(s) could not run because their executable is not installed, so the \
+         generated packages are NOT formatted: {}",
+        missing.len(),
+        missing.join("; ")
+    )
+}
+
+fn run_format_pass(
+    files: &[(Language, Vec<crate::core::backend::GeneratedFile>)],
+    config: &ResolvedCrateConfig,
+    base_dir: &Path,
+    only_languages: Option<&HashSet<Language>>,
+    is_available: &dyn Fn(&str) -> bool,
+) -> Vec<DeferredFormatting> {
+    let mut pass = FormatPass::new(is_available);
     // `None` (full regen, the `alef all` path) always runs the whole-tree convergence pass
     // below and never consults `poly_langs` at all: it formats every generated package under
     // `base_dir` regardless of which languages happen to be represented in `files`. Gating it
@@ -126,7 +263,7 @@ pub fn format_generated(
     // (partial regen) branch below genuinely needs a non-empty language list: it is what tells
     // `poly_paths` which package directories to format at all. ~keep
     match only_languages {
-        None => converge_full_regen_formatting(base_dir),
+        None => converge_full_regen(base_dir, &mut pass),
         Some(only) => {
             let mut seen = HashSet::new();
             let poly_langs: Vec<Language> = files
@@ -135,18 +272,19 @@ pub fn format_generated(
                 .filter(|lang| seen.insert(*lang) && only.contains(lang))
                 .collect();
             if poly_langs.is_empty() {
-                return;
+                return pass.skipped;
             }
             let paths = poly_paths(config, base_dir, only_languages, &poly_langs);
-            poly_format(&paths, base_dir);
+            poly_format_pass(&paths, base_dir, &mut pass);
             for &lang in &poly_langs {
                 let lang_str = lang.to_string().to_lowercase();
                 for step in language_residuals(config, lang, base_dir) {
-                    run_residual(&step, &lang_str);
+                    run_residual(&step, &lang_str, &mut pass);
                 }
             }
         }
     }
+    pass.skipped
 }
 
 /// Maximum `poly fmt --fix` passes attempted while converging a full regen.
@@ -185,21 +323,29 @@ const MAX_POLY_FMT_PASSES: u32 = 3;
 /// Best-effort throughout: a missing `poly`, `cargo`, `rustfmt`, `cargo-sort`, or
 /// `mix` is a warning, never a failure, and generation is never aborted.
 pub(crate) fn converge_full_regen_formatting(base_dir: &Path) {
-    let poly_present = is_tool_available("poly");
+    let mut pass = FormatPass::new(&is_tool_available);
+    converge_full_regen(base_dir, &mut pass);
+    crate::e2e::format::warn_deferred(&pass.skipped);
+}
+
+/// [`converge_full_regen_formatting`]'s body, recording absent executables into `pass`
+/// instead of dropping them into a `warn!` no caller can see.
+fn converge_full_regen(base_dir: &Path, pass: &mut FormatPass<'_>) {
+    let poly_present = pass.available("poly");
     if !poly_present {
-        warn!("poly not found on PATH (skipping post-generation formatting)");
+        pass.record_missing(PACKAGE_TREE_SCOPE, "poly", POLY_FMT_STEP);
     }
     let root = vec![base_dir.to_path_buf()];
 
-    for _pass in 1..=MAX_POLY_FMT_PASSES {
+    for _iteration in 1..=MAX_POLY_FMT_PASSES {
         if poly_present {
-            poly_format(&root, base_dir);
+            poly_format_pass(&root, base_dir, pass);
         }
-        run_cargo_fmt(base_dir);
-        run_workspace_cargo_sort(base_dir);
+        run_cargo_fmt(base_dir, pass);
+        run_workspace_cargo_sort(base_dir, pass);
 
         if !poly_present || poly_fmt_is_clean(base_dir) {
-            run_elixir_mix_format(base_dir);
+            run_elixir_mix_format(base_dir, pass);
             return;
         }
     }
@@ -207,7 +353,7 @@ pub(crate) fn converge_full_regen_formatting(base_dir: &Path) {
         "poly fmt did not converge after {MAX_POLY_FMT_PASSES} passes (non-fatal); generated \
          output may have residual formatting drift"
     );
-    run_elixir_mix_format(base_dir);
+    run_elixir_mix_format(base_dir, pass);
 }
 
 /// Check `poly fmt --check <base_dir>` for a clean (already-formatted) tree. Used
@@ -233,7 +379,7 @@ fn poly_fmt_is_clean(base_dir: &Path) -> bool {
 /// per-file rustfmt invocation did not already produce. Best-effort: a missing
 /// root `Cargo.toml` is a debug/skip (not every generated tree is a cargo
 /// workspace); a missing tool is a warning/skip; a non-zero exit is a warning.
-fn run_cargo_fmt(base_dir: &Path) {
+fn run_cargo_fmt(base_dir: &Path, pass: &mut FormatPass<'_>) {
     if !base_dir.join("Cargo.toml").exists() {
         debug!(
             "no root Cargo.toml at {}, skipping workspace cargo fmt",
@@ -241,9 +387,11 @@ fn run_cargo_fmt(base_dir: &Path) {
         );
         return;
     }
-    if !is_tool_available("cargo") || !is_tool_available("rustfmt") {
-        warn!("cargo/rustfmt not found on PATH (skipping workspace cargo fmt)");
-        return;
+    for tool in ["cargo", "rustfmt"] {
+        if !pass.available(tool) {
+            pass.record_missing(PACKAGE_TREE_SCOPE, tool, CARGO_FMT_STEP);
+            return;
+        }
     }
     match run_formatter("cargo", &["fmt", "--all"], base_dir) {
         Ok(()) => debug!("cargo fmt --all ok"),
@@ -260,7 +408,7 @@ fn run_cargo_fmt(base_dir: &Path) {
 /// it does not change what poly's bundled cargo-sort check accepts as sorted.
 /// Best-effort: a missing root `Cargo.toml` is a debug/skip; a missing
 /// `cargo-sort` binary is a warning/skip; a non-zero exit is a warning.
-fn run_workspace_cargo_sort(base_dir: &Path) {
+fn run_workspace_cargo_sort(base_dir: &Path, pass: &mut FormatPass<'_>) {
     if !base_dir.join("Cargo.toml").exists() {
         debug!(
             "no root Cargo.toml at {}, skipping workspace cargo sort",
@@ -268,8 +416,8 @@ fn run_workspace_cargo_sort(base_dir: &Path) {
         );
         return;
     }
-    if !is_tool_available("cargo-sort") {
-        warn!("cargo-sort not found on PATH (skipping workspace cargo sort)");
+    if !pass.available("cargo-sort") {
+        pass.record_missing(PACKAGE_TREE_SCOPE, "cargo-sort", CARGO_SORT_STEP);
         return;
     }
     match run_formatter("cargo", &["sort", "-n", "-w"], base_dir) {
@@ -361,10 +509,33 @@ fn push_poly_elixir_excludes(args: &mut Vec<String>) {
 /// reformats (`run_tests.php`, `download_ffi.sh`, `mvnw`, `gradlew`, …) — which
 /// poly's own `file-safety` lint then rejects on the next commit.
 pub(crate) fn poly_format(paths: &[PathBuf], config_start: &Path) {
+    let mut pass = FormatPass::new(&is_tool_available);
+    poly_format_pass(paths, config_start, &mut pass);
+    crate::e2e::format::warn_deferred(&pass.skipped);
+}
+
+/// [`poly_format`] recording an absent `poly` into `pass`.
+///
+/// Checked here rather than left to [`poly_format_strict`]'s own bail because that bail
+/// cannot tell an absent executable from poly running and rejecting the code, and only the
+/// first of those is something `--strict` should let an operator escalate separately. ~keep
+fn poly_format_pass(paths: &[PathBuf], config_start: &Path, pass: &mut FormatPass<'_>) {
+    if paths.is_empty() {
+        return;
+    }
+    if !pass.available("poly") {
+        pass.record_missing(PACKAGE_TREE_SCOPE, "poly", POLY_FMT_STEP);
+        return;
+    }
     if let Err(error) = poly_format_strict(paths, config_start) {
         warn!("poly fmt failed (non-fatal): {error}");
     }
 }
+
+/// Step names recorded when a whole-tree formatter is skipped for want of its executable.
+const POLY_FMT_STEP: &str = "poly fmt --fix";
+const CARGO_FMT_STEP: &str = "cargo fmt --all";
+const CARGO_SORT_STEP: &str = "cargo sort -n -w";
 
 pub(crate) fn poly_format_strict(paths: &[PathBuf], config_start: &Path) -> anyhow::Result<()> {
     if paths.is_empty() {
@@ -621,7 +792,7 @@ fn mix_format(work_dir: PathBuf) -> ResidualStep {
 /// a missing `packages/elixir/mix.exs` is a debug/skip (not every crate targets
 /// Elixir), not a warning. Both steps are best-effort via [`run_residual`] and
 /// never abort generation.
-fn run_elixir_mix_format(base_dir: &Path) {
+fn run_elixir_mix_format(base_dir: &Path, pass: &mut FormatPass<'_>) {
     let elixir_dir = base_dir.join("packages/elixir");
     if !elixir_dir.join("mix.exs").exists() {
         debug!(
@@ -630,13 +801,15 @@ fn run_elixir_mix_format(base_dir: &Path) {
         );
         return;
     }
-    run_residual(&mix_deps_get(elixir_dir.clone()), "elixir");
-    run_residual(&mix_format(elixir_dir), "elixir");
+    run_residual(&mix_deps_get(elixir_dir.clone()), "elixir", pass);
+    run_residual(&mix_format(elixir_dir), "elixir", pass);
 }
 
-/// Run a single residual step, best-effort: a missing work dir or tool is a
-/// warning/skip, a non-zero exit is a warning. Never aborts generation.
-fn run_residual(step: &ResidualStep, lang_str: &str) {
+/// Run a single residual step, best-effort: a missing work dir is a debug/skip, a missing
+/// tool is recorded into `pass` (see [`FormatPass`]) and a non-zero exit is a warning.
+/// Never aborts generation on its own -- `--strict` escalation happens once, in
+/// [`escalate_missing_toolchains`], over everything the pass recorded.
+fn run_residual(step: &ResidualStep, lang_str: &str, pass: &mut FormatPass<'_>) {
     if !step.work_dir.exists() {
         debug!(
             "  [{lang_str}] residual work dir does not exist: {}, skipping",
@@ -644,8 +817,12 @@ fn run_residual(step: &ResidualStep, lang_str: &str) {
         );
         return;
     }
-    if !is_tool_available(&step.command) {
-        warn!("[{lang_str}] residual formatter not found: {} (skipping)", step.command);
+    if !pass.available(&step.command) {
+        let command_line = std::iter::once(step.command.as_str())
+            .chain(step.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ");
+        pass.record_missing(lang_str, &step.command, &command_line);
         return;
     }
     let args: Vec<&str> = step.args.iter().map(String::as_str).collect();
@@ -713,5 +890,7 @@ fn resolve_crate_dir(output_path: &Path) -> PathBuf {
         .unwrap_or_else(|| output_path.to_path_buf())
 }
 
+#[cfg(test)]
+mod strict_tests;
 #[cfg(test)]
 mod tests;
