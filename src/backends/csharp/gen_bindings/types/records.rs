@@ -1,7 +1,7 @@
 use super::super::{csharp_file_header, emit_named_param_setup, emit_named_param_teardown_indented, is_tuple_field};
 use super::bridge_fields::bridge_config_for_field;
 use crate::backends::csharp::type_map::{csharp_type, csharp_type_for_dto_field};
-use crate::codegen::naming::{csharp_type_name, to_csharp_name};
+use crate::codegen::naming::{csharp_type_name, field_uses_duration_map_wire, to_csharp_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::{DefaultValue, PrimitiveType, TypeDef, TypeRef};
@@ -155,7 +155,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
             } else {
                 format!("{mapped}?")
             };
-            if matches!(&field.ty, TypeRef::Duration) {
+            if field_uses_duration_map_wire(field) {
                 out.push_str("    [JsonConverter(typeof(NullableDurationMillisJsonConverter))]\n");
             }
             out.push_str(&render(
@@ -181,7 +181,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
             } else {
                 csharp_type_for_dto_field(&field.ty).to_string()
             };
-            if matches!(&field.ty, TypeRef::Duration) {
+            if field_uses_duration_map_wire(field) {
                 out.push_str("    [JsonConverter(typeof(DurationMillisJsonConverter))]\n");
             }
             out.push_str(&render(
@@ -204,7 +204,9 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
                 } else {
                     format!("{}?", base_type)
                 };
-                out.push_str("    [JsonConverter(typeof(NullableDurationMillisJsonConverter))]\n");
+                if field_uses_duration_map_wire(field) {
+                    out.push_str("    [JsonConverter(typeof(NullableDurationMillisJsonConverter))]\n");
+                }
                 out.push_str(&render(
                     "property_with_default.jinja",
                     minijinja::context! { field_type => nullable_type, cs_name, default_val => "null" },
@@ -318,7 +320,7 @@ pub(in crate::backends::csharp::gen_bindings) fn gen_record_type(
             };
 
             if should_emit_required {
-                if matches!(&field.ty, TypeRef::Duration) {
+                if field_uses_duration_map_wire(field) {
                     out.push_str("    [JsonConverter(typeof(DurationMillisJsonConverter))]\n");
                 }
                 out.push_str(&render(

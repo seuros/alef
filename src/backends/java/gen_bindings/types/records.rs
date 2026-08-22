@@ -1,4 +1,5 @@
 use crate::backends::java::type_map::{java_boxed_type, java_type};
+use crate::codegen::naming::field_uses_duration_map_wire;
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{JavaBuilderMode, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
@@ -91,8 +92,11 @@ pub(crate) fn gen_record_type(
         // `std::time::Duration`'s serde derive produces `{"secs":<u64>,"nanos":<u32>}`, not the
         // bare millisecond integer this field's Java type (`Long`) would otherwise serialize to
         // — the FFI layer deserializes struct JSON straight into the real core type, so a plain
-        // integer fails with `invalid type: integer ..., expected struct Duration`. ~keep
-        let needs_duration_serde = matches!(&resolved_ty, TypeRef::Duration);
+        // integer fails with `invalid type: integer ..., expected struct Duration`. A field
+        // carrying `#[serde(with = "...")]` (the `duration_ms` convention) already writes that
+        // bare integer, so it must not get these converters — see
+        // `crate::codegen::naming::field_uses_duration_map_wire`. ~keep
+        let needs_duration_serde = field_uses_duration_map_wire(f);
 
         // 1. The field has an explicit `#[serde(rename = "...")]` attribute.
         let json_property_name = f.serde_rename.clone().unwrap_or_else(|| f.name.clone());

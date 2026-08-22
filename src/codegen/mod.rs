@@ -19,3 +19,6 @@ pub mod shared;
 pub mod type_mapper;
 pub(crate) mod visitor_context;
 pub(crate) mod visitor_result;
+
+#[cfg(test)]
+mod duration_wire_cross_backend_tests;

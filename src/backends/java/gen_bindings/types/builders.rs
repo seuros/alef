@@ -1,5 +1,5 @@
 use crate::backends::java::type_map::{java_boxed_type, java_type};
-use crate::codegen::naming::to_class_name;
+use crate::codegen::naming::{field_uses_duration_map_wire, to_class_name};
 use crate::codegen::shared::binding_fields;
 use crate::core::config::{JavaBuilderMode, TraitBridgeConfig};
 use crate::core::ir::{DefaultValue, PrimitiveType, TypeDef, TypeRef};
@@ -380,8 +380,10 @@ pub(super) fn gen_builder_nested_class(
         // setter instead of the record's canonical constructor, so the record component's own
         // Duration converter annotation (see records.rs) is invisible to Jackson here — the
         // setter needs its own copy or a Duration field silently reverts to the bare-integer
-        // wire shape the core cannot parse. ~keep
-        if matches!(resolved_field_ty, TypeRef::Duration) {
+        // wire shape the core cannot parse. A field carrying `#[serde(with = "...")]` already
+        // writes that bare integer, so it must not get this converter either — see
+        // `crate::codegen::naming::field_uses_duration_map_wire`. ~keep
+        if field_uses_duration_map_wire(field) {
             body.push_str("        @JsonDeserialize(using = DurationMillisDeserializer.class)\n");
         }
         body.push_str("        public Builder with");

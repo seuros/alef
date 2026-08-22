@@ -1,6 +1,7 @@
+use crate::codegen::naming::field_uses_duration_map_wire;
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::{BridgeBinding, JavaBuilderMode, Language, ResolvedCrateConfig};
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::ApiSurface;
 use ahash::AHashSet;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -31,21 +32,22 @@ use types::{
 /// of re-deriving the tagged/untagged-union split by hand. ~keep
 pub(crate) use types::emits_get_value;
 
-/// True if any non-opaque type in `api` has a `Duration`-typed struct field.
+/// True if any non-opaque type in `api` has a `Duration`-typed struct field whose wire shape is
+/// serde's derive object rather than a hand-written codec's scalar.
 ///
 /// Decides whether the generated package needs `DurationMillisSerializer.java` /
 /// `DurationMillisDeserializer.java` — the Jackson converters that round-trip the
 /// ergonomic millisecond `Long` used for Java `Duration` fields against the
 /// `{"secs":<u64>,"nanos":<u32>}` shape `std::time::Duration`'s serde derive actually
-/// produces (see `duration_millis_serializer.jinja`). Mirrors the Go backend's
+/// produces (see `duration_millis_serializer.jinja`). A field carrying `#[serde(with = "...")]`
+/// (the `duration_ms` convention) already writes a bare integer, so it must not count here — see
+/// `crate::codegen::naming::field_uses_duration_map_wire`. Mirrors the Go backend's
 /// `api_has_duration_field` in `binding_file.rs`, gating the same class of dead code. ~keep
 fn api_has_duration_field(api: &ApiSurface) -> bool {
     api.types
         .iter()
         .filter(|typ| !typ.is_opaque && !typ.is_trait)
-        .any(|typ| {
-            crate::codegen::shared::binding_fields(&typ.fields).any(|field| matches!(field.ty, TypeRef::Duration))
-        })
+        .any(|typ| crate::codegen::shared::binding_fields(&typ.fields).any(field_uses_duration_map_wire))
 }
 
 pub struct JavaBackend;
@@ -675,7 +677,7 @@ impl Backend for JavaBackend {
 mod tests {
     use super::*;
     use crate::core::config::TraitBridgeConfig;
-    use crate::core::ir::{FunctionDef, MethodDef, TypeDef};
+    use crate::core::ir::{FunctionDef, MethodDef, TypeDef, TypeRef};
 
     #[test]
     fn removes_trait_bridge_managed_functions_from_java_api_functions() {

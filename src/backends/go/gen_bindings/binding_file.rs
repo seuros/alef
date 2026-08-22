@@ -8,7 +8,7 @@ use super::types::{
     gen_opaque_type_free_only, gen_ptr_helper, gen_struct_type, gen_unmarshal_bytes_helper, go_struct_field_names,
     is_passthrough_raw_message_enum, is_tuple_field,
 };
-use crate::codegen::naming::{go_type_name, to_go_name};
+use crate::codegen::naming::{field_uses_duration_map_wire, go_type_name, to_go_name};
 use crate::core::config::{AdapterPattern, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, TypeRef};
@@ -105,14 +105,15 @@ fn uses_ffi_enum_type(
 /// helper (see [`gen_duration_millis_helper`]) and, in turn, the `encoding/json` import
 /// it depends on.
 ///
-/// The `serde_with` test must stay in lockstep with `type_map::go_field_type`: a field with a
-/// hand-written codec keeps the bare `uint64`, so counting it here would emit a `DurationMillis`
-/// no field references — and with it an `encoding/json` import Go rejects as unused. ~keep
+/// Consults the same predicate as `type_map::go_field_type`
+/// (`crate::codegen::naming::field_uses_duration_map_wire`): a field with a hand-written codec
+/// keeps the bare `uint64`, so counting it here would emit a `DurationMillis` no field
+/// references — and with it an `encoding/json` import Go rejects as unused. ~keep
 fn api_has_duration_field(api: &ApiSurface) -> bool {
-    api.types.iter().filter(|typ| !typ.is_opaque).any(|typ| {
-        crate::codegen::shared::binding_fields(&typ.fields)
-            .any(|field| matches!(field.ty, TypeRef::Duration) && field.serde_with.is_none())
-    })
+    api.types
+        .iter()
+        .filter(|typ| !typ.is_opaque)
+        .any(|typ| crate::codegen::shared::binding_fields(&typ.fields).any(field_uses_duration_map_wire))
 }
 
 /// Returns true if a type reference mentions any excluded type.

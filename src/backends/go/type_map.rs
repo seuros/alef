@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::codegen::naming::go_type_name;
+use crate::codegen::naming::{field_uses_duration_map_wire, go_type_name};
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{FieldDef, PrimitiveType, TypeRef};
 
@@ -123,21 +123,25 @@ pub fn go_optional_struct_field_type(ty: &TypeRef) -> Cow<'static, str> {
 /// bare millisecond integer, so imposing the `{"secs","nanos"}` object would make every Go-side
 /// construction fail Rust deserialization with `invalid type: map, expected u64`. Alef cannot
 /// know what an arbitrary codec emits, so it declines to wrap and leaves the underlying scalar
-/// (`uint64`), which is both the pre-existing behavior and correct for that convention. ~keep
+/// (`uint64`), which is both the pre-existing behavior and correct for that convention.
+///
+/// The decision itself lives in [`crate::codegen::naming::field_uses_duration_map_wire`], the
+/// single predicate every backend that special-cases `Duration`'s derive shape must consult —
+/// see that function's doc for why C# and Java need the identical check. ~keep
 pub fn go_field_type(field: &FieldDef) -> Cow<'static, str> {
-    if field.serde_with.is_some() {
-        go_type(&field.ty)
-    } else {
+    if field_uses_duration_map_wire(field) {
         go_struct_field_type(&field.ty)
+    } else {
+        go_type(&field.ty)
     }
 }
 
 /// Optional/pointer counterpart of [`go_field_type`].
 pub fn go_optional_field_type(field: &FieldDef) -> Cow<'static, str> {
-    if field.serde_with.is_some() {
-        go_optional_type(&field.ty)
-    } else {
+    if field_uses_duration_map_wire(field) {
         go_optional_struct_field_type(&field.ty)
+    } else {
+        go_optional_type(&field.ty)
     }
 }
 

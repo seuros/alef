@@ -1,4 +1,5 @@
 use crate::core::config::Language;
+use crate::core::ir::{FieldDef, TypeRef};
 use heck::{ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutySnakeCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
@@ -93,6 +94,51 @@ pub fn wire_field_name(field_name: &str, serde_rename: Option<&str>, rename_all:
 /// Resolve a wire enum variant value from variant metadata.
 pub fn wire_variant_value(variant_name: &str, serde_rename: Option<&str>, rename_all: Option<&str>) -> String {
     serde_wire_name(variant_name, serde_rename, rename_all)
+}
+
+/// True when a `Duration`-typed field's wire shape is the object serde's derive produces
+/// (`{"secs":u64,"nanos":u32}`) rather than the shape a hand-written codec writes.
+///
+/// A field carrying `#[serde(with = "...")]` (or `serialize_with`) does not get its wire shape
+/// from serde's derive at all — the codec decides it, and the common `duration_ms` convention
+/// writes a bare millisecond integer instead of the derive object. Backends that special-case
+/// `TypeRef::Duration`'s derive shape (Go's `DurationMillis` wrapper, C#'s
+/// `DurationMillisJsonConverter`, Java's `DurationMillisSerializer`/`Deserializer`) must consult
+/// this single predicate before imposing the map shape on a `Duration` field — asserting it
+/// unconditionally breaks every field serialized through such a codec with
+/// `invalid type: map, expected u64`. See `FieldDef::serde_with`.
+pub fn field_uses_duration_map_wire(field: &FieldDef) -> bool {
+    matches!(field.ty, TypeRef::Duration) && field.serde_with.is_none()
+}
+
+#[cfg(test)]
+mod duration_wire_tests {
+    use super::*;
+
+    fn duration_field(serde_with: Option<&str>) -> FieldDef {
+        FieldDef {
+            ty: TypeRef::Duration,
+            serde_with: serde_with.map(str::to_string),
+            ..FieldDef::default()
+        }
+    }
+
+    #[test]
+    fn duration_field_without_serde_with_uses_the_derived_map_wire() {
+        assert!(field_uses_duration_map_wire(&duration_field(None)));
+    }
+
+    #[test]
+    fn duration_field_with_serde_with_uses_the_scalar_wire() {
+        assert!(!field_uses_duration_map_wire(&duration_field(Some("duration_ms"))));
+    }
+
+    #[test]
+    fn non_duration_field_never_uses_the_duration_map_wire() {
+        let mut field = duration_field(None);
+        field.ty = TypeRef::Primitive(crate::core::ir::PrimitiveType::U64);
+        assert!(!field_uses_duration_map_wire(&field));
+    }
 }
 
 /// Resolve a public field/property identifier, applying `rename_fields` before language casing.

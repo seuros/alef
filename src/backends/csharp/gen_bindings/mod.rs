@@ -1,4 +1,6 @@
-use crate::codegen::naming::{csharp_type_name, csharp_wrapper_class_name, to_csharp_name};
+use crate::codegen::naming::{
+    csharp_type_name, csharp_wrapper_class_name, field_uses_duration_map_wire, to_csharp_name,
+};
 use crate::codegen::shared::binding_fields;
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig, resolve_output_dir};
@@ -620,7 +622,7 @@ impl Backend for CsharpBackend {
         let needs_duration_converter = api
             .types
             .iter()
-            .any(|t| binding_fields(&t.fields).any(|field| matches!(field.ty, TypeRef::Duration)));
+            .any(|t| binding_fields(&t.fields).any(field_uses_duration_map_wire));
         if needs_duration_converter {
             files.push(GeneratedFile {
                 path: base_path.join("DurationMillisJsonConverter.cs"),
