@@ -389,6 +389,7 @@ fn gen_method_stub(
     }));
 
     let streaming_key = (owner_type.map(str::to_string), method.name.clone());
+    let is_streaming = streaming_return_types.contains_key(&streaming_key);
     let return_type = if let Some(item_type) = streaming_return_types.get(&streaming_key) {
         format!("AsyncIterator[{item_type}]")
     } else {
@@ -396,7 +397,21 @@ fn gen_method_stub(
     };
     let indent = "    ";
     let safe_name = python_safe_name(&method.name);
-    let def_kw = if method.is_async { "async def" } else { "def" };
+    // `adapter_streaming_wrapper.jinja` emits a streaming method's real wrapper as an async
+    // GENERATOR function (`async def foo(...): ... yield item`) — calling it returns the
+    // `AsyncIterator` synchronously, no `await` needed; only iterating it (`async for`) is
+    // async. A `.pyi` stub has no body for a type checker to infer that shape from, so
+    // `async def foo(...) -> AsyncIterator[Item]: ...` types the CALL itself as
+    // `Coroutine[Any, Any, AsyncIterator[Item]]` — rejecting the exact `async for chunk in
+    // stream_method(...)` call (no `await`) that both the real runtime shape and the e2e
+    // generator's own comment ("chat_stream() itself is NOT a coroutine ... no `await` prefix
+    // is used") already agree on. `method.is_async` must lose to the streaming classification
+    // here, not the other way around. ~keep
+    let def_kw = if method.is_async && !is_streaming {
+        "async def"
+    } else {
+        "def"
+    };
 
     // append `# noqa: A002` on those lines (the suppression is invalid on a single-line def).
     let has_builtin_param = params
@@ -480,6 +495,87 @@ mod tests {
     use super::*;
     use crate::core::ir::FieldDef;
     use crate::core::ir::PrimitiveType;
+
+    fn streaming_method(name: &str) -> crate::core::ir::MethodDef {
+        crate::core::ir::MethodDef {
+            name: name.to_string(),
+            params: Vec::new(),
+            return_type: TypeRef::Named("Ignored".to_string()),
+            is_async: true,
+            is_static: false,
+            error_type: None,
+            doc: String::new(),
+            receiver: Some(crate::core::ir::ReceiverKind::Ref),
+            cfg: None,
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            has_default_impl: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// Cross-generator guard: a streaming method's `.pyi` stub keyword must agree with what
+    /// `adapter_streaming_wrapper.jinja` (the real streaming wrapper backend, see
+    /// `gen_bindings/functions/async_wrappers.rs`) actually emits — `async def ... : yield
+    /// item`, an async GENERATOR whose CALL returns the `AsyncIterator` synchronously, with no
+    /// `await` needed. `method.is_async` alone (true here, mirroring the real extracted Rust
+    /// method) used to win regardless of the streaming classification, so the stub declared
+    /// `async def chat_stream(...) -> AsyncIterator[ChatCompletionChunk]: ...` — which types
+    /// the call itself as returning a `Coroutine`, not an iterable, and pyright rejected the
+    /// unawaited `async for chunk in client.chat_stream(request):` the e2e generator (and the
+    /// real runtime shape) both correctly emit. ~keep
+    #[test]
+    fn streaming_method_stub_keeps_a_plain_def_keyword_despite_method_is_async() {
+        let method = streaming_method("chat_stream");
+        let mut streaming_return_types = std::collections::HashMap::new();
+        streaming_return_types.insert(
+            (Some("DefaultClient".to_string()), "chat_stream".to_string()),
+            "ChatCompletionChunk".to_string(),
+        );
+
+        let stub = gen_method_stub(
+            &method,
+            false,
+            &std::collections::HashSet::new(),
+            Some("DefaultClient"),
+            &streaming_return_types,
+        );
+
+        assert!(
+            stub.trim_start().starts_with("def chat_stream("),
+            "a streaming method's call is synchronous (it returns the AsyncIterator directly); \
+             the stub must keep a plain `def`, not `async def`, got:\n{stub}"
+        );
+        assert!(
+            stub.contains("-> AsyncIterator[ChatCompletionChunk]"),
+            "the streaming return type must still be AsyncIterator[Item]:\n{stub}"
+        );
+    }
+
+    /// Negative control: an ordinary async method with NO streaming classification must keep
+    /// `async def` — the streaming override must not swallow every async method.
+    #[test]
+    fn a_non_streaming_async_method_stub_keeps_async_def() {
+        let method = streaming_method("chat");
+
+        let stub = gen_method_stub(
+            &method,
+            false,
+            &std::collections::HashSet::new(),
+            Some("DefaultClient"),
+            &std::collections::HashMap::new(),
+        );
+
+        assert!(
+            stub.trim_start().starts_with("async def chat("),
+            "a non-streaming async method must keep `async def`, got:\n{stub}"
+        );
+    }
 
     #[test]
     fn type_init_stub_keeps_pyo3_present_cfg_fields() {
