@@ -112,8 +112,8 @@ fn page_action_not_emitted_when_not_used() {
     );
 
     assert!(
-        rendered.contains("String _alefE2eText(Object? value)"),
-        "_alefE2eText helper should still be emitted. Rendered:\n{rendered}"
+        rendered.contains("// E2e tests for category: code"),
+        "the unconditional category header should still be emitted. Rendered:\n{rendered}"
     );
 
     assert!(

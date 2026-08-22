@@ -208,14 +208,15 @@ pub(super) fn render_assertion_dart(
         "equals" | "field_equals" => {
             if let Some(expected) = &assertion.value {
                 let dart_val = format_value(expected);
-                // Check if this field is an enum field. Enum fields need _alefE2eText for serde
-                // wire format conversion (e.g. FinishReason.toolCalls → "tool_calls").
+                // Check if this field is an enum field. Enum fields are compared against the
+                // binding's `.wireValue` getter (see `gen_bindings::enum_wire_values`), which
+                // returns the exact serde wire value for the variant.
                 // `field_resolver.is_enum` consults the hand-maintained `fields_enum`/
                 // `enum_fields` config first and only then the IR-derived classification
                 // (`with_ir_enum_map`), so an explicit config entry still wins — this only
                 // rescues fields a consumer's `alef.toml` never mentions. A config-only check
-                // used to answer `false` for those, SILENTLY skipping `_alefE2eText` rather than
-                // failing to compile: `expect(result.kind.toString(), equals('key_value'))`
+                // used to answer `false` for those, SILENTLY skipping the `.wireValue` accessor
+                // rather than failing to compile: `expect(result.kind.toString(), equals('key_value'))`
                 // compares the enum's Dart `toString()` (its variant name) against the fixture's
                 // serde wire value, so the test passes or fails on the wrong string. ~keep
                 let is_enum_field = assertion
@@ -236,12 +237,25 @@ pub(super) fn render_assertion_dart(
 
                 if expected.is_string() {
                     if is_enum_field {
-                        // For enum fields, use _alefE2eText to normalize the enum value to its
-                        // serde wire format before comparison.
-                        let _ = writeln!(
-                            out,
-                            "    expect(_alefE2eText({field_accessor}), equals({dart_val}.toString()));"
-                        );
+                        // For enum fields, assert the fixture's serde wire literal VERBATIM
+                        // against the binding's `.wireValue` getter -- not a value rebuilt from
+                        // the idiomatic Dart member name, which is a separate naming surface
+                        // (`centralized-naming`) and cannot losslessly round-trip back to the
+                        // wire value.
+                        let is_optional = assertion
+                            .field
+                            .as_deref()
+                            .map(|f| {
+                                let resolved = field_resolver.resolve(f);
+                                field_resolver.is_optional(f) || field_resolver.is_optional(resolved)
+                            })
+                            .unwrap_or(false);
+                        let wire_accessor = if is_optional {
+                            format!("{field_accessor}?.wireValue")
+                        } else {
+                            format!("{field_accessor}.wireValue")
+                        };
+                        let _ = writeln!(out, "    expect({wire_accessor}, equals({dart_val}));");
                     } else if is_display_as_text {
                         // For display-as-text types (e.g. AssistantContent), use .text() accessor
                         // to extract the plain-text representation instead of calling .toString()
@@ -311,10 +325,22 @@ pub(super) fn render_assertion_dart(
 
                 if expected.is_string() {
                     if is_enum_field {
-                        let _ = writeln!(
-                            out,
-                            "    expect(_alefE2eText({field_accessor}).trim(), isNot(equals({dart_val}.toString().trim())));"
-                        );
+                        // See the `equals`/`field_equals` arm above: compare the fixture's wire
+                        // literal VERBATIM against `.wireValue`, not a `.toString()` rebuild.
+                        let is_optional = assertion
+                            .field
+                            .as_deref()
+                            .map(|f| {
+                                let resolved = field_resolver.resolve(f);
+                                field_resolver.is_optional(f) || field_resolver.is_optional(resolved)
+                            })
+                            .unwrap_or(false);
+                        let wire_accessor = if is_optional {
+                            format!("{field_accessor}?.wireValue")
+                        } else {
+                            format!("{field_accessor}.wireValue")
+                        };
+                        let _ = writeln!(out, "    expect({wire_accessor}, isNot(equals({dart_val})));");
                     } else if is_display_as_text {
                         // For display-as-text types, use .text() accessor.
                         // Check if the field is optional; if so, use safe navigation (?.) and provide fallback.
@@ -429,7 +455,23 @@ pub(super) fn render_assertion_dart(
             // FRB models `Option<String>` / `Option<Vec<T>>` as nullable in Dart. The `isEmpty`
             // matcher throws `NoSuchMethodError` on `null`. Accept `null` as semantically
             // empty by combining `isNull` with `isEmpty` via `anyOf`.
-            let _ = writeln!(out, "    expect({field_accessor}, anyOf(isNull, isEmpty));");
+            //
+            // `isEmpty`/`anyOf(isNull, isEmpty)` only applies to types with an `.isEmpty`
+            // getter (collections, strings, maps) -- the same constraint `not_empty` above
+            // branches on. A struct- or scalar-shaped field (e.g. `document:
+            // DocumentStructure`) has no `.isEmpty` getter and throws `NoSuchMethodError` if
+            // this arm calls it directly. Stringify first, the same way `not_empty`'s
+            // non-collection branch does, and fall back to `''` for `null` so the "null counts
+            // as empty" intent above still holds.
+            let is_collection = assertion.field.as_deref().is_some_and(|f| {
+                let resolved = field_resolver.resolve(f);
+                field_resolver.is_array(f) || field_resolver.is_array(resolved)
+            });
+            if is_collection {
+                let _ = writeln!(out, "    expect({field_accessor}, anyOf(isNull, isEmpty));");
+            } else {
+                let _ = writeln!(out, "    expect(({field_accessor}?.toString() ?? ''), isEmpty);");
+            }
         }
         "starts_with" => {
             if let Some(expected) = &assertion.value {
@@ -974,5 +1016,139 @@ mod is_true_optional_field_tests {
         );
         let out = render(&resolver, &is_true_assertion("active"));
         assert_eq!(out, "    expect(result.active, isTrue);\n");
+    }
+}
+
+#[cfg(test)]
+mod is_empty_branch_tests {
+    use super::render_assertion_dart;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn render(resolver: &FieldResolver, field: &str) -> String {
+        let assertion = Assertion {
+            assertion_type: "is_empty".to_string(),
+            field: Some(field.to_string()),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion_dart(&mut out, &assertion, "result", false, resolver);
+        out
+    }
+
+    fn no_arrays_resolver() -> FieldResolver {
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+    }
+
+    /// Regression: `not_empty` branches on `is_array` so a struct-shaped field never has
+    /// `.isEmpty` called on it directly (structs have no such getter -- `NoSuchMethodError`
+    /// at runtime). `is_empty` had no such branch and called `.isEmpty` unconditionally via
+    /// `anyOf(isNull, isEmpty)`. `document` here is not in `array_fields`, so it takes the
+    /// non-collection path.
+    #[test]
+    fn is_empty_on_struct_field_does_not_call_isempty_directly() {
+        let out = render(&no_arrays_resolver(), "document");
+        assert_eq!(out, "    expect((result.document?.toString() ?? ''), isEmpty);\n");
+    }
+
+    /// Control: a field the resolver classifies as an array keeps the original
+    /// `anyOf(isNull, isEmpty)` form, since `List`/`Map`/`String` all have a real
+    /// `.isEmpty` getter.
+    #[test]
+    fn is_empty_on_array_field_keeps_anyof_isnull_isempty() {
+        let array_fields: HashSet<String> = ["items".to_string()].into_iter().collect();
+        let resolver = FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &array_fields,
+            &HashSet::new(),
+        );
+        let out = render(&resolver, "items");
+        assert_eq!(out, "    expect(result.items, anyOf(isNull, isEmpty));\n");
+    }
+}
+
+#[cfg(test)]
+mod enum_wire_value_assertion_tests {
+    use super::render_assertion_dart;
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn enum_resolver(field: &str) -> FieldResolver {
+        let names: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_enum_fields(names)
+    }
+
+    fn optional_enum_resolver(field: &str) -> FieldResolver {
+        let names: HashSet<String> = [field.to_string()].into_iter().collect();
+        FieldResolver::new(
+            &HashMap::new(),
+            &names,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .with_enum_fields(names)
+    }
+
+    fn render(resolver: &FieldResolver, assertion: &Assertion) -> String {
+        let mut out = String::new();
+        render_assertion_dart(&mut out, assertion, "result", false, resolver);
+        out
+    }
+
+    fn equals_assertion(field: &str, value: &str) -> Assertion {
+        Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some(field.to_string()),
+            value: Some(serde_json::Value::String(value.to_string())),
+            ..Assertion::default()
+        }
+    }
+
+    /// Regression: an enum `equals` assertion must compare the fixture's serde wire literal
+    /// VERBATIM against the binding's `.wireValue` getter. The prior `_alefE2eText` helper
+    /// reconstructed a wire value from `.toString()` via an unconditional camelCase ->
+    /// snake_case heuristic, so it could never reproduce a wire value with no `rename_all`
+    /// (e.g. `KeyValue`, which stays PascalCase on the wire) -- it always emitted `key_value`.
+    #[test]
+    fn equals_on_enum_field_asserts_wire_value_verbatim() {
+        let out = render(&enum_resolver("kind"), &equals_assertion("kind", "KeyValue"));
+        assert_eq!(out, "    expect(result.kind.wireValue, equals('KeyValue'));\n");
+    }
+
+    /// `Option<Enum>` maps to `Enum?` in FRB Dart -- `.wireValue` needs safe navigation.
+    #[test]
+    fn equals_on_optional_enum_field_uses_safe_navigation() {
+        let out = render(&optional_enum_resolver("kind"), &equals_assertion("kind", "KeyValue"));
+        assert_eq!(out, "    expect(result.kind?.wireValue, equals('KeyValue'));\n");
+    }
+
+    #[test]
+    fn not_equals_on_enum_field_asserts_wire_value_verbatim() {
+        let assertion = Assertion {
+            assertion_type: "not_equals".to_string(),
+            field: Some("kind".to_string()),
+            value: Some(serde_json::Value::String("Sequence".to_string())),
+            ..Assertion::default()
+        };
+        let out = render(&enum_resolver("kind"), &assertion);
+        assert_eq!(out, "    expect(result.kind.wireValue, isNot(equals('Sequence')));\n");
     }
 }

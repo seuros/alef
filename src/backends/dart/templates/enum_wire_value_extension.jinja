@@ -1,0 +1,9 @@
+extension {{ name }}WireValue on {{ name }} {
+  /// The exact serde wire value for this variant.
+  String get wireValue {
+    switch (this) {
+{% for variant in variants %}      case {{ name }}.{{ variant.vname }}:
+        return '{{ variant.wire }}';
+{% endfor %}    }
+  }
+}

@@ -5,6 +5,7 @@ mod render_type;
 pub(super) mod service_api;
 mod trait_bridge;
 mod types;
+mod wire_value;
 
 use crate::backends::dart::naming::dart_style;
 use crate::core::backend::{
@@ -66,11 +67,13 @@ impl Backend for DartBackend {
             .as_ref()
             .map(|c| c.exclude_functions.iter().map(String::as_str).collect())
             .unwrap_or_default();
-        let _exclude_types: std::collections::HashSet<&str> = config
+        let exclude_types: std::collections::HashSet<&str> = config
             .dart
             .as_ref()
             .map(|c| c.exclude_types.iter().map(String::as_str).collect())
             .unwrap_or_default();
+
+        let dart_wire_enums = wire_value::flat_wire_enums(&api.enums, &exclude_types);
 
         let deduped_functions = crate::codegen::fn_dedup::dedup_same_name_functions(&api.functions);
         let visible_functions: Vec<&FunctionDef> = deduped_functions
@@ -103,7 +106,10 @@ impl Backend for DartBackend {
             .filter(|b| b.register_fn.is_some() || b.unregister_fn.is_some() || b.clear_fn.is_some())
             .collect();
 
-        if !visible_functions.is_empty() || !active_bridge_configs.is_empty() {
+        // The `.wireValue` extensions need the same unprefixed import to the frb-generated
+        // bridge as the bridge class does, so an enum-only crate (no visible functions, no
+        // active trait bridges) must still open this block to get it.
+        if !visible_functions.is_empty() || !active_bridge_configs.is_empty() || !dart_wire_enums.is_empty() {
             body.push_str(&crate::backends::dart::template_env::render(
                 "dart_bridge_imports.jinja",
                 minijinja::context! {
@@ -112,22 +118,29 @@ impl Backend for DartBackend {
             ));
             body.push('\n');
 
-            let bridge_class = config.dart_bridge_class_name();
-            body.push_str(&crate::backends::dart::template_env::render(
-                "dart_bridge_class_open.jinja",
-                minijinja::context! {
-                    bridge_class => bridge_class.as_str(),
-                },
-            ));
-            for f in &visible_functions {
-                emit_function(f, &api.types, &api.enums, &mut body, &mut imports);
-                body.push('\n');
+            if !visible_functions.is_empty() || !active_bridge_configs.is_empty() {
+                let bridge_class = config.dart_bridge_class_name();
+                body.push_str(&crate::backends::dart::template_env::render(
+                    "dart_bridge_class_open.jinja",
+                    minijinja::context! {
+                        bridge_class => bridge_class.as_str(),
+                    },
+                ));
+                for f in &visible_functions {
+                    emit_function(f, &api.types, &api.enums, &mut body, &mut imports);
+                    body.push('\n');
+                }
+                for bridge_cfg in &active_bridge_configs {
+                    emit_trait_bridge_methods(bridge_cfg, &mut body);
+                }
+                emit_streaming_adapter_methods(config, &mut body, &mut imports);
+                body.push_str("}\n");
+                if !dart_wire_enums.is_empty() {
+                    body.push('\n');
+                }
             }
-            for bridge_cfg in &active_bridge_configs {
-                emit_trait_bridge_methods(bridge_cfg, &mut body);
-            }
-            emit_streaming_adapter_methods(config, &mut body, &mut imports);
-            body.push_str("}\n");
+
+            wire_value::emit_wire_value_extensions(&dart_wire_enums, &mut body);
         }
 
         // Whenever a typed-list name shows up anywhere in the body — either as a

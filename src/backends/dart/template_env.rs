@@ -28,6 +28,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/enum_unit_variant.jinja"),
     ),
     (
+        "enum_wire_value_extension.jinja",
+        include_str!("templates/enum_wire_value_extension.jinja"),
+    ),
+    (
         "sealed_class_header.jinja",
         include_str!("templates/sealed_class_header.jinja"),
     ),

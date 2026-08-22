@@ -3,17 +3,18 @@
 //! `render_test_case` used to decide whether a result field is enum-typed purely from the
 //! hand-maintained `fields_enum` / `[e2e.call.overrides.dart] enum_fields` config
 //! (`assertions.rs`'s `is_enum_field` in the `equals`/`field_equals` and `not_equals` arms). A
-//! consumer whose `alef.toml` never declared that entry got NO `_alefE2eText` wrapper for an
+//! consumer whose `alef.toml` never declared that entry got NO `.wireValue` accessor for an
 //! honest-to-goodness `DataNodeKind` enum field.
 //!
 //! Unlike the statically-typed backends, this does not fail to compile: Dart accessors are
 //! always property access (`result.kind`), so `expect(result.kind.toString(),
 //! equals('key_value'))` compiles fine. It just asserts the WRONG string — `.toString()` on a
 //! Dart enum returns its declaration name (`"DataNodeKind.keyValue"`), never the serde wire
-//! value (`"key_value"`), so the generated test either fails at runtime or — worse — silently
+//! value (`"KeyValue"`), so the generated test either fails at runtime or — worse — silently
 //! passes only when the fixture's expected value happens to already be the accidental
-//! `toString()` spelling. `_alefE2eText` is what performs the enum-to-wire-value conversion, so
-//! its absence from the emitted assertion is the observable defect these tests check for.
+//! `toString()` spelling. `.wireValue` (the extension `gen_bindings::wire_value` emits on the
+//! generated enum) is what surfaces the real wire value, so its absence from the emitted
+//! assertion is the observable defect these tests check for.
 //!
 //! `test_case.rs` now wires the same IR-derived classification the rust/csharp/swift/gleam e2e
 //! generators use (`FieldResolver::ir_enum_fields` + `with_ir_enum_map`, anchored at the call's
@@ -29,9 +30,9 @@ use crate::e2e::fixture::{Assertion, Fixture};
 
 use super::test_case::{DartTestCaseContext, render_test_case};
 
-/// The `_alefE2eText(...)` wrapper the enum branch emits — the observable signal that a field
-/// was classified as enum-typed.
-const ENUM_WRAPPER_MARKER: &str = "_alefE2eText(";
+/// The `.wireValue` accessor the enum branch emits — the observable signal that a field was
+/// classified as enum-typed.
+const ENUM_WRAPPER_MARKER: &str = ".wireValue";
 
 /// A `DataNodeKind`-shaped enum: two unit variants, no serde rename overrides.
 fn data_node_kind_enum() -> EnumDef {
@@ -174,7 +175,7 @@ struct Case {
 
 const CASES: &[Case] = &[
     Case {
-        name: "an enum-typed field with no fields_enum config gets _alefE2eText via the IR",
+        name: "an enum-typed field with no fields_enum config gets .wireValue via the IR",
         call: "process",
         expect_enum_wrapper: true,
     },
@@ -200,7 +201,7 @@ fn enum_field_classification_table() {
         let has_enum_wrapper = out.contains(ENUM_WRAPPER_MARKER);
         assert_eq!(
             has_enum_wrapper, case.expect_enum_wrapper,
-            "{}: expected _alefE2eText wrapper = {}, got:\n{out}",
+            "{}: expected .wireValue wrapper = {}, got:\n{out}",
             case.name, case.expect_enum_wrapper
         );
     }
