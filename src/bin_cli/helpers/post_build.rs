@@ -55,19 +55,44 @@ pub(super) fn run_required_post_builds(
     config: &crate::core::config::ResolvedCrateConfig,
     base_dir: &std::path::Path,
 ) -> Result<()> {
+    let resolved: Vec<(crate::core::config::Language, crate::core::backend::BuildConfig)> = languages
+        .iter()
+        .filter_map(|&language| {
+            let backend = crate::cli::registry::try_get_backend(language)?;
+            let build_config = backend.build_config_with_config(config)?;
+            if build_config.post_build.is_empty() {
+                return None;
+            }
+            Some((language, build_config))
+        })
+        .collect();
+    run_resolved_post_builds(&resolved, languages.len(), config, base_dir)
+}
+
+/// Run post-build steps for an already-resolved `(language, build_config)` list, aggregating
+/// failures across languages instead of aborting on the first one.
+///
+/// Split out of [`run_required_post_builds`] so the aggregation behavior (attempt every
+/// language, report every failure) can be exercised directly against a caller-supplied
+/// `BuildConfig` -- in particular so tests can substitute one language's `PostBuildStep` (e.g.
+/// swap a `RunCommand`'s `cmd` for one that is never installed) without reaching into the
+/// registry-resolved config that `run_required_post_builds` itself uses in production. This is
+/// the same seam `run_post_build` already exposes one level down (it takes an explicit
+/// `&BuildConfig` rather than resolving one itself); this function extends that seam to the
+/// aggregation loop above it. `total_languages` is threaded through separately from
+/// `resolved.len()` because it must match `run_required_post_builds`'s original denominator (the
+/// full requested language count, including languages with no post-build step at all). ~keep
+fn run_resolved_post_builds(
+    resolved: &[(crate::core::config::Language, crate::core::backend::BuildConfig)],
+    total_languages: usize,
+    config: &crate::core::config::ResolvedCrateConfig,
+    base_dir: &std::path::Path,
+) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
-    for &language in languages {
-        let Some(backend) = crate::cli::registry::try_get_backend(language) else {
-            continue;
-        };
-        let Some(build_config) = backend.build_config_with_config(config) else {
-            continue;
-        };
-        if build_config.post_build.is_empty() {
-            continue;
-        }
+    for (language, build_config) in resolved {
+        let language = *language;
         tracing::info!("  [{language}] running post-build...");
-        match crate::cli::pipeline::run_post_build(language, &build_config, config, base_dir) {
+        match crate::cli::pipeline::run_post_build(language, build_config, config, base_dir) {
             Ok(outcome) if outcome.skipped_missing_tools.is_empty() => {
                 tracing::info!("  [{language}] post-build processing complete");
             }
@@ -93,14 +118,14 @@ pub(super) fn run_required_post_builds(
     anyhow::bail!(
         "post-build failed for {} of {} language(s): {}",
         failures.len(),
-        languages.len(),
+        total_languages,
         failures.join("; ")
     );
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{languages_have_post_build_steps, run_required_post_builds};
+    use super::{languages_have_post_build_steps, run_required_post_builds, run_resolved_post_builds};
     use crate::core::config::Language;
 
     /// A language with a real, always-runs post-build (see `run_post_build`'s
@@ -169,36 +194,39 @@ mod tests {
     ///
     /// Both languages here must fail regardless of host toolchains. Swift always fails because
     /// no build project exists in the temp dir (`cargo` is always present in this repo's own
-    /// test environment). Dart's `RunCommand` step for `flutter_rust_bridge_codegen` is *not*
-    /// usable for this: whether it genuinely runs and errors, or is silently skipped because
-    /// the tool isn't on `PATH` (`run_run_command`'s `NotFound` arm returns `Ok(false)`, not an
-    /// error -- see `PostBuildOutcome`), depends entirely on the host. That gap is exactly what
-    /// made this test pass on a dev machine with `flutter_rust_bridge_codegen` installed and
-    /// fail in CI without it. So `ALEF_SKIP_COMMANDS` forces that step to skip deterministically
-    /// either way, and a stale FRB bridge -- pre-seeded at Dart's real, registry-derived
-    /// facade/bridge paths -- makes `VerifyFrbBridgeCoverage` (a pure-Rust check with no
-    /// external tool dependency) fail instead. Both failures must be named -- proving the
-    /// second language was actually attempted, not just that the error text happens to mention
-    /// it. ~keep
+    /// test environment). Dart's `RunCommand` step for the frb codegen tool is *not* usable
+    /// as-is: whether it genuinely runs and errors, or is silently skipped because the tool
+    /// isn't on `PATH` (`run_run_command`'s `NotFound` arm returns `Ok(false)`, not an error --
+    /// see `PostBuildOutcome`), depends entirely on the host, and if it genuinely ran it would
+    /// regenerate the bridge and defeat the "stale bridge" setup below. Forcing the skip via
+    /// `ALEF_SKIP_COMMANDS` used to paper over that, but the var is process-global: this test's
+    /// own `ENV_LOCK` only serialized against other holders of that *same* lock instance, not
+    /// against `run_command_tests::env_lock()` in `build.rs`, which sets the identical var under
+    /// a separate lock -- the exact two-locks-guarding-one-resource race `f968767b6` fixed for
+    /// `frb_bridge_coverage.rs`'s equivalent test. The fix here is the same one applied there:
+    /// route the RunCommand step through a command name that is never installed on any host, so
+    /// `run_run_command` reports the deterministic `Ok(false)` skip without touching real
+    /// process-global state at all, and no lock is needed. `run_resolved_post_builds` is the
+    /// seam that makes that substitution possible -- it takes an explicit resolved
+    /// `(language, BuildConfig)` list instead of resolving one from the registry internally, so
+    /// Dart's registry-derived config can be cloned and have its `RunCommand` step's `cmd`
+    /// swapped before the aggregation loop ever runs. A stale FRB bridge -- pre-seeded at
+    /// Dart's real, registry-derived facade/bridge paths -- then makes `VerifyFrbBridgeCoverage`
+    /// (a pure-Rust check with no external tool dependency) fail. Both failures must be named --
+    /// proving the second language was actually attempted, not just that the error text happens
+    /// to mention it. ~keep
     #[test]
     fn a_failing_language_does_not_abort_the_remaining_post_builds() {
         use crate::core::backend::PostBuildStep;
         use crate::core::config::ResolvedCrateConfig;
 
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
-        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
-        // SAFETY: serialized by ENV_LOCK; no other test in this file sets this var concurrently.
-        unsafe {
-            std::env::set_var("ALEF_SKIP_COMMANDS", "flutter_rust_bridge_codegen");
-        }
-
         let directory = tempfile::tempdir().expect("temporary project");
         let config = ResolvedCrateConfig::default();
 
-        // Discover Dart's real facade/bridge paths from its own derived `BuildConfig` rather
-        // than duplicating that backend's internal path formula here.
-        let dart_build_config = crate::cli::registry::try_get_backend(Language::Dart)
+        // Discover Dart's real facade/bridge paths (and full post-build steps) from its own
+        // derived `BuildConfig` rather than duplicating that backend's internal path formula
+        // here.
+        let mut dart_build_config = crate::cli::registry::try_get_backend(Language::Dart)
             .and_then(|backend| backend.build_config_with_config(&config))
             .expect("Dart backend must produce a build config for the default crate config");
         let (facade_path, bridge_path) = dart_build_config
@@ -213,6 +241,18 @@ mod tests {
                 _ => None,
             })
             .expect("Dart's default post-build steps must include VerifyFrbBridgeCoverage");
+
+        // Point the frb codegen `RunCommand` at a command name that is never installed on any
+        // host -- see the test's doc comment for why this replaces `ALEF_SKIP_COMMANDS`.
+        for step in &mut dart_build_config.post_build {
+            if let PostBuildStep::RunCommand { cmd, .. } = step {
+                *cmd = "alef-frb-codegen-intentionally-not-on-path-xyz789";
+            }
+        }
+
+        let swift_build_config = crate::cli::registry::try_get_backend(Language::Swift)
+            .and_then(|backend| backend.build_config_with_config(&config))
+            .expect("Swift backend must produce a build config for the default crate config");
 
         // A facade that has grown a function the committed bridge never picked up -- the
         // alef #135 shape `VerifyFrbBridgeCoverage` exists to catch.
@@ -233,12 +273,11 @@ mod tests {
         )
         .unwrap();
 
-        let result = run_required_post_builds(&[Language::Swift, Language::Dart], &config, directory.path());
-
-        match previous {
-            Some(value) => unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", value) },
-            None => unsafe { std::env::remove_var("ALEF_SKIP_COMMANDS") },
-        }
+        let resolved = [
+            (Language::Swift, swift_build_config),
+            (Language::Dart, dart_build_config),
+        ];
+        let result = run_resolved_post_builds(&resolved, resolved.len(), &config, directory.path());
 
         let error = result.expect_err("missing Swift build project and a stale Dart bridge must both fail");
         let message = error.to_string();
