@@ -54,6 +54,11 @@ pub(crate) enum Commands {
         output: PathBuf,
     },
     /// Generate bindings for selected languages.
+    ///
+    /// Writes bindings and scaffold files, then syncs version pins. It does NOT
+    /// regenerate test_apps/ — that tree belongs to `alef all`'s test-apps stage
+    /// and to `alef test-apps generate`. A stale test_apps/ after this command is
+    /// expected, not a bug.
     Generate {
         /// Comma-separated list of languages (default: all from config).
         #[arg(long, value_delimiter = ',')]
@@ -109,9 +114,12 @@ pub(crate) enum Commands {
     /// Sync version from Cargo.toml to all package manifests.
     ///
     /// Updates version fields in all package manifests and alef.toml registry
-    /// package pins atomically. Does not regenerate code — use `alef generate`,
-    /// `alef all`, or `task alef:generate` to regenerate test_apps/ and scaffold
-    /// files after syncing versions.
+    /// package pins atomically. Does not regenerate code.
+    ///
+    /// To pick the follow-up command, note which tree you need rewritten.
+    /// `alef generate` writes bindings and scaffold files only — it does NOT
+    /// regenerate test_apps/. Only `alef all` (its test-apps stage) and
+    /// `alef test-apps generate` write that tree; `--regen` below reaches it too.
     SyncVersions {
         /// Bump version before syncing (major, minor, patch).
         #[arg(long)]
@@ -121,7 +129,7 @@ pub(crate) enum Commands {
         set: Option<String>,
         /// Regenerate test_apps/ and scaffold files after syncing versions.
         /// By default, sync-versions only updates manifests; use this flag to
-        /// also regenerate code (expensive, normally run separately as `alef generate`).
+        /// also regenerate code (expensive, normally run separately as `alef all`).
         #[arg(long)]
         regen: bool,
         /// Skip the swift artifactbundle build and checksum substitution.
@@ -222,7 +230,13 @@ pub(crate) enum Commands {
         #[arg(long, short)]
         release: bool,
     },
-    /// Run all: generate + stubs + scaffold + readme + docs + sync + e2e.
+    /// Run all: generate + stubs + scaffold + readme + docs + sync + e2e + test-apps.
+    ///
+    /// The test-apps stage runs whenever an `[e2e]` block is configured, and it is
+    /// the only stage that writes test_apps/. It is cache-gated like every other
+    /// stage: on a cache hit it logs `[test-apps] up to date (skipping)` and reuses
+    /// the recorded paths. That log line means the stage ran and found nothing to
+    /// do — it does NOT mean `alef all` skips test apps. Use `--clean` to force it.
     All {
         /// Ignore cache, recomputing every stage from source.
         ///
@@ -621,6 +635,86 @@ pub(crate) enum ValidateAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Collect `(name, about + long_about)` for every subcommand, recursively.
+    fn help_texts(command: &clap::Command, prefix: &str, out: &mut Vec<(String, String)>) {
+        for sub in command.get_subcommands() {
+            let name = if prefix.is_empty() {
+                sub.get_name().to_string()
+            } else {
+                format!("{prefix} {}", sub.get_name())
+            };
+            let mut text = String::new();
+            if let Some(about) = sub.get_about() {
+                text.push_str(&about.to_string());
+                text.push('\n');
+            }
+            if let Some(long_about) = sub.get_long_about() {
+                text.push_str(&long_about.to_string());
+            }
+            for arg in sub.get_arguments() {
+                if let Some(help) = arg.get_long_help().or_else(|| arg.get_help()) {
+                    text.push('\n');
+                    text.push_str(&help.to_string());
+                }
+            }
+            out.push((name.clone(), text));
+            help_texts(sub, &name, out);
+        }
+    }
+
+    /// `alef generate` does not write `test_apps/`: its handler calls
+    /// `pipeline::sync_versions(.., no_regen = true, ..)`, which skips
+    /// `regenerate_test_apps_after_sync` entirely. Only `alef all`'s test-apps stage and
+    /// `alef test-apps generate` write that tree.
+    ///
+    /// The help text used to claim the opposite, and an operator who believes it goes looking
+    /// for a regeneration bug that does not exist. This pins the property rather than a
+    /// literal: any help text that names `alef generate` alongside `test_apps` must be
+    /// disclaiming the write, not promising it. ~keep
+    #[test]
+    fn no_help_text_claims_alef_generate_writes_test_apps() {
+        use clap::CommandFactory;
+
+        let command = Cli::command();
+        let mut texts = Vec::new();
+        help_texts(&command, "", &mut texts);
+        assert!(!texts.is_empty(), "expected to walk at least one subcommand");
+
+        for (name, text) in &texts {
+            if !text.contains("test_apps") || !text.contains("alef generate") {
+                continue;
+            }
+            assert!(
+                text.contains("NOT"),
+                "`alef {name}` help mentions both `alef generate` and test_apps without \
+                 disclaiming the write. `alef generate` does not regenerate test_apps/ -- it \
+                 calls sync_versions with no_regen = true. Attribute that tree to `alef all` \
+                 or `alef test-apps generate`, or spell the exclusion with an explicit NOT.\n\
+                 help text was:\n{text}"
+            );
+        }
+    }
+
+    /// The `[test-apps] up to date (skipping)` cache-hit log reads as "this stage did not run",
+    /// which is how the belief that `alef all` excludes test apps survives. `alef all`'s own
+    /// summary omitting the stage is the other half. Keep the stage named there. ~keep
+    #[test]
+    fn all_command_help_names_the_test_apps_stage() {
+        use clap::CommandFactory;
+
+        let command = Cli::command();
+        let all = command
+            .get_subcommands()
+            .find(|sub| sub.get_name() == "all")
+            .expect("`alef all` subcommand");
+        let about = all.get_about().map(|a| a.to_string()).unwrap_or_default();
+        assert!(
+            about.contains("test-apps"),
+            "`alef all` runs a test-apps stage whenever an [e2e] block is configured, but its \
+             one-line summary does not name it: {about:?}"
+        );
+    }
 
     #[test]
     fn parses_e2e_snippets_migrate_options() {
