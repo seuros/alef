@@ -446,6 +446,49 @@ fn internally_tagged_all_unit_variants_declare_object_not_string_enum() {
     );
 }
 
+/// Regression test: a plain `#[napi(string_enum = "snake_case")]` declaration in `.d.ts` must
+/// use the wire value napi-rs's own `convert_case`-based macro actually emits at runtime, not
+/// the value `wire_variant_value`'s serde-oriented case transform computes. The two disagree for
+/// a variant name with a letter-to-digit boundary (mirrors crawlberg's real
+/// `JsContentFilterKind::Bm25`, whose only variant is `Bm25`): serde's helper gives `"bm25"`,
+/// napi's actual runtime value is `"bm_25"`. Before this fix the `.d.ts` declared `Bm25 = "bm25"`,
+/// so TypeScript accepted a string literal the Rust `FromNapiValue` conversion rejected.
+#[test]
+fn plain_string_enum_dts_uses_napis_own_case_algorithm_not_serdes() {
+    let api = ApiSurface {
+        enums: vec![EnumDef {
+            name: "ContentFilterKind".to_string(),
+            serde_rename_all: Some("snake_case".to_string()),
+            variants: vec![EnumVariant {
+                name: "Bm25".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let dts = gen_dts(
+        &api,
+        "",
+        &Default::default(),
+        &[],
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+    );
+
+    assert!(
+        dts.contains("Bm25 = \"bm_25\","),
+        "expected napi's own convert_case-derived wire value \"bm_25\", got:\n{dts}"
+    );
+    assert!(
+        !dts.contains("Bm25 = \"bm25\","),
+        "must not declare serde's wire value \"bm25\" — napi-rs rejects it at runtime:\n{dts}"
+    );
+}
+
 /// `#[serde(untagged)]` enums serialize each variant as its own bare shape (no wrapper, no
 /// discriminant) — a newtype variant as its inner value, a struct variant as its own object.
 /// The napi glue already treats the whole enum as opaque `serde_json::Value`, so this is a

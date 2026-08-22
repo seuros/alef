@@ -150,15 +150,15 @@ pub(super) fn string_enum_js_values(enum_def: &EnumDef) -> Option<Vec<String>> {
 /// `Boundary::defaults()`, which is what splits `Bm` from `25`. A consumer's checked-in
 /// `index.d.ts` may still show the old `heck` spelling — that file is a generated artifact and
 /// is stale until the binding is rebuilt, so it is not evidence about current runtime behavior.
+/// `napi-derive-backend/src/util.rs::to_case` trims *every* leading underscore with
+/// `trim_start_matches('_')`, not just the first — mirror that exactly, since a single
+/// `strip_prefix('_')` would diverge on a name like `__Private`.
 fn apply_napi_case(name: &str, case: Option<&str>) -> String {
     use convert_case::Casing;
     let Some(case) = case.and_then(napi_convert_case) else {
         return name.to_string();
     };
-    match name.strip_prefix('_') {
-        Some(trimmed) => trimmed.to_case(case),
-        None => name.to_case(case),
-    }
+    name.trim_start_matches('_').to_case(case)
 }
 
 fn napi_convert_case(case: &str) -> Option<convert_case::Case<'static>> {
@@ -1018,12 +1018,22 @@ mod tests {
             ("UPPERCASE", Case::UpperFlat),
             ("PascalCase", Case::Pascal),
         ];
-        let names = ["Bm25", "Utf8", "Sha256", "Md5", "Bfs", "BestFirst", "HttpV2Client"];
+        let names = [
+            "Bm25",
+            "Utf8",
+            "Sha256",
+            "Md5",
+            "Bfs",
+            "BestFirst",
+            "HttpV2Client",
+            "_Reserved",
+            "__Private",
+        ];
 
         for (napi_case, canonical_case) in cases {
             for name in names {
                 let actual = apply_napi_case(name, Some(napi_case));
-                let expected = name.to_case(*canonical_case);
+                let expected = name.trim_start_matches('_').to_case(*canonical_case);
                 assert_eq!(
                     actual, expected,
                     "apply_napi_case({name:?}, {napi_case:?}) = {actual:?}, but convert_case \

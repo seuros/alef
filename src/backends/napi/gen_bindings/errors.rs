@@ -408,12 +408,29 @@ pub(super) fn gen_dts(
                     }
                 } else {
                     lines.push(format!("export declare enum {ts_name} {{"));
-                    for variant in &e.variants {
-                        let value = wire_variant_value(
-                            &variant.name,
-                            variant.serde_rename.as_deref(),
-                            e.serde_rename_all.as_deref(),
-                        );
+                    // `wire_variant_value` computes the *serde* JSON wire name, but a plain enum
+                    // here is emitted by `gen_enum` as `#[napi(string_enum = "...")]`, whose
+                    // runtime value comes from napi-derive-backend's own `convert_case`-based
+                    // case transform — a different algorithm that disagrees with serde's for
+                    // identifiers with a letter-to-digit boundary (`Bm25` -> serde's helper gives
+                    // `"bm25"`, napi's actual runtime value is `"bm_25"`). `string_enum_js_values`
+                    // (`enums.rs`) is the canonical derivation of that napi-side value, so ask it
+                    // instead of re-deriving the wire string here. Fall back to the serde name
+                    // only for enum shapes `string_enum_js_values` declines to classify as a
+                    // string enum, preserving prior behavior for those. (~keep)
+                    let napi_values = enums::string_enum_js_values(e);
+                    for (index, variant) in e.variants.iter().enumerate() {
+                        let value = napi_values
+                            .as_ref()
+                            .and_then(|values| values.get(index))
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                wire_variant_value(
+                                    &variant.name,
+                                    variant.serde_rename.as_deref(),
+                                    e.serde_rename_all.as_deref(),
+                                )
+                            });
                         lines.extend(format_jsdoc(&variant.doc, "  "));
                         lines.push(format!("  {} = \"{}\",", variant.name, value));
                     }
