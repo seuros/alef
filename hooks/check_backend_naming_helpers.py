@@ -27,9 +27,29 @@ BANNED_FUNCTIONS = {
     "pascal_to_snake",
 }
 
+# (posix path, function name) pairs that are exempt from BANNED_FUNCTIONS, each with an
+# inline reason. Entries here must be either the canonical definition in
+# `src/codegen/naming.rs` itself, or a context-specific wrapper that delegates to it — never
+# an independent reimplementation. Do not add an entry to silence a real duplicate; consolidate
+# the duplicate instead.
+ALLOWLIST: dict[tuple[str, str], str] = {
+    ("src/codegen/naming.rs", "wire_variant_value"): "canonical definition; naming.rs IS the canonical implementation",
+    ("src/codegen/naming.rs", "pascal_to_snake"): "canonical definition; naming.rs IS the canonical implementation",
+    ("src/backends/java/gen_bindings/helpers.rs", "java_apply_rename_all"): (
+        "thin wrapper delegating to naming::apply_serde_rename_all; kept because "
+        "src/backends/java/gen_bindings/types/enums.rs still calls it directly"
+    ),
+}
+
+# Longest-name-first so a prefixed banned name (e.g. `pascal_to_snake_case` containing
+# `to_snake_case`) and its shorter sibling never race for which alternative matches first.
+_BANNED_ALTERNATION = "|".join(re.escape(name) for name in sorted(BANNED_FUNCTIONS, key=len, reverse=True))
+
+# `\w*_?` catches a prefixed variant of a banned name (e.g. `java_apply_rename_all`), not
+# just an exact match, so a language prefix can no longer be used to dodge the ban.
 FUNCTION_PATTERN = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?fn\s+"
-    rf"({'|'.join(re.escape(name) for name in sorted(BANNED_FUNCTIONS))})\b"
+    rf"(\w*_?(?:{_BANNED_ALTERNATION}))\b"
 )
 
 
@@ -48,7 +68,7 @@ def read_text(path: Path) -> str | None:
 
 def violations_for_file(path: Path) -> list[str]:
     normalized = path.as_posix()
-    if not normalized.startswith("src/backends/") or path.suffix != ".rs":
+    if not normalized.startswith("src/") or path.suffix != ".rs":
         return []
 
     content = read_text(path)
@@ -59,14 +79,17 @@ def violations_for_file(path: Path) -> list[str]:
     for line_number, line in enumerate(content.splitlines(), start=1):
         match = FUNCTION_PATTERN.search(line)
         if match:
-            violations.append(f"{path}:{line_number}: backend-local helper `{match.group(1)}`")
+            function_name = match.group(1)
+            if (normalized, function_name) in ALLOWLIST:
+                continue
+            violations.append(f"{path}:{line_number}: backend-local helper `{function_name}`")
     return violations
 
 
 def main(argv: list[str] | None = None) -> int:
     paths = [Path(raw) for raw in (argv if argv is not None else sys.argv[1:])]
     if not paths:
-        paths = list(Path("src/backends").rglob("*.rs"))
+        paths = list(Path("src").rglob("*.rs"))
 
     violations: list[str] = []
     for path in paths:

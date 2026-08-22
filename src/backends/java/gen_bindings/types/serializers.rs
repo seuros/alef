@@ -2,7 +2,8 @@ use crate::backends::java::type_map::java_type;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::EnumDef;
 
-use crate::backends::java::gen_bindings::helpers::{is_tuple_field_name, java_apply_rename_all};
+use crate::backends::java::gen_bindings::helpers::is_tuple_field_name;
+use crate::codegen::naming::wire_variant_value;
 
 pub(crate) fn gen_byte_array_serializer(package: &str) -> String {
     let header = hash::header(CommentStyle::DoubleSlash);
@@ -111,14 +112,11 @@ pub(super) fn gen_sealed_union_deserializer(out: &mut String, _package: &str, en
             continue;
         }
 
-        let discriminator = variant.serde_rename.clone().unwrap_or_else(|| {
-            let name = &variant.name;
-            enum_def
-                .serde_rename_all
-                .as_deref()
-                .map(|strategy| java_apply_rename_all(name, Some(strategy)))
-                .unwrap_or_else(|| java_apply_rename_all(name, None))
-        });
+        let discriminator = wire_variant_value(
+            &variant.name,
+            variant.serde_rename.as_deref(),
+            enum_def.serde_rename_all.as_deref(),
+        );
 
         out.push_str("      case \"");
         out.push_str(&discriminator);
@@ -162,14 +160,8 @@ pub(super) fn gen_sealed_union_deserializer(out: &mut String, _package: &str, en
         .excluded_variants
         .iter()
         .map(|v| {
-            let discriminator = v.serde_rename.clone().unwrap_or_else(|| {
-                let name = &v.name;
-                enum_def
-                    .serde_rename_all
-                    .as_deref()
-                    .map(|strategy| java_apply_rename_all(name, Some(strategy)))
-                    .unwrap_or_else(|| java_apply_rename_all(name, None))
-            });
+            let discriminator =
+                wire_variant_value(&v.name, v.serde_rename.as_deref(), enum_def.serde_rename_all.as_deref());
             format!("\"{}\"", discriminator)
         })
         .collect();
@@ -214,14 +206,8 @@ pub(super) fn gen_sealed_union_serializer(out: &mut String, _package: &str, enum
         .variants
         .iter()
         .map(|v| {
-            let discriminator = v.serde_rename.clone().unwrap_or_else(|| {
-                let name = &v.name;
-                enum_def
-                    .serde_rename_all
-                    .as_deref()
-                    .map(|strategy| java_apply_rename_all(name, Some(strategy)))
-                    .unwrap_or_else(|| java_apply_rename_all(name, None))
-            });
+            let discriminator =
+                wire_variant_value(&v.name, v.serde_rename.as_deref(), enum_def.serde_rename_all.as_deref());
             let is_unit_tuple = v.fields.len() == 1
                 && is_tuple_field_name(&v.fields[0].name)
                 && matches!(&v.fields[0].ty, crate::core::ir::TypeRef::Unit);
