@@ -51,6 +51,41 @@ fn emit_sendable_conformance(out: &mut String, type_name: &str, mark: Option<&st
     ));
 }
 
+/// The SwiftPM package root that owns the shared `Sources/RustBridge{,C}` targets, derived only
+/// from the resolved output dir and whether the crate has an explicit `[crates.output] swift`
+/// override -- never from the filesystem.
+///
+/// Two layouts are supported, matching the two branches `generate_bindings` and
+/// `generate_service_api` already use for the main module file's own path:
+///
+/// - No override (the common case): `base_dir` (e.g. `packages/swift`, or `packages/swift/{crate}`
+///   for a multi-crate workspace) already IS the package root -- the main module file is placed at
+///   `<base_dir>/Sources/<Module>/<Module>.swift`, so `<base_dir>` is where `Package.swift` and the
+///   shared `Sources/RustBridge{,C}` targets live too.
+/// - Explicit `[crates.output] swift = "..."` override: the configured path names the FINAL leaf
+///   directory the module file is written into directly (`<base_dir>/<Module>.swift`, no
+///   `Sources/<Module>` nesting -- the user controls that layout). That leaf plays the role
+///   `Sources/<Module>` plays in the default case, so the package root sits two levels above it,
+///   the same relationship as the default layout's `<root>/Sources/<Module>`.
+///
+/// This used to be discovered by walking `base_dir`'s ancestors for one that already had a
+/// `Sources/` directory ON DISK -- nondeterministic, since that directory is created and removed
+/// by this very build (and by concurrent scaffold/test runs), so the same config could resolve to
+/// a different package root depending on what else had run. Codegen output must be a pure
+/// function of (IR, config); this derivation reads neither `std::fs` nor `std::env`. ~keep
+fn swift_package_root(base_dir: &str, has_explicit_output: bool) -> PathBuf {
+    let base_path = PathBuf::from(base_dir);
+    if has_explicit_output {
+        base_path
+            .parent()
+            .and_then(|p| p.parent())
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or(base_path)
+    } else {
+        base_path
+    }
+}
+
 impl Backend for SwiftBackend {
     fn name(&self) -> &str {
         "swift"
@@ -507,17 +542,7 @@ impl Backend for SwiftBackend {
 
         let binding_crate_name = format!("{}-swift", api.crate_name);
         let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
-        let package_root = PathBuf::from(&base_dir)
-            .ancestors()
-            .find(|p| p.join("Sources").is_dir())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| {
-                PathBuf::from(&base_dir)
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("packages/swift"))
-            });
+        let package_root = swift_package_root(&base_dir, config.explicit_output.swift.is_some());
         // `consult_build_output: false` -- reading `target/`'s swift-bridge build output here
         // is exactly the alef #A/#B bug: that directory is populated by this same command's
         // own post-build step (`PostBuildStep::MaterializeSwiftBridge`, wired below in
@@ -635,17 +660,7 @@ impl Backend for SwiftBackend {
         let binding_crate_name = format!("{}-swift", config.name);
 
         let base_dir = resolve_output_dir(config.output_paths.get("swift"), &config.name, "packages/swift");
-        let package_root = PathBuf::from(&base_dir)
-            .ancestors()
-            .find(|p| p.join("Sources").is_dir())
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| {
-                PathBuf::from(&base_dir)
-                    .parent()
-                    .and_then(|p| p.parent())
-                    .map(|p| p.to_path_buf())
-                    .unwrap_or_else(|| PathBuf::from("packages/swift"))
-            });
+        let package_root = swift_package_root(&base_dir, config.explicit_output.swift.is_some());
 
         build_config.post_build.push(PostBuildStep::MaterializeSwiftBridge {
             binding_crate_name,
