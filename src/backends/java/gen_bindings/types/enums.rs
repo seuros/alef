@@ -9,14 +9,23 @@ use crate::backends::java::gen_bindings::helpers::{
     qualify_shadowed_type, safe_java_field_name,
 };
 
-pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str, text_types: &[String]) -> String {
+/// True when the Java binding backend emits `enum_def` as a plain `enum` with a `getValue()`
+/// accessor (`simple_enum_class.jinja`), rather than a tagged- or untagged-union wrapper class
+/// (`gen_java_tagged_union` / `gen_java_untagged_wrapper`, neither of which declare
+/// `getValue()`). `gen_enum_class` below calls this directly to pick its branch, so the two
+/// can never disagree; callers outside this module (e.g. e2e assertion codegen deciding
+/// whether a field access may append `.getValue()`) must go through this function rather than
+/// re-deriving the same condition, for the same reason. ~keep
+pub(crate) fn emits_get_value(enum_def: &EnumDef) -> bool {
     let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    !((enum_def.serde_tag.is_some() && has_data_variants) || (enum_def.serde_untagged && has_data_variants))
+}
 
-    if enum_def.serde_tag.is_some() && has_data_variants {
-        return gen_java_tagged_union(package, enum_def);
-    }
-
-    if enum_def.serde_untagged && has_data_variants {
+pub(crate) fn gen_enum_class(package: &str, enum_def: &EnumDef, main_class: &str, text_types: &[String]) -> String {
+    if !emits_get_value(enum_def) {
+        if enum_def.serde_tag.is_some() {
+            return gen_java_tagged_union(package, enum_def);
+        }
         let emit_text = text_types.iter().any(|t| t == &enum_def.name);
         return gen_java_untagged_wrapper(package, enum_def, main_class, emit_text);
     }

@@ -1,4 +1,4 @@
-use super::super::ir_enum::is_enum_path;
+use super::super::ir_enum::{enum_type_at_path, is_enum_path};
 use super::super::parse::{
     normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices,
 };
@@ -331,6 +331,30 @@ impl FieldResolver {
             return true;
         }
         is_enum_path(&self.ir_enum_map, resolved)
+    }
+
+    /// Resolve the concrete IR enum type name backing `field`'s leaf segment, when the IR
+    /// walk (see `ir_enum` module docs) positively confirms it. `None` covers both "the IR
+    /// doesn't know" (unresolved root type, config-only classification) and "not an enum
+    /// field" — callers that need to distinguish those must call `is_enum` first.
+    ///
+    /// Used by backends whose emitted accessor for an enum-typed field depends on which
+    /// concrete Rust representation that specific enum has (e.g. Java's plain-enum-with-
+    /// `getValue()` vs. tagged/untagged-union-wrapper split), not just "is this field an
+    /// enum" in the abstract.
+    pub fn ir_enum_type_name(&self, field: &str) -> Option<String> {
+        let resolved = self.resolve(field);
+        enum_type_at_path(&self.ir_enum_map, resolved)
+    }
+
+    /// Whether the Java binding backend emits a `getValue()` accessor for the enum type
+    /// backing `field`, per `backends::java::gen_bindings::emits_get_value`. `None` when the
+    /// IR does not positively resolve `field` to a concrete enum type (unresolved root type,
+    /// or a field classified as enum only via the hand-maintained `fields_enum` config) — the
+    /// caller must decide its own fallback for "unknown" rather than this method guessing.
+    pub fn java_enum_emits_get_value(&self, field: &str) -> Option<bool> {
+        let name = self.ir_enum_type_name(field)?;
+        Some(!self.java_wrapper_enum_names.contains(&name))
     }
 
     /// Check if a field name is the root of a collection type (i.e., the field

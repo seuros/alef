@@ -41,6 +41,7 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
 
     let mut field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
     let mut enum_fields: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut enum_field_types: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     for type_def in type_defs {
         for field in &type_def.fields {
@@ -52,6 +53,10 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
                     .entry(type_def.name.clone())
                     .or_default()
                     .insert(field.name.clone());
+                enum_field_types
+                    .entry(type_def.name.clone())
+                    .or_default()
+                    .insert(field.name.clone(), named.to_string());
             } else if struct_names.contains(named) {
                 field_types
                     .entry(type_def.name.clone())
@@ -64,6 +69,7 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
     IrEnumMap {
         field_types,
         enum_fields,
+        enum_field_types,
         root_type: None,
     }
 }
@@ -76,6 +82,20 @@ fn segment_name(segment: &PathSegment) -> Option<&str> {
         PathSegment::MapAccess { field, .. } => Some(field),
         PathSegment::Length => None,
     }
+}
+
+/// Walk `map.field_types` from `root` through `prefix`, returning the owner type the path's
+/// last segment lands on — or `None` if any segment names something the IR does not recognize
+/// as a field on the current owner. Shared by [`is_enum_path`] and [`enum_type_at_path`] so the
+/// two answer from the exact same walk and can never disagree about which type a path reaches.
+fn resolve_owner<'a>(map: &'a IrEnumMap, root: &'a str, prefix: &[PathSegment]) -> Option<&'a str> {
+    let mut owner = root;
+    for segment in prefix {
+        let name = segment_name(segment)?;
+        let next = map.field_types.get(owner).and_then(|fields| fields.get(name))?;
+        owner = next.as_str();
+    }
+    Some(owner)
 }
 
 /// Walk `path` from `map.root_type` through `map.field_types`, answering whether the leaf
@@ -94,20 +114,28 @@ pub(super) fn is_enum_path(map: &IrEnumMap, path: &str) -> bool {
     let Some((last, prefix)) = segments.split_last() else {
         return false;
     };
-
-    let mut owner = root;
-    for segment in prefix {
-        let Some(name) = segment_name(segment) else {
-            return false;
-        };
-        match map.field_types.get(owner).and_then(|fields| fields.get(name)) {
-            Some(next) => owner = next.as_str(),
-            None => return false,
-        }
-    }
-
+    let Some(owner) = resolve_owner(map, root, prefix) else {
+        return false;
+    };
     let Some(name) = segment_name(last) else {
         return false;
     };
     map.enum_fields.get(owner).is_some_and(|fields| fields.contains(name))
+}
+
+/// Resolve the concrete IR enum type name backing `path`'s leaf segment, walking the same
+/// `map.field_types` chain as [`is_enum_path`]. Returns `None` under the exact same
+/// "unknown" conditions `is_enum_path` returns `false` for; callers that need to know *which*
+/// enum a positively-classified field resolves to (not just that it is one) use this instead
+/// of re-walking the path themselves.
+pub(super) fn enum_type_at_path(map: &IrEnumMap, path: &str) -> Option<String> {
+    let root = map.root_type.as_deref()?;
+    let segments = parse_path(path);
+    let (last, prefix) = segments.split_last()?;
+    let owner = resolve_owner(map, root, prefix)?;
+    let name = segment_name(last)?;
+    map.enum_field_types
+        .get(owner)
+        .and_then(|fields| fields.get(name))
+        .cloned()
 }

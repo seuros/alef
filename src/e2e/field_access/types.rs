@@ -78,6 +78,14 @@ pub struct FieldResolver {
     /// entirely to the hand-maintained `fields_enum` config. See [`IrEnumMap`] for why this
     /// is keyed by `(type, field)` rather than by bare field name.
     pub(super) ir_enum_map: IrEnumMap,
+    /// Names of IR enum types for which the Java binding backend does NOT emit a plain
+    /// `enum` with a `getValue()` accessor — i.e. `!backends::java::gen_bindings::emits_get_value`
+    /// (tagged- or untagged-union wrapper classes). Populated once per crate IR, from the exact
+    /// predicate the Java binding backend itself uses, via `with_java_wrapper_enum_names`.
+    /// Empty for every non-Java resolver and for any Java resolver built before that IR data
+    /// was wired in, in which case `java_enum_emits_get_value` answers `None` (unknown) rather
+    /// than assuming either shape.
+    pub(super) java_wrapper_enum_names: HashSet<String>,
 }
 
 /// IR-derived enum-field classification, keyed by owner type so a field named `kind` that is
@@ -101,6 +109,12 @@ pub struct FieldResolver {
 pub struct IrEnumMap {
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub enum_fields: HashMap<String, HashSet<String>>,
+    /// `enum_field_types[type_name][field_name]` — the IR enum's own name for an entry also
+    /// present in `enum_fields`. Lets a caller resolve WHICH enum a positively-classified
+    /// field is, not just that it is one — e.g. so Java e2e codegen can check whether that
+    /// specific enum is a plain `enum` (`getValue()` accessor) or a tagged/untagged-union
+    /// wrapper class, per `backends::java::gen_bindings::emits_get_value`.
+    pub enum_field_types: HashMap<String, HashMap<String, String>>,
     pub root_type: Option<String>,
 }
 
