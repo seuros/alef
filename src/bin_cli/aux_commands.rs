@@ -707,7 +707,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             continue;
                         }
                         tracing::info!("Running test apps for: {}", names.join(", "));
-                        pipeline::test_apps_run(e2e_crate, &names)?;
+                        pipeline::test_apps_run(e2e_crate, config_path, &names)?;
                     }
                     Ok(None)
                 }
