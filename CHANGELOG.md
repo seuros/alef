@@ -27,6 +27,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Regression coverage: `tests/backends_php_ext_facade_symbol_subset.rs`. It diffs the facade
   method set the php-ext backend actually emits against the callable the smoke-app generator
   actually calls, rather than pinning one symbol name.
+- **An already-scaffolded consumer's `poly.toml` kept re-merging the `alef-snippets`
+  pre-commit hook forever, after alef itself stopped emitting it in 0.61.1.**
+  `merge_managed_toml_core`'s prune pass removes only array *values* it tracked itself; it has
+  no counterpart that retracts a whole *table* alef stops emitting, so the union pass kept
+  re-adding a table already present on disk. Every commit shelled out to an `alef` binary the
+  consumer's lint job never installs, failing `poly lint`/pre-commit with `alef-snippets: 1:
+  alef: not found`. Added `migrate_poly_toml_drop_snippet_hook`
+  (`src/scaffold/languages/poly_migrations.rs`), registered in
+  `write_scaffold_files_report` next to the other pre-existing-file repairs: self-guarding on
+  an exact match of the table's own `run` command and `workspace = true`, so it never touches
+  a consumer's own differently-configured `alef-snippets` entry. Regression coverage:
+  `src/scaffold/tests/poly_migrations.rs`.
+
+- **The Ruby scaffold's `spec/<name>_spec.rb` seed failed `Style/WordArray` on any DTO with
+  two or more `String` fields.** `ruby_construct_example` asserted a multi-field DTO's values
+  with a bracketed array literal (e.g. `["alef-scaffold", "alef-scaffold"]`); the repeated
+  seed literal is a hyphenated word, which the scaffolded `.rubocop.yml`'s default
+  `Style/WordArray` (`WordRegex` permits one hyphen, `MinSize: 2`) still flags. An all-String
+  field list now emits `%w[...]` instead, leaving mixed-type field lists (never all-String
+  literals) on the bracket form the cop does not flag.
+
 - **The C# backend declared `[DllImport]` entry points for symbols the C FFI backend never
   exports, whenever a scalar-crossing enum reached a parameter position.** A fieldless `Copy`
   enum crosses the C ABI as `int32_t`, not as an `AlefHandle`, so the FFI backend gives it
