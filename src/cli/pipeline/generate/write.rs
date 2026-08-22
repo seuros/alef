@@ -686,8 +686,9 @@ pub fn write_files_report(files: &[(Language, Vec<GeneratedFile>)], base_dir: &P
 /// without treating Alef's own formatting pass as drift.
 ///
 /// Files that don't carry the alef header marker (scaffold-once Cargo.toml,
-/// composer.json, gemspec, package.json, lockfiles) are skipped — alef has
-/// no claim on them.
+/// composer.json, package.json, lockfiles) are skipped — alef has
+/// no claim on them. The Ruby gemspec and `.rubocop.yml` are NOT in this category — both carry
+/// the alef header (`generated_header: true`) and are alef-owned, overwritten on every `alef build`.
 pub fn finalize_hashes(
     paths: &std::collections::HashSet<std::path::PathBuf>,
     sources_hash: &str,

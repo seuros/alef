@@ -1030,8 +1030,9 @@ pub(crate) fn verify_walk_multi(
 /// dependency-fetch cache or build-output directory is neither this run's generated output
 /// nor its generation input — so verify stays fast and never claims foreign content. Files
 /// without the alef header marker are skipped silently — those are user-owned (scaffold-once
-/// Cargo.toml templates, composer.json, gemspec, package.json, lockfiles, etc.) and alef has
-/// no claim.
+/// Cargo.toml templates, composer.json, package.json, lockfiles, etc.) and alef has
+/// no claim. The Ruby gemspec and `.rubocop.yml` are NOT in this category — both carry the
+/// alef header (`generated_header: true`) and are alef-owned, overwritten on every `alef build`.
 pub(crate) fn verify_walk(base_dir: &std::path::Path, inputs_hash: &str) -> anyhow::Result<Vec<StaleMismatch>> {
     let mut stale: Vec<StaleMismatch> = collect_alef_hashes(base_dir)
         .into_iter()

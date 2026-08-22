@@ -571,3 +571,78 @@ fn every_seed_tier_keeps_its_uncomment_pass_marker() {
         );
     }
 }
+
+/// Regression for the gemspec/RuboCop deadlock: alef's generated `.gemspec` once filtered
+/// `spec.files` with `.reject { |f| f.match?(%r{...}) }`, which RuboCop's
+/// `Style/SelectByRegexp` flags (it wants `grep_v`). Both the gemspec and the `.rubocop.yml`
+/// that lints it are `generated_header: true`, so the consumer has no file they can hand-edit
+/// to escape the violation -- `alef build` reintroduces it every run. This test does not shell
+/// out to `rubocop` (not guaranteed present in CI); instead it structurally forbids the exact
+/// shape the cop flags -- a `.select`/`.reject` block whose predicate is `<expr>.match?(%r{...})`
+/// -- anywhere in the generated gemspec, and confirms `grep_v` is present as the replacement.
+#[test]
+fn gemspec_files_filter_never_reintroduces_the_select_by_regexp_anti_pattern() {
+    let files = scaffold_ruby(&ApiSurface::default(), &minimal_config()).expect("scaffold");
+    let gemspec = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with(".gemspec"))
+        .expect("a gemspec must be emitted");
+
+    let select_by_regexp_shape = regex_lite_contains_match_predicate(&gemspec.content);
+    assert!(
+        !select_by_regexp_shape,
+        "gemspec re-introduces the Style/SelectByRegexp anti-pattern \
+         (`.select`/`.reject` with a `.match?(%r{{...}})` predicate), got:\n{}",
+        gemspec.content
+    );
+    assert!(
+        gemspec.content.contains(".grep_v(%r{"),
+        "gemspec must filter spec.files via grep_v, RuboCop's own autocorrect target, got:\n{}",
+        gemspec.content
+    );
+}
+
+/// Scans for `.select { |x| <expr>.match?(%r{...}) }` or `.reject { |x| <expr>.match?(%r{...}) }`
+/// without pulling in a full regex engine dependency for one test: a hand-rolled scanner over
+/// the small, fixed set of generated files is enough to catch the specific shape RuboCop's
+/// `Style/SelectByRegexp` flags.
+fn regex_lite_contains_match_predicate(content: &str) -> bool {
+    for method in [".select {", ".reject {", ".select{", ".reject{"] {
+        let mut search_from = 0;
+        while let Some(offset) = content[search_from..].find(method) {
+            let start = search_from + offset;
+            let block_end = content[start..].find('}').map_or(content.len(), |end| start + end + 1);
+            if content[start..block_end].contains(".match?(%r{") {
+                return true;
+            }
+            search_from = start + method.len();
+        }
+    }
+    false
+}
+
+/// Defense in depth: even after the `Style/SelectByRegexp` fix, a *future* RuboCop cop could
+/// flag something else in the alef-owned gemspec or Rakefile, and the consumer would again have
+/// no file to hand-edit around it (both carry `generated_header: true`, so `alef build`
+/// overwrites any workaround). Excluding both from `AllCops.Exclude` in the generated
+/// `.rubocop.yml` -- mirroring the Go backend's `exclusions: generated: lax` -- means a new cop
+/// can no longer reopen this exact deadlock shape on a file the consumer cannot edit.
+#[test]
+fn rubocop_config_excludes_the_alef_owned_gemspec_and_rakefile() {
+    let files = scaffold_ruby(&ApiSurface::default(), &minimal_config()).expect("scaffold");
+    let rubocop_yml = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with(".rubocop.yml"))
+        .expect("a .rubocop.yml must be emitted");
+
+    assert!(
+        rubocop_yml.content.contains("\"*.gemspec\""),
+        "AllCops.Exclude must cover the alef-owned gemspec, got:\n{}",
+        rubocop_yml.content
+    );
+    assert!(
+        rubocop_yml.content.contains("\"Rakefile\""),
+        "AllCops.Exclude must cover the alef-owned Rakefile, got:\n{}",
+        rubocop_yml.content
+    );
+}
