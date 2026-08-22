@@ -1,3 +1,4 @@
+use crate::snippets::discovery;
 use crate::snippets::gaps::{discover_includes, parse_include_target};
 use crate::snippets::parser::{self, FrontmatterStatus};
 use crate::snippets::types::Language;
@@ -30,6 +31,7 @@ pub enum AuditIssueKind {
     InvalidInclude,
     UnknownLanguage,
     UnreadableFile,
+    MissingDirectory,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,11 +59,20 @@ impl AuditReport {
 ///
 /// # Errors
 ///
-/// This function reports unreadable files as audit issues rather than returning
-/// an error, so callers can see every problem found in one run. ~keep
+/// This function reports unreadable files and configured roots that do not exist as audit
+/// issues rather than returning an error, so callers can see every problem found in one run.
+/// ~keep
 #[must_use]
 pub fn audit(config: &AuditConfig) -> AuditReport {
     let mut issues = Vec::new();
+    issues.extend(missing_directory_issues(
+        discovery::SNIPPET_DIRECTORY_KIND,
+        &config.snippet_dirs,
+    ));
+    issues.extend(missing_directory_issues(
+        discovery::DOCUMENTATION_DIRECTORY_KIND,
+        &config.docs_dirs,
+    ));
     for snippet_dir in &config.snippet_dirs {
         issues.extend(audit_snippets(snippet_dir, config.require_frontmatter, &config.exclude));
     }
@@ -85,6 +96,28 @@ pub fn audit(config: &AuditConfig) -> AuditReport {
             .then(left.message.cmp(&right.message))
     });
     AuditReport { issues }
+}
+
+/// Report every configured root that does not exist on disk.
+///
+/// Without this the audit reads as clean over a root that is not there: `markdown_files` walks
+/// nothing and contributes no issues, so a `docs_dirs` entry pointing at a path that was renamed
+/// or never created reports "Audit clean: no issues found" having examined not one file. The
+/// missing-directory policy itself lives in `discovery::missing_configured_directories`; an audit
+/// reports it as an issue rather than an error because that is how this module surfaces every
+/// other unreadable input (see [`audit`]). ~keep
+fn missing_directory_issues(kind: &str, dirs: &[PathBuf]) -> Vec<AuditIssue> {
+    discovery::missing_configured_directories(dirs)
+        .into_iter()
+        .map(|directory| {
+            issue(
+                AuditIssueKind::MissingDirectory,
+                directory,
+                1,
+                discovery::missing_directory_message(kind, directory),
+            )
+        })
+        .collect()
 }
 
 fn audit_snippets(snippet_dir: &Path, require_frontmatter: bool, exclude: &[PathBuf]) -> Vec<AuditIssue> {
@@ -243,6 +276,9 @@ fn audit_fences(path: &Path, content: &str) -> Vec<AuditIssue> {
 }
 
 fn markdown_files(base: &Path, exclude: &[PathBuf]) -> Vec<PathBuf> {
+    // Not the silent-empty this module used to have: a root that is absent is reported by
+    // `missing_directory_issues` before any walk happens, so an empty list here can no longer be
+    // mistaken for an audited-and-clean root. ~keep
     if !base.exists() {
         return Vec::new();
     }
@@ -365,6 +401,64 @@ mod tests {
                 .issues
                 .iter()
                 .any(|issue| issue.kind == AuditIssueKind::BrokenFence)
+        );
+    }
+
+    /// A configured `docs_dirs` root that does not exist must be reported, not walked over in
+    /// silence. `markdown_files` returns an empty list for a path that is not there, so the
+    /// audit previously reported zero issues -- "Audit clean: no issues found" -- for a
+    /// documentation tree it never opened, which is indistinguishable from one that was fully
+    /// audited. Unlike `snippet_dirs`, nothing upstream of this walks `docs_dirs` eagerly, so
+    /// this was live, not merely theoretical. ~keep
+    #[test]
+    fn reports_a_docs_directory_that_does_not_exist() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let missing = dir.path().join("docs-never-created");
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![missing.clone()],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert!(
+            report.has_errors(),
+            "a documentation root that does not exist must fail the audit, not read as clean"
+        );
+        assert_eq!(
+            report.issues.len(),
+            1,
+            "exactly one issue is expected for one missing root: {:?}",
+            report.issues
+        );
+        assert_eq!(report.issues[0].kind, AuditIssueKind::MissingDirectory);
+        assert!(
+            report.issues[0].message.contains(&missing.display().to_string()),
+            "the issue must name the missing path so the misconfiguration is actionable: {}",
+            report.issues[0].message
+        );
+    }
+
+    /// The same policy `discover_snippets` established: a root that exists but holds nothing is
+    /// legitimate and stays silent. Only a root that is missing outright is a misconfiguration.
+    #[test]
+    fn an_existing_empty_docs_directory_audits_clean() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).expect("create empty docs directory");
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert_eq!(
+            report.issues,
+            Vec::new(),
+            "an existing but empty documentation root is not a misconfiguration"
         );
     }
 

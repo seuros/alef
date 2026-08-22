@@ -5,29 +5,67 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// How a configured directory is named in a missing-directory diagnostic.
+///
+/// Kept as constants rather than literals at each call site so the same configured root reads
+/// the same way whichever surface rejects it. ~keep
+pub const SNIPPET_DIRECTORY_KIND: &str = "snippet";
+/// See [`SNIPPET_DIRECTORY_KIND`]; used for `docs_dirs`-style documentation roots.
+pub const DOCUMENTATION_DIRECTORY_KIND: &str = "documentation";
+
+/// The configured directories that do not exist on disk, in configuration order.
+///
+/// This is the one place the project's missing-directory policy is expressed, and every surface
+/// that walks configured roots is expected to consult it: a configured directory that does not
+/// exist is almost always a typo or a path that generation has not populated yet -- never a
+/// legitimate "nothing to check" signal. Silently skipping it makes a root that was repointed but
+/// never populated indistinguishable from one that was fully validated, because the check then
+/// reports a clean run having examined nothing.
+///
+/// A directory that exists but is empty is a different, legitimate case and is deliberately not
+/// reported here: it still contributes zero snippets, but only a directory that is missing
+/// outright is a misconfiguration. ~keep
+#[must_use]
+pub fn missing_configured_directories(dirs: &[PathBuf]) -> Vec<&Path> {
+    dirs.iter().filter(|dir| !dir.exists()).map(PathBuf::as_path).collect()
+}
+
+/// The diagnostic for a single configured directory that does not exist.
+#[must_use]
+pub fn missing_directory_message(kind: &str, directory: &Path) -> String {
+    format!("configured {kind} directory does not exist: {}", directory.display())
+}
+
+/// Reject the first configured directory that does not exist on disk.
+///
+/// See [`missing_configured_directories`] for why a missing directory is never treated as an
+/// empty one.
+///
+/// # Errors
+///
+/// Returns an error naming the first missing directory.
+pub fn ensure_configured_directories_exist(kind: &str, dirs: &[PathBuf]) -> Result<()> {
+    match missing_configured_directories(dirs).first() {
+        Some(missing) => Err(crate::snippets::error::Error::Other(missing_directory_message(
+            kind, missing,
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Discover snippets beneath the provided directories.
 ///
 /// # Errors
 ///
-/// Returns an error when a source file cannot be parsed into snippet blocks.
+/// Returns an error when a configured directory does not exist (see
+/// [`missing_configured_directories`]), or when a source file cannot be parsed into snippet
+/// blocks.
 pub fn discover_snippets(dirs: &[PathBuf], language_filter: Option<&[Language]>) -> Result<Vec<Snippet>> {
     let mut snippets = Vec::new();
 
+    ensure_configured_directories_exist(SNIPPET_DIRECTORY_KIND, dirs)?;
+
     for dir in dirs {
-        // A configured directory that does not exist is almost always a typo or a path that
-        // generation has not populated yet -- never a legitimate "nothing to check" signal. Prior
-        // behaviour silently skipped it, which made a snippets root that was repointed but never
-        // populated indistinguishable from one that was fully validated: discovery would report
-        // zero snippets and every caller (`alef snippets list`, `check`, `gaps`) treated that as a
-        // clean run. A directory that exists but is empty is a different, legitimate case and is
-        // left alone -- it still contributes zero snippets, but callers can tell the two apart
-        // because this path only rejects a directory that is missing outright. ~keep
-        if !dir.exists() {
-            return Err(crate::snippets::error::Error::Other(format!(
-                "configured snippet directory does not exist: {}",
-                dir.display()
-            )));
-        }
         let ledger_metadata = load_ledger_metadata(dir)?;
 
         for entry in WalkDir::new(dir)
