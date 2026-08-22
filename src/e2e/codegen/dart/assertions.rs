@@ -144,7 +144,7 @@ pub(super) fn render_assertion_dart(
         // does. Restricted to enum-typed element fields only: a scalar field (e.g. a `String`
         // element) must keep comparing its actual `.toString()` content, not its Dart runtime
         // type name. ~keep
-        let elem_is_enum = field_resolver.is_enum(f) || field_resolver.is_enum(&resolved_full);
+        let elem_is_enum = field_resolver.is_enum(f) || field_resolver.is_enum(resolved_full);
         let elem_to_string = if elem_is_enum {
             format!("e.{elem_accessor}.runtimeType.toString()")
         } else {
