@@ -285,6 +285,40 @@ fn warn_deferred_reports_an_unpublished_version_reason_verbatim() {
     );
 }
 
+/// The mixed batch is what a real release run produces, and it is where a single heading
+/// cannot be right: a registry-mode run that is also missing a formatter emits both kinds at
+/// once. Each kind must get its own heading, or the missing formatter is announced under the
+/// publish heading and read as noise. ~keep
+#[test]
+#[tracing_test::traced_test]
+fn a_mixed_batch_reports_each_reason_under_its_own_heading() {
+    let entries = vec![
+        DeferredFormatting {
+            language: "php".to_owned(),
+            step: "php-cs-fixer fix .".to_owned(),
+            reason: MISSING_TOOLCHAIN_REASON.to_owned(),
+        },
+        DeferredFormatting {
+            language: "go".to_owned(),
+            step: GO_MOD_TIDY_STEP.to_owned(),
+            reason: UNPUBLISHED_VERSION_REASON.to_owned(),
+        },
+    ];
+
+    warn_deferred_for_crate("sample-crate", &entries);
+
+    assert!(
+        logs_contain("[sample-crate] 1 formatting step(s) skipped"),
+        "the missing formatter needs its own heading, counting only itself"
+    );
+    assert!(
+        logs_contain("[sample-crate] 1 dependency-resolution step(s) deferred until the pinned version is published"),
+        "the publish deferral needs its own heading, counting only itself"
+    );
+    assert!(logs_contain("php-cs-fixer fix ."), "each entry must still be listed");
+    assert!(logs_contain(GO_MOD_TIDY_STEP), "each entry must still be listed");
+}
+
 /// The default path shells out to `poly fmt --fix`. With poly installed it must
 /// actually reformat the file; without it, non-strict mode must defer rather than
 /// abort instead of the old behaviour of aborting regardless of `strict` -- a

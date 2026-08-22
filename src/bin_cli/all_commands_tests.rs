@@ -1,6 +1,7 @@
 use super::{
-    create_once_overwrite, handle, refused_snippet_dir_paths, snippet_validation_needs_build_artifacts,
-    sync_registry_versions_before_all, warn_if_snippet_validation_needs_build,
+    create_once_overwrite, handle, refused_snippet_dir_paths, report_deferred_formatting,
+    snippet_validation_needs_build_artifacts, sync_registry_versions_before_all,
+    warn_if_snippet_validation_needs_build,
 };
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
@@ -921,5 +922,57 @@ fn all_writes_the_full_cross_phase_union_into_the_language_manifest() {
         manifest, expected,
         "python.manifest must hold the union of every phase's alef-marked output -- bindings, \
          stubs, and public API -- not just generate_bindings' own single file. Got: {manifest:?}"
+    );
+}
+
+/// A configured e2e format hook whose executable is absent is survived and *recorded* rather
+/// than fatal (see `e2e::format::resolve_shell_failure`). `alef all`'s own reporter then
+/// announced every recorded entry under "deferred until the pinned version is published" --
+/// true only of registry-mode dependency resolution. An operator reading that heading files
+/// the entry under benign release-cycle noise and commits the unformatted tree: a consumer
+/// whose PHP hook pointed at a `vendor/bin/php-cs-fixer` its checkout does not have shipped 31
+/// unformatted PHP files with no signal that formatting had been skipped at all. The heading
+/// must name the real reason -- the same fix `e2e::format::warn_deferred` already carries for
+/// the standalone stage commands. ~keep
+#[test]
+#[tracing_test::traced_test]
+fn a_missing_formatter_executable_is_not_reported_as_a_publish_deferral() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("e2e-out");
+    std::fs::create_dir_all(out.join("php")).expect("create php output dir");
+    let script = out.join("php").join("run_tests.php");
+    std::fs::write(&script, "<?php\n").expect("write php file");
+
+    let mut e2e_config = crate::core::config::e2e::E2eConfig {
+        output: out.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
+    e2e_config.format.insert(
+        "php".to_owned(),
+        "(cd {dir} && ../../vendor/bin/alef-absent-php-cs-fixer fix .)".to_owned(),
+    );
+    let files = vec![GeneratedFile {
+        path: script,
+        content: "<?php\n".to_owned(),
+        generated_header: false,
+    }];
+
+    let deferred = crate::e2e::format::run_formatters(&files, &e2e_config, false)
+        .expect("a missing formatter executable must not abort the run");
+    assert_eq!(deferred.len(), 1, "the skip must be recorded, got: {deferred:?}");
+
+    report_deferred_formatting("sample-crate", &deferred);
+
+    assert!(
+        !logs_contain("deferred until the pinned version is published"),
+        "a missing formatter executable must not be reported as waiting on a publish"
+    );
+    assert!(
+        logs_contain("is NOT formatted"),
+        "the heading must say the output was left unformatted"
+    );
+    assert!(
+        logs_contain("executable is not installed"),
+        "the report must still carry the entry's own reason"
     );
 }

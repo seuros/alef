@@ -51,6 +51,19 @@ pub struct DeferredFormatting {
     pub reason: String,
 }
 
+impl DeferredFormatting {
+    /// Whether this entry records an absent executable rather than an unpublished version.
+    ///
+    /// The two whys demand opposite operator actions — "install the toolchain" versus "wait
+    /// for the release" — so every reporter has to tell them apart. [`MISSING_TOOLCHAIN_REASON`]
+    /// is written verbatim at both sites that record an absent executable, and is the only
+    /// reason that is, which is what makes the comparison the classification rather than a
+    /// heuristic over free text. ~keep
+    pub fn is_missing_toolchain(&self) -> bool {
+        self.reason == MISSING_TOOLCHAIN_REASON
+    }
+}
+
 impl std::fmt::Display for DeferredFormatting {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "[{}] {} — {}", self.language, self.step, self.reason)
@@ -338,22 +351,54 @@ fn resolve_shell_failure(
 /// Step name recorded when `go mod tidy` is deferred.
 const GO_MOD_TIDY_STEP: &str = "go mod tidy";
 
-/// Log any deferred resolution steps.
-///
-/// For standalone stage commands, which have no later pipeline phase to report
-/// from the way `alef all` does.
-///
-/// ~keep The prefix stays reason-agnostic on purpose: `DeferredFormatting`'s own `reason`
-/// field (rendered by its `Display` impl below) is the only place that knows WHY a step
-/// was deferred, and there are two distinct whys — [`UNPUBLISHED_VERSION_REASON`] (registry
-/// mode resolving a version this run itself produces) and [`MISSING_TOOLCHAIN_REASON`] (the
-/// formatter's executable is absent, unrelated to publishing). A prefix that hard-coded
-/// "until the pinned version is published" was correct for the first and actively false for
-/// the second — the exact shape a CI job without `mix`/`go` on PATH hits on every run,
-/// pointing operators at "wait for a release" instead of "install the toolchain".
+/// Log any deferred resolution steps, for standalone stage commands — which have no
+/// later pipeline phase to report from the way `alef all` does.
 pub fn warn_deferred(deferred: &[DeferredFormatting]) {
-    for entry in deferred {
-        warn!("formatting step deferred: {entry}");
+    report_deferred(None, deferred);
+}
+
+/// [`warn_deferred`] for a pipeline that reports per crate (`alef all`).
+///
+/// Shares one implementation with the standalone reporter deliberately: the two used to
+/// classify the same `DeferredFormatting` list differently, and only one of them was ever
+/// fixed. ~keep
+pub fn warn_deferred_for_crate(crate_name: &str, deferred: &[DeferredFormatting]) {
+    report_deferred(Some(crate_name), deferred);
+}
+
+/// Report deferred steps grouped by WHY they were deferred.
+///
+/// ~keep There are two distinct whys and they demand opposite operator actions:
+/// [`UNPUBLISHED_VERSION_REASON`] (registry mode resolving a version this run itself
+/// produces — wait for the release) and [`MISSING_TOOLCHAIN_REASON`] (the formatter's
+/// executable is absent — install it, and treat this run's output as unformatted). A
+/// heading that hard-coded "until the pinned version is published" was correct for the
+/// first and actively false for the second, and it is the heading an operator triages on:
+/// filed under benign release-cycle noise, a skipped formatter's own entry goes unread and
+/// the unformatted tree gets committed. Missing toolchains therefore get their own heading
+/// that says the output was left unformatted.
+fn report_deferred(crate_name: Option<&str>, deferred: &[DeferredFormatting]) {
+    let scope = crate_name.map_or_else(String::new, |name| format!("[{name}] "));
+    let (missing, unpublished): (Vec<_>, Vec<_>) = deferred.iter().partition(|entry| entry.is_missing_toolchain());
+    if !missing.is_empty() {
+        warn!(
+            "{scope}{} formatting step(s) skipped — the executable is not installed, so that \
+             output is NOT formatted. Install the toolchain, or re-run with --strict to make \
+             this fatal:",
+            missing.len()
+        );
+        for entry in missing {
+            warn!("  {entry}");
+        }
+    }
+    if !unpublished.is_empty() {
+        warn!(
+            "{scope}{} dependency-resolution step(s) deferred until the pinned version is published:",
+            unpublished.len()
+        );
+        for entry in unpublished {
+            warn!("  {entry}");
+        }
     }
 }
 
