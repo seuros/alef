@@ -113,6 +113,7 @@ fn make_api_surface() -> ApiSurface {
 
 mod bridges;
 mod cfg_functions;
+mod determinism;
 mod trait_bridge;
 mod wide_int_returns;
 mod wrappers;

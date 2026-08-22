@@ -7,6 +7,7 @@ use tracing_test::traced_test;
 
 mod config_marshalling_fixtures;
 mod config_marshalling_tests;
+mod determinism;
 
 fn test_config() -> ResolvedCrateConfig {
     let toml = r#"

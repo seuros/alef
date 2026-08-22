@@ -474,7 +474,13 @@ pub(super) fn gen_extendr_wrappers_r(
         map
     };
 
-    for typ in &api.types {
+    // Sorted by name: `api.types`' incoming order reflects source-extraction order, which is not
+    // guaranteed stable across separate `alef` invocations. Every class env block below is
+    // concatenated into a single `.R` file, so unsorted iteration would make that file's bytes
+    // depend on that upstream ordering. ~keep
+    let mut types_for_class_env_emission: Vec<&crate::core::ir::TypeDef> = api.types.iter().collect();
+    types_for_class_env_emission.sort_by(|a, b| a.name.cmp(&b.name));
+    for typ in types_for_class_env_emission {
         if typ.is_trait || excluded.contains(&typ.name) {
             continue;
         }
@@ -554,7 +560,11 @@ pub(super) fn gen_extendr_wrappers_r(
         }
     }
 
-    for e in &api.enums {
+    // Sorted by name, same rationale as `types_for_class_env_emission` above. ~keep
+    let mut enums_sorted: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
+    enums_sorted.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for &e in &enums_sorted {
         if !is_flat_data_enum(e) {
             continue;
         }
@@ -577,7 +587,7 @@ pub(super) fn gen_extendr_wrappers_r(
         ));
     }
 
-    for e in &api.enums {
+    for &e in &enums_sorted {
         if is_flat_data_enum(e) || is_json_passthrough_data_enum(e) {
             continue;
         }
@@ -594,7 +604,7 @@ pub(super) fn gen_extendr_wrappers_r(
         ));
     }
 
-    for e in &api.enums {
+    for &e in &enums_sorted {
         if !is_json_passthrough_data_enum(e) {
             continue;
         }
@@ -767,7 +777,17 @@ pub(super) fn gen_namespace(
 
     let bridge_fn_names: ahash::AHashSet<&str> = trait_bridge_fns.iter().map(|tb| tb.name.as_str()).collect();
 
-    for func in &api.functions {
+    // Sorted by name: `api`'s Vec fields reflect source-extraction order, which is not
+    // guaranteed stable across separate `alef` invocations, and every export/S3method line below
+    // is concatenated into the single `NAMESPACE` file. ~keep
+    let mut functions_for_namespace: Vec<&crate::core::ir::FunctionDef> = api.functions.iter().collect();
+    functions_for_namespace.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut types_for_namespace: Vec<&crate::core::ir::TypeDef> = api.types.iter().collect();
+    types_for_namespace.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut enums_for_namespace: Vec<&crate::core::ir::EnumDef> = api.enums.iter().collect();
+    enums_for_namespace.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for func in &functions_for_namespace {
         if bridge_fn_names.contains(func.name.as_str()) {
             continue;
         }
@@ -798,7 +818,7 @@ pub(super) fn gen_namespace(
     }
 
     let excluded = collect_excluded_class_types(api, bridges);
-    for typ in &api.types {
+    for typ in &types_for_namespace {
         if typ.is_trait || excluded.contains(&typ.name) {
             continue;
         }
@@ -816,7 +836,7 @@ pub(super) fn gen_namespace(
         ));
     }
 
-    for e in &api.enums {
+    for e in &enums_for_namespace {
         if !is_flat_data_enum(e) {
             continue;
         }
@@ -834,7 +854,7 @@ pub(super) fn gen_namespace(
         ));
     }
 
-    for e in &api.enums {
+    for e in &enums_for_namespace {
         if !is_json_passthrough_data_enum(e) {
             continue;
         }
