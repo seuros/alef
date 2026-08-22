@@ -5,8 +5,8 @@
 //! coverage-ledger and per-language recipe half lives in [`coverage`], which reuses the fixture
 //! helpers defined here.
 
-use super::*;
 use super::mock_harness_guard::reject_mock_harness_scaffolding;
+use super::*;
 
 mod coverage;
 

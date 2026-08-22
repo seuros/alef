@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.64.0] - 2026-08-22
+
 ### Fixed
 
 - Generated Go is gofmt-clean in two more places. The e2e visitor-struct emitter wrote
@@ -14,6 +16,310 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   brace (gofmt separates consecutive top-level declarations), and the Go visitor preamble ran the
   `import (...)` block straight into the next declaration with no blank line. Both surfaced as
   `gofmt -l` failures in consumers with no local cause, since the files are generated.
+
+### Changed (BREAKING)
+
+These change the code alef GENERATES. Regenerate (`alef all` plus `alef test-apps generate`) and
+review the diff before releasing a consumer package.
+
+- **Ruby / RBS**: a wire name that is not a valid bare Ruby symbol is now emitted quoted
+  (`:"fine-tune"`, `:"og:image"`) instead of the syntactically invalid bare form. Identifier-safe
+  names stay bare, so most `sig/*.rbs` files are unchanged. The wire value itself is untouched --
+  only its literal encoding. Previously-generated RBS containing a hyphen or colon in a variant
+  name did not parse at all.
+- **C# / Java**: `Duration` fields no longer force the serde-derive `{"secs","nanos"}` object
+  shape when `serde_with` declares a scalar, and sealed-union `Display` now emits the real wire
+  value rather than a lowercased variant name. A multi-word or explicitly renamed variant that
+  previously stringified as `"elementbased"` now correctly yields `"element_based"`.
+- **C# e2e**: generated trait-bridge stubs now derive their types and member names from the same
+  seam the binding uses, so a stub that previously failed to compile (`ulong??`, `IXmlBackend`,
+  `GetUuid`) now matches its interface.
+- **Elixir**: rustler and the e2e generator now agree on `rename_all` wire tags via
+  `wire_variant_value`; an absent `rename_all` no longer snake_cases the variant.
+- **Snippets**: a `docs.snippets.docs_dirs` entry pointing at a path that does not exist now
+  fails the docs stage's audit instead of passing silently.
+- **Snippets**: a `tsc` type error (TS2322, TS2304, ...) is now reported as a real failure with the
+  compiler's own text, instead of being relabelled `Unavailable` with "run `alef build` first".
+  Runs that appeared incomplete may now report genuine failures.
+
+### Added
+
+- `alef verify` now reports create-once (`generated_header: false`) scaffold files whose
+  on-disk content predates a fix to the template that produced them. These files (a zig
+  `build.zig`, a kotlin test seed, a params struct) are written once and are user-owned
+  thereafter, so a template fix landing upstream could previously never be surfaced to a
+  consumer who had already scaffolded the file -- `alef verify` had no opinion on the
+  condition at all. Detection is deliberately conservative: a file is only reported when its
+  on-disk content differs from what the current template would produce AND its entire git
+  history is exactly one commit (nothing has touched it since whatever commit introduced it),
+  so a legitimate hand-edit is never mistaken for template drift except in the narrow case of
+  an edit folded into that same single commit (amend/squash) -- see
+  `src/cli/pipeline/generate/scaffold_drift.rs`'s module doc for the full false-positive/
+  false-negative analysis. Purely informational: it never fails `alef verify`, is never folded
+  into `ensure_success`, and alef never rewrites the file -- the remedy is a human reviewing
+  the current template and deciding whether to hand-port the fix.
+- `alef docs --skip-snippet-validation` and `alef all --skip-snippet-validation` skip the
+  compile/type-check/run step of `docs.snippets.validation_level` validation. Snippet
+  discovery, the reference-page audit, and gap detection still run; only the step that spawns
+  a compiler, interpreter, or type-checker per snippet is skipped. Exposes the existing
+  `docs::generate_docs_stage_without_snippet_compile_validation` path (already used
+  internally by `alef adopt` and `alef verify`) through the CLI, so regenerating docs is
+  cheap again when the toolchains or built artifacts snippet validation depends on are not
+  present (e.g. a clean checkout before `alef build`).
+- Generated documentation snippets for an error fixture that names the error variant it provokes
+  (`{"type": "error", "value": "Authentication"}`) now catch that variant's generated exception
+  class before the flat catch-all, instead of emitting a single generic `except Error` that prints
+  `type(error).__name__`. The decision lives in one shared seam,
+  `e2e::codegen::snippet_error_branch`, which reuses `declared_error_variant`'s existing
+  per-backend verdict on whether a binding can tell one error variant from another — so a snippet's
+  typed catch and the e2e suite's type assertion can never claim different things about the same
+  variant. Backends whose bindings expose only a flat error type keep the generic branch unchanged.
+  Python is wired today (pyo3 generates a distinct exception class per variant unconditionally);
+  Go, Java, and Zig have their per-variant names registered in the same table and gate on
+  `#[alef(error_code = N)]`, awaiting emitter adoption.
+
+### Changed
+
+- The `extension == "jar"` test and its base64 decode, previously inlined in
+  `generate::write` and `generate::scaffold` and simply absent from `generate::diff`, are now one
+  shared `generate::binary` module (`is_base64_binary_output` / `decode_base64_binary`).
+- `alef adopt`'s "NOT ADOPTED -- not text" report now covers only matches alef genuinely cannot
+  read: non-UTF-8 bytes on a path alef emits as text, or a binary path whose generated content
+  did not decode.
+- e2e/kotlin_android: `render_build_gradle_kotlin_android` now takes a `KotlinAndroidBuildGradleInputs` params struct instead of 8 positional arguments, removing the `#[expect(clippy::too_many_arguments)]` added under release pressure.
+- A directory that exists but is empty remains a legitimate silent zero everywhere; only a
+  directory that is missing outright is reported. The policy now lives in one place,
+  `snippets::discovery::missing_configured_directories`, which `discover_snippets`,
+  `snippets::audit::audit`, the `snippets audit`/`gaps` commands, and `alef verify` all consult.
+- `snippets::audit::AuditIssueKind` gains a `MissingDirectory` variant (additive).
+- Behaviour change worth calling out for consumers: a `docs.snippets.docs_dirs` entry pointing at
+  a path that does not exist now fails the docs stage's snippet audit, where it previously passed
+  silently. This matches how `docs.snippets.dirs` / `inline_dirs` already behaved
+  (`docs::build_snippet_context` has always refused a missing root).
+
+### Fixed
+
+- rustler: the Elixir `@type` alias for a flat data enum's variant and the `wire_value/1` map
+  clause it generates could name the discriminator key differently -- the `@type` alias
+  hard-coded a literal `type:` key while `wire_value/1` used `serde_tag` (or a fallback). Both
+  are now derived from one `flat_data_enum_discriminator` helper so they cannot disagree.
+- rustler/extendr: replaced the `"format_type"` fallback discriminator name (a domain-specific
+  word, not a generic default) with `"type"`, matching the fallback the wasm backend already
+  uses for the identical concept and matching serde's own `tag = "type"` convention. All call
+  sites that name a flat data enum's discriminator field (the Rust struct field, the `From<core>`
+  and `From<binding>` impls, and the Elixir `@type`/`wire_value/1` pair) now read the fallback
+  from a single shared function per backend instead of hard-coding it independently.
+- rustler: removed an unused, unreachable `elixir_data_enum_type.jinja` template that carried
+  the same `type:`-hard-coding bug but was never rendered by any call site.
+- `alef sync-versions` no longer stamps `alef:hash:` on the files it rewrites before writing
+  the `[crates.e2e.registry.packages.*].version` bump to `alef.toml`. Because that field is a
+  real generation input (it feeds registry-mode `test_apps/` content), the previous ordering
+  stamped every rewritten file against a pre-bump `inputs_hash`, so those files verified stale
+  immediately after the very run that wrote them. `sync_registry_package_versions` now runs
+  before the `finalize_hashes` pass over the rewritten file set.
+- **e2e**: fixtures declaring an `error` assertion's message/type-name check as a SECOND
+  `"error"`-type assertion (a bare `{"type": "error"}` followed by
+  `{"type": "error", "value": "..."}`) silently lost the message check across every backend —
+  `declared_error_value()` selected only the fixture's positionally-first `"error"` assertion,
+  found it bare, and returned `None`. Affected go, csharp, java, zig, dart, ruby, c, php, swift,
+  gleam, elixir, r, typescript/node, brew, and python (which duplicated the same buggy lookup
+  locally instead of calling the shared helper). The dropped assertion was then mislabeled by
+  `error_path_assertions::render()` as an unrenderable `error.<field>` access
+  (`... has no accessor for error field <none> in this backend`), hiding that a real message
+  value existed. `declared_error_value()` now scans every `"error"` assertion for the first one
+  carrying a value regardless of position; python is routed through the same shared function
+  instead of its own copy; a bare or single-valued `"error"` assertion is never marked
+  unrenderable. A genuinely unsupportable SECOND declared value (no observed fixture uses this
+  shape) is now named honestly via a new `AdditionalDeclaredErrorValueNotChecked` skip instead of
+  reusing the "no accessor for error field" wording.
+- Ruby/Magnus bindings no longer emit invalid RBS/Ruby symbol literals for enum wire values that
+  contain characters a bare Ruby symbol cannot carry (e.g. a serde-renamed variant like
+  `fine-tune`). `sig/types.rbs` previously wrote `:fine-tune` verbatim
+  (`src/backends/magnus/gen_stubs.rs`), which `rbs` rejects with `Syntax error: unexpected
+  token='-'` and which consumers cannot fix themselves since the file is alef-generated. A single
+  helper, `crate::backends::magnus::ruby_symbol_literal`, now renders every generated Ruby symbol
+  literal derived from a wire value, quoting it (`:"fine-tune"`) only when the value is not a bare
+  Ruby identifier — a bare-safe value like `KeyValue` still renders unquoted. The wire value itself
+  is never altered (no hyphen-to-underscore sanitizing); only how the literal is written changes.
+  Routed through the helper: the RBS `type value = ...` union in `gen_stubs.rs`, and the
+  `#[serde(tag = "...")]` discriminator symbol emitted into the tagged-enum `from_hash` dispatcher
+  in `gen_bindings/tagged_enums.rs`. The two other symbol sites in `tagged_enums.rs`
+  (`:attr_name`/`:_0` Data.define attribute names, and the matching `hash[:field]` lookup) are
+  built from the Rust struct field name, not from a serde-renamed wire value, so they cannot carry
+  non-identifier characters and were left as bare symbols.
+- The C# e2e trait-bridge test stub (`e2e::codegen::csharp::stubs`) no longer maps parameter and
+  return types through a hand-rolled, duplicate mapper. It now routes every type through
+  `backends::csharp::trait_bridge::csharp_type_visible_pub` — the same seam the production
+  `I{TraitName}` interface is generated from — and derives the interface/method names through
+  `codegen::naming::csharp_type_name` / `to_csharp_name` instead of a bare
+  `heck::ToUpperCamelCase`. The duplicate mapper had drifted on `Json` (`object` vs the
+  interface's `string`), `Duration` (`ulong?` vs `ulong`), `Option<Duration>` (`ulong??` — invalid
+  C# syntax — vs `ulong?`), and any type or method name that folds under a C# initialism (e.g.
+  `UuidPair` → `UUIDPair`, `get_uuid` → `GetUUID`), all of which produced stubs that failed to
+  compile (CS0535/CS0246) against the real interface. `csharp_type_for_stub` and
+  `csharp_type_for_stub_visible` are deleted; the C# e2e visitor generator
+  (`e2e::codegen::csharp::visitor`) was routed through the same seam for consistency.
+- The C# and Java e2e sealed-union `Display` helpers (`e2e::codegen::csharp::values::render_sealed_display`,
+  `e2e::codegen::java::project::render_sealed_display`) no longer compute their per-variant wire
+  string with a hardcoded `.to_lowercase()` of `serde_rename.unwrap_or(variant_name)`. That
+  ignored `serde_rename_all` entirely (`ElementBased` under `snake_case` displayed as
+  `"elementbased"` instead of `"element_based"`; under `kebab-case` it stayed `"elementbased"`
+  instead of `"element-based"`) and lowercased an explicit `#[serde(rename = "...")]` that the
+  binding preserves verbatim (`#[serde(rename = "Image")]` displayed as `"image"` instead of
+  `"Image"`). Both now call `codegen::naming::wire_variant_value`, the same seam the production
+  C# `json_name` (`backends::csharp::gen_bindings::enums`) and Java discriminator
+  (`backends::java::gen_bindings::types::serializers`) compute from.
+- Added cross-generator guard tests
+  (`e2e::codegen::csharp::trait_bridge_stub_interface_seam_tests`,
+  `e2e::codegen::csharp::sealed_display_wire_name_tests`,
+  `e2e::codegen::java::sealed_display_wire_name_tests`) that render both the production and e2e
+  paths independently and assert they agree, so a future hand-rolled mapper reintroduced in
+  either generator fails the build instead of silently drifting again.
+- The Elixir e2e generator no longer derives enum `rename_all` wire tags with a local,
+  hand-rolled `apply_rename_all` helper that disagreed with the canonical
+  `crate::codegen::naming::wire_variant_value` on two strategies: an absent (or unrecognized)
+  `rename_all` left the variant name unchanged in the canonical helper but lowercased it to
+  snake_case here, and `"UPPERCASE"` uppercased the raw name canonically but routed through
+  `to_shouty_snake_case` (inserting underscores) here. The rustler binding itself already
+  computes wire tags via `wire_variant_value`
+  (`src/backends/rustler/gen_bindings/public_api_args.rs`,
+  `src/backends/rustler/gen_bindings/types.rs`), so for the common no-`rename_all` case the two
+  generators disagreed on the same IR: `match_unit_enum_atom` (`src/e2e/codegen/elixir/args.rs`)
+  would fail to recognize a fixture's wire-tag string as matching any unit-enum variant and fall
+  back to emitting a binary literal where the NIF's `NifUnitEnum` decoder expects an atom. Both
+  call sites (`match_unit_enum_atom` and `emit_tagged_enum_array`'s tag matching) now call
+  `wire_variant_value` directly so the e2e generator and the rustler binding cannot drift apart
+  again.
+- `alef diff` no longer reports every base64-encoded binary output (`gradle-wrapper.jar`) as
+  pending on every run. `diff_files` read the on-disk bytes with `read_to_string(...)
+  .unwrap_or_default()`, which yields an empty string for a jar and can therefore never equal the
+  base64 `GeneratedFile::content` it was compared against — so the entry was permanent, unrelated
+  to the file's actual bytes, and `alef diff --exit-code` could not return 0 in any repo with a
+  kotlin-android target. Binary outputs are now compared as decoded bytes.
+- `alef adopt` can now take ownership of a binary generated output instead of refusing it as
+  "not text". alef's writers already guard binaries with `is_scaffold_owned_path` and record them
+  with `record_scaffold_owned_path`, so the ownership rail existed — but no command could put a
+  pre-existing binary into `.alef-ownership.toml`, leaving such a file refused by the write guard
+  permanently. A binary match is now classified on its decoded bytes (converged when it already
+  equals what alef would write, drifted otherwise), reviewed as size plus blake3 digest per side
+  in place of the line diff bytes cannot have, and adopted through the committed record without
+  its contents being touched. It remains a create-once seed, so `--clobber-create-once-seeds` is
+  still required — `gradle-wrapper.jar` satisfies neither the reserved-namespace nor the
+  sole-reader criterion of `cli::cache::is_alef_derived_output`.
+- `adopt::managed_outputs` no longer runs the text normalizer over base64 binary content. The
+  appended trailing newline made the payload undecodable, so the bytes alef would actually write
+  were unrepresentable in the adopt candidate set.
+- `alef e2e generate` no longer aborts documentation-snippet generation for fixtures whose `mock_url` / `mock_url_list` call argument has no declared `input` value. Previously such a fixture's snippet body fell back to `MOCK_SERVER_URL` / `MOCK_SERVER_<ID>` harness wiring and was rejected outright by the mock-harness leak guard, and the rejection aborted the whole batch — a structural failure for URL-centric consumers, where nearly every fixture is shaped this way. `Fixture::docs_call_fixture()`'s snippet rendering path now injects an illustrative `https://example.com` literal for any undeclared `mock_url`/`mock_url_list` argument before rendering, so no fixture edits are required; the executable e2e suite is unaffected since the injection runs only on the docs-transformed clone, never on the fixture the executable generator renders from.
+- `hooks/check_backend_naming_helpers.py` only scanned `src/backends/` and matched banned
+  helper names as an exact whole function name, so a backend-local casing/serde duplicate
+  could evade it two ways: living outside `src/backends/` entirely (e.g.
+  `src/codegen/generators/enums.rs::apply_rename_all`), or living inside the enforced path
+  under a language-prefixed name (`src/backends/java/gen_bindings/helpers.rs::java_apply_rename_all`).
+  The hook now scans all of `src/` and matches a banned name with an optional prefix
+  (`\w*_?(apply_rename_all|wire_variant_value|...)`), plus a small `ALLOWLIST` of
+  `(path, function name)` pairs — each with an inline reason — for the canonical definitions
+  in `src/codegen/naming.rs` itself (`wire_variant_value`, `pascal_to_snake`) and for
+  `java_apply_rename_all`, which stays a thin wrapper because
+  `src/backends/java/gen_bindings/types/enums.rs` still calls it directly.
+- Consolidated the confirmed-equivalent duplicate wire-value computations onto
+  `crate::codegen::naming::wire_variant_value`/`apply_serde_rename_all`:
+  `src/backends/java/gen_bindings/types/serializers.rs` (three call sites recomputing a
+  variant's discriminator via `.serde_rename.clone().unwrap_or_else(...)` +
+  `java_apply_rename_all`) now call `wire_variant_value` directly, and
+  `java_apply_rename_all` (`src/backends/java/gen_bindings/helpers.rs`) now delegates its body
+  to `naming::apply_serde_rename_all` instead of reimplementing the `rename_all` match arms.
+  `src/backends/csharp/gen_bindings/enums.rs` was already routed through `wire_variant_value`
+  end to end; no change was needed there. Widening the hook's scope surfaced additional
+  casing-helper name collisions in `src/adapters/`, `src/codegen/error_gen/`,
+  `src/codegen/generators/`, `src/cli/pipeline/helpers.rs`, `src/docs/`, `src/readme/`,
+  `src/core/config/resolved/`, `src/backends/kotlin/`, `src/backends/wasm/`, and
+  `src/e2e/codegen/` — all outside this change's file lane, left flagged for follow-up rather
+  than allowlisted away.
+- `alef snippets` typescript validation no longer mislabels genuine `tsc` type errors as a
+  missing dependency. `TypeScriptValidator::is_dependency_error` previously matched 27 `TS`
+  diagnostic codes -- including TS2322 (not assignable), TS2345 (argument mismatch), TS2304
+  (cannot find name, ambiguous between a missing import and a real typo), TS7006 (implicit
+  `any`), and a dozen other ordinary type/syntax errors -- as evidence the toolchain "ran but
+  reported a missing dependency or build artifact", captioning the result with
+  "run `alef build` first" and reclassifying it from `Fail` to the incomplete `Unavailable`
+  status (`--strict` fails a run on zero `Unavailable`). A real content failure -- e.g. TS2322,
+  TS2304 -- was laundered into the environment bucket, sending the reader to rebuild toolchains
+  for a defect no rebuild could fix. `is_dependency_error` now matches only the 7 codes `tsc`
+  emits when it could not *locate* a module, namespace, or declaration file (TS2307, TS2305,
+  TS2306, TS7016, TS2792, TS2503, TS2580) -- the shape that actually means "this run's
+  environment lacks a dependency or build artifact". Every other `tsc` failure stays `Fail`
+  with the compiler's own message verbatim, so an unrecognized or ordinary failure is always
+  shown, never re-captioned by guess.
+- e2e/zig: guard `build.zig`'s `RunStep.setCwd` on the `test_documents` directory's existence via a new `zig/guarded_set_cwd.zig.jinja` template, closing the same unguarded-fork crash already fixed for Gradle (kotlin/kotlin_android) and Maven Surefire (java) in 0.63.0.
+- e2e/kotlin: plain-Kotlin's `build.gradle.kts` now resolves the fixture working directory from `E2eConfig::test_documents_dir` (via `test_documents_relative_from`) instead of a hard-coded `"test_documents"` literal, matching the kotlin_android fix.
+- Fixed a flaky `run_post_build_aborts_before_patching_a_stale_bridge_when_frb_is_skipped` test
+  (`src/cli/pipeline/commands/build/frb_bridge_coverage.rs`) that raced under high thread count:
+  it guarded its `ALEF_SKIP_COMMANDS` mutation with a test-local lock that other test modules
+  setting the same process-global env var did not share. The test no longer touches the real
+  environment at all — it points the `RunCommand` step at a command name that is never
+  installed, which `run_run_command` already reports as `Ok(false)` (skipped) deterministically.
+- `a_failing_language_does_not_abort_the_remaining_post_builds` (`src/bin_cli/helpers/post_build.rs`)
+  set the process-global `ALEF_SKIP_COMMANDS` under a file-local lock distinct from
+  `build.rs`'s `run_command_tests::env_lock()`, so it could race with that module's own
+  `ALEF_SKIP_COMMANDS` mutations under real parallel test execution. Split
+  `run_required_post_builds` into registry resolution (`run_required_post_builds`) and an
+  aggregation loop over an explicit resolved `(language, BuildConfig)` list
+  (`run_resolved_post_builds`), and pointed the test's Dart `RunCommand` step at a command
+  name that is never installed on any host instead of forcing a skip via the env var -- the
+  same fix shape as `f968767b6`. This also removes the test's dependence on whether
+  `flutter_rust_bridge_codegen` happens to be on the host `PATH`, which previously made the
+  "2 of 2" assertion depend on ambient toolchain state.
+- `patch_root_package_manifest_replaces_release_placeholders` (`src/publish/package/swift.rs`)
+  set the process-global `ALEF_SWIFT_CHECKSUM` with no lock at all. `patch_root_package_manifest`
+  now takes the checksum as an explicit `Option<&str>` parameter instead of reading
+  `ALEF_SWIFT_CHECKSUM`/`SWIFT_ARTIFACT_CHECKSUM` itself; `package_swift` resolves the env vars
+  once and passes the result in. Added
+  `patch_root_package_manifest_errors_when_checksum_placeholder_has_no_checksum` to cover the
+  previously-untested missing-checksum error path, now expressible without touching `std::env`.
+- C# and Java bindings no longer force the serde-derive `{"secs":u64,"nanos":u32}` object shape
+  onto a `Duration` struct field that carries `#[serde(with = "...")]` (the common `duration_ms`
+  convention, which writes a bare millisecond integer). Both backends previously applied their
+  `DurationMillisJsonConverter` / `DurationMillisSerializer`+`DurationMillisDeserializer`
+  unconditionally to every `Duration` field, which made the field round-trip as a JSON object
+  instead of a scalar and broke Rust-side deserialization with `invalid type: map, expected u64`
+  whenever the core used a hand-written millisecond codec. The decision now lives in a single
+  predicate, `crate::codegen::naming::field_uses_duration_map_wire`, that Go (which already
+  special-cased this), C#, and Java all consult, so the two wire forms cannot drift apart again
+  per-backend.
+- `discover_snippets` no longer silently skips a configured snippet directory that does not exist
+  on disk; it now returns an error naming the missing path. Previously `if !dir.exists() { continue; }`
+  made a snippets root that was repointed but never populated indistinguishable from one that was
+  fully validated — `alef snippets list` reported "0 snippets" and exited 0, and `alef snippets check`
+  passed silently whenever the missing root was only in `docs.snippets.inline_dirs` (a `dirs` entry
+  happened to fail already, incidentally, via an unrelated coverage-ledger walk). A directory that
+  exists but is genuinely empty is unaffected and still reports zero snippets without erroring.
+- `alef snippets audit` no longer reports "Audit clean: no issues found" for a `--docs` root that
+  does not exist. A missing documentation root was walked as an empty one, so an audit could pass
+  having opened not one file; it is now reported as a `MissingDirectory` audit error naming the
+  path. The same check covers `--snippets` roots, and it reaches `alef snippets check` and the
+  docs stage's snippet audit (`docs::validate_snippets`), which share `snippets::audit::audit`.
+- `alef snippets audit` and `alef snippets gaps` now name the real cause when a configured
+  directory does not exist. Both already failed on a missing `--snippets` root, but only because
+  the coverage-ledger walk tripped over it first, reporting "reading generated snippet coverage:
+  ... IO error" for what is simply a path that is not there. A missing `--docs` root made `gaps`
+  fail for a different wrong reason: with no documentation tree to walk, every snippet read as
+  unreferenced.
+- `alef verify` now reports a `docs.snippets.dirs` / `inline_dirs` entry that does not resolve to a
+  directory on disk. `verify` checked generated-file hashes and generated-snippet coverage-ledger
+  freshness, neither of which asks whether the configured roots exist, so a root renamed or deleted
+  after the last generation passed as "All bindings and versions are up to date". The condition was
+  in fact already being detected during `verify` — its managed-surface pass reaches
+  `docs::build_snippet_context`, which refuses it — and then discarded, because a docs-stage error
+  there is deliberately downgraded to a debug log. `--report-only` prints the finding without
+  failing, as it does for every other verify finding.
+- `alef all` no longer announces a formatter whose executable is missing as a step
+  "deferred until the pinned version is published". A configured e2e `format` hook
+  pointing at an absent binary (e.g. a `vendor/bin/php-cs-fixer` a fresh checkout does
+  not have) is now reported under its own heading, naming the real cause and stating
+  that the output was left unformatted. Both the `alef all` and the standalone-stage
+  reporters now share one implementation, so the two can no longer classify the same
+  deferral list differently.
+
 
 ## [0.63.1] - 2026-08-22
 

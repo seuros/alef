@@ -70,7 +70,7 @@
         },
         "skip_languages": {
           "default": [],
-          "description": "Language backends for which this adapter should NOT be emitted.\n\nMirrors the same field on `[[crates.e2e.calls.*]]`. Useful when a\nconsumer's core crate cannot compile on a given target (e.g.\na streaming crate on `wasm32-unknown-unknown` which has no working async\nruntime for streaming). The adapter remains declared for every backend\nwhere it works, with explicit per-backend opt-out rather than removing\nthe adapter entirely.\n\nValues must match the canonical TOML language names used in `languages`\n(`\"python\"`, `\"node\"`, `\"wasm\"`, `\"ruby\"`, `\"php\"`, `\"go\"`,\n`\"java\"`, `\"csharp\"`, `\"elixir\"`, `\"kotlin\"`, `\"kotlin_android\"`,\n`\"swift\"`, `\"dart\"`, `\"zig\"`, `\"ffi\"`, `\"r\"`, `\"gleam\"`, `\"c\"`,\n`\"jni\"`, `\"rust\"`). An unknown name fails at config-resolve time.\n\nExample: `skip_languages = [\"wasm\", \"kotlin\"]`",
+          "description": "Language backends for which this adapter should NOT be emitted.\n\nMirrors the same field on `[[crates.e2e.calls.*]]`. Useful when a\nconsumer's core crate cannot compile on a given target (e.g.\na streaming crate on `wasm32-unknown-unknown` which has no working async\nruntime for streaming). The adapter remains declared for every backend\nwhere it works, with explicit per-backend opt-out rather than removing\nthe adapter entirely.\n\nValues must match a canonical [`Language`] name (see [`Language::ALL`]).\nAn unknown name fails at config-resolve time.\n\nExample: `skip_languages = [\"wasm\", \"kotlin\"]`",
           "items": {
             "type": "string"
           },
@@ -8129,7 +8129,7 @@
       "type": "object"
     }
   },
-  "$id": "https://github.com/xberg-io/alef/releases/download/v0.63.1/alef.schema.json",
+  "$id": "https://github.com/xberg-io/alef/releases/download/v0.64.0/alef.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "JSON Schema for the JSON representation of alef.toml.",
@@ -8249,6 +8249,6 @@
   ],
   "title": "Alef configuration",
   "type": "object",
-  "version": "0.63.1",
-  "x-alef-version": "0.63.1"
+  "version": "0.64.0",
+  "x-alef-version": "0.64.0"
 }
