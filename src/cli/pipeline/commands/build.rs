@@ -763,18 +763,34 @@ fn build_command_for(
     }
 }
 
+/// What happened while running one language's post-build steps.
+///
+/// A [`PostBuildStep::RunCommand`] whose tool isn't on `PATH` is treated as success (falling
+/// back to whatever generated output is already committed is deliberate -- see
+/// `run_run_command`'s doc comment), but that made a skip indistinguishable from a step that
+/// actually ran and produced current output. `skipped_missing_tools` names every such tool so a
+/// caller can report it instead of silently treating the run as fully up to date.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PostBuildOutcome {
+    /// Commands that were skipped because they were not found on `PATH`, in the order their
+    /// `RunCommand` steps ran.
+    pub skipped_missing_tools: Vec<String>,
+}
+
 /// Run post-build processing steps (e.g., patching .d.ts files).
 pub fn run_post_build(
     lang: Language,
     bc: &crate::core::backend::BuildConfig,
     config: &ResolvedCrateConfig,
     base_dir: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PostBuildOutcome> {
     use crate::core::backend::PostBuildStep;
 
     let crate_dir = output_path_for(lang, config)
         .map(resolve_crate_dir)
         .unwrap_or(Path::new(""));
+
+    let mut skipped_missing_tools: Vec<String> = Vec::new();
 
     for step in &bc.post_build {
         match step {
@@ -799,8 +815,11 @@ pub fn run_post_build(
             }
             PostBuildStep::RunCommand { cmd, args } => {
                 let work_dir = base_dir.join(crate_dir);
-                run_run_command(cmd, args, &work_dir, &config.name)
+                let ran = run_run_command(cmd, args, &work_dir, &config.name)
                     .with_context(|| format!("post-build RunCommand '{cmd}' failed"))?;
+                if !ran {
+                    skipped_missing_tools.push((*cmd).to_string());
+                }
             }
             PostBuildStep::PostProcessFile { path, processor } => {
                 use crate::core::backend::PostProcessor;
@@ -949,7 +968,7 @@ pub fn run_post_build(
         }
     }
 
-    Ok(())
+    Ok(PostBuildOutcome { skipped_missing_tools })
 }
 
 /// Rewrite the `"name"` field of a wasm-pack-generated `package.json` in place.
@@ -997,17 +1016,23 @@ const RUN_COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from
 /// `RUN_COMMAND_TIMEOUT` ceiling; on timeout the child is SIGKILL'd and the
 /// call returns an error. Returns an error on non-zero exit status.
 ///
+/// Returns `Ok(true)` when `cmd` actually ran (and exited zero), `Ok(false)` when it was
+/// skipped -- either via the `ALEF_SKIP_COMMANDS` escape hatch below or because `cmd` isn't
+/// on `PATH`. Both skips are deliberately non-fatal (falling back to whatever generated output
+/// is already committed is the point), but the caller needs to tell "skipped" apart from "ran
+/// and produced current output" -- see [`PostBuildOutcome`].
+///
 /// Escape hatch: the env var `ALEF_SKIP_COMMANDS` accepts a comma-separated
 /// list of `cmd` names to skip without running. Useful in environments where
 /// a post-build tool is unavailable, hangs (e.g. `flutter_rust_bridge_codegen`
 /// installing Flutter via FVM under CI), or simply isn't desired this run.
 /// Each skipped command logs a `warn!` so the omission is visible.
-fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str) -> anyhow::Result<()> {
+fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str) -> anyhow::Result<bool> {
     if let Ok(skip_list) = std::env::var("ALEF_SKIP_COMMANDS")
         && skip_list.split(',').any(|s| s.trim() == cmd)
     {
         warn!("[{cmd}] skipped via ALEF_SKIP_COMMANDS env var");
-        return Ok(());
+        return Ok(false);
     }
     let mut command = std::process::Command::new(cmd);
     command
@@ -1023,7 +1048,7 @@ fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str)
             warn!(
                 "[{cmd}] not on PATH — skipping post-build step. Install '{cmd}' to regenerate at build time; falling back to committed generated files."
             );
-            return Ok(());
+            return Ok(false);
         }
         Err(err) => return Err(anyhow::Error::new(err).context(format!("failed to spawn '{cmd}'"))),
     };
@@ -1051,7 +1076,7 @@ fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str)
         anyhow::bail!("'{cmd}' exited with status {code}");
     }
 
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1864,7 +1889,10 @@ mod run_command_tests {
         let dir = std::env::temp_dir();
         let result = run_run_command("echo", &["alef-runcommand-ok"], &dir, "sample");
         restore_skip_env(previous);
-        assert!(result.is_ok(), "echo should succeed: {result:?}");
+        assert!(
+            matches!(result, Ok(true)),
+            "echo should run and report Ok(true): {result:?}"
+        );
     }
 
     #[test]
@@ -1895,8 +1923,8 @@ mod run_command_tests {
         }
         let skipped = run_run_command("false", &[], &dir, "sample");
         assert!(
-            skipped.is_ok(),
-            "listed command must return Ok without spawning: {skipped:?}"
+            matches!(skipped, Ok(false)),
+            "listed command must return Ok(false) without spawning: {skipped:?}"
         );
 
         unsafe {
@@ -1907,6 +1935,27 @@ mod run_command_tests {
         assert!(
             honored.is_err(),
             "unlisted command must still spawn and surface failure"
+        );
+    }
+
+    /// A tool missing from `PATH` used to be indistinguishable from a tool that ran and
+    /// produced current output -- both returned `Ok(())`. `run_post_build`'s `RunCommand` arm
+    /// (and `PostBuildOutcome::skipped_missing_tools`) depend on `Ok(false)` here to tell the
+    /// two apart, so the primitive that ultimately makes the skip observable must be pinned
+    /// down on its own. ~keep
+    #[test]
+    fn run_run_command_reports_false_when_the_tool_is_not_on_path() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+        let previous = std::env::var("ALEF_SKIP_COMMANDS").ok();
+        unsafe {
+            std::env::remove_var("ALEF_SKIP_COMMANDS");
+        }
+        let dir = std::env::temp_dir();
+        let result = run_run_command("alef-definitely-not-a-real-binary-xyz123", &[], &dir, "sample");
+        restore_skip_env(previous);
+        assert!(
+            matches!(result, Ok(false)),
+            "a missing tool must be reported as skipped, not silently equivalent to success: {result:?}"
         );
     }
 }

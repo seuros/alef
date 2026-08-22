@@ -106,6 +106,14 @@ jobs:
         with:
           tool: cargo-sort
       - uses: xberg-io/actions/install-homebrew-linux@v1
+      # Homebrew 6.x refuses to load formulae from a third-party tap until the tap is
+      # explicitly trusted; `brew install` on an untrusted tap fails rather than skipping.
+      # `brew trust` is a real subcommand as of 6.x (verified locally); see
+      # https://docs.brew.sh/Tap-Trust.
+      - name: Trust goldziher/tap
+        run: |
+          brew tap goldziher/tap
+          brew trust goldziher/tap
       - name: Install poly
         run: brew install goldziher/tap/poly
       # Both tools must be present *before* the lanes run. The lanes fail on a missing
