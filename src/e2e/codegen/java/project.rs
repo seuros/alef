@@ -363,6 +363,33 @@ mod tests {
         cfg
     }
 
+    /// Regression: Maven Surefire's `<workingDirectory>` must not be set unconditionally --
+    /// forking the worker JVM fails when it points at a directory that does not exist (the
+    /// same failure mode Gradle test workers hit; the Kotlin/Kotlin-Android generators guard
+    /// their `workingDir` on `.isDirectory`). Maven has no inline conditional inside a single
+    /// plugin `<configuration>` block, so the guard must be a file-existence-activated
+    /// `<profile>` that only sets `<workingDirectory>` when the test_documents dir exists.
+    #[test]
+    fn render_pom_xml_guards_working_directory_on_test_documents_existence() {
+        let e2e_cfg = make_e2e_config(DependencyMode::Local, None);
+        let out = render_pom_xml("tree-sitter", "com.example", "1.0.0", &e2e_cfg, "tree_sitter", &[]);
+
+        let (unconditional, guarded) = out.split_once("<profiles>").unwrap_or((out.as_str(), ""));
+        assert!(
+            !unconditional.contains("<workingDirectory>"),
+            "the unconditionally-active surefire plugin config must not set workingDirectory \
+             unguarded, got:\n{unconditional}"
+        );
+        assert!(
+            guarded.contains("<exists>${basedir}/../../test_documents</exists>"),
+            "expected a file-existence-activated profile guarding workingDirectory, got:\n{out}"
+        );
+        assert!(
+            guarded.contains("<workingDirectory>${project.basedir}/../../test_documents</workingDirectory>"),
+            "expected workingDirectory to still be set inside the guarded profile, got:\n{out}"
+        );
+    }
+
     #[test]
     fn render_pom_xml_local_without_extras_has_single_dep() {
         let e2e_cfg = make_e2e_config(DependencyMode::Local, None);
