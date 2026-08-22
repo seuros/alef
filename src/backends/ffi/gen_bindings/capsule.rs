@@ -181,7 +181,7 @@ mod tests {
     /// tree-sitter's own `Language::into_raw(self) -> *const ffi::TSLanguage` confirms this for
     /// the real-world capsule config. A trailing cast to the expression's own type trips
     /// `clippy::unnecessary_cast`, which is denied in downstream consumers (e.g.
-    /// tree-sitter-language-pack's generated `ts-pack-core-ffi` crate). This test was red before
+    /// a consumer's generated FFI crate). This test was red before
     /// the fix: it asserted on `" as *const"` appearing in the output.
     #[test]
     fn capsule_into_raw_expr_emits_no_redundant_cast() {
