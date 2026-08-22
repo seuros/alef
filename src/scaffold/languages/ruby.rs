@@ -229,7 +229,7 @@ Gem::Specification.new do |spec|
 {metadata}  spec.metadata["rubygems_mfa_required"] = "true"
 
   candidate_files    = Dir.glob(%w[README* LICENSE* lib/**/* ext/**/* sig/**/* Steepfile]).select {{ |f| File.file?(f) }}
-  spec.files         = candidate_files.reject {{ |f| f.match?(%r{{/(?:target|tmp)/|\.(?:bundle|so|dylib|dll|o|a|log)\z|\.dSYM/}}) }}
+  spec.files         = candidate_files.grep_v(%r{{/(?:target|tmp)/|\.(?:bundle|so|dylib|dll|o|a|log)\z|\.dSYM/}})
   spec.require_paths = ["lib"]
   spec.extensions    = ["ext/{ext_name}/native/extconf.rb"]
 
@@ -264,6 +264,12 @@ AllCops:
     - "lib/**/*.bundle"
     - "lib/**/*.rb"
     - "ext/**/*"
+    # alef also generates the gemspec and Rakefile below; excluding them here means a
+    # future RuboCop cop cannot deadlock generation the way Style/SelectByRegexp once did
+    # against the gemspec (both files are alef-owned and rewritten on every `alef build`,
+    # so the consumer has no way to hand-fix a violation in them).
+    - "*.gemspec"
+    - "Rakefile"
 
 Style/FrozenStringLiteralComment:
   Enabled: true
