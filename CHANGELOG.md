@@ -7,6 +7,184 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`alef generate --strict`**, meaning exactly what `alef all --strict` already documented: a
+  configured formatter whose executable is not installed fails the run. A missing formatter stays
+  non-fatal by default — `poly`, `rustfmt`, `cargo-sort` and `mix` are host toolchains a fresh
+  clone may legitimately lack.
+- **e2e fixture validation for discarded URL literals.** A fixture that declares a
+  scheme-carrying URL (`https://…`, `gopher://…`) for a `mock_url` / `mock_url_list` argument
+  without setting `preserve_input_urls` is now a validation **error**. That literal was silently
+  discarded at codegen time — every backend fell through to the mock server address — so the
+  fixture proved something other than what its author wrote. `alef e2e validate` exits non-zero
+  on it. A mock-server-relative path (`/seed1`) and the `$mock_url` placeholder are unaffected.
+- **File-size ratchet enforcing the 1,000-line `file-modularization` cap.** The rule was
+  aspirational — nothing measured it, and 124 files under `src/` and `tests/` had drifted past
+  the cap. `tests/file_size_ratchet.rs` freezes today's sizes against the committed ceilings in
+  `tests/file_size_baseline.txt`: an over-cap file may shrink freely but fails the build the
+  moment it exceeds its recorded ceiling, a file not in the baseline may never cross 1,000 lines,
+  and a baseline entry whose file has dropped under the cap must be deleted so the ratchet
+  tightens instead of licensing a regrowth. `task lint:file-size` runs it alone;
+  `task lint:file-size:tighten` rewrites the baseline after a split.
+
+### Changed (BREAKING)
+
+These change the code alef GENERATES. Regenerate with `alef all` and review the diff before
+releasing a consumer package.
+
+- **Generated doc snippets omit the `level:` front-matter key instead of rendering `level: null`.**
+  These files are Astro content entries, and Astro's collection schema types `level` as an
+  optional STRING: zod distinguishes "absent" from "present and null", so an absent key validates
+  while an explicit YAML null does not (`level: Expected type "string", received "object"`). A
+  single bad entry aborts the whole `astro build` — 810 generated snippets in one consumer all
+  carried `level: null` and the docs build died on the first one alphabetically. Alef's own parser
+  deserialises both spellings to `SnippetMetadata::level == None`, so the validation contract is
+  unchanged. Regenerate docs snippets.
+- **Generated bindings no longer depend on IR arrival order.** Every backend concatenated
+  `ApiSurface`'s `types`/`enums`/`functions`/`errors` into a single generated file in raw `Vec`
+  order, so a change in extraction or pipeline-orchestration order could make two `alef` runs over
+  an unchanged tree emit the same blocks in a different order. All 17 backends now order the
+  surface once at their `Backend` entry points, before any emission or function deduplication —
+  including before `with_deduped_functions`, whose `any(...)` cfg union and canonical-entry pick
+  were themselves input-order sensitive. Expect a one-time reordering diff on regeneration.
+
+### Fixed
+
+#### Generated code correctness
+
+- **swift**: the SwiftPM package root (`Sources/RustBridge{,C}` placement) is no longer derived by
+  probing the filesystem for an existing `Sources/` directory. The output prefix is now a pure
+  function of the resolved output dir and whether `[crates.output] swift` is configured, so
+  generated paths no longer depend on ambient directory state. The empty-path fallback was
+  silently reachable any time no ancestor happened to have an on-disk `Sources/` directory yet —
+  e.g. a project's very first `alef build`.
+- **swift**: `--manifest-path packages/swift/rust/Cargo.toml` was hardcoded in
+  `build_config()`, and `gen_rust_crate::emit` independently hardcoded the same literal as the
+  crate's actual write location. An explicit `[crates.output] swift` override moved every other
+  swift artifact but left both of these behind, producing
+  `error: manifest path packages/swift/rust/Cargo.toml does not exist`. Both now route through the
+  same `swift_package_root` helper, so where the crate is written and where `cargo build` looks
+  cannot disagree.
+- **php**: `#[serde(default = "crate::serde_defaults::…")]` no longer references a function the
+  generated crate never defines. The attribute emitter and the `serde_defaults` module emitter
+  decided independently, from two hand-mirrored type tables; a non-optional scalar field whose
+  `#[serde(default = "Type::function")]` sits on a primitive got the attribute but no function,
+  and the generated crate failed to compile with `E0425`. Both emitters now go through one
+  predicate, and such a field is answered with the fully-qualified core function the extractor
+  resolved, cast to the PHP-facing width — so the mirror keeps the core default instead of
+  deserializing to `0`.
+- **magnus (ruby)**: `default_timeout`'s `#[serde(default = "...")]` reference is now paired with
+  its definition. The free-function emitter and the per-field attribute emitter decided
+  independently whether a `request_timeout`/`timeout` field needed the fallback — one matched
+  `FieldDef::ty` directly and ignored `field.optional`, the other matched the type-mapped Rust
+  string against the literal `"u64"`, which an `Option<u64>` field never produces. An
+  `Option<u64>` field with no non-optional counterpart generated
+  `fn default_timeout() -> u64 { 30000 }` with nothing referencing it. Both sides now go through
+  one predicate.
+- **java**: the `#[serde(default)]` Vec/Map builder-field eager `List.of()`/`Map.of()` default is
+  now scoped to fields that also carry `skip_serializing_if` — the actual signal that makes the
+  wire key go missing. The unscoped version silently regressed the nullable-without-eager-default
+  contract for every other bare `#[serde(default)]` collection field.
+- **dart**: the generated bridge crate's `build.rs` re-applied flutter_rust_bridge's missing
+  `#[cfg(...)]` gates only from the success arm of the `flutter_rust_bridge_codegen` spawn, itself
+  behind the opt-in `ALEF_FRB_REGENERATE_ON_BUILD` early return. Every build that needs the repair
+  — a plain build of the *committed* bridge on a machine without FRB installed, i.e. CI — returned
+  before reaching it (`E0425: cannot find function ... in the crate root`, on both Android ABIs).
+  The repair now runs unconditionally at the top of `main()`, derives the gates from `lib.rs` on
+  every build, needs no external tool, and is idempotent.
+- **wasm / pyo3 / extendr**: a struct field whose typed default is a bare zero-argument path call
+  was emitted as `unwrap_or_else(|| path::to::fn())`, tripping `clippy::redundant_closure` under
+  `-D warnings` and failing the generated crate's own lint gate. The path is now passed directly
+  to `unwrap_or_else`. Any other shape — arguments, a trailing `.into()`, or field access — keeps
+  its closure, since only a bare call is a valid function-item substitute.
+- **rustler (elixir) / extendr (r)**: both backends now sort IR items at every `Backend` entry
+  point, so `lib.rs`, `*.ex`, `extendr-wrappers.R` and `NAMESPACE` no longer depend on the arrival
+  order of `ApiSurface.functions`/`errors`. Types and enums were already sorted; a determinism
+  test that only reversed those never exercised the still-broken axis.
+- **e2e/c**: the engine-factory pattern's URL construction only ever consulted a scalar
+  `input.url` field, so batch/list fixtures fell through to the raw `MOCK_SERVER_URL` `getenv`
+  scaffolding even when `preserve_input_urls` was set — which the mock-harness leak guard rejects
+  in a published documentation snippet. Now routed through the same shared
+  `resolve_urls_field`/`preserved_url_list` helpers every other backend already uses.
+- **php/e2e**: enum-variant assertion availability is decided from the binding's own enum
+  lowering rather than a hard-coded consumer field path. The old predicate was false for the shape
+  it named, was classified as a fatal `AuthoringGap` that no consumer could close, and hard-coded
+  one consumer crate's type path. It is now a non-fatal `LanguageLimitation`, and the new
+  `enum_variant_access` walks the same IR type graph the accessor renderer walks.
+- **php/e2e**: property access is no longer emitted for data-enum-typed struct fields. The e2e
+  getter map was built from a local copy of the binding's scalar predicate fed with ALL enum
+  names, so a tagged or untagged data enum field was rendered as a property when the binding
+  exposes it only as a getter. The copy is gone.
+
+#### Generation pipeline
+
+- `alef generate` now runs post-build (Swift's `MaterializeSwiftBridge`, Dart's
+  `flutter_rust_bridge_codegen`) **before** its formatting pass, matching `alef all`. Previously a
+  post-build step's writes were stamped with `alef:hash:` before ever being run through
+  `poly fmt`, so the shipped file was permanently non-canonical — poly's hash-stamped-file skip
+  cannot tell "canonical and stamped" apart from "never formatted and stamped" — and a later
+  `alef verify` or standalone `poly fmt --fix .` could disagree with it.
+- A partial regen now formats every directory it stamps, in two respects that were separately
+  broken. `format_generated` could skip a language that had a post-build step but nothing else
+  changed this run (`poly_langs` was derived from an intersection with the written-files list, not
+  from the caller's `only_languages` set). And for `python`, `ffi` and `php` — every language whose
+  default output template is `<crate-root>/src` — `poly_paths` named only the `src` subdirectory,
+  one level below the crate root holding the binding crate's own `Cargo.toml`, so that manifest
+  shipped non-canonical straight out of generation.
+- `--strict` now guards the pass that formats `packages/<lang>` — the shipped bindings — and not
+  only the e2e formatter. Missing-tool skips were swallowed in a `warn!` the caller never saw, so
+  `alef all --strict`'s own promise held for the e2e tree while the more important surface went
+  unguarded.
+- The stage and per-language generation caches are invalidated when the alef version changes.
+  `compute_stage_hash` and `compute_lang_hash` carried no compile-time alef identity — the only
+  input tracking the alef build was a best-effort `current_exe()` mtime+size probe that silently
+  degrades to an empty string on failure. Two different alef releases could produce identical
+  cache keys, so `alef generate` reported `up to date (skipping)` for every target and kept the
+  previous release's generated code until someone passed `--clean`. This does **not** change the
+  embedded `alef:hash:` value, which is a separate mechanism.
+
+#### Verification and reporting
+
+- `alef verify` no longer reports permanently-stale generated files after a command that runs a
+  whole-tree formatter pass. `alef stubs`, `alef init` and `sync-versions`' regeneration each
+  formatted the entire repository and then stamped only the narrow set of paths they had
+  generated, so every other alef-marked file the formatter rewrote kept a hash derived from its
+  pre-format bytes and was reported stale forever, with no regeneration able to clear it.
+- `alef verify -vv` now dumps the managed path set the orphan report is diffed against, so an
+  orphan finding can be checked rather than guessed at.
+
+#### Documentation output
+
+- A public function reachable under two `cfg` gates was documented twice, byte-identical, under
+  one `### Functions` heading. All 26 backend call sites OR-merge those groups; the docs generator
+  did not. It now calls `with_deduped_functions()` alongside its existing cfg filter.
+- Rustdoc headings alef does not rewrite to a bold label could escape above the section they were
+  spliced under, in the worst case as a bare `#` H1 inside a page rooted at `##` — tripping rumdl
+  MD001/MD025 and turning `poly lint` red in consumer repos. Two independent causes: the language
+  pages anchored the doc's *first* heading at the target level, and the shared pages shifted by a
+  fixed number of levels, which is only correct for a doc opening at `#`. Headings are now
+  re-levelled by mapping the doc's distinct levels onto consecutive levels from the target, which
+  is order-independent and gap-free. No section name was added to an allowlist.
+- `alef sync-versions --help` no longer names `alef generate` as a way to regenerate `test_apps/`.
+  `alef generate` calls `sync_versions` with `no_regen = true`, so it never reaches
+  `regenerate_test_apps_after_sync`; only `alef all`'s test-apps stage and `alef test-apps
+  generate` write that tree. `alef generate --help` states the exclusion, and `alef all --help`
+  now names the test-apps stage it had been omitting.
+
+### Changed
+
+- **php**: the `serde_defaults` module is emitted through a Minijinja template instead of being
+  assembled with `format!`.
+- Consumer project names replaced with neutral fixture names across 27 source files, per
+  `project-agnostic-codegen`. The project-mention gate now reports every failing chunk instead of
+  returning on the first one.
+- Internal module splits to hold files under the 1,000-line cap, with no behaviour change:
+  cache-key identity moved to `src/cli/cache_identity.rs`, `preserve_input_urls` validation to
+  `src/e2e/validate/url_preservation.rs`, frozen-file logic to `src/bin_cli/helpers/frozen.rs`,
+  and trailing test modules out of eight further files into siblings.
+- Dependencies: `jsonschema` to v0.50.1, `freezed` to v4.
+
 ## [0.65.0] - 2026-08-22
 
 ### Changed (BREAKING)
