@@ -146,7 +146,7 @@ fn not_error_then_is_empty_in_sequence_emits_only_is_empty() {
         "not_error must not assert presence alongside is_empty; got: {out}"
     );
     assert!(
-        out.contains("assert is_nil(result)"),
-        "is_empty must still render its own nil check; got: {out}"
+        out.contains("assert result in [nil, \"\", [], %{}]"),
+        "is_empty must still render its own nil/empty check; got: {out}"
     );
 }

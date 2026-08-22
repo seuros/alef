@@ -258,6 +258,8 @@ pub use stubs::emit_test_backend;
 #[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
+mod is_empty_collection_tests;
+#[cfg(test)]
 mod is_true_tests;
 #[cfg(test)]
 mod not_error_bare_option_underscoring_tests;
