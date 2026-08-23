@@ -619,7 +619,7 @@ pub(super) fn render_json_assertion(
                     let escaped = escape_zig(s);
                     let _ = writeln!(
                         out,
-                        "        try testing.expectEqualStrings(\"{escaped}\", std.mem.trim(u8, _fmt_display, \" \\n\\r\\t\"));"
+                        "        try testing.expectEqualStrings(\"{escaped}\", _fmt_display);"
                     );
                 }
             }
