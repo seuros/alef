@@ -9,6 +9,8 @@ mod bridge_fn;
 #[cfg(test)]
 mod build_rs_cfg_gates_tests;
 mod cargo;
+#[cfg(test)]
+mod cargo_sort_order_tests;
 mod conversions;
 mod enum_conversions;
 mod helpers;
