@@ -33,6 +33,8 @@ pub mod csharp;
 pub mod dart;
 mod dart_visitors;
 pub(crate) mod declared_error_variant;
+#[cfg(test)]
+mod derived_presentation_binding_tests;
 pub mod elixir;
 pub(crate) mod error_path_assertions;
 mod field_resolution;

@@ -275,6 +275,33 @@ impl CallConfig {
         }
     }
 
+    /// Whether this call's result is a scalar/collection value rather than a struct with
+    /// member accessors, for `language`.
+    ///
+    /// The flag is a property of the Rust return type and belongs on the call, but a
+    /// per-language `overrides.<language>` spelling is still accepted for backwards
+    /// compatibility (and is genuinely per-language where a binding flattens the return type
+    /// only in one target), so both have to be consulted — every backend that reads it already
+    /// ORs the two inline. ~keep
+    pub fn effective_result_is_simple(&self, language: &str) -> bool {
+        self.result_is_simple
+            || self
+                .overrides
+                .get(language)
+                .is_some_and(|override_config| override_config.result_is_simple)
+    }
+
+    /// Whether this call returns a raw byte buffer for `language`. Resolved the same way
+    /// [`Self::effective_result_is_simple`] is, and separate from it because a byte buffer has
+    /// its own length/emptiness idioms in every backend.
+    pub fn effective_result_is_bytes(&self, language: &str) -> bool {
+        self.result_is_bytes
+            || self
+                .overrides
+                .get(language)
+                .is_some_and(|override_config| override_config.result_is_bytes)
+    }
+
     /// The function identity this call names for `language`, or `None` when it names none.
     ///
     /// A per-language `[e2e.calls.<name>.overrides.<language>] function` outranks the base

@@ -34,16 +34,75 @@ pub(crate) fn resolve(
         &fixture.tags,
         &fixture.input,
     );
+    let resolver = build_resolver(e2e_config, call, type_defs);
+    resolve_with(fixture, e2e_config, language, &resolver)
+}
+
+/// The bare, IR-backed resolver [`resolve`] answers with. Shared with [`apply_derived_shows`] so
+/// the paths written into `docs.shows` are decided by exactly the resolver that will later
+/// render them, not by a second construction that could drift.
+fn build_resolver(
+    e2e_config: &E2eConfig,
+    call: &crate::core::config::e2e::CallConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+) -> FieldResolver {
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    let resolver = FieldResolver::new(
+    FieldResolver::new(
         e2e_config.effective_fields(call),
         e2e_config.effective_fields_optional(call),
         e2e_config.effective_result_fields(call),
         e2e_config.effective_fields_array(call),
         e2e_config.effective_fields_method_calls(call),
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
-    resolve_with(fixture, e2e_config, language, &resolver)
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+}
+
+/// Write the field paths [`resolve`] would derive from `fixture`'s own assertions into the
+/// fixture's `docs.shows`, so that [`Fixture::has_docs_presentation`] reports them.
+///
+/// ~keep That predicate is the single question the *call emitter* asks about the *snippet's*
+/// intent: `rust/test_file/test_function.rs` uses it to decide both whether the call binds a
+/// named `result` at all (rather than `let _ =`) and whether a `Result`-returning call is
+/// unwrapped before that binding. Before this, it only ever saw hand-authored
+/// `shows`/`presentation` blocks, so the operations #199 derives from assertions were invisible
+/// to it: 283 generated Rust snippets in one consumer repo bound `let _ = convert(...)` and then
+/// printed `result.content` (`E0425`), and any that had bound it would have field-accessed a
+/// `Result` (`E0609`). Materializing the derivation into the fixture — rather than teaching the
+/// call emitter to re-derive it — is what keeps the two generators reading one fact.
+///
+/// A fixture that already hand-authors `shows` or `presentation.operations` is left alone: its
+/// operations are the authored ones, and `has_docs_presentation` already reports them. Must be
+/// called before any caller clears `assertions`, which is where the derivation reads from.
+pub(crate) fn apply_derived_shows(
+    fixture: &mut Fixture,
+    e2e_config: &E2eConfig,
+    language: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+) {
+    if fixture.docs.is_none() || fixture.has_docs_presentation() {
+        return;
+    }
+    let call = e2e_config.resolve_call_for_fixture(
+        fixture.call.as_deref(),
+        &fixture.id,
+        &fixture.resolved_category(),
+        &fixture.tags,
+        &fixture.input,
+    );
+    let resolver = build_resolver(e2e_config, call, type_defs);
+    let paths: Vec<String> = default_operations_from_assertions(fixture, call, language, &resolver)
+        .into_iter()
+        .filter_map(|operation| match operation {
+            FixtureDocsOperation::Show { path, .. } => Some(path),
+            FixtureDocsOperation::Iterate { .. } => None,
+        })
+        .collect();
+    if paths.is_empty() {
+        return;
+    }
+    if let Some(docs) = fixture.docs.as_mut() {
+        docs.shows = paths;
+    }
 }
 
 /// [`resolve`], but against a caller-supplied [`FieldResolver`].
@@ -100,7 +159,7 @@ pub(crate) fn resolve_with(
     // "call the function" into "here is how you use what it returns", without a second,
     // independently-derived notion of which fields exist on the result. ~keep
     let operations = if operations.is_empty() {
-        default_operations_from_assertions(fixture, call.returns_void)
+        default_operations_from_assertions(fixture, call, language, resolver)
     } else {
         operations
     };
@@ -164,8 +223,42 @@ pub(crate) fn resolve_with(
 /// input shape, which would let this and the assertion resolver disagree about what fields a
 /// result has. Assertions with no `field` (method-result checks, `error` assertions) name
 /// nothing to show and are skipped; a void call has no result to access at all. ~keep
-fn default_operations_from_assertions(fixture: &Fixture, returns_void: bool) -> Vec<FixtureDocsOperation> {
-    if returns_void {
+///
+/// A derived path is only shown when the assertion renderer would itself have rendered a member
+/// access on the result for it. `Assertion::field` is not a promise that the name is a member of
+/// the return type — three whole classes of assertion name something else, and 0.67.2 emitted a
+/// non-compiling accessor for every one of them:
+///
+/// * an **error-path fixture**. Every backend's error block renders the must-fail check and
+///   returns without visiting another assertion (that is the entire premise of
+///   [`error_path_assertions`]), so `error.status_code` is a claim about the raised error, never
+///   about a result — and on the success path there is no result to show anyway.
+/// * a **non-struct result**. When `result_is_simple`/`result_is_bytes` holds for this language,
+///   the field is a pseudo-field naming the buffer or scalar itself, exactly as
+///   `java/assertions.rs`'s byte-buffer arm documents; the snippet falls back to showing the
+///   whole result.
+/// * a **name the availability oracle does not recognize**. Both halves are needed:
+///   [`FieldResolver::is_valid_for_result`] rejects what the oracle positively excludes, and
+///   [`FieldResolver::result_field_oracle_knows`] additionally rejects what it has simply never
+///   heard of — an assertion *grouping* like `rate_limit.` or a streaming pseudo-field is not a
+///   member path, and defaulting an unrecognized name to "valid" is right for an authored
+///   assertion but wrong for an inferred accessor. See that method for the asymmetry.
+///
+/// Rejection falls back to no operation, i.e. the pre-#199 whole-result display — never to a
+/// guess. ~keep
+///
+/// [`error_path_assertions`]: crate::e2e::codegen::error_path_assertions
+fn default_operations_from_assertions(
+    fixture: &Fixture,
+    call: &crate::core::config::e2e::CallConfig,
+    language: &str,
+    resolver: &FieldResolver,
+) -> Vec<FixtureDocsOperation> {
+    if call.returns_void
+        || call.effective_result_is_simple(language)
+        || call.effective_result_is_bytes(language)
+        || fixture.assertions.iter().any(|a| a.assertion_type == "error")
+    {
         return Vec::new();
     }
     let mut seen_fields = Vec::new();
@@ -173,6 +266,7 @@ fn default_operations_from_assertions(fixture: &Fixture, returns_void: bool) -> 
         .assertions
         .iter()
         .filter_map(|assertion| assertion.field.as_deref())
+        .filter(|field| shows_on_result(field, resolver))
         .filter(|field| {
             let is_new = !seen_fields.contains(field);
             if is_new {
@@ -185,6 +279,15 @@ fn default_operations_from_assertions(fixture: &Fixture, returns_void: bool) -> 
             display: false,
         })
         .collect()
+}
+
+/// Whether a derived field path names a member of the call's result, per the oracles the
+/// assertion renderers already consult. See [`default_operations_from_assertions`].
+fn shows_on_result(field: &str, resolver: &FieldResolver) -> bool {
+    !field.is_empty()
+        && !crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field)
+        && resolver.is_valid_for_result(field)
+        && resolver.result_field_oracle_knows(field) != Some(false)
 }
 
 /// The root variable an accessor chain is anchored on, spelled the way the target
@@ -605,3 +708,7 @@ mod tests {
         assert!(resolve(&fixture, &config, "python", &[]).is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "presentation/derived_show_resolution_tests.rs"]
+mod derived_show_resolution_tests;
