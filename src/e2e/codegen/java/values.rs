@@ -33,6 +33,41 @@ pub(super) fn is_java_builtin_type(ty: &str) -> bool {
     )
 }
 
+/// The JVM's `CONSTANT_Utf8` constant-pool entry -- and `javac`'s own enforcement of the same
+/// cap on any single string literal -- tops out at 65535 bytes of modified UTF-8. No amount of
+/// escaping raises that ceiling; a value long enough to threaten it has to stop being one
+/// literal.
+///
+/// The budget is counted in raw characters, not bytes, because a single non-BMP character (an
+/// emoji, for instance) costs up to 6 bytes in modified UTF-8 (a CESU-8 surrogate pair) while
+/// counting as one `char` here -- so the budget has to assume every character could be that
+/// expensive. `8_000 * 6 = 48_000`, comfortably under the 65535 cap even before the escaping
+/// `java_string_literal` already performs on top of it.
+const JAVA_STRING_LITERAL_CHUNK_CHARS: usize = 8_000;
+
+/// Render `s` as a Java string-literal expression that compiles regardless of length.
+///
+/// A single `"..."` literal cannot exceed the JVM's per-constant byte cap -- see
+/// [`JAVA_STRING_LITERAL_CHUNK_CHARS`]. Values under the safe budget (the overwhelming
+/// majority: identifiers, URLs, short fixture fields) render exactly as before, one `"..."`
+/// literal. A value long enough to threaten the cap -- e.g. a large fixture body inlined into a
+/// generated doc snippet or e2e test -- is split into `+`-concatenated literal chunks, each
+/// small enough that no single chunk can approach the limit, and the whole expression is
+/// parenthesized so a caller can chain a method off it (`.replace(...)`) or pass it as a call
+/// argument without knowing whether it rendered one literal or several.
+pub(super) fn java_string_literal(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= JAVA_STRING_LITERAL_CHUNK_CHARS {
+        return format!("\"{}\"", escape_java(s));
+    }
+    let joined = chars
+        .chunks(JAVA_STRING_LITERAL_CHUNK_CHARS)
+        .map(|chunk| format!("\"{}\"", escape_java(&chunk.iter().collect::<String>())))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    format!("({joined})")
+}
+
 /// Emit a Java list of deserialized objects via JsonUtil.
 /// E.g., `[{"type": "click", ...}, ...]` becomes `java.util.Arrays.asList(JsonUtil.fromJson(...))`.
 pub(super) fn emit_java_object_array(arr: &serde_json::Value, elem_type: &str) -> String {
@@ -44,8 +79,8 @@ pub(super) fn emit_java_object_array(arr: &serde_json::Value, elem_type: &str) -
             .iter()
             .map(|item| {
                 let json_str = serde_json::to_string(item).unwrap_or_default();
-                let escaped = escape_java(&json_str);
-                format!("JsonUtil.fromJson(\"{escaped}\", {elem_type}.class)")
+                let literal = java_string_literal(&json_str);
+                format!("JsonUtil.fromJson({literal}, {elem_type}.class)")
             })
             .collect();
         format!("java.util.Arrays.asList({})", item_strs.join(", "))
@@ -63,7 +98,7 @@ pub(super) fn json_to_java(value: &serde_json::Value) -> String {
 /// `element_type` controls how numeric array elements are emitted: "f32" -> `1.0f`, otherwise `1.0d`.
 pub(super) fn json_to_java_typed(value: &serde_json::Value, element_type: Option<&str>) -> String {
     match value {
-        serde_json::Value::String(s) => format!("\"{}\"", escape_java(s)),
+        serde_json::Value::String(s) => java_string_literal(s),
         serde_json::Value::Bool(b) => b.to_string(),
         serde_json::Value::Number(n) => {
             if n.is_f64() {
@@ -82,7 +117,7 @@ pub(super) fn json_to_java_typed(value: &serde_json::Value, element_type: Option
         }
         serde_json::Value::Object(_) => {
             let json_str = serde_json::to_string(value).unwrap_or_default();
-            format!("\"{}\"", escape_java(&json_str))
+            java_string_literal(&json_str)
         }
     }
 }
@@ -130,8 +165,8 @@ pub(super) fn java_builder_expression(
                     // Path field: wrap in Optional.of(java.nio.file.Path.of(...))
                     format!("Optional.of(java.nio.file.Path.of(\"{}\"))", escape_java(s))
                 } else {
-                    // String field: emit as a quoted literal
-                    format!("\"{}\"", escape_java(s))
+                    // String field: emit as a quoted literal (safe at any length).
+                    java_string_literal(s)
                 }
             }
             serde_json::Value::Bool(b) => b.to_string(),
@@ -233,5 +268,62 @@ pub(super) fn collect_nested_type_names(
         if let Some(nested) = val.as_object() {
             collect_nested_type_names(nested, nested_types, types_out);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The JVM's `CONSTANT_Utf8` constant-pool cap is exactly 65535 bytes. Values comfortably
+    /// under it must render exactly as before: one plain `"..."` literal, no parentheses, no
+    /// concatenation.
+    #[test]
+    fn a_short_value_stays_a_single_quoted_literal() {
+        assert_eq!(java_string_literal("hello world"), "\"hello world\"");
+    }
+
+    /// Neutral synthetic payload, well over the JVM's 65535-byte `CONSTANT_Utf8` cap. Not any
+    /// real consumer's data -- chosen only to be unambiguously larger than the limit, per
+    /// `project-agnostic-codegen`.
+    fn oversized_payload() -> String {
+        "abcdefghij".repeat(10_000) // 100,000 bytes
+    }
+
+    /// Regression for alef task #180: a value long enough to threaten the JVM's per-constant
+    /// byte cap must never render as a single literal segment, no matter how it is escaped --
+    /// the cap is structural, not cosmetic. Every `+`-joined segment must independently satisfy
+    /// the limit. ~keep
+    #[test]
+    fn a_value_over_the_jvm_constant_cap_is_never_a_single_literal_segment() {
+        let literal = java_string_literal(&oversized_payload());
+        assert!(
+            literal.contains(" + "),
+            "an oversized value must be split into multiple concatenated literals: {literal}"
+        );
+        let inner = literal
+            .strip_prefix('(')
+            .and_then(|rest| rest.strip_suffix(')'))
+            .unwrap_or(&literal);
+        for segment in inner.split(" + ") {
+            assert!(
+                segment.len() <= 65_535,
+                "a single Java string literal segment must never exceed the JVM's 65535-byte \
+                 CONSTANT_Utf8 cap: got {} bytes in {segment:?}",
+                segment.len()
+            );
+        }
+    }
+
+    /// The parenthesized concatenation must still be usable everywhere a bare literal was --
+    /// as a call argument, or with a method chained directly onto it (e.g. `.replace(...)`,
+    /// as `test_method.rs`'s mock-URL substitution does).
+    #[test]
+    fn an_oversized_literal_is_parenthesized_so_a_caller_can_chain_a_method_onto_it() {
+        let literal = java_string_literal(&oversized_payload());
+        assert!(
+            literal.starts_with('(') && literal.ends_with(')'),
+            "expected a parenthesized concatenation: {literal}"
+        );
     }
 }

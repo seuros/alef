@@ -1,1 +1,1 @@
-val {{ variable }} = MAPPER.readValue("{{ json }}"{{ replacements }}, {{ type_name }}::class.java)
+val {{ variable }} = MAPPER.readValue({{ json_literal }}{{ replacements }}, {{ type_name }}::class.java)

@@ -216,7 +216,12 @@ fn render_json_object_setup(
                 "java/snippet_json_object_setup.jinja",
                 minijinja::context! {
                     variable => arg.name,
-                    json => crate::e2e::escape::escape_java(&json),
+                    // A full Java string-literal expression (quoted, or `+`-chunked when the
+                    // fixture body is long enough to threaten the JVM's 65535-byte constant
+                    // cap) -- not just escaped content -- so the template can splice it in
+                    // without assuming a single `"..."` literal is safe. See
+                    // `values::java_string_literal`. ~keep
+                    json_literal => super::values::java_string_literal(&json),
                     type_name => type_name,
                     file_reads => file_reads,
                 },
@@ -786,6 +791,69 @@ mod tests {
         let continuation_line = line_containing(&body, "Files.readAllBytes(java.nio.file.Path.of(\"document.pdf\"))");
         assert_eq!(leading_spaces(open_line), 8, "{body}");
         assert_eq!(leading_spaces(continuation_line), 12, "{body}");
+    }
+
+    /// Regression for alef task #180: a fixture whose `json_object` field carries a value long
+    /// enough to threaten the JVM's 65535-byte `CONSTANT_Utf8` cap must never render as a
+    /// single Java string literal above that limit -- no amount of escaping can raise the cap,
+    /// so the doc snippet generator has to stop emitting one literal once a value is long
+    /// enough. Neutral synthetic payload (`project-agnostic-codegen`): not any real consumer's
+    /// fixture, just something unambiguously larger than the JVM cap. ~keep
+    #[test]
+    fn a_doc_snippet_never_emits_a_single_java_literal_over_the_jvm_constant_cap() {
+        let oversized_payload = "abcdefghij".repeat(10_000); // 100,000 bytes
+        let fixture = Fixture {
+            id: "large_payload".into(),
+            description: "Process a large payload".into(),
+            input: serde_json::json!({"content": oversized_payload}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "options".into(),
+                field: "content".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "java".into(),
+            CallOverride {
+                options_type: Some("PayloadOptions".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+        );
+
+        assert!(
+            body.contains(&oversized_payload[..100]),
+            "the snippet must still contain the fixture content, just not as one literal:\n{}",
+            &body[..body.len().min(500)]
+        );
+        for segment in body.split('"') {
+            assert!(
+                segment.len() <= 65_535,
+                "a generated Java doc snippet must never contain a single quoted-literal \
+                 segment above the JVM's 65535-byte CONSTANT_Utf8 cap: got {} bytes",
+                segment.len()
+            );
+        }
     }
 
     /// Regression: the snippet generator used to build the checked-exception class name by

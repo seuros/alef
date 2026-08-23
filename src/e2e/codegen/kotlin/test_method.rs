@@ -382,11 +382,14 @@ pub(super) fn render_test_method(
         }
         let normalized = crate::e2e::codegen::transform_json_keys_for_language(&request_input, "snake_case");
         let request_json = serde_json::to_string(&normalized).unwrap_or_default();
-        let escaped_json = crate::e2e::escape::escape_kotlin(&request_json);
+        // A full literal expression -- quoted, or `+`-chunked when `request_json` is long
+        // enough to threaten the JVM's 65535-byte constant cap -- not just escaped content.
+        // See `values::kotlin_string_literal`.
+        let literal = super::values::kotlin_string_literal(&request_json);
         if crate::e2e::codegen::value_contains_mock_url_placeholder(&normalized) {
             let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
             setup_lines.push(format!(
-                "val {request_name}Json = \"{escaped_json}\".replace(\"{}\", System.getProperty(\"mockServer.{}\", System.getenv(\"{env_key}\") ?: \"\"))",
+                "val {request_name}Json = {literal}.replace(\"{}\", System.getProperty(\"mockServer.{}\", System.getenv(\"{env_key}\") ?: \"\"))",
                 crate::e2e::escape::escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER), fixture.id,
             ));
             setup_lines.push(format!(
@@ -394,7 +397,7 @@ pub(super) fn render_test_method(
             ));
         } else {
             setup_lines.push(format!(
-                "val {request_name} = MAPPER.readValue(\"{escaped_json}\", {request_type}::class.java)"
+                "val {request_name} = MAPPER.readValue({literal}, {request_type}::class.java)"
             ));
         }
         args_str = request_name;

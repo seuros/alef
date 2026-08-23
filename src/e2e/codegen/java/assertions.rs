@@ -336,8 +336,8 @@ pub(super) fn render_assertion(
                 }
                 "equals" => {
                     if let Some(serde_json::Value::String(s)) = &assertion.value {
-                        let escaped = crate::e2e::escape::escape_java(s);
-                        format!("        assertEquals(\"{escaped}\", {expr});\n")
+                        let literal = super::values::java_string_literal(s);
+                        format!("        assertEquals({literal}, {expr});\n")
                     } else if let Some(n) = assertion.value.as_ref().and_then(|v| v.as_u64()) {
                         format!("        assertEquals({n}, {expr});\n")
                     } else {
