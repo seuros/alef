@@ -599,25 +599,14 @@ pub(super) fn gen_build_rs(
         if pairs.is_empty() {
             String::new()
         } else {
-            let replaces = pairs
+            pairs
                 .iter()
-                .map(|(prefixed, bare)| format!("        header = header.replace(\"{prefixed}\", \"{bare}\");"))
+                .map(|(prefixed, bare)| format!("    header = header.replace(\"{prefixed}\", \"{bare}\");"))
                 .collect::<Vec<_>>()
-                .join("\n");
-            format!(
-                "\n    // Rewrite prefixed host-native capsule pointee types back to the unprefixed\n    \
-                 // names forward-declared in the header prelude (cbindgen prefixes all referenced\n    \
-                 // types, but these are external types defined by the host tree-sitter runtime).\n    \
-                 {{\n        \
-                 let header_path = \"include/{header_name}\";\n        \
-                 let mut header = std::fs::read_to_string(header_path).expect(\"read generated header\");\n\
-                 {replaces}\n        \
-                 std::fs::write(header_path, header).expect(\"write patched header\");\n    \
-                 }}\n"
-            )
+                .join("\n")
         }
     };
-    let go_copy_step = match go_output_dir {
+    let go_header_destination = match go_output_dir {
         Some(go_dir) => {
             let go_dir = go_dir.trim_end_matches('/');
             let depth = std::path::Path::new(go_dir)
@@ -627,23 +616,7 @@ pub(super) fn gen_build_rs(
                 .max(1);
             let to_root = "../".repeat(depth);
             let dest_dir = format!("{to_root}{go_dir}/include");
-            format!(
-                "\n    // Go, Zig, and generated C consumers compile against the C header. Go's\n    \
-                 // `binding.go` carries `#include \"{header_name}\"` under cgo, so the header has to be\n    \
-                 // vendored next to the Go sources to build at all. Every other binding\n    \
-                 // (Panama/JNI, P/Invoke, PyO3, NAPI, Magnus, ...) resolves the cdylib's\n    \
-                 // symbols at run time and never sees a header. Zig and C consume the canonical\n    \
-                 // staged header directly rather than this Go-specific vendored copy.\n    \
-                 //\n    \
-                 // So this is deliberately a single destination, NOT an incomplete fan-out\n    \
-                 // list. Do not add package directories here just because they ship the\n    \
-                 // cdylib: a vendored copy of a generated header that nothing compiles is a\n    \
-                 // drift generator, and it silently rots into a false record of the ABI.\n    \
-                 let go_include_dir = std::path::Path::new(\"{dest_dir}\");\n    \
-                 std::fs::create_dir_all(go_include_dir).expect(\"Unable to create Go include directory\");\n    \
-                 std::fs::copy(\"include/{header_name}\", go_include_dir.join(\"{header_name}\"))\n        \
-                 .expect(\"Unable to copy header to Go include directory\");\n"
-            )
+            format!("        Path::new(\"{dest_dir}/{header_name}\"),\n")
         }
         None => String::new(),
     };
@@ -653,7 +626,7 @@ pub(super) fn gen_build_rs(
             header_name => header_name,
             lib_name => lib_name,
             prefix_upper => &prefix_upper,
-            go_copy_step => go_copy_step,
+            go_header_destination => go_header_destination,
             capsule_header_fixup => capsule_header_fixup,
         },
     )
