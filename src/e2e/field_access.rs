@@ -26,6 +26,10 @@ mod tests;
 mod ir_enum_tests;
 
 #[cfg(test)]
+#[path = "field_access/csharp_optional_index_tests.rs"]
+mod csharp_optional_index_tests;
+
+#[cfg(test)]
 #[path = "field_access/zig_method_call_accessor_tests.rs"]
 mod zig_method_call_accessor_tests;
 

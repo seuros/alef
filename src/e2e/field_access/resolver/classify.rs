@@ -224,6 +224,55 @@ impl FieldResolver {
         self.is_known_via_sibling_field_config(fixture_field, resolved)
     }
 
+    /// Whether the availability oracle *positively recognizes* `fixture_field`'s first segment,
+    /// as opposed to [`Self::is_valid_for_result`]'s deliberate default-allow answer for a name
+    /// it has never heard of.
+    ///
+    /// The two answers must stay distinct because they serve opposite risks. An assertion is
+    /// rendered against a hand-authored fixture path, so defaulting an unrecognized name to
+    /// "valid" is right: virtual namespace prefixes, synthetic and streaming pseudo-fields all
+    /// legitimately name things no struct declares, and skipping them would silently drop real
+    /// coverage. A *derived* docs-snippet accessor has no such author — it is inferred from an
+    /// assertion that may not even be about the result — so the same default emits a member
+    /// access nothing declares. `crawl_stream`'s `rate_limit.min_duration_ms` is the shape:
+    /// `rate_limit` is an assertion grouping, not a field, and the IR declares only
+    /// `rate_limit_ms` elsewhere. ~keep
+    ///
+    /// * `Some(true)` — the IR reaches this field name through the binding, or the consumer
+    ///   listed it in `result_fields` (directly or behind a virtual namespace prefix).
+    /// * `Some(false)` — an oracle was available and did not recognize the name.
+    /// * `None` — no oracle at all: no IR was wired in and `result_fields` is empty, so nothing
+    ///   was consulted and nothing can be concluded. Mirrors `e2e::validate`'s
+    ///   `IrFieldShape::IrAbsent`; callers must fall back to their pre-oracle behaviour rather
+    ///   than treat silence as rejection, or every IR-less call site would reject everything.
+    pub fn result_field_oracle_knows(&self, fixture_field: &str) -> Option<bool> {
+        if self.ir_reachable_fields.is_empty()
+            && self.ir_known_excluded_fields.is_empty()
+            && self.result_fields.is_empty()
+        {
+            return None;
+        }
+        let resolved = self.resolve(fixture_field);
+        let first_segment = resolved.split('.').next().unwrap_or(resolved);
+        let first_segment = first_segment.split('[').next().unwrap_or(first_segment);
+        if self.ir_known_excluded_fields.contains(first_segment) {
+            return Some(false);
+        }
+        if self.ir_reachable_fields.contains(first_segment) || self.result_fields.contains(first_segment) {
+            return Some(true);
+        }
+        // Same namespace-prefix rescue `is_valid_for_result` applies, so a path the consumer
+        // deliberately spelled `browser.browser_used` is not rejected for its virtual prefix.
+        if let Some(suffix) = self.namespace_stripped_path(resolved) {
+            let suffix_first = suffix.split('.').next().unwrap_or(suffix);
+            let suffix_first = suffix_first.split('[').next().unwrap_or(suffix_first);
+            if self.ir_reachable_fields.contains(suffix_first) || self.result_fields.contains(suffix_first) {
+                return Some(true);
+            }
+        }
+        Some(false)
+    }
+
     /// True when `fixture_field` (or its alias-resolved path) is referenced by one of
     /// the other per-field config maps (`fields`, `fields_optional`, `fields_array`,
     /// `fields_method_calls`) even though it is absent from `result_fields`.

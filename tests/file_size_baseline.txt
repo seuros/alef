@@ -73,7 +73,6 @@ src/e2e/codegen/ruby/assertions.rs 1044
 src/e2e/codegen/ruby/examples.rs 1168
 src/e2e/codegen/rust/assertions.rs 1721
 src/e2e/codegen/rust/http.rs 1065
-src/e2e/codegen/rust/mod.rs 1113
 src/e2e/codegen/swift/assertions.rs 1219
 src/e2e/codegen/swift/tests.rs 1205
 src/e2e/codegen/typescript/assertions.rs 1500
