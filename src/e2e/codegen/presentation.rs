@@ -92,6 +92,18 @@ pub(crate) fn resolve_with(
                 .flat_map(|presentation| presentation.operations.iter().cloned()),
         )
         .collect::<Vec<_>>();
+    // A fixture-driven docs entry (the common shape: authored once as `assertions`, never
+    // hand-annotated with `shows`/`presentation`) has no explicit field list here, but its
+    // `assertions` already name the exact result fields it checks -- the same field paths the
+    // e2e assertion resolver renders `assert_eq!`/`assertEquals`/etc. against. Reading that
+    // existing data instead of leaving the snippet at a bare `print(result)` is what turns
+    // "call the function" into "here is how you use what it returns", without a second,
+    // independently-derived notion of which fields exist on the result. ~keep
+    let operations = if operations.is_empty() {
+        default_operations_from_assertions(fixture, call.returns_void)
+    } else {
+        operations
+    };
     operations
         .iter()
         .map(|operation| match operation {
@@ -138,6 +150,39 @@ pub(crate) fn resolve_with(
                     destructure_item,
                 }
             }
+        })
+        .collect()
+}
+
+/// Default field-access operations for a docs-tagged fixture whose `docs.shows` and
+/// `docs.presentation.operations` are both empty.
+///
+/// Every generated assertion already anchors on `Assertion::field`, so the field paths a
+/// fixture cares about are known even when nobody hand-authored a `shows` list for the docs
+/// snippet. This derives one `show` per distinct field, in first-appearance order, from
+/// exactly that same data -- deliberately not re-deriving field names from the IR or the
+/// input shape, which would let this and the assertion resolver disagree about what fields a
+/// result has. Assertions with no `field` (method-result checks, `error` assertions) name
+/// nothing to show and are skipped; a void call has no result to access at all. ~keep
+fn default_operations_from_assertions(fixture: &Fixture, returns_void: bool) -> Vec<FixtureDocsOperation> {
+    if returns_void {
+        return Vec::new();
+    }
+    let mut seen_fields = Vec::new();
+    fixture
+        .assertions
+        .iter()
+        .filter_map(|assertion| assertion.field.as_deref())
+        .filter(|field| {
+            let is_new = !seen_fields.contains(field);
+            if is_new {
+                seen_fields.push(*field);
+            }
+            is_new
+        })
+        .map(|field| FixtureDocsOperation::Show {
+            path: field.to_string(),
+            display: false,
         })
         .collect()
 }
@@ -484,5 +529,79 @@ mod tests {
             with_ir[0].expression, "result.data.as_ref().unwrap().kind",
             "with IR in scope, resolve must unwrap the Option before the nested field access"
         );
+    }
+
+    /// The shape every fixture-driven (non-hand-authored) docs fixture takes: `docs` is
+    /// present so the fixture DOES get a snippet, but nobody hand-annotated `shows` or
+    /// `presentation` -- the only field knowledge lives in `assertions`. Before this fell
+    /// back to reading `assertions`, `resolve` returned an empty operations list here and
+    /// every generated snippet in every language bottomed out at a bare
+    /// `print(result)`/`println!("{:?}", result)`, never showing how to consume the return
+    /// value. Two assertions on the same field (`equals` and `not_empty`, both on
+    /// `"content"`) must collapse to one `show`, not print the field twice.
+    #[test]
+    fn resolve_derives_show_operations_from_assertion_fields_when_docs_names_none() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "smoke_simple_paragraph",
+            "description": "Simple paragraph converts correctly",
+            "input": {"html": "<p>Hello World</p>"},
+            "assertions": [
+                {"type": "equals", "field": "content", "value": "Hello World\n"},
+                {"type": "not_empty", "field": "content"}
+            ],
+            "docs": {"topic": "smoke", "stem": "smoke_simple_paragraph"}
+        }))
+        .expect("fixture must parse");
+        let config = E2eConfig {
+            call: CallConfig {
+                function: "convert".into(),
+                result_var: "result".into(),
+                ..CallConfig::default()
+            },
+            ..E2eConfig::default()
+        };
+
+        let python = resolve(&fixture, &config, "python", &[]);
+        assert_eq!(python.len(), 1, "the duplicate 'content' field must not be shown twice");
+        assert_eq!(python[0].kind, "show");
+        assert_eq!(python[0].expression, "result.content");
+
+        let rust = resolve(&fixture, &config, "rust", &[]);
+        assert_eq!(rust[0].expression, "result.content");
+    }
+
+    /// An `error`-typed assertion names no `field` and must not be mistaken for one -- it
+    /// documents a failure mode, not a field to print on the success path.
+    #[test]
+    fn resolve_ignores_assertions_with_no_field_when_deriving_show_operations() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "auth_error",
+            "description": "Authentication failure",
+            "input": {"token": "bad"},
+            "assertions": [{"type": "error"}],
+            "docs": {"topic": "errors", "stem": "auth_error"}
+        }))
+        .expect("fixture must parse");
+        let config = config();
+
+        assert!(resolve(&fixture, &config, "python", &[]).is_empty());
+    }
+
+    /// A void call has no result to access; even a fixture whose assertions happen to name a
+    /// field (e.g. a side-effect check) must not gain a fabricated `print(result.<field>)`.
+    #[test]
+    fn resolve_derives_no_show_operations_for_a_void_returning_call() {
+        let fixture: Fixture = serde_json::from_value(serde_json::json!({
+            "id": "configure_logging",
+            "description": "Configure logging",
+            "input": {"level": "debug"},
+            "assertions": [{"type": "equals", "field": "level", "value": "debug"}],
+            "docs": {"topic": "configuration", "stem": "configure_logging"}
+        }))
+        .expect("fixture must parse");
+        let mut config = config();
+        config.call.returns_void = true;
+
+        assert!(resolve(&fixture, &config, "python", &[]).is_empty());
     }
 }

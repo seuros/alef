@@ -212,6 +212,11 @@ impl E2eCodegen for RustE2eCodegen {
             .assertions
             .iter()
             .any(|assertion| assertion.assertion_type == "error");
+        // Resolved before `assertions` is cleared below: a fixture with no hand-authored
+        // `docs.shows`/`docs.presentation` falls back to showing the fields its own
+        // `assertions` already name (see `presentation::default_operations_from_assertions`),
+        // and that fallback has nothing to read once this function empties the list. ~keep
+        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs);
         call_fixture.assertions.clear();
         call_fixture.mock_response = None;
         // This trait method carries no `functions: &[FunctionDef]` parameter (the free-function
@@ -243,7 +248,6 @@ impl E2eCodegen for RustE2eCodegen {
                 )
             })
             .collect::<Vec<_>>();
-        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs);
         let call = e2e_config.resolve_call_for_fixture(
             call_fixture.call.as_deref(),
             &call_fixture.id,
