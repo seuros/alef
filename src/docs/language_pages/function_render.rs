@@ -225,7 +225,7 @@ mod tests {
     /// block) has its own, independent whitelist of recognised headings that does not include
     /// `note`, so an unrecognised `# Note` heading was folded into whatever section came
     /// before it -- `example`, if that's the last recognised heading in the doc. This doc
-    /// mirrors the real shape from `xberg::chunking::count_tokens`: Arguments, then an Example
+    /// mirrors the real consumer shape: Arguments, then an Example
     /// code fence, then a trailing Note section.
     #[test]
     fn test_note_section_after_examples_is_not_emitted_twice() {
