@@ -35,7 +35,7 @@ pub(crate) use write::{
 };
 pub use write::{
     finalize_hashes, finalize_hashes_after_tree_format, finalize_hashes_sweeping, managed_generated_files,
-    managed_output_paths, write_files, write_files_report,
+    managed_output_paths, stampable_output_paths, write_files, write_files_report,
 };
 
 #[cfg(test)]

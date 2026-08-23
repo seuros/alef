@@ -33,9 +33,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let mut binding_count: usize = 0;
             let mut all_paths = std::collections::HashSet::new();
             for (lang_key, lang_files) in &bindings {
-                for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
-                    all_paths.insert(base_dir.join(&file.path));
-                }
+                all_paths.extend(pipeline::stampable_output_paths(lang_files, &base_dir));
                 let single = vec![(*lang_key, lang_files.clone())];
                 binding_count += pipeline::write_files(&single, &base_dir)?;
             }
@@ -46,9 +44,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!("  Generating scaffolding...");
             let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
             let scaffold_count = pipeline::write_scaffold_files(&scaffold_files, &base_dir)?;
-            for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
-                all_paths.insert(base_dir.join(&file.path));
-            }
+            all_paths.extend(pipeline::stampable_output_paths(&scaffold_files, &base_dir));
 
             tracing::info!("  Formatting...");
             // `alef init` bootstraps a fresh clone, which is precisely the machine least likely

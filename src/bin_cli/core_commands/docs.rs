@@ -80,7 +80,7 @@ pub(crate) fn handle(
             .filter(|file| file.carries_alef_marker())
             .map(|file| base_dir.join(&file.path))
             .collect();
-        let doc_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
+        let doc_paths = pipeline::stampable_output_paths(&files, &base_dir);
         pipeline::finalize_hashes(&doc_paths, &sources_hash, &alef_toml_bytes)?;
         if use_stage_cache {
             cache::write_stage_hash(&resolved_cfg.name, &docs_stage_key, &stage_hash, &output_paths)?;

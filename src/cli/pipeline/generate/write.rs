@@ -89,6 +89,52 @@ pub fn report_refused_writes(report: &WriteReport) {
     }
 }
 
+/// Every path in `files` that [`finalize_hashes`] must re-stamp this run.
+///
+/// This is deliberately a *disk-aware superset* of
+/// [`GeneratedFile::carries_alef_marker`], and the difference between the two is a whole
+/// bug class rather than an edge case. The two sides of the stamp contract answer the
+/// ownership question from different evidence:
+///
+/// - the stamper asked the in-memory [`GeneratedFile`] — `generated_header`, or a marker
+///   the emitter templated into `content`;
+/// - `alef verify` ([`crate::bin_cli::helpers::collect_alef_hashes`]) asks the bytes **on
+///   disk** — every file whose leading lines carry the marker is held to its stamp.
+///
+/// A create-once scaffold seed (`generated_header: false`, no marker in `content`:
+/// `packages/go/go.mod`, `packages/zig/build.zig.zon`, the Swift `RustBridge` placeholder)
+/// that an *earlier* alef wrote with a header sits on exactly that fault line. The
+/// scaffold writer's `can_skip` never rewrites it, and it failed the stamper's in-memory
+/// predicate, so no run re-stamped it — while verify, reading the marker off disk, held it
+/// to a stamp frozen at whichever `inputs_hash` last wrote it. The first input change after
+/// that reported the file stale permanently: regenerating could not clear it (there was
+/// nothing to write), `alef adopt` refused it as already alef-owned, and the file was
+/// content-correct the entire time. Deciding the stamp scope from the same evidence verify
+/// uses is what makes that state unreachable, rather than a list of names to special-case.
+///
+/// Only the hash line is rewritten by the stamping pass this feeds; the file's body is
+/// never touched, so a seed a human has grown past alef's placeholder keeps every byte it
+/// has. ~keep
+pub fn stampable_output_paths(
+    files: &[GeneratedFile],
+    base_dir: &Path,
+) -> std::collections::HashSet<std::path::PathBuf> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let full_path = base_dir.join(&file.path);
+            // Short-circuits before touching the filesystem for the common case, so the
+            // disk read only happens for the files the in-memory predicate rejects. ~keep
+            (file.carries_alef_marker() || disk_carries_alef_marker(&full_path)).then_some(full_path)
+        })
+        .collect()
+}
+
+/// Whether the file already on disk at `path` declares itself alef-generated.
+fn disk_carries_alef_marker(path: &Path) -> bool {
+    std::fs::read_to_string(path).is_ok_and(|content| hash::content_has_alef_marker(&content))
+}
+
 pub fn managed_output_paths(files: &[GeneratedFile], base_dir: &Path) -> std::collections::HashSet<std::path::PathBuf> {
     files
         .iter()
@@ -810,5 +856,7 @@ pub use tree_stamp::finalize_hashes_after_tree_format;
 
 #[cfg(test)]
 mod marker_syntax_tests;
+#[cfg(test)]
+mod stamp_scope_tests;
 #[cfg(test)]
 mod tree_format_stamp_tests;
