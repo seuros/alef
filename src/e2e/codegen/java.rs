@@ -378,6 +378,8 @@ mod enum_field_classification_tests;
 #[cfg(test)]
 mod not_error_bare_option_tests;
 #[cfg(test)]
+mod optional_collection_default_agreement_tests;
+#[cfg(test)]
 mod sealed_display_wire_name_tests;
 #[cfg(test)]
 mod tests;
