@@ -74,6 +74,7 @@ pub fn vendor_core_only(
 
     let workspace_pkg = workspace_table.get("package").and_then(|p| p.as_table());
     let workspace_deps = workspace_table.get("dependencies").and_then(|d| d.as_table());
+    let workspace_lints = workspace_table.get("lints");
 
     let vendor_crate_dir = dest_dir.join(&*core_crate_name);
     if vendor_crate_dir.exists() {
@@ -98,7 +99,7 @@ pub fn vendor_core_only(
         inline_workspace_deps(&mut crate_doc, "build-dependencies", ws_deps)?;
     }
 
-    remove_workspace_lints(&mut crate_doc);
+    inline_workspace_lints(&mut crate_doc, workspace_lints);
 
     if !generate_workspace_manifest && !crate_doc.as_table().contains_key("workspace") {
         crate_doc.as_table_mut().insert("workspace", Item::Table(Table::new()));
@@ -711,17 +712,78 @@ fn strip_workspace_member_entries(lock_path: &Path, member_names: &std::collecti
     Ok(())
 }
 
-/// Remove `[lints] workspace = true` section.
-fn remove_workspace_lints(doc: &mut DocumentMut) {
-    if let Some(lints) = doc.get("lints").and_then(|l| l.as_table_like())
-        && lints
-            .get("workspace")
-            .and_then(|w| w.as_value())
-            .and_then(|v| v.as_bool())
-            == Some(true)
-    {
-        doc.remove("lints");
+/// Replace the vendored crate's `[lints] workspace = true` with the source
+/// workspace's own `[workspace.lints]` tables, verbatim.
+///
+/// The general rule: a crate lifted out of its workspace must keep every piece of
+/// build configuration it was inheriting, not just the parts that happen to be
+/// load-bearing today. `[lints]` is the one such table Cargo resolves through the
+/// workspace, so vendoring has to materialize it — otherwise the vendored copy
+/// compiles under a *different* lint configuration than the crate its sources came
+/// from. That difference is invisible in a default build (the lost lints only
+/// downgrade to nothing) and fatal under `RUSTFLAGS="-D warnings"`, because the
+/// entry that matters most here is `unexpected_cfgs`' check-cfg allowlist: it is
+/// what tells rustc that the crate's own `#[cfg(...)]` gates are expected names.
+/// Drop it and every gate in the crate becomes an `unexpected_cfgs` diagnostic.
+///
+/// Nothing here is specific to any one cfg name or lint — the whole
+/// `[workspace.lints]` sub-tree is copied across, so a workspace that adds a new
+/// lint or a new check-cfg entry needs no change in alef.
+///
+/// When the workspace declares no `[workspace.lints]`, the inheritance marker is
+/// simply removed as before: there is nothing to inline, and `workspace = true`
+/// with no parent workspace is not a manifest Cargo can read. ~keep
+fn inline_workspace_lints(doc: &mut DocumentMut, ws_lints: Option<&Item>) {
+    let inherits_from_workspace = doc
+        .get("lints")
+        .and_then(|l| l.as_table_like())
+        .and_then(|lints| lints.get("workspace"))
+        .and_then(|w| w.as_value())
+        .and_then(toml_edit::Value::as_bool)
+        == Some(true);
+    if !inherits_from_workspace {
+        return;
     }
+
+    doc.remove("lints");
+
+    let Some(source) = ws_lints.and_then(|l| l.as_table_like()) else {
+        return;
+    };
+    if source.is_empty() {
+        return;
+    }
+    doc.insert("lints", Item::Table(rebuild_lint_table(source)));
+}
+
+/// Copy a `[workspace.lints]` sub-tree into a freshly built table.
+///
+/// Cloning the source tables wholesale would carry their `position` ordering and
+/// leading comment decor from the workspace manifest into a document that has a
+/// different table layout. Rebuilding copies the semantics and leaves the
+/// formatting to the destination document. Only real (`Item::Table`) children are
+/// recursed into: a value like `unexpected_cfgs = { level = "warn", check-cfg =
+/// [...] }` is an inline table that must stay inline and stay verbatim. ~keep
+fn rebuild_lint_table(source: &dyn toml_edit::TableLike) -> Table {
+    let mut out = Table::new();
+    // Implicit suppresses only a header that would carry no keys of its own, so
+    // `[lints.rust]` still prints while a bare `[lints]` above it does not. ~keep
+    out.set_implicit(true);
+    for (key, item) in source.iter() {
+        match item {
+            Item::Table(inner) => {
+                out.insert(key, Item::Table(rebuild_lint_table(inner)));
+            }
+            other => {
+                let mut cloned = other.clone();
+                if let Some(value) = cloned.as_value_mut() {
+                    value.decor_mut().clear();
+                }
+                out.insert(key, cloned);
+            }
+        }
+    }
+    out
 }
 
 /// Generate a minimal workspace Cargo.toml for the vendor directory.
@@ -777,5 +839,7 @@ fn clean_vendored_deps(vendor_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod lint_inheritance_tests;
 #[cfg(test)]
 mod tests;
