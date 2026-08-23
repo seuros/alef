@@ -168,34 +168,33 @@ mod tests {
     use std::process::Command;
     use tempfile::TempDir;
 
+    /// Build the annotated-tag fixture these tests read back.
+    ///
+    /// Each step asserts on the child's exit status rather than only on `output()`'s spawn
+    /// result: a nonzero `git` exit leaves `output()` perfectly `Ok`, so the previous
+    /// `.unwrap()`s could not see a failed commit or tag at all and left the tests asserting
+    /// against an empty repository instead of the fixture they name. That is not theoretical
+    /// here -- this fixture makes both a commit and an *annotated* tag, and a developer with
+    /// `commit.gpgsign` / `tag.gpgsign` set globally signs both, so the steps most likely to
+    /// fail were exactly the ones whose failure was invisible. ~keep
+    fn run_git(dir: &std::path::Path, args: &[&str]) {
+        let output = crate::test_support::git_command(dir)
+            .args(args)
+            .output()
+            .expect("git must be runnable");
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     fn init_git_repo(dir: &std::path::Path) {
-        Command::new("git").args(["init"]).current_dir(dir).output().unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
+        run_git(dir, &["init"]);
         std::fs::write(dir.join("README.md"), "test").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["tag", "-a", "v4.1.0", "HEAD", "-m", "Release v4.1.0"])
-            .current_dir(dir)
-            .output()
-            .unwrap();
+        run_git(dir, &["add", "."]);
+        run_git(dir, &["commit", "-m", "init"]);
+        run_git(dir, &["tag", "-a", "v4.1.0", "HEAD", "-m", "Release v4.1.0"]);
     }
 
     fn minimal_config() -> ResolvedCrateConfig {

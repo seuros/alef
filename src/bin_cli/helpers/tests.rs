@@ -719,9 +719,7 @@ fn find_missing_and_frozen_generated_files_splits_out_a_gitignored_managed_path(
         .expect("missing paths are joined onto base_dir")
         .to_owned();
 
-    let git_init_status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir.path())
+    let git_init_status = crate::test_support::git_command(dir.path())
         .args(["init", "--quiet"])
         .status()
         .expect("git init must run");

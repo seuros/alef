@@ -425,18 +425,16 @@ fn gitmodules_registered_submodule_is_still_validated() {
 }
 
 fn init_git_repo(root: &Path) {
-    let status = std::process::Command::new("git")
+    let status = crate::test_support::git_command(root)
         .args(["init", "-q"])
-        .current_dir(root)
         .status()
         .expect("git init");
     assert!(status.success(), "git init must succeed for tracked-discovery tests");
 }
 
 fn git_add(root: &Path, relative: &str) {
-    let status = std::process::Command::new("git")
+    let status = crate::test_support::git_command(root)
         .args(["add", "--", relative])
-        .current_dir(root)
         .status()
         .expect("git add");
     assert!(

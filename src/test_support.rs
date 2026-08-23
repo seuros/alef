@@ -367,31 +367,77 @@ pub(crate) mod cargo_sort_order {
         }
     }
 }
-/// files it tracks or ignores.
+/// A `git` invocation rooted at `root` and isolated from the ambient environment's git
+/// configuration.
 ///
-/// A real repository rather than a stub, because the behaviour under test is precisely what
-/// `git ls-files` reports: a fake would encode this test's assumption about git's answer instead
-/// of measuring it, and the defects these fixtures cover were all cases where the assumed answer
-/// and the real one differed. ~keep
-pub(crate) fn git_init(root: &Path) {
-    let status = std::process::Command::new("git")
-        .args(["init", "-q"])
+/// Every fixture repository in this crate is built by shelling out to a real `git` rather than a
+/// stub, because the behaviour under test is precisely what `git ls-files` and `git log` report: a
+/// fake would encode the test's assumption about git's answer instead of measuring it, and the
+/// defects these fixtures cover were all cases where the assumed answer and the real one differed.
+///
+/// Shelling out, though, means the child `git` reads the *developer's* `~/.gitconfig` unless told
+/// not to, which makes a test's outcome a function of the machine running it. That is not
+/// hypothetical: with `commit.gpgsign = true` set globally -- a common and entirely reasonable
+/// developer setting -- every `git commit` below is signed, so these tests silently depend on a
+/// working gpg-agent and fail with `gpg: signing failed` when it cannot serve a signature under
+/// parallel test load. A test that passes on a box with no signing key and fails on one that has
+/// it is not testing what it claims to.
+///
+/// `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_SYSTEM` pointed at `/dev/null` neutralize the whole ambient
+/// config surface in one move rather than denylisting settings one at a time -- not just signing,
+/// but `core.hooksPath`, `core.excludesFile`, `init.defaultBranch`, aliases and anything a future
+/// developer happens to set. The explicit `-c` overrides then supply the few values a fixture
+/// genuinely needs, which the now-empty config no longer provides. ~keep
+pub(crate) fn git_command(root: &Path) -> std::process::Command {
+    let mut command = std::process::Command::new("git");
+    command
         .current_dir(root)
-        .status()
-        .expect("git init");
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .args([
+            "-c",
+            "user.name=Alef Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "tag.gpgsign=false",
+            "-c",
+            "core.excludesFile=/dev/null",
+            "-c",
+            "init.defaultBranch=main",
+        ]);
+    command
+}
+
+/// Initialize a fixture repository at `root` so git can report which files it tracks or ignores.
+pub(crate) fn git_init(root: &Path) {
+    let status = git_command(root).args(["init", "-q"]).status().expect("git init");
     assert!(status.success(), "git init must succeed for a tracked-ness fixture");
 }
 
 /// Stage `relative` (paths relative to `root`) into `root`'s index, making them tracked.
 pub(crate) fn git_add(root: &Path, relative: &[&str]) {
-    let status = std::process::Command::new("git")
+    let status = git_command(root)
         .arg("add")
         .arg("--")
         .args(relative)
-        .current_dir(root)
         .status()
         .expect("git add");
     assert!(status.success(), "git add must succeed for a tracked-ness fixture");
+}
+
+/// Stage every change under `root` and commit it as `message`.
+pub(crate) fn git_commit_all(root: &Path, message: &str) {
+    let status = git_command(root).args(["add", "-A"]).status().expect("git add -A");
+    assert!(status.success(), "git add -A must succeed for a history fixture");
+    let status = git_command(root)
+        .args(["commit", "--quiet", "-m", message])
+        .status()
+        .expect("git commit");
+    assert!(status.success(), "git commit must succeed for a history fixture");
 }
 
 /// Write `content` to `root/relative`, creating parent directories as needed.
@@ -402,4 +448,73 @@ pub(crate) fn write_file(root: &Path, relative: &str, content: &str) -> PathBuf 
     }
     std::fs::write(&path, content).expect("write fixture file");
     path
+}
+
+#[cfg(test)]
+mod git_hermeticity_tests {
+    use super::{git_command, git_commit_all, git_init, write_file};
+
+    /// Pin the property the shared git helper exists to guarantee: a fixture commit is
+    /// unsigned no matter what the surrounding configuration asks for.
+    ///
+    /// The repository-local `commit.gpgsign = true` written here is a *stronger* demand than
+    /// the developer `~/.gitconfig` that caused the original flake, because git ranks local
+    /// config above global -- so a helper that survives this necessarily survives an ambient
+    /// global setting too. Asserting on `%G?` rather than merely on the commit succeeding is
+    /// what makes this a real check: a signature that happened to succeed would still leave
+    /// the commit signed, and would still couple every fixture to a working gpg-agent. ~keep
+    #[test]
+    fn git_commit_all_is_unsigned_even_when_local_config_demands_signing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_init(root);
+
+        let configured = git_command(root)
+            .args(["config", "--local", "commit.gpgsign", "true"])
+            .status()
+            .expect("git config");
+        assert!(configured.success(), "the hostile local config must be written");
+        let configured = git_command(root)
+            .args(["config", "--local", "user.signingkey", "DEADBEEFDEADBEEF"])
+            .status()
+            .expect("git config");
+        assert!(configured.success(), "the bogus signing key must be written");
+
+        write_file(root, "build.zig", "const std = @import(\"std\");\n");
+        git_commit_all(root, "scaffold");
+
+        let signature = git_command(root)
+            .args(["log", "-1", "--format=%G?"])
+            .output()
+            .expect("git log");
+        assert!(signature.status.success(), "git log must succeed");
+        assert_eq!(
+            String::from_utf8_lossy(&signature.stdout).trim(),
+            "N",
+            "the fixture commit must carry no signature, so the test never depends on a working \
+             gpg-agent on the machine running it"
+        );
+    }
+
+    /// The ambient default branch name must not leak into a fixture either -- a developer with
+    /// `init.defaultBranch` set to anything but `main` would otherwise build a differently
+    /// shaped repository than CI does. ~keep
+    #[test]
+    fn git_init_uses_a_pinned_default_branch_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        git_init(root);
+        write_file(root, "seed.txt", "seed\n");
+        git_commit_all(root, "scaffold");
+
+        let branch = git_command(root)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .expect("git rev-parse");
+        assert_eq!(
+            String::from_utf8_lossy(&branch.stdout).trim(),
+            "main",
+            "the fixture branch name must be pinned by the helper, not inherited from the host"
+        );
+    }
 }

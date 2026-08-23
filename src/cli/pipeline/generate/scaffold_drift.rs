@@ -139,41 +139,7 @@ fn untouched_since_scaffold(base_dir: &Path, relative: &Path) -> Option<bool> {
 mod tests {
     use super::*;
 
-    fn init_git_repo(base_dir: &Path) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(base_dir)
-            .args(["init", "--quiet"])
-            .status()
-            .expect("git init");
-        assert!(status.success(), "git init failed");
-    }
-
-    fn git_commit_all(base_dir: &Path, message: &str) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(base_dir)
-            .args(["add", "-A"])
-            .status()
-            .expect("git add");
-        assert!(status.success(), "git add failed");
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(base_dir)
-            .args([
-                "-c",
-                "user.email=test@example.com",
-                "-c",
-                "user.name=Test",
-                "commit",
-                "--quiet",
-                "-m",
-                message,
-            ])
-            .status()
-            .expect("git commit");
-        assert!(status.success(), "git commit failed");
-    }
+    use crate::test_support::{git_commit_all, git_init as init_git_repo};
 
     fn seed_file(base_dir: &Path, relative: &str, content: &str) -> PathBuf {
         let full = base_dir.join(relative);

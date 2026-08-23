@@ -1,11 +1,8 @@
 use super::{gitignored_dirs, gitignored_paths, split_missing_by_gitignore};
 use std::path::Path;
-use std::process::Command;
 
 fn init_repo(base: &Path) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(base)
+    let status = crate::test_support::git_command(base)
         .args(["init", "--quiet"])
         .status()
         .expect("git init must run");
