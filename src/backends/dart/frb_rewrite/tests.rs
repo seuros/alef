@@ -562,6 +562,33 @@ Future<ExtractionResult> extractBytes(
     );
 }
 
+/// `dartfmt` wraps a long return type onto its own line, so the excluded function's name starts
+/// a fresh line with no preceding space -- the same alef #191 boundary shape
+/// `missing_bridge_functions` hits. Before the fix, `filter_excluded_functions` looked for a
+/// literal `" {camel}("` and never matched, silently leaving the excluded function in the
+/// generated bridge instead of stripping it.
+#[test]
+fn filter_excluded_functions_removes_a_function_whose_name_is_wrapped_onto_its_own_line() {
+    let input = "\
+Future<ChunkClassificationDefinition>
+createChunkClassificationDefinitionFromJson({required String json}) =>
+    RustLib.instance.api.crateCreateChunkClassificationDefinitionFromJson(json: json);
+
+Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);
+";
+    let exclude_set = std::collections::HashSet::from(["create_chunk_classification_definition_from_json"]);
+    let out = filter_excluded_functions(input, &exclude_set);
+
+    assert!(
+        !out.contains("createChunkClassificationDefinitionFromJson"),
+        "excluded, line-wrapped function must be removed, got:\n{out}"
+    );
+    assert!(
+        out.contains("countWidgets"),
+        "non-excluded function countWidgets must remain, got:\n{out}"
+    );
+}
+
 #[test]
 fn fix_handler_executor_calls_adds_async_to_closures() {
     let input = r#"Future<String> processRequest(Request req, FutureOr<String> Function(String) handler) {

@@ -375,9 +375,7 @@ pub fn filter_excluded_functions(source: &str, exclude_functions: &std::collecti
         if !trimmed.is_empty() && !trimmed.starts_with("class") && !trimmed.starts_with("enum") {
             should_skip_function = exclude_functions.iter().any(|&excluded| {
                 let camel_excluded = snake_to_camel(excluded);
-
-                let pattern = format!(" {}(", camel_excluded);
-                line.contains(&pattern)
+                contains_function_at_token_boundary(line, &camel_excluded)
             });
         }
 
@@ -412,6 +410,38 @@ pub fn filter_excluded_functions(source: &str, exclude_functions: &std::collecti
     }
 
     result
+}
+
+/// True when `haystack` contains `name` immediately followed by `(`, at a real identifier
+/// boundary -- the character immediately preceding the match (if any) is not itself a valid
+/// identifier character.
+///
+/// This replaces the naive `haystack.contains(&format!(" {name}("))` idiom, which requires the
+/// function name to be preceded by exactly one literal space. That holds for frb's typical
+/// single-line `Future<T> functionName(...)` output, but not once `dartfmt` wraps a long return
+/// type onto its own line: the function name then starts a fresh line (or is indented),
+/// preceded by a newline/whitespace rather than a single space, and the naive check reports a
+/// present, correctly-bridged function as missing (alef #191). Matching on a general token
+/// boundary instead of a specific whitespace shape is insensitive to whatever `dartfmt` puts
+/// before the name -- one space, a newline, indentation, or nothing at all (start of string).
+///
+/// `pub(super)`: also used by [`super::bridge_coverage::missing_bridge_functions`], which needs
+/// the identical boundary-safe lookup to find a facade function's Dart name in bridge output.
+pub(super) fn contains_function_at_token_boundary(haystack: &str, name: &str) -> bool {
+    let needle = format!("{name}(");
+    let mut search_start = 0;
+    while let Some(relative_offset) = haystack[search_start..].find(&needle) {
+        let absolute_offset = search_start + relative_offset;
+        let preceding_char = haystack[..absolute_offset].chars().next_back();
+        let at_boundary = !matches!(preceding_char, Some(c) if c.is_alphanumeric() || c == '_' || c == '$');
+        if at_boundary {
+            return true;
+        }
+        // This occurrence is a suffix of a longer identifier (e.g. `myFunctionName(` while
+        // looking for `functionName(`) -- keep scanning past its first byte for a real match.
+        search_start = absolute_offset + 1;
+    }
+    false
 }
 
 /// Convert Rust snake_case to Dart lowerCamelCase.
