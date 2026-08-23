@@ -72,8 +72,9 @@ jobs:
       # have to actually be on PATH here, not just in the `generated-output-gate` job.
       # `poly` is deliberately not installed in this job: the tests that exercise it
       # already tolerate its absence (see `e2e::format::format_language`'s non-`--strict`
-      # deferral), so it is not required for this job to pass, only for the
-      # `generated-output-gate` job's lanes, which install it themselves.
+      # deferral, and `cli_all_format_gate_covers_every_write_phase`'s own
+      # `poly_is_available()` branch), so it is not required for this job to pass, only
+      # for the `generated-output-gate` job's lanes, which install it themselves.
       - name: Set up JDK
         uses: actions/setup-java@v5
         with:

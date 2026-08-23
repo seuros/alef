@@ -19,9 +19,33 @@
 ///    `messy.py` is left exactly as written (`x=1`).
 /// 4. A third `alef all` run must make no further changes -- the tree is formatted and hash-
 ///    stable, not oscillating.
+///
+/// Step 3's actual reformatting of `messy.py` depends on `poly` being on `PATH` -- it is the
+/// engine `pipeline::format_generated_reporting` shells out to. CI's `test` job deliberately
+/// does not install `poly` (see `.github/workflows/ci.yml`'s comment on that job), so this test
+/// cannot assert the `x=1` -> `x = 1` transformation unconditionally without being vacuous
+/// there: with `poly` absent, the whole-tree pass still runs but every step it would perform
+/// is recorded as skipped, `messy.py` stays exactly as seeded, and a test that only checked the
+/// file's contents could not tell "the gate is still narrowly keyed" (the bug this regression
+/// guards) apart from "there is no formatter to prove the gate ran" -- a vacuous assertion.
+/// So this test brings its own two-path proof instead of silently tolerating that: when
+/// `poly` is on `PATH`, it asserts the real transformation directly;
+/// when it is not, it asserts the whole-tree pass's own log evidence instead -- the
+/// "Formatting generated files..." line proving the gate fired, paired with the deferred-step
+/// warning naming `poly` as the missing tool -- which a narrowly-keyed gate could never
+/// produce on a README-only change regardless of whether `poly` is installed. ~keep
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+/// Whether `poly` is on `PATH` in this process's environment, mirroring the same tolerance
+/// `e2e::format::format_language` already applies to poly-shelling tests (see that module's
+/// non-`--strict` deferral) -- this test is not exempt from CI's `test` job omitting `poly`
+/// just because it happens to also touch `alef all`'s formatting gate rather than the e2e
+/// pipeline's. ~keep
+fn poly_is_available() -> bool {
+    which::which("poly").is_ok()
+}
 
 fn alef_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_alef"))
@@ -95,14 +119,49 @@ fn a_readme_only_change_still_formats_stray_files_and_stays_hash_stable() {
         "the deleted README must be regenerated on the second run"
     );
 
-    assert_eq!(
-        fs::read_to_string(&messy).expect("read messy.py after the second run"),
-        "x = 1\n",
+    // Whichever branch runs, the whole-tree pass must have fired at all: a narrowly-keyed
+    // gate (the alef #119 bug) never logs this line on a README-only change, with or
+    // without `poly` on `PATH`. This is the one assertion both branches below share. ~keep
+    assert!(
+        second_stdout_and_stderr.contains("Formatting generated files"),
         "a run whose only reported change was the README must still run the whole-tree \
-         formatting pass and reformat every other file under the tree, including this \
-         alef-unmanaged stray file -- if this still reads `x=1`, the format gate is still \
-         narrowly keyed to bindings/service-API/stubs only. Full run output:\n{second_stdout_and_stderr}"
+         formatting pass -- if the \"Formatting generated files...\" line is missing, the \
+         format gate is still narrowly keyed to bindings/service-API/stubs only. Full run \
+         output:\n{second_stdout_and_stderr}"
     );
+
+    if poly_is_available() {
+        assert_eq!(
+            fs::read_to_string(&messy).expect("read messy.py after the second run"),
+            "x = 1\n",
+            "a run whose only reported change was the README must still reformat every other \
+             file under the tree, including this alef-unmanaged stray file -- if this still \
+             reads `x=1`, the whole-tree pass ran but did not actually reach this file. Full \
+             run output:\n{second_stdout_and_stderr}"
+        );
+    } else {
+        // `poly` is not installed (this is CI's `test` job, which omits it deliberately --
+        // see the module doc). The whole-tree pass still ran (asserted above) but every step
+        // it would perform gets recorded as deferred and `messy.py` is left exactly as
+        // seeded, so the only remaining proof available here is the deferred-step warning
+        // itself naming `poly` as the missing tool. Asserting on that instead of skipping the
+        // test keeps this regression covered even where `poly` is absent, rather than going
+        // silent exactly where the vacuous-assertion failure mode this test guards against
+        // would otherwise hide. ~keep
+        assert!(
+            second_stdout_and_stderr.contains("poly") && second_stdout_and_stderr.contains("not installed"),
+            "with `poly` absent, the whole-tree pass must still record a deferred step naming \
+             `poly` as the missing tool -- if that warning is missing, the pass did not \
+             actually attempt to format the tree. Full run output:\n{second_stdout_and_stderr}"
+        );
+        assert_eq!(
+            fs::read_to_string(&messy).expect("read messy.py after the second run"),
+            "x=1\n",
+            "with `poly` absent no formatter can have touched this file; if it changed, this \
+             assertion (not the reformatting one above) needs updating instead. Full run \
+             output:\n{second_stdout_and_stderr}"
+        );
+    }
 
     let messy_after_second = fs::read_to_string(&messy).expect("read messy.py again");
     let third = run_all(root);
