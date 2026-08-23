@@ -585,6 +585,15 @@ pub(super) fn render_csharp_with_optionals(
                 push_key_field_name(&mut path_so_far, seg);
                 out.push('.');
                 out.push_str(&name.to_pascal_case());
+                // Indexing a nullable collection dereferences it exactly as reading `.Count`
+                // does, so this arm has to ask `optional_fields` the same question the `Field`
+                // arm above asks — and without the `!is_leaf` guard, because the dereference
+                // happens whether or not another segment follows. Skipping it let one emitted
+                // snippet contradict itself: `result.Metadata.Headings!.Count` on one line and
+                // `result.Metadata.Headings[0].Level` (a CS8602) on the next. ~keep
+                if optional_fields.contains(&path_so_far) {
+                    out.push('!');
+                }
                 out.push_str(&format!("[{index}]"));
                 // Normalise the tracked key so a Field segment further down the
                 // chain (e.g. "results[0].metadata.format") still matches
