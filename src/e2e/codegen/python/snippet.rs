@@ -26,6 +26,11 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
+    // Resolved before `assertions` is cleared below: a fixture with no hand-authored
+    // `docs.shows`/`docs.presentation` falls back to showing the fields its own
+    // `assertions` already name (see `presentation::default_operations_from_assertions`),
+    // and that fallback has nothing to read once this function empties the list. ~keep
+    let presentation = crate::e2e::codegen::presentation::resolve(&call_fixture, e2e_config, "python", type_defs);
     call_fixture.assertions.clear();
     call_fixture.mock_response = None;
     // With `mock_response` cleared, `test_function`'s `client_factory` path falls through
@@ -36,7 +41,6 @@ pub(super) fn render_snippet_body(
     // the *original* `fixture`) drops straight to the same bare `api_key="test-key"` shape the
     // substitution just below already targets. ~keep
     call_fixture.env = None;
-    let presentation = crate::e2e::codegen::presentation::resolve(&call_fixture, e2e_config, "python", type_defs);
     let call = e2e_config.resolve_call_for_fixture(
         call_fixture.call.as_deref(),
         &call_fixture.id,
