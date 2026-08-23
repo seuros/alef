@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.1] - 2026-08-23
+
+### Fixed
+
+- **Generated FFI build scripts no longer rewrite tracked headers during ordinary Cargo builds.**
+  Header export is now explicit via `ALEF_EXPORT_GENERATED_HEADERS=1`; cbindgen output is buffered,
+  validated as UTF-8, and published atomically to the canonical and Go destinations with rollback
+  on failure. This prevents failed workspace lint or build commands from truncating generated files.
+
 ## [0.67.0] - 2026-08-23
 
 ### Fixed

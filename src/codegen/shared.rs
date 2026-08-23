@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 /// Matches a bare zero-argument path call — `a::b::c()` — and nothing else: no trailing
 /// `.into()`, no trailing field access, no arguments inside the parens. Anchored at both ends
-/// so `crawlberg::SsrfPolicy::from_env().into()` and
+/// so `downstream::Policy::from_env().into()` and
 /// `serde_json::from_str::<T>(r#"{}"#).field` (both of which need the closure to stay, the
 /// former for its conversion and the latter for its side-effecting expect/deserialize call)
 /// never match. ~keep

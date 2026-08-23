@@ -221,7 +221,7 @@ fn write_post_build_fixture_workspace(root: &std::path::Path) {
 /// `return Err(error)` straight out of `handle` -- so a single crate's post-build failure
 /// (real-world: a Dart `flutter_rust_bridge_codegen` break) meant stubs, e2e, READMEs and docs
 /// for THAT crate never ran, and neither did any crate listed after it. A consumer repo hit
-/// this for real (task #186, "xberg"): the run hard-stopped after the generate stage, with
+/// this for real (task #186): the run hard-stopped after the generate stage, with
 /// e2e/test-apps files left at pre-session mtimes. This fixture reproduces the same shape
 /// against alef's own tests, holding `SKIP_COMMANDS_LOCK` for its whole duration because the
 /// `cargo build` below must genuinely run and fail, not be silently skipped by a concurrent

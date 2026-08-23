@@ -7,8 +7,16 @@ use tracing::info;
 
 /// Run a shell command, logging and failing on non-zero exit.
 pub(crate) fn run_command(cmd: &str) -> anyhow::Result<()> {
+    run_command_with_env(cmd, &[])
+}
+
+/// Run a shell command with environment variables scoped to the child process.
+pub(crate) fn run_command_with_env(cmd: &str, environment: &[(&str, &str)]) -> anyhow::Result<()> {
     info!("Running: {cmd}");
-    let status = std::process::Command::new("sh").args(["-c", cmd]).status()?;
+    let status = std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .envs(environment.iter().copied())
+        .status()?;
     if !status.success() {
         anyhow::bail!("Command failed: {cmd}");
     }
@@ -301,9 +309,18 @@ pub(crate) fn run_command_captured_with_timeout(
 /// napi, cargo when wrapped by sccache) write diagnostics to stdout, so
 /// surfacing only stderr leaves CI failures opaque.
 pub(crate) fn run_command_captured(cmd: &str) -> anyhow::Result<(String, String)> {
+    run_command_captured_with_env(cmd, &[])
+}
+
+/// Run a shell command with child-scoped environment variables while capturing output.
+pub(crate) fn run_command_captured_with_env(
+    cmd: &str,
+    environment: &[(&str, &str)],
+) -> anyhow::Result<(String, String)> {
     info!("Running: {cmd}");
     let output = std::process::Command::new("sh")
         .args(["-c", cmd])
+        .envs(environment.iter().copied())
         .output()
         .with_context(|| format!("failed to spawn: {cmd}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();

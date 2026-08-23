@@ -1,5 +1,5 @@
 use crate::cli::pipeline::helpers::{
-    check_precondition, precondition_passes, run_before, run_command, run_command_captured,
+    check_precondition, precondition_passes, run_before, run_command_captured_with_env, run_command_with_env,
 };
 use crate::cli::registry;
 use crate::core::config::{BuildCommandConfig, Language, ResolvedCrateConfig};
@@ -14,6 +14,15 @@ mod frb_cache;
 mod observability;
 
 pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool) -> anyhow::Result<()> {
+    build_with_environment(config, languages, release, &[])
+}
+
+pub(crate) fn build_with_environment(
+    config: &ResolvedCrateConfig,
+    languages: &[Language],
+    release: bool,
+    environment: &[(&str, &str)],
+) -> anyhow::Result<()> {
     let crate_name = &config.name;
     let base_dir = std::env::current_dir()?;
 
@@ -102,7 +111,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
             if let Some(cmd_list) = cmds {
                 for cmd in cmd_list.commands() {
                     info!("Building {lang}: {cmd}");
-                    run_command(cmd).with_context(|| format!("failed to build {lang}"))?;
+                    run_command_with_env(cmd, environment).with_context(|| format!("failed to build {lang}"))?;
                 }
             }
             Ok(())
@@ -127,7 +136,9 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
         if release {
             cmd.push_str(" --release");
         }
-        let result = observability::observe(Language::Ffi, || run_command(&cmd).context("failed to build FFI crate"));
+        let result = observability::observe(Language::Ffi, || {
+            run_command_with_env(&cmd, environment).context("failed to build FFI crate")
+        });
         if let Err(err) = result {
             failures.push(format!("{}: {err:#}", Language::Ffi));
         }
@@ -172,7 +183,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
                     let mut combined_output = (String::new(), String::new());
                     for cmd in cmd_list.commands() {
                         info!("Building {lang}: {cmd}");
-                        let (stdout, stderr) = run_command_captured(cmd)
+                        let (stdout, stderr) = run_command_captured_with_env(cmd, environment)
                             .with_context(|| format!("failed to build language bindings for {lang}"))?;
                         combined_output.0.push_str(&stdout);
                         combined_output.1.push_str(&stderr);
@@ -181,7 +192,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
                 }
                 info!("Building {lang} ({})...", bc.tool);
                 let build_cmd = build_command_for(*lang, bc, config, release);
-                run_command_captured(&build_cmd)
+                run_command_captured_with_env(&build_cmd, environment)
                     .with_context(|| format!("failed to build language bindings for {lang}"))
             })
         })
@@ -241,7 +252,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
                     let mut combined_output = (String::new(), String::new());
                     for cmd in cmd_list.commands() {
                         info!("Building {lang}: {cmd}");
-                        let (stdout, stderr) = run_command_captured(cmd)
+                        let (stdout, stderr) = run_command_captured_with_env(cmd, environment)
                             .with_context(|| format!("failed to build language bindings for {lang}"))?;
                         combined_output.0.push_str(&stdout);
                         combined_output.1.push_str(&stderr);
@@ -250,7 +261,7 @@ pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool
                 }
                 info!("Building {lang} ({})...", bc.tool);
                 let build_cmd = build_command_for(*lang, bc, config, release);
-                run_command_captured(&build_cmd)
+                run_command_captured_with_env(&build_cmd, environment)
                     .with_context(|| format!("failed to build language bindings for {lang}"))
             })
         })
@@ -1775,6 +1786,32 @@ mod build_orchestration_tests {
     fn hermetic_config(toml: &str) -> ResolvedCrateConfig {
         let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(toml).unwrap();
         alef_cfg.resolve().unwrap().remove(0)
+    }
+
+    #[test]
+    fn explicit_environment_reaches_the_ffi_build_process() {
+        let config = hermetic_config(
+            r#"
+[workspace]
+languages = ["ffi"]
+
+[workspace.build_commands.ffi]
+precondition = "true"
+build = 'test "$ALEF_EXPORT_GENERATED_HEADERS" = "1"'
+
+[[crates]]
+name = "environment-test-lib"
+sources = ["src/lib.rs"]
+"#,
+        );
+
+        build_with_environment(
+            &config,
+            &[Language::Ffi],
+            false,
+            &[("ALEF_EXPORT_GENERATED_HEADERS", "1")],
+        )
+        .expect("the explicit header-export environment must reach Cargo's build process");
     }
 
     /// `go` is `ffi_dependent` (`BuildDependency::Ffi`) while `php` and `node`

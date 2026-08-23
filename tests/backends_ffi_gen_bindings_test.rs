@@ -735,7 +735,7 @@ fn test_gen_trait_bridge_register_fn_validates_required_fn_ptrs() {
 }
 
 #[test]
-fn test_build_rs_contains_go_header_copy_when_go_is_configured() {
+fn test_build_rs_contains_go_header_destination_when_go_is_configured() {
     let config = resolved_one(
         r#"
 [workspace]
@@ -761,14 +761,6 @@ go = "packages/go/"
     let files = backend.generate_bindings(&api, &config).unwrap();
     let build_rs = files.iter().find(|f| f.path.ends_with("build.rs")).unwrap();
 
-    assert!(
-        build_rs.content.contains("go_include_dir"),
-        "build.rs must contain go_include_dir when Go is configured"
-    );
-    assert!(
-        build_rs.content.contains("std::fs::copy"),
-        "build.rs must copy the header into the Go include dir"
-    );
     assert!(
         build_rs.content.contains("packages/go/include"),
         "build.rs must target the correct Go include destination"
@@ -799,12 +791,8 @@ ffi = "crates/mylib-ffi/src/"
     let build_rs = files.iter().find(|f| f.path.ends_with("build.rs")).unwrap();
 
     assert!(
-        !build_rs.content.contains("go_include_dir"),
-        "build.rs must not contain Go copy step when Go is not configured"
-    );
-    assert!(
-        !build_rs.content.contains("std::fs::copy"),
-        "build.rs must not copy header when Go is not configured"
+        !build_rs.content.contains("packages/go/include"),
+        "build.rs must not publish a Go header when Go is not configured"
     );
 }
 
