@@ -101,16 +101,80 @@ pub fn write_elixir_checksums(config: &ResolvedCrateConfig, output_dir: &Path) -
     }
 
     let pkg_dir = config.package_dir(crate::core::config::extras::Language::Elixir);
-    let checksum_path = Path::new(&pkg_dir).join(format!("checksum-Elixir.{module_name}.Native.exs"));
-    let mut content = String::from("%{\n");
-    for (file, digest) in &checksums {
-        content.push_str(&format!("  \"{file}\" => \"{digest}\",\n"));
-    }
-    content.push_str("}\n");
+    let pkg_dir = Path::new(&pkg_dir);
+    let checksum_path = pkg_dir.join(format!("checksum-Elixir.{module_name}.Native.exs"));
+    let content = render_checksum_map(&checksums, formatter_line_length(pkg_dir));
     fs::create_dir_all(checksum_path.parent().unwrap_or(Path::new(".")))?;
     fs::write(&checksum_path, content)?;
 
     Ok(checksum_path)
+}
+
+/// Line width `mix format` assumes when `.formatter.exs` declares none.
+const ELIXIR_DEFAULT_LINE_LENGTH: usize = 98;
+
+/// Indent Elixir's formatter gives a map entry inside a multi-line `%{}`.
+const MAP_ENTRY_INDENT: &str = "  ";
+
+/// Separator between a map key and its value.
+const MAP_ARROW: &str = " => ";
+
+/// Resolve the line width `mix format` will apply inside `package_dir`.
+///
+/// Alef scaffolds `line_length: 140`, but `.formatter.exs` is user-owned once
+/// written, so the declared value — not alef's preference — decides where the
+/// formatter wraps. Falling back to Elixir's own default keeps the emitted file
+/// stable even where no `.formatter.exs` exists. ~keep
+fn formatter_line_length(package_dir: &Path) -> usize {
+    let Ok(source) = fs::read_to_string(package_dir.join(".formatter.exs")) else {
+        return ELIXIR_DEFAULT_LINE_LENGTH;
+    };
+    source
+        .lines()
+        .find_map(|line| {
+            let value = line.trim().strip_prefix("line_length:")?;
+            value.trim().trim_end_matches(',').parse::<usize>().ok()
+        })
+        .unwrap_or(ELIXIR_DEFAULT_LINE_LENGTH)
+}
+
+/// Render the checksum map exactly as `mix format` would, so the written file is
+/// already a fixed point of the formatter.
+///
+/// `alef fmt` runs `mix format` over `packages/elixir` as the sole authority for
+/// `.ex`/`.exs`. Emitting each entry on one long line left every regeneration
+/// producing a pure-reformat diff — identical digests, rewrapped lines — that
+/// masked real changes. Elixir's formatter keeps an entry on one line only while
+/// the rendered line (trailing comma included) fits the configured width, and it
+/// drops the comma after the final entry; past the width the value moves to its
+/// own continuation line. ~keep
+fn render_checksum_map(checksums: &BTreeMap<String, String>, line_length: usize) -> String {
+    #[derive(serde::Serialize)]
+    struct ChecksumEntry {
+        key: String,
+        value: String,
+        wrap: bool,
+    }
+
+    let last_index = checksums.len().saturating_sub(1);
+    let entries: Vec<ChecksumEntry> = checksums
+        .iter()
+        .enumerate()
+        .map(|(index, (file, digest))| {
+            let key = format!("\"{file}\"");
+            let value = format!("\"{digest}\"");
+            let trailing_comma = usize::from(index != last_index);
+            let one_line_width =
+                MAP_ENTRY_INDENT.len() + key.chars().count() + MAP_ARROW.len() + value.chars().count() + trailing_comma;
+            ChecksumEntry {
+                wrap: one_line_width > line_length,
+                key,
+                value,
+            }
+        })
+        .collect();
+
+    super::template_env::render("elixir_checksums.jinja", minijinja::context! { entries => entries })
 }
 
 /// Return the native extension suffix for RustlerPrecompiled filenames.
@@ -401,5 +465,132 @@ scaffold_output = "{pkg}"
         let content = fs::read_to_string(&checksum_file).unwrap();
         assert!(content.contains("sha256:"));
         assert!(content.contains("nif-2.16"));
+    }
+
+    /// A 64-hex digest behind the `sha256:` tag, quoted: a fixed 73 columns.
+    fn digest(fill: char) -> String {
+        format!("sha256:{}", std::iter::repeat_n(fill, 64).collect::<String>())
+    }
+
+    fn map_of(entries: &[(&str, String)]) -> BTreeMap<String, String> {
+        entries
+            .iter()
+            .map(|(file, digest)| ((*file).to_owned(), digest.clone()))
+            .collect()
+    }
+
+    /// Format `source` the way `mix format` does, or `None` when Elixir is absent.
+    ///
+    /// `mix format` is `Code.format_string!` plus a trailing newline, so driving
+    /// the compiler directly needs no mix project on disk. ~keep
+    fn mix_format(source: &str, line_length: usize) -> Option<String> {
+        let script = format!(
+            "IO.write(IO.iodata_to_binary(Code.format_string!(IO.read(:stdio, :eof), line_length: {line_length})) <> \"\\n\")"
+        );
+        let mut child = std::process::Command::new("elixir")
+            .args(["-e", &script])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .ok()?;
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .expect("stdin was piped")
+            .write_all(source.as_bytes())
+            .expect("write source to elixir");
+        let out = child.wait_with_output().expect("wait for elixir");
+        assert!(
+            out.status.success(),
+            "elixir formatter failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Some(String::from_utf8(out.stdout).expect("formatter output is UTF-8"))
+    }
+
+    /// The property that actually matters: what alef writes must already be what
+    /// `mix format` would produce, so regeneration stops churning the file.
+    #[test]
+    fn rendered_checksum_map_is_already_mix_format_stable() {
+        let checksums = map_of(&[
+            (
+                "libsample_rustler-v1.0.0-nif-2.16-aarch64-apple-darwin.so.tar.gz",
+                digest('a'),
+            ),
+            (
+                "libsample_rustler-v1.0.0-nif-2.16-x86_64-unknown-linux-gnu.so.tar.gz",
+                digest('b'),
+            ),
+            (
+                "libsample_rustler-v1.0.0-nif-2.17-x86_64-pc-windows-msvc.dll.tar.gz",
+                digest('c'),
+            ),
+            ("libs-v1.0.0-nif-2.16-x86_64-apple-darwin.so.tar.gz", digest('d')),
+        ]);
+
+        for line_length in [98, 140] {
+            let rendered = render_checksum_map(&checksums, line_length);
+            let Some(formatted) = mix_format(&rendered, line_length) else {
+                tracing::warn!("elixir not on PATH, skipping formatter-stability check");
+                return;
+            };
+            assert_eq!(
+                rendered, formatted,
+                "emitted checksum map must be a fixed point of mix format at line_length {line_length}"
+            );
+        }
+    }
+
+    /// The wrap decision is per entry and counts the trailing comma, which the
+    /// final entry does not carry — so an entry exactly at the limit stays inline
+    /// only when it is last.
+    #[test]
+    fn entry_wraps_only_when_rendered_line_exceeds_line_length() {
+        let line_length = 98;
+        // 2 indent + 4 arrow + 73 digest = 79 columns before the quoted key.
+        let at_limit = "f".repeat(line_length - 79 - 2);
+        let over_limit = "f".repeat(line_length - 79 - 1);
+
+        let last_at_limit = render_checksum_map(&map_of(&[(&at_limit, digest('a'))]), line_length);
+        assert!(
+            !last_at_limit.contains("=>\n"),
+            "final entry at exactly the limit stays inline: {last_at_limit}"
+        );
+
+        let last_over_limit = render_checksum_map(&map_of(&[(&over_limit, digest('a'))]), line_length);
+        assert!(
+            last_over_limit.contains("=>\n"),
+            "final entry one column over the limit wraps: {last_over_limit}"
+        );
+
+        // Same key, now non-final: the comma pushes it one column over.
+        let with_comma = render_checksum_map(
+            &map_of(&[(&at_limit, digest('a')), ("z.tar.gz", digest('b'))]),
+            line_length,
+        );
+        assert!(
+            with_comma.starts_with(&format!("%{{\n  \"{at_limit}\" =>\n")),
+            "trailing comma counts toward the width: {with_comma}"
+        );
+    }
+
+    #[test]
+    fn empty_checksum_map_renders_as_collapsed_literal() {
+        assert_eq!(render_checksum_map(&BTreeMap::new(), 98), "%{}\n");
+    }
+
+    #[test]
+    fn formatter_line_length_reads_scaffolded_formatter_exs() {
+        let tmp = TempDir::new().unwrap();
+        assert_eq!(formatter_line_length(tmp.path()), ELIXIR_DEFAULT_LINE_LENGTH);
+
+        fs::write(
+            tmp.path().join(".formatter.exs"),
+            "[\n  import_deps: [:rustler],\n  inputs: [\"{mix,.formatter}.exs\"],\n  line_length: 140\n]\n",
+        )
+        .unwrap();
+        assert_eq!(formatter_line_length(tmp.path()), 140);
     }
 }

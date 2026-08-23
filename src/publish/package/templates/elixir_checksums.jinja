@@ -1,0 +1,14 @@
+{% if entries %}
+%{
+{% for entry in entries %}
+{% if entry.wrap %}
+  {{ entry.key }} =>
+    {{ entry.value }}{{ "," if not loop.last else "" }}
+{% else %}
+  {{ entry.key }} => {{ entry.value }}{{ "," if not loop.last else "" }}
+{% endif %}
+{% endfor %}
+}
+{% else %}
+%{}
+{% endif %}
