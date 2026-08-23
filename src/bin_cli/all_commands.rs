@@ -341,13 +341,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 for (lang, lang_files) in &bindings {
                     let lang_str = lang.to_string();
 
-                    for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
-                        current_gen_paths.insert(base_dir.join(&file.path));
-                        language_output_paths
-                            .entry(*lang)
-                            .or_default()
-                            .insert(base_dir.join(&file.path));
-                    }
+                    current_gen_paths.extend(pipeline::stampable_output_paths(lang_files, &base_dir));
+                    language_output_paths
+                        .entry(*lang)
+                        .or_default()
+                        .extend(pipeline::managed_output_paths(lang_files, &base_dir));
 
                     let hashes: Vec<(String, String)> = lang_files
                         .iter()
@@ -383,13 +381,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
                         for (lang, files) in &svc_files {
-                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
-                                current_gen_paths.insert(base_dir.join(&file.path));
-                                language_output_paths
-                                    .entry(*lang)
-                                    .or_default()
-                                    .insert(base_dir.join(&file.path));
-                            }
+                            current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
+                            language_output_paths
+                                .entry(*lang)
+                                .or_default()
+                                .extend(pipeline::managed_output_paths(files, &base_dir));
                         }
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
                         refusals.absorb_refusals(&report);
@@ -425,9 +421,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 }
                 let scaffold_output_paths: Vec<PathBuf> =
                     scaffold_files.iter().map(|file| base_dir.join(&file.path)).collect();
-                for file in scaffold_files.iter().filter(|file| file.carries_alef_marker()) {
-                    current_gen_paths.insert(base_dir.join(&file.path));
-                }
+                current_gen_paths.extend(pipeline::stampable_output_paths(&scaffold_files, &base_dir));
                 let scaffold_keep: std::collections::HashSet<PathBuf> = scaffold_output_paths.iter().cloned().collect();
                 let scaffold_sweep_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
                 pipeline::sweep_manifest_orphans(&previous_scaffold_paths, &scaffold_keep, &scaffold_sweep_roots, &[])?;
@@ -484,13 +478,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 };
 
                 for (lang, files) in &stubs {
-                    for file in files.iter().filter(|file| file.carries_alef_marker()) {
-                        current_gen_paths.insert(base_dir.join(&file.path));
-                        language_output_paths
-                            .entry(*lang)
-                            .or_default()
-                            .insert(base_dir.join(&file.path));
-                    }
+                    current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
+                    language_output_paths
+                        .entry(*lang)
+                        .or_default()
+                        .extend(pipeline::managed_output_paths(files, &base_dir));
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
@@ -516,13 +508,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
 
                         for (lang, files) in &public_api_files {
-                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
-                                current_gen_paths.insert(base_dir.join(&file.path));
-                                language_output_paths
-                                    .entry(*lang)
-                                    .or_default()
-                                    .insert(base_dir.join(&file.path));
-                            }
+                            current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
+                            language_output_paths
+                                .entry(*lang)
+                                .or_default()
+                                .extend(pipeline::managed_output_paths(files, &base_dir));
                         }
 
                         if !api_match || clean {
@@ -751,9 +741,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if readme_count > 0 {
                     any_output_changed = true;
                 }
-                for file in readme_files.iter().filter(|file| file.carries_alef_marker()) {
-                    current_gen_paths.insert(base_dir.join(&file.path));
-                }
+                current_gen_paths.extend(pipeline::stampable_output_paths(&readme_files, &base_dir));
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating docs...");
@@ -784,9 +772,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if doc_count > 0 {
                     any_output_changed = true;
                 }
-                for file in doc_files.iter().filter(|file| file.carries_alef_marker()) {
-                    current_gen_paths.insert(base_dir.join(&file.path));
-                }
+                current_gen_paths.extend(pipeline::stampable_output_paths(&doc_files, &base_dir));
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
                 // Snippet/doc validation (`docs::generate_docs_stage`'s later sub-steps) reads its
                 // input from disk, not from `doc_files` in memory. When the ownership guard refuses
