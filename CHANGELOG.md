@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.67.0] - 2026-08-23
+## [0.67.1] - 2026-08-23
 
 ### Fixed
 
@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Header export is now explicit via `ALEF_EXPORT_GENERATED_HEADERS=1`; cbindgen output is buffered,
   validated as UTF-8, and published atomically to the canonical and Go destinations with rollback
   on failure. This prevents failed workspace lint or build commands from truncating generated files.
+
+## [0.67.0] - 2026-08-23
+
+### Fixed
+
 - **Dart bridge-coverage no longer reports a present function as missing when `dartfmt` wraps its
   return type.** `missing_bridge_functions` looked for a facade function's camelCase name in the
   generated bridge with a literal `" name("` substring check, which only holds while the return
