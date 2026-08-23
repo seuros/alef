@@ -157,12 +157,14 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             PostBuildStep::MaterializeSwiftBridge { .. } => "MaterializeSwiftBridge",
             PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName",
             PostBuildStep::VerifyFrbBridgeCoverage { .. } => "VerifyFrbBridgeCoverage",
+            PostBuildStep::VerifyFrbCodegenVersion { .. } => "VerifyFrbCodegenVersion",
         })
         .collect();
 
     assert_eq!(
         steps,
         vec![
+            "VerifyFrbCodegenVersion",
             "RunCommand",
             "VerifyFrbBridgeCoverage",
             "PostProcessFile",
@@ -176,9 +178,68 @@ fn build_config_for_frb_run_command_precedes_post_process_file() {
             "CarryFrbCfgGates",
             "StageDartNatives"
         ],
-        "RunCommand must come before VerifyFrbBridgeCoverage, which must come before every \
-         PostProcessFile step in post_build steps (alef #135: a PostProcessFile step must never \
-         patch a bridge that VerifyFrbBridgeCoverage has not yet cleared as fresh)"
+        "VerifyFrbCodegenVersion must come before RunCommand (alef #204: never invoke a \
+         flutter_rust_bridge_codegen whose version disagrees with the declared pin), which must \
+         come before VerifyFrbBridgeCoverage, which must come before every PostProcessFile step \
+         in post_build steps (alef #135: a PostProcessFile step must never patch a bridge that \
+         VerifyFrbBridgeCoverage has not yet cleared as fresh)"
+    );
+}
+
+#[test]
+fn build_config_for_frb_verify_codegen_version_uses_the_declared_frb_version_pin() {
+    use alef::core::backend::PostBuildStep;
+
+    let config = make_config();
+    let bc = DartBackend
+        .build_config_for(&config)
+        .expect("FRB style must yield a BuildConfig");
+
+    let expected_version = bc
+        .post_build
+        .iter()
+        .find_map(|step| match step {
+            PostBuildStep::VerifyFrbCodegenVersion { expected_version } => Some(expected_version.clone()),
+            _ => None,
+        })
+        .expect("FRB config must include a VerifyFrbCodegenVersion step");
+
+    assert_eq!(
+        expected_version,
+        alef::backends::dart::naming::dart_frb_version(&config),
+        "VerifyFrbCodegenVersion must check against the same pin the generated \
+         Cargo.toml/pubspec.yaml dependency declares -- a separate, disconnected pin would defeat \
+         the point of the check"
+    );
+}
+
+#[test]
+fn build_config_for_frb_skip_frb_omits_verify_codegen_version() {
+    use alef::core::backend::PostBuildStep;
+
+    let toml = r#"
+[workspace]
+languages = ["dart"]
+
+[[crates]]
+name = "demo-crate"
+sources = ["src/lib.rs"]
+
+[crates.dart]
+skip_frb = true
+"#;
+    let cfg: alef::core::config::new_config::NewAlefConfig = toml::from_str(toml).expect("test config must parse");
+    let config = cfg.resolve().expect("test config must resolve").remove(0);
+
+    let bc = DartBackend
+        .build_config_for(&config)
+        .expect("FRB style with skip_frb must still yield a BuildConfig");
+
+    assert!(
+        !bc.post_build
+            .iter()
+            .any(|s| matches!(s, PostBuildStep::VerifyFrbCodegenVersion { .. })),
+        "skip_frb = true must suppress VerifyFrbCodegenVersion along with the RunCommand it guards"
     );
 }
 
@@ -296,6 +357,7 @@ skip_frb = true
                 }
                 PostBuildStep::RewriteWasmPackageName { .. } => "RewriteWasmPackageName".to_string(),
                 PostBuildStep::VerifyFrbBridgeCoverage { .. } => "VerifyFrbBridgeCoverage".to_string(),
+                PostBuildStep::VerifyFrbCodegenVersion { .. } => "VerifyFrbCodegenVersion".to_string(),
             })
             .collect::<Vec<_>>()
     );
