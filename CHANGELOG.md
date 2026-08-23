@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Java: a non-optional `Vec`/`Map` field carrying `#[serde(default, skip_serializing_if = "...")]`
+  no longer emits `@Nullable` on the generated record component. The builder already defaulted such
+  fields to `List.of()`/`Map.of()`, but the record component was independently marked `@Nullable`
+  because `has_serde_default` alone drove that decision -- so a payload omitting the key (which
+  `skip_serializing_if` guarantees for an empty collection) passed `null` into the record's
+  canonical constructor, throwing `NullPointerException` on `.isEmpty()` downstream even though the
+  underlying Rust `Vec<T>`/`HashMap<K, V>` is never null. The record now emits a compact-constructor
+  line normalizing `null` to the same empty-collection literal the builder uses, and both
+  generators now read that literal from one shared function
+  (`serde_default_collection_literal`) rather than each deriving it. Changes generated Java output
+  for any consumer with such a field.
+
 - **Dart generation now uses flutter_rust_bridge 2.13 and bypasses its redundant dependency
   preflight.** Alef emits the bridge dependencies itself, while FRB's check rejected valid Dart
   prereleases such as `freezed 4.0.0-dev.3` before generation could complete.
@@ -125,6 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refreshed Dart snapshots left stale by the flutter_rust_bridge 2.13 bump and the relocation of
   `carry_frb_cfg_gates()` into the successful-regeneration arm. Both changes are deliberate and
   separately tested; only the committed snapshots lagged, and `cargo test --lib` does not run them.
+
+### Changed
+
+- Split four over-cap source files at their concept boundaries so the file-size ratchet passes:
+  dart `build.rs`/`flutter_rust_bridge.yaml` emission out of `gen_rust_crate/cargo.rs`, java
+  bracket-wildcard assertion rendering out of `e2e/codegen/java/assertions.rs`, crate-attribute
+  formatting out of `codegen/shared.rs`, and fixture field resolution out of `e2e/codegen/mod.rs`.
+  Pure restructuring; existing public paths are preserved by re-export.
 
 ### Added
 
