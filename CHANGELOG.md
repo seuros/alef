@@ -9,12 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Wire `src/codegen/config_gen/tests/generators.rs` into the module tree
+  (`src/codegen/config_gen/tests.rs` was missing `mod generators;`), so its 18 config-generator
+  unit tests actually compile and run. Fixed 14 stale `FieldDef`/`TypeDef` struct literals
+  predating the `version` and `has_private_fields` IR fields, and one test function missing its
+  own `#[test]` attribute -- all silently dead until now (#211).
+- Fix a stale assertion in the Rustler kwargs-constructor test, which asserted the *pre-fix*
+  buggy output (`unwrap_or_default()`, silently producing `""` for a `String` field with a real
+  default) rather than the already-correct `unwrap_or("default".to_string())`. The generator was
+  right; only the expectation was wrong.
+- Remove three dead, never-compiled test files under `src/codegen/generators/trait_bridge/tests/`
+  (`spec.rs`, `type_formatting.rs`, `helpers.rs`). All 41 of their `#[test]` bodies are byte-identical
+  to ones in the wired `spec_and_formatting.rs`; `helpers.rs` carried no tests at all.
 - `alef generate`/`alef build` now fail loudly, before invoking `flutter_rust_bridge_codegen`,
   when the `flutter_rust_bridge_codegen` binary on `PATH` reports a version that disagrees with
   the project's declared `[crates.dart] frb_version` pin. Previously the locally installed
   codegen binary's version was baked into generated Dart/Rust bridge output with no check at
   all, so two developers (or a developer and CI) with different `flutter_rust_bridge_codegen`
   installs produced different committed bytes from identical input (#204).
+
+### Added
+
+- `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
+  `#[test]` function is unreachable from a crate root. It re-derives the real module graph from
+  `src/lib.rs`/`src/main.rs`, following `mod name;`, inline `mod name { .. }` bodies, `#[path]`
+  redirects and `include!` splicing the way `rustc` resolves them -- the durable guard against a
+  test file silently never compiling (#211).
 
 ## [0.67.2] - 2026-08-23
 
