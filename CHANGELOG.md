@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **e2e/java**: stop inlining large fixture values as a single Java string literal. The JVM caps
+  a `CONSTANT_Utf8` constant-pool entry (and `javac` a string literal) at 65535 bytes, a limit no
+  amount of escaping can raise; a fixture body long enough to threaten it made the generated Java
+  doc snippet, e2e test method, or HTTP mock body fail to compile. `java_string_literal` (new,
+  `src/e2e/codegen/java/values.rs`) renders short values exactly as before and splits longer ones
+  into `+`-concatenated literal chunks, each safely under the cap. Wired through
+  `json_to_java_typed`, `emit_java_object_array`, `java_builder_expression`, the doc-snippet
+  `json_object` setup (`snippet.rs` + `snippet_json_object_setup.jinja`), the e2e test method's
+  `from_json` builder path (`test_method.rs`), the HTTP mock request body (`http.rs`), the
+  `equals` assertion literal (`assertions.rs`), and the `handle`/IR-typed-struct JSON embeds in
+  `args.rs`. Task #180.
+- **e2e/kotlin**: apply the identical fix to the Kotlin backend. Kotlin compiles to the same JVM
+  bytecode as Java and shares the exact 65535-byte `CONSTANT_Utf8` cap, so it had the same live
+  defect. `kotlin_string_literal` (new, `src/e2e/codegen/kotlin/values.rs`) mirrors
+  `java_string_literal`. Wired through `json_to_kotlin`, both `snippet_json_object_setup.jinja`
+  call sites (the `handle`-config and `json_object` paths in `args.rs`), the streaming-request
+  `from_json` builder path shared by `snippet.rs` and `test_method.rs`, the HTTP mock request body
+  (`http.rs`), the `equals` assertion literal, and the array-element `json_object` embed.
+- `alef build` no longer silently discards `PostBuildOutcome::skipped_missing_tools`: both
+  post-build call sites in `build_with_environment` now route through
+  `record_post_build_outcome`, which warns per language and adds a "post-build tool(s) skipped
+  (not on PATH)" count to the backend build summary, matching the signal `alef generate`/`alef
+  all` already gave via `run_resolved_post_builds`. A missing post-build tool remains non-fatal
+  (falling back to committed generated output is intentional), but is no longer indistinguishable
+  from a clean run.
+- `alef test-apps run --lang <target>` now fails with a clear error when the requested target(s)
+  matched no crate's configured `[e2e].languages`, instead of silently exiting 0 with no test
+  apps run. Mirrors `ensure_requested_suites_will_run`'s semantics for `alef test`. A run with no
+  `--lang` filter and no `[e2e].languages` configured anywhere is unaffected (still a legitimate
+  non-fatal no-op).
+
 ## [0.67.1] - 2026-08-23
 
 ### Fixed
