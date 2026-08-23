@@ -151,36 +151,6 @@ pub(super) fn emit_php_object_array_with_mock_base(
     }
 }
 
-/// Filters out empty string enum values from JSON objects before rendering.
-///
-/// When a field has an empty string value, it's treated as a missing/null enum field
-/// and should not be included in the PHP array.
-pub(super) fn filter_empty_enum_strings(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let filtered: serde_json::Map<String, serde_json::Value> = map
-                .iter()
-                .filter_map(|(k, v)| {
-                    // Skip empty string values (typically represent missing enum variants)
-                    if let serde_json::Value::String(s) = v
-                        && s.is_empty()
-                    {
-                        return None;
-                    }
-                    // Recursively filter nested objects and arrays
-                    Some((k.clone(), filter_empty_enum_strings(v)))
-                })
-                .collect();
-            serde_json::Value::Object(filtered)
-        }
-        serde_json::Value::Array(arr) => {
-            let filtered: Vec<serde_json::Value> = arr.iter().map(filter_empty_enum_strings).collect();
-            serde_json::Value::Array(filtered)
-        }
-        other => other.clone(),
-    }
-}
-
 /// True when `field_name` on `struct_name` is a plain `String` or `Optional<String>`
 /// field — i.e. a field where an empty string `""` is a meaningful value the fixture
 /// intends to send (e.g. `ExtractInput.mime_type = ""` to exercise the empty-MIME
@@ -206,7 +176,7 @@ pub(super) fn field_is_string_typed(
         .unwrap_or(false)
 }
 
-/// Type-aware variant of [`filter_empty_enum_strings`]: drops empty string values only
+/// Drops empty string values only
 /// for fields that are NOT plain `String`/`Optional<String>` (i.e. enum fields, where
 /// `""` represents an absent variant and would fail deserialization), while preserving
 /// `""` for genuine string fields whose emptiness is meaningful (e.g. an explicit empty
