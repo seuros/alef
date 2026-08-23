@@ -137,8 +137,8 @@ pub(super) fn render_assertion(
                 }
                 "equals" => {
                     if let Some(serde_json::Value::String(s)) = &assertion.value {
-                        let escaped = escape_kotlin(s);
-                        format!("        assertEquals(\"{escaped}\", {expr})\n")
+                        let literal = super::values::kotlin_string_literal(s);
+                        format!("        assertEquals({literal}, {expr})\n")
                     } else if let Some(b) = assertion.value.as_ref().and_then(|v| v.as_bool()) {
                         format!("        assertEquals({b}, {expr})\n")
                     } else {

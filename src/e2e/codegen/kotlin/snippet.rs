@@ -143,11 +143,14 @@ pub(crate) fn render_snippet_body(
         }
         let normalized = crate::e2e::codegen::transform_json_keys_for_language(&request_input, "snake_case");
         let request_json = serde_json::to_string(&normalized).unwrap_or_default();
-        let escaped_json = crate::e2e::escape::escape_kotlin(&request_json);
+        // A full literal expression -- quoted, or `+`-chunked when `request_json` is long
+        // enough to threaten the JVM's 65535-byte constant cap -- not just escaped content.
+        // See `values::kotlin_string_literal`.
+        let literal = super::values::kotlin_string_literal(&request_json);
         if crate::e2e::codegen::value_contains_mock_url_placeholder(&normalized) {
             let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
             setup_lines.push(format!(
-                "val {request_name}Json = \"{escaped_json}\".replace(\"{}\", System.getProperty(\"mockServer.{}\", System.getenv(\"{env_key}\") ?: \"\"))",
+                "val {request_name}Json = {literal}.replace(\"{}\", System.getProperty(\"mockServer.{}\", System.getenv(\"{env_key}\") ?: \"\"))",
                 crate::e2e::escape::escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER),
                 fixture.id,
             ));
@@ -156,7 +159,7 @@ pub(crate) fn render_snippet_body(
             ));
         } else {
             setup_lines.push(format!(
-                "val {request_name} = mapper.readValue(\"{escaped_json}\", {request_type}::class.java)"
+                "val {request_name} = mapper.readValue({literal}, {request_type}::class.java)"
             ));
         }
         args = request_name;
@@ -812,6 +815,72 @@ mod tests {
         assert!(body.contains("catch (error: Exception)"), "{body}");
         assert!(body.contains("error::class.simpleName"), "{body}");
         assert!(!body.contains("AssertionError"), "{body}");
+    }
+
+    /// Regression twin of the Java fix (alef task #180): Kotlin compiles to the same JVM
+    /// bytecode as Java and inherits the identical 65535-byte `CONSTANT_Utf8` cap on a single
+    /// string literal. A fixture whose `json_object` field carries a value long enough to
+    /// threaten that cap must never render as a single Kotlin string literal above the limit.
+    /// Neutral synthetic payload (`project-agnostic-codegen`): not any real consumer's fixture.
+    /// ~keep
+    #[test]
+    fn a_doc_snippet_never_emits_a_single_kotlin_literal_over_the_jvm_constant_cap() {
+        let oversized_payload = "abcdefghij".repeat(10_000); // 100,000 bytes
+        let fixture = Fixture {
+            id: "large_payload".into(),
+            description: "Process a large payload".into(),
+            input: serde_json::json!({"content": oversized_payload}),
+            ..Fixture::default()
+        };
+        let mut call = CallConfig {
+            function: "process".into(),
+            args: vec![crate::e2e::config::ArgMapping {
+                name: "options".into(),
+                field: "content".into(),
+                arg_type: "json_object".into(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        };
+        call.overrides.insert(
+            "kotlin".into(),
+            CallOverride {
+                options_type: Some("PayloadOptions".into()),
+                ..CallOverride::default()
+            },
+        );
+
+        let body = render_snippet_body(
+            &fixture,
+            &E2eConfig {
+                call,
+                ..E2eConfig::default()
+            },
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            false,
+        )
+        .expect("snippet renders");
+
+        assert!(
+            body.contains(&oversized_payload[..100]),
+            "the snippet must still contain the fixture content, just not as one literal:\n{}",
+            &body[..body.len().min(500)]
+        );
+        for segment in body.split('"') {
+            assert!(
+                segment.len() <= 65_535,
+                "a generated Kotlin doc snippet must never contain a single quoted-literal \
+                 segment above the JVM's 65535-byte CONSTANT_Utf8 cap: got {} bytes",
+                segment.len()
+            );
+        }
     }
 
     #[test]

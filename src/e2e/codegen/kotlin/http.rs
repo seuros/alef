@@ -84,8 +84,11 @@ impl client::TestClientRenderer for KotlinTestClientRenderer {
 
         let body_publisher = if let Some(body) = ctx.body {
             let json = serde_json::to_string(body).unwrap_or_default();
-            let escaped = escape_kotlin(&json);
-            format!("java.net.http.HttpRequest.BodyPublishers.ofString(\"{escaped}\")")
+            // A full literal expression (see `values::kotlin_string_literal`): quoted, or
+            // `+`-chunked when the fixture body is long enough to threaten the JVM's
+            // 65535-byte constant cap.
+            let literal = super::values::kotlin_string_literal(&json);
+            format!("java.net.http.HttpRequest.BodyPublishers.ofString({literal})")
         } else {
             "java.net.http.HttpRequest.BodyPublishers.noBody()".to_string()
         };

@@ -110,8 +110,8 @@ pub(super) fn build_args_and_setup(
                 let name = &arg.name;
                 if let Some(config_type) = super::test_file::resolve_handle_config_type(arg, options_type, type_defs) {
                     setup_lines.push(format!(
-                        "val {name}Config = MAPPER.readValue(\"{}\", {config_type}::class.java)",
-                        escape_kotlin(&json_str),
+                        "val {name}Config = MAPPER.readValue({}, {config_type}::class.java)",
+                        super::values::kotlin_string_literal(&json_str),
                     ));
                     setup_lines.push(format!(
                         "val {} = {class_name}.{constructor_name}({name}Config)",
@@ -304,16 +304,16 @@ pub(super) fn build_args_and_setup(
                                     if item.is_object() {
                                         let normalized = crate::e2e::codegen::transform_json_keys_for_language(item, "snake_case");
                                         let json_str = serde_json::to_string(&normalized).unwrap_or_default();
-                                        let escaped = escape_kotlin(&json_str);
+                                        let literal = super::values::kotlin_string_literal(&json_str);
                                         if let Some(base_var) = mock_base_var.as_deref()
                                             && crate::e2e::codegen::value_contains_mock_url_placeholder(item)
                                         {
                                             format!(
-                                                "MAPPER.readValue(\"{escaped}\".replace(\"{}\", {base_var}), {element_type}::class.java)",
+                                                "MAPPER.readValue({literal}.replace(\"{}\", {base_var}), {element_type}::class.java)",
                                                 escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER)
                                             )
                                         } else {
-                                            format!("MAPPER.readValue(\"{escaped}\", {element_type}::class.java)")
+                                            format!("MAPPER.readValue({literal}, {element_type}::class.java)")
                                         }
                                     } else if element_type == "String" {
                                         if let Some(raw) = item.as_str()
@@ -378,8 +378,8 @@ pub(super) fn build_args_and_setup(
                                 "val {base_var} = System.getProperty(\"mockServer.{fixture_id}\", System.getenv(\"{env_key}\") ?: ((System.getProperty(\"mockServerUrl\", System.getenv(\"MOCK_SERVER_URL\") ?: \"\") ?: \"\") + \"/fixtures/{fixture_id}\"))"
                             ));
                             setup_lines.push(format!(
-                                "val {json_var} = \"{}\".replace(\"{}\", {base_var})",
-                                escape_kotlin(&json_str),
+                                "val {json_var} = {}.replace(\"{}\", {base_var})",
+                                super::values::kotlin_string_literal(&json_str),
                                 escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER)
                             ));
                             setup_lines.push(format!(
@@ -448,8 +448,8 @@ pub(super) fn build_args_and_setup(
                                 "val {base_var} = System.getProperty(\"mockServer.{fixture_id}\", System.getenv(\"{env_key}\") ?: ((System.getProperty(\"mockServerUrl\", System.getenv(\"MOCK_SERVER_URL\") ?: \"\") ?: \"\") + \"/fixtures/{fixture_id}\"))"
                             ));
                             setup_lines.push(format!(
-                                "val {json_var} = \"{}\".replace(\"{}\", {base_var})",
-                                crate::e2e::escape::escape_kotlin(&json_str),
+                                "val {json_var} = {}.replace(\"{}\", {base_var})",
+                                super::values::kotlin_string_literal(&json_str),
                                 crate::e2e::escape::escape_kotlin(crate::e2e::codegen::MOCK_URL_PLACEHOLDER)
                             ));
                             setup_lines.push(format!(
@@ -457,8 +457,8 @@ pub(super) fn build_args_and_setup(
                             ));
                         } else if file_reads.is_empty() {
                             setup_lines.push(format!(
-                                "val {var_name} = MAPPER.readValue(\"{}\", {config_type}::class.java)",
-                                crate::e2e::escape::escape_kotlin(&json_str)
+                                "val {var_name} = MAPPER.readValue({}, {config_type}::class.java)",
+                                super::values::kotlin_string_literal(&json_str)
                             ));
                         } else {
                             let replacements = file_reads
@@ -484,7 +484,7 @@ pub(super) fn build_args_and_setup(
                                     "kotlin/snippet_json_object_setup.jinja",
                                     minijinja::context! {
                                         variable => var_name,
-                                        json => escape_kotlin(&json_str),
+                                        json_literal => super::values::kotlin_string_literal(&json_str),
                                         replacements => replacements,
                                         type_name => config_type,
                                     },
@@ -644,7 +644,7 @@ fn append_docs_file_setup(
             "kotlin/snippet_json_object_setup.jinja",
             minijinja::context! {
                 variable => variable,
-                json => escape_kotlin(&json),
+                json_literal => super::values::kotlin_string_literal(&json),
                 replacements => replacements,
                 type_name => type_name,
             },
