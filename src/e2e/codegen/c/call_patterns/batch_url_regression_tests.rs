@@ -130,3 +130,72 @@ fn batch_url_list_fixture_without_preserve_flag_still_uses_mock_server() {
         "the batch literal must not leak when preservation is off:\n{out}"
     );
 }
+
+/// REPRODUCTION for the empty-array case: a fixture whose `batch_urls` list is
+/// deliberately empty (e.g. `batch_scrape_empty_urls_error.json`, testing the
+/// empty-input error path) still falls back to the raw `getenv("MOCK_SERVER_URL")`
+/// scaffolding today, because `preserved_url_list(true, [])` is `Some(vec![])` and
+/// `.into_iter().next()` on an empty vec is `None` -- so `preserved_url` ends up
+/// `None` exactly like the undeclared case, even though `preserve_input_urls` is set.
+#[test]
+fn empty_batch_url_list_fixture_does_not_fall_back_to_raw_mock_scaffolding() {
+    // Mirrors the real `batch_scrape_empty_urls_error.json` shape: `batch_urls: []` is
+    // deliberate (testing the empty-input error path), `preserve_input_urls` is set by
+    // `mock_url_defaults::with_default_mock_url_literals` for exactly this case (see its
+    // `a_declared_empty_url_list_is_marked_preserved` test), and the fixture carries its
+    // own "error" assertion -- the thing rule 3 requires this test to prove still holds.
+    let fixture = Fixture {
+        id: "batch_scrape_empty_urls_error".into(),
+        description: "Batch scrape rejects an empty URL list".into(),
+        input: serde_json::json!({"batch_urls": []}),
+        preserve_input_urls: true,
+        assertions: vec![crate::e2e::fixture::Assertion {
+            assertion_type: "error".into(),
+            field: None,
+            value: Some(serde_json::Value::String("empty urls".into())),
+            values: None,
+            ..crate::e2e::fixture::Assertion::default()
+        }],
+        ..Fixture::default()
+    };
+    let mut out = String::new();
+
+    super::render_engine_factory_test_function(
+        &mut out,
+        &fixture,
+        "sample",
+        "batch_scrape",
+        "result",
+        &permissive_resolver(),
+        &HashMap::new(),
+        &HashSet::new(),
+        "BatchCrawlResults",
+        "CrawlConfig",
+        true,
+        Some("char*"),
+        &[],
+        &global_sources(),
+    )
+    .expect("engine-factory empty-batch fixture renders");
+
+    assert!(
+        !out.contains("MOCK_SERVER_URL"),
+        "an empty, deliberately-declared batch_urls list has nothing to leak and must not \
+         fall back to mock-harness scaffolding:\n{out}"
+    );
+    assert!(
+        !out.contains("getenv"),
+        "no mock-harness getenv scaffolding of any kind belongs in this render:\n{out}"
+    );
+    assert!(
+        out.contains("snprintf(url, sizeof(url), \"%s\", \"\");"),
+        "the deliberately empty list must render as a literal empty url, not be dropped:\n{out}"
+    );
+    // Rule 3: the fixture's own empty-array error assertion must survive untouched --
+    // this fix only changes URL construction, not the fixture's assertions themselves.
+    assert_eq!(
+        crate::e2e::codegen::declared_error_value(&fixture),
+        Some("empty urls"),
+        "the fixture's own error assertion must still be intact after rendering"
+    );
+}

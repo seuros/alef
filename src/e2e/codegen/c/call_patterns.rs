@@ -109,21 +109,31 @@ pub(super) fn render_engine_factory_test_function(
     // fixtures, so the first list entry is that address. Falling through the shared
     // `resolve_urls_field`/`preserved_url_list` seam here (rather than re-deriving the
     // `batch_urls` alias locally) keeps the alias list defined in exactly one place.
+    let urls_value = crate::e2e::codegen::resolve_urls_field(&fixture.input, "input.urls");
+    let preserved_urls = crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, urls_value);
     let preserved_url = crate::e2e::codegen::preserved_url_literal(
         fixture.preserve_input_urls,
         crate::e2e::codegen::resolve_field(&fixture.input, "input.url"),
     )
-    .or_else(|| {
-        let urls_value = crate::e2e::codegen::resolve_urls_field(&fixture.input, "input.urls");
-        crate::e2e::codegen::preserved_url_list(fixture.preserve_input_urls, urls_value)
-            .and_then(|urls| urls.into_iter().next())
-    });
+    .or_else(|| preserved_urls.as_ref().and_then(|urls| urls.first().copied()));
+    // ~keep alef #185: `batch_urls: []` is a deliberate empty-array fixture (testing the
+    // empty-input error path), not an unset field. `preserved_url_list` returns
+    // `Some(vec![])` for it -- distinct from `None`, which means either preservation is
+    // off or the field was never declared at all. Treating the two the same sent an
+    // empty, on-purpose list through the `getenv("MOCK_SERVER_URL")` branch below, which
+    // has nothing to do with the fixture and which the published-snippet leak guard
+    // rejects outright. There is no address to leak here, so render the empty list
+    // literally: an empty `url` string, with no mock-harness scaffolding at all.
+    let declared_empty_list = matches!(&preserved_urls, Some(urls) if urls.is_empty());
     if let Some(url) = preserved_url {
         // The fixture's own address is the subject of the test; the mock server
         // lookup is skipped entirely so no env var can override it.
         let url_escaped = escape_c(url);
         let _ = writeln!(out, "    char url[2048];");
         let _ = writeln!(out, "    snprintf(url, sizeof(url), \"%s\", \"{url_escaped}\");");
+    } else if declared_empty_list {
+        let _ = writeln!(out, "    char url[2048];");
+        let _ = writeln!(out, "    snprintf(url, sizeof(url), \"%s\", \"\");");
     } else {
         // Prefer per-fixture MOCK_SERVER_<UPPER_ID> (for fixtures that need host-root
         // routes like /robots.txt or /sitemap.xml), fall back to
