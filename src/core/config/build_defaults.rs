@@ -128,9 +128,11 @@ pub(crate) fn default_build_config(
             dependency_precondition: None,
             dependency_remediation: None,
             before: None,
-            build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-ffi"))),
+            build: Some(StringOrVec::Single(format!(
+                "cargo build --manifest-path {output_dir}/Cargo.toml"
+            ))),
             build_release: Some(StringOrVec::Single(format!(
-                "cargo build --release -p {crate_name}-ffi"
+                "cargo build --release --manifest-path {output_dir}/Cargo.toml"
             ))),
         },
         Language::Java => {
@@ -488,12 +490,12 @@ mod tests {
     }
 
     #[test]
-    fn ffi_uses_cargo_build_p() {
+    fn ffi_uses_its_manifest_without_requiring_workspace_membership() {
         let c = cfg(Language::Ffi, "packages/ffi", "my-lib");
         let build = c.build.unwrap().commands().join(" ");
         let release = c.build_release.unwrap().commands().join(" ");
-        assert!(build.contains("cargo build -p my-lib-ffi"));
-        assert!(release.contains("cargo build --release -p my-lib-ffi"));
+        assert_eq!(build, "cargo build --manifest-path packages/ffi/Cargo.toml");
+        assert_eq!(release, "cargo build --release --manifest-path packages/ffi/Cargo.toml");
     }
 
     #[test]
