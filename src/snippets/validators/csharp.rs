@@ -501,8 +501,23 @@ impl CsharpValidator {
         Ok(())
     }
 
+    /// ~keep `CS0246` (type or namespace not found) and `CS0234` (namespace has no such member)
+    /// can only mean the referenced package is absent or stale. `CS0103` ("the name 'x' does not
+    /// exist in the current context") is C#'s ambiguous unresolved-name diagnostic — the direct
+    /// analogue of `TS2304`, rejected by task #130 — and `CS5001` (no entry point) is a defect in
+    /// the emitted program, not a missing package. Accepting either made
+    /// `runner::finalize_result` relabel a codegen defect as `Unavailable`.
+    ///
+    /// Line-scoped and all-must-match, like `typescript::is_dependency_error`, so a batch mixing
+    /// one unresolved namespace with a genuine error is not relabeled wholesale.
     fn is_dependency_error_text(output: &str) -> bool {
-        output.contains("CS0246") || output.contains("CS0234") || output.contains("CS0103") || output.contains("CS5001")
+        let diagnostics: Vec<&str> = output.lines().filter(|line| line.contains(": error CS")).collect();
+        if diagnostics.is_empty() {
+            return false;
+        }
+        diagnostics
+            .iter()
+            .all(|line| line.contains("CS0246") || line.contains("CS0234"))
     }
 }
 

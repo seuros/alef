@@ -440,41 +440,53 @@ impl SnippetValidator for RustValidator {
         ValidationLevel::Run
     }
 
+    /// ~keep A dependency error is one whose only possible cause is that a name from outside the
+    /// snippet could not be resolved at all: an unresolved import, an unlinked crate, a module
+    /// file that is not on disk. Nothing else qualifies, because `runner::finalize_result`
+    /// rewrites an accepted `Fail` into `Unavailable` + "run `alef build` first", which takes it
+    /// out of the failure tally entirely.
+    ///
+    /// The pre-#215 list accepted `E0425` (cannot find value), `E0308` (mismatched types),
+    /// `E0599` (no method), `E0609` (no field), `E0061` (wrong argument count) and the bare
+    /// `could not compile` summary rustc prints on EVERY failed build. That made the classifier
+    /// vacuous: 283 generated snippets in one consumer repo referenced a `result` binding the
+    /// call emitter never bound, and all 283 were reported as an unbuilt artifact instead of as
+    /// the codegen defect they were. Every code that can only fire after name resolution has
+    /// already succeeded is a defect in the generated snippet and must stay `Fail`.
+    ///
+    /// Mirrors `typescript::is_dependency_error` (task #130) in requiring EVERY diagnostic to be
+    /// a dependency diagnostic: output mixing a real defect with an unresolved import is not
+    /// confidently an environment gap, so it fails with rustc's own text rather than shrugging.
     fn is_dependency_error(&self, output: &str) -> bool {
-        let patterns = [
-            "E0432", "E0433", "E0412", "E0405", "E0425", "E0463", "E0277", "E0599", "E0752", "E0308", "E0107", "E0609",
-            "E0061", "E0574", "E0583", "E0282", "E0728", "E0423",
+        // `E0432` unresolved import, `E0433` use of undeclared crate or module, `E0463` can't
+        // find crate, `E0583` file not found for module. Each fires because a name the snippet
+        // imports does not exist anywhere on the resolution path. ~keep
+        const UNRESOLVED_DEPENDENCY_CODES: [&str; 4] = ["E0432", "E0433", "E0463", "E0583"];
+        // rustc's end-of-run summary lines accompany every failure regardless of cause, so they
+        // carry no classification signal. Counting `could not compile` as a dependency signal is
+        // what accepted every failing build. ~keep
+        const SUMMARY_MARKERS: [&str; 4] = [
+            "aborting due to",
+            "Some errors have",
+            "For more information",
+            "could not compile",
         ];
 
-        let error_lines: Vec<&str> = output
+        let diagnostics: Vec<&str> = output
             .lines()
-            .filter(|line| {
-                let trimmed = line.trim_start();
-                trimmed.starts_with("error")
-                    || trimmed.contains("aborting due to")
-                    || trimmed.starts_with("Some errors have")
-                    || trimmed.starts_with("For more information")
-            })
+            .map(str::trim_start)
+            .filter(|line| line.starts_with("error"))
+            .filter(|line| !SUMMARY_MARKERS.iter().any(|marker| line.contains(marker)))
             .collect();
 
-        if error_lines.is_empty() {
+        if diagnostics.is_empty() {
             return false;
         }
-
-        error_lines.iter().any(|line| {
-            patterns.iter().any(|pattern| line.contains(pattern))
+        diagnostics.iter().all(|line| {
+            UNRESOLVED_DEPENDENCY_CODES.iter().any(|code| line.contains(code))
                 || line.contains("unresolved import")
-                || line.contains("cannot find")
-                || line.contains("not found in")
-                || line.contains("could not compile")
-                || line.contains("derive macro")
-                || line.contains("proc-macro")
-                || line.contains("main function not found")
-                || line.contains("functions are not allowed in")
-                || line.contains("expected one of")
-                || line.contains("expected parameter name")
-                || line.contains("not allowed to be `async`")
-                || line.contains("expected item, found")
+                || line.contains("can't find crate")
+                || line.contains("no matching package named")
         })
     }
 }

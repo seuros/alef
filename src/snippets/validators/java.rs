@@ -520,8 +520,25 @@ impl SnippetValidator for JavaValidator {
         ValidationLevel::TypeCheck
     }
 
+    /// ~keep `cannot find symbol` used to be accepted here, and it is javac's diagnostic for
+    /// EVERY unresolved name — including a method that simply does not exist on a class that
+    /// resolved perfectly well. 51 generated liter-llm snippets calling `result.error()` on a
+    /// `BatchObject` with no such accessor were therefore counted `unavailable` rather than
+    /// failed (see `runner::finalize_result`). A classpath that was never built produces
+    /// `package X does not exist` on the import line instead, which is unambiguous and stays.
+    ///
+    /// Mirrors `typescript::is_dependency_error` (task #130) in requiring EVERY diagnostic to be
+    /// a dependency diagnostic, so a mixed compile does not get relabeled.
     fn is_dependency_error(&self, output: &str) -> bool {
-        output.contains("cannot find symbol") || output.contains("package") && output.contains("does not exist")
+        let diagnostics: Vec<&str> = output.lines().filter(|line| line.contains(": error:")).collect();
+        if diagnostics.is_empty() {
+            return false;
+        }
+        diagnostics.iter().all(|line| {
+            (line.contains("package ") && line.contains("does not exist"))
+                || line.contains("cannot access")
+                || line.contains("class file for") && line.contains("not found")
+        })
     }
 }
 

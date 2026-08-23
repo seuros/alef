@@ -100,8 +100,13 @@ impl SnippetValidator for SwiftValidator {
         })
     }
 
+    /// ~keep `cannot find 'x' in scope` fires for a name the generated snippet failed to bind
+    /// just as readily as for one a missing module would have supplied, so it is the same
+    /// ambiguous shape task #130 rejected for `TS2304` — and an accepted match is rewritten into
+    /// `Unavailable` by `runner::finalize_result`, taking a real defect out of the failure tally.
+    /// `no such module` names the unbuilt artifact itself and is unambiguous.
     fn is_dependency_error(&self, output: &str) -> bool {
-        output.contains("no such module") || output.contains("cannot find") && output.contains("in scope")
+        output.contains("no such module")
     }
 }
 

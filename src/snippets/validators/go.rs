@@ -346,8 +346,15 @@ impl SnippetValidator for GoValidator {
         ValidationLevel::Run
     }
 
+    /// ~keep `undefined: x` is Go's diagnostic for any unresolved identifier — a package the
+    /// module never provided and a local the generated snippet forgot to bind produce the same
+    /// text — so it is the ambiguous shape task #130 rejected for `TS2304`, and accepting it
+    /// turns a codegen defect into an `Unavailable` shrug (see `runner::finalize_result`). The
+    /// package-resolution diagnostics name the module itself and stay.
     fn is_dependency_error(&self, output: &str) -> bool {
-        output.contains("undefined:") || output.contains("cannot find package") || output.contains("no required module")
+        output.contains("cannot find package")
+            || output.contains("no required module")
+            || output.contains("cannot find module providing package")
     }
 }
 
