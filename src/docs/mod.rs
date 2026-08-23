@@ -681,14 +681,23 @@ fn enforce_snippet_summary(
     strict: bool,
     summary: &crate::snippets::types::RunSummary,
 ) -> anyhow::Result<()> {
-    if summary.unavailable > 0 && strict {
-        let toolchain_missing = summary.unavailable - summary.unresolved_dependency;
+    // `unresolved_dependency` is never a defect in the generated bindings: it is set only when a
+    // real toolchain ran to completion and reported a missing import/link/build target (see
+    // `finalize_result`'s doc comment in `snippets::runner`), and every caller of this function
+    // (`alef docs`, `alef all`) never runs a full per-language build in the same invocation --
+    // see `bin_cli::all_commands::warn_if_snippet_validation_needs_build`'s doc comment. Strict
+    // mode failing on it indistinguishably from a genuine content defect is what trained
+    // operators to distrust an `alef all` failure (task #186): codegen completed and wrote
+    // correct output, yet the run reported failure for a precondition `alef all`/`alef docs`
+    // structurally cannot satisfy on their own. A toolchain that is simply missing from `PATH`
+    // (`toolchain_missing`) is still a real environment gap unrelated to any build artifact, and
+    // still fails strict mode. ~keep
+    let toolchain_missing = summary.unavailable - summary.unresolved_dependency;
+    if toolchain_missing > 0 && strict {
         anyhow::bail!(
-            "strict snippet validation failed for crate `{}`: {} unavailable ({} unresolved dependency, {} \
-             toolchain missing){}",
+            "strict snippet validation failed for crate `{}`: {} unavailable due to a missing toolchain \
+             (unrelated to a missing build artifact){}",
             crate_name,
-            summary.unavailable,
-            summary.unresolved_dependency,
             toolchain_missing,
             attribute_unavailable(summary)
         );

@@ -130,3 +130,65 @@ fn an_ordinary_clean_run_emits_no_declared_capped_warning() {
         "an ordinary clean run must not warn about a declared-level cap that never happened"
     );
 }
+
+/// Regression for task #186's precondition-gap defect: `unresolved_dependency` is set only when
+/// a real toolchain ran to completion and reported a missing import/link/build target -- never a
+/// defect in the generated bindings -- and neither caller of this validation path (`alef docs`,
+/// `alef all`) ever runs a full per-language build in the same invocation. Strict mode must not
+/// fail the run over it: doing so is indistinguishable, to an operator, from a genuine content
+/// defect, which is exactly what trained operators to distrust an `alef all` failure. It must
+/// still be loudly reported, just not as a bail. ~keep
+#[traced_test]
+#[test]
+fn unresolved_dependency_unavailable_does_not_bail_even_in_strict_mode() {
+    let summary = RunSummary::from_results(vec![ValidationResult {
+        status: SnippetStatus::Unavailable,
+        unresolved_dependency: true,
+        ..result("fixture_ts_import", SnippetStatus::Unavailable)
+    }]);
+
+    enforce_snippet_summary("fixture-crate", true, &summary)
+        .expect("an unresolved-dependency-only unavailable result must not bail strict mode");
+
+    assert!(
+        logs_contain("unresolved dependency"),
+        "a demoted-to-warning unresolved dependency must still be reported loudly"
+    );
+}
+
+/// The other half: a toolchain that is simply missing from `PATH` is a real environment gap
+/// unrelated to any build artifact, and must still fail strict mode exactly as before -- the fix
+/// above narrows the strict-unavailable bail, it does not remove it. ~keep
+#[test]
+fn toolchain_missing_unavailable_still_bails_in_strict_mode() {
+    let summary = RunSummary::from_results(vec![result("fixture_zig_missing", SnippetStatus::Unavailable)]);
+
+    let error = enforce_snippet_summary("fixture-crate", true, &summary)
+        .expect_err("a genuinely missing toolchain must still fail strict mode");
+
+    let message = error.to_string();
+    assert!(message.contains("missing toolchain"), "got: {message}");
+    assert!(
+        !message.contains("unresolved dependency)"),
+        "a pure toolchain-missing bail must not claim any unresolved dependency: {message}"
+    );
+}
+
+/// A mix of both causes must still bail on the toolchain-missing half -- the strict gate must
+/// not be silenced just because some of the batch was a build-artifact gap instead. ~keep
+#[test]
+fn a_mix_of_both_causes_still_bails_on_the_toolchain_missing_half() {
+    let summary = RunSummary::from_results(vec![
+        ValidationResult {
+            status: SnippetStatus::Unavailable,
+            unresolved_dependency: true,
+            ..result("fixture_ts_import", SnippetStatus::Unavailable)
+        },
+        result("fixture_zig_missing", SnippetStatus::Unavailable),
+    ]);
+
+    let error = enforce_snippet_summary("fixture-crate", true, &summary)
+        .expect_err("a genuine toolchain gap in the same batch must still fail strict mode");
+
+    assert!(error.to_string().contains("1 unavailable"), "got: {error}");
+}
