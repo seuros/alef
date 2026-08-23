@@ -81,6 +81,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against. Python and Rust additionally resolved presentation after clearing assertions; both are
   hoisted above the clear. Task #199.
 
+- **`alef scaffold` now allowlists bare `cfg(alef)` in `[workspace.lints.rust]`, not just
+  `feature = "alef-meta"`.** `#[cfg_attr(alef, alef(skip))]` is alef's documented and far more
+  common exclusion marker, but `cfg(alef)` is never a real declared cfg, so rustc's
+  `unexpected_cfgs` fired on every use and any lane compiling with `-D warnings` denied it.
+
 ## [0.67.1] - 2026-08-23
 
 ### Fixed
