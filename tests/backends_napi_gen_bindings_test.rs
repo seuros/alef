@@ -518,11 +518,8 @@ fn test_type_mapping() {
 
     let content = lib_rs.unwrap().content.as_str();
 
-    assert!(
-        content.contains("pub struct JsNumbers {"),
-        "Should contain the JsNumbers struct; got:\n{content}"
-    );
-    for declaration in [
+    for expected in [
+        "pub struct JsNumbers {",
         "pub u32_val: u32",
         "pub i64_val: i64",
         "pub string_val: Option<String>",
@@ -530,8 +527,8 @@ fn test_type_mapping() {
         "pub opt_string: Option<String>",
     ] {
         assert!(
-            content.contains(declaration),
-            "expected field declaration `{declaration}`; got:\n{content}"
+            content.contains(expected),
+            "expected `{expected}` in the emitted bindings; got:\n{content}"
         );
     }
 }
