@@ -147,6 +147,33 @@ pub(crate) fn swift_call_arg(
         return from_expr;
     }
 
+    if let TypeRef::Named(n) = &p.ty
+        && tagged_enum_names.contains(n.as_str())
+    {
+        let native_ty = source_type(n);
+        let deserialize =
+            |value: &str| format!("::serde_json::from_str::<{native_ty}>({value}).expect(\"valid JSON for {name}\")");
+        if p.optional {
+            let converted = format!("{name}.as_ref().map(|value| {})", deserialize("value"));
+            if p.is_ref {
+                return if p.is_mut {
+                    format!("{converted}.as_mut()")
+                } else {
+                    format!("{converted}.as_ref()")
+                };
+            }
+            return converted;
+        }
+        let converted = deserialize(&format!("&{name}"));
+        if p.is_ref {
+            if p.is_mut {
+                return format!("&mut {converted}");
+            }
+            return format!("&{converted}");
+        }
+        return converted;
+    }
+
     if let TypeRef::Vec(inner) = &p.ty
         && let TypeRef::Named(n) = inner.as_ref()
     {
@@ -672,6 +699,55 @@ mod tests {
         );
         assert!(!shim.contains("From<String>"));
         assert!(!shim.contains("unimplemented!"));
+    }
+
+    /// Data-carrying enums cross swift-bridge as JSON strings. A referenced enum parameter
+    /// therefore must be deserialized before it is borrowed for the source call; treating the
+    /// bridge `String` as an opaque wrapper emits `&param.0` and fails with E0609.
+    #[test]
+    fn referenced_tagged_enum_param_is_deserialized_before_source_call() {
+        let mut output_format = param("output_format", TypeRef::Named("OutputFormat".to_string()));
+        output_format.is_ref = true;
+        let f = function(vec![
+            param(
+                "layout_enabled",
+                TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+            ),
+            output_format,
+        ]);
+        let unit_enum_names = HashSet::new();
+        let tagged_enum_names = HashSet::from(["OutputFormat"]);
+        let type_paths = HashMap::from([("OutputFormat".to_string(), "sample_crawler::OutputFormat".to_string())]);
+        let no_serde_names = HashSet::new();
+        let handle_returned_types = HashSet::new();
+        let capsule_types = HashMap::new();
+        let context = FunctionShimContext {
+            source_crate: "sample_crawler",
+            type_paths: &type_paths,
+            unit_enum_names: &unit_enum_names,
+            tagged_enum_names: &tagged_enum_names,
+            no_serde_names: &no_serde_names,
+            handle_returned_types: &handle_returned_types,
+            capsule_types: &capsule_types,
+        };
+
+        let shim = emit_function_shim(&f, &context);
+
+        assert!(
+            shim.contains("output_format: String"),
+            "tagged enums use the String bridge type:\n{shim}"
+        );
+        assert!(
+            shim.contains(
+                "&::serde_json::from_str::<sample_crawler::OutputFormat>(&output_format)\
+                 .expect(\"valid JSON for output_format\")"
+            ),
+            "the bridge string must be deserialized into the source enum before borrowing:\n{shim}"
+        );
+        assert!(
+            !shim.contains("output_format.0"),
+            "a bridge String has no opaque-wrapper field:\n{shim}"
+        );
     }
 
     #[test]
