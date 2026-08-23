@@ -86,6 +86,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   common exclusion marker, but `cfg(alef)` is never a real declared cfg, so rustc's
   `unexpected_cfgs` fired on every use and any lane compiling with `-D warnings` denied it.
 
+- A user `[e2e.format]` override's `{dir}` placeholder now expands to a path a POSIX shell can
+  `cd` into on Windows. `canonicalize` returns the extended-length form `\\?\C:\...`, and `sh`
+  reads every `\` as an escape, so the `cd` in the conventional `(cd {dir} && ...)` override
+  failed before the formatter ever ran. The shell then exited 1, which is not the
+  command-not-found status 127, so an absent formatter was misclassified as "the formatter ran
+  and rejected the code" and killed the run instead of being recorded as a deferred
+  environment gap. `run_in_dir`'s built-in residual steps already avoided this by never going
+  through a shell; the override path, which must go through one, now normalises the path.
+
 ## [0.67.1] - 2026-08-23
 
 ### Fixed

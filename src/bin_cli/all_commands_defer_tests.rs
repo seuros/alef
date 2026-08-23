@@ -166,13 +166,18 @@ const POST_BUILD_FIXTURE_SOURCE: &str = "pub fn greet(name: String) -> String {\
 const POST_BUILD_FIXTURE_CARGO_TOML: &str =
     "[package]\nname = \"postbuildlib\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
 
-/// `languages = ["ffi"]` with no `[workspace] ... members` covering the generated
-/// `crates/postbuildlib-ffi` directory: `complete_generated_artifacts` always runs
-/// `cargo build -p postbuildlib-ffi` for an FFI-configured crate (see
-/// `bin_cli::helpers::complete_generated_artifacts`), and with no workspace declaring that
-/// package, `cargo` fails fast (no compilation, no network) with "package ID specification
-/// ... did not match any packages" -- a real, deterministic post-build failure with no
-/// toolchain-availability flakiness. ~keep
+/// `languages = ["ffi"]` with an explicit `[build_commands.ffi]` that cannot succeed, giving
+/// this test a real, deterministic post-build failure with no compilation, no network and no
+/// toolchain-availability flakiness.
+///
+/// It used to rely on `cargo build -p postbuildlib-ffi` failing with "package ID specification
+/// ... did not match any packages", because the generated crate is not a member of any
+/// workspace. That was never a property worth depending on -- it was alef's own defect, since
+/// a `-p` spec resolves only for a workspace member while the emitted FFI crate is standalone
+/// unless the consumer lists it. `build_command_for` now builds it by `--manifest-path`, so
+/// that build legitimately succeeds and the test lost its failure. Assert the property the
+/// test is actually about (a genuine post-build failure still fails the run) through a failure
+/// that alef is not trying to eliminate. ~keep
 const POST_BUILD_FIXTURE_ALEF_TOML: &str = r#"
 [workspace]
 languages = ["ffi"]
@@ -181,6 +186,9 @@ languages = ["ffi"]
 name = "postbuildlib"
 sources = ["src/lib.rs"]
 version_from = "Cargo.toml"
+
+[crates.build_commands.ffi]
+build = "exit 42"
 
 [crates.e2e]
 fixtures = "fixtures"
@@ -253,8 +261,8 @@ fn a_crate_post_build_failure_does_not_abort_its_own_remaining_stages() {
     );
     let message = format!("{error:#}");
     assert!(
-        message.contains("postbuildlib-ffi"),
-        "the failure must carry the underlying cargo diagnostic verbatim: {message}"
+        message.contains("ffi"),
+        "the failure must name the language whose post-build step failed: {message}"
     );
     assert!(
         logs_contain("[postbuildlib] post-build processing"),
