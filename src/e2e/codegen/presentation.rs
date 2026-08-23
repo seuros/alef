@@ -12,6 +12,28 @@ pub(crate) struct PresentationOperation {
     pub(crate) display: bool,
     pub(crate) destructure_source: String,
     pub(crate) destructure_item: String,
+    /// True when [`Self::expression`] evaluates to an optional/nullable value.
+    ///
+    /// Distinct from [`Self::optional`], which says the *iterated collection* may be absent and
+    /// drives a `?? []`-style guard. This says the value a `show` operation hands to the target
+    /// language's print call is itself an optional. Swift needs it because `print`/`debugPrint`
+    /// take `Any`, and Swift warns on every implicit optional-to-`Any` coercion — an error under
+    /// the `-warnings-as-errors` the snippet validator compiles with. ~keep
+    pub(crate) shown_optional: bool,
+    /// Per-entry companion to [`Self::fields`], same length and order: whether each iterated
+    /// field expression evaluates to an optional. Parallel rather than a struct per field so the
+    /// eighteen templates that read `operation.fields` as plain strings keep working unchanged. ~keep
+    pub(crate) field_optionals: Vec<bool>,
+}
+
+/// True when the value an accessor for `path` yields is optional in the target language.
+///
+/// An optional link anywhere in the chain makes the whole expression optional — `markdown` being
+/// `Option<Markdown>` is what makes `result.markdown()?.content()` a `RustString?` even though
+/// `content` itself is not optional — so every prefix is consulted, not just the full path. ~keep
+fn path_yields_optional(resolver: &FieldResolver, path: &str) -> bool {
+    let segments: Vec<&str> = path.split('.').collect();
+    (1..=segments.len()).any(|length| resolver.is_optional(&segments[..length].join(".")))
 }
 
 /// `type_defs` feeds the same IR-derived optional-field detection every e2e assertion
@@ -116,6 +138,8 @@ pub(crate) fn resolve_with(
                 display: *display,
                 destructure_source: String::new(),
                 destructure_item: String::new(),
+                shown_optional: path_yields_optional(resolver, path),
+                field_optionals: Vec::new(),
             },
             FixtureDocsOperation::Iterate {
                 path,
@@ -148,6 +172,11 @@ pub(crate) fn resolve_with(
                     display: *display,
                     destructure_source,
                     destructure_item,
+                    shown_optional: false,
+                    field_optionals: fields
+                        .iter()
+                        .map(|field| path_yields_optional(resolver, field))
+                        .collect(),
                 }
             }
         })

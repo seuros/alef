@@ -5,11 +5,11 @@ import {{ module }}
 {{ body }}
 {% for operation in presentation %}
 {% if operation.kind == "show" %}
-{{ "print" if operation.display else "debugPrint" }}({{ operation.expression }})
+{{ "print" if operation.display else "debugPrint" }}({{ operation.expression }}{% if operation.shown_optional %} as Any{% endif %})
 {% else %}
 for {{ operation.item }} in {{ operation.expression }}{% if operation.optional %} ?? []{% endif %} {
 {% for field in operation.fields %}
-    {{ "print" if operation.display else "debugPrint" }}({{ field }})
+    {{ "print" if operation.display else "debugPrint" }}({{ field }}{% if operation.field_optionals[loop.index0] %} as Any{% endif %})
 {% endfor %}
 }
 {% endif %}
