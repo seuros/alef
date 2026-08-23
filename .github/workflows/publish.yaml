@@ -116,8 +116,17 @@ jobs:
     outputs:
       exists: ${{ steps.check.outputs.exists }}
     steps:
+      # ~keep continue-on-error: this check is advisory, not a release gate --
+      # every job downstream of it already runs under `always()` and treats a
+      # missing/non-'true' `exists` output as "not published yet, proceed."
+      # A transient failure here (e.g. the registry API rate-limiting an
+      # anonymous or momentarily-unauthenticated request) must not flip the
+      # whole run red when every publish/build job still succeeds. See
+      # v0.66.0 run 32602290549: this step failed on a GitHub API 403 while
+      # every other job, including the actual crates.io publish, succeeded.
       - name: Check crates.io for alef
         id: check
+        continue-on-error: true
         uses: xberg-io/actions/check-registry@v1
         with:
           registry: cratesio
@@ -137,8 +146,17 @@ jobs:
       # the homebrew bottles are named `alef-<version>.<bottle_tag>.bottle.tar.gz`, so
       # `asset-prefix: alef-` reported "published" for a release carrying nothing but
       # two bottles and no CLI archive at all.
+      #
+      # ~keep continue-on-error: this check is advisory, not a release gate -- `build-cli`
+      # and `upload-release-assets` below already run under `always()` and treat a
+      # missing/non-'true' `exists` output as "not published yet, proceed to build/upload."
+      # A transient failure here must not flip the whole run red when every publish/build
+      # job still succeeds. v0.66.0 run 32602290549 hit exactly this: this step failed on
+      # an unauthenticated GitHub API call that got rate-limited (HTTP 403) while every
+      # other job, including the actual asset upload, succeeded.
       - name: Check GitHub release assets
         id: check
+        continue-on-error: true
         uses: xberg-io/actions/check-registry@v1
         with:
           registry: github-release
@@ -157,8 +175,12 @@ jobs:
     outputs:
       exists: ${{ steps.check.outputs.exists }}
     steps:
+      # ~keep continue-on-error: same rationale as `check-github-release` and
+      # `check-cratesio` -- this check is advisory, and downstream jobs already
+      # treat a missing/non-'true' `exists` output as "not published yet."
       - name: Check Homebrew formula
         id: check
+        continue-on-error: true
         uses: xberg-io/actions/check-registry@v1
         with:
           registry: homebrew
