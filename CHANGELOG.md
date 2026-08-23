@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Dart FRB: `frb_generated.rs` no longer diverges between `alef build` and `alef generate` on
+  identical input. `alef build`'s `CarryFrbCfgGates` post-build step wrote
+  `flutter_rust_bridge_codegen`'s raw, unformatted output straight to disk, while `alef generate`
+  additionally ran a separate `poly fmt` pass over the same file afterward -- two alef commands
+  regenerating unchanged input then disagreed on the committed bytes (e.g. `use` import grouping
+  order), producing spurious diffs on every regeneration. `CarryFrbCfgGates` now normalizes the
+  file through the same `normalize_content` pass the guarded generator path hashes against, so
+  both commands converge on one canonical form. (#179)
+- `alef verify` now detects Dart FRB `frb_generated.rs` drift. The file is written by an external
+  tool and rewritten in place by `CarryFrbCfgGates`, so it never carries alef's own embedded hash
+  marker and was structurally invisible to `alef verify`'s per-file staleness check -- it could
+  silently fall behind (stale `#[cfg(...)]` gates, or non-canonical formatting) with zero signal.
+  `alef verify` now recomputes the same canonical form `CarryFrbCfgGates` would write and reports
+  a difference as drift. (#179)
 - **e2e/java**: stop inlining large fixture values as a single Java string literal. The JVM caps
   a `CONSTANT_Utf8` constant-pool entry (and `javac` a string literal) at 65535 bytes, a limit no
   amount of escaping can raise; a fixture body long enough to threaten it made the generated Java
