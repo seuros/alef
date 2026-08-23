@@ -11,7 +11,13 @@ use tracing::{debug, info, warn};
 
 mod frb_bridge_coverage;
 mod frb_cache;
+mod frb_cfg_gates;
 mod observability;
+
+// Re-exported for `alef verify`'s frb-gate-drift check (`bin_cli::core_commands::verify`), which
+// needs the identical canonicalization this crate's own `CarryFrbCfgGates` post-build step uses
+// to write the file, so the two can never disagree about what "up to date" means. See alef #179.
+pub(crate) use frb_cfg_gates::canonical_frb_generated;
 
 pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool) -> anyhow::Result<()> {
     build_with_environment(config, languages, release, &[])
@@ -926,33 +932,7 @@ pub fn run_post_build(
             } => {
                 let source_file = base_dir.join(crate_dir).join(source_path);
                 let target_file = base_dir.join(crate_dir).join(target_path);
-                if source_file.exists() && target_file.exists() {
-                    let source_content = std::fs::read_to_string(&source_file)
-                        .with_context(|| format!("failed to read cfg-gate source {}", source_file.display()))?;
-                    let target_content = std::fs::read_to_string(&target_file)
-                        .with_context(|| format!("failed to read cfg-gate target {}", target_file.display()))?;
-                    let rewritten = crate::backends::dart::carry_lib_rs_cfg_gates_into_frb_generated(
-                        &source_content,
-                        &target_content,
-                    );
-                    if rewritten != target_content {
-                        std::fs::write(&target_file, &rewritten)
-                            .with_context(|| format!("failed to write cfg-gated file {}", target_file.display()))?;
-                        info!(
-                            "Carried #[cfg] gates from {} into {}",
-                            source_file.display(),
-                            target_file.display()
-                        );
-                    } else {
-                        debug!("CarryFrbCfgGates {}: no changes needed", target_file.display());
-                    }
-                } else {
-                    debug!(
-                        "CarryFrbCfgGates source or target not found: {} / {}",
-                        source_file.display(),
-                        target_file.display()
-                    );
-                }
+                frb_cfg_gates::run(&source_file, &target_file)?;
             }
             PostBuildStep::StageDartNatives { lib_stem } => {
                 let package_root = base_dir.join("packages/dart");

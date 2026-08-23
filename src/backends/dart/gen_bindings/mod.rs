@@ -348,9 +348,9 @@ impl DartBackend {
 
                 let skip_frb = config.dart.as_ref().map(|c| c.skip_frb).unwrap_or(false);
 
-                let rust_crate_dir = resolve_output_dir(None, &config.name, "packages/dart/rust");
-                let rust_lib_rs_path = PathBuf::from(format!("{rust_crate_dir}/src/lib.rs"));
-                let rust_frb_generated_path = PathBuf::from(format!("{rust_crate_dir}/src/frb_generated.rs"));
+                let Some((rust_lib_rs_path, rust_frb_generated_path)) = frb_rust_facade_paths(config) else {
+                    unreachable!("frb_rust_facade_paths only returns None for DartStyle::Ffi, already matched above");
+                };
 
                 let mut post_build_steps: Vec<PostBuildStep> = if skip_frb {
                     vec![]
@@ -484,4 +484,21 @@ fn emit_streaming_adapter_methods(config: &ResolvedCrateConfig, out: &mut String
 /// Converts a crate name like `"my-lib"` to snake_case `"my_lib"`.
 fn dart_module_name(crate_name: &str) -> String {
     crate_name.replace('-', "_")
+}
+
+/// The FRB Rust facade's `(lib.rs, frb_generated.rs)` paths for `config`, or `None` when the
+/// active bridging style is `DartStyle::Ffi` (no Rust facade crate at all).
+///
+/// The single source of truth for these two paths: [`DartBackend::build_config_for`] uses it to
+/// build the `CarryFrbCfgGates` post-build step, and `alef verify`'s frb-gate-drift check
+/// (`bin_cli::core_commands::verify`) uses it to find the same two files read-only, so the paths
+/// a write can target and the paths a check reads can never drift apart. See alef #179.
+pub fn frb_rust_facade_paths(config: &ResolvedCrateConfig) -> Option<(PathBuf, PathBuf)> {
+    if dart_style(config) == DartStyle::Ffi {
+        return None;
+    }
+    let rust_crate_dir = resolve_output_dir(None, &config.name, "packages/dart/rust");
+    let rust_lib_rs_path = PathBuf::from(format!("{rust_crate_dir}/src/lib.rs"));
+    let rust_frb_generated_path = PathBuf::from(format!("{rust_crate_dir}/src/frb_generated.rs"));
+    Some((rust_lib_rs_path, rust_frb_generated_path))
 }
