@@ -149,7 +149,7 @@ fn kotlin_android_optional_config_arg_emits_default_constructor_not_null() {
 
     let lines: Vec<&str> = rendered
         .lines()
-        .filter(|line| line.contains("SampleCrate.extractBytes(") || line.contains(".extractBytes("))
+        .filter(|line| line.contains(".extractBytes("))
         .collect();
     for line in lines {
         assert!(

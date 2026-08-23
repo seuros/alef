@@ -518,20 +518,19 @@ fn test_type_mapping() {
 
     let content = lib_rs.unwrap().content.as_str();
 
-    assert!(content.contains("Numbers"), "Should contain Numbers struct");
-    assert!(
-        content.contains("u32") || content.contains("u32_val"),
-        "Should map u32 field"
-    );
-    assert!(
-        content.contains("i64") || content.contains("i64_val"),
-        "Should map i64 field"
-    );
-    assert!(content.contains("String"), "Should map String fields");
-    assert!(
-        content.contains("Vec") || content.contains("string_list"),
-        "Should map Vec<String> field"
-    );
+    for expected in [
+        "pub struct JsNumbers {",
+        "pub u32_val: u32",
+        "pub i64_val: i64",
+        "pub string_val: Option<String>",
+        "pub string_list: Vec<String>",
+        "pub opt_string: Option<String>",
+    ] {
+        assert!(
+            content.contains(expected),
+            "expected `{expected}` in the emitted bindings; got:\n{content}"
+        );
+    }
 }
 
 #[test]
@@ -1230,8 +1229,8 @@ fn test_optional_and_default_fields() {
         "Non-opaque struct should use napi(object, js_name = ...)"
     );
     assert!(
-        content.contains("Default") || content.contains("impl Default for JsOptions"),
-        "Type with has_default should derive Default or have impl"
+        content.contains("impl Default for JsOptions") || content.contains("Default)]"),
+        "Type with has_default should derive Default or have an impl; got:\n{content}"
     );
 }
 

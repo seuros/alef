@@ -616,7 +616,7 @@ fn fallible_function_returning_primitive_no_null_check() {
     );
 
     assert!(
-        content.contains("return _result;") || content.contains("return"),
+        content.contains("return _result;"),
         "BUG: function should have a return statement. Content:\n{}",
         content
     );

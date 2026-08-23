@@ -462,7 +462,7 @@ fn test_gen_trait_bridges_file_interface_method_with_error_returns_tuple_or_erro
         "method with non-unit return and error must produce (T, error) return type"
     );
     assert!(
-        code.contains("Ping() error") || code.contains("Ping()"),
+        code.contains("Ping() error"),
         "method with unit return and error must produce 'error' return type"
     );
 }

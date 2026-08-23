@@ -205,7 +205,7 @@ fn csharp_validation_setup_lines_are_inside_throws_lambda() {
     let content = generate_content(&CSharpCodegen, "csharp");
 
     assert!(
-        content.contains("Assert.ThrowsAnyAsync") || content.contains("Assert.ThrowsAny"),
+        content.contains("Assert.ThrowsAnyAsync"),
         "ThrowsAny assertion missing:\n{content}"
     );
 

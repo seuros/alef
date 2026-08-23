@@ -72,8 +72,7 @@ fn scaffold_napi_cargo_includes_tokio_util_with_rt_feature_when_trait_bridges_pr
         "Cargo.toml must include tokio-util when trait bridges are present"
     );
     assert!(
-        content.contains(r#"features = ["rt"]"#)
-            || content.contains("tokio-util = { version = \"0.7\", features = [\"rt\"] }"),
+        content.contains(r#"tokio-util = { version = "0.7", features = ["rt"] }"#),
         "tokio-util must include the 'rt' feature"
     );
 

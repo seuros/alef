@@ -468,7 +468,7 @@ fn test_sync_function_go() {
     let body = &bodies["transform"];
 
     assert!(
-        body.contains("C.CString") || body.contains("C."),
+        body.contains("C.CString"),
         "Go body should call C functions. Got: {}",
         body
     );
@@ -993,11 +993,11 @@ fn test_python_string_params() {
 
     let body = &bodies["concat"];
     assert!(
-        body.contains("a.into()") || body.contains("a"),
-        "Should reference 'a' param"
+        body.contains("a.into()") || body.contains("(a,") || body.contains("(a)"),
+        "Should pass the 'a' param through to the core call; got:\n{body}"
     );
     assert!(
-        body.contains("b.into()") || body.contains("b"),
+        body.contains("b.into()") || body.contains(" b)") || body.contains(" b,"),
         "Should reference 'b' param"
     );
 }

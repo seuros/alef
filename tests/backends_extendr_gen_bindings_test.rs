@@ -1448,7 +1448,7 @@ mod trait_bridge {
             "registration fn must validate required method 'transform' exists"
         );
         assert!(
-            code.code.contains("dollar(\"transform\")") || code.code.contains("\"transform\""),
+            code.code.contains("dollar(\"transform\")"),
             "constructor must check required methods via dollar()"
         );
     }

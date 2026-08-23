@@ -142,7 +142,7 @@ args = [
         "PHP must not fall back to ExtractionConfig when options_type is EmbeddingConfig; got:\n{content}"
     );
     assert!(
-        content.contains("use SampleCrate\\EmbeddingConfig;") || content.contains("EmbeddingConfig;"),
+        content.contains("use Mylib\\EmbeddingConfig;"),
         "the resolved options_type must be imported; got:\n{content}"
     );
 }
