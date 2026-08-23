@@ -177,8 +177,6 @@ pub(super) fn build_args_and_setup(
                 // Use <ConfigType>::from_json() instead of direct property assignment.
                 // ext-php-rs doesn't support writable #[php(prop)] fields for complex types,
                 // so serialize the config to JSON and use from_json() to construct it.
-                // Filter out empty string enum values before passing to from_json().
-                let filtered_config = super::values::filter_empty_enum_strings(config_value);
                 // The PHP binding's `from_json` deserializes into the binding struct, which is
                 // always emitted with `#[serde(rename_all = "{php_lang_rename_all}")]` by the
                 // PHP backend (camelCase by default, or whatever `[crates.php] serde_rename_all`
@@ -191,6 +189,11 @@ pub(super) fn build_args_and_setup(
                         arg.name
                     )
                 });
+                // Drop `""` only where it cannot deserialize — an enum-typed field with no empty
+                // variant. On a `String`/`Option<String>` field `""` is the value the fixture is
+                // testing, and dropping it makes PHP the one backend that never sends it. ~keep
+                let filtered_config =
+                    super::values::filter_empty_enum_strings_with_types(config_value, Some(config_type), type_defs);
                 setup_lines.push(format!(
                     "${name}_config = {config_type}::from_json(json_encode({}));",
                     super::values::json_to_php_camel_keys_with_types(
@@ -383,8 +386,10 @@ pub(super) fn build_args_and_setup(
                     match options_via {
                         "json" => {
                             // Pass as JSON string via json_encode(); the Rust method accepts Option<String>.
-                            // Filter out empty string enum values.
-                            let filtered_v = super::values::filter_empty_enum_strings(v);
+                            // Type-aware so `""` survives on a `String`/`Option<String>` field and is
+                            // dropped only where it would fail enum deserialization. ~keep
+                            let filtered_v =
+                                super::values::filter_empty_enum_strings_with_types(v, json_object_type, type_defs);
 
                             // If the config is empty after filtering, pass null instead.
                             if let serde_json::Value::Object(obj) = &filtered_v
