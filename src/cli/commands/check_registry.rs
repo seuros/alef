@@ -298,9 +298,11 @@ fn check_homebrew(package: &str, version: &str, tap_repo: Option<&str>) -> Resul
 /// Pick the GitHub token to authenticate with, given the two candidate
 /// environment variables read by [`github_auth_token`]. Kept separate from
 /// the env lookup so the precedence/empty-string rules are unit-testable
-/// without mutating real process environment state.
+/// without mutating real process environment state. An empty value is treated
+/// as absent rather than as a token, so a workflow that exports an empty
+/// `GITHUB_TOKEN` still falls through to `GH_TOKEN` instead of going anonymous.
 fn resolve_github_token(github_token: Option<String>, gh_token: Option<String>) -> Option<String> {
-    github_token.or(gh_token).filter(|token| !token.is_empty())
+    github_token.into_iter().chain(gh_token).find(|token| !token.is_empty())
 }
 
 /// Read a GitHub token from the environment, if one is available.
@@ -449,9 +451,11 @@ mod tests {
     #[test]
     fn resolve_github_token_treats_empty_string_as_absent() {
         assert_eq!(
-            resolve_github_token(Some(String::new()), Some("gh-cli-token".to_string())),
-            None
+            resolve_github_token(Some(String::new()), Some("gh-cli-token".to_string())).as_deref(),
+            Some("gh-cli-token"),
+            "an empty GITHUB_TOKEN must not suppress a usable GH_TOKEN"
         );
         assert_eq!(resolve_github_token(Some(String::new()), None), None);
+        assert_eq!(resolve_github_token(None, Some(String::new())), None);
     }
 }
