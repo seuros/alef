@@ -3704,7 +3704,7 @@ Related: `ConversionOptions::output_format` and `Result::unwrap_or()`."#
     let content = &dto_file.content;
 
     assert!(
-        content.contains("{@code OutputFormat.None}") || content.contains("OutputFormat.None"),
+        content.contains("{@code OutputFormat.None}"),
         "Rust :: should become . in Javadoc, got:\n{content}"
     );
     assert!(

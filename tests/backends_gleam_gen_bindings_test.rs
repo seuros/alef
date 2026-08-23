@@ -400,7 +400,7 @@ fn enum_tuple_variant_emits_unlabeled_field() {
         "positional field `_0` must not appear as a label: {content}"
     );
     assert!(
-        content.contains("Inner(\n    String\n  )") || content.contains("Inner(\n    String"),
+        content.contains("Inner(\n    String\n  )"),
         "unlabeled String argument expected: {content}"
     );
 }

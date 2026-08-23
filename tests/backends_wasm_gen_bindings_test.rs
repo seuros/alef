@@ -844,8 +844,8 @@ fn test_error_types() {
     let content = &files[0].content;
 
     assert!(
-        content.contains("ValidationError") || content.contains("fn"),
-        "Should contain error handling"
+        content.contains("ValidationError"),
+        "the emitted bindings must name the declared error type; got:\n{content}"
     );
 }
 

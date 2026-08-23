@@ -597,7 +597,7 @@ fn test_error_types() {
     );
 
     assert!(
-        content.contains("process_error_to_py_err") || content.contains("_to_py_err"),
+        content.contains("process_error_to_py_err"),
         "Should generate error converter function"
     );
 }
