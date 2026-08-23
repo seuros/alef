@@ -127,7 +127,7 @@ pub fn get_language(name: String) -> Result<Language, String> {
 // The fixture's own core crate derives serde, so it needs the dependency to compile. It went
 // unnoticed until the core crate became reachable from the emitted binding crates: before that
 // nothing ever built it, so an uncompilable fixture still passed every lane. ~keep
-pub(crate) const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n";
+pub(crate) const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n\n[lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(alef)'] }\n";
 
 // `java` and `elixir` scaffolders bail `alef generate` outright when repository/license/
 // authors are unset (`scaffold::languages::java`, `scaffold::languages::elixir`), and both

@@ -1139,7 +1139,44 @@ mod build_rs_tests {
             "the opt-in env var must be checked before flutter_rust_bridge_codegen is invoked; got:\n{}",
             file.content
         );
+        assert!(
+            file.content.contains(r#""--no-deps-check""#),
+            "the opt-in path must tolerate valid prerelease Dart dependencies"
+        );
         syn::parse_file(&file.content).expect("generated build.rs must be valid Rust");
+    }
+
+    /// A default Cargo build must be source-tree read-only. In particular, carrying cfg gates
+    /// mutates the committed FRB Rust output and therefore belongs behind the same explicit
+    /// regeneration opt-in as every other post-codegen rewrite.
+    #[test]
+    fn emitted_build_rs_does_not_mutate_sources_before_opt_in_gate() {
+        let file = emit_build_rs(
+            "packages/dart/rust",
+            "sample_router",
+            "sample_router",
+            "sample_router_dart",
+        );
+        let opt_in_gate = file
+            .content
+            .find("if !frb_regeneration_opted_in()")
+            .expect("build.rs must return early unless regeneration is explicitly enabled");
+
+        for mutation in [
+            "carry_frb_cfg_gates();",
+            "patch_published_loader();",
+            "fix_handler_executor_calls();",
+        ] {
+            let mutation_call = file
+                .content
+                .find(mutation)
+                .unwrap_or_else(|| panic!("build.rs must retain the opt-in mutation `{mutation}`"));
+            assert!(
+                opt_in_gate < mutation_call,
+                "source mutation `{mutation}` must occur only after the regeneration opt-in gate; got:\n{}",
+                file.content
+            );
+        }
     }
 
     #[test]

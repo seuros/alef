@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.2] - 2026-08-23
+
 ### Fixed
 
+- **Dart generation now uses flutter_rust_bridge 2.13 and bypasses its redundant dependency
+  preflight.** Alef emits the bridge dependencies itself, while FRB's check rejected valid Dart
+  prereleases such as `freezed 4.0.0-dev.3` before generation could complete.
+- **Swift tagged-enum parameters are deserialized before the source call.** A data-carrying enum
+  crosses swift-bridge as a JSON string; a referenced parameter was emitted as `&param.0`, treating
+  the bridge `String` as an opaque wrapper and failing to compile with E0609.
+- **The generated FFI crate builds by manifest path rather than package ID.** `cargo build -p
+  <crate>-ffi` assumes the emitted crate is a member of the invoking workspace; a standalone
+  generated manifest is not, and cargo rejected the package spec outright.
+- **The `alef all` format gate and the publish-asset guard are hermetic across platforms.** The
+  format gate installs its own stub formatter on `PATH` instead of depending on `poly` being
+  present, and the publish-asset guard's Unix-only shell helpers are `cfg`-gated so the suite
+  compiles on Windows.
 - Dart FRB: `frb_generated.rs` no longer diverges between `alef build` and `alef generate` on
   identical input. `alef build`'s `CarryFrbCfgGates` post-build step wrote
   `flutter_rust_bridge_codegen`'s raw, unformatted output straight to disk, while `alef generate`
@@ -53,6 +68,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   apps run. Mirrors `ensure_requested_suites_will_run`'s semantics for `alef test`. A run with no
   `--lang` filter and no `[e2e].languages` configured anywhere is unaffected (still a legitimate
   non-fatal no-op).
+
+- **e2e/java**: an `equals` assertion carrying a literal `null` against a non-optional collection
+  field no longer renders `assertEquals(null, result.field())` -- a comparison the generated
+  binding can never satisfy, because its Jackson builder defaults an absent, serde-defaulted
+  collection to `List.of()`. `with_ir_collection_map` was wired into the csharp, kotlin, swift and
+  rust e2e generators but never java, so java's assertion side had no IR-backed view of which
+  result fields are collections. Task #200.
+- **e2e**: a docs-tagged fixture with neither `docs.shows` nor `docs.presentation` no longer emits
+  a snippet that bottoms out at a bare `print(result)`. Field access is derived from the fixture's
+  own assertions, which already anchor on the same field paths the assertion resolver renders
+  against. Python and Rust additionally resolved presentation after clearing assertions; both are
+  hoisted above the clear. Task #199.
 
 ## [0.67.1] - 2026-08-23
 
