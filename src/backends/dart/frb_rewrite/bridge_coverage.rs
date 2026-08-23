@@ -18,7 +18,7 @@
 //! stale bridge fails the build loudly instead of being silently patched into a half-correct state.
 
 use super::cfg_gates::free_pub_fn_name;
-use super::text_transformations::snake_to_camel;
+use super::text_transformations::{contains_function_at_token_boundary, snake_to_camel};
 
 /// Names of every top-level (column 0) `pub fn` / `pub async fn` free function declared in
 /// `lib_rs_source`, in declaration order.
@@ -37,8 +37,12 @@ pub fn free_function_names(lib_rs_source: &str) -> Vec<String> {
 /// bridge post-frb by [`super::text_transformations::filter_excluded_functions`] and are expected
 /// to be permanently absent, independent of whether the bridge is otherwise fresh.
 ///
-/// Matching uses flutter_rust_bridge's snake_case -> lowerCamelCase convention, the same lookup
-/// [`super::text_transformations::filter_excluded_functions`] uses to find a function to strip.
+/// Matching uses flutter_rust_bridge's snake_case -> lowerCamelCase convention and a
+/// token-boundary lookup ([`contains_function_at_token_boundary`]) rather than a literal
+/// leading-space check, so a function whose name `dartfmt` wrapped onto its own line (a long
+/// return type pushes it past the line's whitespace) is still found (alef #191). This is the
+/// same boundary-safe lookup [`super::text_transformations::filter_excluded_functions`] uses to
+/// find a function to strip.
 pub fn missing_bridge_functions(
     lib_rs_source: &str,
     bridge_dart_source: &str,
@@ -50,7 +54,7 @@ pub fn missing_bridge_functions(
         .filter(|name| !excluded.contains(name.as_str()))
         .filter(|name| {
             let camel = snake_to_camel(name);
-            !bridge_dart_source.contains(&format!(" {camel}("))
+            !contains_function_at_token_boundary(bridge_dart_source, &camel)
         })
         .collect()
 }
@@ -109,6 +113,36 @@ pub fn record_price(id: String, price_cents: i64) -> Result<(), String> {
         let bridge_dart = "Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);\n";
 
         assert!(missing_bridge_functions(lib_rs, bridge_dart, &[]).is_empty());
+    }
+
+    /// `dartfmt` wraps a long return type onto its own line, pushing the function name onto the
+    /// line below preceded by a newline (and indentation), not a literal space -- the alef #191
+    /// shape: a facade function that IS present and correctly bridged is reported missing purely
+    /// because of how the bridge happened to be line-wrapped.
+    #[test]
+    fn missing_bridge_functions_finds_a_function_whose_name_is_wrapped_onto_its_own_line() {
+        let lib_rs = "\
+pub fn create_chunk_classification_definition_from_json(
+    json: String,
+) -> Result<ChunkClassificationDefinition, String> {
+    todo!()
+}
+";
+        // dartfmt wrapped the long return type onto its own line, so the function name starts a
+        // fresh line with no preceding space -- only a preceding newline.
+        let bridge_dart = "\
+Future<ChunkClassificationDefinition>
+createChunkClassificationDefinitionFromJson({required String json}) =>
+    RustLib.instance.api.crateCreateChunkClassificationDefinitionFromJson(json: json);
+";
+
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[]);
+        assert_eq!(
+            missing,
+            Vec::<String>::new(),
+            "the function is present and correctly bridged -- only line-wrapped -- and must not \
+             be reported missing: {missing:?}"
+        );
     }
 
     #[test]
