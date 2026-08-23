@@ -24,3 +24,5 @@ pub(crate) mod visitor_result;
 
 #[cfg(test)]
 mod duration_wire_cross_backend_tests;
+#[cfg(test)]
+mod serde_enum_wire_cross_backend_tests;
