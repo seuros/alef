@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `alef generate`/`alef build` now fail loudly, before invoking `flutter_rust_bridge_codegen`,
+  when the `flutter_rust_bridge_codegen` binary on `PATH` reports a version that disagrees with
+  the project's declared `[crates.dart] frb_version` pin. Previously the locally installed
+  codegen binary's version was baked into generated Dart/Rust bridge output with no check at
+  all, so two developers (or a developer and CI) with different `flutter_rust_bridge_codegen`
+  installs produced different committed bytes from identical input (#204).
+
 ## [0.67.2] - 2026-08-23
 
 ### Fixed
