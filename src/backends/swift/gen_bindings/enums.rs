@@ -1,8 +1,42 @@
+use crate::backends::swift::gen_bindings::adjacent_codable::emit_serde_adjacent_codable;
 use crate::backends::swift::naming::swift_source_ident as swift_case_ident;
 use crate::backends::swift::type_map::SwiftMapper;
+use crate::codegen::serde_enum_repr::{SerdeEnumRepr, serde_enum_repr};
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
 use heck::{AsSnakeCase, ToLowerCamelCase};
+
+/// Render the custom `Codable` members an enum needs so its JSON matches serde's, or an empty
+/// string when serde's representation is already what Swift synthesises.
+///
+/// This is the only place the choice is made: every Swift enum emitter routes through it, so the
+/// first-class enum and the trait-bridge result enum (which used to emit no `Codable` body at
+/// all, silently accepting Swift's externally tagged synthesis) can no longer disagree.
+fn serde_codable_body(en: &EnumDef, repr: &SerdeEnumRepr, mapper: &SwiftMapper) -> String {
+    let mut body = String::new();
+    match repr {
+        SerdeEnumRepr::Internal { .. } => emit_serde_tagged_codable(en, &mut body, mapper),
+        SerdeEnumRepr::Adjacent { tag, content } => {
+            emit_serde_adjacent_codable(en, tag, content, &mut body, mapper);
+        }
+        SerdeEnumRepr::Untagged if has_untagged_single_payloads(en) => {
+            emit_serde_untagged_codable(en, &mut body, mapper);
+        }
+        SerdeEnumRepr::External | SerdeEnumRepr::Untagged => {}
+    }
+    body
+}
+
+/// `emit_serde_untagged_codable` decodes each variant through a single-value container, which
+/// only works when every data variant carries exactly one payload.
+fn has_untagged_single_payloads(en: &EnumDef) -> bool {
+    en.variants.iter().any(|v| !v.fields.is_empty())
+        && en
+            .variants
+            .iter()
+            .filter(|v| !v.fields.is_empty())
+            .all(|v| v.fields.len() == 1)
+}
 
 /// Emits a custom Codable conformance for a serde-internally-tagged enum.
 /// Handles variant-tag decoding/encoding and respects field renames.
@@ -267,59 +301,21 @@ pub(super) fn emit_enum(
         return;
     }
 
-    let has_serde_tag = en.serde_tag.is_some() && !en.serde_untagged;
-    let is_serde_untagged = en.serde_untagged
-        && en.variants.iter().any(|v| !v.fields.is_empty())
-        && en
-            .variants
-            .iter()
-            .filter(|v| !v.fields.is_empty())
-            .all(|v| v.fields.len() == 1);
+    let repr = serde_enum_repr(en);
+    let is_serde_untagged = matches!(repr, SerdeEnumRepr::Untagged) && has_untagged_single_payloads(en);
 
-    if has_serde_tag {
-        let mut variants = String::new();
-        for variant in &en.variants {
-            emit_variant_with_data(variant, &mut variants, mapper);
-        }
-        let mut codable_body = String::new();
-        emit_serde_tagged_codable(en, &mut codable_body, mapper);
-        out.push_str(&crate::backends::swift::template_env::render(
-            "swift_enum_decl.swift.jinja",
-            minijinja::context! {
-                name => &en.name,
-                variants => variants,
-                codable_body => codable_body,
-            },
-        ));
-    } else if is_serde_untagged {
-        let mut variants = String::new();
-        for variant in &en.variants {
-            emit_variant_with_data(variant, &mut variants, mapper);
-        }
-        let mut codable_body = String::new();
-        emit_serde_untagged_codable(en, &mut codable_body, mapper);
-        out.push_str(&crate::backends::swift::template_env::render(
-            "swift_enum_decl.swift.jinja",
-            minijinja::context! {
-                name => &en.name,
-                variants => variants,
-                codable_body => codable_body,
-            },
-        ));
-    } else {
-        let mut variants = String::new();
-        for variant in &en.variants {
-            emit_variant_with_data(variant, &mut variants, mapper);
-        }
-        out.push_str(&crate::backends::swift::template_env::render(
-            "swift_enum_decl.swift.jinja",
-            minijinja::context! {
-                name => &en.name,
-                variants => variants,
-                codable_body => "",
-            },
-        ));
+    let mut variants = String::new();
+    for variant in &en.variants {
+        emit_variant_with_data(variant, &mut variants, mapper);
     }
+    out.push_str(&crate::backends::swift::template_env::render(
+        "swift_enum_decl.swift.jinja",
+        minijinja::context! {
+            name => &en.name,
+            variants => variants,
+            codable_body => serde_codable_body(en, &repr, mapper),
+        },
+    ));
 
     if is_serde_untagged && text_types.iter().any(|t| t == &en.name) {
         emit_swift_text_accessor(en, out);
@@ -512,7 +508,7 @@ pub(super) fn emit_enum_without_into_rust(
             minijinja::context! {
                 name => &en.name,
                 variants => variants,
-                codable_body => "",
+                codable_body => serde_codable_body(en, &serde_enum_repr(en), mapper),
             },
         ));
     } else {

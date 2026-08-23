@@ -56,6 +56,42 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/swift_tagged_codable.swift.jinja"),
     ),
     (
+        "swift_adjacent_codable.swift.jinja",
+        include_str!("../templates/swift_adjacent_codable.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_payload_key_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_payload_key_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_decode_unit_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_decode_unit_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_decode_newtype_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_decode_newtype_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_decode_struct_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_decode_struct_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_encode_unit_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_encode_unit_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_encode_newtype_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_encode_newtype_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_encode_struct_case.swift.jinja",
+        include_str!("../templates/swift_adjacent_encode_struct_case.swift.jinja"),
+    ),
+    (
+        "swift_adjacent_encode_field.swift.jinja",
+        include_str!("../templates/swift_adjacent_encode_field.swift.jinja"),
+    ),
+    (
         "swift_untagged_codable.swift.jinja",
         include_str!("../templates/swift_untagged_codable.swift.jinja"),
     ),

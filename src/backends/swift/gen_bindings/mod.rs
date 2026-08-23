@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use crate::backends::swift::gen_rust_crate;
 use crate::backends::swift::type_map::SwiftMapper;
 
+mod adjacent_codable;
 mod boxes;
 pub(crate) mod bridge_artifacts;
 mod client;
