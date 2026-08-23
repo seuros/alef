@@ -12,9 +12,9 @@ pub use emitters::{
 };
 pub use sanitize::{DocTarget, sanitize_rust_idioms, sanitize_rust_idioms_keep_sections};
 pub use sections::{
-    RustdocSections, doc_first_paragraph_joined, example_for_target, parse_arguments_bullets, parse_rustdoc_sections,
-    render_csharp_xml_sections, render_doxygen_sections, render_javadoc_sections, render_jsdoc_sections,
-    render_phpdoc_sections, replace_fence_lang,
+    BOLD_LABEL_ONLY_SECTION_NAMES, RustdocSections, doc_first_paragraph_joined, example_for_target,
+    parse_arguments_bullets, parse_rustdoc_sections, render_csharp_xml_sections, render_doxygen_sections,
+    render_javadoc_sections, render_jsdoc_sections, render_phpdoc_sections, replace_fence_lang,
 };
 
 #[cfg(test)]
