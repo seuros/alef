@@ -140,9 +140,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let mut any_written = false;
                 for (lang, lang_files) in &files {
                     let lang_str = lang.to_string();
-                    for file in lang_files.iter().filter(|file| file.carries_alef_marker()) {
-                        current_gen_paths.insert(base_dir.join(&file.path));
-                    }
+                    current_gen_paths.extend(pipeline::stampable_output_paths(lang_files, &base_dir));
 
                     let hashes: Vec<(String, String)> = lang_files
                         .iter()
@@ -180,9 +178,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
                     if !svc_files.is_empty() {
                         for (_, files) in &svc_files {
-                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
-                                current_gen_paths.insert(base_dir.join(&file.path));
-                            }
+                            current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
                         }
                         for (language, generated) in &svc_files {
                             generation_owned_paths
@@ -237,9 +233,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
 
                         for (_, files) in &public_api_files {
-                            for file in files.iter().filter(|file| file.carries_alef_marker()) {
-                                current_gen_paths.insert(base_dir.join(&file.path));
-                            }
+                            current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
                         }
                         for (language, generated) in &public_api_files {
                             generation_owned_paths
@@ -297,9 +291,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         !stub_hashes.is_empty() && stub_hashes.iter().all(|(p, h)| stored_stubs.get(p) == Some(h));
 
                     for (_, files) in &stub_files {
-                        for file in files.iter().filter(|file| file.carries_alef_marker()) {
-                            current_gen_paths.insert(base_dir.join(&file.path));
-                        }
+                        current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
                     }
                     for (language, generated) in &stub_files {
                         generation_owned_paths
@@ -346,12 +338,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // prove alef owns; this repair runs regardless, since a missing forwarded feature
                 // is additive-only and safe even without that proof (see `scaffold::repair`). ~keep
                 crate::scaffold::repair_missing_cfg_binding_features(&api, resolved_cfg, &languages);
-                for file in &scaffold_files {
-                    let path = base_dir.join(&file.path);
-                    if file.carries_alef_marker() {
-                        current_gen_paths.insert(path);
-                    }
-                }
+                current_gen_paths.extend(pipeline::stampable_output_paths(&scaffold_files, &base_dir));
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
@@ -558,11 +545,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let stub_paths: std::collections::HashSet<PathBuf> = files
                     .iter()
-                    .flat_map(|(_, fs)| {
-                        fs.iter()
-                            .filter(|file| file.carries_alef_marker())
-                            .map(|file| base_dir.join(&file.path))
-                    })
+                    .flat_map(|(_, fs)| pipeline::stampable_output_paths(fs, &base_dir))
                     .collect();
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 pipeline::finalize_hashes_after_tree_format(&stub_paths, &base_dir, &sources_hash, &alef_toml_bytes)?;
@@ -611,15 +594,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
                 let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                 let count = pipeline::write_scaffold_files(&files, &base_dir)?;
-                let output_paths: Vec<PathBuf> = files
-                    .iter()
-                    .filter(|file| file.carries_alef_marker())
-                    .map(|file| base_dir.join(&file.path))
-                    .collect();
-                let scaffold_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
+                let scaffold_paths = pipeline::stampable_output_paths(&files, &base_dir);
                 pipeline::finalize_hashes(&scaffold_paths, &sources_hash, &alef_toml_bytes)?;
                 // The stage manifest passed to `write_stage_hash` is deliberately every path
-                // `pipeline::scaffold` returned, not `output_paths`'s marker-filtered subset.
+                // `pipeline::scaffold` returned, not `scaffold_paths`'s marker-filtered subset.
                 // `is_stage_cached`'s disk-presence check (`cache::outputs_exist`) only ever
                 // inspects paths recorded in that manifest, so a create-once seed file --
                 // `generated_header: false`, unmarked by design so a hand-grown suite is never
@@ -691,7 +669,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     .filter(|file| file.carries_alef_marker())
                     .map(|file| base_dir.join(&file.path))
                     .collect();
-                let readme_paths: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
+                let readme_paths = pipeline::stampable_output_paths(&files, &base_dir);
                 pipeline::finalize_hashes(&readme_paths, &sources_hash, &alef_toml_bytes)?;
                 cache::write_stage_hash(&resolved_cfg.name, "readme", &stage_hash, &output_paths)?;
                 grand_total += count;

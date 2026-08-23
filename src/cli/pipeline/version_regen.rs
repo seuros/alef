@@ -209,11 +209,7 @@ pub(super) fn regenerate_readmes(config: &ResolvedCrateConfig, config_path: &std
     let sources_hash = super::super::cache::sources_hash(&config.source_hash_paths())?;
     let alef_toml_bytes = super::super::cache::read_alef_toml_bytes(config_path);
     let count = super::generate::write_scaffold_files_with_overwrite(&readme_files, &base_dir, true)?;
-    let paths: std::collections::HashSet<std::path::PathBuf> = readme_files
-        .iter()
-        .filter(|file| file.carries_alef_marker())
-        .map(|file| base_dir.join(&file.path))
-        .collect();
+    let paths = super::generate::stampable_output_paths(&readme_files, &base_dir);
     super::generate::finalize_hashes(&paths, &sources_hash, &alef_toml_bytes)?;
     Ok(count)
 }
