@@ -54,6 +54,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reading its `.Count`, so a single snippet no longer contains both
   `result.Metadata.Headings!.Count` and `result.Metadata.Headings[0].Level` (`CS8602`).
 
+- **e2e/brew:** the generated `run_tests.sh` harness reported `PASS` when any assertion but the
+  last one failed. `run_test` invoked each test function as the condition of an `if`, which
+  disables `errexit` for the entire call, so a failing assertion's `return 1` no longer aborted
+  the function and the function's exit status was just its last command's. Assertion helpers now
+  record failures in a per-test counter that `run_test` consults alongside the exit status, and
+  the harness core is emitted from a Minijinja template. Treat every historical brew pass as
+  unverified. (#227)
+- **e2e/brew:** namespace-prefixed fixture fields produced jq paths that never matched the CLI
+  payload. Brew built its path from `FieldResolver::resolve`, which only applies aliases, so a
+  field like `batch.completed_count` — where `batch` is a virtual grouping label rather than a
+  JSON object — became `.batch.completed_count`, `null` against every real payload. Brew now
+  applies the same namespace stripping the C backend uses; genuinely nested paths whose first
+  segment is a declared result field are unchanged. (#228)
+- **Vendoring no longer strips a crate's inherited lint configuration.** `alef publish prepare`
+  (both `VendorMode::CoreOnly` and `VendorMode::Full`, the latter being R/CRAN's default) copied
+  the core crate out of its workspace and deleted its `[lints]\nworkspace = true` without
+  inlining anything, so the vendored crate compiled under a *different* lint configuration than
+  the sources it was copied from. The `[workspace.lints.rust]` `unexpected_cfgs` check-cfg
+  allowlist went with it, which is what declares the crate's own `#[cfg(...)]` gates as expected
+  cfg names — every gate in the vendored copy then became an `unexpected_cfgs` diagnostic. That
+  is silent in a default build and a hard error under the `RUSTFLAGS="-D warnings"` CI sets, so
+  the breakage was invisible to every local run and only ever surfaced in CI. Vendoring now
+  materializes the whole `[workspace.lints]` sub-tree into the vendored manifest verbatim; a
+  crate that spells out its own `[lints]` instead of inheriting is left untouched, and a
+  workspace that declares no lints still just has the inheritance marker removed.
+
 ### Added
 
 - `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
