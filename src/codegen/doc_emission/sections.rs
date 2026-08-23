@@ -17,17 +17,17 @@ pub struct RustdocSections {
 }
 
 /// Rustdoc section names that `docs::doc_cleaning::convert_doc_headings_to_bold` converts to an
-/// inline bold label (`**Note:**`) rather than a Markdown heading. [`RustdocSections`] has no
-/// dedicated field for these -- they carry prose only, no data any codegen path consumes
-/// structurally.
+/// inline bold label (`**Note:**`) rather than a Markdown heading. This is the single list both
+/// pipelines consult, so they cannot drift apart again.
 ///
-/// This is the single list both pipelines consult for these names. `parse_rustdoc_sections`
-/// must treat every name here as a section boundary of its own, even though it has nowhere to
-/// put the content: folding it into whichever section preceded it (its default behaviour for
-/// headings it doesn't recognise) would let that content resurface raw and unconverted inside
-/// e.g. the `example` field, alongside the bold label the docs pipeline already emitted for the
-/// same heading from the full doc string. That is alef #192: a `# Note` after `# Examples`
-/// rendered twice -- once correctly bolded, once leaked verbatim into the Example block. ~keep
+/// Ordering matters in `parse_rustdoc_sections`: the recognised-section match runs FIRST, so
+/// `errors`/`returns`/`panics`/`safety` are captured into their own [`RustdocSections`] field
+/// and never reach the drop branch below. Only `note`/`notes` -- which have no field -- do.
+/// Such a name must still end the current section rather than be folded into it (the default
+/// for unrecognised headings), or its prose resurfaces raw inside e.g. the `example` field
+/// alongside the bold label the docs pipeline already emitted for the same heading. That is
+/// alef #192: a `# Note` after `# Examples` rendered twice -- once bolded, once verbatim
+/// inside the Example block. ~keep
 pub const BOLD_LABEL_ONLY_SECTION_NAMES: &[&str] = &["errors", "returns", "panics", "safety", "notes", "note"];
 
 /// Parse a rustdoc string into [`RustdocSections`].
