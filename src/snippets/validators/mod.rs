@@ -28,6 +28,10 @@ use std::io::Read;
 use std::io::Write;
 
 #[cfg(test)]
+#[path = "dependency_error_classification_tests.rs"]
+mod dependency_error_classification_tests;
+
+#[cfg(test)]
 pub(crate) fn jvm_toolchain_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
