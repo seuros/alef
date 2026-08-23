@@ -1,4 +1,8 @@
+{% if is_adjacent %}
+/** Custom serializer for sealed interface with unwrapped variants. Emits serde's adjacently tagged shape: the discriminator under "{{ tag_field }}" and the whole payload under "{{ content_field }}". */
+{% else %}
 /** Custom serializer for sealed interface with unwrapped variants. Emits the discriminator tag alongside the inner record's fields (flat object). */
+{% endif %}
 class {{ class_name }}Serializer extends StdSerializer<{{ class_name }}> {
   private static final long serialVersionUID = 1L;
   /** ObjectMapper for serializing inner variant values. */
@@ -39,6 +43,12 @@ class {{ class_name }}Serializer extends StdSerializer<{{ class_name }}> {
 
     gen.writeStartObject();
     gen.writeStringField("{{ tag_field }}", tag);
+{% if is_adjacent %}
+    if (inner != null) {
+      gen.writeFieldName("{{ content_field }}");
+      gen.writeTree(MAPPER.valueToTree(inner));
+    }
+{% else %}
     if (inner != null) {
       com.fasterxml.jackson.databind.JsonNode tree = MAPPER.valueToTree(inner);
       if (tree.isObject()) {
@@ -52,6 +62,7 @@ class {{ class_name }}Serializer extends StdSerializer<{{ class_name }}> {
         }
       }
     }
+{% endif %}
     gen.writeEndObject();
   }
 }

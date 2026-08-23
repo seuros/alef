@@ -68,6 +68,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "sealed_union_serializer.jinja",
         include_str!("templates/sealed_union_serializer.jinja"),
     ),
+    (
+        "sealed_union_deserializer.jinja",
+        include_str!("templates/sealed_union_deserializer.jinja"),
+    ),
     ("visit_result.jinja", include_str!("templates/visit_result.jinja")),
     (
         "visitor_interface.jinja",

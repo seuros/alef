@@ -1,0 +1,75 @@
+/** Custom deserializer for sealed interface with unwrapped variants. */
+class {{ class_name }}Deserializer extends StdDeserializer<{{ class_name }}> {
+  private static final long serialVersionUID = 1L;
+
+  {{ class_name }}Deserializer() {
+    super({{ class_name }}.class);
+  }
+
+{% if is_adjacent and needs_content %}
+  /** Rejects an adjacently tagged document whose "{{ content_field }}" payload is absent. */
+  private static com.fasterxml.jackson.databind.JsonNode requireContent(
+      final JsonParser parser,
+      final com.fasterxml.jackson.databind.JsonNode contentNode,
+      final String tagValue)
+      throws java.io.IOException {
+    if (contentNode == null || contentNode.isNull()) {
+      throw new com.fasterxml.jackson.databind.JsonMappingException(
+          parser, "Missing '{{ content_field }}' payload for {{ class_name }} variant: " + tagValue);
+    }
+    return contentNode;
+  }
+
+{% endif %}
+  @Override
+  @SuppressWarnings("PMD.CyclomaticComplexity")
+  public {{ class_name }} deserialize(final JsonParser parser, final DeserializationContext ctx)
+      throws java.io.IOException {
+    final ObjectNode node = parser.getCodec().readTree(parser);
+    final com.fasterxml.jackson.databind.JsonNode tagNode = node.get("{{ tag_field }}");
+    if (tagNode == null || tagNode.isNull()) {
+      throw new com.fasterxml.jackson.databind.JsonMappingException(
+          parser, "Missing discriminator field: {{ tag_field }}");
+    }
+    final String tagValue = tagNode.asText();
+{% if is_adjacent %}
+    final com.fasterxml.jackson.databind.JsonNode contentNode = node.get("{{ content_field }}");
+{% else %}
+    node.remove("{{ tag_field }}");
+{% endif %}
+
+    return switch (tagValue) {
+{% for variant in variants %}
+{% if variant.is_unit %}
+      case "{{ variant.discriminator }}" -> new {{ class_name }}.{{ variant.name }}();
+{% elif is_adjacent %}
+{% if variant.is_tuple %}
+      case "{{ variant.discriminator }}" -> new {{ class_name }}.{{ variant.name }}(
+          ctx.readTreeAsValue(requireContent(parser, contentNode, tagValue), {{ variant.inner_type }}.class));
+{% else %}
+      case "{{ variant.discriminator }}" -> ctx.readTreeAsValue(
+          requireContent(parser, contentNode, tagValue), {{ class_name }}.{{ variant.name }}.class);
+{% endif %}
+{% elif variant.is_tuple %}
+{% if variant.inner_type == "String" %}
+      case "{{ variant.discriminator }}" -> new {{ class_name }}.{{ variant.name }}(node.toString());
+{% else %}
+      case "{{ variant.discriminator }}" -> new {{ class_name }}.{{ variant.name }}(ctx.readTreeAsValue(node, {{ variant.inner_type }}.class));
+{% endif %}
+{% else %}
+      case "{{ variant.discriminator }}" -> ctx.readTreeAsValue(node, {{ class_name }}.{{ variant.name }}.class);
+{% endif %}
+{% endfor %}
+      default -> {
+{% if excluded_variants %}
+        if ({% for discriminator in excluded_variants %}{% if not loop.first %} || {% endif %}tagValue.equals("{{ discriminator }}"){% endfor %}) {
+          throw new com.fasterxml.jackson.databind.JsonMappingException(
+              parser, "{{ class_name }} variant '" + tagValue + "' is not available in this binding");
+        }
+{% endif %}
+        throw new com.fasterxml.jackson.databind.JsonMappingException(
+            parser, "Unknown {{ class_name }} discriminator: " + tagValue);
+      }
+    };
+  }
+}
