@@ -58,6 +58,29 @@ fn an_absent_program_is_classified_absent_even_in_a_spaced_directory() {
     );
 }
 
+/// The same defect on the one path `run_in_dir` cannot cover: a user `format` override is a
+/// shell line, so its `{dir}` placeholder must expand to something `sh` can `cd` into. The
+/// Windows form cannot exist on Unix, so the transform is asserted directly. ~keep
+#[test]
+fn a_verbatim_windows_path_is_rewritten_into_a_form_a_posix_shell_can_cd_into() {
+    assert_eq!(
+        posix_shell_path(r"\\?\C:\Users\runner\AppData\Local\Temp\e2e-out\php"),
+        "C:/Users/runner/AppData/Local/Temp/e2e-out/php",
+        "the extended-length prefix must be dropped and separators flipped, or every `\\` in \
+         the path is eaten as a shell escape and `cd` fails before the formatter runs"
+    );
+    assert_eq!(
+        posix_shell_path(r"\\?\UNC\server\share\e2e-out\php"),
+        "//server/share/e2e-out/php",
+        "a verbatim UNC path must round-trip back to its double-slash share form"
+    );
+    assert_eq!(
+        posix_shell_path("/tmp/e2e-out/php"),
+        "/tmp/e2e-out/php",
+        "a path that is already POSIX must pass through untouched"
+    );
+}
+
 /// Build an `E2eConfig` whose output directory is `out`, defaults otherwise.
 fn e2e_config_for(out: &Path) -> E2eConfig {
     E2eConfig {

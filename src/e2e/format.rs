@@ -162,7 +162,7 @@ fn format_language(
 ) -> anyhow::Result<()> {
     let configured_dir = PathBuf::from(format!("{}/{}", e2e_config.effective_output(), lang));
     let dir_path = resolve_formatter_directory(&configured_dir, current_dir)?;
-    let dir = dir_path.to_string_lossy();
+    let dir = shell_directory(&dir_path);
 
     // User override takes precedence and replaces the poly pass entirely. Its
     // contents are opaque to us, so registry-mode failures are deferred.
@@ -285,6 +285,35 @@ pub fn run_formatters_for_cached_paths(
 /// The status a POSIX shell exits with when the command it was asked to run does not
 /// exist. ~keep
 const SHELL_COMMAND_NOT_FOUND: i32 = 127;
+
+/// Render a canonicalized directory for interpolation into the `{dir}` placeholder of a
+/// user `format` override, which [`run_shell`] hands to `sh -c`.
+///
+/// [`run_in_dir`] escapes this problem entirely by never going through a shell; a user
+/// override *is* a shell line, so the path itself has to be shell-usable. On Windows
+/// `canonicalize` returns the extended-length form `\\?\C:\...`, and a POSIX shell reads
+/// every `\` as an escape -- `cd \\?\C:\Users\...` becomes `cd \?C:Users...`, which fails
+/// before the formatter is ever reached. The shell then exits 1, and 1 is not
+/// [`SHELL_COMMAND_NOT_FOUND`], so an absent formatter arrived as "the formatter ran and
+/// rejected the code" and killed the run. ~keep
+fn shell_directory(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        posix_shell_path(&text)
+    } else {
+        text.into_owned()
+    }
+}
+
+/// Strip Windows' extended-length prefix and switch to forward slashes, the drive-letter
+/// form `sh` accepts. Kept free of `cfg` so it is unit-testable on every platform.
+fn posix_shell_path(text: &str) -> String {
+    let stripped = match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(text).to_owned(),
+    };
+    stripped.replace('\\', "/")
+}
 
 /// A shell-invoked formatter that did not succeed, and whether the executable was
 /// even there.

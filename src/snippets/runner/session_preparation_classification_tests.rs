@@ -142,9 +142,15 @@ fn sleep_hook(seconds: u64) -> String {
     format!("sleep {seconds}")
 }
 
+/// `timeout /t` refuses to run at all when stdin is not a console -- `run_command` pipes the
+/// child's output and CI hands the test binary a redirected stdin, so it exited immediately
+/// with "ERROR: Input redirection is not supported" and the hook never outlived the timeout
+/// this fixture exists to trigger. `ping` against loopback is the console-free cmd sleep: one
+/// packet goes out immediately and each subsequent one waits a second, so `seconds + 1`
+/// packets take about `seconds`, whether or not the pings are answered. ~keep
 #[cfg(windows)]
 fn sleep_hook(seconds: u64) -> String {
-    format!("timeout /t {seconds}")
+    format!("ping -n {} 127.0.0.1", seconds + 1)
 }
 
 /// Case (c), parallel/batched dispatch: `group_batchable_snippets` in `batch.rs` is the path a

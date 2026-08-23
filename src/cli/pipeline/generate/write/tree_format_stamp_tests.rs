@@ -23,8 +23,13 @@ fn inputs_hash() -> String {
 }
 
 /// Write an alef-marked Rust file, creating parents. Returns the absolute path.
+///
+/// `relative` is joined one component at a time: `Path::join("a/b")` keeps the literal `/`
+/// inside a single Windows component, so the fixture path would stringify as
+/// `...\crates/demo-py/src\lib.rs` while `verify_walk` reports the all-`\` form, and the
+/// stale-path assertions compare `String`s. ~keep
 fn write_marked(root: &Path, relative: &str, body: &str) -> PathBuf {
-    let path = root.join(relative);
+    let path = relative.split('/').fold(root.to_path_buf(), |acc, part| acc.join(part));
     std::fs::create_dir_all(path.parent().expect("relative path has a parent")).expect("create parent dirs");
     let content = format!("{}{body}", hash::header(hash::CommentStyle::DoubleSlash));
     std::fs::write(&path, content).expect("write marked file");

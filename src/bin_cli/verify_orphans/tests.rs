@@ -1,6 +1,18 @@
 use super::find_orphaned_generated_files;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Join a `/`-separated relative path onto `root` one component at a time.
+///
+/// `Path::join("a/b")` keeps the literal `/` inside a single Windows component, so the
+/// fixture path stringifies as `...\packages/java/dev/demo\File.java` while the walk under
+/// test yields the all-`\` form. `PathBuf` comparison hides that (Windows `Path` treats both
+/// separators as separators); the `String` comparison these assertions need does not. ~keep
+fn join_components(root: &Path, relative: &str) -> PathBuf {
+    relative
+        .split('/')
+        .fold(root.to_path_buf(), |path, part| path.join(part))
+}
 
 fn marked_java_content() -> String {
     let header = crate::core::hash::header(crate::core::hash::CommentStyle::DoubleSlash);
@@ -14,7 +26,7 @@ fn marked_java_content() -> String {
 #[test]
 fn reports_a_marked_file_the_current_run_no_longer_produces() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let package_dir = dir.path().join("packages/java/dev/demo");
+    let package_dir = join_components(dir.path(), "packages/java/dev/demo");
     std::fs::create_dir_all(&package_dir).expect("package dir");
     let dropped = package_dir.join("VisitorBridge.java");
     std::fs::write(&dropped, marked_java_content()).expect("write dropped file");
@@ -34,7 +46,7 @@ fn reports_a_marked_file_the_current_run_no_longer_produces() {
 #[test]
 fn does_not_report_a_marked_file_still_in_the_managed_path_set() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let package_dir = dir.path().join("packages/java/dev/demo");
+    let package_dir = join_components(dir.path(), "packages/java/dev/demo");
     std::fs::create_dir_all(&package_dir).expect("package dir");
     let current = package_dir.join("Bridge.java");
     std::fs::write(&current, marked_java_content()).expect("write current file");
@@ -54,7 +66,7 @@ fn does_not_report_a_marked_file_still_in_the_managed_path_set() {
 #[test]
 fn does_not_report_an_unmarked_user_owned_file_in_a_generated_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let package_dir = dir.path().join("packages/java/dev/demo");
+    let package_dir = join_components(dir.path(), "packages/java/dev/demo");
     std::fs::create_dir_all(&package_dir).expect("package dir");
     let current = package_dir.join("Bridge.java");
     std::fs::write(&current, marked_java_content()).expect("write current file");
@@ -98,7 +110,7 @@ fn does_not_report_the_rust_toolchain_create_once_seed() {
 #[test]
 fn does_not_report_a_file_owned_by_a_different_crate_once_paths_are_unioned() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let package_dir = dir.path().join("packages/java/dev/demo");
+    let package_dir = join_components(dir.path(), "packages/java/dev/demo");
     std::fs::create_dir_all(&package_dir).expect("package dir");
     let owned_by_crate_b = package_dir.join("CrateBOnly.java");
     std::fs::write(&owned_by_crate_b, marked_java_content()).expect("write file");
