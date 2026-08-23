@@ -98,6 +98,10 @@ pub(crate) fn build_with_environment(
     // that had nothing to do with it. The run still fails overall, but only
     // after every backend got a chance to run and report its own outcome.
     let mut failures: Vec<String> = Vec::new();
+    // Populated by `record_post_build_outcome` -- see its doc comment for the discard bug this
+    // closes. Non-fatal (never folded into `failures`), but named in the summary log below so a
+    // fallback to stale committed output is never silent. ~keep
+    let mut skipped_post_build_tools: Vec<String> = Vec::new();
 
     for &lang in &rust_langs {
         let result = observability::observe(lang, || {
@@ -207,9 +211,12 @@ pub(crate) fn build_with_environment(
                 if !stderr.is_empty() {
                     debug!("[{lang} build] {stderr}");
                 }
-                if let Err(err) = run_post_build(*lang, bc, config, &base_dir) {
-                    failures.push(format!("{lang}: post-build failed: {err:#}"));
-                }
+                record_post_build_outcome(
+                    *lang,
+                    run_post_build(*lang, bc, config, &base_dir),
+                    &mut failures,
+                    &mut skipped_post_build_tools,
+                );
             }
             Err(err) => failures.push(format!("{lang}: {err:#}")),
         }
@@ -276,9 +283,12 @@ pub(crate) fn build_with_environment(
                 if !stderr.is_empty() {
                     debug!("[{lang} build] {stderr}");
                 }
-                if let Err(err) = run_post_build(*lang, bc, config, &base_dir) {
-                    failures.push(format!("{lang}: post-build failed: {err:#}"));
-                }
+                record_post_build_outcome(
+                    *lang,
+                    run_post_build(*lang, bc, config, &base_dir),
+                    &mut failures,
+                    &mut skipped_post_build_tools,
+                );
             }
             Err(err) => failures.push(format!("{lang}: {err:#}")),
         }
@@ -308,9 +318,11 @@ pub(crate) fn build_with_environment(
     // that subtraction could under-report. Report what's exact instead. ~keep
     info!(
         "Backend build summary: {total_announced} announced, {skipped_count} skipped, \
-         {} blocked on unmet preconditions, {dispatched_count} dispatched, {} language-level failure(s)",
+         {} blocked on unmet preconditions, {dispatched_count} dispatched, {} language-level failure(s), \
+         {} post-build tool(s) skipped (not on PATH, falling back to committed output)",
         unmet.len(),
-        failures.len()
+        failures.len(),
+        skipped_post_build_tools.len()
     );
 
     build_outcome(&failures, &unmet)
@@ -788,6 +800,40 @@ pub struct PostBuildOutcome {
     pub skipped_missing_tools: Vec<String>,
 }
 
+/// Fold one language's `run_post_build` result into `build_with_environment`'s shared
+/// `failures`/`skipped_post_build_tools` buckets.
+///
+/// Before this helper existed, both call sites in `build_with_environment` matched only the
+/// `Err` arm of `run_post_build` (`if let Err(err) = run_post_build(...) { failures.push(...) }`)
+/// and threw the `Ok` arm away wholesale -- including `PostBuildOutcome::skipped_missing_tools`.
+/// That made `alef build` report a clean success for a language whose post-build tool (e.g.
+/// `flutter_rust_bridge_codegen`) was missing from `PATH` and silently fell back to stale
+/// committed generated output, with zero warning and zero exit-code signal: `alef generate`/
+/// `alef all` already surfaced this via `bin_cli::helpers::post_build::run_resolved_post_builds`,
+/// but `alef build` has its own independent call sites and inherited none of that. Kept
+/// non-fatal, matching `run_run_command`'s doc comment and `BackendReadiness::ToolchainMissing`'s
+/// reasoning just above `build_outcome`: a missing toolchain is a statement about the machine,
+/// not the checkout, so it stays a warning rather than a hard error. ~keep
+fn record_post_build_outcome(
+    lang: Language,
+    result: anyhow::Result<PostBuildOutcome>,
+    failures: &mut Vec<String>,
+    skipped_post_build_tools: &mut Vec<String>,
+) {
+    match result {
+        Ok(outcome) => {
+            for tool in outcome.skipped_missing_tools {
+                warn!(
+                    "[{lang}] post-build completed but skipped '{tool}' (not on PATH) -- falling back to \
+                     committed generated files"
+                );
+                skipped_post_build_tools.push(format!("{lang}: {tool}"));
+            }
+        }
+        Err(err) => failures.push(format!("{lang}: post-build failed: {err:#}")),
+    }
+}
+
 /// Run post-build processing steps (e.g., patching .d.ts files).
 pub fn run_post_build(
     lang: Language,
@@ -1185,6 +1231,77 @@ mod readiness_tests {
 
         assert!(message.contains("backend build failed for 1 language(s)"), "{message}");
         assert!(message.contains("1 language(s) were not built"), "{message}");
+    }
+}
+
+#[cfg(test)]
+mod record_post_build_outcome_tests {
+    use super::*;
+
+    /// The regression this fix closes: `run_post_build`'s `Ok` arm carries
+    /// `skipped_missing_tools`, and before `record_post_build_outcome` existed, both call sites
+    /// in `build_with_environment` matched only `Err` and discarded the `Ok` arm wholesale --
+    /// `alef build` reported a clean success while silently falling back to stale committed
+    /// output for a language whose post-build tool was missing from `PATH`. This proves the
+    /// caller can now tell the difference: a skipped tool must land in
+    /// `skipped_post_build_tools`, not vanish. ~keep
+    #[test]
+    fn a_skipped_tool_is_recorded_not_discarded() {
+        let mut failures = Vec::new();
+        let mut skipped_post_build_tools = Vec::new();
+
+        record_post_build_outcome(
+            Language::Dart,
+            Ok(PostBuildOutcome {
+                skipped_missing_tools: vec!["flutter_rust_bridge_codegen".to_string()],
+            }),
+            &mut failures,
+            &mut skipped_post_build_tools,
+        );
+
+        assert!(
+            failures.is_empty(),
+            "a skipped tool is non-fatal, not a build failure: {failures:?}"
+        );
+        assert_eq!(
+            skipped_post_build_tools,
+            vec!["dart: flutter_rust_bridge_codegen".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_clean_post_build_records_nothing() {
+        let mut failures = Vec::new();
+        let mut skipped_post_build_tools = Vec::new();
+
+        record_post_build_outcome(
+            Language::Dart,
+            Ok(PostBuildOutcome::default()),
+            &mut failures,
+            &mut skipped_post_build_tools,
+        );
+
+        assert!(failures.is_empty());
+        assert!(skipped_post_build_tools.is_empty());
+    }
+
+    /// The control: a genuine post-build failure must still be fatal, not reclassified as a
+    /// skip. ~keep
+    #[test]
+    fn a_genuine_post_build_error_still_fails() {
+        let mut failures = Vec::new();
+        let mut skipped_post_build_tools = Vec::new();
+
+        record_post_build_outcome(
+            Language::Dart,
+            Err(anyhow::anyhow!("patch target missing")),
+            &mut failures,
+            &mut skipped_post_build_tools,
+        );
+
+        assert_eq!(failures.len(), 1);
+        assert!(failures[0].contains("patch target missing"), "{failures:?}");
+        assert!(skipped_post_build_tools.is_empty());
     }
 }
 
