@@ -33,6 +33,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header, so it used the 60 req/hour anonymous limit shared across the runner IP pool and got
   HTTP 403s. It now sends `GITHUB_TOKEN` (falling back to `GH_TOKEN`); an empty value falls
   through rather than forcing an anonymous request.
+- **`alef all` reports every stage failure instead of aborting on the first.** A pre-flight
+  snippet-coverage failure aborted the run before the per-crate loop started (nothing was written
+  at all), and one crate's post-build failure returned immediately — so stubs, public-API, e2e,
+  test-apps, README, and docs never ran for that crate or any later one. Failures are now
+  accumulated: the run still fails, but it names every failure rather than the first. A single
+  failure still returns its original error unchanged, so existing `.context()` chains are intact.
+- **Strict snippet validation no longer fails on a missing build artifact.** `unresolved_dependency`
+  is set only when a real toolchain ran and reported a missing import or link target — and neither
+  `alef all` nor `alef docs` builds per-language artifacts in the same invocation, so it was
+  failing on a precondition it structurally cannot satisfy. A toolchain genuinely absent from
+  `PATH` still fails strict mode, and every unavailable result is still reported via `tracing::warn!`
+  with its per-snippet attribution.
+- **kotlin_android/JNI: a function excluded only from the JNI shim no longer drops the destructor
+  for the type it returns.** `[crates.jni].exclude_functions` tells the JNI backend to skip
+  generating one function's own native shim; it does not tell Kotlin to stop calling that function.
+  The destructor emitter was narrowing reachability by that JNI-only list, so Kotlin declared and
+  called a `nativeFree<Type>` the JNI crate never implemented — an unresolved symbol that stopped
+  the AAR building. The JNI shim generator now computes reachability with the same
+  `kotlin_visible_functions`/`handle_only_type_names` predicate the Kotlin emitters use, so the
+  declaration, its call site, and its native implementation cannot name different sets.
 - **A failed registry pre-check no longer turns a successful publish run red.** The three
   `check-*` steps in `publish.yaml` are advisory — every downstream job already runs under
   `always()` and treats a missing output as "not published yet" — so they now carry
