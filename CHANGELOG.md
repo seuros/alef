@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.0] - 2026-08-23
+
 ### Fixed
 
 - **Dart bridge-coverage no longer reports a present function as missing when `dartfmt` wraps its
