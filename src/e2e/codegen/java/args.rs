@@ -159,8 +159,8 @@ pub(super) fn build_args_and_setup(
                 let name = &arg.name;
                 if let Some(config_type) = resolve_handle_config_type(arg, options_type, type_defs) {
                     setup_lines.push(format!(
-                        "var {name}Config = MAPPER.readValue(\"{}\", {config_type}.class);",
-                        escape_java(&json_str),
+                        "var {name}Config = MAPPER.readValue({}, {config_type}.class);",
+                        super::values::java_string_literal(&json_str),
                     ));
                     setup_lines.push(format!(
                         "var {} = {class_name}.{constructor_name}({name}Config);",
@@ -443,8 +443,8 @@ fn ir_typed_java_expression(
     if type_defs.iter().any(|type_def| &type_def.name == declared) && value.is_object() {
         let json = serde_json::to_string(value).unwrap_or_default();
         return Some(format!(
-            "{qualifier}JsonUtil.fromJson(\"{}\", {qualifier}{declared}.class)",
-            escape_java(&json)
+            "{qualifier}JsonUtil.fromJson({}, {qualifier}{declared}.class)",
+            super::values::java_string_literal(&json)
         ));
     }
     None

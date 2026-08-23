@@ -144,8 +144,11 @@ impl client::TestClientRenderer for JavaTestClientRenderer {
                 serde_json::Value::String(s) if is_raw_text_content_type => s.clone(),
                 other => serde_json::to_string(other).unwrap_or_default(),
             };
-            let escaped = escape_java(&body_str);
-            format!("java.net.http.HttpRequest.BodyPublishers.ofString(\"{escaped}\")")
+            // A full literal expression (see `values::java_string_literal`): quoted, or
+            // `+`-chunked when the fixture body is long enough to threaten the JVM's
+            // 65535-byte constant cap.
+            let literal = super::values::java_string_literal(&body_str);
+            format!("java.net.http.HttpRequest.BodyPublishers.ofString({literal})")
         } else {
             "java.net.http.HttpRequest.BodyPublishers.noBody()".to_string()
         };

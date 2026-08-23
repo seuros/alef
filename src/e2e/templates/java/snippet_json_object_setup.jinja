@@ -3,7 +3,7 @@ var {{ variable }}File{{ index }} = java.util.Base64.getEncoder().encodeToString
     java.nio.file.Files.readAllBytes(java.nio.file.Path.of("{{ path }}"))
 );
 {% endfor %}
-var {{ variable }}Json = "{{ json }}";
+var {{ variable }}Json = {{ json_literal }};
 {% for index, marker, path in file_reads %}
 {{ variable }}Json = {{ variable }}Json.replace("{{ marker }}", {{ variable }}File{{ index }});
 {% endfor %}

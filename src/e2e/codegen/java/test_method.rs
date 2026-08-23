@@ -265,7 +265,10 @@ pub(super) fn render_test_method(
                         // (matches Rust's serde default), so pass through fixture keys as-is.
                         let normalized = super::super::transform_json_keys_for_language(val, "snake_case");
                         let json_str = serde_json::to_string(&normalized).unwrap_or_default();
-                        let escaped = escape_java(&json_str);
+                        // A full literal expression -- quoted, or `+`-chunked when `json_str`
+                        // is long enough to threaten the JVM's 65535-byte constant cap -- not
+                        // just escaped content. See `values::java_string_literal`.
+                        let literal = super::values::java_string_literal(&json_str);
                         let var_name = &arg.name;
                         if crate::e2e::codegen::value_contains_mock_url_placeholder(&normalized) {
                             let env_key = crate::e2e::codegen::mock_url_env_key(&fixture.id);
@@ -274,7 +277,7 @@ pub(super) fn render_test_method(
                                 fixture_id = fixture.id,
                             ));
                             builder_expressions.push_str(&format!(
-                                "        String {var_name}Json = \"{escaped}\".replace(\"{}\", {var_name}MockBaseUrl);\n",
+                                "        String {var_name}Json = {literal}.replace(\"{}\", {var_name}MockBaseUrl);\n",
                                 crate::e2e::codegen::MOCK_URL_PLACEHOLDER
                             ));
                             builder_expressions.push_str(&format!(
@@ -282,7 +285,7 @@ pub(super) fn render_test_method(
                             ));
                         } else {
                             builder_expressions.push_str(&format!(
-                                "        var {var_name} = JsonUtil.fromJson(\"{escaped}\", {opts_type}.class);\n",
+                                "        var {var_name} = JsonUtil.fromJson({literal}, {opts_type}.class);\n",
                             ));
                         }
                     } else if let Some(obj) = val.as_object() {
