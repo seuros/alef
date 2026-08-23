@@ -210,14 +210,7 @@ enum AdjacentSupport {
 const ADJACENT_TAGGING_SUPPORT: &[(&str, AdjacentSupport)] = &[
     ("swift", AdjacentSupport::Correct),
     ("go", AdjacentSupport::Correct),
-    (
-        "java",
-        AdjacentSupport::KnownDivergent(
-            "backends::java::gen_bindings::types::serializers never reads EnumDef::serde_content, \
-             so it writes the payload's fields flat beside the tag and drops a scalar payload \
-             entirely",
-        ),
-    ),
+    ("java", AdjacentSupport::Correct),
     (
         "csharp",
         AdjacentSupport::KnownDivergent(
@@ -414,5 +407,86 @@ fn support_table_matches_what_each_backend_actually_emits() {
                  start guarding it. Recorded divergence: {where_}"
             ),
         }
+    }
+}
+
+fn java_union_output() -> String {
+    generate(&JavaBackend, &plain_api(), &ResolvedCrateConfig::default())
+}
+
+/// Isolate the body of the generated Jackson serializer so an assertion cannot be satisfied by a
+/// matching literal elsewhere in the file.
+fn java_serialize_body(java: &str) -> String {
+    let start = java
+        .find(&format!("public void serialize({ENUM_NAME} value"))
+        .expect("Java emits a Jackson serializer for the sealed union");
+    let rest = &java[start..];
+    let end = rest.find("\n  }\n").expect("the serialize method is closed");
+    rest[..end].to_string()
+}
+
+/// The JSON the generated Java serializer writes for each variant, reconstructed from the emitted
+/// code rather than restated: the `instanceof` chain supplies each variant's tag and whether it
+/// sets a payload, and the writer block below it supplies where that payload lands.
+fn java_emitted_wire_forms(java: &str) -> Vec<String> {
+    let body = java_serialize_body(java);
+    assert!(
+        body.contains(&format!("gen.writeStringField(\"{TAG_KEY}\", tag);")),
+        "the serializer must write the variant tag under serde's tag key:\n{body}"
+    );
+    assert!(
+        body.contains(&format!("gen.writeFieldName(\"{CONTENT_KEY}\");"))
+            && body.contains("gen.writeTree(MAPPER.valueToTree(inner));"),
+        "the serializer must write the payload whole under serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains("isObject()"),
+        "the payload must not be written only when it happens to be a JSON object — a newtype \
+         variant hands the serializer a bare scalar, and gating on isObject() discards it \
+         silently:\n{body}"
+    );
+    let payload_json = serde_json::to_string(SAMPLE_PAYLOAD).expect("the string payload serializes");
+    body.split("tag = \"")
+        .skip(1)
+        .map(|chunk| {
+            let (discriminator, rest) = chunk.split_once('"').expect("each tag assignment is a closed literal");
+            if rest.contains("inner = null;") {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\"}}")
+            } else {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\",\"{CONTENT_KEY}\":{payload_json}}}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn java_serializer_emits_exactly_what_serde_writes() {
+    let emitted = java_emitted_wire_forms(&java_union_output());
+    assert_eq!(
+        emitted,
+        serde_wire_forms(),
+        "the generated Jackson serializer must produce serde's adjacent wire form for every \
+         variant; flattening the payload beside the tag is serde's *internal* form, which Rust \
+         rejects, and a scalar payload has no fields to flatten so it was dropped outright"
+    );
+}
+
+#[test]
+fn java_deserializer_reads_the_payload_from_serdes_content_key() {
+    let java = java_union_output();
+    assert!(
+        java.contains(&format!("node.get(\"{CONTENT_KEY}\")")),
+        "the deserializer must read the payload from serde's content key:\n{java}"
+    );
+    assert!(
+        !java.contains(&format!("node.remove(\"{TAG_KEY}\")")),
+        "stripping the tag and reading the remainder as the payload is serde's *internal* form; \
+         an adjacently tagged document keeps its payload under the content key:\n{java}"
+    );
+    for tag in serde_variant_tags() {
+        assert!(
+            java.contains(&format!("case \"{tag}\" ->")),
+            "the deserializer must dispatch on serde's variant tag {tag:?}:\n{java}"
+        );
     }
 }
