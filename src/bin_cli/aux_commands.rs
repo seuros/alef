@@ -687,6 +687,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     Ok(None)
                 }
                 TestAppsAction::Run { lang } => {
+                    let mut ran_any = false;
                     for e2e_crate in &crates_to_process {
                         let Some(this_e2e_config) = e2e_crate.e2e.as_ref() else {
                             continue;
@@ -706,9 +707,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         if names.is_empty() {
                             continue;
                         }
+                        ran_any = true;
                         tracing::info!("Running test apps for: {}", names.join(", "));
                         pipeline::test_apps_run(e2e_crate, config_path, &names)?;
                     }
+                    ensure_requested_test_app_targets_ran(lang.as_deref(), ran_any)?;
                     Ok(None)
                 }
             }
@@ -738,6 +741,35 @@ fn e2e_stage_cache_key(registry: bool, lang: Option<&[String]>) -> String {
         .map(|languages| languages.join("-"))
         .unwrap_or_else(|| "all".to_string());
     format!("{stage}-{selector}")
+}
+
+/// `alef test-apps run`'s "did the requested targets actually run" gate.
+///
+/// `TestAppsAction::Run`'s per-crate loop silently `continue`s whenever a crate's matched
+/// `names` is empty, then falls through to `Ok(None)` -- exit 0 with no distinct signal -- once
+/// every crate has been visited. Before this gate existed, a mistyped or stale `--lang` filter
+/// (e.g. `--lang python` after a crate's `[e2e].languages` dropped python) matched nothing in
+/// every crate and reported the identical clean exit as a run that installed and exercised every
+/// requested package. `alef test-apps run` exists specifically to verify a release end-to-end
+/// (issue #87) -- the same shape as the tslp incident this fix is named for, where every publish
+/// job was skipped and the run still reported success. Mirrors
+/// `cli::pipeline::commands::test::ensure_requested_suites_will_run`'s semantics: an *explicit*
+/// `--lang` request that matched nothing is fatal. `lang: None` matching nothing is left alone --
+/// that means no crate in this run has any `[e2e].languages` configured at all, which is this
+/// checkout's own declared configuration rather than an unfulfilled request, so it stays a
+/// silent no-op exactly like it did before this fix. ~keep
+fn ensure_requested_test_app_targets_ran(lang_filter: Option<&[String]>, ran_any: bool) -> Result<()> {
+    if ran_any {
+        return Ok(());
+    }
+    let Some(filter) = lang_filter else {
+        return Ok(());
+    };
+    anyhow::bail!(
+        "requested test-app target(s) {} matched no configured `[e2e].languages` in any processed crate -- check \
+         for a typo, or that the target is actually enabled for this crate",
+        filter.join(", ")
+    );
 }
 
 fn write_snippet_migration_report(
@@ -815,5 +847,34 @@ mod tests {
             e2e_stage_cache_key(false, Some(&python)),
             e2e_stage_cache_key(false, Some(&node))
         );
+    }
+
+    /// The regression this fix closes: before `ensure_requested_test_app_targets_ran` existed,
+    /// `TestAppsAction::Run`'s loop silently `continue`d past every crate whose matched `names`
+    /// was empty and fell through to `Ok(None)` -- an explicit `--lang` filter that matched
+    /// nothing anywhere reported the identical clean exit as a run that actually installed and
+    /// exercised the requested package(s). This proves the caller can now tell the difference.
+    #[test]
+    fn an_explicit_lang_filter_that_matched_nothing_is_fatal() {
+        let requested = vec!["python".to_string()];
+
+        let error = ensure_requested_test_app_targets_ran(Some(&requested), false)
+            .expect_err("an explicit --lang filter that matched nothing anywhere must not exit clean");
+
+        assert!(error.to_string().contains("python"), "{error}");
+    }
+
+    #[test]
+    fn an_explicit_lang_filter_that_matched_something_is_fine() {
+        assert!(ensure_requested_test_app_targets_ran(Some(&["python".to_string()]), true).is_ok());
+    }
+
+    /// The control: with no `--lang` filter, `ran_any == false` means no crate in this run has
+    /// any `[e2e].languages` configured at all -- this checkout's own declared configuration,
+    /// not an unfulfilled request -- so it must stay non-fatal exactly like it did before this
+    /// fix. ~keep
+    #[test]
+    fn no_lang_filter_and_nothing_configured_stays_non_fatal() {
+        assert!(ensure_requested_test_app_targets_ran(None, false).is_ok());
     }
 }
