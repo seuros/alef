@@ -78,6 +78,33 @@ pub(crate) fn boxes_to_carry_literal_default(ty: &TypeRef, typed_default: Option
     java_literal_default(ty, typed_default).is_some()
 }
 
+/// The Java empty-collection literal that a non-optional `Vec`/`Map` field must fall back to when
+/// `#[serde(default, skip_serializing_if = "...")]` lets the wire key go missing, or `None` when
+/// the field does not qualify.
+///
+/// `skip_serializing_if` on a collection guarantees the JSON key is absent when the collection is
+/// empty, so any deserialization path that binds straight onto a constructor parameter (a record's
+/// canonical/compact constructor, or a builder's setter called with an explicit JSON `null`) sees
+/// `null` for a Rust `Vec<T>`/`HashMap<K, V>` that itself is never null. `builders.rs`'s eager
+/// field initializer and `records.rs`'s "must this component be `@Nullable`" decision and compact
+/// constructor restore all have to agree on this same value, or the record ends up `@Nullable`
+/// over a component the compact constructor never actually lets be null (or vice versa) — this is
+/// the single place that decision is made. ~keep
+pub(crate) fn serde_default_collection_literal(
+    ty: &TypeRef,
+    has_serde_default: bool,
+    serde_skip_serializing_if: bool,
+) -> Option<&'static str> {
+    if !has_serde_default || !serde_skip_serializing_if {
+        return None;
+    }
+    match ty {
+        TypeRef::Vec(_) => Some("List.of()"),
+        TypeRef::Map(_, _) => Some("Map.of()"),
+        _ => None,
+    }
+}
+
 /// Names that conflict with methods on `java.lang.Object` and are therefore
 /// illegal as record component names or method names in generated Java code.
 const JAVA_OBJECT_METHOD_NAMES: &[&str] = &[

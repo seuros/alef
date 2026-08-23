@@ -425,6 +425,44 @@ fn serde_default_marker_collection_field_without_skip_serializing_if_stays_nulla
     );
 }
 
+/// The record-component half of the same defect. The builder already builds
+/// `List.of()` for a `#[serde(default, skip_serializing_if = "Vec::is_empty")]` field (see the
+/// test above), but the record component itself was independently marked `@Nullable` because
+/// `records.rs` derives "must this be nullable" from `has_serde_default` alone, with no knowledge
+/// of the builder's eager default. `skip_serializing_if` guarantees the wire key is absent for an
+/// empty collection, so Jackson passes `null` for that constructor parameter on direct (no
+/// builder) record deserialization — the exact same field that can never actually be `null` (Rust
+/// `Vec<T>` is not `Option<Vec<T>>`) gets `@Nullable` on one emission path and a non-null eager
+/// default on the other. The fix must keep the component `@Nullable`-free by normalizing `null` to
+/// the same `List.of()` literal in the compact constructor, so the "cannot be null" claim implied
+/// by dropping `@Nullable` is actually true.
+#[test]
+fn serde_default_marker_collection_field_record_component_is_not_nullable() {
+    let mut tags_field = impl_default_field("tags", TypeRef::Vec(Box::new(TypeRef::String)), DefaultValue::Empty);
+    tags_field.typed_default = None;
+    tags_field.default = Some("/* serde(default) */".to_string());
+    tags_field.serde_skip_serializing_if = true;
+    let typ = impl_default_record(vec![tags_field]);
+
+    let out = render_impl_default_record(&typ);
+
+    let record_line = out
+        .lines()
+        .find(|line| line.contains("public record HeuristicsConfig"))
+        .unwrap_or_else(|| panic!("no record declaration line in generated output:\n{out}"));
+    assert!(
+        !record_line.contains("@Nullable"),
+        "a field whose builder eagerly defaults to a non-null value must not carry @Nullable on \
+         the record component:\n{record_line}"
+    );
+    assert!(
+        out.contains("tags == null") && out.contains("List.of()"),
+        "the compact constructor must normalize a null argument to the same empty-collection \
+         default the builder uses, since that normalization is what makes dropping @Nullable \
+         correct:\n{out}"
+    );
+}
+
 /// Negative control, scalar case: `Empty` on a primitive must stay unboxed at the Java type-zero,
 /// the same outcome `defaults_equal_to_the_java_type_zero_stay_unboxed` pins for an explicit
 /// zero-valued literal — `Empty` is the variant real fixtures actually carry for this case.

@@ -8,6 +8,7 @@ use ahash::AHashSet;
 use super::shared::{is_options_field_bridge, options_field_bridge_trait_name, resolve_field_type};
 use crate::backends::java::gen_bindings::helpers::{
     boxes_to_carry_literal_default, format_optional_value, is_serde_default_marker, safe_java_field_name,
+    serde_default_collection_literal,
 };
 
 pub(super) const BUILDER_AUTO_THRESHOLD: usize = 8;
@@ -219,12 +220,16 @@ pub(super) fn gen_builder_nested_class(
                     // every other `#[serde(default)]` field (see `is_serde_default_marker`'s
                     // doc). Applying `List.of()`/`Map.of()` unconditionally would silently ship a
                     // non-null value for a field callers never set, which
-                    // `@JsonInclude(NON_ABSENT)` would then never drop from the wire. ~keep
-                    match &field.ty {
-                        TypeRef::Vec(_) => "List.of()".to_string(),
-                        TypeRef::Map(_, _) => "Map.of()".to_string(),
-                        _ => "null".to_string(),
-                    }
+                    // `@JsonInclude(NON_ABSENT)` would then never drop from the wire.
+                    //
+                    // Delegates to `serde_default_collection_literal` so `records.rs`'s
+                    // `@Nullable`-on-the-record-component decision and compact-constructor restore
+                    // use this exact same value — otherwise the record component and the builder
+                    // default drift independently, which is how `@Nullable List<T> children` ended
+                    // up next to a builder that never actually produces a null `children`. ~keep
+                    serde_default_collection_literal(&field.ty, true, true)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| "null".to_string())
                 } else {
                     "null".to_string()
                 }

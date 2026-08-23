@@ -10,7 +10,7 @@ use super::builders::{gen_builder_nested_class, should_emit_builder};
 use super::shared::{options_field_bridge_trait_name, resolve_field_type};
 use crate::backends::java::gen_bindings::helpers::{
     RECORD_LINE_WRAP_THRESHOLD, boxes_to_carry_literal_default, emit_javadoc, is_serde_default_marker,
-    java_literal_default, safe_java_field_name,
+    java_literal_default, safe_java_field_name, serde_default_collection_literal,
 };
 
 #[allow(clippy::too_many_arguments)]
@@ -43,6 +43,14 @@ pub(crate) fn gen_record_type(
 
         // Non-optional fields with #[serde(default)] must use boxed types in the record
         let has_serde_default = is_serde_default_marker(f.default.as_deref());
+
+        // A `Vec`/`Map` field with `#[serde(default, skip_serializing_if = "...")]` gets a
+        // non-null eager default in the builder (`serde_default_collection_literal`), so the
+        // record component must not be `@Nullable` for it either — see the `has_nullable`
+        // computation below, and the compact-constructor restore further down that is what makes
+        // dropping `@Nullable` here correct rather than merely convenient. ~keep
+        let serde_default_collection_default =
+            serde_default_collection_literal(&f.ty, has_serde_default, f.serde_skip_serializing_if);
 
         // alef could not read the real value out of `impl Default`. `java_literal_default`
         // correctly refuses to restore a guessed literal for this in the compact constructor
@@ -103,9 +111,12 @@ pub(crate) fn gen_record_type(
         let needs_builder = should_emit_builder(typ, builder_mode);
         let has_json_property =
             f.serde_rename.is_some() || jname != json_property_name || (needs_builder && !is_visitor_field);
-        // Emit @Nullable for optional fields and for non-optional fields with #[serde(default)]
+        // Emit @Nullable for optional fields and for non-optional fields with #[serde(default)] —
+        // except a `Vec`/`Map` field that qualifies for `serde_default_collection_default`: the
+        // compact constructor restores `null` to that same literal, so the component can never
+        // actually observe `null` and `@Nullable` would be a lie.
         let has_nullable = f.optional
-            || has_serde_default
+            || (has_serde_default && serde_default_collection_default.is_none())
             || matches!(resolved_ty, TypeRef::Duration)
             || is_unresolved_default
             || boxes_to_carry_literal_default(&f.ty, f.typed_default.as_ref());
@@ -253,8 +264,19 @@ pub(crate) fn gen_record_type(
         .filter(|f| !f.optional)
         .filter_map(|f| {
             // `java_literal_default` returning `Some` is also what boxed the component, so the
-            // sentinel this tests against is guaranteed to be `null`. ~keep
-            let literal = java_literal_default(&f.ty, f.typed_default.as_ref())?;
+            // sentinel this tests against is guaranteed to be `null`. A field that instead
+            // qualifies for `serde_default_collection_literal` is not boxed for that reason — a
+            // `List`/`Map` component is already a reference type — but the `has_nullable`
+            // computation above deliberately left it non-`@Nullable` on the strength of this exact
+            // restore line existing, so it must be checked here too. ~keep
+            let literal = java_literal_default(&f.ty, f.typed_default.as_ref()).or_else(|| {
+                serde_default_collection_literal(
+                    &f.ty,
+                    is_serde_default_marker(f.default.as_deref()),
+                    f.serde_skip_serializing_if,
+                )
+                .map(str::to_string)
+            })?;
             let jname = safe_java_field_name(&f.name);
             Some(format!("        if ({jname} == null) {{ {jname} = {literal}; }}"))
         })
