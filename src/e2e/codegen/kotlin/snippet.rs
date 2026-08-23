@@ -29,6 +29,24 @@ pub(crate) fn render_snippet_body(
     enums: &[EnumDef],
     kotlin_android_style: bool,
 ) -> anyhow::Result<String> {
+    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, kotlin_android_style, &[])
+}
+
+/// [`render_snippet_body`], with the free-function registry it cannot see.
+///
+/// `functions` lets the presentation resolver anchor the snippet's field facts at the call's
+/// own declared result type instead of matching field names across the whole crate IR; without
+/// it the resolver falls back to the flat, name-keyed answers. Mirrors `java/snippet.rs`'s
+/// split for the same reason. ~keep
+pub(crate) fn render_snippet_body_with_ir(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    kotlin_android_style: bool,
+    functions: &[crate::core::ir::FunctionDef],
+) -> anyhow::Result<String> {
     let lang = if kotlin_android_style {
         "kotlin_android"
     } else {
@@ -220,7 +238,7 @@ pub(crate) fn render_snippet_body(
         class_name
     };
 
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs);
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, functions);
     let result_var = call.effective_result_var();
     Ok(crate::e2e::template_env::render(
         "kotlin/snippet_body.jinja",

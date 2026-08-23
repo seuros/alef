@@ -6,12 +6,28 @@ use crate::codegen::generators::{self, RustBindingConfig};
 use crate::codegen::naming::to_node_name;
 use crate::codegen::shared::{binding_fields, can_auto_delegate, function_params, partition_methods};
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{EnumDef, MethodDef, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, FieldDef, MethodDef, TypeDef, TypeRef};
 use ahash::AHashSet;
 use heck::{ToPascalCase, ToSnakeCase};
 
 use super::enums::string_enum_js_values;
 use super::functions::{napi_apply_primitive_casts_to_call_args, napi_gen_call_args, napi_wrap_return};
+
+/// Whether the generated NAPI binding declares `field` of `owner` as `Option<T>`, i.e. whether
+/// the emitted `.d.ts` spells it `name?: T` and a JS caller may read `undefined` from it.
+///
+/// ~keep Two independent reasons make a field optional in the binding, and only the first is
+/// visible on the field itself. A type that implements `Default` has EVERY one of its fields
+/// widened to `Option<T>` (that is what `TypeDef::has_default` exists for on this backend — the
+/// generated struct fills each absent field from the default), so a field declared `metadata:
+/// PageMetadata` in the core crate still reaches TypeScript as `readonly metadata?:
+/// PageMetadata`. e2e snippet codegen has to reach the same verdict this emitter does, or it
+/// renders `result.metadata.title` against a `?`-typed member and `tsc` rejects the snippet with
+/// `TS18048` — so this is a named predicate rather than an inline condition, and
+/// `FieldResolver::ir_result_field_facts` calls exactly it.
+pub(crate) fn napi_field_is_optional(field: &FieldDef, owner: &TypeDef) -> bool {
+    matches!(field.ty, TypeRef::Optional(_)) || field.optional || owner.has_default
+}
 
 /// Map a struct-field `TypeRef` containing `TypeRef::Bytes` (Rust `Vec<u8>`) to the TS
 /// type the generated `JsBytes` wrapper accepts at runtime.
@@ -131,7 +147,7 @@ pub(super) fn gen_struct(
             }
             _ => (map_bytes_field_type(&field.ty), false),
         };
-        let field_type = if (field.optional || typ.has_default) && !already_optional {
+        let field_type = if napi_field_is_optional(field, typ) && !already_optional {
             format!("Option<{base_type}>")
         } else {
             base_type

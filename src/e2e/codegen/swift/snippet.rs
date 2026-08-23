@@ -151,7 +151,14 @@ pub(super) fn render_with_ir(
             &std::collections::HashMap::new(),
             first_class_map.clone(),
         );
-        crate::e2e::codegen::presentation::resolve_with(fixture, e2e_config, "swift", &field_resolver)
+        crate::e2e::codegen::presentation::resolve_with(
+            fixture,
+            e2e_config,
+            "swift",
+            &field_resolver,
+            type_defs,
+            functions,
+        )
     };
     if !expects_error && !call.returns_void && presentation.is_empty() {
         body.push_str(&format!("\nprint({result_var})"));

@@ -12,3 +12,7 @@ pub use gen_bindings::NapiBackend;
 /// matters. Test-only: nothing in the non-test binary calls it. ~keep
 #[cfg(test)]
 pub(crate) use gen_bindings::errors::internal_tagged_union_dts_lines;
+/// Re-exported so e2e snippet codegen decides "is this field optional in the Node binding?"
+/// with the predicate this backend emits from, instead of a second copy that can drift. See
+/// [`gen_bindings::types::napi_field_is_optional`]. ~keep
+pub(crate) use gen_bindings::types::napi_field_is_optional;

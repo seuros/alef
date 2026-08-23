@@ -94,6 +94,33 @@ pub struct FieldResolver {
     /// see [`IrCollectionMap`] for why this is keyed by `(type, field)` rather than by bare
     /// field name.
     pub(super) ir_collection_map: IrCollectionMap,
+    /// IR-derived field facts about the call's OWN declared result type, anchored at that type
+    /// rather than keyed by bare field name. Populated via `with_ir_result_fields`; empty
+    /// (`root_type: None`) whenever a codegen call site could not resolve the call's return
+    /// type, in which case every anchored answer is skipped and the flat, name-keyed
+    /// `optional_fields`/`ir_reachable_fields` behaviour stands unchanged. See
+    /// [`IrResultFieldMap`].
+    pub(super) ir_result_field_map: IrResultFieldMap,
+}
+
+/// IR field facts keyed by owner type and anchored at the type a specific call returns, so a
+/// field name that means different things on different structs is never conflated.
+///
+/// * `field_types[type_name][field_name]` — the named type `field_name` traverses into, when
+///   that type is another struct the path can keep walking through.
+/// * `optional_fields[type_name]` — fields of `type_name` the *generated binding* declares as
+///   possibly-absent, per the [`crate::e2e::field_access::OptionalityRule`] the map was built
+///   with. Not the same question as "is the Rust field `Option<T>`": see that enum.
+/// * `declared_fields[type_name]` — every binding-visible field of `type_name`, i.e. the members
+///   a generated accessor may legally name.
+/// * `root_type` — the IR type name the call's declared return type resolves to, via
+///   `codegen::call_ir::resolve_declared_result_type`. `None` disables every anchored answer.
+#[derive(Debug, Clone, Default)]
+pub struct IrResultFieldMap {
+    pub field_types: HashMap<String, HashMap<String, String>>,
+    pub optional_fields: HashMap<String, HashSet<String>>,
+    pub declared_fields: HashMap<String, HashSet<String>>,
+    pub root_type: Option<String>,
 }
 
 /// IR-derived collection-field classification, keyed by owner type so a field named `items`

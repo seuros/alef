@@ -239,7 +239,7 @@ pub(super) fn gen_dts(
                     let js_name = to_node_name(&field.name);
                     let ts_ty = dts_type(&field.ty);
                     lines.extend(format_jsdoc(&field.doc, "  "));
-                    let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional || typ.has_default;
+                    let is_optional = super::types::napi_field_is_optional(field, typ);
                     if is_optional {
                         lines.push(format!("  readonly {js_name}?: {ts_ty}"));
                     } else {

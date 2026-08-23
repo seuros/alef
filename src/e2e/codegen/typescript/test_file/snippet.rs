@@ -8,8 +8,45 @@ pub(crate) struct SnippetContext<'a> {
     pub e2e_config: &'a E2eConfig,
     pub type_defs: &'a [TypeDef],
     pub enums: &'a [EnumDef],
+    /// `ApiSurface::functions`. Empty for a caller with no free-function registry in scope,
+    /// which leaves the presentation resolver's field facts unanchored — the pre-existing
+    /// behaviour — rather than changing any verdict. ~keep
+    pub functions: &'a [crate::core::ir::FunctionDef],
     pub wasm_type_prefix: &'a str,
     pub config: &'a crate::core::config::ResolvedCrateConfig,
+}
+
+/// The node docs-snippet body, assembling the [`SnippetContext`] from the `node` call overrides.
+///
+/// Lives beside the renderer rather than in the backend's `mod.rs` so the module that owns
+/// `SnippetContext` also owns how a node context is built — `wasm/snippet.rs` builds its own the
+/// same way, and `mod.rs` is a remediation target that must not absorb more of this. ~keep
+pub(crate) fn render_node_snippet_body(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &crate::core::config::ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> String {
+    let overrides = e2e_config.call.overrides.get("node");
+    let module = e2e_config
+        .resolve_package("node")
+        .and_then(|package| package.name)
+        .or_else(|| overrides.and_then(|value| value.module.clone()))
+        .unwrap_or_else(|| e2e_config.call.module.clone());
+    render_snippet_body(SnippetContext {
+        lang: "node",
+        fixture,
+        module: &module,
+        client_factory: overrides.and_then(|value| value.client_factory.as_deref()),
+        e2e_config,
+        type_defs,
+        enums,
+        functions,
+        wasm_type_prefix: "",
+        config,
+    })
 }
 
 pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
@@ -21,6 +58,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         e2e_config,
         type_defs,
         enums,
+        functions,
         wasm_type_prefix,
         config,
     } = context;
@@ -194,7 +232,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             error_type => error_type_name.clone(),
             thrown_value_is_opaque => lang == "wasm",
             returns_void => call.returns_void,
-            presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs),
+            presentation => crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, functions),
         },
     )
 }
@@ -397,6 +435,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -461,6 +500,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -505,6 +545,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -532,6 +573,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -576,6 +618,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -629,6 +672,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -678,6 +722,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
@@ -728,6 +773,7 @@ mod tests {
             e2e_config: &e2e,
             type_defs: &[],
             enums: &[],
+            functions: &[],
             wasm_type_prefix: "",
             config: &config,
         });
