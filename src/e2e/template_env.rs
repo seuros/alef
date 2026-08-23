@@ -77,6 +77,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         "snippets/file.md.jinja",
         include_str!("templates/snippets/file.md.jinja"),
     ),
+    ("brew/harness.sh.jinja", include_str!("templates/brew/harness.sh.jinja")),
     ("c/snippet_body.jinja", include_str!("templates/c/snippet_body.jinja")),
     (
         "c/trait_bridge_snippet.jinja",
