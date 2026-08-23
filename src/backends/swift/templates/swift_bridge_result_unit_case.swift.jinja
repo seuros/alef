@@ -1,1 +1,7 @@
-    case .{{ swift_case }}: return "\"{{ variant_name }}\""
+{% if repr == "internal" or repr == "adjacent" %}
+    case .{{ swift_case }}: return "{\"{{ tag_key }}\":\"{{ variant_wire }}\"}"
+{% elif repr == "untagged" %}
+    case .{{ swift_case }}: return "null"
+{% else %}
+    case .{{ swift_case }}: return "\"{{ variant_wire }}\""
+{% endif %}

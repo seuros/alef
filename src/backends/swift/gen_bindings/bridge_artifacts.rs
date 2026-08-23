@@ -1,5 +1,6 @@
 use crate::backends::swift::gen_bindings::boxes::{swift_adapter_conversions, swift_box_ffi_type, swift_box_params};
 use crate::backends::swift::naming::{swift_rust_shim_ident as swift_ident, swift_source_ident as swift_case_ident};
+use crate::codegen::serde_enum_repr::{SerdeEnumRepr, serde_enum_repr};
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{BridgeBinding, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, TypeRef};
@@ -402,23 +403,44 @@ pub(super) fn emit_inbound_protocols(
                     function_name => &fn_name,
                 },
             ));
+            let repr = serde_enum_repr(en);
             for variant in &en.variants {
                 let variant_name = &variant.name;
                 let swift_case = swift_case_ident(&variant_name.to_lower_camel_case());
+                let variant_wire = crate::codegen::naming::wire_variant_value(
+                    variant_name,
+                    variant.serde_rename.as_deref(),
+                    en.serde_rename_all.as_deref(),
+                );
                 if variant.fields.is_empty() {
                     out.push_str(&crate::backends::swift::template_env::render(
                         "swift_bridge_result_unit_case.swift.jinja",
                         minijinja::context! {
                             swift_case => &swift_case,
-                            variant_name => variant_name,
+                            variant_wire => &variant_wire,
+                            repr => repr.kind(),
+                            tag_key => repr.tag(),
                         },
                     ));
                 } else if variant.is_tuple && variant.fields.len() == 1 {
+                    assert!(
+                        !matches!(repr, SerdeEnumRepr::Internal { .. }),
+                        "`{}::{variant_name}` is a newtype variant of an internally tagged enum \
+                         (`#[serde(tag = \"...\")]` with no `content`). serde cannot serialize \
+                         that at all — it fails with `cannot serialize tagged newtype variant` — \
+                         so there is no correct JSON for the Swift bridge to emit. Add \
+                         `#[serde(content = \"...\")]` to make the enum adjacently tagged, or give \
+                         the variant named fields.",
+                        en.name
+                    );
                     out.push_str(&crate::backends::swift::template_env::render(
                         "swift_bridge_result_newtype_case.swift.jinja",
                         minijinja::context! {
                             swift_case => &swift_case,
-                            variant_name => variant_name,
+                            variant_wire => &variant_wire,
+                            repr => repr.kind(),
+                            tag_key => repr.tag(),
+                            content_key => repr.content(),
                         },
                     ));
                 }

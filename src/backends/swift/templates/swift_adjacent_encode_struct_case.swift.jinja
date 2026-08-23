@@ -1,0 +1,4 @@
+        case .{{ case_name }}({{ bindings }}):
+            try container.encode("{{ variant_wire }}", forKey: .{{ tag_ident }})
+            var payload = container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .{{ content_ident }})
+{{ field_encoders }}

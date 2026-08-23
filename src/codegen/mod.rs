@@ -16,6 +16,7 @@ pub mod fn_dedup;
 pub mod generators;
 pub mod keywords;
 pub mod naming;
+pub mod serde_enum_repr;
 pub mod shared;
 pub mod type_mapper;
 pub(crate) mod visitor_context;

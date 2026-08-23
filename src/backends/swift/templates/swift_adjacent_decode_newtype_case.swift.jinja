@@ -1,0 +1,2 @@
+        case "{{ variant_wire }}":
+            self = .{{ case_name }}({{ label }}: try container.{{ decode_method }}({{ payload_type }}.self, forKey: .{{ content_ident }}))
