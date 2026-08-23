@@ -295,6 +295,25 @@ fn check_homebrew(package: &str, version: &str, tap_repo: Option<&str>) -> Resul
     Ok(false)
 }
 
+/// Pick the GitHub token to authenticate with, given the two candidate
+/// environment variables read by [`github_auth_token`]. Kept separate from
+/// the env lookup so the precedence/empty-string rules are unit-testable
+/// without mutating real process environment state.
+fn resolve_github_token(github_token: Option<String>, gh_token: Option<String>) -> Option<String> {
+    github_token.or(gh_token).filter(|token| !token.is_empty())
+}
+
+/// Read a GitHub token from the environment, if one is available.
+///
+/// Checks `GITHUB_TOKEN` (set on every GitHub Actions job by default) then
+/// `GH_TOKEN` (the `gh` CLI convention). Authenticated requests to
+/// `api.github.com` get a 5,000 req/hour rate limit instead of the 60
+/// req/hour applied to anonymous requests from a shared runner IP -- the
+/// unauthenticated limit is what produced HTTP 403s on hosted runners.
+fn github_auth_token() -> Option<String> {
+    resolve_github_token(std::env::var("GITHUB_TOKEN").ok(), std::env::var("GH_TOKEN").ok())
+}
+
 fn check_github_release(
     package: &str,
     version: &str,
@@ -312,11 +331,14 @@ fn check_github_release(
     };
     let url = format!("https://api.github.com/repos/{repo}/releases/tags/{tag}");
     let agent = build_agent();
-    let response = agent
+    let mut request = agent
         .get(&url)
         .header("User-Agent", "alef-publish/1.0")
-        .header("Accept", "application/vnd.github+json")
-        .call();
+        .header("Accept", "application/vnd.github+json");
+    if let Some(token) = github_auth_token() {
+        request = request.header("Authorization", format!("Bearer {token}"));
+    }
+    let response = request.call();
     let resp = match classify(response).with_context(|| format!("GitHub API GET {url}"))? {
         HttpOutcome::Ok(resp) => resp,
         HttpOutcome::NotFound => return Ok(false),
@@ -405,5 +427,31 @@ mod tests {
         let result = check_github_release("alef", "1.0.0", None, None, &[]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("--repo"));
+    }
+
+    #[test]
+    fn resolve_github_token_prefers_github_token() {
+        let resolved = resolve_github_token(Some("actions-token".to_string()), Some("gh-cli-token".to_string()));
+        assert_eq!(resolved.as_deref(), Some("actions-token"));
+    }
+
+    #[test]
+    fn resolve_github_token_falls_back_to_gh_token() {
+        let resolved = resolve_github_token(None, Some("gh-cli-token".to_string()));
+        assert_eq!(resolved.as_deref(), Some("gh-cli-token"));
+    }
+
+    #[test]
+    fn resolve_github_token_none_when_both_absent() {
+        assert_eq!(resolve_github_token(None, None), None);
+    }
+
+    #[test]
+    fn resolve_github_token_treats_empty_string_as_absent() {
+        assert_eq!(
+            resolve_github_token(Some(String::new()), Some("gh-cli-token".to_string())),
+            None
+        );
+        assert_eq!(resolve_github_token(Some(String::new()), None), None);
     }
 }
