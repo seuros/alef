@@ -146,3 +146,4 @@ mod constructors;
 mod defaults;
 mod diagnostics;
 mod extendr;
+mod generators;
