@@ -568,7 +568,14 @@ fn all_docs_stage_failure_does_not_return_before_formatting_and_hash_stamping() 
 /// must-always-run step -- formatting, orphan sweeping, hash finalisation, deferred-formatting
 /// reporting, hook installation, and the run-level refusal report -- has executed for every
 /// crate, not before. Propagating it any earlier than the end of `handle` would reintroduce the
-/// short-circuit this restructure removes. ~keep
+/// short-circuit this restructure removes.
+///
+/// It is folded into `stage_failures` (task #186) rather than `return Err(error)` directly, so a
+/// docs-stage failure that coincides with a pre-flight or post-build failure elsewhere in the
+/// same run is still named in the final summary instead of being silently dropped -- but
+/// `StageFailures::into_result` returns a single recorded failure completely unchanged (see its
+/// own unit tests), so this is not a behavioral loosening of the "returned as-is" guarantee this
+/// test used to pin directly against `return Err(error)`. ~keep
 #[test]
 fn all_propagates_the_deferred_docs_error_only_after_hook_installation() {
     let source = include_str!("all_commands.rs");
@@ -587,9 +594,10 @@ fn all_propagates_the_deferred_docs_error_only_after_hook_installation() {
 
     let tail = &source[propagate..];
     assert!(
-        tail.contains("return Err(error);"),
-        "the deferred error must be returned as-is -- it already carries whatever `.context(...)` \
-         the `Err` arm applied (the refusal-count wrapping), so this must not rebuild or discard it"
+        tail.contains("stage_failures.record(\"docs/snippet validation\", error);"),
+        "the deferred error must be handed to `stage_failures` as-is -- it already carries \
+         whatever `.context(...)` the `Err` arm applied (the refusal-count wrapping), so this \
+         must not rebuild or discard it before recording it: {tail}"
     );
     assert!(
         !source[..propagate].contains("return Err(error.context"),

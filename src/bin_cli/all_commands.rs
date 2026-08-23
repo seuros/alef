@@ -7,6 +7,9 @@ use super::args::*;
 use super::dispatch::DispatchContext;
 use super::helpers::*;
 mod docs_stage;
+mod preflight;
+mod stage_failures;
+use stage_failures::StageFailures;
 /// Surface formatting steps that did not run: registry-mode dependency resolution deferred
 /// to a post-publish pass, and formatters whose executable is absent.
 ///
@@ -180,21 +183,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             let multi = dispatch::is_multi_crate(&crates_to_process);
             let base_dir = std::env::current_dir()?;
 
-            for resolved_cfg in &crates_to_process {
-                let Some(e2e_config) = &resolved_cfg.e2e else {
-                    continue;
-                };
-                let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                if let Some(coverage) = crate::e2e::evaluate_snippet_coverage(
-                    resolved_cfg,
-                    e2e_config,
-                    &api.types,
-                    &api.enums,
-                    &api.functions,
-                )? {
-                    crate::e2e::ensure_fresh_snippet_coverage_complete(&coverage)?;
-                }
-            }
+            // Deferred across the whole run, not just this check -- see `StageFailures`'s doc
+            // comment. A rejection here must still fail `alef all`, but it must not fail it
+            // before the main loop below has had a chance to write bindings, e2e suites and
+            // docs for every crate. ~keep
+            let mut stage_failures = StageFailures::new();
+            preflight::run_snippet_coverage_preflight(&crates_to_process, config_path, &mut stage_failures);
 
             let config_toml = std::fs::read_to_string(config_path)?;
             let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
@@ -441,21 +435,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
-                // A bare `?` here used to hide the one diagnostic that explains this exact
-                // failure mode: a post-build check like `VerifyFrbBridgeCoverage` (alef #135)
-                // fails precisely when a facade file regenerated (e.g. `lib.rs`, which
-                // self-marks and so always writes) while a sibling manifest it depends on
-                // (e.g. the FRB crate's `Cargo.toml`, which predates marker-stamping in an
-                // older consumer tree) was refused by the ownership guard and stayed stale.
-                // `refusals` already has that refusal recorded by now (the bindings phase
-                // above ran first), but `pipeline::report_refused_writes` was only ever
-                // called at the very end of this function -- unreachable once this `?`
-                // propagates. Surfacing it here, before the post-build error, is what turns
-                // "install/enable flutter_rust_bridge_codegen" (misleading; the tool is
-                // present) into "run `alef adopt <path>`" (the actual fix). ~keep
+                // A bare `?`/`return Err` here used to hard-stop the entire run: not just the
+                // rest of THIS crate's stages (stubs, scaffold, e2e, docs never ran), but every
+                // crate listed after this one in `crates_to_process` too -- one backend's
+                // post-build failure (e.g. a Dart `flutter_rust_bridge_codegen` break) denied a
+                // multi-crate workspace any regeneration at all (task #186). Deferred into
+                // `stage_failures` instead: this crate's remaining stages, and every later
+                // crate, still run. `refusals` is still reported -- once, at the very end of
+                // this function, covering this failure alongside every other write refusal --
+                // which is what turns "install/enable flutter_rust_bridge_codegen" (misleading;
+                // the tool is present) into "run `alef adopt <path>`" (the actual fix). ~keep
                 if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
-                    pipeline::report_refused_writes(&refusals);
-                    return Err(error);
+                    stage_failures.record(&format!("[{}] post-build processing", resolved_cfg.name), error);
                 }
                 pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
@@ -969,18 +960,23 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!(
                 "Done: {grand_binding_count} binding files, {grand_stub_count} stub files, {grand_api_count} API files, {grand_scaffold_count} scaffold files, {grand_readme_count} readme files, {grand_e2e_count} e2e files, {grand_doc_count} doc files"
             );
-            // Propagated last, after every crate has been through formatting, orphan sweeping, hash
+            // Folded last, after every crate has been through formatting, orphan sweeping, hash
             // finalisation and hook installation -- see `docs_stage_error`'s doc comment for why a
             // docs/snippet validation failure must not reach this point any earlier than this. The
-            // run still exits non-zero and the error's context (including the refusal-count wrapping
-            // above) is untouched; only the timing of the `return` moved. `e2e_stage_error` is checked
-            // first: emitted code outranks docs under the same standing priority ruling. ~keep
+            // run still exits non-zero, and the error's own context (including the refusal-count
+            // wrapping above) is untouched; only the timing of the `return` moved. Both go into
+            // `stage_failures` rather than an early `return Err`, alongside any pre-flight or
+            // post-build failure recorded earlier: a run that hit more than one of these categories
+            // used to report only `e2e_stage_error` and silently drop `docs_stage_error` entirely --
+            // this is the "accurate summary naming everything that went wrong" task #186 asks for,
+            // not just the first thing. ~keep
             if let Some(error) = e2e_stage_error {
-                return Err(error);
+                stage_failures.record("e2e codegen", error);
             }
             if let Some(error) = docs_stage_error {
-                return Err(error);
+                stage_failures.record("docs/snippet validation", error);
             }
+            stage_failures.into_result()?;
             Ok(None)
         }
         other => Ok(Some(other)),
@@ -994,3 +990,7 @@ mod tests;
 #[cfg(test)]
 #[path = "all_commands_refusal_tests.rs"]
 mod refusal_tests;
+
+#[cfg(test)]
+#[path = "all_commands_defer_tests.rs"]
+mod defer_tests;
