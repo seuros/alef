@@ -28,6 +28,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all, so two developers (or a developer and CI) with different `flutter_rust_bridge_codegen`
   installs produced different committed bytes from identical input (#204).
 
+- **snippets:** a snippet that does not compile is no longer reported as `unavailable`. Every
+  `is_dependency_error` implementation that could not distinguish "the binding package was never
+  built" from "the generated code is wrong" now accepts only diagnostics that can mean nothing
+  else: Rust `E0432`/`E0433`/`E0463`/`E0583` (no longer `E0425`, `E0308`, `E0599`, `E0609`,
+  `E0061`, or the `could not compile` summary rustc prints on every failed build), Java `package
+  ... does not exist` (no longer bare `cannot find symbol`), C# `CS0246`/`CS0234` (no longer
+  `CS0103`/`CS5001`), Go `cannot find package`/`no required module` (no longer bare `undefined:`),
+  Swift `no such module` (no longer `cannot find ... in scope`). Rust, Java and C# additionally
+  require every diagnostic in the output to be a dependency diagnostic, matching the TypeScript
+  validator. Reclassification took real failures out of the failure tally entirely — 283 Rust and
+  51 Java snippets in two consumer repos were counted `unavailable`, so nothing went red.
+- **e2e:** a docs snippet no longer emits an accessor for an assertion field that is not a member
+  of the call's result. The operations derived from a fixture's own assertions (added in 0.66.x)
+  are now filtered through the oracles the assertion renderers already consult, so an error-path
+  fixture, a `result_is_simple`/`result_is_bytes` call, a streaming pseudo-field
+  (`stream.has_page_event`), an assertion grouping prefix (`rate_limit.`) and a field the
+  availability oracle rejects all fall back to showing the whole result instead of emitting
+  `result.error()`, `result.Audio`, `result.CostTracked` or `result.stream.hasPageEvent`.
+- **e2e/rust:** a snippet presenting derived fields now binds the result it references and
+  unwraps a `Result`-returning call first. `Fixture::has_docs_presentation` — the one predicate
+  the call emitter consults — could not see assertion-derived operations, so the emitter wrote
+  `let _ = convert(...)` while the snippet printed `result.content` (`E0425`).
+- **e2e/csharp:** indexing an optional collection now emits the same null-forgiving operator as
+  reading its `.Count`, so a single snippet no longer contains both
+  `result.Metadata.Headings!.Count` and `result.Metadata.Headings[0].Level` (`CS8602`).
+
 ### Added
 
 - `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
