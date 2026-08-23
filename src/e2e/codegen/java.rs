@@ -355,6 +355,7 @@ impl E2eCodegen for JavaCodegen {
 }
 
 mod args;
+mod assertion_wildcard;
 mod assertions;
 mod http;
 mod project;

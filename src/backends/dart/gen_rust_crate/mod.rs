@@ -6,6 +6,7 @@ use crate::core::ir::{ApiSurface, EnumDef, TypeDef};
 use std::collections::HashSet;
 
 mod bridge_fn;
+mod build_rs;
 #[cfg(test)]
 mod build_rs_cfg_gates_tests;
 mod cargo;
@@ -23,7 +24,8 @@ mod trait_bridge;
 mod trait_types;
 
 use bridge_fn::emit_bridge_fn;
-use cargo::{emit_build_rs, emit_cargo_toml, emit_frb_yaml};
+use build_rs::{emit_build_rs, emit_frb_yaml};
+use cargo::emit_cargo_toml;
 use mirror::{emit_mirror_enum, emit_mirror_error, emit_mirror_struct};
 use trait_bridge::{emit_excluded_bridge_types, emit_trait_bridge, needs_excluded_bridge_type};
 

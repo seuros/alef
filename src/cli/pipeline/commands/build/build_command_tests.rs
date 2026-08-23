@@ -1,0 +1,587 @@
+use super::*;
+use crate::core::backend::{BuildConfig, BuildDependency};
+
+#[test]
+fn csharp_build_command_uses_verbosity_flag_not_query_mode() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["csharp"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "dotnet",
+        crate_suffix: "",
+        build_dep: BuildDependency::Ffi,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Csharp, &build_config, &config, false);
+
+    assert!(
+        command.contains("--verbosity quiet"),
+        "C# build must use explicit quiet verbosity: {command}"
+    );
+    assert!(
+        !command.contains(" -q"),
+        "C# build must not use dotnet query mode shorthand: {command}"
+    );
+}
+
+/// Regression test: `napi build`'s own `--dts` output defaults to the crate's
+/// `package.json` `"types"` field, which is `index.d.ts` — the exact file alef's node
+/// backend writes its own hand-derived type declarations (unions, doc comments, the
+/// `alef:hash:` provenance line) to. Every `napi build` invocation this arm emits — the
+/// default node build step every consumer without a `[build_commands.node]` override
+/// runs — used to leave `--dts` unset, so a routine `alef build` (or the scaffolded
+/// `npm run build`, which shares this same command shape) silently clobbered alef's
+/// canonical `index.d.ts` with napi-rs's own auto-derived one, discarding the
+/// provenance header `alef verify` relies on to detect staleness. ~keep
+#[test]
+fn napi_build_command_never_lets_napi_rs_overwrite_alefs_index_d_ts() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "napi",
+        crate_suffix: "-node",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Node, &build_config, &config, false);
+
+    assert!(
+        command.contains(&format!(
+            "--dts {}",
+            crate::core::template_versions::npm::NAPI_AUTO_DTS_FILENAME
+        )),
+        "napi build must redirect its own auto-derived .d.ts away from alef's \
+         index.d.ts: {command}"
+    );
+    assert!(
+        !command.contains("--dts index.d.ts"),
+        "napi build must never be told to write its own type declarations over alef's \
+         canonical index.d.ts: {command}"
+    );
+}
+
+#[test]
+fn kotlin_gradle_build_command_runs_in_generated_package() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["kotlin"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "gradle",
+        crate_suffix: "",
+        build_dep: BuildDependency::Ffi,
+        post_build: Vec::new(),
+    };
+
+    assert_eq!(
+        build_command_for(Language::Kotlin, &build_config, &config, false),
+        "cd packages/kotlin && gradle build"
+    );
+    assert_eq!(
+        build_command_for(Language::Kotlin, &build_config, &config, true),
+        "cd packages/kotlin && gradle build -Prelease"
+    );
+}
+
+/// Regression test for the real consumer failure this arm was rewritten for: an
+/// explicit `[crates.output] kotlin_android` pointing at a deep, gradle-marker-free
+/// namespace source directory (`.../src/main/kotlin/io/<ns>/<pkg>/android/`) used to be
+/// `cd`-ed into verbatim, and gradle rejected it ("Project directory '...' is not part
+/// of the build defined by settings file '...'"). The fix must walk up to the nearest
+/// `settings.gradle.kts` and build from there instead. ~keep
+#[test]
+fn gradle_build_walks_up_to_settings_gradle_root_from_deep_namespace_dir() {
+    let root = tempfile::tempdir().expect("failed to create temp dir");
+    let project_root = root.path().join("packages/kotlin-android");
+    let deep_source_dir = project_root.join("src/main/kotlin/io/alpha/mylib/android");
+    std::fs::create_dir_all(&deep_source_dir).expect("failed to create deep namespace dir");
+    std::fs::write(
+        project_root.join("settings.gradle.kts"),
+        "rootProject.name = \"alpha\"\n",
+    )
+    .expect("failed to write settings.gradle.kts fixture");
+    std::fs::write(project_root.join("build.gradle.kts"), "// android library build\n")
+        .expect("failed to write build.gradle.kts fixture");
+
+    // Prove the fixture actually built the shape under test before asserting on it:
+    // both markers must exist at the project root and be absent from the deep dir.
+    assert!(project_root.join("settings.gradle.kts").is_file());
+    assert!(project_root.join("build.gradle.kts").is_file());
+    assert!(!deep_source_dir.join("settings.gradle.kts").exists());
+    assert!(!deep_source_dir.join("build.gradle.kts").exists());
+
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.alpha"
+
+[crates.output]
+kotlin_android = '{deep_source_dir}/'
+"#,
+        deep_source_dir = deep_source_dir.display(),
+    ))
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "gradle",
+        crate_suffix: "",
+        build_dep: BuildDependency::Ffi,
+        post_build: Vec::new(),
+    };
+
+    let expected_root = project_root.display().to_string();
+    assert_eq!(
+        build_command_for(Language::KotlinAndroid, &build_config, &config, false),
+        format!("cd {expected_root} && gradle build")
+    );
+    assert_eq!(
+        build_command_for(Language::KotlinAndroid, &build_config, &config, true),
+        format!("cd {expected_root} && gradle build -Prelease")
+    );
+}
+
+/// Boundary case: no `settings.gradle*`/`build.gradle*` exists anywhere up the ancestor
+/// chain, so the walk-up must fall back to the original source directory unchanged
+/// (like the mix/mvn/dotnet arms above it) instead of walking to the filesystem root or
+/// panicking. ~keep
+#[test]
+fn gradle_build_falls_back_to_source_dir_when_no_marker_found() {
+    let root = tempfile::tempdir().expect("failed to create temp dir");
+    let deep_source_dir = root
+        .path()
+        .join("packages/kotlin-android/src/main/kotlin/io/alpha/mylib/android");
+    std::fs::create_dir_all(&deep_source_dir).expect("failed to create deep namespace dir");
+
+    // Prove the fixture is genuinely marker-free before asserting on the fallback.
+    assert!(deep_source_dir.is_dir());
+    for ancestor in deep_source_dir.ancestors() {
+        for marker in [
+            "settings.gradle.kts",
+            "settings.gradle",
+            "build.gradle.kts",
+            "build.gradle",
+        ] {
+            assert!(
+                !ancestor.join(marker).exists(),
+                "fixture must not contain {marker} under {}",
+                ancestor.display()
+            );
+        }
+        if ancestor == root.path() {
+            break;
+        }
+    }
+
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.alpha"
+
+[crates.output]
+kotlin_android = '{deep_source_dir}/'
+"#,
+        deep_source_dir = deep_source_dir.display(),
+    ))
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "gradle",
+        crate_suffix: "",
+        build_dep: BuildDependency::Ffi,
+        post_build: Vec::new(),
+    };
+
+    // The configured output path carries a trailing separator and the fallback returns it
+    // verbatim, so the expectation must too -- `cd <dir>/` is what a real run emits. ~keep
+    let expected = deep_source_dir.display().to_string();
+    assert_eq!(
+        build_command_for(Language::KotlinAndroid, &build_config, &config, false),
+        format!("cd {expected}/ && gradle build")
+    );
+}
+
+#[test]
+fn unknown_build_tool_fails_instead_of_reporting_success() {
+    let config = ResolvedCrateConfig::default();
+    let build_config = BuildConfig {
+        tool: "unsupported",
+        crate_suffix: "",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Kotlin, &build_config, &config, false);
+    assert!(
+        command.ends_with("&& false"),
+        "unknown build tool must still exit non-zero: {command}"
+    );
+    assert!(
+        command.contains("no default build command for tool \"unsupported\""),
+        "unknown build tool failure must name the missing tool instead of a bare `false`: {command}"
+    );
+}
+
+fn wasm_config(extra: &str) -> ResolvedCrateConfig {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(&format!(
+        r#"
+[workspace]
+languages = ["wasm"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+{extra}
+"#
+    ))
+    .unwrap();
+    alef_cfg.resolve().unwrap().remove(0)
+}
+
+fn wasm_build_config() -> BuildConfig {
+    BuildConfig {
+        tool: "wasm-pack",
+        crate_suffix: "-wasm",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    }
+}
+
+/// Regression test: `alef e2e` (local mode) resolves the wasm package through
+/// `pkg/nodejs` (`ResolvedCrateConfig::wasm_crate_path`), and the scaffolded crate
+/// manifest resolves `main`/`types` to `pkg/nodejs/…` and `module` to `pkg/web/…`.
+/// `alef build` used to run a single `--target web` with wasm-pack's *default* out-dir,
+/// producing a bare `pkg/` that none of those consumers read while never producing
+/// `pkg/nodejs` at all — so a fresh checkout needed a hand-rolled extra build step.
+/// The emitted command must match the scaffolded `build:wasm:<target>` scripts exactly,
+/// since `publish::package::wasm` re-runs those same scripts via `npm run build:all`
+/// and the two must not disagree about where a target lands. ~keep
+#[test]
+fn wasm_build_command_builds_every_default_target_into_its_own_pkg_subdir() {
+    let config = wasm_config("");
+
+    let command = build_command_for(Language::Wasm, &wasm_build_config(), &config, false);
+
+    assert_eq!(
+        command,
+        "cd crates/sample-lib-wasm && \
+         wasm-pack build --dev --target web --out-dir pkg/web && \
+         wasm-pack build --dev --target bundler --out-dir pkg/bundler && \
+         wasm-pack build --dev --target nodejs --out-dir pkg/nodejs && \
+         wasm-pack build --dev --target deno --out-dir pkg/deno"
+    );
+}
+
+/// The bare `pkg/` that the pre-fix command produced is exactly what nothing consumes;
+/// asserting its absence is what distinguishes this fix from "also happens to build web".
+#[test]
+fn wasm_build_command_never_leaves_a_target_in_the_bare_pkg_dir() {
+    let command = build_command_for(Language::Wasm, &wasm_build_config(), &wasm_config(""), true);
+
+    assert!(
+        !command.contains("--target web --out-dir pkg "),
+        "no target may use wasm-pack's default bare `pkg/` out-dir: {command}"
+    );
+    for target in ["web", "bundler", "nodejs", "deno"] {
+        assert!(
+            command.contains(&format!("--target {target} --out-dir pkg/{target}")),
+            "release build must still pair every target with its own out-dir: {command}"
+        );
+    }
+    assert!(command.contains("--release"), "{command}");
+    assert!(!command.contains("--dev"), "{command}");
+}
+
+/// Failure path: a crate that narrows `[crates.wasm] targets` to keep its published
+/// package small must get exactly that set — not a hardcoded web+nodejs pair. This is
+/// the case a hardcoded command silently gets wrong, and it also proves the emitted
+/// set is genuinely read from config rather than a constant that happens to match the
+/// default. Note `pkg/nodejs` is absent here, so `alef e2e` cannot resolve the package
+/// for such a crate — a config-consistency problem that belongs to config validation,
+/// not something the build command should paper over by force-building nodejs. ~keep
+#[test]
+fn wasm_build_command_honours_a_narrowed_target_set() {
+    let config = wasm_config("\n[crates.wasm]\ntargets = [\"web\"]\n");
+
+    let command = build_command_for(Language::Wasm, &wasm_build_config(), &config, false);
+
+    assert_eq!(
+        command,
+        "cd crates/sample-lib-wasm && wasm-pack build --dev --target web --out-dir pkg/web"
+    );
+    assert!(!command.contains("nodejs"), "{command}");
+}
+
+/// An empty target list must fail loudly and name the setting, matching the unknown-tool
+/// arm, rather than emitting a dangling `cd <dir> && ` the shell rejects as a syntax error
+/// that names neither alef nor the offending config key.
+#[test]
+fn wasm_build_command_fails_loudly_on_an_empty_target_set() {
+    let config = wasm_config("\n[crates.wasm]\ntargets = []\n");
+
+    let command = build_command_for(Language::Wasm, &wasm_build_config(), &config, false);
+
+    assert!(command.ends_with("&& false"), "must exit non-zero: {command}");
+    assert!(command.contains("[crates.wasm] targets is empty"), "{command}");
+    assert!(
+        !command.contains("wasm-pack build"),
+        "must not emit a truncated wasm-pack invocation: {command}"
+    );
+}
+
+#[test]
+fn swift_build_command_uses_swift_build_with_package_path() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["swift"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "swift",
+        crate_suffix: "-swift",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    assert_eq!(
+        build_command_for(Language::Swift, &build_config, &config, false),
+        "swift build --package-path packages/swift"
+    );
+    assert_eq!(
+        build_command_for(Language::Swift, &build_config, &config, true),
+        "swift build --package-path packages/swift --configuration release"
+    );
+}
+
+#[test]
+fn zig_build_command_uses_zig_build() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["zig"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "zig",
+        crate_suffix: "",
+        build_dep: BuildDependency::Ffi,
+        post_build: Vec::new(),
+    };
+
+    assert_eq!(
+        build_command_for(Language::Zig, &build_config, &config, false),
+        "cd packages/zig && zig build"
+    );
+    assert_eq!(
+        build_command_for(Language::Zig, &build_config, &config, true),
+        "cd packages/zig && zig build --release=fast"
+    );
+}
+
+#[test]
+fn gleam_build_command_uses_gleam_build() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["gleam"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "gleam",
+        crate_suffix: "",
+        build_dep: BuildDependency::Rustler,
+        post_build: Vec::new(),
+    };
+
+    assert_eq!(
+        build_command_for(Language::Gleam, &build_config, &config, false),
+        "cd packages/gleam && gleam build"
+    );
+    assert_eq!(
+        build_command_for(Language::Gleam, &build_config, &config, true),
+        "cd packages/gleam && gleam build"
+    );
+}
+
+// Regression test for a real crash found while investigating the "false"
+// command-substitution incident: `registry::get_backend` panics for `C`
+// (it has no binding backend — it's an e2e/consumer-only target), and the
+// classification loop used to call it unconditionally for every
+// non-Rust language. A `[workspace] languages` list that includes "c"
+// (a documented, valid e2e target) would crash the whole build instead
+// of skipping C gracefully like any other backend-less language. ~keep
+#[test]
+fn c_language_is_skipped_gracefully_instead_of_panicking() {
+    let config = ResolvedCrateConfig::default();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(&config, &[Language::C], false)));
+
+    match result {
+        Ok(build_result) => assert!(
+            build_result.is_ok(),
+            "C has no binding backend and must be skipped cleanly: {build_result:?}"
+        ),
+        Err(_) => panic!("building an unsupported binding target must not panic"),
+    }
+}
+
+/// Regression test: wasm-pack derives `pkg/nodejs/package.json`'s `"name"` from the wasm
+/// crate's `Cargo.toml`, not from `config.wasm_package_name()` — so every `file:` dependency
+/// and `require()`/`import` specifier the wasm e2e codegen emits (which use
+/// `wasm_package_name()`) would name a package the directory does not declare unless
+/// something patches it after the build. This proves the patch is surgical: only the
+/// `"name"` field changes, every other field (including unrelated `"name"`-shaped strings
+/// elsewhere in the file) is untouched.
+#[test]
+fn rewrite_wasm_package_json_name_only_touches_the_name_field() {
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let manifest_path = dir.path().join("package.json");
+    std::fs::write(
+        &manifest_path,
+        r#"{
+  "name": "sample-core-wasm",
+  "version": "0.1.0",
+  "description": "not a name field: \"name\" appears here too",
+  "main": "sample_core_wasm.js"
+}
+"#,
+    )
+    .expect("failed to write fixture package.json");
+
+    rewrite_wasm_package_json_name(&manifest_path, "@xberg-io/sample-crate-wasm").expect("rewrite must succeed");
+
+    let rewritten = std::fs::read_to_string(&manifest_path).expect("failed to read rewritten package.json");
+    assert!(
+        rewritten.contains(r#""name": "@xberg-io/sample-crate-wasm""#),
+        "{rewritten}"
+    );
+    assert!(!rewritten.contains("sample-core-wasm"), "{rewritten}");
+    assert!(
+        rewritten.contains(r#""main": "sample_core_wasm.js""#),
+        "unrelated fields must survive untouched: {rewritten}"
+    );
+    assert!(
+        rewritten.contains(r#"not a name field: \"name\" appears here too"#),
+        "a `\"name\"` substring inside another field's value must not be touched: {rewritten}"
+    );
+}
+
+#[test]
+fn rewrite_wasm_package_json_name_is_idempotent() {
+    let dir = tempfile::tempdir().expect("failed to create temp dir");
+    let manifest_path = dir.path().join("package.json");
+    std::fs::write(&manifest_path, r#"{"name": "already-correct"}"#).expect("failed to write fixture");
+
+    rewrite_wasm_package_json_name(&manifest_path, "already-correct").expect("rewrite must succeed");
+
+    let rewritten = std::fs::read_to_string(&manifest_path).expect("failed to read package.json");
+    assert_eq!(rewritten, r#"{"name": "already-correct"}"#);
+}
+
+/// End-to-end regression through the public `run_post_build` entry point, proving the
+/// `PostBuildStep::RewriteWasmPackageName` variant is actually wired up (not just the
+/// private helper it calls) and resolves `package_json_path` relative to `base_dir`
+/// directly — not `base_dir.join(crate_dir)`, unlike every other `PostBuildStep` — since
+/// the crate directory (`config.package_dir(Language::Wasm)`'s default-formula fallback,
+/// used when `[crates.output] wasm` isn't set) must already be baked into the path by
+/// the caller that constructs this step.
+#[test]
+fn run_post_build_rewrites_wasm_package_json_name_relative_to_base_dir() {
+    let base_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let pkg_dir = base_dir.path().join("crates/sample-lib-wasm/pkg/nodejs");
+    std::fs::create_dir_all(&pkg_dir).expect("failed to create pkg/nodejs");
+    std::fs::write(pkg_dir.join("package.json"), r#"{"name": "sample-lib-wasm-crate"}"#)
+        .expect("failed to write fixture package.json");
+
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["wasm"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "wasm-pack",
+        crate_suffix: "-wasm",
+        build_dep: BuildDependency::None,
+        post_build: vec![crate::core::backend::PostBuildStep::RewriteWasmPackageName {
+            package_json_path: std::path::PathBuf::from("crates/sample-lib-wasm/pkg/nodejs/package.json"),
+            package_name: config.wasm_package_name(),
+        }],
+    };
+
+    run_post_build(Language::Wasm, &build_config, &config, base_dir.path()).expect("post-build must succeed");
+
+    let rewritten =
+        std::fs::read_to_string(pkg_dir.join("package.json")).expect("failed to read rewritten package.json");
+    assert!(
+        rewritten.contains(&format!(r#""name": "{}""#, config.wasm_package_name())),
+        "{rewritten}"
+    );
+}

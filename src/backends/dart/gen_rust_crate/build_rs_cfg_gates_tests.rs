@@ -11,7 +11,7 @@
 //! Because that is a source-tree mutation, an ordinary Cargo build must return before reaching it;
 //! the repair belongs only in the successful explicit FRB regeneration arm.
 
-use super::cargo::emit_build_rs;
+use super::build_rs::emit_build_rs;
 use syn::{Expr, Stmt};
 
 fn generated_build_rs() -> String {
