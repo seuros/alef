@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dart bridge-coverage no longer reports a present function as missing when `dartfmt` wraps its
+  return type.** `missing_bridge_functions` looked for a facade function's camelCase name in the
+  generated bridge with a literal `" name("` substring check, which only holds while the return
+  type and the name share a line. A long return type wrapped onto its own line put a newline
+  before the name, the match failed, and the post-build check aborted the whole run — taking the
+  stubs, public-API, e2e, test-apps, README, and docs stages with it. The sibling
+  `filter_excluded_functions` used the same idiom and had the same latent bug (a line-wrapped
+  excluded function was silently never stripped). Both now share one token-boundary matcher that
+  is insensitive to whatever whitespace `dartfmt` emits.
+- **C e2e renders a deliberately empty `mock_url_list` literally instead of falling back to mock
+  scaffolding.** The engine-factory pattern collapsed the preserved URL list to its first element,
+  which made "declared empty on purpose" indistinguishable from "unset" and emitted
+  `getenv("MOCK_SERVER_URL")` scaffolding for a fixture that had explicitly asked for no URLs.
+  C's engine-factory pattern was the only site affected — every other backend passes the whole
+  list through to an empty collection literal.
+- **A `# Note` section is no longer emitted twice in generated docs.** Two parsers read the same
+  rustdoc and disagreed about who owned the section: `convert_doc_headings_to_bold` turned it into
+  a `**Note:**` label, while `parse_rustdoc_sections` — which does not recognise `note` — folded
+  the raw heading into whichever section preceded it, usually `# Example`. Both paths now consult
+  one shared list of bold-labelled section names, so they cannot drift apart again.
+- **`alef check-registry --registry github-release` authenticates.** It sent no `Authorization`
+  header, so it used the 60 req/hour anonymous limit shared across the runner IP pool and got
+  HTTP 403s. It now sends `GITHUB_TOKEN` (falling back to `GH_TOKEN`); an empty value falls
+  through rather than forcing an anonymous request.
+- **A failed registry pre-check no longer turns a successful publish run red.** The three
+  `check-*` steps in `publish.yaml` are advisory — every downstream job already runs under
+  `always()` and treats a missing output as "not published yet" — so they now carry
+  `continue-on-error: true`. alef v0.66.0 published correctly to crates.io while its run reported
+  failure for exactly this reason.
+
+### Added
+
+- Table-order coverage for the Dart and Swift bridge-crate `Cargo.toml` emitters, which were the
+  only two of eleven emission sites with no test driving their real output through the
+  `cargo_sort_order` checker. Both were already canonical; the tests keep them that way.
+
 ## [0.66.0] - 2026-08-23
 
 ### Added
