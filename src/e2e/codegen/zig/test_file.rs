@@ -719,6 +719,7 @@ pub(super) fn render_snippet_body(
     ffi_prefix: &str,
     config: &ResolvedCrateConfig,
     type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> anyhow::Result<String> {
     let call = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -798,7 +799,7 @@ pub(super) fn render_snippet_body(
     // fixtures keep the whole-payload print below. ~keep
     let binds_typed_result = !expects_error && !call.returns_void && !body.contains("const _result_json =");
     let presentation = if binds_typed_result {
-        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig", type_defs)
+        crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "zig", type_defs, functions)
     } else {
         Vec::new()
     };

@@ -144,7 +144,20 @@ impl E2eCodegen for RCodegen {
         e2e_config: &E2eConfig,
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        self.render_snippet_body_with_functions(fixture, e2e_config, config, type_defs, enums, &[], &[])
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
         _enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
         let call = e2e_config.resolve_call_for_fixture(
             fixture.call.as_deref(),
@@ -191,7 +204,7 @@ impl E2eCodegen for RCodegen {
         let presentation = if call.returns_void || expects_error {
             Vec::new()
         } else {
-            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r", type_defs)
+            crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "r", type_defs, functions)
         };
         let body = if call.returns_void || expects_error || !presentation.is_empty() {
             body

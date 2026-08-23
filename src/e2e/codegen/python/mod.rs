@@ -156,7 +156,7 @@ impl super::E2eCodegen for PythonE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, &[])
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, &[], &[])
     }
 
     fn render_snippet_body_with_functions(
@@ -166,10 +166,10 @@ impl super::E2eCodegen for PythonE2eCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<String> {
-        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, errors)
+        snippet::render_snippet_body(fixture, e2e_config, config, type_defs, enums, errors, functions)
     }
 
     fn language_name(&self) -> &'static str {

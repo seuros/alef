@@ -92,6 +92,13 @@ impl FieldResolver {
         if self.is_optional_direct(field) {
             return true;
         }
+        // Anchored IR answer: the leaf is optional on the exact type this path reaches from the
+        // call's declared result type. Consulted only after the config-declared sets, so an
+        // explicit `fields_optional` entry still wins, and it can only add a `true` — a `None`
+        // root type (no IR, or an unresolvable call) makes it a no-op. ~keep
+        if super::super::ir_result_fields::is_optional_path(&self.ir_result_field_map, self.resolve(field)) {
+            return true;
+        }
         // Namespace-prefix fallback: paths like `interaction.action_results[0].data`
         // strip the virtual `interaction.` prefix before consulting `optional_fields`,
         // matching the same convention used by `is_valid_for_result`.
@@ -255,6 +262,16 @@ impl FieldResolver {
         let resolved = self.resolve(fixture_field);
         let first_segment = resolved.split('.').next().unwrap_or(resolved);
         let first_segment = first_segment.split('[').next().unwrap_or(first_segment);
+        // The anchored oracle answers first and last: when the call's own result type is known,
+        // whether IT declares this member is the whole question, and a name reachable on some
+        // other struct entirely is not evidence about this one. Only reached when a root type
+        // resolved AND this map carries its fields; `None` from here falls through to the flat,
+        // name-keyed answer below, which is what every IR-less call site still gets. ~keep
+        if let Some(declared) =
+            super::super::ir_result_fields::root_declares_first_segment(&self.ir_result_field_map, first_segment)
+        {
+            return Some(declared || self.namespace_prefix_reaches_a_declared_field(resolved));
+        }
         if self.ir_known_excluded_fields.contains(first_segment) {
             return Some(false);
         }
@@ -271,6 +288,21 @@ impl FieldResolver {
             }
         }
         Some(false)
+    }
+
+    /// The namespace-prefix rescue, against the anchored result type: a path deliberately
+    /// spelled `browser.browser_used` must not be rejected for its virtual first segment when
+    /// the result type declares `browser_used`. Same rule
+    /// [`Self::result_field_oracle_knows`] applies to the flat sets, asked of the one type the
+    /// call actually returns.
+    fn namespace_prefix_reaches_a_declared_field(&self, resolved: &str) -> bool {
+        let Some(suffix) = self.namespace_stripped_path(resolved) else {
+            return false;
+        };
+        let suffix_first = suffix.split('.').next().unwrap_or(suffix);
+        let suffix_first = suffix_first.split('[').next().unwrap_or(suffix_first);
+        super::super::ir_result_fields::root_declares_first_segment(&self.ir_result_field_map, suffix_first)
+            == Some(true)
     }
 
     /// True when `fixture_field` (or its alias-resolved path) is referenced by one of

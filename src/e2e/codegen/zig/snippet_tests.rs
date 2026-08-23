@@ -17,8 +17,16 @@ fn client_factory_snippet_never_points_the_reader_at_the_mock_server() {
             ..Default::default()
         },
     );
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(
         !rendered.contains("MOCK_SERVER"),
@@ -72,8 +80,16 @@ fn client_factory_snippet_renders_the_base_url_the_fixture_documents() {
         },
     );
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(
         rendered.contains(
@@ -104,8 +120,16 @@ fn client_factory_snippet_without_docs_client_keeps_the_base_url_slot_null() {
         },
     );
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(
         rendered.contains("sample.create_client(std.mem.span(_api_key), null, null, null, null)"),
@@ -165,8 +189,16 @@ fn snippet_keeps_import_and_call_without_test_harness() {
     };
     let mut e2e = E2eConfig::default();
     e2e.call.function = "count".into();
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
     assert!(rendered.contains("const sample = @import(\"sample\")"));
     assert!(rendered.contains("const result = try sample.count()"));
     assert!(rendered.contains("std.debug.print(\"{any}\\n\", .{result})"));
@@ -190,8 +222,16 @@ fn documented_presentation_binds_the_result_and_reads_the_shown_fields() {
     e2e.call.function = "process".into();
     e2e.result_fields = ["summary".to_string(), "items".to_string()].into_iter().collect();
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(rendered.contains("const result = try sample.process()"), "{rendered}");
     assert!(
@@ -232,8 +272,16 @@ fn json_struct_result_keeps_the_payload_print_instead_of_field_accessors() {
         },
     );
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(!rendered.contains("result.summary"), "{rendered}");
     assert!(
@@ -259,8 +307,16 @@ fn json_result_snippet_consumes_and_frees_the_result() {
         },
     );
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(
         rendered.contains("const _result_json = try sample.process()"),
@@ -312,8 +368,16 @@ fn expected_error_snippet_prints_caught_error_name() {
     });
     let mut e2e = E2eConfig::default();
     e2e.call.function = "parse".into();
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
     assert!(rendered.contains("else |err|"));
     assert!(rendered.contains("call failed as expected"));
     assert!(rendered.contains("return error.TestUnexpectedResult"));
@@ -333,8 +397,16 @@ fn visitor_snippet_reuses_native_callback_setup() {
     });
     let mut e2e = E2eConfig::default();
     e2e.call.function = "render_document".into();
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("visitor snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("visitor snippet renders");
     assert!(rendered.contains("pub fn main() !void"));
     assert!(rendered.contains("_visitor"));
     assert!(!rendered.contains("test \""));
@@ -353,8 +425,16 @@ fn streaming_snippet_reuses_error_union_call_preparation() {
     e2e.call.function = "stream_items".into();
     e2e.call.streaming = Some(crate::core::config::e2e::StreamingConfig::Enabled(true));
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("streaming snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("streaming snippet renders");
 
     assert!(rendered.contains("stream_items"), "{rendered}");
     assert!(rendered.contains("pub fn main() !void"));
@@ -469,8 +549,16 @@ fn docs_bytes_fixture_and_config() -> (Fixture, E2eConfig) {
 fn snippet_target_never_references_std_testing_for_a_docs_bytes_input() {
     let (fixture, e2e) = docs_bytes_fixture_and_config();
 
-    let rendered = render_snippet_body(&fixture, &e2e, "sample", "sample", &ResolvedCrateConfig::default(), &[])
-        .expect("snippet renders");
+    let rendered = render_snippet_body(
+        &fixture,
+        &e2e,
+        "sample",
+        "sample",
+        &ResolvedCrateConfig::default(),
+        &[],
+        &[],
+    )
+    .expect("snippet renders");
 
     assert!(rendered.contains("readFileAlloc"), "{rendered}");
     assert!(rendered.contains("std.Io.Threaded"), "{rendered}");

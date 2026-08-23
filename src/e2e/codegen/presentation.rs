@@ -45,6 +45,7 @@ pub(crate) fn resolve(
     e2e_config: &E2eConfig,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Vec<PresentationOperation> {
     if fixture.docs.is_none() {
         return Vec::new();
@@ -56,8 +57,8 @@ pub(crate) fn resolve(
         &fixture.tags,
         &fixture.input,
     );
-    let resolver = build_resolver(e2e_config, call, type_defs);
-    resolve_with(fixture, e2e_config, language, &resolver)
+    let resolver = build_resolver(e2e_config, call, language, type_defs, functions);
+    resolve_with(fixture, e2e_config, language, &resolver, type_defs, functions)
 }
 
 /// The bare, IR-backed resolver [`resolve`] answers with. Shared with [`apply_derived_shows`] so
@@ -66,17 +67,50 @@ pub(crate) fn resolve(
 fn build_resolver(
     e2e_config: &E2eConfig,
     call: &crate::core::config::e2e::CallConfig,
+    language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> FieldResolver {
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    FieldResolver::new(
-        e2e_config.effective_fields(call),
-        e2e_config.effective_fields_optional(call),
-        e2e_config.effective_result_fields(call),
-        e2e_config.effective_fields_array(call),
-        e2e_config.effective_fields_method_calls(call),
+    anchor_to_declared_result_type(
+        FieldResolver::new(
+            e2e_config.effective_fields(call),
+            e2e_config.effective_fields_optional(call),
+            e2e_config.effective_result_fields(call),
+            e2e_config.effective_fields_array(call),
+            e2e_config.effective_fields_method_calls(call),
+        )
+        .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields),
+        call,
+        language,
+        type_defs,
+        functions,
     )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+}
+
+/// Attach the field facts of the call's OWN declared result type to `resolver`.
+///
+/// ~keep Everything a snippet needs to know about a field — may it be absent, is it a member of
+/// the result at all — is a fact about one specific type, but `FieldResolver`'s IR sets are keyed
+/// by bare name across the whole crate, because nothing had ever handed this layer the identity
+/// of the type under generation. `resolve_declared_result_type` is that identity, and it is the
+/// same anchor `IrEnumMap`/`IrCollectionMap` already resolve for the same reason. A call whose
+/// return type does not resolve (no `functions`/`type_defs` in scope, an unresolvable name,
+/// disagreeing same-named methods) yields a `None` root, which leaves every anchored answer
+/// disabled and the pre-existing flat behaviour exactly intact.
+fn anchor_to_declared_result_type(
+    resolver: FieldResolver,
+    call: &crate::core::config::e2e::CallConfig,
+    language: &str,
+    type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> FieldResolver {
+    let root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call,
+        language,
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
+    resolver.with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, language), root_type)
 }
 
 /// Write the field paths [`resolve`] would derive from `fixture`'s own assertions into the
@@ -100,6 +134,7 @@ pub(crate) fn apply_derived_shows(
     e2e_config: &E2eConfig,
     language: &str,
     type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) {
     if fixture.docs.is_none() || fixture.has_docs_presentation() {
         return;
@@ -111,7 +146,7 @@ pub(crate) fn apply_derived_shows(
         &fixture.tags,
         &fixture.input,
     );
-    let resolver = build_resolver(e2e_config, call, type_defs);
+    let resolver = build_resolver(e2e_config, call, language, type_defs, functions);
     let paths: Vec<String> = default_operations_from_assertions(fixture, call, language, &resolver)
         .into_iter()
         .filter_map(|operation| match operation {
@@ -147,6 +182,8 @@ pub(crate) fn resolve_with(
     e2e_config: &E2eConfig,
     language: &str,
     resolver: &FieldResolver,
+    type_defs: &[crate::core::ir::TypeDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) -> Vec<PresentationOperation> {
     let Some(docs) = fixture.docs.as_ref() else {
         return Vec::new();
@@ -158,6 +195,10 @@ pub(crate) fn resolve_with(
         &fixture.tags,
         &fixture.input,
     );
+    // The two callers that supply their own resolver (php's getter map, swift's first-class map)
+    // build it from config alone, so the anchoring has to be applied here rather than at each
+    // construction site -- one place decides what a snippet knows about its result type. ~keep
+    let resolver = &anchor_to_declared_result_type(resolver.clone(), call, language, type_defs, functions);
     let result_var = call.effective_result_var();
     let result_root = root_variable(language, result_var);
     let operations = docs
@@ -185,6 +226,16 @@ pub(crate) fn resolve_with(
     } else {
         operations
     };
+    // Only now are the paths this snippet will render known, and the accessor renderers read
+    // optionality out of a path set rather than by asking a question -- so the anchored answer
+    // for exactly these paths has to be materialised into that set before anything renders. An
+    // `Iterate` operation's per-item `fields` are deliberately left out: they are rooted at the
+    // loop variable, not at the result, so the result type is the wrong anchor for them. ~keep
+    let resolver = &resolver
+        .clone()
+        .with_anchored_optional_paths(operations.iter().map(|operation| match operation {
+            FixtureDocsOperation::Show { path, .. } | FixtureDocsOperation::Iterate { path, .. } => path.as_str(),
+        }));
     operations
         .iter()
         .map(|operation| match operation {
@@ -491,8 +542,8 @@ mod tests {
                 is_async => false, presentation => operations },
             )
         };
-        let displayed = render(resolve(&display_fixture, &config, "rust", &[]));
-        let debugged = render(resolve(&debug_fixture, &config, "rust", &[]));
+        let displayed = render(resolve(&display_fixture, &config, "rust", &[], &[]));
+        let debugged = render(resolve(&debug_fixture, &config, "rust", &[], &[]));
 
         assert!(displayed.contains("println!(\"{}\", result.text);"), "{displayed}");
         assert!(debugged.contains("println!(\"{:?}\", result.text);"), "{debugged}");
@@ -502,8 +553,8 @@ mod tests {
     fn presentation_templates_emit_idiomatic_python_rust_and_typescript() {
         let fixture = fixture();
         let config = config();
-        let python = resolve(&fixture, &config, "python", &[]);
-        let rust = resolve(&fixture, &config, "rust", &[]);
+        let python = resolve(&fixture, &config, "python", &[], &[]);
+        let rust = resolve(&fixture, &config, "rust", &[], &[]);
         let mut typescript_fixture = fixture.clone();
         typescript_fixture
             .docs
@@ -517,7 +568,7 @@ mod tests {
             display: true,
             optional: true,
         }];
-        let typescript = resolve(&typescript_fixture, &config, "node", &[]);
+        let typescript = resolve(&typescript_fixture, &config, "node", &[], &[]);
 
         let python_output = crate::e2e::template_env::render(
             "python/snippet_body.py.jinja",
@@ -594,7 +645,7 @@ mod tests {
         let mut stale_config = config();
         stale_config.fields_optional = ["results[0].elements".to_string()].into_iter().collect();
 
-        let operations = resolve(&stale_fixture, &stale_config, "node", &[]);
+        let operations = resolve(&stale_fixture, &stale_config, "node", &[], &[]);
         let iterate = operations.first().expect("one iterate operation");
         assert!(
             iterate.optional,
@@ -650,8 +701,8 @@ mod tests {
             ..TypeDef::default()
         };
 
-        let without_ir = resolve(&show_fixture, &config, "rust", &[]);
-        let with_ir = resolve(&show_fixture, &config, "rust", &[process_result]);
+        let without_ir = resolve(&show_fixture, &config, "rust", &[], &[]);
+        let with_ir = resolve(&show_fixture, &config, "rust", &[process_result], &[]);
 
         assert_eq!(
             without_ir[0].expression, "result.data.kind",
@@ -693,12 +744,12 @@ mod tests {
             ..E2eConfig::default()
         };
 
-        let python = resolve(&fixture, &config, "python", &[]);
+        let python = resolve(&fixture, &config, "python", &[], &[]);
         assert_eq!(python.len(), 1, "the duplicate 'content' field must not be shown twice");
         assert_eq!(python[0].kind, "show");
         assert_eq!(python[0].expression, "result.content");
 
-        let rust = resolve(&fixture, &config, "rust", &[]);
+        let rust = resolve(&fixture, &config, "rust", &[], &[]);
         assert_eq!(rust[0].expression, "result.content");
     }
 
@@ -716,7 +767,7 @@ mod tests {
         .expect("fixture must parse");
         let config = config();
 
-        assert!(resolve(&fixture, &config, "python", &[]).is_empty());
+        assert!(resolve(&fixture, &config, "python", &[], &[]).is_empty());
     }
 
     /// A void call has no result to access; even a fixture whose assertions happen to name a
@@ -734,10 +785,14 @@ mod tests {
         let mut config = config();
         config.call.returns_void = true;
 
-        assert!(resolve(&fixture, &config, "python", &[]).is_empty());
+        assert!(resolve(&fixture, &config, "python", &[], &[]).is_empty());
     }
 }
 
 #[cfg(test)]
 #[path = "presentation/derived_show_resolution_tests.rs"]
 mod derived_show_resolution_tests;
+
+#[cfg(test)]
+#[path = "presentation/anchored_result_facts_tests.rs"]
+mod anchored_result_facts_tests;

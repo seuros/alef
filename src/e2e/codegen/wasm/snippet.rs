@@ -70,6 +70,7 @@ pub(super) fn render(
             e2e_config,
             type_defs,
             enums,
+            functions,
             wasm_type_prefix: &wasm_type_prefix,
             config,
         });
