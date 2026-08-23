@@ -298,6 +298,7 @@ impl Backend for DartBackend {
                     "generate",
                     "--config-file",
                     "packages/dart/rust/flutter_rust_bridge.yaml",
+                    "--no-deps-check",
                 ],
             }],
         })
@@ -361,6 +362,7 @@ impl DartBackend {
                             "generate",
                             "--config-file",
                             "packages/dart/rust/flutter_rust_bridge.yaml",
+                            "--no-deps-check",
                         ],
                     }]
                 };

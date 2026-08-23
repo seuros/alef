@@ -1139,6 +1139,10 @@ mod build_rs_tests {
             "the opt-in env var must be checked before flutter_rust_bridge_codegen is invoked; got:\n{}",
             file.content
         );
+        assert!(
+            file.content.contains(r#""--no-deps-check""#),
+            "the opt-in path must tolerate valid prerelease Dart dependencies"
+        );
         syn::parse_file(&file.content).expect("generated build.rs must be valid Rust");
     }
 

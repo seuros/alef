@@ -45,7 +45,12 @@ fn main() {
     }
 
     match std::process::Command::new("flutter_rust_bridge_codegen")
-        .args(["generate", "--config-file", "flutter_rust_bridge.yaml"])
+        .args([
+            "generate",
+            "--config-file",
+            "flutter_rust_bridge.yaml",
+            "--no-deps-check",
+        ])
         .status()
     {
         Ok(status) if status.success() => {
