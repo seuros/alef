@@ -315,6 +315,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/kotlin/snippet_json_object_setup.jinja"),
     ),
     (
+        "kotlin/test_imports.kt.jinja",
+        include_str!("templates/kotlin/test_imports.kt.jinja"),
+    ),
+    (
         "ruby/docs_file_read.jinja",
         include_str!("templates/ruby/docs_file_read.jinja"),
     ),

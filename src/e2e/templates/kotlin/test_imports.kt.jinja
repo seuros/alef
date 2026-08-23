@@ -1,0 +1,9 @@
+{#- Import block of a generated Kotlin e2e test file.
+
+    Context variables:
+    - imports: list of import paths, already ordered, package-qualified and de-duplicated by
+      the caller. Emitted verbatim, one `import` declaration each.
+#}
+{% for path in imports %}
+import {{ path }}
+{% endfor %}

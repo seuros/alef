@@ -421,3 +421,36 @@ fn node_type_name_never_adds_the_js_wrapper_prefix() {
         assert_eq!(node_type_name(input), expected, "node_type_name({input:?})");
     }
 }
+
+/// `qualified_type_path` is the single decision point for "does this name already carry a
+/// package". Table-driven: every emitter that prefixes a JVM/.NET package onto a configured type
+/// name routes through here, so a regression in any row doubles a package prefix in generated code.
+#[test]
+fn qualified_type_path_prefixes_bare_names_and_leaves_qualified_ones_alone() {
+    let cases = [
+        (
+            "dev.sample.bindings",
+            "SampleClient",
+            "dev.sample.bindings.SampleClient",
+        ),
+        (
+            "dev.sample.bindings",
+            "dev.sample.bindings.SampleClient",
+            "dev.sample.bindings.SampleClient",
+        ),
+        (
+            "dev.sample.bindings",
+            "other.pkg.SampleClient",
+            "other.pkg.SampleClient",
+        ),
+        ("dev.sample.bindings", "*", "dev.sample.bindings.*"),
+        ("", "SampleClient", "SampleClient"),
+    ];
+    for (package, type_name, expected) in cases {
+        assert_eq!(
+            qualified_type_path(package, type_name),
+            expected,
+            "qualified_type_path({package:?}, {type_name:?})"
+        );
+    }
+}
