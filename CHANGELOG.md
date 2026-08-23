@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   redirects and `include!` splicing the way `rustc` resolves them -- the durable guard against a
   test file silently never compiling (#211).
 
+### Removed
+
+- `template_versions::cargo::FLUTTER_RUST_BRIDGE_CODEGEN`: the constant carried a renovate marker
+  but was read nowhere in the tree. The `flutter_rust_bridge_codegen` version gate ships through
+  `[crates.dart] frb_version` (resolved by `backends::dart::naming::dart_frb_version`, defaulting
+  to the sibling `FLUTTER_RUST_BRIDGE`), so the second constant was a renovate-bumpable duplicate
+  of the same version with nothing keeping the two in sync (#218).
+
 ## [0.67.2] - 2026-08-23
 
 ### Fixed
