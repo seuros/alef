@@ -16,7 +16,10 @@
 #}
 {% if assertion_type == "equals" %}
 {% if is_string_val %}
-    try testing.expectEqualStrings({{ zig_val }}, std.mem.trim(u8, {{ field_expr }}.string, " \n\r\t"));
+{# Equals is exact: neither side is normalized. Trimming only the actual value made every #}
+{# fixture whose expected literal ends in `\n` unsatisfiable, and trimming both sides would #}
+{# instead mask real trailing-whitespace regressions. ~keep #}
+    try testing.expectEqualStrings({{ zig_val }}, {{ field_expr }}.string);
 {% elif is_bool_val %}
     try testing.expectEqual({{ bool_val }}, {{ field_expr }}.bool);
 {% elif is_null_val %}

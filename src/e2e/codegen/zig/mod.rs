@@ -76,6 +76,8 @@ mod args;
 mod assertions;
 mod build;
 mod enum_field_config;
+#[cfg(test)]
+mod equals_exact_string_tests;
 mod hash;
 mod http;
 #[cfg(test)]
