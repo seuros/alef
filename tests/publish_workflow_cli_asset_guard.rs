@@ -9,12 +9,18 @@
 //! Everything here is extracted from the committed workflow and executed, rather than
 //! transcribed, so the test cannot drift away from what CI actually runs.
 
+#[cfg(unix)]
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(unix)]
 use std::process::Command;
 
 const WORKFLOW: &str = ".github/workflows/publish.yaml";
+#[cfg(unix)]
 const TARGETS_FILE: &str = ".github/cli-targets.json";
+#[cfg(unix)]
 const RESOLVE_STEP_ID: &str = "cli-targets";
 
 fn repo_root() -> PathBuf {
@@ -46,6 +52,7 @@ fn step_with_id(job: &serde_yaml::Value, id: &str) -> serde_yaml::Value {
         .unwrap_or_else(|| panic!("no step with id `{id}`"))
 }
 
+#[cfg(unix)]
 fn step_named(job: &serde_yaml::Value, name: &str) -> serde_yaml::Value {
     steps(job)
         .into_iter()
@@ -55,6 +62,7 @@ fn step_named(job: &serde_yaml::Value, name: &str) -> serde_yaml::Value {
 
 /// Run the workflow's own resolve-matrix script in `workdir` and return its `$GITHUB_OUTPUT`
 /// keys. The script text comes from the committed workflow verbatim.
+#[cfg(unix)]
 fn run_resolve_step(workdir: &Path) -> Vec<(String, String)> {
     let script = step_with_id(&job(&workflow(), "prepare"), RESOLVE_STEP_ID)["run"]
         .as_str()
@@ -89,6 +97,7 @@ fn run_resolve_step(workdir: &Path) -> Vec<(String, String)> {
         .collect()
 }
 
+#[cfg(unix)]
 fn output_value(outputs: &[(String, String)], key: &str) -> String {
     outputs
         .iter()
@@ -100,6 +109,7 @@ fn output_value(outputs: &[(String, String)], key: &str) -> String {
 
 /// The archive filename `build-cli` uploads, taken from that job's own shell and expanded for
 /// one matrix entry.
+#[cfg(unix)]
 fn archive_name_for(entry: &serde_json::Value) -> String {
     let archive_step = step_named(&job(&workflow(), "build-cli"), "Create release archive");
     let script = archive_step["run"].as_str().expect("archive step has a run block");

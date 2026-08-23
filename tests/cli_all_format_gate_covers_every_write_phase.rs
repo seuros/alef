@@ -23,6 +23,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn alef_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_alef"))
 }
@@ -51,9 +54,44 @@ fn write_fixture(root: &Path) {
     .expect("write alef config");
 }
 
-fn run_all(root: &Path) -> Output {
+fn install_test_formatter(root: &Path) -> PathBuf {
+    let bin_dir = root.join("test-bin");
+    fs::create_dir(&bin_dir).expect("create test formatter directory");
+
+    #[cfg(unix)]
+    {
+        let formatter = bin_dir.join("poly");
+        fs::write(
+            &formatter,
+            "#!/bin/sh\nif [ -f packages/python/messy.py ]; then\n  printf 'x = 1\\n' > packages/python/messy.py\nfi\n",
+        )
+        .expect("write test formatter");
+        let mut permissions = fs::metadata(&formatter)
+            .expect("read test formatter metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&formatter, permissions).expect("make test formatter executable");
+    }
+
+    #[cfg(windows)]
+    fs::write(
+        bin_dir.join("poly.cmd"),
+        "@echo off\r\nif exist packages\\python\\messy.py (\r\n  > packages\\python\\messy.py echo x = 1\r\n)\r\n",
+    )
+    .expect("write test formatter");
+
+    bin_dir
+}
+
+fn run_all(root: &Path, formatter_bin: &Path) -> Output {
+    let path = std::env::join_paths(
+        std::iter::once(formatter_bin.to_path_buf())
+            .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())),
+    )
+    .expect("construct PATH with test formatter");
     Command::new(alef_binary())
         .current_dir(root)
+        .env("PATH", path)
         .arg("all")
         .output()
         .expect("run alef all")
@@ -64,8 +102,9 @@ fn a_readme_only_change_still_formats_stray_files_and_stays_hash_stable() {
     let fixture = tempfile::tempdir().expect("create fixture directory");
     let root = fixture.path();
     write_fixture(root);
+    let formatter_bin = install_test_formatter(root);
 
-    let first = run_all(root);
+    let first = run_all(root, &formatter_bin);
     assert!(
         first.status.success(),
         "first `alef all` run must succeed: {}",
@@ -79,7 +118,7 @@ fn a_readme_only_change_still_formats_stray_files_and_stays_hash_stable() {
     let messy = root.join("packages/python/messy.py");
     fs::write(&messy, "x=1\n").expect("seed an unformatted, alef-unmanaged file");
 
-    let second = run_all(root);
+    let second = run_all(root, &formatter_bin);
     assert!(
         second.status.success(),
         "second `alef all` run must succeed: {}",
@@ -105,7 +144,7 @@ fn a_readme_only_change_still_formats_stray_files_and_stays_hash_stable() {
     );
 
     let messy_after_second = fs::read_to_string(&messy).expect("read messy.py again");
-    let third = run_all(root);
+    let third = run_all(root, &formatter_bin);
     assert!(
         third.status.success(),
         "third `alef all` run must succeed: {}",
