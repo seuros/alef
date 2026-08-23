@@ -14,6 +14,7 @@ pub mod php;
 pub mod python;
 pub mod ruby;
 pub mod swift;
+pub(crate) mod template_env;
 pub mod util;
 pub mod wasm;
 pub mod zig;
