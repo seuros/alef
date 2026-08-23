@@ -26,6 +26,7 @@ pub use gen_bindings::{
 
 pub use gen_bindings::jni_emitter::{
     emit_jni_bridge_object, emit_jni_client_class, emit_streaming_jni_external_funs, handle_only_type_names,
+    kotlin_exclude_functions, kotlin_visible_functions,
 };
 
 pub use gen_bindings::literal_normalizer;

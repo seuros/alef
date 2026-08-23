@@ -27,7 +27,6 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
     );
     emit_jni_type_shims(
         &mut out,
-        &visible_functions,
         &filtered_api,
         config,
         &excluded_functions,
@@ -44,7 +43,6 @@ pub(crate) fn emit_lib_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> Str
 #[allow(clippy::too_many_arguments)]
 fn emit_jni_type_shims(
     out: &mut String,
-    visible_functions: &[crate::core::ir::FunctionDef],
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
     excluded_functions: &std::collections::HashSet<&str>,
@@ -59,9 +57,9 @@ fn emit_jni_type_shims(
     emit_jni_value_type_shims(out, api, excluded_types, package, bridge);
     emit_opaque_return_destructors(
         out,
-        visible_functions,
         &client_types,
         api,
+        config,
         opaque_types,
         capsule_types,
         package,
@@ -293,59 +291,48 @@ fn emit_jni_value_type_shims(
     }
 }
 
+/// Destructor shims for opaque types that are reachable from Kotlin but never became a
+/// "client type" (`jni_client_types`, which already gets a destructor via
+/// [`emit_client_lifecycle_shims`]).
+///
+/// Reachability is computed by the *same* [`crate::backends::kotlin::handle_only_type_names`]
+/// predicate the kotlin_android Bridge object and handle-wrapper emitters use, fed with
+/// [`crate::backends::kotlin::kotlin_visible_functions`] /
+/// [`crate::backends::kotlin::kotlin_exclude_functions`] rather than this backend's own
+/// `visible_jni_functions` -- deliberately, so that a function excluded only via
+/// `[crates.jni].exclude_functions` (which tells this backend to skip generating that one
+/// function's *own* native shim, not to hide it from Kotlin) does not also drop the destructor
+/// for whatever opaque type it returns. Kotlin keeps calling the function and keeps needing to
+/// free what it returns either way. `client_types` stays this backend's own (broader) notion of
+/// "already has a destructor" -- it also covers streaming-adapter owners with no instance
+/// methods, which get their `nativeFree<Type>` from [`emit_client_lifecycle_shims`] instead --
+/// so nothing here ever emits a duplicate `#[no_mangle]` symbol. ~keep
 #[allow(clippy::too_many_arguments)]
 fn emit_opaque_return_destructors(
     out: &mut String,
-    functions: &[crate::core::ir::FunctionDef],
     client_types: &[&TypeDef],
     api: &ApiSurface,
+    config: &ResolvedCrateConfig,
     opaque_types: &std::collections::HashSet<&str>,
     capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
     package: &str,
     bridge: &str,
 ) {
     let client_names = client_types.iter().map(|type_def| type_def.name.as_str()).collect();
-    let return_names = opaque_return_names(functions, api, opaque_types, capsule_types, &client_names);
-    for type_name in return_names {
+    let visible_functions = crate::backends::kotlin::kotlin_visible_functions(api, config);
+    let exclude_functions = crate::backends::kotlin::kotlin_exclude_functions(config);
+    let capsule_type_names: std::collections::HashSet<&str> = capsule_types.keys().map(String::as_str).collect();
+    let return_names = crate::backends::kotlin::handle_only_type_names(
+        api,
+        &visible_functions,
+        &exclude_functions,
+        opaque_types,
+        &capsule_type_names,
+        &client_names,
+    );
+    for type_name in &return_names {
         let symbol = jni_symbol(package, bridge, &destructor_method_name(type_name));
         emit_destructor_shim(out, &symbol, type_name);
-    }
-}
-
-fn opaque_return_names<'a>(
-    functions: &'a [crate::core::ir::FunctionDef],
-    api: &'a ApiSurface,
-    opaque_types: &std::collections::HashSet<&str>,
-    capsule_types: &std::collections::HashMap<String, crate::core::config::FfiCapsuleTypeConfig>,
-    client_names: &std::collections::HashSet<&str>,
-) -> std::collections::HashSet<&'a str> {
-    let function_returns = functions.iter().map(|function| &function.return_type);
-    let method_returns = api.types.iter().flat_map(|type_def| {
-        type_def
-            .methods
-            .iter()
-            .filter(|method| !method.sanitized && !method.is_static)
-            .map(|method| &method.return_type)
-    });
-    function_returns
-        .chain(method_returns)
-        .filter_map(named_return_type)
-        .filter(|type_name| {
-            opaque_types.contains(*type_name)
-                && !capsule_types.contains_key(*type_name)
-                && !client_names.contains(*type_name)
-        })
-        .collect()
-}
-
-fn named_return_type(type_ref: &TypeRef) -> Option<&str> {
-    match type_ref {
-        TypeRef::Named(type_name) => Some(type_name),
-        TypeRef::Optional(inner) => match inner.as_ref() {
-            TypeRef::Named(type_name) => Some(type_name),
-            _ => None,
-        },
-        _ => None,
     }
 }
 
