@@ -16,13 +16,30 @@ pub struct RustdocSections {
     pub example: Option<String>,
 }
 
+/// Rustdoc section names that `docs::doc_cleaning::convert_doc_headings_to_bold` converts to an
+/// inline bold label (`**Note:**`) rather than a Markdown heading. [`RustdocSections`] has no
+/// dedicated field for these -- they carry prose only, no data any codegen path consumes
+/// structurally.
+///
+/// This is the single list both pipelines consult for these names. `parse_rustdoc_sections`
+/// must treat every name here as a section boundary of its own, even though it has nowhere to
+/// put the content: folding it into whichever section preceded it (its default behaviour for
+/// headings it doesn't recognise) would let that content resurface raw and unconverted inside
+/// e.g. the `example` field, alongside the bold label the docs pipeline already emitted for the
+/// same heading from the full doc string. That is alef #192: a `# Note` after `# Examples`
+/// rendered twice -- once correctly bolded, once leaked verbatim into the Example block. ~keep
+pub const BOLD_LABEL_ONLY_SECTION_NAMES: &[&str] = &["errors", "returns", "panics", "safety", "notes", "note"];
+
 /// Parse a rustdoc string into [`RustdocSections`].
 ///
 /// Recognises level-1 ATX headings whose name matches one of the standard
 /// rustdoc section names (`Arguments`, `Returns`, `Errors`, `Panics`,
 /// `Safety`, `Example`, `Examples`). Anything before the first heading
 /// becomes `summary`. Unrecognised headings are folded into the
-/// preceding section verbatim, so unconventional rustdoc isn't lost.
+/// preceding section verbatim, so unconventional rustdoc isn't lost --
+/// except for [`BOLD_LABEL_ONLY_SECTION_NAMES`], which end the current
+/// section and are dropped rather than folded in, since another pipeline
+/// already owns and emits that content. ~keep
 ///
 /// The input is expected to already have rustdoc-hidden lines stripped
 /// and intra-doc-link syntax rewritten by
@@ -41,6 +58,9 @@ pub fn parse_rustdoc_sections(doc: &str) -> RustdocSections {
     let mut current: Option<&'static str> = None;
     let mut buf = String::new();
     let mut in_fence = false;
+    // While true, incoming lines belong to a section owned elsewhere (see
+    // `BOLD_LABEL_ONLY_SECTION_NAMES`) and must not be folded into `buf`.
+    let mut dropping = false;
     let flush = |target: Option<&'static str>,
                  buf: &mut String,
                  summary: &mut String,
@@ -74,8 +94,10 @@ pub fn parse_rustdoc_sections(doc: &str) -> RustdocSections {
         let trimmed = line.trim_start();
         if trimmed.starts_with("```") {
             in_fence = !in_fence;
-            buf.push_str(line);
-            buf.push('\n');
+            if !dropping {
+                buf.push_str(line);
+                buf.push('\n');
+            }
             continue;
         }
         if !in_fence && let Some(rest) = trimmed.strip_prefix("# ") {
@@ -102,11 +124,30 @@ pub fn parse_rustdoc_sections(doc: &str) -> RustdocSections {
                     &mut example,
                 );
                 current = target;
+                dropping = false;
+                continue;
+            }
+            if BOLD_LABEL_ONLY_SECTION_NAMES.contains(&head.as_str()) {
+                flush(
+                    current,
+                    &mut buf,
+                    &mut summary,
+                    &mut arguments,
+                    &mut returns,
+                    &mut errors,
+                    &mut panics,
+                    &mut safety,
+                    &mut example,
+                );
+                current = None;
+                dropping = true;
                 continue;
             }
         }
-        buf.push_str(line);
-        buf.push('\n');
+        if !dropping {
+            buf.push_str(line);
+            buf.push('\n');
+        }
     }
     flush(
         current,

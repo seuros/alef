@@ -171,6 +171,40 @@ fn test_parse_rustdoc_sections_pound_inside_fence_is_not_a_heading() {
     assert!(sections.example.as_ref().unwrap().contains("# install deps"));
 }
 
+/// ~keep Regression for alef #192: a `# Note` heading following `# Example` must not be folded
+/// into `example` -- that field is emitted raw by `docs::examples::render_function_example`,
+/// and `docs::doc_cleaning::convert_doc_headings_to_bold` already converts the same `# Note`
+/// heading (read from the full doc string, independently of this parser) into a `**Note:**`
+/// bold label elsewhere on the page. If this parser folded the heading in too, the note content
+/// would be emitted twice.
+#[test]
+fn test_parse_rustdoc_sections_note_after_example_is_not_folded_into_example() {
+    let doc = "Run the thing.\n\n# Example\n\n```rust\nlet x = run();\n```\n\n# Note\n\nThis is a note.";
+    let sections = parse_rustdoc_sections(doc);
+    let example = sections.example.as_deref().unwrap_or_default();
+    assert!(example.contains("let x = run();"), "example: {example}");
+    assert!(!example.contains("Note"), "note content leaked into example: {example}");
+    assert!(
+        !example.contains("This is a note."),
+        "note content leaked into example: {example}"
+    );
+}
+
+/// ~keep Same regression as above, but for a bare `# Notes` (plural) heading and for the case
+/// where the preceding section is `# Safety` rather than `# Example` -- confirms the fix isn't
+/// scoped to one specific preceding section.
+#[test]
+fn test_parse_rustdoc_sections_notes_after_safety_is_not_folded_into_safety() {
+    let doc = "Do the thing.\n\n# Safety\n\nCaller must ensure `ptr` is valid.\n\n# Notes\n\nExtra context.";
+    let sections = parse_rustdoc_sections(doc);
+    let safety = sections.safety.as_deref().unwrap_or_default();
+    assert!(safety.contains("Caller must ensure"), "safety: {safety}");
+    assert!(
+        !safety.contains("Extra context."),
+        "notes content leaked into safety: {safety}"
+    );
+}
+
 #[test]
 fn test_parse_arguments_bullets_dash_separator() {
     let body = "* `path` - The file path.\n* `config` - Optional configuration.";

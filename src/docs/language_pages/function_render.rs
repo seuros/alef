@@ -217,6 +217,58 @@ mod tests {
     use super::*;
     use crate::docs::test_helpers::{TEST_CRATE_NAME, TEST_PREFIX, make_function, make_param};
 
+    /// ~keep Reproduces alef #192: a `# Note` section that follows a `# Examples` section in a
+    /// rustdoc comment was emitted twice on the generated function entry -- once correctly
+    /// converted to a `**Note:**` bold label by `clean_doc`, and a second time raw and
+    /// unconverted, leaked verbatim into the `**Example:**` code block. The leak happened
+    /// because `codegen::doc_emission::parse_rustdoc_sections` (which powers the Example
+    /// block) has its own, independent whitelist of recognised headings that does not include
+    /// `note`, so an unrecognised `# Note` heading was folded into whatever section came
+    /// before it -- `example`, if that's the last recognised heading in the doc. This doc
+    /// mirrors the real shape from `xberg::chunking::count_tokens`: Arguments, then an Example
+    /// code fence, then a trailing Note section.
+    #[test]
+    fn test_note_section_after_examples_is_not_emitted_twice() {
+        let mut func = make_function("count_tokens", vec![], TypeRef::String, false, None);
+        func.doc = r#"Count the number of tokens in `text`.
+
+# Arguments
+
+* `text` - The text to tokenize.
+
+# Example
+
+```rust,no_run
+let n = count_tokens("hello");
+```
+
+# Note
+
+This function is intentionally excluded from language bindings."#
+            .to_string();
+
+        let doc_body = {
+            let doc = clean_doc(&func.doc, Language::Rust);
+            demote_headings_to_start_at(&doc, 5)
+        };
+        let example = render_function_example(&func, Language::Rust, TEST_PREFIX);
+        let rendered = format!("{doc_body}\n\n{example}");
+
+        assert_eq!(
+            rendered.matches("**Note:**").count(),
+            1,
+            "the Note section must be converted to a bold label exactly once: {rendered}"
+        );
+        assert!(
+            !rendered
+                .lines()
+                .any(|line| line.trim_start().trim_start_matches('#').trim() == "Note"
+                    && line.trim_start().starts_with('#')),
+            "no raw, unconverted `# Note` heading (at any level) may survive in the rendered \
+             output: {rendered}"
+        );
+    }
+
     /// ~keep The signature line and the "Returns:" prose are two independent renderers
     /// describing the same function on the same generated page. For a fallible Ffi/C
     /// function whose logical return is `()`, the ABI repurposes the return as an

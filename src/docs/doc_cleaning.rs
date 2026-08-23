@@ -169,13 +169,7 @@ pub(crate) fn convert_doc_headings_to_bold(doc: &str) -> String {
         if !in_code_block && line.starts_with('#') {
             let heading_text = line.trim_start_matches('#').trim();
             let lower = heading_text.to_lowercase();
-            if lower == "errors"
-                || lower == "returns"
-                || lower == "panics"
-                || lower == "safety"
-                || lower == "notes"
-                || lower == "note"
-            {
+            if crate::codegen::doc_emission::BOLD_LABEL_ONLY_SECTION_NAMES.contains(&lower.as_str()) {
                 out.push_str(&crate::docs::template_env::render(
                     "bold_heading.jinja",
                     minijinja::context! { text => heading_text },
