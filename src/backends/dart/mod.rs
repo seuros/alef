@@ -27,4 +27,4 @@ pub use frb_rewrite::{
     strip_trailing_whitespace,
 };
 pub use gen_bindings::DartBackend;
-pub(crate) use gen_bindings::config_param_is_named_optional;
+pub(crate) use gen_bindings::{config_param_is_named_optional, frb_rust_facade_paths};

@@ -17,8 +17,8 @@ mod version_workspace;
 mod workspace_lints;
 
 pub use cleanup::cleanup_orphaned_files;
-pub(crate) use commands::build_with_environment;
 pub use commands::{build, clean, fmt, fmt_post_generate, lint, run_post_build, setup, test, test_apps_run, update};
+pub(crate) use commands::{build_with_environment, canonical_frb_generated};
 pub use extract::extract;
 pub use format::{format_generated, format_generated_reporting, warn_missing_formatters};
 pub(crate) use format::{install_poly_hooks, is_tool_available, poly_format, poly_format_strict};

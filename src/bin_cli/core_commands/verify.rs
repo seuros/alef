@@ -159,6 +159,36 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         }
     }
 
+    // Dart's FRB `frb_generated.rs` is written by `PostBuildStep::RunCommand` (an external
+    // `flutter_rust_bridge_codegen` invocation) and then rewritten in place by
+    // `PostBuildStep::CarryFrbCfgGates` -- neither goes through the guarded
+    // `write_files_report` path that stamps alef's own embedded `alef:hash:` marker, so the
+    // per-file `stale` walk above never even looks at this file: it is structurally invisible
+    // to it, not merely skipped. alef #179 was exactly this -- the file could silently drift
+    // (an unformatted `alef build` regeneration disagreeing with a formatted `alef generate`
+    // one, or `lib.rs`'s `#[cfg(...)]` gates falling out of sync) and `alef verify` reported
+    // nothing. This recomputes the same canonical form `CarryFrbCfgGates` itself would write --
+    // see `pipeline::canonical_frb_generated` -- and flags a difference as drift. It cannot
+    // prove the wire dispatch bodies still match the current API surface (that needs the real
+    // `flutter_rust_bridge_codegen` tool, which a fast read-only `verify` must not shell out
+    // to); it only proves the file is not a fixed point of the transform that already governs
+    // it. ~keep
+    let mut all_frb_generated_drift: Vec<String> = Vec::new();
+    for resolved_cfg in &crates_to_process {
+        all_frb_generated_drift.extend(frb_generated_drift(resolved_cfg, &base_dir));
+    }
+    let has_frb_generated_drift = !all_frb_generated_drift.is_empty();
+    if has_frb_generated_drift {
+        crate::bin_cli::output::line(
+            "Dart FRB bridge drift detected (frb_generated.rs is not the canonical form \
+             `CarryFrbCfgGates` would write for the current lib.rs -- run `alef generate` to \
+             regenerate and reformat it):",
+        );
+        for path in &all_frb_generated_drift {
+            crate::bin_cli::output::line(format_args!("  {path}"));
+        }
+    }
+
     let mut all_version_mismatches: Vec<String> = Vec::new();
     for resolved_cfg in &crates_to_process {
         let mismatches = pipeline::verify_versions(resolved_cfg)?;
@@ -230,6 +260,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         && !has_adoptable_frozen_files
         && !has_orphan_files
         && !has_abi_disagreement
+        && !has_frb_generated_drift
         && !has_version_issues
         && snippet_coverage_issues.is_empty()
         && untracked_records.is_empty()
@@ -371,6 +402,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
             || has_adoptable_frozen_files
             || has_orphan_files
             || has_abi_disagreement
+            || has_frb_generated_drift
             || has_stage_failures,
         has_version_issues,
         snippet_coverage_issues.len(),
@@ -409,6 +441,32 @@ fn log_managed_surface(managed_paths: &std::collections::HashSet<std::path::Path
     for path in paths {
         tracing::debug!("  managed: {}", path.display());
     }
+}
+
+/// `config`'s Dart FRB `frb_generated.rs`, as a one-line drift report (`[<crate>] <path>`), if
+/// its on-disk content is not the canonical form `PostBuildStep::CarryFrbCfgGates` would write
+/// for the current `lib.rs`. Empty when the crate does not target Dart's FRB style, or when
+/// either file is missing (nothing generated yet is not drift -- `missing_generated_files`
+/// covers files a plain `alef generate` can create; this file cannot be, since alef only ever
+/// rewrites one flutter_rust_bridge_codegen already produced). See [`run`]'s call site. ~keep
+fn frb_generated_drift(config: &crate::core::config::ResolvedCrateConfig, base_dir: &std::path::Path) -> Vec<String> {
+    let Some((lib_rs_path, frb_generated_path)) = crate::backends::dart::frb_rust_facade_paths(config) else {
+        return Vec::new();
+    };
+    let lib_rs_path = base_dir.join(lib_rs_path);
+    let frb_generated_path = base_dir.join(frb_generated_path);
+    let (Ok(lib_rs), Ok(frb_generated)) = (
+        std::fs::read_to_string(&lib_rs_path),
+        std::fs::read_to_string(&frb_generated_path),
+    ) else {
+        return Vec::new();
+    };
+
+    let canonical = pipeline::canonical_frb_generated(&lib_rs, &frb_generated, &frb_generated_path);
+    if canonical == frb_generated {
+        return Vec::new();
+    }
+    vec![format!("[{}] {}", config.name, frb_generated_path.display())]
 }
 
 /// The crate's configured `docs.snippets` roots that are not on disk, as
@@ -471,4 +529,103 @@ fn ensure_configured_snippet_directories_exist(missing: &[String], report_only: 
          reports a clean run having examined nothing",
         missing.join(", ")
     )
+}
+
+#[cfg(test)]
+mod frb_generated_drift_tests {
+    use super::frb_generated_drift;
+
+    /// A minimal single-crate, Dart-targeting config, resolved the same way
+    /// `backends::order_invariance_tests::every_language_config` builds its fixture.
+    fn dart_config(name: &str) -> crate::core::config::ResolvedCrateConfig {
+        let toml_text = format!(
+            "[workspace]\nlanguages = [\"dart\"]\n\n[[crates]]\nname = \"{name}\"\nsources = [\"src/lib.rs\"]\n"
+        );
+        let cfg: crate::core::config::new_config::NewAlefConfig =
+            toml::from_str(&toml_text).expect("test config must parse");
+        cfg.resolve().expect("test config must resolve").remove(0)
+    }
+
+    /// Writes `lib_rs`/`frb_generated_rs` at the exact paths `frb_rust_facade_paths` computes for
+    /// `config`, rooted under `base_dir`. Returns the `frb_generated.rs` path actually written, so
+    /// callers can build a canonical form against it with `pipeline::canonical_frb_generated`.
+    fn write_frb_fixture(
+        config: &crate::core::config::ResolvedCrateConfig,
+        base_dir: &std::path::Path,
+        lib_rs: &str,
+        frb_generated_rs: &str,
+    ) -> std::path::PathBuf {
+        let (lib_rs_path, frb_generated_path) =
+            crate::backends::dart::frb_rust_facade_paths(config).expect("dart FRB style always has facade paths");
+        let lib_rs_path = base_dir.join(lib_rs_path);
+        let frb_generated_path = base_dir.join(frb_generated_path);
+        std::fs::create_dir_all(lib_rs_path.parent().expect("facade path has a parent dir"))
+            .expect("create facade src dir");
+        std::fs::write(&lib_rs_path, lib_rs).expect("write facade lib.rs");
+        std::fs::write(&frb_generated_path, frb_generated_rs).expect("write frb_generated.rs");
+        frb_generated_path
+    }
+
+    const LIB_RS: &str = "pub fn add(a: i64, b: i64) -> i64 {\n    a + b\n}\n";
+    const RAW_FROM_TOOL: &str = "use flutter_rust_bridge::for_generated::{transform_result_dco, Lifetimeable, \
+                                  Lockable};\nfn wire__crate__add_impl() {}\n";
+
+    /// alef #179: before `frb_generated_drift` existed, `alef verify` had no opinion at all on a
+    /// `frb_generated.rs` left in the tool's raw, unformatted form by `alef build` -- the file
+    /// carries no alef marker, so the per-file `stale` walk never even looks at it. This proves
+    /// the new check actually catches that case instead of silently agreeing with it.
+    #[test]
+    fn flags_unformatted_frb_generated_as_drift() {
+        // `frb_generated_drift` reaches `format_rust_content` (via `canonical_frb_generated`),
+        // which resolves rustfmt's `--config-path` against `std::env::current_dir()` --
+        // process-global state shared across every test thread in this binary. Without this
+        // lock, a sibling test that legitimately chdirs mid-run (`test_support::CwdGuard`) can
+        // point rustfmt at a directory that no longer exists, making rustfmt fail and silently
+        // fall back to unformatted output -- turning this test's real assertion into a false
+        // failure unrelated to `frb_generated_drift` itself. See `test_support` module docs. ~keep
+        let _cwd_lock = crate::test_support::CWD_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        if !crate::cli::pipeline::is_tool_available("rustfmt") {
+            return;
+        }
+        let config = dart_config("sample-lib");
+        let base_dir = tempfile::tempdir().expect("tempdir");
+        write_frb_fixture(&config, base_dir.path(), LIB_RS, RAW_FROM_TOOL);
+
+        let drift = frb_generated_drift(&config, base_dir.path());
+        assert_eq!(
+            drift.len(),
+            1,
+            "unformatted frb_generated.rs must be reported as drift: {drift:?}"
+        );
+    }
+
+    /// The converse of the above: once the file already holds the canonical form
+    /// `CarryFrbCfgGates` would write, the check must be silent -- otherwise every `alef verify`
+    /// on an up-to-date tree would falsely report drift forever.
+    #[test]
+    fn is_silent_once_frb_generated_is_canonical() {
+        // Same cwd-race guard as `flags_unformatted_frb_generated_as_drift` above -- see that
+        // test's comment. ~keep
+        let _cwd_lock = crate::test_support::CWD_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+
+        if !crate::cli::pipeline::is_tool_available("rustfmt") {
+            return;
+        }
+        let config = dart_config("sample-lib");
+        let base_dir = tempfile::tempdir().expect("tempdir");
+        let frb_generated_path = write_frb_fixture(&config, base_dir.path(), LIB_RS, RAW_FROM_TOOL);
+        let canonical = crate::cli::pipeline::canonical_frb_generated(LIB_RS, RAW_FROM_TOOL, &frb_generated_path);
+        std::fs::write(&frb_generated_path, &canonical).expect("write canonical frb_generated.rs");
+
+        let drift = frb_generated_drift(&config, base_dir.path());
+        assert!(
+            drift.is_empty(),
+            "already-canonical frb_generated.rs must not be reported as drift: {drift:?}"
+        );
+    }
 }
