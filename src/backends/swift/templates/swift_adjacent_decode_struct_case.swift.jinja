@@ -1,0 +1,3 @@
+        case "{{ variant_wire }}":
+            let payload = try container.nestedContainer(keyedBy: PayloadKeys.self, forKey: .{{ content_ident }})
+            self = .{{ case_name }}({{ field_decoders }})

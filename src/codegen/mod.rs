@@ -16,6 +16,7 @@ pub mod fn_dedup;
 pub mod generators;
 pub mod keywords;
 pub mod naming;
+pub mod serde_enum_repr;
 pub mod shared;
 pub mod type_mapper;
 pub(crate) mod visitor_context;
@@ -23,3 +24,5 @@ pub(crate) mod visitor_result;
 
 #[cfg(test)]
 mod duration_wire_cross_backend_tests;
+#[cfg(test)]
+mod serde_enum_wire_cross_backend_tests;

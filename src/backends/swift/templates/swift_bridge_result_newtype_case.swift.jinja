@@ -1,1 +1,7 @@
-    case .{{ swift_case }}(let v): return "{\"{{ variant_name }}\":\"\(jsonEscapeStr(v))\"}"
+{% if repr == "adjacent" %}
+    case .{{ swift_case }}(let v): return "{\"{{ tag_key }}\":\"{{ variant_wire }}\",\"{{ content_key }}\":\"\(jsonEscapeStr(v))\"}"
+{% elif repr == "untagged" %}
+    case .{{ swift_case }}(let v): return "\"\(jsonEscapeStr(v))\""
+{% else %}
+    case .{{ swift_case }}(let v): return "{\"{{ variant_wire }}\":\"\(jsonEscapeStr(v))\"}"
+{% endif %}

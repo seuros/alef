@@ -1,0 +1,3 @@
+        case .{{ case_name }}(let {{ label }}):
+            try container.encode("{{ variant_wire }}", forKey: .{{ tag_ident }})
+            try container.{{ encode_method }}({{ label }}, forKey: .{{ content_ident }})
