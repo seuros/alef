@@ -23,7 +23,12 @@ pub(crate) fn complete_generated_artifacts(
     }
 
     crate::cli::pipeline::ensure_ffi_header_freshness(config, base_dir, || {
-        crate::cli::pipeline::build(config, &[crate::core::config::Language::Ffi], false)
+        crate::cli::pipeline::build_with_environment(
+            config,
+            &[crate::core::config::Language::Ffi],
+            false,
+            &[("ALEF_EXPORT_GENERATED_HEADERS", "1")],
+        )
     })
 }
 

@@ -6,6 +6,7 @@ mod test;
 mod test_apps;
 mod update;
 
+pub(crate) use build::build_with_environment;
 pub use build::{build, run_post_build};
 pub use clean::clean;
 pub use lint::{fmt, fmt_post_generate, lint};
