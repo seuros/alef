@@ -80,6 +80,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crate that spells out its own `[lints]` instead of inheriting is left untouched, and a
   workspace that declares no lints still just has the inheritance marker removed.
 
+- **e2e/zig**: `equals` string assertions no longer wrap `std.mem.trim` around the actual value while emitting the fixture's expected literal verbatim. Any expectation ending in a newline was unsatisfiable by construction. Both sides are now compared exactly, matching every other e2e backend. Applies to the JSON-struct assertion template and to the `metadata.format` discriminated-union path, which carried its own copy of the trim.
+- **e2e/kotlin**: a fully-qualified `[e2e.call.overrides.<lang>] class` is no longer double-qualified. The binding-class import split the name into an import path while the trait-bridge import prefixed the binding package onto it unconditionally, so generated test files carried both the correct import and an unresolvable `<pkg>.<pkg>.<Class>`, failing the Kotlin compile with `Unresolved reference`. Package qualification is now centralized in `naming::qualified_type_path`, and the import block is collected in one de-duplicating `ImportBlock` rendered from a template.
+- `alef verify` no longer reports create-once scaffold seeds stale forever. The stamping pass
+  decided which files to re-stamp from the in-memory `GeneratedFile`, while `alef verify` decides
+  from the marker on disk. A seed an earlier alef wrote with a header (`packages/go/go.mod`,
+  `packages/zig/build.zig.zon`, the Swift `RustBridge` placeholder) failed the in-memory predicate
+  and was never re-stamped, so the first input change after that pinned it stale permanently:
+  regenerating wrote nothing, `alef adopt` refused it as already alef-owned, and the file was
+  content-correct throughout. The stamp scope is now computed by `stampable_output_paths`, which
+  asks the same question verify asks — does the file on disk carry an alef marker — so the two
+  sides can no longer disagree. Only the hash line is rewritten; the seed's body is untouched.
+
+### Added
+
+- Golden vectors pinning the `alef:hash:` recipe (`compute_inputs_hash` / `compute_file_hash`) to
+  `CODEGEN_FORMAT_VERSION`, the recorded revision of that recipe. Changing the framing now fails a
+  test instead of silently invalidating every stamp in every consumer repo.
+- PHP e2e fixtures no longer drop a deliberate empty string on a `String`/`Option<String>` config
+  field. The handle-arg and `options_via = "json"` call sites ran fixture input through a
+  type-blind filter that removed every `""`, making PHP the only one of 21 backends that never
+  forwarded the value the fixture was testing (a fixture writing `bm25_query = ""` exercised the
+  default-config path instead). Both sites now use the type-aware filter, which drops `""` only on
+  an enum-typed field where it names no variant.
+- Swift documentation snippets cast an optional expression to `Any` before printing it.
+  `print`/`debugPrint` take `Any`, and Swift raises `expression implicitly coerced from 'T?' to
+  'Any'` — an error under the `-warnings-as-errors` the snippet validator compiles with. Every
+  prefix of the shown path is consulted, so an optional link (`result.markdown()?.content()`) is
+  covered alongside an optional leaf (`result.finalUrl()`); total expressions stay uncast.
+- Swift bindings now emit and parse serde's adjacent wire form for enums declared
+  `#[serde(tag = "...", content = "...")]`. The trait-bridge result encoder hardcoded serde's
+  external default, sending the bare string `"Variant"` where Rust expected
+  `{"tag":"variant","content":payload}` and rejecting every callback with
+  `invalid type: string "...", expected adjacently tagged enum ...`; the generated `Codable`
+  conformance had the same gap in the decoding direction, and trait-bridge result enums got no
+  custom `Codable` at all.
+
+### Added
+
+- `codegen::serde_enum_repr` — the single classifier for serde's four enum representations
+  (external, internal, adjacent, untagged), derived from `serde_tag` / `serde_content` /
+  `serde_untagged` in the IR. Backends must classify through it instead of re-deriving the wire
+  form.
+- A cross-backend guard (`codegen::serde_enum_wire_cross_backend_tests`) that measures each
+  backend's generated JSON for an adjacently tagged fixture enum against what `serde_json`
+  actually writes for an equivalent Rust enum, and records which backends hand-write that JSON so
+  a new one cannot drift in unexamined.
+
+### Notes
+
+- The Swift generator now fails at generation time, rather than emitting JSON Rust cannot accept,
+  for two shapes it does not support: a newtype variant of an internally tagged enum (which serde
+  itself cannot serialize) and a multi-field tuple variant of an adjacently tagged enum (whose
+  content serde writes as a JSON array).
+
 ### Added
 
 - `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
