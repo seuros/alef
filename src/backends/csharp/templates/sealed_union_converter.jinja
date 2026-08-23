@@ -1,11 +1,19 @@
 /// <summary>
 /// Custom converter for {{ class_name }} sealed union with flattened variant fields.
 /// </summary>
+{% if is_adjacent %}
+/// <remarks>
+/// Handles serde's adjacently tagged layout: the discriminator under "{{ tag_field }}" and the
+/// whole payload — object or scalar — under "{{ content_field }}". System.Text.Json's
+/// [JsonPolymorphic] cannot express this layout, so we manually (de)serialize here.
+/// </remarks>
+{% else %}
 /// <remarks>
 /// Handles JSON objects with a discriminator field ({{ tag_field }}) and variant-specific
 /// fields at the same level. System.Text.Json's [JsonPolymorphic] cannot handle
 /// this layout, so we manually deserialize here.
 /// </remarks>
+{% endif %}
 public sealed class {{ class_name }}JsonConverter : JsonConverter<{{ class_name }}>
 {
     public override {{ class_name }} Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
@@ -29,6 +37,45 @@ public sealed class {{ class_name }}JsonConverter : JsonConverter<{{ class_name 
             throw new JsonException("Discriminator field is null");
         }
 
+{% if is_adjacent %}
+        // The payload sits whole under "{{ content_field }}" and may be a scalar, so it is taken
+        // verbatim rather than reassembled from the sibling fields. Tuple-variant records
+        // (`Variant(InnerStruct value)`) expect it under a single "Value" field; struct-variant
+        // records (`Variant { field1, field2 }`) expect the payload object itself.
+        var hasContent = root.TryGetProperty("{{ content_field }}", out var contentElement);
+
+        using var ms = new MemoryStream();
+        using var writer = new Utf8JsonWriter(ms);
+        if (hasContent)
+        {
+            contentElement.WriteTo(writer);
+        }
+        else
+        {
+            writer.WriteStartObject();
+            writer.WriteEndObject();
+        }
+        writer.Flush();
+        ms.Position = 0;
+        var flatJson = ms.ToArray();
+
+        using var msWrapped = new MemoryStream();
+        using var writerWrapped = new Utf8JsonWriter(msWrapped);
+        writerWrapped.WriteStartObject();
+        writerWrapped.WritePropertyName("Value");
+        if (hasContent)
+        {
+            contentElement.WriteTo(writerWrapped);
+        }
+        else
+        {
+            writerWrapped.WriteNullValue();
+        }
+        writerWrapped.WriteEndObject();
+        writerWrapped.Flush();
+        msWrapped.Position = 0;
+        var wrappedJson = msWrapped.ToArray();
+{% else %}
         // Tuple-variant records (`Variant(InnerStruct value)`) expect a single
         // "Value" field holding the inner struct's JSON, so wrap the remaining
         // fields under "Value". Struct-variant records (`Variant { field1,
@@ -69,6 +116,7 @@ public sealed class {{ class_name }}JsonConverter : JsonConverter<{{ class_name 
         writerWrapped.Flush();
         msWrapped.Position = 0;
         var wrappedJson = msWrapped.ToArray();
+{% endif %}
 
         return tagValue switch
         {
@@ -91,11 +139,18 @@ public sealed class {{ class_name }}JsonConverter : JsonConverter<{{ class_name 
 
     public override void Write(Utf8JsonWriter writer, {{ class_name }} value, JsonSerializerOptions options)
     {
+{% if is_adjacent %}
+        // Emit the discriminator under "{{ tag_field }}" and the payload whole under
+        // "{{ content_field }}" — serde's adjacent form. Flattening the payload beside the tag
+        // is serde's *internal* form and Rust rejects it with "expected adjacently tagged enum";
+        // it also has nothing to flatten when the payload is a scalar, which dropped it outright.
+{% else %}
         // Emit the discriminator tag plus the inner variant's fields flattened at
         // the same level — mirrors the Java sealed-union serializer pattern. Turn
         // `Message.User(UserMessage value)` into `{"{{ tag_field }}":"user","content":...}`
         // not `{"value":{...}}`. Without this, sending a chat request to FFI fails
         // with "missing field {{ tag_field }}" inside Rust serde.
+{% endif %}
         string tag;
         object? inner;
         switch (value)
@@ -125,6 +180,10 @@ public sealed class {{ class_name }}JsonConverter : JsonConverter<{{ class_name 
         writer.WriteString("{{ tag_field }}", tag);
         if (inner != null)
         {
+{% if is_adjacent %}
+            writer.WritePropertyName("{{ content_field }}");
+            JsonSerializer.Serialize(writer, inner, inner.GetType(), options);
+{% else %}
             using var doc = JsonSerializer.SerializeToDocument(inner, inner.GetType(), options);
             if (doc.RootElement.ValueKind == JsonValueKind.Object)
             {
@@ -134,6 +193,7 @@ public sealed class {{ class_name }}JsonConverter : JsonConverter<{{ class_name 
                     prop.Value.WriteTo(writer);
                 }
             }
+{% endif %}
         }
         writer.WriteEndObject();
     }
