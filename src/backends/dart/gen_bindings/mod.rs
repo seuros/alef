@@ -7,7 +7,7 @@ mod trait_bridge;
 mod types;
 mod wire_value;
 
-use crate::backends::dart::naming::dart_style;
+use crate::backends::dart::naming::{dart_frb_version, dart_style};
 use crate::core::backend::{
     Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, PostProcessor,
 };
@@ -356,15 +356,23 @@ impl DartBackend {
                 let mut post_build_steps: Vec<PostBuildStep> = if skip_frb {
                     vec![]
                 } else {
-                    vec![PostBuildStep::RunCommand {
-                        cmd: "flutter_rust_bridge_codegen",
-                        args: vec![
-                            "generate",
-                            "--config-file",
-                            "packages/dart/rust/flutter_rust_bridge.yaml",
-                            "--no-deps-check",
-                        ],
-                    }]
+                    vec![
+                        // Must precede the RunCommand below: catches a `flutter_rust_bridge_codegen`
+                        // on PATH whose version disagrees with the declared `frb_version` pin before
+                        // that mismatched binary ever writes non-deterministic output (alef #204).
+                        PostBuildStep::VerifyFrbCodegenVersion {
+                            expected_version: dart_frb_version(config),
+                        },
+                        PostBuildStep::RunCommand {
+                            cmd: "flutter_rust_bridge_codegen",
+                            args: vec![
+                                "generate",
+                                "--config-file",
+                                "packages/dart/rust/flutter_rust_bridge.yaml",
+                                "--no-deps-check",
+                            ],
+                        },
+                    ]
                 };
 
                 // Gate every post-processor below on the facade/bridge actually agreeing --

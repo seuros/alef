@@ -159,6 +159,33 @@ pub enum PostBuildStep {
         /// `PostProcessor::FrbDartExcludeFunctions`) — never reported as a coverage gap.
         exclude_functions: Vec<String>,
     },
+    /// Verify the `flutter_rust_bridge_codegen` binary on `PATH` reports `expected_version`
+    /// before the `RunCommand` step right after this one invokes it.
+    ///
+    /// `flutter_rust_bridge_codegen` is not a pure function of its input: its generated
+    /// `frb_generated.rs`/`frb_generated.dart` output (import ordering, wire dispatch
+    /// structure, generated comments) is a function of *its own* version as well, so two
+    /// developers -- or a developer and CI -- with different `flutter_rust_bridge_codegen`
+    /// versions installed produce different committed bytes from identical Rust input. alef
+    /// already carries a declared pin for this (`[crates.dart] frb_version`, defaulting to
+    /// `template_versions::cargo::FLUTTER_RUST_BRIDGE`) because the generated crate's
+    /// `Cargo.toml`/`pubspec.yaml` must depend on the exact `flutter_rust_bridge` runtime
+    /// version the installed codegen binary was built against -- but nothing checked that
+    /// pin against the binary actually on `PATH` before running it (alef #204).
+    ///
+    /// This step is deliberately not the thing that changes the installed binary's version --
+    /// alef does not vendor `flutter_rust_bridge_codegen` and cannot force a specific one onto
+    /// `PATH`. It fails loudly instead, before `generate` runs, so a version mismatch is a
+    /// build error at the point it happens rather than a silent, ambient-machine-dependent diff
+    /// discovered later in review or CI. A missing binary is not this step's concern: it
+    /// resolves to `Ok(())` and lets the `RunCommand` step immediately after report the
+    /// existing "not on PATH, falling back to committed output" skip the same way it always
+    /// has. ~keep
+    VerifyFrbCodegenVersion {
+        /// The pinned `flutter_rust_bridge` version (`naming::dart_frb_version`) the installed
+        /// `flutter_rust_bridge_codegen --version` output must match exactly.
+        expected_version: String,
+    },
 }
 
 impl PostBuildStep {
@@ -224,7 +251,8 @@ impl PostBuildStep {
             | PostBuildStep::StageDartNatives { .. }
             | PostBuildStep::CarryFrbCfgGates { .. }
             | PostBuildStep::RewriteWasmPackageName { .. }
-            | PostBuildStep::VerifyFrbBridgeCoverage { .. } => Vec::new(),
+            | PostBuildStep::VerifyFrbBridgeCoverage { .. }
+            | PostBuildStep::VerifyFrbCodegenVersion { .. } => Vec::new(),
         }
     }
 }
