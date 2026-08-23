@@ -12,6 +12,7 @@ mod build_command;
 mod frb_bridge_coverage;
 mod frb_cache;
 mod frb_cfg_gates;
+mod frb_version_check;
 mod observability;
 
 use build_command::{build_command_for, output_path_for, resolve_crate_dir};
@@ -527,6 +528,10 @@ pub fn run_post_build(
                 if !ran {
                     skipped_missing_tools.push((*cmd).to_string());
                 }
+            }
+            PostBuildStep::VerifyFrbCodegenVersion { expected_version } => {
+                frb_version_check::run(frb_version_check::FLUTTER_RUST_BRIDGE_CODEGEN, expected_version)
+                    .context("post-build VerifyFrbCodegenVersion failed")?;
             }
             PostBuildStep::PostProcessFile { path, processor } => {
                 use crate::core::backend::PostProcessor;
