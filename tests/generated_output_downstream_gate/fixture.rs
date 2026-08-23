@@ -127,7 +127,22 @@ pub fn get_language(name: String) -> Result<Language, String> {
 // The fixture's own core crate derives serde, so it needs the dependency to compile. It went
 // unnoticed until the core crate became reachable from the emitted binding crates: before that
 // nothing ever built it, so an uncompilable fixture still passed every lane. ~keep
-pub(crate) const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n";
+//
+// `[lints.rust] unexpected_cfgs`'s `check-cfg` allowlist is required, not decorative: the
+// fixture source above uses alef's own `#[cfg_attr(alef, alef(skip))]` exclusion marker (see
+// `RawLanguage` and `Language::into_raw`), and `cfg(alef)` is never a real, declared cfg --
+// there is no `alef` proc-macro crate this fixture depends on, so the attribute inside each
+// `cfg_attr` never actually runs at real compile time. Without this allowlist, rustc's
+// `unexpected_cfgs` lint fires on both call sites and the clippy lane's `-D warnings` denies
+// it: this crate is a path dependency of every clippy-lane binding crate, so an unconfigured
+// core manifest fails builds it does not otherwise participate in. `alef scaffold` patches
+// this same allowlist into `[workspace.lints.rust]` when the root manifest already declares a
+// `[workspace]` (see `cli::pipeline::workspace_lints`), but this fixture's root is a plain
+// `[package]` manifest -- the common case for a small, pre-existing consumer crate -- so it
+// carries the allowlist itself, exactly as a real consumer in that shape has to today. ~keep
+pub(crate) const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"toolkit\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n\
+                                              [dependencies]\nserde = { version = \"1\", features = [\"derive\"] }\n\n\
+                                              [lints.rust]\nunexpected_cfgs = { level = \"warn\", check-cfg = ['cfg(alef)'] }\n";
 
 // `java` and `elixir` scaffolders bail `alef generate` outright when repository/license/
 // authors are unset (`scaffold::languages::java`, `scaffold::languages::elixir`), and both
