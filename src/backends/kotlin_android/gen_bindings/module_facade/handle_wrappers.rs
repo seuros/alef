@@ -44,12 +44,13 @@ pub(super) fn emit_handle_wrappers(
     // declares -- a capsule type's host runtime owns the pointer, so it is excluded from
     // both the destructor declaration and this wrapper-class-with-close() emission. See
     // `crate::backends::kotlin::handle_only_type_names` for why the two must never disagree.
+    let capsule_type_names: HashSet<&str> = capsule_types.keys().map(String::as_str).collect();
     let handle_type_names = crate::backends::kotlin::handle_only_type_names(
         api,
         visible_functions,
         &exclude_functions,
         &opaque_type_names,
-        &capsule_types,
+        &capsule_type_names,
         &client_types,
     );
     let handle_types: BTreeMap<&str, &TypeDef> = api

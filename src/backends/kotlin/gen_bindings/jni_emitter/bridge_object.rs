@@ -40,9 +40,14 @@ pub fn emit_jni_bridge_object(api: &ApiSurface, config: &ResolvedCrateConfig) ->
     render_jni_bridge_file(config, &inputs, body)
 }
 
-fn jni_bridge_inputs<'a>(api: &'a ApiSurface, config: &ResolvedCrateConfig) -> JniBridgeInputs<'a> {
-    let bridge_name = format!("{}Bridge", to_pascal_case(&config.name));
-    let exclude_functions: std::collections::HashSet<String> = config
+/// The `[crates.kotlin_android]`/`[crates.kotlin] exclude_functions` union that gates every
+/// Kotlin-side emission -- the Bridge object's own `external fun` declarations, the wrapper
+/// classes' calls, and destructor reachability. Deliberately excludes
+/// `[crates.jni].exclude_functions`: that list only tells the JNI shim generator to skip
+/// implementing one function's *own* native symbol (e.g. because the consumer hand-writes it),
+/// it does not tell Kotlin to stop calling the function. See [`kotlin_visible_functions`]. ~keep
+pub fn kotlin_exclude_functions(config: &ResolvedCrateConfig) -> std::collections::HashSet<String> {
+    config
         .kotlin_android
         .as_ref()
         .map(|android| android.exclude_functions.iter().cloned().collect())
@@ -52,16 +57,39 @@ fn jni_bridge_inputs<'a>(api: &'a ApiSurface, config: &ResolvedCrateConfig) -> J
                 .as_ref()
                 .map(|kotlin| kotlin.exclude_functions.iter().cloned().collect())
                 .unwrap_or_default()
-        });
-    let visible_functions = api
-        .functions
+        })
+}
+
+/// Top-level functions the Kotlin/kotlin_android Bridge object actually declares and calls.
+///
+/// This is the reachability set every consumer of [`handle_only_type_names`] must build from --
+/// including the JNI shim generator (`src/backends/jni`), which has its own, JNI-shim-only
+/// exclusion list (`[crates.jni].exclude_functions`, see [`kotlin_exclude_functions`]) that must
+/// never narrow which opaque return types still need a `nativeFree<Type>`: Kotlin keeps calling
+/// a function -- and keeps needing to free what it returns -- even when the JNI backend was told
+/// to skip generating that one function's own native shim. Feeding the JNI destructor emitter
+/// this function (instead of its own jni-exclusion-narrowed function list) is what keeps the
+/// Bridge object's destructor declarations and the JNI shim's destructor implementations from
+/// drifting apart again. ~keep
+pub fn kotlin_visible_functions<'a>(
+    api: &'a ApiSurface,
+    config: &ResolvedCrateConfig,
+) -> Vec<&'a crate::core::ir::FunctionDef> {
+    let exclude_functions = kotlin_exclude_functions(config);
+    api.functions
         .iter()
         .filter(|function| {
             !function.sanitized
                 && !exclude_functions.contains(function.name.as_str())
                 && !trait_bridge_manages_jni_function(function.name.as_str(), config)
         })
-        .collect();
+        .collect()
+}
+
+fn jni_bridge_inputs<'a>(api: &'a ApiSurface, config: &ResolvedCrateConfig) -> JniBridgeInputs<'a> {
+    let bridge_name = format!("{}Bridge", to_pascal_case(&config.name));
+    let exclude_functions = kotlin_exclude_functions(config);
+    let visible_functions = kotlin_visible_functions(api, config);
     JniBridgeInputs {
         exception_class: format!("{bridge_name}Exception"),
         bridge_name,
@@ -198,12 +226,13 @@ fn emit_handle_only_destructors(
         })
         .map(|type_def| type_def.name.as_str())
         .collect();
+    let capsule_type_names: std::collections::HashSet<&str> = inputs.capsule_types.keys().map(String::as_str).collect();
     let returns = handle_only_type_names(
         api,
         &inputs.visible_functions,
         &inputs.exclude_functions,
         &inputs.opaque_type_names,
-        &inputs.capsule_types,
+        &capsule_type_names,
         &client_types,
     );
     if returns.is_empty() {
@@ -225,18 +254,26 @@ fn emit_handle_only_destructors(
 /// a `nativeFree<Type>` destructor.
 ///
 /// Shared by [`emit_handle_only_destructors`] (declares each `nativeFree<Type>` external
-/// fun the Bridge object owns) and the kotlin_android handle-wrapper emitter
+/// fun the Bridge object owns), the kotlin_android handle-wrapper emitter
 /// (`kotlin_android::gen_bindings::module_facade::handle_wrappers`, which emits the `.kt`
-/// wrapper class whose `close()` calls it), so the declaration and its only call site can
-/// never name a different set of types. Returns owned names rather than borrowing from `api`
-/// so both call sites can build it from their own differently-lifetimed inputs without the
-/// two having to share a single lifetime parameter. ~keep
+/// wrapper class whose `close()` calls it), and the `jni` shim generator
+/// (`src/backends/jni/gen_shims/top_level.rs`, which must implement the exact same set of
+/// `Java_..._nativeFree<Type>` symbols) -- so the declaration, its call site, and its native
+/// implementation can never name a different set of types. Returns owned names rather than
+/// borrowing from `api` so every call site can build it from its own differently-lifetimed
+/// inputs without all three having to share a single lifetime parameter.
+///
+/// `visible_functions` and `exclude_functions` must come from [`kotlin_visible_functions`] /
+/// [`kotlin_exclude_functions`] (or an equivalent that mirrors what Kotlin actually calls) --
+/// never from a native-shim-only exclusion list such as `[crates.jni].exclude_functions`, which
+/// narrows only which function gets its *own* generated native shim, not which functions Kotlin
+/// still calls (and therefore which return types still need freeing). ~keep
 pub fn handle_only_type_names(
     api: &ApiSurface,
     visible_functions: &[&crate::core::ir::FunctionDef],
     exclude_functions: &std::collections::HashSet<String>,
     opaque_type_names: &std::collections::HashSet<&str>,
-    capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    capsule_type_names: &std::collections::HashSet<&str>,
     client_types: &std::collections::HashSet<&str>,
 ) -> std::collections::BTreeSet<String> {
     let function_returns = visible_functions
@@ -247,7 +284,7 @@ pub fn handle_only_type_names(
         .filter(|type_name| {
             opaque_type_names.contains(*type_name)
                 && !client_types.contains(*type_name)
-                && !capsule_types.contains_key(*type_name)
+                && !capsule_type_names.contains(*type_name)
         })
         .map(str::to_string)
         .collect()
