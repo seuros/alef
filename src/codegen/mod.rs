@@ -8,6 +8,7 @@ pub mod c_consumer;
 pub mod cfg;
 pub mod config_gen;
 pub mod conversions;
+pub mod crate_attributes;
 pub mod defaults;
 pub mod doc_emission;
 pub mod error_gen;
