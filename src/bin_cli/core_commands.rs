@@ -637,13 +637,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
             pipeline::install_poly_hooks(&base_dir);
 
-            // downstream crates can use `#[cfg_attr(feature = "alef-meta", alef(since = "..."))]`
+            // downstream crates can use `#[cfg_attr(alef, alef(skip))]` and
+            // `#[cfg_attr(feature = "alef-meta", alef(since = "..."))]`
             match pipeline::ensure_workspace_alef_meta_check_cfg() {
                 Ok(true) => tracing::info!(
-                    "Patched Cargo.toml: added [workspace.lints.rust] unexpected_cfgs allowlist for alef-meta"
+                    "Patched Cargo.toml: added [workspace.lints.rust] unexpected_cfgs allowlist for alef and alef-meta"
                 ),
                 Ok(false) => {}
-                Err(e) => tracing::warn!("could not patch workspace lints for alef-meta: {e}"),
+                Err(e) => tracing::warn!("could not patch workspace lints for alef/alef-meta: {e}"),
             }
 
             tracing::info!("Generated {grand_total} scaffold files");

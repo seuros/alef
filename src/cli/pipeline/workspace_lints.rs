@@ -1,23 +1,32 @@
 //! Format-preserving patch of `[workspace.lints.rust]` in the root `Cargo.toml`.
 //!
-//! Called during `alef scaffold` to add the `alef-meta` check-cfg allowlist so
-//! that downstream crates can write
-//! `#[cfg_attr(feature = "alef-meta", alef(since = "..."))]`
-//! without declaring `alef-meta` as a real Cargo feature — which would cause
-//! `cargo clippy --all-features` to activate the feature, invoke the (non-existent)
-//! `alef` proc-macro, and fail with a hard compile error.
+//! Called during `alef scaffold` to add the check-cfg allowlist for alef's two
+//! source-level marker conventions, so that downstream crates can write either
+//! without declaring a real Cargo feature or cfg:
+//! * `#[cfg_attr(alef, alef(skip))]` — excludes an item from every binding surface
+//!   (the far more common of the two; see `core::ir::items` and the extractor's
+//!   exclusion handling).
+//! * `#[cfg_attr(feature = "alef-meta", alef(since = "..."))]` — the schema-since
+//!   annotation.
 //!
-//! The allowlist entry `cfg(feature, values("alef-meta"))` tells rustc 1.80+ that
-//! `alef-meta` is a known cfg value, silencing `unexpected_cfg` warnings, while
-//! keeping `alef-meta` out of `[features]` so `--all-features` never enables it.
+//! Neither `alef` nor `alef-meta` is ever actually enabled at real compile time —
+//! there is no `alef` proc-macro crate a downstream `Cargo.toml` depends on, so the
+//! attribute inside each `cfg_attr` never actually runs. Declaring `alef-meta` as a
+//! real Cargo feature instead would cause `cargo clippy --all-features` to activate
+//! it and fail with a hard compile error trying to invoke that nonexistent macro. The
+//! two allowlist entries below tell rustc 1.80+ that both names are known cfg
+//! names/values, silencing `unexpected_cfg` under `-D warnings` without ever making
+//! either one a real feature.
 
 use anyhow::Context as _;
 use std::path::Path;
 
-const CHECK_CFG_VALUE: &str = r#"cfg(feature, values("alef-meta"))"#;
+/// Check-cfg allowlist entries for both marker conventions (see the module doc).
+/// Order is the order they render inside `check-cfg = [...]`.
+const CHECK_CFG_VALUES: [&str; 2] = ["cfg(alef)", r#"cfg(feature, values("alef-meta"))"#];
 
 /// Patch `[workspace.lints.rust]` in the root `Cargo.toml` to include
-/// `unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("alef-meta"))'] }`.
+/// `unexpected_cfgs = { level = "warn", check-cfg = ['cfg(alef)', 'cfg(feature, values("alef-meta"))'] }`.
 ///
 /// Reads from and writes to `./Cargo.toml` (the current working directory).
 pub fn ensure_workspace_alef_meta_check_cfg() -> anyhow::Result<bool> {
@@ -79,9 +88,11 @@ fn ensure_workspace_alef_meta_check_cfg_at(cargo_toml: &Path) -> anyhow::Result<
         return Ok(false);
     }
 
-    // Build: unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("alef-meta"))'] }
+    // Build: unexpected_cfgs = { level = "warn", check-cfg = ['cfg(alef)', 'cfg(feature, values("alef-meta"))'] }
     let mut check_cfg_array = Array::new();
-    check_cfg_array.push(CHECK_CFG_VALUE);
+    for value in CHECK_CFG_VALUES {
+        check_cfg_array.push(value);
+    }
 
     let mut inline = InlineTable::new();
     inline.insert("level", Value::from("warn"));
@@ -96,7 +107,7 @@ fn ensure_workspace_alef_meta_check_cfg_at(cargo_toml: &Path) -> anyhow::Result<
 
 #[cfg(test)]
 mod tests {
-    use super::{CHECK_CFG_VALUE, ensure_workspace_alef_meta_check_cfg_at};
+    use super::{CHECK_CFG_VALUES, ensure_workspace_alef_meta_check_cfg_at};
     use std::fs;
     use tempfile::TempDir;
 
@@ -130,10 +141,12 @@ mod tests {
         let modified = run(&dir, "[workspace]\nmembers = [\"crates/*\"]\n").unwrap();
         assert!(modified, "should patch manifest that has no lints section");
         let written = read(&dir);
-        assert!(
-            written.contains(CHECK_CFG_VALUE),
-            "must contain check-cfg value:\n{written}"
-        );
+        for value in CHECK_CFG_VALUES {
+            assert!(
+                written.contains(value),
+                "must contain check-cfg value {value}:\n{written}"
+            );
+        }
         assert!(
             written.contains("unexpected_cfgs"),
             "must contain unexpected_cfgs key:\n{written}"
@@ -143,8 +156,9 @@ mod tests {
     #[test]
     fn idempotent_when_check_cfg_already_present() {
         let dir = TempDir::new().unwrap();
+        let entries = CHECK_CFG_VALUES.map(|value| format!("'{value}'")).to_vec().join(", ");
         let content = format!(
-            "[workspace]\nmembers = []\n\n[workspace.lints.rust]\nunexpected_cfgs = {{ level = \"warn\", check-cfg = ['{CHECK_CFG_VALUE}'] }}\n"
+            "[workspace]\nmembers = []\n\n[workspace.lints.rust]\nunexpected_cfgs = {{ level = \"warn\", check-cfg = [{entries}] }}\n"
         );
         let modified = run(&dir, &content).unwrap();
         assert!(!modified, "must not modify file that already has the check-cfg");
@@ -178,10 +192,12 @@ mod tests {
         .unwrap();
         assert!(modified, "should add unexpected_cfgs alongside existing lint entry");
         let written = read(&dir);
-        assert!(
-            written.contains(CHECK_CFG_VALUE),
-            "must contain check-cfg value:\n{written}"
-        );
+        for value in CHECK_CFG_VALUES {
+            assert!(
+                written.contains(value),
+                "must contain check-cfg value {value}:\n{written}"
+            );
+        }
         assert!(
             written.contains("unsafe_code"),
             "existing lint must be preserved:\n{written}"
