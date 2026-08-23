@@ -100,6 +100,7 @@ fn test_gen_csharp_record() {
     assert!(output.contains("public string Name"));
     assert!(output.contains("init;"));
 }
+#[test]
 fn test_gen_magnus_kwargs_constructor_hash_path_for_many_fields() {
     let mut fields: Vec<FieldDef> = (0..16)
         .map(|i| FieldDef {
@@ -123,6 +124,7 @@ fn test_gen_magnus_kwargs_constructor_hash_path_for_many_fields() {
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,
+            version: Default::default(),
         })
         .collect();
     fields[0].optional = true;
@@ -150,6 +152,7 @@ fn test_gen_magnus_kwargs_constructor_hash_path_for_many_fields() {
         binding_exclusion_reason: None,
         is_variant_wrapper: false,
         has_lifetime_params: false,
+        has_private_fields: false,
         version: Default::default(),
     };
     let output = gen_magnus_kwargs_constructor(&typ, &simple_type_mapper);
@@ -229,6 +232,7 @@ fn test_gen_php_kwargs_constructor_optional_field_passthrough() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     });
     let output = gen_php_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
@@ -262,6 +266,7 @@ fn test_gen_php_kwargs_constructor_unwrap_or_default_for_primitive() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     });
     let output = gen_php_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
@@ -314,6 +319,7 @@ fn test_gen_rustler_kwargs_constructor_optional_field() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     });
     let output = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
@@ -346,6 +352,7 @@ fn test_gen_rustler_kwargs_constructor_skips_binding_excluded_fields() {
         binding_excluded: true,
         binding_exclusion_reason: Some("internal implementation detail".to_string()),
         original_type: None,
+        version: Default::default(),
     });
 
     let output = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
@@ -380,6 +387,7 @@ fn test_gen_rustler_kwargs_constructor_named_type_uses_unwrap_or_default() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     });
     let output = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
@@ -389,12 +397,13 @@ fn test_gen_rustler_kwargs_constructor_named_type_uses_unwrap_or_default() {
 }
 
 #[test]
-fn test_gen_rustler_kwargs_constructor_string_field_uses_unwrap_or_default() {
+fn test_gen_rustler_kwargs_constructor_string_field_with_default_preserves_literal() {
     let mut typ = make_test_type();
     let output = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
-        output.contains("name: opts.get(\"name\").and_then(|t| t.decode().ok()).unwrap_or_default(),"),
-        "String field with quoted default should use unwrap_or_default"
+        output.contains("name: opts.get(\"name\").and_then(|t| t.decode().ok()).unwrap_or(\"default\".to_string()),"),
+        "String field with a real default must preserve the literal, not collapse to \
+         unwrap_or_default() (which would silently produce an empty string): {output}"
     );
     typ.fields.push(FieldDef {
         name: "label".to_string(),
@@ -417,6 +426,7 @@ fn test_gen_rustler_kwargs_constructor_string_field_uses_unwrap_or_default() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     });
     let output2 = gen_rustler_kwargs_constructor(&typ, &simple_type_mapper);
     assert!(
@@ -503,6 +513,7 @@ fn test_gen_go_functional_options_skips_tuple_fields() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     });
     let output = gen_go_functional_options(&typ, &simple_type_mapper);
     assert!(
@@ -539,6 +550,7 @@ fn test_gen_magnus_hash_constructor_generic_type_prefix() {
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,
+            version: Default::default(),
         })
         .collect();
     let typ = TypeDef {
@@ -564,6 +576,7 @@ fn test_gen_magnus_hash_constructor_generic_type_prefix() {
         binding_exclusion_reason: None,
         is_variant_wrapper: false,
         has_lifetime_params: false,
+        has_private_fields: false,
         version: Default::default(),
     };
     let output = gen_magnus_kwargs_constructor(&typ, &simple_type_mapper);
@@ -596,6 +609,7 @@ fn test_magnus_hash_constructor_no_double_option_when_ty_is_optional() {
         binding_excluded: false,
         binding_exclusion_reason: None,
         original_type: None,
+        version: Default::default(),
     };
     let mut fields: Vec<FieldDef> = (0..15)
         .map(|i| FieldDef {
@@ -619,6 +633,7 @@ fn test_magnus_hash_constructor_no_double_option_when_ty_is_optional() {
             binding_excluded: false,
             binding_exclusion_reason: None,
             original_type: None,
+            version: Default::default(),
         })
         .collect();
     fields.push(field);
@@ -645,6 +660,7 @@ fn test_magnus_hash_constructor_no_double_option_when_ty_is_optional() {
         binding_exclusion_reason: None,
         is_variant_wrapper: false,
         has_lifetime_params: false,
+        has_private_fields: false,
         version: Default::default(),
     };
     let output = gen_magnus_kwargs_constructor(&typ, &simple_type_mapper);
