@@ -606,6 +606,14 @@ pub(super) fn gen_build_rs(
                 .join("\n")
         }
     };
+    // The Go include dir is a SECOND publish destination, not a fan-out list that happens to
+    // have one entry. Go's `binding.go` carries `#include "<header>"` under cgo, so the header
+    // must be vendored next to the Go sources for the package to compile at all. Every other
+    // binding (Panama/JNI, P/Invoke, PyO3, NAPI, Magnus, ...) resolves the cdylib's symbols at
+    // run time and never sees a header; Zig and generated C read the canonical staged header
+    // directly. Do NOT add package directories here just because they ship the cdylib -- a
+    // vendored copy of a generated header that nothing compiles is a drift generator that rots
+    // into a false record of the ABI. ~keep
     let go_header_destination = match go_output_dir {
         Some(go_dir) => {
             let go_dir = go_dir.trim_end_matches('/');
