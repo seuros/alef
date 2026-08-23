@@ -782,11 +782,17 @@ swift = "custom/output/Sources/TestLib"
             .build_config_with_config(&config)
             .expect("swift backend must produce a build config");
 
-        let manifest_path_args: Vec<&str> = build_config
+        // The manifest path is built with `Path::join`, so its separators are the host's --
+        // `\` on Windows, which is what `cargo --manifest-path` wants there. Comparing the
+        // raw string would assert the host OS, not the override-following behaviour under
+        // test, so separators are normalised at the assertion boundary. ~keep
+        let manifest_path_args: Vec<String> = build_config
             .post_build
             .iter()
             .find_map(|step| match step {
-                PostBuildStep::RunCommand { cmd, args } if *cmd == "cargo" => Some(args.clone()),
+                PostBuildStep::RunCommand { cmd, args } if *cmd == "cargo" => {
+                    Some(args.iter().map(|arg| arg.replace('\\', "/")).collect())
+                }
                 _ => None,
             })
             .expect("swift build config must have a cargo RunCommand post-build step");
