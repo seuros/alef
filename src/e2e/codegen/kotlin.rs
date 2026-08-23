@@ -19,6 +19,7 @@ mod args;
 mod assertions;
 mod discriminated;
 mod http;
+mod imports;
 mod not_error;
 mod project;
 pub(crate) mod snippet;
@@ -32,6 +33,8 @@ mod visitor;
 mod collection_field_classification_tests;
 #[cfg(test)]
 mod enum_field_classification_tests;
+#[cfg(test)]
+mod qualified_class_import_tests;
 #[cfg(test)]
 mod tests;
 

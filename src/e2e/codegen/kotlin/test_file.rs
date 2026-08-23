@@ -484,22 +484,6 @@ pub(super) fn render_test_file_inner(
         !crate::e2e::codegen::streaming_assertions::resolve_is_streaming(f, cc.streaming_enabled())
     });
 
-    let _ = writeln!(out, "import org.junit.jupiter.api.Test");
-    let _ = writeln!(out, "import kotlin.test.assertEquals");
-    let _ = writeln!(out, "import kotlin.test.assertTrue");
-    let _ = writeln!(out, "import kotlin.test.assertFalse");
-    let _ = writeln!(out, "import kotlin.test.assertFailsWith");
-    if needs_assert_not_null {
-        let _ = writeln!(out, "import kotlin.test.assertNotNull");
-    }
-    if has_client_factory_fixtures || kotlin_android_style {
-        let _ = writeln!(out, "import kotlinx.coroutines.runBlocking");
-    }
-    // `Flow<T>.toList()` is only available via this import — it is not part of the
-    // standard Flow API in Kotlin 1.x/2.x without the explicit import.
-    if has_streaming_fixtures {
-        let _ = writeln!(out, "import kotlinx.coroutines.flow.toList");
-    }
     // Effective binding package for FQN imports. When the binding `class_name` is
     // not fully-qualified, fall back to `kotlin_pkg_id` — the kotlin binding emits
     // top-level typealiases at that package (e.g. `package com.github.sample_core_dev`)
@@ -513,17 +497,31 @@ pub(super) fn render_test_file_inner(
     } else {
         kotlin_pkg_id.to_string()
     };
+    let mut imports = super::imports::ImportBlock::new(binding_pkg_for_imports);
+
+    imports.push("org.junit.jupiter.api.Test");
+    imports.push("kotlin.test.assertEquals");
+    imports.push("kotlin.test.assertTrue");
+    imports.push("kotlin.test.assertFalse");
+    imports.push("kotlin.test.assertFailsWith");
+    if needs_assert_not_null {
+        imports.push("kotlin.test.assertNotNull");
+    }
+    if has_client_factory_fixtures || kotlin_android_style {
+        imports.push("kotlinx.coroutines.runBlocking");
+    }
+    // `Flow<T>.toList()` is only available via this import — it is not part of the
+    // standard Flow API in Kotlin 1.x/2.x without the explicit import.
+    if has_streaming_fixtures {
+        imports.push("kotlinx.coroutines.flow.toList");
+    }
     // Only import the binding class when there are non-HTTP fixtures that call it.
     let has_call_fixtures = fixtures.iter().any(|f| !f.is_http_test());
-    if has_call_fixtures {
-        if !import_path.is_empty() {
-            let _ = writeln!(out, "import {import_path}");
-        } else if !class_name.is_empty() {
-            let _ = writeln!(out, "import {binding_pkg_for_imports}.{class_name}");
-        }
+    if has_call_fixtures && !class_name.is_empty() {
+        imports.push_binding_type(class_name);
     }
     for request_type in streaming_request_types {
-        let _ = writeln!(out, "import {binding_pkg_for_imports}.{request_type}");
+        imports.push_binding_type(&request_type);
     }
     let needs_format_metadata_import = fixtures.iter().any(|fixture| {
         fixture.assertions.iter().any(|assertion| {
@@ -534,16 +532,16 @@ pub(super) fn render_test_file_inner(
         })
     });
     if has_call_fixtures && needs_format_metadata_import {
-        let _ = writeln!(out, "import {binding_pkg_for_imports}.FormatMetadata");
+        imports.push_binding_type("FormatMetadata");
     }
     if needs_object_mapper {
-        let _ = writeln!(out, "import com.fasterxml.jackson.databind.ObjectMapper");
-        let _ = writeln!(out, "import com.fasterxml.jackson.datatype.jdk8.Jdk8Module");
+        imports.push("com.fasterxml.jackson.databind.ObjectMapper");
+        imports.push("com.fasterxml.jackson.datatype.jdk8.Jdk8Module");
         // `registerKotlinModule()` is required on the kotlin_android target so that
         // Jackson can deserialise Kotlin data classes (which have no default
         // constructor). The extension function lives in jackson-module-kotlin.
         if kotlin_android_style {
-            let _ = writeln!(out, "import com.fasterxml.jackson.module.kotlin.registerKotlinModule");
+            imports.push("com.fasterxml.jackson.module.kotlin.registerKotlinModule");
         }
     }
     // Import every options type referenced by per-call kotlin overrides in this file.
@@ -553,33 +551,31 @@ pub(super) fn render_test_file_inner(
         let mut sorted_opts: Vec<&String> = per_fixture_options_types.iter().collect();
         sorted_opts.sort();
         for opts_type in sorted_opts {
-            let _ = writeln!(out, "import {binding_pkg_for_imports}.{opts_type}");
+            imports.push_binding_type(opts_type);
         }
     }
     // Import element_type classes used by json_object array args (e.g., BatchBytesItem, BatchFileItem).
     let mut sorted_elements: Vec<&String> = element_type_classes.iter().collect();
     sorted_elements.sort();
     for element_type in sorted_elements {
-        let _ = writeln!(out, "import {binding_pkg_for_imports}.{element_type}");
+        imports.push_binding_type(element_type);
     }
     // Import trait bridge classes used by fixtures (kotlin_android only).
-    if !trait_bridge_classes.is_empty() {
-        let mut sorted_bridges: Vec<&String> = trait_bridge_classes.iter().collect();
-        sorted_bridges.sort();
-        for bridge_class in sorted_bridges {
-            let _ = writeln!(out, "import {binding_pkg_for_imports}.{bridge_class}");
-        }
+    let mut sorted_bridges: Vec<&String> = trait_bridge_classes.iter().collect();
+    sorted_bridges.sort();
+    for bridge_class in sorted_bridges {
+        imports.push_binding_type(bridge_class);
     }
     // Import plugin interfaces used by test stubs (kotlin_android only).
     if !plugin_interfaces.is_empty() {
         let mut sorted_interfaces: Vec<&String> = plugin_interfaces.iter().collect();
         sorted_interfaces.sort();
         for iface in sorted_interfaces {
-            let _ = writeln!(out, "import {binding_pkg_for_imports}.{iface}");
+            imports.push_binding_type(iface);
         }
         // Wildcard import to cover all plugin-related types (ExtractionResult, ExtractionConfig,
         // OcrConfig, OcrBackendType, ProcessingStage, etc.) used by trait bridge test stubs.
-        let _ = writeln!(out, "import {binding_pkg_for_imports}.*");
+        imports.push_binding_type("*");
     }
     let mut handle_config_types: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for f in fixtures.iter() {
@@ -602,8 +598,9 @@ pub(super) fn render_test_file_inner(
         }
     }
     for config_type in handle_config_types {
-        let _ = writeln!(out, "import {binding_pkg_for_imports}.{config_type}");
+        imports.push_binding_type(&config_type);
     }
+    out.push_str(&imports.render());
     let _ = writeln!(out);
 
     let _ = writeln!(out, "/** E2e tests for category: {category}. */");

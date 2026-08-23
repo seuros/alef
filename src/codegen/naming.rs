@@ -170,6 +170,23 @@ pub fn abi_symbol(prefix: &str, name: &str) -> String {
     to_c_name(prefix, name)
 }
 
+/// Qualify a type name with a dotted package/namespace, leaving an already-qualified name alone.
+///
+/// JVM-family and .NET targets accept a type spelled either bare (`SampleClient`) or fully
+/// qualified (`dev.sample.bindings.SampleClient`), and one configured value — an
+/// `[e2e.call.overrides.<lang>] class`, an `options_type`, a bridge class — reaches several
+/// emitters. Prefixing unconditionally turns the qualified spelling into
+/// `dev.sample.bindings.dev.sample.bindings.SampleClient`, which does not resolve; never
+/// prefixing leaves a bare name unresolvable from a child package. The "does it already carry a
+/// package" decision has to be made in exactly one place, or two emitters reading the same config
+/// value disagree and the generated file carries both spellings. ~keep
+pub fn qualified_type_path(package: &str, type_name: &str) -> String {
+    if package.is_empty() || type_name.contains('.') {
+        return type_name.to_string();
+    }
+    format!("{package}.{type_name}")
+}
+
 /// Return a language-safe identifier for a generated name surface.
 pub fn escape_identifier(lang: Language, name: &str, surface: NameSurface) -> String {
     let context = match surface {
