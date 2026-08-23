@@ -166,18 +166,30 @@ const POST_BUILD_FIXTURE_SOURCE: &str = "pub fn greet(name: String) -> String {\
 const POST_BUILD_FIXTURE_CARGO_TOML: &str =
     "[package]\nname = \"postbuildlib\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
 
-/// `languages = ["ffi"]` with an explicit `[build_commands.ffi]` that cannot succeed, giving
-/// this test a real, deterministic post-build failure with no compilation, no network and no
-/// toolchain-availability flakiness.
+/// `languages = ["ffi"]` plus a `[crates.build_commands.ffi]` override whose `build` command can
+/// only fail. `complete_generated_artifacts` reaches `crate::cli::pipeline::ensure_ffi_header_freshness`
+/// for any FFI-configured crate, the generated header does not exist yet on a fresh tree, and
+/// the refresh closure it then calls is `build_with_environment(.., [Ffi], ..)` -- which honours
+/// this override in place of its own cargo invocation. The failure therefore originates inside
+/// `complete_generated_artifacts`, the only thing `stage_failures.record("[<crate>] post-build
+/// processing", ..)` wraps, and it costs one `exit 42`: no compilation, no network, no dependency
+/// on which toolchains happen to be installed.
 ///
-/// It used to rely on `cargo build -p postbuildlib-ffi` failing with "package ID specification
-/// ... did not match any packages", because the generated crate is not a member of any
-/// workspace. That was never a property worth depending on -- it was alef's own defect, since
+/// `precondition` is load-bearing, not decoration: `config::validation::preconditions` rejects a
+/// pipeline table that sets a main command without one, so an override with a bare `build` key
+/// never survives `load_config` and aborts the run before any stage records anything. `true` is
+/// the POSIX command -- "this override's tooling is always available".
+///
+/// This used to rely instead on `cargo build -p postbuildlib-ffi` failing with "package ID
+/// specification ... did not match any packages", because the generated crate is not a member of
+/// any workspace. That was never a property worth depending on -- it was alef's own defect, since
 /// a `-p` spec resolves only for a workspace member while the emitted FFI crate is standalone
-/// unless the consumer lists it. `build_command_for` now builds it by `--manifest-path`, so
-/// that build legitimately succeeds and the test lost its failure. Assert the property the
-/// test is actually about (a genuine post-build failure still fails the run) through a failure
-/// that alef is not trying to eliminate. ~keep
+/// unless the consumer lists it. Both that call site and `build_command_for`'s `"cargo"` arm now
+/// build by `--manifest-path`, so the build legitimately succeeds and this test lost its failure
+/// (measured before it was replaced: 7s and an "Updating crates.io index" -- it had also quietly
+/// become a compiling, networked test). A configured build command that exits non-zero is a
+/// permanent, first-class failure mode alef is not trying to eliminate, so it cannot be fixed out
+/// from under this test the same way. ~keep
 const POST_BUILD_FIXTURE_ALEF_TOML: &str = r#"
 [workspace]
 languages = ["ffi"]
@@ -188,6 +200,7 @@ sources = ["src/lib.rs"]
 version_from = "Cargo.toml"
 
 [crates.build_commands.ffi]
+precondition = "true"
 build = "exit 42"
 
 [crates.e2e]
@@ -231,9 +244,12 @@ fn write_post_build_fixture_workspace(root: &std::path::Path) {
 /// for THAT crate never ran, and neither did any crate listed after it. A consumer repo hit
 /// this for real (task #186): the run hard-stopped after the generate stage, with
 /// e2e/test-apps files left at pre-session mtimes. This fixture reproduces the same shape
-/// against alef's own tests, holding `SKIP_COMMANDS_LOCK` for its whole duration because the
-/// `cargo build` below must genuinely run and fail, not be silently skipped by a concurrent
-/// test's `ALEF_SKIP_COMMANDS=cargo` (see `SkipCommandsGuard`'s doc).
+/// against alef's own tests. It holds `SKIP_COMMANDS_LOCK` for its whole duration so a
+/// concurrent test cannot rewrite the process-global `ALEF_SKIP_COMMANDS` mid-run and change
+/// which of this run's subprocesses execute (see `SkipCommandsGuard`'s doc); the failure this
+/// test asserts on no longer depends on that var either way, since the `[build_commands.ffi]`
+/// override above is dispatched through `run_command_captured_with_env`, which that escape
+/// hatch does not gate -- only `PostBuildStep::RunCommand` consults it.
 ///
 /// This run has exactly one recorded stage failure, so `StageFailures::into_result` returns the
 /// original `anyhow::Error` unchanged rather than wrapping it in a `"[crate] post-build
@@ -261,8 +277,14 @@ fn a_crate_post_build_failure_does_not_abort_its_own_remaining_stages() {
     );
     let message = format!("{error:#}");
     assert!(
-        message.contains("ffi"),
-        "the failure must name the language whose post-build step failed: {message}"
+        message.contains("failed to refresh the generated FFI header"),
+        "the failure must be the one `complete_generated_artifacts` itself raises -- that is the \
+         only thing the deferred `[<crate>] post-build processing` label wraps, so an error from \
+         any other stage would satisfy every other assertion here while proving nothing: {message}"
+    );
+    assert!(
+        message.contains("Command failed: exit 42"),
+        "the failure must carry the underlying build diagnostic verbatim: {message}"
     );
     assert!(
         logs_contain("[postbuildlib] post-build processing"),
