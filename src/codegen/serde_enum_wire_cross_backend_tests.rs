@@ -211,13 +211,7 @@ const ADJACENT_TAGGING_SUPPORT: &[(&str, AdjacentSupport)] = &[
     ("swift", AdjacentSupport::Correct),
     ("go", AdjacentSupport::Correct),
     ("java", AdjacentSupport::Correct),
-    (
-        "csharp",
-        AdjacentSupport::KnownDivergent(
-            "backends/csharp/templates/sealed_union_converter.jinja is parameterised by tag_field \
-             alone, so it reads and writes serde's internal shape",
-        ),
-    ),
+    ("csharp", AdjacentSupport::Correct),
     (
         "kotlin_android",
         AdjacentSupport::KnownDivergent(
@@ -469,6 +463,89 @@ fn java_serializer_emits_exactly_what_serde_writes() {
          variant; flattening the payload beside the tag is serde's *internal* form, which Rust \
          rejects, and a scalar payload has no fields to flatten so it was dropped outright"
     );
+}
+
+fn csharp_union_output() -> String {
+    generate(&CsharpBackend, &plain_api(), &ResolvedCrateConfig::default())
+}
+
+/// Isolate the body of the generated `Write` method, so an assertion cannot be satisfied by a
+/// matching literal in the reader above it.
+fn csharp_write_body(csharp: &str) -> String {
+    let start = csharp
+        .find("public override void Write(")
+        .expect("C# emits a JsonConverter for the sealed union");
+    let rest = &csharp[start..];
+    let end = rest.find("\n    }\n").expect("the Write method is closed");
+    rest[..end].to_string()
+}
+
+/// The JSON the generated C# converter writes for each variant, reconstructed from the emitted
+/// code: the `switch` supplies each variant's tag and whether it sets a payload, and the writer
+/// block below it supplies where that payload lands.
+fn csharp_emitted_wire_forms(csharp: &str) -> Vec<String> {
+    let body = csharp_write_body(csharp);
+    assert!(
+        body.contains(&format!("writer.WriteString(\"{TAG_KEY}\", tag);")),
+        "the converter must write the variant tag under serde's tag key:\n{body}"
+    );
+    assert!(
+        body.contains(&format!("writer.WritePropertyName(\"{CONTENT_KEY}\");"))
+            && body.contains("JsonSerializer.Serialize(writer, inner, inner.GetType(), options);"),
+        "the converter must write the payload whole under serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains("JsonValueKind.Object"),
+        "the payload must not be written only when it happens to be a JSON object — a newtype \
+         variant hands the converter a bare scalar, and gating on ValueKind discarded it \
+         silently:\n{body}"
+    );
+    let payload_json = serde_json::to_string(SAMPLE_PAYLOAD).expect("the string payload serializes");
+    body.split("tag = \"")
+        .skip(1)
+        .map(|chunk| {
+            let (discriminator, rest) = chunk.split_once('"').expect("each tag assignment is a closed literal");
+            if rest.contains("inner = null;") {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\"}}")
+            } else {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\",\"{CONTENT_KEY}\":{payload_json}}}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn csharp_converter_emits_exactly_what_serde_writes() {
+    let emitted = csharp_emitted_wire_forms(&csharp_union_output());
+    assert_eq!(
+        emitted,
+        serde_wire_forms(),
+        "the generated System.Text.Json converter must produce serde's adjacent wire form for \
+         every variant; flattening the payload beside the tag is serde's *internal* form, which \
+         Rust rejects, and a scalar payload has no fields to flatten so it was dropped outright"
+    );
+}
+
+#[test]
+fn csharp_converter_reads_the_payload_from_serdes_content_key() {
+    let csharp = csharp_union_output();
+    assert!(
+        csharp.contains(&format!(
+            "root.TryGetProperty(\"{CONTENT_KEY}\", out var contentElement)"
+        )),
+        "the converter must read the payload from serde's content key:\n{csharp}"
+    );
+    assert!(
+        !csharp.contains(&format!("prop.Name != \"{TAG_KEY}\"")),
+        "reassembling the payload from every field that is not the tag is serde's *internal* \
+         form; an adjacently tagged document keeps its payload under the content key:\n{csharp}"
+    );
+    for tag in serde_variant_tags() {
+        assert!(
+            csharp.contains(&format!("\"{tag}\" =>")),
+            "the converter must dispatch on serde's variant tag {tag:?}:\n{csharp}"
+        );
+    }
 }
 
 #[test]
