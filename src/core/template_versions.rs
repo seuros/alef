@@ -152,9 +152,6 @@ pub mod cargo {
     // renovate: datasource=crate depName=flutter_rust_bridge
     pub const FLUTTER_RUST_BRIDGE: &str = "2.13.0";
 
-    // renovate: datasource=crate depName=flutter_rust_bridge_codegen
-    pub const FLUTTER_RUST_BRIDGE_CODEGEN: &str = "2.13.0";
-
     // renovate: datasource=crate depName=swift-bridge
     pub const SWIFT_BRIDGE: &str = "0.1.59";
 
