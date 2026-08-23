@@ -136,13 +136,18 @@ pub(crate) fn build_with_environment(
             .iter()
             .any(|(_, bc)| bc.tool == "cargo" && bc.crate_suffix == "-ffi")
     {
-        let ffi_crate = output_path_for(Language::Ffi, config)
+        // Same workspace-membership trap as the `"cargo"` arm of `build_command_for`: a `-p`
+        // package spec resolves only for a workspace member, while the emitted FFI crate is
+        // standalone unless the consumer lists it. Prefer the crate's own manifest, which is
+        // correct either way. ~keep
+        let ffi_crate_root = output_path_for(Language::Ffi, config)
             .map(resolve_crate_dir)
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or_else(|| Box::leak(format!("{crate_name}-ffi").into_boxed_str()));
-        info!("Building FFI crate: {ffi_crate}");
-        let mut cmd = format!("cargo build -p {ffi_crate}");
+            .and_then(|p| p.to_str())
+            .map(str::to_string)
+            .or_else(|| crate::core::config::resolve_helpers::default_binding_crate_root(crate_name, "ffi"))
+            .unwrap_or_else(|| format!("crates/{crate_name}-ffi"));
+        info!("Building FFI crate: {ffi_crate_root}");
+        let mut cmd = format!("cargo build --manifest-path {ffi_crate_root}/Cargo.toml");
         if release {
             cmd.push_str(" --release");
         }
@@ -519,6 +524,22 @@ fn build_command_for(
             format!("cd {wasm_crate_dir} && {builds}")
         }
         "cargo" => {
+            // `-p <name>-ffi` is a workspace package spec: it resolves only if the emitted crate
+            // is a member of the workspace cargo is invoked from. The generated FFI crate is
+            // standalone whenever the consumer does not list it under `[workspace] members`, and
+            // cargo then rejects the spec outright rather than falling back to the path — which
+            // is what broke the generated-output gate's own fixture. `default_binding_crate_root`
+            // is the same formula `OutputTemplate::resolve` uses for the default output path, so
+            // this and the tree `generate` writes cannot name two different crate roots. Building
+            // by manifest path is correct for a workspace member too, so no consumer loses the
+            // workspace-aware behaviour. ~keep
+            if crate_dir.is_empty()
+                && lang == Language::Ffi
+                && let Some(root) =
+                    crate::core::config::resolve_helpers::default_binding_crate_root(&config.name, "ffi")
+            {
+                return format!("cargo build --manifest-path {root}/Cargo.toml{release_flag}");
+            }
             if crate_dir.is_empty() && !bc.crate_suffix.is_empty() {
                 return format!("cargo build -p {}{}{}", config.name, bc.crate_suffix, release_flag);
             }

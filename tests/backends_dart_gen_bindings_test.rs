@@ -2254,7 +2254,8 @@ fn build_config_for_frb_run_command_uses_config_file() {
         &vec![
             "generate",
             "--config-file",
-            "packages/dart/rust/flutter_rust_bridge.yaml"
+            "packages/dart/rust/flutter_rust_bridge.yaml",
+            "--no-deps-check"
         ],
         "flutter_rust_bridge_codegen must read the generated config file"
     );
