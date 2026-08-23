@@ -94,6 +94,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and rejected the code" and killed the run instead of being recorded as a deferred
   environment gap. `run_in_dir`'s built-in residual steps already avoided this by never going
   through a shell; the override path, which must go through one, now normalises the path.
+- The generated FFI crate's `build.rs` nested its stale-backup cleanup inside `if
+  had_destination`, which clippy rejects as `collapsible_if` under `-D warnings`. Because the
+  file carries `generated_header: true`, no consumer edit survived regeneration, so a consumer
+  had to suppress the lint in its own CI — and any lint pass alef did not know about (poly runs
+  its own whole-project clippy) hit it anyway. Flattened with an early return rather than a
+  let-chain, so the emitted crate's edition does not matter.
+- Emit `checksum-Elixir.*.exs` in `mix format`'s canonical wrapped form so regeneration no longer
+  produces pure-reformat diffs. Each map entry was written on a single line; `mix format` (the sole
+  formatter for generated `.ex`/`.exs`) then moved every over-width digest onto its own continuation
+  line and dropped the trailing comma, so the file was dirty after every `alef build`. The emission
+  now wraps per entry exactly where the formatter would — honouring `line_length` from the package's
+  `.formatter.exs`, falling back to Elixir's default of 98 — and renders through a Minijinja template
+  instead of `push_str(&format!(...))`.
+- Tests that shell out to `git` no longer inherit the ambient global git configuration. Fixture
+  repositories are now built through a single hermetic `test_support::git_command` helper that
+  neutralizes `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` and pins identity, signing, excludes and the
+  default branch name. Previously a developer with `commit.gpgsign = true` set globally signed
+  every fixture commit, making the suite depend on a working gpg-agent, and the same tests would
+  behave differently on CI, which has no signing key.
+- `go_tag`'s fixture builder asserted only that `git` could be spawned, not that it succeeded, so a
+  failed commit or annotated tag left the tests asserting against an empty repository instead of
+  the fixture they name. Each step now checks the child's exit status.
+- Four `#[test]` functions had empty bodies and had passed unconditionally since they were written;
+  they now assert the PHP namespace-qualification, PHP streaming-field disambiguation and
+  kotlin_android `file_path` behaviours against real codegen output. Fifteen further integration
+  assertions could not fail — ten had a dead disjunction arm, five matched needles too weak to
+  detect a regression. Tightening the PHP `options_type` import assertion exposed a wrong
+  expectation the dead arm had masked (`use SampleCrate\…` where codegen emits `use Mylib\…`).
+- Refreshed Dart snapshots left stale by the flutter_rust_bridge 2.13 bump and the relocation of
+  `carry_frb_cfg_gates()` into the successful-regeneration arm. Both changes are deliberate and
+  separately tested; only the committed snapshots lagged, and `cargo test --lib` does not run them.
+
+### Added
+
+- `tests/test_vacuity_gate.rs`: a mechanical guard over `tests/**/*.rs` rejecting three shapes of
+  check that cannot fail — a `#[test]` with an empty body, a `x.contains(a) || x.contains(b)`
+  disjunction whose needles subsume each other, and a narrowed `cargo test` invocation in
+  `ci.yml`'s `test` job (which would retire all ~253 integration binaries while every signal
+  stayed green).
 
 ## [0.67.1] - 2026-08-23
 
