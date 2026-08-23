@@ -10,7 +10,6 @@
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
-use crate::e2e::codegen::field_skip::nested_wildcard_skip_line;
 use crate::e2e::escape::escape_java;
 use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
