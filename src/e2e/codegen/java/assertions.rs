@@ -476,6 +476,34 @@ pub(super) fn render_assertion(
         .as_deref()
         .is_some_and(|f| field_resolver.is_array(field_resolver.resolve(f)));
 
+    // A fixture's `equals` assertion carrying a literal JSON `null` against a field the IR
+    // proves is a genuine (non-`Option`) collection -- e.g. `Vec<T>` with `#[serde(default,
+    // skip_serializing_if = "Vec::is_empty")]` -- can never pass: the generated binding's
+    // Jackson deserializer and its `Builder`'s own default both materialize an absent/omitted
+    // collection as an empty `List`/`Map`, never `null` -- see
+    // `backends::java::gen_bindings::types::builders::gen_builder_nested_class`'s
+    // `field_is_optional_in_binding` branch, which only ever defaults to `null` when the IR's
+    // `field.optional` is true. Both `is_collection_root` and `is_optional` here read that
+    // same IR fact (via `with_ir_collection_map`/`with_ir_fields`), so this is the assertion
+    // side asking the binding side's own question, not a second independent guess at the
+    // answer. Recognize the case and assert the same emptiness the binding actually produces
+    // instead of a null-equality check that can never pass. ~keep
+    let is_doomed_null_equals_on_required_collection = assertion.assertion_type == "equals"
+        && matches!(assertion.value, Some(serde_json::Value::Null))
+        && assertion.field.as_deref().is_some_and(|f| {
+            !f.is_empty()
+                && field_resolver.is_valid_for_result(f)
+                && field_resolver.is_collection_root(field_resolver.resolve(f))
+                && !field_resolver.is_optional(field_resolver.resolve(f))
+        });
+    if is_doomed_null_equals_on_required_collection {
+        let accessor = field_resolver.accessor(assertion.field.as_deref().unwrap_or_default(), "java", result_var);
+        out.push_str(&format!(
+            "        assertTrue({accessor}.isEmpty(), \"expected empty (binding never returns null for a non-optional collection)\");\n"
+        ));
+        return;
+    }
+
     let field_expr = if result_is_simple {
         result_var.to_string()
     } else {

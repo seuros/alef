@@ -32,6 +32,12 @@ use types::{
 /// of re-deriving the tagged/untagged-union split by hand. ~keep
 pub(crate) use types::emits_get_value;
 
+/// Re-exported so the e2e Java assertion-agreement pinning test can drive the real binding
+/// generator directly from the same IR fixture it feeds to the real test emitter, instead of
+/// re-deriving the record/builder default-value rules by hand. ~keep
+#[cfg(test)]
+pub(crate) use types::gen_record_type as test_only_gen_record_type;
+
 /// True if any non-opaque type in `api` has a `Duration`-typed struct field whose wire shape is
 /// serde's derive object rather than a hand-written codec's scalar.
 ///
