@@ -286,23 +286,22 @@ impl E2eCodegen for TypeScriptCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let overrides = e2e_config.call.overrides.get("node");
-        let module = e2e_config
-            .resolve_package("node")
-            .and_then(|package| package.name)
-            .or_else(|| overrides.and_then(|value| value.module.clone()))
-            .unwrap_or_else(|| e2e_config.call.module.clone());
-        Ok(test_file::render_snippet_body(test_file::SnippetContext {
-            lang: "node",
-            fixture,
-            module: &module,
-            client_factory: overrides.and_then(|value| value.client_factory.as_deref()),
-            e2e_config,
-            type_defs,
-            enums,
-            wasm_type_prefix: "",
-            config,
-        }))
+        self.render_snippet_body_with_functions(fixture, e2e_config, config, type_defs, enums, &[], &[])
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        Ok(test_file::render_node_snippet_body(
+            fixture, e2e_config, config, type_defs, enums, functions,
+        ))
     }
 
     fn language_name(&self) -> &'static str {

@@ -210,89 +210,120 @@ impl E2eCodegen for RustE2eCodegen {
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
     ) -> Result<String> {
-        let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
-        let mut call_fixture = fixture.docs_call_fixture();
-        let expects_error = fixture
-            .assertions
-            .iter()
-            .any(|assertion| assertion.assertion_type == "error");
-        // Resolved before `assertions` is cleared below: a fixture with no hand-authored
-        // `docs.shows`/`docs.presentation` falls back to showing the fields its own
-        // `assertions` already name (see `presentation::default_operations_from_assertions`),
-        // and that fallback has nothing to read once this function empties the list. ~keep
-        //
-        // Materialized into the fixture's own `docs.shows` first, so `has_docs_presentation()`
-        // — the one question `test_file::test_function` asks before deciding whether the call
-        // binds a named `result` and whether a `Result` return is unwrapped — sees the derived
-        // operations too, not just hand-authored ones. Without it the emitter bound `let _ =`
-        // while this snippet printed `result.<field>`. ~keep
-        super::presentation::apply_derived_shows(&mut call_fixture, e2e_config, "rust", type_defs);
-        let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs);
-        call_fixture.assertions.clear();
-        call_fixture.mock_response = None;
-        // This trait method carries no `functions: &[FunctionDef]` parameter (the free-function
-        // registry), so a snippet whose call names a free function rather than an IR type's
-        // method resolves no root type for IR-derived enum classification here — it still
-        // falls back to the hand-maintained `fields_enum` config, exactly as before this
-        // parameter existed. Method-based calls (`type_defs` alone) resolve fine.
-        let test_file = render_test_file(
-            &fixture.resolved_category(),
-            &[&call_fixture],
-            e2e_config,
-            config,
-            type_defs,
-            enums,
-            &[],
-            &dep_name,
-            call_fixture.needs_mock_server(),
-            fixture.docs_client(),
-            expects_error,
-        );
-        let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
-        let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
-        let body = body
-            .into_iter()
-            .map(|line| {
-                line.replace(
-                    "\"test-key\".to_string()",
-                    &format!("std::env::var(\"{api_key_var}\").expect(\"{api_key_var} must be set\")"),
-                )
-            })
-            .collect::<Vec<_>>();
-        let call = e2e_config.resolve_call_for_fixture(
-            call_fixture.call.as_deref(),
-            &call_fixture.id,
-            &call_fixture.resolved_category(),
-            &call_fixture.tags,
-            &call_fixture.input,
-        );
-        // An error fixture renders the `Result` through the template's `match`, which both
-        // reports the failure and consumes the value — a second unconditional `println!`
-        // of `result_var` would then reference a moved binding. ~keep
-        let display_result = !expects_error && presentation.is_empty() && !call.returns_void;
-        let body = body
-            .into_iter()
-            .map(|line| {
-                if display_result {
-                    line.replacen("let _ =", &format!("let {} =", call.effective_result_var()), 1)
-                } else {
-                    line.to_string()
-                }
-            })
-            .collect::<Vec<_>>();
-        Ok(crate::e2e::template_env::render(
-            "rust/snippet_body.rs.jinja",
-            minijinja::context! {
-                imports => imports, body => body, is_async => is_async, presentation => presentation,
-                display_result => display_result, result_var => call.effective_result_var(),
-                expects_error => expects_error, returns_void => call.returns_void,
-            },
-        ))
+        render_docs_snippet(fixture, e2e_config, config, type_defs, enums, &[])
+    }
+
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        render_docs_snippet(fixture, e2e_config, config, type_defs, enums, functions)
     }
 
     fn language_name(&self) -> &'static str {
         "rust"
     }
+}
+
+/// The docs-snippet body, with the free-function registry the trait's IR-less
+/// [`E2eCodegen::render_snippet_body`] arm cannot supply.
+///
+/// `functions` reaches only the presentation resolver, which needs it to anchor field facts at
+/// the call's declared result type. `render_test_file` below still receives `&[]` deliberately:
+/// widening what IT sees would change enum classification and argument lowering for every Rust
+/// snippet, which is a different change from this one. ~keep
+fn render_docs_snippet(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[crate::core::ir::TypeDef],
+    enums: &[crate::core::ir::EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> Result<String> {
+    let dep_name = resolve_crate_name(e2e_config, config).replace('-', "_");
+    let mut call_fixture = fixture.docs_call_fixture();
+    let expects_error = fixture
+        .assertions
+        .iter()
+        .any(|assertion| assertion.assertion_type == "error");
+    // Resolved before `assertions` is cleared below: a fixture with no hand-authored
+    // `docs.shows`/`docs.presentation` falls back to showing the fields its own
+    // `assertions` already name (see `presentation::default_operations_from_assertions`),
+    // and that fallback has nothing to read once this function empties the list. ~keep
+    //
+    // Materialized into the fixture's own `docs.shows` first, so `has_docs_presentation()`
+    // — the one question `test_file::test_function` asks before deciding whether the call
+    // binds a named `result` and whether a `Result` return is unwrapped — sees the derived
+    // operations too, not just hand-authored ones. Without it the emitter bound `let _ =`
+    // while this snippet printed `result.<field>`. ~keep
+    super::presentation::apply_derived_shows(&mut call_fixture, e2e_config, "rust", type_defs, functions);
+    let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs, functions);
+    call_fixture.assertions.clear();
+    call_fixture.mock_response = None;
+    // This trait method carries no `functions: &[FunctionDef]` parameter (the free-function
+    // registry), so a snippet whose call names a free function rather than an IR type's
+    // method resolves no root type for IR-derived enum classification here — it still
+    // falls back to the hand-maintained `fields_enum` config, exactly as before this
+    // parameter existed. Method-based calls (`type_defs` alone) resolve fine.
+    let test_file = render_test_file(
+        &fixture.resolved_category(),
+        &[&call_fixture],
+        e2e_config,
+        config,
+        type_defs,
+        enums,
+        &[],
+        &dep_name,
+        call_fixture.needs_mock_server(),
+        fixture.docs_client(),
+        expects_error,
+    );
+    let (imports, body, is_async) = extract_rust_snippet(&test_file)?;
+    let api_key_var = crate::e2e::fixture::FixtureEnv::api_key_var_or_default(fixture.env.as_ref());
+    let body = body
+        .into_iter()
+        .map(|line| {
+            line.replace(
+                "\"test-key\".to_string()",
+                &format!("std::env::var(\"{api_key_var}\").expect(\"{api_key_var} must be set\")"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let call = e2e_config.resolve_call_for_fixture(
+        call_fixture.call.as_deref(),
+        &call_fixture.id,
+        &call_fixture.resolved_category(),
+        &call_fixture.tags,
+        &call_fixture.input,
+    );
+    // An error fixture renders the `Result` through the template's `match`, which both
+    // reports the failure and consumes the value — a second unconditional `println!`
+    // of `result_var` would then reference a moved binding. ~keep
+    let display_result = !expects_error && presentation.is_empty() && !call.returns_void;
+    let body = body
+        .into_iter()
+        .map(|line| {
+            if display_result {
+                line.replacen("let _ =", &format!("let {} =", call.effective_result_var()), 1)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(crate::e2e::template_env::render(
+        "rust/snippet_body.rs.jinja",
+        minijinja::context! {
+            imports => imports, body => body, is_async => is_async, presentation => presentation,
+            display_result => display_result, result_var => call.effective_result_var(),
+            expects_error => expects_error, returns_void => call.returns_void,
+        },
+    ))
 }
 
 fn extract_rust_snippet(rendered: &str) -> Result<(Vec<&str>, Vec<&str>, bool)> {

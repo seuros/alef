@@ -6,6 +6,7 @@
 
 mod ir_collection;
 mod ir_enum;
+mod ir_result_fields;
 mod optional_renderers;
 mod parse;
 mod renderers;
@@ -13,8 +14,8 @@ mod resolver;
 mod types;
 
 pub use types::{
-    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, PhpGetterMap, StringyField, StringyFieldKind,
-    SwiftFirstClassMap,
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, StringyField,
+    StringyFieldKind, SwiftFirstClassMap,
 };
 
 #[cfg(test)]

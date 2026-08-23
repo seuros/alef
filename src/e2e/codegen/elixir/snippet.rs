@@ -12,6 +12,23 @@ pub(super) fn render_snippet_body(
     type_defs: &[TypeDef],
     enums: &[EnumDef],
 ) -> Result<String> {
+    render_snippet_body_with_ir(fixture, e2e_config, config, type_defs, enums, &[])
+}
+
+/// [`render_snippet_body`], with the free-function registry it cannot see.
+///
+/// `functions` lets the presentation resolver anchor the snippet's field facts at the call's
+/// own declared result type instead of matching field names across the whole crate IR; without
+/// it the resolver falls back to the flat, name-keyed answers. Mirrors `java/snippet.rs`'s
+/// split for the same reason. ~keep
+pub(super) fn render_snippet_body_with_ir(
+    fixture: &Fixture,
+    e2e_config: &E2eConfig,
+    config: &ResolvedCrateConfig,
+    type_defs: &[TypeDef],
+    enums: &[EnumDef],
+    functions: &[crate::core::ir::FunctionDef],
+) -> Result<String> {
     if fixture.is_http_test() {
         return render_http_snippet(fixture);
     }
@@ -93,7 +110,7 @@ pub(super) fn render_snippet_body(
         .assertions
         .iter()
         .any(|assertion| assertion.assertion_type == "error");
-    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs);
+    let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, lang, type_defs, functions);
     Ok(crate::e2e::template_env::render(
         "elixir/snippet_body.jinja",
         minijinja::context! {

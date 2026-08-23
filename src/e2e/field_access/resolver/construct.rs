@@ -1,9 +1,37 @@
 use super::super::ir_collection::build_ir_collection_map;
 use super::super::ir_enum::build_ir_enum_map;
+use super::super::ir_result_fields::{OptionalityRule, build_ir_result_field_map, is_optional_path};
 use super::super::types::{
-    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, PhpGetterMap, SwiftFirstClassMap,
+    DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, SwiftFirstClassMap,
 };
 use std::collections::{HashMap, HashSet};
+
+/// Every key an accessor renderer will look up in `optional_fields` while walking `path`, in
+/// order, one per segment.
+///
+/// ~keep Must stay byte-identical to what the renderers build, or an inserted entry silently
+/// never matches: they track the path with [`push_key_field_name`] (the segment's bare name,
+/// no index) to ask about the segment itself, then [`push_key_index_suffix`] normalises an
+/// indexed segment to a literal `[0]` before the next one — so the key for
+/// `results[3].metadata` is `results` and then `results[0].metadata`, never `results[3]`.
+///
+/// [`push_key_field_name`]: super::super::optional_renderers::push_key_field_name
+/// [`push_key_index_suffix`]: super::super::optional_renderers::push_key_index_suffix
+fn optional_lookup_keys(path: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut path_so_far = String::new();
+    for segment in super::super::parse::parse_path(path) {
+        // A `.length`/`.count` pseudo-segment names no field, leaves the tracked key untouched,
+        // and is never looked up — pushing here would only re-test the previous key. ~keep
+        if super::super::parse::segment_name(&segment).is_none() {
+            continue;
+        }
+        super::super::optional_renderers::push_key_field_name(&mut path_so_far, &segment);
+        keys.push(path_so_far.clone());
+        super::super::optional_renderers::push_key_index_suffix(&mut path_so_far, &segment);
+    }
+    keys
+}
 
 thread_local! {
     /// ~keep Fields already warned about by [`FieldResolver::warn_on_result_fields_contradicting_ir`]
@@ -68,6 +96,7 @@ impl FieldResolver {
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            ir_result_field_map: IrResultFieldMap::default(),
         }
     }
 
@@ -102,6 +131,7 @@ impl FieldResolver {
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            ir_result_field_map: IrResultFieldMap::default(),
         }
     }
 
@@ -146,6 +176,7 @@ impl FieldResolver {
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            ir_result_field_map: IrResultFieldMap::default(),
         }
     }
 
@@ -196,6 +227,7 @@ impl FieldResolver {
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            ir_result_field_map: IrResultFieldMap::default(),
         }
     }
 
@@ -230,6 +262,7 @@ impl FieldResolver {
             ir_enum_map: IrEnumMap::default(),
             java_wrapper_enum_names: HashSet::new(),
             ir_collection_map: IrCollectionMap::default(),
+            ir_result_field_map: IrResultFieldMap::default(),
         }
     }
 
@@ -308,6 +341,53 @@ impl FieldResolver {
     pub fn with_ir_collection_map(mut self, mut map: IrCollectionMap, root_type: Option<String>) -> Self {
         map.root_type = root_type;
         self.ir_collection_map = map;
+        self
+    }
+
+    /// Compute the per-owner-type field facts for [`Self::with_ir_result_fields`], under the
+    /// optionality rule the binding for `language` applies. The returned map has no `root_type`
+    /// yet — `with_ir_result_fields` anchors it to the specific call being rendered. Mirrors
+    /// [`Self::ir_collection_fields`]'s "compute once from the crate's IR" shape.
+    pub(crate) fn ir_result_field_facts(type_defs: &[crate::core::ir::TypeDef], language: &str) -> IrResultFieldMap {
+        build_ir_result_field_map(type_defs, OptionalityRule::for_language(language))
+    }
+
+    /// Attach IR field facts anchored at `root_type` — the IR type name the call's declared
+    /// return type resolves to, per `codegen::call_ir::resolve_declared_result_type`.
+    ///
+    /// `map` should come from [`Self::ir_result_field_facts`]; only `root_type` varies per call.
+    /// A `None` root leaves every anchored answer disabled, which is exactly the behaviour
+    /// before this map existed — so wiring it in can never, on its own, change a verdict. ~keep
+    pub(crate) fn with_ir_result_fields(mut self, mut map: IrResultFieldMap, root_type: Option<String>) -> Self {
+        map.root_type = root_type;
+        self.ir_result_field_map = map;
+        self
+    }
+
+    /// Record, in `optional_fields`, every prefix of `paths` the anchored map proves optional.
+    ///
+    /// ~keep The accessor renderers do not call [`Self::is_optional`]; they consult the
+    /// `optional_fields` path set directly, one dotted prefix at a time, because that is the only
+    /// form in which "the value BEFORE this segment may be absent" is expressible while walking a
+    /// chain (`render_typescript_with_optionals` and its eight siblings all share this shape).
+    /// Anchored optionality therefore has to be materialised into that set for the exact paths a
+    /// caller is about to render, rather than answered on demand. Doing it per-path — instead of
+    /// enumerating the whole reachable type graph — keeps recursive types finite and adds nothing
+    /// for fields nobody accesses.
+    ///
+    /// Purely additive: an entry is only ever inserted, so no path that already guarded can stop
+    /// guarding.
+    pub(crate) fn with_anchored_optional_paths<'a>(mut self, paths: impl IntoIterator<Item = &'a str>) -> Self {
+        if self.ir_result_field_map.root_type.is_none() {
+            return self;
+        }
+        for path in paths {
+            for key in optional_lookup_keys(self.resolve(path)) {
+                if is_optional_path(&self.ir_result_field_map, &key) {
+                    self.optional_fields.insert(key);
+                }
+            }
+        }
         self
     }
 
