@@ -154,113 +154,13 @@ pub(super) fn render_run_tests(categories: &[String], env: &HashMap<String, Stri
     let _ = writeln!(out, "  exit 1");
     let _ = writeln!(out, "fi");
     let _ = writeln!(out);
-    let _ = writeln!(out, "PASS=0");
-    let _ = writeln!(out, "FAIL=0");
-    let _ = writeln!(out);
-
-    // Helper functions.
-    let _ = writeln!(out, "assert_equals() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" expected=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [ \"$actual\" != \"$expected\" ]; then");
-    let _ = writeln!(
-        out,
-        "    echo \"FAIL [$label]: expected '$expected', got '$actual'\" >&2"
-    );
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_contains() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" expected=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [[ \"$actual\" != *\"$expected\"* ]]; then");
-    let _ = writeln!(out, "    echo \"FAIL [$label]: expected to contain '$expected'\" >&2");
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_not_empty() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" label=\"$2\"");
-    let _ = writeln!(
-        out,
-        "  # `jq -r` renders JSON null and empty containers as the literal text \"null\", \"[]\" and \"{{}}\","
-    );
-    let _ = writeln!(
-        out,
-        "  # so a bare emptiness test would pass on them. A legitimate 0 or false still renders as text and passes."
-    );
-    let _ = writeln!(
-        out,
-        "  if [ -z \"$actual\" ] || [ \"$actual\" = \"null\" ] || [ \"$actual\" = \"[]\" ] || [ \"$actual\" = \"{{}}\" ]; then"
-    );
-    let _ = writeln!(out, "    echo \"FAIL [$label]: expected non-empty value\" >&2");
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_count_min() {{");
-    let _ = writeln!(out, "  local count=\"$1\" min=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [ \"$count\" -lt \"$min\" ]; then");
-    let _ = writeln!(
-        out,
-        "    echo \"FAIL [$label]: expected at least $min elements, got $count\" >&2"
-    );
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_greater_than() {{");
-    let _ = writeln!(out, "  local val=\"$1\" threshold=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [ \"$(echo \"$val > $threshold\" | bc -l)\" != \"1\" ]; then");
-    let _ = writeln!(out, "    echo \"FAIL [$label]: expected $val > $threshold\" >&2");
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_greater_than_or_equal() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" expected=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [ \"$actual\" -lt \"$expected\" ]; then");
-    let _ = writeln!(out, "    echo \"FAIL [$label]: expected $actual >= $expected\" >&2");
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_is_empty() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" label=\"$2\"");
-    let _ = writeln!(out, "  if [ -n \"$actual\" ]; then");
-    let _ = writeln!(
-        out,
-        "    echo \"FAIL [$label]: expected empty value, got '$actual'\" >&2"
-    );
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_less_than() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" expected=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [ \"$actual\" -ge \"$expected\" ]; then");
-    let _ = writeln!(out, "    echo \"FAIL [$label]: expected $actual < $expected\" >&2");
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_less_than_or_equal() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" expected=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [ \"$actual\" -gt \"$expected\" ]; then");
-    let _ = writeln!(out, "    echo \"FAIL [$label]: expected $actual <= $expected\" >&2");
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
-    let _ = writeln!(out);
-    let _ = writeln!(out, "assert_not_contains() {{");
-    let _ = writeln!(out, "  local actual=\"$1\" expected=\"$2\" label=\"$3\"");
-    let _ = writeln!(out, "  if [[ \"$actual\" == *\"$expected\"* ]]; then");
-    let _ = writeln!(
-        out,
-        "    echo \"FAIL [$label]: expected not to contain '$expected'\" >&2"
-    );
-    let _ = writeln!(out, "    return 1");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
+    // Harness core: pass/fail counters, the assertion helpers the generated
+    // category tests call, and `run_test`. Emitted from a template because it is a
+    // single logical shell unit with no per-suite parameters.
+    out.push_str(&crate::e2e::template_env::render(
+        "brew/harness.sh.jinja",
+        minijinja::context! {},
+    ));
     let _ = writeln!(out);
 
     // Source per-category files.
@@ -271,19 +171,6 @@ pub(super) fn render_run_tests(categories: &[String], env: &HashMap<String, Stri
         let _ = writeln!(out, "# shellcheck source=test_{category}.sh");
         let _ = writeln!(out, "source \"$SCRIPT_DIR/test_{category}.sh\"");
     }
-    let _ = writeln!(out);
-
-    // Run each test function and track pass/fail.
-    let _ = writeln!(out, "run_test() {{");
-    let _ = writeln!(out, "  local name=\"$1\"");
-    let _ = writeln!(out, "  if \"$name\"; then");
-    let _ = writeln!(out, "    echo \"PASS: $name\"");
-    let _ = writeln!(out, "    PASS=$((PASS + 1))");
-    let _ = writeln!(out, "  else");
-    let _ = writeln!(out, "    echo \"FAIL: $name\"");
-    let _ = writeln!(out, "    FAIL=$((FAIL + 1))");
-    let _ = writeln!(out, "  fi");
-    let _ = writeln!(out, "}}");
     let _ = writeln!(out);
 
     // Gather all test function names from category files then call them.
@@ -444,5 +331,105 @@ mod tests {
         let env_pos = script.find("${E2E_ALLOW_PRIVATE_NETWORK").unwrap();
         let mock_pos = script.find("MOCK_SERVER_URL").unwrap();
         assert!(env_pos < mock_pos, "env block must precede mock-server bootstrap");
+    }
+
+    /// Executing the emitted runner is the only way to prove the harness reports
+    /// a failing assertion, because the bug being guarded against was invisible
+    /// in the emitted text: `if "$name"; then` reads like a correct check and
+    /// silently disables errexit for the test function's whole body.
+    ///
+    /// Unix-only: the generated harness is bash, and the stubs it needs on PATH
+    /// are chmod'd executables.
+    #[cfg(unix)]
+    fn run_generated_harness(category_body: &str) -> (bool, String) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let root = dir.path();
+        // The runner's preflight requires both `jq` and the configured CLI on
+        // PATH before it runs a single test; stub both so the harness itself is
+        // what the test exercises.
+        for stub in ["jq", "sample-cli"] {
+            let path = root.join(stub);
+            std::fs::write(&path, "#!/usr/bin/env bash\nexit 0\n").expect("write stub");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod stub");
+        }
+        let script = render_run_tests(&["smoke".to_string()], &HashMap::new(), "sample-cli");
+        std::fs::write(root.join("run_tests.sh"), &script).expect("write runner");
+        std::fs::write(root.join("test_smoke.sh"), category_body).expect("write category file");
+
+        let path_var = format!(
+            "{}:{}",
+            root.display(),
+            std::env::var("PATH").unwrap_or_else(|_| "/usr/bin:/bin".to_string())
+        );
+        let output = std::process::Command::new("bash")
+            .arg("run_tests.sh")
+            .current_dir(root)
+            .env("PATH", path_var)
+            // Pre-set so the runner skips the mock-server bootstrap; no test here
+            // actually reaches out over the network.
+            .env("MOCK_SERVER_URL", "http://127.0.0.1:1")
+            .output()
+            .expect("bash runs the generated runner");
+        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
+        (output.status.success(), combined)
+    }
+
+    #[cfg(unix)]
+    fn three_assertion_category(first_expected: &str) -> String {
+        format!(
+            "#!/usr/bin/env bash\nset -euo pipefail\n\n\
+             test_three_assertions() {{\n\
+             \x20 assert_equals \"2\" \"{first_expected}\" 'first'\n\
+             \x20 assert_equals 'ok' 'ok' 'second'\n\
+             \x20 assert_equals 'ok' 'ok' 'third'\n\
+             }}\n\n\
+             run_tests_smoke() {{\n\
+             \x20 run_test test_three_assertions\n\
+             }}\n"
+        )
+    }
+
+    /// Regression: a test whose FIRST of three assertions fails must be reported
+    /// as FAIL and must fail the runner. `run_test` used to invoke the test
+    /// function as an `if` condition, which disables errexit for the whole call,
+    /// so the function's status was just its last command's — every assertion but
+    /// the last could fail while the suite reported PASS and exited 0.
+    #[cfg(unix)]
+    #[test]
+    fn runner_fails_when_only_the_first_of_three_assertions_fails() {
+        let (success, output) = run_generated_harness(&three_assertion_category("99"));
+        assert!(
+            output.contains("FAIL [first]: expected '99', got '2'"),
+            "the failing assertion must report itself; got:\n{output}"
+        );
+        assert!(
+            output.contains("FAIL: test_three_assertions"),
+            "the test must be reported as FAIL; got:\n{output}"
+        );
+        assert!(
+            output.contains("Results: 0 passed, 1 failed"),
+            "the tally must count the test as failed; got:\n{output}"
+        );
+        assert!(!success, "the runner must exit non-zero; got:\n{output}");
+    }
+
+    /// The other half of the guard: the fix must not turn every test red. A
+    /// three-assertion test that passes all three still reports PASS and exits 0.
+    #[cfg(unix)]
+    #[test]
+    fn runner_passes_when_every_assertion_passes() {
+        let (success, output) = run_generated_harness(&three_assertion_category("2"));
+        assert!(
+            output.contains("PASS: test_three_assertions"),
+            "an all-passing test must be reported as PASS; got:\n{output}"
+        );
+        assert!(
+            output.contains("Results: 1 passed, 0 failed"),
+            "the tally must count the test as passed; got:\n{output}"
+        );
+        assert!(success, "the runner must exit zero; got:\n{output}");
     }
 }
