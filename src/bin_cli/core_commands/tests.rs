@@ -10,9 +10,7 @@ use std::path::Path;
 const OWNERSHIP_MANIFEST: &str = ".alef-ownership.toml";
 
 fn init_git_work_tree(base_dir: &Path) -> Option<()> {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(base_dir)
+    let status = crate::test_support::git_command(base_dir)
         .args(["init", "--quiet"])
         .status()
         .ok()?;
@@ -20,9 +18,7 @@ fn init_git_work_tree(base_dir: &Path) -> Option<()> {
 }
 
 fn git_add(base_dir: &Path, relative: &str) {
-    let status = std::process::Command::new("git")
-        .arg("-C")
-        .arg(base_dir)
+    let status = crate::test_support::git_command(base_dir)
         .args(["add", "--", relative])
         .status()
         .expect("git add");

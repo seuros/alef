@@ -1719,13 +1719,10 @@ mod tests {
 
     /// Initialise a git work tree in `base_dir`, or `None` when git is unavailable.
     ///
-    /// No identity is configured because nothing here commits: `git ls-files
-    /// --error-unmatch` answers from the index, so `git add` alone is enough to make a
-    /// path tracked for the purpose under test. ~keep
+    /// Nothing here commits: `git ls-files --error-unmatch` answers from the index, so `git
+    /// add` alone is enough to make a path tracked for the purpose under test. ~keep
     fn init_git_work_tree(base_dir: &Path) -> Option<()> {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(base_dir)
+        let status = crate::test_support::git_command(base_dir)
             .args(["init", "--quiet"])
             .status()
             .ok()?;
@@ -1733,9 +1730,7 @@ mod tests {
     }
 
     fn git_add(base_dir: &Path, relative: &str) {
-        let status = std::process::Command::new("git")
-            .arg("-C")
-            .arg(base_dir)
+        let status = crate::test_support::git_command(base_dir)
             .args(["add", "--", relative])
             .status()
             .expect("git add");
