@@ -385,12 +385,21 @@ fn default_operations_from_assertions(
     {
         return Vec::new();
     }
+    // ~keep A streaming fixture's `chunks`/`stream_content` assertions name a locally collected
+    // list, not a member of the result, so no accessor may be derived for them. A NON-streaming
+    // fixture whose result type genuinely declares a field of one of those names is the opposite
+    // case: rejecting the name by spelling alone dropped `result.chunks` from 52 snippets in one
+    // consumer's suite while its 16 e2e files kept asserting on the very same field.
+    // `resolve_is_streaming` is the call-scoped question every assertion renderer already gates
+    // its streaming branch on, so both generators answer it once and cannot disagree.
+    let fixture_is_streaming =
+        crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call.streaming_enabled());
     let mut seen_fields = Vec::new();
     fixture
         .assertions
         .iter()
         .filter_map(|assertion| assertion.field.as_deref())
-        .filter(|field| shows_on_result(field, resolver))
+        .filter(|field| shows_on_result(field, resolver, fixture_is_streaming))
         .filter(|field| {
             let is_new = !seen_fields.contains(field);
             if is_new {
@@ -407,9 +416,9 @@ fn default_operations_from_assertions(
 
 /// Whether a derived field path names a member of the call's result, per the oracles the
 /// assertion renderers already consult. See [`default_operations_from_assertions`].
-fn shows_on_result(field: &str, resolver: &FieldResolver) -> bool {
+fn shows_on_result(field: &str, resolver: &FieldResolver, fixture_is_streaming: bool) -> bool {
     !field.is_empty()
-        && !crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field)
+        && !(fixture_is_streaming && crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field))
         && resolver.is_valid_for_result(field)
         && resolver.result_field_oracle_knows(field) != Some(false)
 }

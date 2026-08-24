@@ -376,3 +376,81 @@ fn the_availability_oracles_disagree_on_purpose_for_a_name_the_result_type_lacks
     assert!(resolver.is_valid_for_result("content"));
     assert_eq!(resolver.result_field_oracle_knows("content"), Some(true));
 }
+
+/// A result field whose NAME collides with a legacy streaming pseudo-field (`chunks`,
+/// `stream_content`, `tool_calls`, ...) is still a real member when the call is not a streaming
+/// call, and must keep its derived accessor.
+///
+/// ~keep `shows_on_result` rejected every name in `STREAMING_VIRTUAL_FIELDS` by spelling alone,
+/// with no streaming gate — the one caller of `is_streaming_virtual_field` in the tree that had
+/// none. Every assertion renderer gates that same list on `resolve_is_streaming`, so the two
+/// generators disagreed: e2e kept asserting `len(result.chunks) > 0` while the snippet silently
+/// dropped the field, across 52 files in one consumer's suite. Both directions are asserted
+/// together so neither half can move alone.
+#[test]
+fn a_result_field_named_like_a_streaming_pseudo_field_still_derives_its_accessor() {
+    let type_defs = vec![
+        TypeDef {
+            name: "SegmentReport".to_string(),
+            fields: vec![
+                field(
+                    "chunks",
+                    TypeRef::Vec(Box::new(TypeRef::Named("Segment".to_string()))),
+                    false,
+                ),
+                field("total", TypeRef::String, false),
+            ],
+            ..TypeDef::default()
+        },
+        TypeDef {
+            name: "Segment".to_string(),
+            fields: vec![field("text", TypeRef::String, false)],
+            ..TypeDef::default()
+        },
+    ];
+    let assertions = serde_json::json!([
+        {"type": "length_greater_than", "field": "chunks", "value": 0},
+        {"type": "equals", "field": "total", "value": "3"}
+    ]);
+
+    let operations = resolve(
+        &docs_fixture(assertions.clone()),
+        &config(),
+        "python",
+        &type_defs,
+        &convert_returning("SegmentReport"),
+    );
+    assert_eq!(
+        operations
+            .iter()
+            .map(|operation| operation.expression.as_str())
+            .collect::<Vec<_>>(),
+        vec!["result.chunks", "result.total"],
+        "`chunks` is declared by the type `convert` returns, so the snippet must show it"
+    );
+
+    let streaming: Fixture = serde_json::from_value(serde_json::json!({
+        "id": "streaming_fixture",
+        "description": "Streaming fixture",
+        "input": {"html": "<p>Hello</p>"},
+        "assertions": assertions,
+        "mock_response": {"status": 200, "stream_chunks": ["a", "b"]},
+        "docs": {"topic": "smoke", "stem": "streaming_fixture"}
+    }))
+    .expect("fixture must parse");
+    let streamed = resolve(
+        &streaming,
+        &config(),
+        "python",
+        &type_defs,
+        &convert_returning("SegmentReport"),
+    );
+    assert_eq!(
+        streamed
+            .iter()
+            .map(|operation| operation.expression.as_str())
+            .collect::<Vec<_>>(),
+        vec!["result.total"],
+        "on a streaming fixture `chunks` names the collected local list, not a result member"
+    );
+}
