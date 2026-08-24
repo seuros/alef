@@ -190,6 +190,55 @@ fn swift_bridged_output() -> String {
     generate(&SwiftBackend, &bridged_api(), &bridged_config())
 }
 
+/// Isolate the body of one generated per-variant getter, so an assertion cannot be satisfied by a
+/// sibling getter or by the tag getter below them.
+fn pyo3_variant_getter_body(pyo3: &str, getter: &str) -> String {
+    let marker = format!("fn {getter}(&self, py: Python<'_>)");
+    let start = pyo3
+        .find(&marker)
+        .unwrap_or_else(|| panic!("PyO3 emits a `{marker}` getter:\n{pyo3}"));
+    let rest = &pyo3[start..];
+    let end = rest.find("\n    }\n").expect("the getter is closed");
+    rest[..end].to_string()
+}
+
+/// PyO3 does not hand-write the JSON document — serde does, inside the generated Rust — so what it
+/// can get wrong is *where in that document the payload lives*. The adjacent form puts it under the
+/// content key; handing back the whole document returns the tag envelope instead of the payload.
+#[test]
+fn pyo3_variant_getter_returns_the_payload_not_the_tag_envelope() {
+    let pyo3 = generate(&Pyo3Backend, &plain_api(), &ResolvedCrateConfig::default());
+    let data_variant_tag = serde_variant_tags()
+        .into_iter()
+        .find(|tag| {
+            let form: serde_json::Value = serde_json::from_str(
+                &serde_wire_forms()
+                    .into_iter()
+                    .find(|json| json.contains(tag))
+                    .expect("every tag has a wire form"),
+            )
+            .expect("serde output is JSON");
+            form.get(CONTENT_KEY).is_some()
+        })
+        .expect("the fixture has a variant serde gives a content key");
+
+    let body = pyo3_variant_getter_body(&pyo3, &data_variant_tag);
+    assert!(
+        body.contains(&format!("json.get(\"{CONTENT_KEY}\")")),
+        "the getter must read the payload from serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains("let payload = json;"),
+        "handing back the whole serialized document is serde's *internal* form, where the payload's \
+         fields really are flat beside the tag; under adjacent tagging it returns the envelope and \
+         the caller never sees the payload:\n{body}"
+    );
+    assert!(
+        body.contains(&format!("let tag_field = \"{TAG_KEY}\";")),
+        "the getter must still dispatch on serde's tag key:\n{body}"
+    );
+}
+
 fn kotlin_android_union_output() -> String {
     generate(&KotlinAndroidBackend, &plain_api(), &ResolvedCrateConfig::default())
 }
@@ -264,12 +313,17 @@ fn kotlin_android_deserializer_reads_the_payload_from_serdes_content_key() {
 
 /// Whether a backend already speaks serde's adjacent form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-
 enum AdjacentSupport {
     /// Emits both the tag key and the content key, i.e. serde's adjacent shape.
     Correct,
     /// Emits the tag key but no content key — serde's *internal* shape, which Rust refuses for an
     /// adjacently tagged enum. The string records where the divergence lives.
+    ///
+    /// Every backend in [`ADJACENT_TAGGING_SUPPORT`] is currently [`AdjacentSupport::Correct`], so
+    /// nothing constructs this today. It is the slot a newly discovered divergence gets recorded
+    /// in — asserted rather than waived — so it stays. Delete this attribute (not the variant) when
+    /// adding such an entry. ~keep
+    #[expect(dead_code, reason = "the recording slot for the next divergence found")]
     KnownDivergent(&'static str),
 }
 
@@ -286,13 +340,7 @@ const ADJACENT_TAGGING_SUPPORT: &[(&str, AdjacentSupport)] = &[
     ("java", AdjacentSupport::Correct),
     ("csharp", AdjacentSupport::Correct),
     ("kotlin_android", AdjacentSupport::Correct),
-    (
-        "pyo3",
-        AdjacentSupport::KnownDivergent(
-            "backends::pyo3::gen_stubs::enums builds `{tag_field: variant}` and merges the payload \
-             fields into the same object",
-        ),
-    ),
+    ("pyo3", AdjacentSupport::Correct),
 ];
 
 /// Every backend whose generated output mentions the serde tag key at all, whether or not it

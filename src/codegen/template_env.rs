@@ -422,6 +422,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/generators/enums/external_variant_payload.jinja"),
     ),
     (
+        "generators/enums/adjacent_variant_payload.jinja",
+        include_str!("templates/generators/enums/adjacent_variant_payload.jinja"),
+    ),
+    (
         "generators/enums/variant_tag_match.jinja",
         include_str!("templates/generators/enums/variant_tag_match.jinja"),
     ),
