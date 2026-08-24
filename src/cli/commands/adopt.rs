@@ -699,7 +699,9 @@ pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptRep
         tracing::warn!(
             path = %candidate.relative.display(),
             "create-once seed: alef emits this path only when absent, so adopting it consents to alef \
-             replacing its contents with a placeholder seed on the next generate"
+             replacing its contents with a placeholder seed on the next overwriting regen (an \
+             `alef version` sync, `alef all --clobber-create-once-seeds`) -- a plain `alef generate` \
+             skips it"
         );
     }
 
@@ -737,8 +739,8 @@ pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptRep
         bail!(
             "`{}` matches only create-once seeds, which alef emits solely when absent -- \
              adopting one consents to alef replacing its contents with a placeholder seed on the \
-             next generate, so nothing was written. Pass --clobber-create-once-seeds to adopt them \
-             anyway.",
+             next overwriting regen (an `alef version` sync, `alef all --clobber-create-once-seeds`), \
+             so nothing was written. Pass --clobber-create-once-seeds to adopt them anyway.",
             options.target
         );
     }

@@ -351,9 +351,17 @@ pub(crate) enum Commands {
         // it does; an `--include-*` or `--force` spelling reads as routine scope-widening,
         // and this widens scope onto precisely the paths where adoption destroys work on a
         // later, unrelated command. ~keep
-        /// DANGEROUS: also adopt create-once seeds (real test suites, build.zig, ...).
-        /// alef emits these only when absent, so adopting one consents to alef replacing
-        /// its contents with a placeholder seed on the next generate.
+        // The timing is stated exactly. Adoption itself writes no seed byte -- for an
+        // unmarkable seed (LICENSE, mvnw, .gitkeep) it only records the path in
+        // `.alef-ownership.toml` -- and a plain `alef generate` skips the seed regardless
+        // (`write_scaffold_files_report`'s `can_skip`). The loss lands on the next write that
+        // passes `overwrite: true`, where the record or marker adoption left behind is what
+        // clears the ownership guard. Saying "on the next generate" invited an operator to
+        // run one, see the file untouched, and dismiss a warning that is true. ~keep
+        /// DANGEROUS: also adopt create-once seeds (real test suites, build.zig, LICENSE, ...).
+        /// alef emits these only when absent, so adopting one consents to alef replacing its
+        /// contents with a placeholder seed on the next OVERWRITING regen -- an `alef version`
+        /// sync or `alef all --clobber-create-once-seeds`. A plain `alef generate` skips them.
         #[arg(long)]
         clobber_create_once_seeds: bool,
     },
