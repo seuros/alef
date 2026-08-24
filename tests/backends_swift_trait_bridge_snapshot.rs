@@ -131,7 +131,7 @@ fn test_trait_bridge_sync_method() {
 #[test]
 fn test_trait_bridge_async_method() {
     let trait_def = make_trait_def(
-        "OcrBackend",
+        "SampleBackend",
         vec![make_method(
             "recognize",
             vec![make_param("image_bytes", TypeRef::Bytes)],
@@ -140,8 +140,8 @@ fn test_trait_bridge_async_method() {
         )],
     );
 
-    let bridge_cfg = make_bridge_cfg("OcrBackend");
-    let bridges = vec![("OcrBackend".to_string(), &bridge_cfg, &trait_def)];
+    let bridge_cfg = make_bridge_cfg("SampleBackend");
+    let bridges = vec![("SampleBackend".to_string(), &bridge_cfg, &trait_def)];
     let files = gen_trait_bridge_files(
         &bridges,
         &std::collections::HashSet::new(),
@@ -152,8 +152,8 @@ fn test_trait_bridge_async_method() {
     assert_eq!(files[0].0, "SwiftPluginBridge.swift");
     let (filename, content) = &files[1];
 
-    assert_eq!(filename, "SwiftOcrBackendBridge.swift");
-    assert!(content.contains("protocol SwiftOcrBackendBridge"));
+    assert_eq!(filename, "SwiftSampleBackendBridge.swift");
+    assert!(content.contains("protocol SwiftSampleBackendBridge"));
     assert!(content.contains("throws"));
     assert!(content.contains("func recognize"));
 }
@@ -161,7 +161,7 @@ fn test_trait_bridge_async_method() {
 #[test]
 fn test_trait_bridge_multiple_methods() {
     let trait_def = make_trait_def(
-        "PostProcessor",
+        "SampleTransformer",
         vec![
             make_method(
                 "process",
@@ -178,8 +178,8 @@ fn test_trait_bridge_multiple_methods() {
         ],
     );
 
-    let bridge_cfg = make_bridge_cfg("PostProcessor");
-    let bridges = vec![("PostProcessor".to_string(), &bridge_cfg, &trait_def)];
+    let bridge_cfg = make_bridge_cfg("SampleTransformer");
+    let bridges = vec![("SampleTransformer".to_string(), &bridge_cfg, &trait_def)];
     let files = gen_trait_bridge_files(
         &bridges,
         &std::collections::HashSet::new(),
@@ -190,7 +190,7 @@ fn test_trait_bridge_multiple_methods() {
     assert_eq!(files[0].0, "SwiftPluginBridge.swift");
     let (filename, content) = &files[1];
 
-    assert_eq!(filename, "SwiftPostProcessorBridge.swift");
+    assert_eq!(filename, "SwiftSampleTransformerBridge.swift");
     assert!(content.contains("func process"));
     assert!(content.contains("func validate"));
     assert!(content.matches("func").count() >= 2);
@@ -199,14 +199,14 @@ fn test_trait_bridge_multiple_methods() {
 #[test]
 fn test_trait_bridge_excludes_swift() {
     let trait_def = make_trait_def(
-        "OcrBackend",
+        "SampleBackend",
         vec![make_method("recognize", vec![], TypeRef::String, false)],
     );
 
-    let mut bridge_cfg = make_bridge_cfg("OcrBackend");
+    let mut bridge_cfg = make_bridge_cfg("SampleBackend");
     bridge_cfg.exclude_languages = vec!["swift".to_string()];
 
-    let bridges = vec![("OcrBackend".to_string(), &bridge_cfg, &trait_def)];
+    let bridges = vec![("SampleBackend".to_string(), &bridge_cfg, &trait_def)];
     let files = gen_trait_bridge_files(
         &bridges,
         &std::collections::HashSet::new(),
@@ -219,14 +219,14 @@ fn test_trait_bridge_excludes_swift() {
 #[test]
 fn test_trait_bridge_skips_options_field() {
     let trait_def = make_trait_def(
-        "OcrBackend",
+        "SampleBackend",
         vec![make_method("recognize", vec![], TypeRef::String, false)],
     );
 
-    let mut bridge_cfg = make_bridge_cfg("OcrBackend");
+    let mut bridge_cfg = make_bridge_cfg("SampleBackend");
     bridge_cfg.bind_via = BridgeBinding::OptionsField;
 
-    let bridges = vec![("OcrBackend".to_string(), &bridge_cfg, &trait_def)];
+    let bridges = vec![("SampleBackend".to_string(), &bridge_cfg, &trait_def)];
     let files = gen_trait_bridge_files(
         &bridges,
         &std::collections::HashSet::new(),
@@ -270,7 +270,7 @@ fn test_trait_bridge_primitive_params() {
 #[test]
 fn test_trait_bridge_excluded_type_return() {
     let trait_def = make_trait_def(
-        "OcrBackend",
+        "SampleBackend",
         vec![make_method(
             "process",
             vec![make_param("image_bytes", TypeRef::Bytes)],
@@ -279,11 +279,11 @@ fn test_trait_bridge_excluded_type_return() {
         )],
     );
 
-    let bridge_cfg = make_bridge_cfg("OcrBackend");
+    let bridge_cfg = make_bridge_cfg("SampleBackend");
     let mut exclude_types = std::collections::HashSet::new();
     exclude_types.insert("ExtractionResult".to_string());
 
-    let bridges = vec![("OcrBackend".to_string(), &bridge_cfg, &trait_def)];
+    let bridges = vec![("SampleBackend".to_string(), &bridge_cfg, &trait_def)];
     let files = gen_trait_bridge_files(&bridges, &exclude_types, &std::collections::HashSet::new());
 
     assert_eq!(files.len(), 2);
