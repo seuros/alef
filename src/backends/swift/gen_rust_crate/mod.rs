@@ -67,7 +67,7 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         None => crate_name.replace('-', "_"),
     };
 
-    let features_owned = feature_gate::configured_swift_features(config, &core_crate_dir);
+    let features_owned = feature_gate::configured_swift_features(config, &core_crate_dir, api);
     let features: &[String] = &features_owned;
     let mut exclude_functions: HashSet<String> = config
         .swift

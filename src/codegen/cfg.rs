@@ -185,6 +185,44 @@ pub fn collect_cfg_gates(api: &ApiSurface) -> BTreeSet<String> {
     out
 }
 
+/// Groups of feature names that appear as alternatives inside a shared `any(feature = "...", ...)`
+/// cfg gate somewhere in `api`.
+///
+/// A source crate can express "this capability is available under either of these features"
+/// (for example, a full-dependency feature and a narrower one that swaps in a cross-compilable
+/// substitute) by gating the relevant items with `#[cfg(any(feature = "a", feature = "b"))]`
+/// instead of nesting one feature inside another's Cargo feature-of-a-feature list. Deriving that
+/// relationship straight from the parsed cfg strings — rather than hard-coding a specific pair of
+/// feature names — is what lets a caller such as
+/// [`crate::backends::swift::gen_rust_crate::feature_gate::configured_swift_features`] widen a
+/// binding's literal Cargo feature list to a sibling feature it must also turn on, for any crate
+/// that uses this pattern, not just one that happens to name its features a certain way.
+///
+/// Only a top-level `any(...)` gate that names two or more bare `feature = "..."` alternatives
+/// counts; a gate combining features some other way (`all(...)`, a target predicate, a single
+/// feature) carries no alternative-feature relationship for this purpose and is skipped.
+#[must_use]
+pub fn collect_cfg_feature_alternatives(api: &ApiSurface) -> Vec<BTreeSet<String>> {
+    collect_cfg_gates(api)
+        .iter()
+        .filter_map(|gate| any_group_feature_names(gate))
+        .collect()
+}
+
+/// Feature names named directly (not nested inside `all(...)`/`not(...)`) inside a top-level
+/// `any(...)` cfg gate. `None` when `cfg_str` is not an `any(...)` gate, or names fewer than two
+/// bare features.
+fn any_group_feature_names(cfg_str: &str) -> Option<BTreeSet<String>> {
+    let normalized = cfg_str.trim().replace(" (", "(");
+    let inner = normalized.strip_prefix("any(").and_then(|s| s.strip_suffix(')'))?;
+    let names: BTreeSet<String> = parse_cfg_list(inner)
+        .iter()
+        .filter_map(|clause| clause.strip_prefix("feature = \"").and_then(|s| s.strip_suffix('"')))
+        .map(str::to_string)
+        .collect();
+    (names.len() >= 2).then_some(names)
+}
+
 /// The full set of Cargo features the generated FFI crate's `Cargo.toml` enables by default,
 /// once `scaffold::languages::ffi::scaffold_ffi` writes it: [`Language::Ffi`]'s configured
 /// feature list (minus `serde`, which is a passthrough dependency, never a default) unioned with

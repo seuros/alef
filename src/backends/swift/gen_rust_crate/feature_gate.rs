@@ -1,6 +1,6 @@
 //! Feature-gate helpers for generated swift-bridge crates.
 
-use crate::codegen::cfg::collect_cfg_features;
+use crate::codegen::cfg::{collect_cfg_feature_alternatives, collect_cfg_features};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use std::collections::{BTreeSet, HashSet};
@@ -34,13 +34,33 @@ pub(crate) fn source_crate_has_feature(config: &ResolvedCrateConfig, core_crate_
     false
 }
 
-pub(crate) fn configured_swift_features(config: &ResolvedCrateConfig, core_crate_dir: &str) -> Vec<String> {
+/// Widen `config`'s configured Swift feature list with any sibling feature the source crate
+/// itself pairs with an already-active one.
+///
+/// A source crate may gate one capability behind either of two sibling Cargo features (see
+/// [`collect_cfg_feature_alternatives`]) rather than nesting one feature inside another's own
+/// feature list — for example, a full-dependency feature and a narrower one that swaps in a
+/// substitute dependency compatible with cross-compiled targets. When the configured feature list
+/// activates one side of such a pairing (directly, or via the `full` umbrella), the other side is
+/// included too, but only when the source crate's on-disk `Cargo.toml` actually declares it — so a
+/// crate that does not use this pattern for a given feature never has an unknown name injected.
+pub(crate) fn configured_swift_features(
+    config: &ResolvedCrateConfig,
+    core_crate_dir: &str,
+    api: &ApiSurface,
+) -> Vec<String> {
     let base_features = config.features_for_language(Language::Swift);
     let mut features: BTreeSet<String> = base_features.iter().cloned().collect();
-    let ocr_active = features.contains("ocr") || features.contains("full");
-    let ocr_wasm_present = features.contains("ocr-wasm");
-    if ocr_active && !ocr_wasm_present && source_crate_has_feature(config, core_crate_dir, "ocr-wasm") {
-        features.insert("ocr-wasm".to_string());
+    let full_active = features.contains("full");
+    for group in collect_cfg_feature_alternatives(api) {
+        if !full_active && group.is_disjoint(&features) {
+            continue;
+        }
+        for companion in &group {
+            if !features.contains(companion) && source_crate_has_feature(config, core_crate_dir, companion) {
+                features.insert(companion.clone());
+            }
+        }
     }
     features.into_iter().collect()
 }
@@ -50,7 +70,9 @@ pub(crate) fn effective_swift_codegen_features(
     config: &ResolvedCrateConfig,
     core_crate_dir: &str,
 ) -> Vec<String> {
-    let mut features: BTreeSet<String> = configured_swift_features(config, core_crate_dir).into_iter().collect();
+    let mut features: BTreeSet<String> = configured_swift_features(config, core_crate_dir, api)
+        .into_iter()
+        .collect();
     let excluded: HashSet<&str> = config
         .swift
         .as_ref()
@@ -146,5 +168,161 @@ mod tests {
             Some("any(feature = \"heuristics\", feature = \"embeddings\")"),
             &features
         ));
+    }
+
+    /// A source crate can gate one capability behind either of two sibling features (see
+    /// [`collect_cfg_feature_alternatives`]) instead of nesting one feature inside the other's own
+    /// Cargo feature list. When the configured Swift feature list only names one side, the other
+    /// side must still be widened in, provided the source crate's own `Cargo.toml` declares it.
+    #[test]
+    fn configured_swift_features_widens_an_active_alternative_pair() {
+        let temp = tempfile::tempdir().expect("create fixture workspace root");
+        let crate_dir = temp.path().join("crates").join("demo_core");
+        std::fs::create_dir_all(&crate_dir).expect("create fixture crate dir");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[features]\nengine-native = []\nengine-portable = []\n",
+        )
+        .expect("write fixture Cargo.toml");
+
+        let config = ResolvedCrateConfig {
+            name: "demo".to_string(),
+            features: vec!["engine-native".to_string()],
+            workspace_root: Some(temp.path().to_path_buf()),
+            ..ResolvedCrateConfig::default()
+        };
+        let api = ApiSurface {
+            crate_name: "demo".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "Engine".to_string(),
+                rust_path: "demo::Engine".to_string(),
+                cfg: Some(r#"any(feature = "engine-native", feature = "engine-portable")"#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let features = configured_swift_features(&config, "demo_core", &api);
+        assert!(
+            features.iter().any(|f| f == "engine-portable"),
+            "expected the source crate's paired feature to be widened in, got: {features:?}"
+        );
+    }
+
+    /// The companion side of the widening test above: a feature name that only appears in the
+    /// `any(...)` cfg gate, and that the source crate's own `Cargo.toml` never declares, must never
+    /// be injected — that would hand Cargo a feature name it does not recognise.
+    #[test]
+    fn configured_swift_features_does_not_inject_a_feature_the_source_crate_lacks() {
+        let temp = tempfile::tempdir().expect("create fixture workspace root");
+        let crate_dir = temp.path().join("crates").join("demo_core");
+        std::fs::create_dir_all(&crate_dir).expect("create fixture crate dir");
+        std::fs::write(crate_dir.join("Cargo.toml"), "[features]\nengine-native = []\n")
+            .expect("write fixture Cargo.toml");
+
+        let config = ResolvedCrateConfig {
+            name: "demo".to_string(),
+            features: vec!["engine-native".to_string()],
+            workspace_root: Some(temp.path().to_path_buf()),
+            ..ResolvedCrateConfig::default()
+        };
+        let api = ApiSurface {
+            crate_name: "demo".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "Engine".to_string(),
+                rust_path: "demo::Engine".to_string(),
+                cfg: Some(r#"any(feature = "engine-native", feature = "engine-portable")"#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let features = configured_swift_features(&config, "demo_core", &api);
+        assert!(
+            !features.iter().any(|f| f == "engine-portable"),
+            "must not inject a feature the source crate never declares, got: {features:?}"
+        );
+    }
+
+    /// Neither side of an alternative pair is active: no widening should happen even though the
+    /// source crate declares both features, since nothing in the configured list triggers it.
+    #[test]
+    fn configured_swift_features_leaves_an_inactive_pair_alone() {
+        let temp = tempfile::tempdir().expect("create fixture workspace root");
+        let crate_dir = temp.path().join("crates").join("demo_core");
+        std::fs::create_dir_all(&crate_dir).expect("create fixture crate dir");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[features]\nengine-native = []\nengine-portable = []\n",
+        )
+        .expect("write fixture Cargo.toml");
+
+        let config = ResolvedCrateConfig {
+            name: "demo".to_string(),
+            features: vec!["unrelated".to_string()],
+            workspace_root: Some(temp.path().to_path_buf()),
+            ..ResolvedCrateConfig::default()
+        };
+        let api = ApiSurface {
+            crate_name: "demo".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "Engine".to_string(),
+                rust_path: "demo::Engine".to_string(),
+                cfg: Some(r#"any(feature = "engine-native", feature = "engine-portable")"#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let features = configured_swift_features(&config, "demo_core", &api);
+        assert_eq!(features, vec!["unrelated".to_string()]);
+    }
+
+    /// A crate whose cfg gates carry no `any(...)` alternative at all — every gate is a bare
+    /// `feature = "..."` — has nothing for [`collect_cfg_feature_alternatives`] to find, so the
+    /// configured feature list must pass through completely unchanged. The source crate declares
+    /// (and separately, and validly, gates a different item behind) a second feature,
+    /// `engine-portable`, so a mechanism that widened on any cfg-referenced name — not just one
+    /// paired with an active feature inside a shared `any(...)` — would inject it here; this
+    /// pins that only true `any(...)` alternation, not mere co-occurrence anywhere in the surface,
+    /// triggers widening.
+    #[test]
+    fn configured_swift_features_unchanged_when_no_cfg_alternatives_exist() {
+        let temp = tempfile::tempdir().expect("create fixture workspace root");
+        let crate_dir = temp.path().join("crates").join("demo_core");
+        std::fs::create_dir_all(&crate_dir).expect("create fixture crate dir");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[features]\nengine-native = []\nengine-portable = []\n",
+        )
+        .expect("write fixture Cargo.toml");
+
+        let config = ResolvedCrateConfig {
+            name: "demo".to_string(),
+            features: vec!["engine-native".to_string()],
+            workspace_root: Some(temp.path().to_path_buf()),
+            ..ResolvedCrateConfig::default()
+        };
+        let api = ApiSurface {
+            crate_name: "demo".to_string(),
+            types: vec![
+                crate::core::ir::TypeDef {
+                    name: "Engine".to_string(),
+                    rust_path: "demo::Engine".to_string(),
+                    cfg: Some(r#"feature = "engine-native""#.to_string()),
+                    ..Default::default()
+                },
+                crate::core::ir::TypeDef {
+                    name: "PortableWidget".to_string(),
+                    rust_path: "demo::PortableWidget".to_string(),
+                    cfg: Some(r#"feature = "engine-portable""#.to_string()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let features = configured_swift_features(&config, "demo_core", &api);
+        assert_eq!(features, vec!["engine-native".to_string()]);
     }
 }
