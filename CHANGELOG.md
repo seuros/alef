@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.5] - 2026-08-24
+
 ### Added
 
 - Added `[crates.e2e.snippets].curated_snippets`: glob patterns (relative to `output`) declaring hand-authored snippet files as curated on purpose rather than alef-generated. Resolved into `SnippetGenerationReport::curated_paths` and into `migration::MigrationEntry::curated`, so both the generation report and `alef e2e snippets-migrate` can distinguish a declared, intentional absence of a generated equivalent from a genuine coverage gap.
