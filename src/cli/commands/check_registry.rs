@@ -72,13 +72,28 @@ pub fn check(registry: Registry, package: &str, version: &str, extra: &ExtraPara
         Registry::Cratesio => check_cratesio(package, version)?,
         Registry::Hex => check_hex(package, version)?,
         Registry::Homebrew => check_homebrew(package, version, extra.tap_repo.as_deref())?,
-        Registry::GithubRelease => check_github_release(
-            package,
-            version,
-            extra.repo.as_deref(),
-            extra.asset_prefix.as_deref(),
-            &extra.required_assets,
-        )?,
+        Registry::GithubRelease => {
+            let exists = check_github_release(
+                package,
+                version,
+                extra.repo.as_deref(),
+                extra.asset_prefix.as_deref(),
+                &extra.required_assets,
+            )?;
+            if exists && !has_asset_filter(extra.asset_prefix.as_deref(), &extra.required_assets) {
+                // ~keep A CI-sourced --required-assets/--asset-prefix value that expands to
+                // nothing looks identical, at the CLI layer, to the flags never being passed.
+                // Warn so "the release exists" is not silently read as "all artifacts are
+                // attached" — Zig/Swift below intentionally never supply these filters and
+                // must not trigger this warning.
+                tracing::warn!(
+                    "check-registry --registry github-release: no --asset-prefix or \
+                     --required-assets given; only verified that the release exists, not that \
+                     any specific build artifacts are attached to it"
+                );
+            }
+            exists
+        }
         Registry::Pub => check_pub(package, version)?,
         Registry::Zig | Registry::Swift => check_github_release(package, version, extra.repo.as_deref(), None, &[])?,
     };
@@ -316,6 +331,13 @@ fn github_auth_token() -> Option<String> {
     resolve_github_token(std::env::var("GITHUB_TOKEN").ok(), std::env::var("GH_TOKEN").ok())
 }
 
+/// Whether `asset_prefix`/`required_assets` request an asset-level check, versus
+/// only checking that the release itself exists. An asset prefix of only
+/// whitespace-empty content does not count as a filter.
+fn has_asset_filter(asset_prefix: Option<&str>, required_assets: &[String]) -> bool {
+    asset_prefix.is_some_and(|s| !s.is_empty()) || !required_assets.is_empty()
+}
+
 fn check_github_release(
     package: &str,
     version: &str,
@@ -346,11 +368,10 @@ fn check_github_release(
         HttpOutcome::NotFound => return Ok(false),
     };
 
-    let asset_prefix = asset_prefix.filter(|s| !s.is_empty());
-    let has_asset_filter = asset_prefix.is_some() || !required_assets.is_empty();
-    if !has_asset_filter {
+    if !has_asset_filter(asset_prefix, required_assets) {
         return Ok(true);
     }
+    let asset_prefix = asset_prefix.filter(|s| !s.is_empty());
 
     let body = resp
         .into_body()
@@ -457,5 +478,27 @@ mod tests {
         );
         assert_eq!(resolve_github_token(Some(String::new()), None), None);
         assert_eq!(resolve_github_token(None, Some(String::new())), None);
+    }
+
+    #[test]
+    fn has_asset_filter_false_when_both_absent() {
+        assert!(!has_asset_filter(None, &[]));
+    }
+
+    #[test]
+    fn has_asset_filter_false_when_prefix_is_empty_string() {
+        // A `--asset-prefix ""` (e.g. an unset CI variable expanded and quoted) must not
+        // count as a real filter, the same as omitting the flag entirely.
+        assert!(!has_asset_filter(Some(""), &[]));
+    }
+
+    #[test]
+    fn has_asset_filter_true_with_prefix() {
+        assert!(has_asset_filter(Some("alef-"), &[]));
+    }
+
+    #[test]
+    fn has_asset_filter_true_with_required_assets() {
+        assert!(has_asset_filter(None, &["alef-linux-x64.tar.gz".to_string()]));
     }
 }
