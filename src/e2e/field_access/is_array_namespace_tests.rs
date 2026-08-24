@@ -110,6 +110,26 @@ fn is_array_still_rejects_a_stripped_path_that_is_not_an_array() {
     );
 }
 
+/// `result_relative_path` asks `is_valid_for_result`, which re-enters `is_array` through
+/// `is_known_via_sibling_field_config`. This is the config shape that takes that route — the
+/// stripped root is absent from `result_fields` and known only via `fields_array`. Reaching the
+/// assertion at all is the proof the recursion terminates; a self-feeding fallback would blow the
+/// stack here rather than return.
+#[test]
+fn is_array_terminates_when_the_stripped_root_is_known_only_through_fields_array() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &set(&["content"]),
+        &set(&["items"]),
+        &HashSet::new(),
+    );
+    assert!(
+        resolver.is_array("ns.items"),
+        "items is a declared array field, so the virtual `ns.` label must strip"
+    );
+}
+
 /// An alias target that is a declared array field must classify through the raw fixture spelling
 /// too. Most call sites already spell this `is_array(f) || is_array(resolve(f))`; routing through
 /// `result_relative_path` (which resolves first) makes the two spellings agree everywhere.
