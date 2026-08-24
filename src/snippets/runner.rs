@@ -7,7 +7,7 @@ use crate::snippets::types::{
 };
 use crate::snippets::validators::ValidatorRegistry;
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -56,7 +56,8 @@ fn available_parallelism() -> usize {
 ///
 /// Returns an error when the validation thread pool cannot be created.
 pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config: &RunnerConfig) -> Result<RunSummary> {
-    let preparation = prepare_sessions_isolated(&config.sessions, config.timeout_secs);
+    let sessions_to_prepare = sessions_needed_for_preparation(snippets, &config.sessions);
+    let preparation = prepare_sessions_isolated(&sessions_to_prepare, config.timeout_secs);
     let sessions = preparation.sessions;
     let session_errors = preparation.errors;
     let session_locks = sessions
@@ -515,6 +516,57 @@ fn structurally_unreachable(
         || (validator.achievable_level(requested) < requested && validator.achievable_level_is_structural(requested))
 }
 
+/// The subset of `all_sessions` this run actually needs prepared: every session a snippet in
+/// `snippets` resolves to (via `session_resolution::resolve_session_claim`, run against the
+/// *full* configured map so ambiguity detection is unaffected downstream), expanded to include
+/// any other configured session that shares a `working_directory` with one of those.
+///
+/// Preparing only the sessions a filtered run (`alef snippets check --lang go`) actually touches
+/// is the whole point: unfiltered, every configured `before` hook ran regardless of `--lang`,
+/// because `prepare_sessions_isolated` was always handed the complete `config.sessions` map --
+/// discovery narrowed to one language while session preparation stayed crate-wide, which is what
+/// turned a single-language diagnostic into an hour-plus run across every configured toolchain.
+///
+/// Dropping an unneeded session from the map handed to `prepare_sessions_isolated` is not free,
+/// though: `session::purge_stale_session_scratch` sweeps a working directory's scratch root down
+/// to only the fingerprints *this call* resolved, and two sessions can legitimately share one
+/// working directory. Omitting a cohabiting session here would make its live fingerprint
+/// directory look abandoned and delete it -- destroying a sibling session's build cache to speed
+/// up an unrelated run. The expansion step exists solely to prevent that: any session sharing a
+/// working directory with a needed one is kept too, even though no snippet in this run claims it
+/// directly. ~keep
+fn sessions_needed_for_preparation(
+    snippets: &[Snippet],
+    all_sessions: &HashMap<String, SessionSpec>,
+) -> HashMap<String, SessionSpec> {
+    let mut needed: HashSet<&str> = HashSet::new();
+    for snippet in snippets {
+        match session_resolution::resolve_session_claim(snippet, all_sessions, |spec| spec.language) {
+            session_resolution::SessionClaim::Claimed(key) => {
+                needed.insert(key);
+            }
+            session_resolution::SessionClaim::Ambiguous(candidates) => {
+                needed.extend(candidates);
+            }
+            session_resolution::SessionClaim::Unclaimed => {}
+        }
+    }
+
+    let shared_directories: HashSet<&std::path::Path> = all_sessions
+        .iter()
+        .filter(|(key, _)| needed.contains(key.as_str()))
+        .map(|(_, spec)| spec.working_directory.as_path())
+        .collect();
+
+    all_sessions
+        .iter()
+        .filter(|(key, spec)| {
+            needed.contains(key.as_str()) || shared_directories.contains(spec.working_directory.as_path())
+        })
+        .map(|(key, spec)| (key.clone(), spec.clone()))
+        .collect()
+}
+
 /// The single resolution `fail_fast_results`, `parallel_results` and
 /// `batch::group_batchable_snippets` all share for "which configured session does this snippet
 /// use" -- see `session_resolution` for why the resolver, not a per-caller string lookup, is what
@@ -896,3 +948,6 @@ mod batch_logging_tests;
 
 #[cfg(test)]
 mod failure_reporting_tests;
+
+#[cfg(test)]
+mod session_scope_tests;
