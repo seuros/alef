@@ -225,7 +225,6 @@ fn emit_visitor_operation(
     bridge_type_aliases: &HashSet<String>,
     bridge: &VisitorFunctionBridge,
 ) {
-    out.push_str("            Throwable operationFailure = null;\n            try {\n");
     out.push_str(&crate::backends::java::template_env::render(
         "ffi_options_set_visitor.jinja",
         minijinja::context! { handle_name => options_set_handle, options_ptr => &bridge.options_param_c },
@@ -272,6 +271,7 @@ pub(super) fn gen_convert_with_visitor_internal_method(
     );
     out.push('\n');
     emit_visitor_handle_setup(&mut out, &pu, &exc, visitor_bridge);
+    super::error_catch::emit_visitor_operation_open(&mut out, &exc);
     emit_visitor_operation(
         &mut out,
         func,

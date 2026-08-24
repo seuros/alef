@@ -238,6 +238,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_typed_rethrow_catch.jinja"),
     ),
     (
+        "ffi_visitor_operation_open.jinja",
+        include_str!("templates/ffi_visitor_operation_open.jinja"),
+    ),
+    (
         "ffi_alef_error_comment.jinja",
         include_str!("templates/ffi_alef_error_comment.jinja"),
     ),
