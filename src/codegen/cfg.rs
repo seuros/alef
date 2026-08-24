@@ -7,9 +7,9 @@
 //! `#[cfg(feature = "X")]` guards.
 
 use crate::core::config::{Language, ResolvedCrateConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, cfg_feature_satisfied};
 use anyhow::Context as _;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 /// Extract every `feature = "X"` name referenced by a cfg expression.
@@ -54,6 +54,31 @@ pub fn collect_cfg_feature_names(cfg_str: &str, out: &mut BTreeSet<String>) {
 /// by any cfg attribute on a type, field, method, enum variant, service, or
 /// top-level function.
 ///
+/// A flattening of [`collect_cfg_gates`], which owns the walk itself: this answers "which
+/// feature names must the binding crate's `[features]` table declare", while the gate set
+/// answers "which conditions decide whether an item is emitted". Both questions are asked of the
+/// same positions, and deriving one from the other is what keeps them from drifting apart. ~keep
+pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for gate in collect_cfg_gates(api) {
+        collect_cfg_feature_names(&gate, &mut out);
+    }
+    out
+}
+
+/// Walk the full [`ApiSurface`] and return every distinct `#[cfg(...)]` condition string
+/// attached to a type, field, method, enum variant, service, or top-level function.
+///
+/// The whole expression, not the feature names inside it: a caller that must decide whether an
+/// item is *emitted* has to evaluate the condition (via
+/// [`crate::core::ir::cfg_feature_satisfied`], the same evaluator
+/// [`ApiSurface::with_cfg_filtered_deep`] filters with), and a name set cannot answer that. Set
+/// difference over names says `any(feature = "a", feature = "b")` is unsatisfied for a binding
+/// that enables only `a`, and says every gate is unsatisfied for a binding that enables the
+/// umbrella `full` — both wrong, both a warning that fires with false content. ~keep
+///
+/// Which positions are walked, and why each one counts:
+///
 /// Methods count: a Rust-emitting backend re-emits a gated method's `#[cfg(feature = "X")]`
 /// verbatim into its binding crate, so `X` must exist in that crate's `[features]` table or
 /// the build fails with `unexpected cfg condition value: X`. ~keep
@@ -78,9 +103,10 @@ pub fn collect_cfg_feature_names(cfg_str: &str, out: &mut BTreeSet<String>) {
 /// the `is_host` asymmetry, which is intentional and must not be collapsed — is pinned by
 /// `backends::ffi::gen_bindings::tests::feature_defines`. ~keep
 ///
-/// The set is sorted (via `BTreeSet`) so the resulting Cargo.toml is stable
-/// across regenerations.
-pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
+/// The set is sorted (via `BTreeSet`) so every derived artifact — a Cargo.toml `[features]`
+/// list, a warning's reported gate list — is stable across regenerations.
+#[must_use]
+pub fn collect_cfg_gates(api: &ApiSurface) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     // Forwarding features (`<feat> = ["<core>/<feat>"]`) are only valid for the HOST crate's own ~keep
     // features. Types merged from `[[crates.source_crates]]` carry the foreign crate's cfg gates ~keep
@@ -104,16 +130,16 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
             continue;
         }
         if let Some(cfg) = &typ.cfg {
-            collect_cfg_feature_names(cfg, &mut out);
+            out.insert(cfg.clone());
         }
         for field in &typ.fields {
             if let Some(cfg) = &field.cfg {
-                collect_cfg_feature_names(cfg, &mut out);
+                out.insert(cfg.clone());
             }
         }
         for method in &typ.methods {
             if let Some(cfg) = &method.cfg {
-                collect_cfg_feature_names(cfg, &mut out);
+                out.insert(cfg.clone());
             }
         }
     }
@@ -122,22 +148,22 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
             continue;
         }
         if let Some(cfg) = &enum_def.cfg {
-            collect_cfg_feature_names(cfg, &mut out);
+            out.insert(cfg.clone());
         }
         for variant in &enum_def.variants {
             if let Some(cfg) = &variant.cfg {
-                collect_cfg_feature_names(cfg, &mut out);
+                out.insert(cfg.clone());
             }
         }
         for method in &enum_def.methods {
             if let Some(cfg) = &method.cfg {
-                collect_cfg_feature_names(cfg, &mut out);
+                out.insert(cfg.clone());
             }
         }
     }
     for func in &api.functions {
         if let Some(cfg) = &func.cfg {
-            collect_cfg_feature_names(cfg, &mut out);
+            out.insert(cfg.clone());
         }
     }
     for service in &api.services {
@@ -145,14 +171,14 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
             continue;
         }
         if let Some(cfg) = &service.cfg {
-            collect_cfg_feature_names(cfg, &mut out);
+            out.insert(cfg.clone());
         }
         if let Some(cfg) = &service.constructor.cfg {
-            collect_cfg_feature_names(cfg, &mut out);
+            out.insert(cfg.clone());
         }
         for configurator in &service.configurators {
             if let Some(cfg) = &configurator.cfg {
-                collect_cfg_feature_names(cfg, &mut out);
+                out.insert(cfg.clone());
             }
         }
     }
@@ -519,65 +545,99 @@ pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Langu
     );
 }
 
-/// Warn when a single-surface binding language's configured feature set (used to decide which
-/// `#[cfg(feature = "...")]`-gated FFI exports get glue via [`ApiSurface::with_cfg_filtered_deep`])
-/// diverges from the FFI crate's own EFFECTIVE default feature set.
+/// Warn when a binding language's own cfg filter and the shared FFI cdylib disagree about
+/// whether a `#[cfg(feature = "...")]`-gated item exists.
 ///
-/// The FFI cdylib is built once, shared by every language binding (`cargo build -p
+/// The FFI cdylib is built once and shared by every language binding (`cargo build -p
 /// {ffi_crate}` runs with no `--features` override — see `cli::pipeline::commands::build`), and
 /// its `[features] default = [...]` list is populated by [`effective_ffi_default_features`] (see
 /// `scaffold::languages::ffi::scaffold_ffi`) — the FFI language config's own feature list
-/// UNIONED with every feature `collect_cfg_features` finds referenced by an emitted cfg gate,
-/// not the FFI language config's feature list alone. A binding language's own
-/// `with_cfg_filtered_deep` call assumes its configured feature set describes that same compiled
-/// artifact; comparing it against `features_for_language(Language::Ffi)` instead of the effective
-/// set is blind to exactly the drift `collect_cfg_features` introduces, which is the common case
-/// (see `github.com/xberg-io/alef/issues/257`). alef cannot detect the actual build-time mismatch
-/// (it doesn't run `cargo build` here), so this only flags the config-level drift that would
-/// cause it, naming the assumption so it is a visible, documented constraint rather than a silent
-/// landmine. ~keep
+/// UNIONED with every feature name an emitted cfg gate references, not the FFI language config's
+/// feature list alone. Each binding meanwhile filters its own surface with
+/// [`ApiSurface::with_cfg_filtered_deep`] under its configured feature list. When the two answers
+/// for one gate differ, the binding either references a symbol the shipped library does not
+/// export or silently omits one it does.
 ///
-/// The two directions of drift have different failure modes, so they get different warnings:
-/// - `lang`-only features (configured for this binding, absent from the FFI effective set) are
-///   UNSAFE: `with_cfg_filtered_deep` keeps glue for a symbol the shipped cdylib was never built
-///   with, which is a link/runtime failure.
-/// - FFI-only features (in the effective set, absent from this binding's configured list) are a
-///   SAFE parity gap: the filter drops glue for a symbol that does exist in the shipped cdylib,
-///   so the binding just doesn't expose it — no broken reference, but a coverage gap worth
-///   flagging. ~keep
+/// This evaluates each gate with [`crate::core::ir::cfg_feature_satisfied`] — the very function
+/// the filter uses — rather than differencing the two feature-name sets. A name difference is not
+/// a gate difference, and treating it as one made this warning fire with false content on the
+/// commonest configuration there is: with `features = ["full"]` on both sides, every gate is
+/// satisfied on both sides and nothing is omitted, yet the set difference reported every
+/// cfg-discovered name as a coverage gap, because `full` is a universal satisfier inside
+/// `cfg_feature_satisfied` that no set operation over literal names can model. `any(...)` gates
+/// were misreported the same way. A warning whose text is routinely false trains its reader to
+/// ignore it, which costs more than having no warning at all. ~keep
+///
+/// alef cannot observe the real build (it does not run `cargo build` here), so this reports the
+/// config-level divergence that would cause the failure, and stays a warning: configuring a
+/// narrower surface than the cdylib exports is legitimate, deliberate, and must not fail a build.
+///
+/// The two directions have different failure modes, so they get different warnings:
+/// - the binding keeps a gated item the cdylib was NOT built with: UNSAFE — glue referencing a
+///   symbol the shipped library does not export, i.e. a link/runtime failure. Reachable when the
+///   gate's feature is declare-only on the FFI side (`[crates.ffi].extra_features`), which
+///   [`effective_ffi_default_features`] excludes from the cdylib's defaults on purpose.
+/// - the binding DROPS a gated item the cdylib does export: a SAFE coverage gap — the binding's
+///   surface is silently smaller than the artifact it links against. This is the case a
+///   configured list that satisfies no gate produces, and the one worth naming precisely. ~keep
+///
+/// Only the FFI side expands aggregate feature names through the core crate's `[features]` table
+/// (via [`expand_configured_features`], as `backends::jni`'s target gate does): cargo really does
+/// enable an aggregate's members when it compiles the cdylib, so the artifact contains them. The
+/// binding side is deliberately NOT expanded — its filter compares literally, so a binding
+/// configured with an aggregate really does drop the members' items, and expanding here would
+/// hide exactly the underexposure this warning exists to report. ~keep
 pub fn warn_on_ffi_feature_drift(api: &ApiSurface, config: &ResolvedCrateConfig, lang: Language) {
     if lang == Language::Ffi {
         return;
     }
-    let lang_features: BTreeSet<&str> = config.features_for_language(lang).iter().map(String::as_str).collect();
-    let effective_owned = effective_ffi_default_features(api, config);
-    let ffi_effective_features: BTreeSet<&str> = effective_owned.iter().map(String::as_str).collect();
-    if lang_features == ffi_effective_features {
-        return;
+    let binding_owned = config.features_for_language(lang);
+    let binding_enabled: HashSet<&str> = binding_owned.iter().map(String::as_str).collect();
+    let ffi_owned = expand_configured_features(config, &effective_ffi_default_features(api, config));
+    let cdylib_enabled: HashSet<&str> = ffi_owned.iter().map(String::as_str).collect();
+
+    let mut unsafe_gates: BTreeSet<String> = BTreeSet::new();
+    let mut coverage_gaps: BTreeSet<String> = BTreeSet::new();
+    for gate in collect_cfg_gates(api) {
+        let kept_by_binding = cfg_feature_satisfied(Some(&gate), &binding_enabled);
+        let built_into_cdylib = cfg_feature_satisfied(Some(&gate), &cdylib_enabled);
+        match (kept_by_binding, built_into_cdylib) {
+            (true, false) => {
+                unsafe_gates.insert(gate);
+            }
+            (false, true) => {
+                coverage_gaps.insert(gate);
+            }
+            _ => {}
+        }
     }
-    let host_only: BTreeSet<&str> = lang_features.difference(&ffi_effective_features).copied().collect();
-    let parity_gap: BTreeSet<&str> = ffi_effective_features.difference(&lang_features).copied().collect();
-    if !host_only.is_empty() {
+
+    if !unsafe_gates.is_empty() {
         tracing::warn!(
             language = %lang,
-            host_only_features = ?host_only,
-            ffi_effective_features = ?ffi_effective_features,
-            "this binding's configured feature set enables features the FFI cdylib's effective \
-             default set does not include; cfg-gated glue for these features is kept by \
-             with_cfg_filtered_deep even though the linked native library was never built with \
-             them — this is unsafe and can produce glue that references symbols the shipped \
-             library doesn't export"
+            unsatisfied_in_cdylib = ?unsafe_gates,
+            cdylib_default_features = ?BTreeSet::from_iter(ffi_owned.iter().map(String::as_str)),
+            "this binding's configured feature set satisfies cfg gates the FFI cdylib's effective \
+             default feature set does not; with_cfg_filtered_deep keeps glue for those items even \
+             though the linked native library was never built with them — this is unsafe and can \
+             produce glue that references symbols the shipped library doesn't export"
         );
     }
-    if !parity_gap.is_empty() {
+    if !coverage_gaps.is_empty() {
+        let mut missing_features = BTreeSet::new();
+        for gate in &coverage_gaps {
+            collect_cfg_feature_names(gate, &mut missing_features);
+        }
+        missing_features.retain(|name| !binding_enabled.contains(name.as_str()));
         tracing::warn!(
             language = %lang,
-            parity_gap_features = ?parity_gap,
-            lang_features = ?lang_features,
-            "the FFI cdylib's effective default feature set includes features this binding does \
-             not declare; cfg-gated glue for these features is safely omitted by \
-             with_cfg_filtered_deep, but the shipped native library does export them — add them \
-             to this binding's configured feature list to close the coverage gap"
+            unsatisfied_gates = ?coverage_gaps,
+            missing_features = ?missing_features,
+            configured_features = ?BTreeSet::from_iter(binding_enabled.iter().copied()),
+            "the FFI cdylib's effective default feature set satisfies cfg gates this binding's \
+             configured feature set does not; with_cfg_filtered_deep safely omits that glue, but \
+             the shipped native library does export those items — add the missing features to \
+             this binding's configured feature list to close the coverage gap"
         );
     }
 }

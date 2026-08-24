@@ -2,6 +2,8 @@ use super::*;
 use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, TypeDef};
 use tracing_test::traced_test;
 
+mod drift;
+
 #[test]
 fn combine_gates_drops_an_owner_the_member_already_requires() {
     assert_eq!(
@@ -529,112 +531,6 @@ extra_features = ["wasm-http"]
         BTreeSet::from(["shared".to_string(), "sample-gate".to_string()]),
         "must include the configured FFI feature and the discovered gate, but exclude the \
          declare-only extra_features entry even though it is also gated on"
-    );
-}
-
-/// The exact scenario this repo's FFI feature drift warning was blind to (issue #257): a
-/// binding's configured feature set matches `[crates.ffi]`'s configured feature set byte for
-/// byte, so a comparison of the two CONFIGURED lists finds nothing. But the FFI crate's
-/// EFFECTIVE default set is a strict superset -- `collect_cfg_features` discovers an emitted
-/// gate neither list mentions -- so the linked cdylib actually ships more than this binding
-/// declares. A drift check that only compares the two configured lists passes silently here;
-/// one that compares against the effective set must fire.
-#[traced_test]
-#[test]
-fn warn_on_ffi_feature_drift_fires_when_effective_set_diverges_even_though_configured_sets_match() {
-    let config = resolved_config(
-        r#"
-[workspace]
-languages = ["ffi", "go"]
-[[crates]]
-name = "sample-core"
-sources = []
-[crates.ffi]
-features = ["shared"]
-[crates.go]
-features = ["shared"]
-"#,
-    );
-    let api = api_with_gated_functions(&[("discovered_gate", Some(r#"feature = "sample-gate""#))]);
-
-    warn_on_ffi_feature_drift(&api, &config, Language::Go);
-
-    assert!(
-        logs_contain("coverage gap"),
-        "the FFI crate's effective default set includes `sample-gate`, which Go's configured \
-         list does not -- this is precisely the drift the two CONFIGURED lists agree on and \
-         hide, so the warning must still fire"
-    );
-    assert!(
-        !logs_contain("unsafe and can produce glue"),
-        "Go's configured set is a subset of the effective set here, not a superset, so this \
-         must not be reported as the unsafe host-only direction"
-    );
-}
-
-/// A binding's configured feature set matching the FFI crate's EFFECTIVE default set exactly
-/// (not just its configured list) must not warn -- a check that always fires is as useless as
-/// one that never does.
-#[traced_test]
-#[test]
-fn warn_on_ffi_feature_drift_silent_when_lang_features_equal_effective_set() {
-    let config = resolved_config(
-        r#"
-[workspace]
-languages = ["ffi", "go"]
-[[crates]]
-name = "sample-core"
-sources = []
-[crates.ffi]
-features = ["shared"]
-[crates.go]
-features = ["shared"]
-"#,
-    );
-    let api = api_with_gated_functions(&[("configured_only", None)]);
-
-    warn_on_ffi_feature_drift(&api, &config, Language::Go);
-
-    assert!(
-        !logs_contain("coverage gap") && !logs_contain("unsafe and can produce glue"),
-        "Go's configured set equals the FFI crate's effective default set, so neither warning \
-         must fire"
-    );
-}
-
-/// The other direction of drift: a binding's configured set enables a feature the FFI crate's
-/// effective default set does not include at all. This is the unsafe direction --
-/// `with_cfg_filtered_deep` keeps glue for a symbol the shipped cdylib was never built with --
-/// and must be reported distinctly from the safe parity-gap direction above.
-#[traced_test]
-#[test]
-fn warn_on_ffi_feature_drift_fires_for_host_only_features_not_in_effective_set() {
-    let config = resolved_config(
-        r#"
-[workspace]
-languages = ["ffi", "go"]
-[[crates]]
-name = "sample-core"
-sources = []
-[crates.ffi]
-features = ["shared"]
-[crates.go]
-features = ["shared", "go-only-feature"]
-"#,
-    );
-    let api = api_with_gated_functions(&[("configured_only", None)]);
-
-    warn_on_ffi_feature_drift(&api, &config, Language::Go);
-
-    assert!(
-        logs_contain("unsafe and can produce glue"),
-        "`go-only-feature` is configured for Go but absent from the FFI crate's effective \
-         default set -- the unsafe host-only direction must fire"
-    );
-    assert!(
-        !logs_contain("coverage gap"),
-        "there is no feature in the effective set that Go's configured list omits here, so the \
-         safe parity-gap warning must not also fire"
     );
 }
 
