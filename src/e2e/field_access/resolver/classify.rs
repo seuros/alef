@@ -354,11 +354,13 @@ impl FieldResolver {
         let first_segment = first_segment.split('[').next().unwrap_or(first_segment);
         // The anchored oracle answers first and last: when the call's own result type is known,
         // whether IT declares this member is the whole question, and a name reachable on some
-        // other struct entirely is not evidence about this one. Only reached when a root type
-        // resolved AND this map carries its fields; `None` from here falls through to the flat,
-        // name-keyed answer below, which is what every IR-less call site still gets. ~keep
-        if let Some(declared) =
-            super::super::ir_result_fields::root_declares_first_segment(&self.ir_result_field_map, first_segment)
+        // other struct entirely is not evidence about this one. Asked of the WHOLE path, not just
+        // its root: a deeper segment nobody declares is the same phantom member access as a root
+        // one, and judging only the root is what let `result.document.document_structure` reach a
+        // published snippet. Only reached when a root type resolved AND the walk stays inside the
+        // struct graph this map carries; `None` from here falls through to the flat, name-keyed
+        // answer below, which is what every IR-less call site still gets. ~keep
+        if let Some(declared) = super::super::ir_result_fields::root_declares_path(&self.ir_result_field_map, resolved)
         {
             return Some(declared || self.namespace_prefix_reaches_a_declared_field(resolved));
         }
@@ -393,6 +395,36 @@ impl FieldResolver {
         let suffix_first = suffix_first.split('[').next().unwrap_or(suffix_first);
         super::super::ir_result_fields::root_declares_first_segment(&self.ir_result_field_map, suffix_first)
             == Some(true)
+    }
+
+    /// The `alef.toml` key through which the consumer declared `fixture_field`, if any.
+    ///
+    /// ~keep A path the availability oracle refuses is usually not a defect — assertion
+    /// groupings, streaming pseudo-fields and virtual namespace prefixes all legitimately name
+    /// something no struct declares, and dropping their derived accessor is the correct silent
+    /// outcome. A path the consumer *wrote down in config* is different: it is a claim about the
+    /// result type, made by hand, and a refused claim is drift only they can fix. Naming the key
+    /// that carries it is what makes the difference reportable.
+    ///
+    /// `result_fields` lists top-level names only, so it answers for a single-segment path and
+    /// never for a dotted one — otherwise every nested path under a listed root would read as
+    /// consumer-declared when only its first segment was.
+    pub fn declaring_config_key(&self, fixture_field: &str) -> Option<&'static str> {
+        let resolved = self.resolve(fixture_field);
+        if self.aliases.contains_key(fixture_field) {
+            return Some("fields");
+        }
+        if self.method_calls.contains(resolved) {
+            return Some("fields_method_calls");
+        }
+        if self.is_array(resolved) {
+            return Some("fields_array");
+        }
+        if self.is_optional_direct(resolved) {
+            return Some("fields_optional");
+        }
+        let is_single_segment = !resolved.contains('.') && !resolved.contains('[');
+        (is_single_segment && self.result_fields.contains(resolved)).then_some("result_fields")
     }
 
     /// True when `fixture_field` (or its alias-resolved path) is referenced by one of
