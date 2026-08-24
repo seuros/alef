@@ -180,3 +180,20 @@ fn a_recorded_skip_is_classified_as_a_missing_toolchain() {
         );
     }
 }
+
+/// `alef lint` has no `--strict` flag and no other tool to fall back to: `poly` IS the whole
+/// implementation. Warning and returning `Ok(())` for a missing `poly` used to report a clean
+/// lint pass for a run that checked nothing at all, unlike the package-formatter pass above,
+/// which has real partial coverage to fall back to and is rightly lenient by default. ~keep
+#[test]
+fn poly_lint_fails_loudly_when_poly_is_not_on_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let error =
+        poly_lint_with(dir.path(), &|_tool| false).expect_err("a missing poly must fail alef lint, not report clean");
+
+    assert!(
+        error.to_string().contains("poly"),
+        "the error must name the missing tool: {error}"
+    );
+}
