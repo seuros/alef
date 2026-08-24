@@ -483,7 +483,8 @@ impl FieldResolver {
         ];
         roots.into_iter().any(|(root, field_types)| {
             root.is_some_and(|root| field_types.get(root).is_some_and(|f| f.contains_key(field_name)))
-        })    }
+        })
+    }
 
     /// Check if a resolved field is an array/Vec type.
     pub fn is_array(&self, field: &str) -> bool {
