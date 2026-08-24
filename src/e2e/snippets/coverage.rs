@@ -1,5 +1,5 @@
 use super::{COVERAGE_MANIFEST_VERSION, SnippetCoverageKey, SnippetCoverageLedger};
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,86 @@ pub fn normalize(mut ledger: SnippetCoverageLedger) -> SnippetCoverageLedger {
         .documented_exceptions
         .sort_by(|left, right| left.key.cmp(&right.key));
     ledger
+}
+
+/// Resolve `[crates.e2e.snippets].curated_snippets` glob patterns against the files that
+/// actually exist under `output`, returning every relative path claimed as curated.
+///
+/// Anti-vacuity by construction: a pattern that matches no file is refused with an error
+/// naming the pattern rather than silently contributing nothing to `curated_paths`. Without
+/// this, a glob typo (a misspelled directory, a pattern anchored the wrong way) would parse
+/// cleanly, mark nothing as curated, and leave every one of the files it was meant to cover
+/// still reported as an unaccounted gap -- the exact defect class this declaration exists to
+/// close. A pattern matching a path this run itself generated is refused for the same
+/// reason in the other direction: a curated declaration must never silently annex alef's own
+/// output.
+pub fn resolve_curated_snippet_paths(
+    output: &Path,
+    patterns: &[String],
+    generated_paths: &[PathBuf],
+) -> Result<Vec<PathBuf>> {
+    if patterns.is_empty() {
+        return Ok(Vec::new());
+    }
+    let generated: BTreeSet<&Path> = generated_paths.iter().map(PathBuf::as_path).collect();
+    let existing = existing_relative_files(output)?;
+    let mut curated = BTreeSet::new();
+    for pattern in patterns {
+        let compiled =
+            glob::Pattern::new(pattern).with_context(|| format!("invalid curated snippet glob `{pattern}`"))?;
+        let mut matched_any = false;
+        for relative in &existing {
+            if !compiled.matches_path(relative) {
+                continue;
+            }
+            if generated.contains(relative.as_path()) {
+                bail!(
+                    "curated snippet glob `{pattern}` matches `{}`, which alef itself generates this run; \
+                     a curated declaration must never claim a path alef writes",
+                    relative.display()
+                );
+            }
+            matched_any = true;
+            curated.insert(relative.clone());
+        }
+        if !matched_any {
+            bail!(
+                "curated snippet glob `{pattern}` matches no file under `{}`; a curated declaration \
+                 matching zero files is refused rather than silently accepted, since that would leave \
+                 every file it was meant to cover still reported as an unaccounted gap -- fix the \
+                 pattern or remove it",
+                output.display()
+            );
+        }
+    }
+    Ok(curated.into_iter().collect())
+}
+
+fn existing_relative_files(output: &Path) -> Result<Vec<PathBuf>> {
+    if !output.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut files = Vec::new();
+    for entry in walkdir::WalkDir::new(output).follow_links(true) {
+        let entry = entry.with_context(|| format!("failed to walk snippet output {}", output.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let relative = entry
+            .path()
+            .strip_prefix(output)
+            .with_context(|| format!("failed to relativize {}", entry.path().display()))?;
+        files.push(relative.to_path_buf());
+    }
+    Ok(files)
+}
+
+/// A one-line coverage summary distinguishing curated files from alef-generated ones, so a
+/// report can state "N curated, M generated" instead of leaving "all snippets are generated"
+/// an unverifiable claim. `curated` and `generated` are file counts -- see
+/// [`resolve_curated_snippet_paths`] and [`SnippetCoverageLedger::generated_paths`].
+pub fn summary(curated: usize, generated: usize) -> String {
+    format!("{curated} curated, {generated} generated")
 }
 
 pub fn validate(ledger: &SnippetCoverageLedger) -> Result<()> {
@@ -221,6 +301,94 @@ fn ensure_disjoint(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod curated_snippet_tests {
+    use super::resolve_curated_snippet_paths;
+    use std::path::PathBuf;
+
+    fn write(directory: &std::path::Path, relative: &str, content: &str) {
+        let path = directory.join(relative);
+        std::fs::create_dir_all(path.parent().expect("relative path has a parent")).expect("create parent directory");
+        std::fs::write(path, content).expect("write curated fixture file");
+    }
+
+    #[test]
+    fn a_matching_glob_is_recorded_as_curated() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(directory.path(), "docker/quick-start.md", "curated by hand");
+
+        let curated = resolve_curated_snippet_paths(directory.path(), &["docker/*.md".to_string()], &[])
+            .expect("a matching pattern resolves");
+
+        assert_eq!(curated, vec![PathBuf::from("docker/quick-start.md")]);
+    }
+
+    /// The anti-vacuity requirement pinned literally: a glob that matches zero files must
+    /// fail the run rather than silently contributing nothing. A typo'd directory name here
+    /// (`dcoker` for `docker`) is exactly the shape of mistake that would otherwise recreate
+    /// the "coverage reports curated files as missing" gap this declaration exists to close.
+    #[test]
+    fn a_glob_matching_zero_files_is_refused_not_silently_accepted() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(directory.path(), "docker/quick-start.md", "curated by hand");
+
+        let error = resolve_curated_snippet_paths(directory.path(), &["dcoker/*.md".to_string()], &[])
+            .expect_err("a glob matching nothing must be refused");
+
+        assert!(error.to_string().contains("dcoker/*.md"), "{error}");
+        assert!(error.to_string().contains("matches no file"), "{error}");
+    }
+
+    /// A pattern that matches only this run's own generated output must never silently
+    /// annex it -- that would let a curated declaration mask a real coverage gap by
+    /// reclassifying alef's own file as "not alef's concern".
+    #[test]
+    fn a_glob_matching_a_generated_path_is_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(directory.path(), "python/quick-start.md", "alef wrote this");
+
+        let error = resolve_curated_snippet_paths(
+            directory.path(),
+            &["python/*.md".to_string()],
+            &[PathBuf::from("python/quick-start.md")],
+        )
+        .expect_err("a glob claiming generated output must be refused");
+
+        assert!(error.to_string().contains("alef itself generates"), "{error}");
+    }
+
+    #[test]
+    fn no_configured_globs_yields_no_curated_paths_without_touching_disk() {
+        // A directory that does not exist must not error when there are no patterns to
+        // resolve -- an unconfigured project pays no cost for this feature.
+        let curated = resolve_curated_snippet_paths(std::path::Path::new("/does/not/exist"), &[], &[])
+            .expect("no patterns never touches the filesystem");
+
+        assert!(curated.is_empty());
+    }
+
+    /// A glob declared for a project that has never generated anything yet (no `output`
+    /// directory on disk at all) must fail exactly like any other zero-match glob -- the
+    /// curated files it claims must already exist, since curated means hand-authored, not
+    /// "will exist eventually".
+    #[test]
+    fn a_glob_over_a_missing_output_directory_is_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let missing_output = directory.path().join("never-created");
+
+        let error = resolve_curated_snippet_paths(&missing_output, &["**/*.md".to_string()], &[])
+            .expect_err("a glob over a directory that was never generated must be refused");
+
+        assert!(error.to_string().contains("matches no file"), "{error}");
+    }
+
+    #[test]
+    fn summary_reports_curated_and_generated_counts() {
+        assert_eq!(super::summary(3, 431), "3 curated, 431 generated");
+        assert_eq!(super::summary(0, 0), "0 curated, 0 generated");
+    }
 }
 
 #[cfg(test)]
