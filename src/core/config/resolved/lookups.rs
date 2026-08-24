@@ -89,7 +89,19 @@ impl ResolvedCrateConfig {
                 Some(n) if n >= 2 => format!("packages/go/v{n}"),
                 _ => "packages/go".to_string(),
             },
-            Language::KotlinAndroid => "packages/kotlin-android".to_string(),
+            // A configured `[crates.output].kotlin_android` is answered by the backend rather than
+            // re-derived here: that key may name either the Gradle project root or the Kotlin
+            // source directory inside it, and only the backend's `ProjectLayout` knows how to tell
+            // those two shapes apart. Ignoring it — as this arm used to — sent
+            // `cd {output_dir} && gradle` to a directory the backend never wrote to. The
+            // unconfigured default is the backend's own constant, not a second copy of the
+            // literal. ~keep
+            Language::KotlinAndroid => match self.explicit_output.kotlin_android {
+                Some(_) => crate::backends::kotlin_android::project_root(self)
+                    .to_string_lossy()
+                    .to_string(),
+                None => crate::backends::kotlin_android::DEFAULT_AAR_ROOT.to_string(),
+            },
             _ => format!("packages/{lang}"),
         }
     }
@@ -705,6 +717,45 @@ kotlin = "packages/kotlin/src/main/kotlin/dev/demo/kt/"
 "#,
         );
         assert_eq!(r.package_dir(Language::Kotlin), "packages/kotlin");
+    }
+
+    /// A configured `[crates.output].kotlin_android` must reach `package_dir`, in both shapes the
+    /// backend's `ProjectLayout` accepts: a bare Gradle project root, and a Kotlin source
+    /// directory whose project root is the prefix before the Gradle source-set suffix.
+    /// `package_dir` feeds `cd {output_dir} && gradle …`, so ignoring the key builds a directory
+    /// the backend never wrote to.
+    #[test]
+    fn package_dir_kotlin_android_honors_the_configured_output_path() {
+        let with_output = |output: &str| {
+            resolved_one(&format!(
+                r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.demo"
+
+[crates.output]
+kotlin_android = "{output}"
+"#
+            ))
+        };
+
+        assert_eq!(
+            with_output("android/sdk").package_dir(Language::KotlinAndroid),
+            "android/sdk",
+            "a configured project root must be the directory the gradle command targets"
+        );
+        assert_eq!(
+            with_output("android/sdk/src/main/kotlin/dev/demo").package_dir(Language::KotlinAndroid),
+            "android/sdk",
+            "a configured Kotlin source directory must resolve to the project root above it, the \
+             same way the backend's ProjectLayout resolves it"
+        );
     }
 
     #[test]

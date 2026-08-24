@@ -114,7 +114,11 @@ fn api_without_excluded_types(api: &ApiSurface, exclude_types: &HashSet<String>)
 
 /// Default output root when the workspace does not configure
 /// `[crates.output].kotlin_android` explicitly.
-const DEFAULT_AAR_ROOT: &str = "packages/kotlin-android";
+///
+/// [`crate::core::config::ResolvedCrateConfig::package_dir`] reads this rather than repeating the
+/// literal, so the directory the build command `cd`s into and the one this backend documents as
+/// its default cannot drift apart. ~keep
+pub const DEFAULT_AAR_ROOT: &str = "packages/kotlin-android";
 
 /// Segment used by Gradle's Android source-set layout to separate the
 /// project root from the Kotlin source destination
@@ -290,6 +294,19 @@ struct ProjectLayout {
     /// Kotlin source destination — where `<Module>.kt` and Kotlin facade
     /// files are emitted.
     kotlin_source_dir: PathBuf,
+}
+
+/// The Gradle project root this backend writes `build.gradle.kts` into — the directory a
+/// `cd <dir> && gradle …` build, lint, test, or clean command must target.
+///
+/// [`crate::core::config::ResolvedCrateConfig::package_dir`] calls this instead of deriving the
+/// directory a second time. `[crates.output].kotlin_android` may name either the Gradle project
+/// root or the Kotlin source destination inside it, and only [`ProjectLayout`] knows how to tell
+/// those two shapes apart; a second derivation that guessed would send the build command
+/// somewhere this backend never wrote. ~keep
+#[must_use]
+pub fn project_root(config: &ResolvedCrateConfig) -> PathBuf {
+    ProjectLayout::resolve(config).package_root
 }
 
 impl ProjectLayout {
