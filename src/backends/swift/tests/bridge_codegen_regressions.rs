@@ -13,7 +13,7 @@
 
 use crate::backends::swift::gen_bindings::trait_bridge::gen_trait_bridge_files;
 use crate::core::config::TraitBridgeConfig;
-use crate::core::ir::{MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
 use std::collections::HashSet;
 
 fn param(name: &str, ty: TypeRef) -> ParamDef {
@@ -47,13 +47,19 @@ fn make_trait(name: &str, methods: Vec<MethodDef>) -> TypeDef {
 /// Render the per-trait bridge file (`Swift{Trait}Bridge.swift`), which carries both the
 /// protocol declarations and the adapter class.
 fn bridge_source(trait_def: &TypeDef) -> String {
+    bridge_source_with_api(trait_def, &ApiSurface::default())
+}
+
+/// Like `bridge_source`, but with a caller-supplied `ApiSurface` -- needed for cases where the
+/// generated content depends on IR lookups beyond the trait itself (e.g. `ApiSurface::enums`).
+fn bridge_source_with_api(trait_def: &TypeDef, api: &ApiSurface) -> String {
     let bridge_cfg = TraitBridgeConfig {
         trait_name: trait_def.name.clone(),
         register_fn: Some(format!("register{}", trait_def.name)),
         ..Default::default()
     };
     let bridges = vec![(trait_def.name.clone(), &bridge_cfg, trait_def)];
-    let files = gen_trait_bridge_files(&bridges, &HashSet::new(), &HashSet::new());
+    let files = gen_trait_bridge_files(&bridges, &HashSet::new(), &HashSet::new(), api);
     let wanted = format!("Swift{}Bridge.swift", trait_def.name);
     files
         .into_iter()
@@ -130,5 +136,53 @@ fn adapter_converts_vec_string_return_element_wise() {
     assert!(
         source.contains("return marshal_ok_result(result.map { String($0) })"),
         "Vec<String> returns must be converted element-wise: {source}"
+    );
+}
+
+/// Regression test for alef #258: a trait method that both has a Rust-side default
+/// implementation and returns an enum produced a Swift default stub body of `return "{}"`,
+/// a `String` literal that does not type-check against the enum-typed declared return
+/// (`swift_return_type` declares a non-excluded `Named` return as the enum's own Swift type,
+/// not `String`). The default body must ask the IR for a real case of that enum instead.
+#[test]
+fn default_method_for_enum_return_constructs_a_real_enum_case() {
+    let enum_def = EnumDef {
+        name: "ConfidenceLevel".to_string(),
+        rust_path: "testcrate::ConfidenceLevel".to_string(),
+        variants: vec![
+            EnumVariant {
+                name: "High".to_string(),
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Low".to_string(),
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        ..Default::default()
+    };
+    let api = ApiSurface {
+        enums: vec![enum_def],
+        ..Default::default()
+    };
+
+    let mut confidence_method = method(
+        "confidence_level",
+        vec![],
+        TypeRef::Named("ConfidenceLevel".to_string()),
+        None,
+    );
+    confidence_method.has_default_impl = true;
+
+    let source = bridge_source_with_api(&make_trait("TextBackend", vec![confidence_method]), &api);
+
+    assert!(
+        source.contains("return .high"),
+        "default stub must construct a real ConfidenceLevel case, got:\n{source}"
+    );
+    assert!(
+        !source.contains("return \"{}\""),
+        "default stub must not return a bare string literal for an enum-typed return, got:\n{source}"
     );
 }
