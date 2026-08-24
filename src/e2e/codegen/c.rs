@@ -80,7 +80,7 @@ fn enum_fields_from_ir(
 /// for the scalar `AlefHandle` handle representation, `NULL` for a real pointer. See
 /// `c::optional_arg` for the full rationale; re-exported here (rather than imported at every
 /// use site) so the submodules keep naming it `super::c_optional_sentinel`. ~keep
-use optional_arg::{c_optional_sentinel, resolve_optional_sentinel};
+use optional_arg::{c_optional_sentinel, ir_declares_a_json_string_param, resolve_optional_sentinel};
 
 /// Infer the opaque-handle PascalCase return type for a bare-field accessor.
 ///
