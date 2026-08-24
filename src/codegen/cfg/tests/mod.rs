@@ -147,6 +147,98 @@ fn collect_cfg_features_walks_types_enums_functions() {
 }
 
 #[test]
+fn any_group_feature_names_reads_a_two_arm_any_gate() {
+    let want: BTreeSet<String> = ["engine-native", "engine-portable"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(
+        any_group_feature_names(r#"any(feature = "engine-native", feature = "engine-portable")"#),
+        Some(want)
+    );
+}
+
+#[test]
+fn any_group_feature_names_normalises_stringified_whitespace() {
+    let want: BTreeSet<String> = ["a", "b"].into_iter().map(String::from).collect();
+    assert_eq!(
+        any_group_feature_names(r#"any (feature = "a" , feature = "b")"#),
+        Some(want)
+    );
+}
+
+#[test]
+fn any_group_feature_names_rejects_a_single_feature_gate() {
+    assert_eq!(any_group_feature_names(r#"feature = "engine-native""#), None);
+}
+
+#[test]
+fn any_group_feature_names_rejects_an_all_gate() {
+    assert_eq!(
+        any_group_feature_names(r#"all(feature = "engine-native", feature = "engine-portable")"#),
+        None
+    );
+}
+
+#[test]
+fn any_group_feature_names_ignores_a_nested_non_feature_arm() {
+    // Only two bare `feature = "..."` arms are extracted; a third arm that is not a bare feature
+    // (here nested inside `not(...)`) does not count toward the two-arm minimum on its own, but
+    // does not block the two arms that do qualify either.
+    let want: BTreeSet<String> = ["engine-native", "engine-portable"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(
+        any_group_feature_names(
+            r#"any(feature = "engine-native", feature = "engine-portable", not(target_arch = "wasm32"))"#
+        ),
+        Some(want)
+    );
+}
+
+/// The relationship [`collect_cfg_feature_alternatives`] exists to expose: a source crate gates
+/// one capability behind either of two sibling features, and a caller widening a binding's
+/// literal Cargo feature list needs to discover that pairing from the parsed cfg strings instead
+/// of a hard-coded feature name.
+#[test]
+fn collect_cfg_feature_alternatives_finds_an_any_gated_pair() {
+    let api = ApiSurface {
+        crate_name: "mylib".to_string(),
+        types: vec![TypeDef {
+            name: "Engine".to_string(),
+            rust_path: "mylib::Engine".to_string(),
+            cfg: Some(r#"any(feature = "engine-native", feature = "engine-portable")"#.to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let groups = collect_cfg_feature_alternatives(&api);
+    let want: BTreeSet<String> = ["engine-native", "engine-portable"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert_eq!(groups, vec![want]);
+}
+
+#[test]
+fn collect_cfg_feature_alternatives_ignores_a_single_feature_gate() {
+    let api = ApiSurface {
+        crate_name: "mylib".to_string(),
+        types: vec![TypeDef {
+            name: "Engine".to_string(),
+            rust_path: "mylib::Engine".to_string(),
+            cfg: Some(r#"feature = "engine-native""#.to_string()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    assert!(collect_cfg_feature_alternatives(&api).is_empty());
+}
+
+#[test]
 fn collect_cfg_features_full_surface_walk() {
     let api = ApiSurface {
         types: vec![TypeDef {
