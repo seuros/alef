@@ -96,11 +96,11 @@ pub struct VersionCheck {
     /// `name@version` that must be published before this mismatch can be resolved, when the
     /// manifest cannot be refreshed in-tree at all.
     ///
-    /// ~keep Only ever set on a failing check, and it does not soften the verdict: the row is
-    /// still a mismatch and still fails `--exit-code`. It exists because the two kinds of
-    /// mismatch call for opposite actions — plain drift is "run the sync and commit it", a
-    /// blocked row is "publish the release, then refresh" — and an output that cannot tell them
-    /// apart makes the whole report read as noise.
+    /// ~keep Only ever set on a failing check. It DOES soften the verdict: [`checks_pass`]
+    /// tolerates such a row, so it does not fail `--exit-code`. See that function for why —
+    /// failing it makes the gate unsatisfiable by construction. It exists because the two kinds
+    /// of mismatch call for opposite actions — plain drift is "run the sync and commit it", a
+    /// blocked row is "publish the release, then refresh".
     pub blocked_on_publish: Option<String>,
 }
 

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `alef validate versions --exit-code` now asks `checks_pass` for its verdict instead of
+  re-deriving it. The local copy disagreed in both directions: it exited 0 for a crate whose
+  check set was EMPTY — the vacuous pass `checks_pass` explicitly refuses — and it exited 1
+  on a `blocked_on_publish` row, which `checks_pass` deliberately tolerates because such a
+  row is a lockfile entry pinning the crate at the very version being released and cannot
+  resolve until that version is published. Failing it made the gate unsatisfiable by
+  construction for any repo with a registry-depending test app. `--json` already reported
+  `checks_pass`, so a single invocation could print `"ok": true` and still exit 1. The
+  `blocked_on_publish` doc comment, which asserted the opposite and contradicted both
+  `checks_pass` and its tests, is corrected.
+
 ## [0.67.4] - 2026-08-24
 
 ### Fixed
