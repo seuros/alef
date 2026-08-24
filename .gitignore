@@ -70,3 +70,4 @@ CLAUDE.md
 
 # Sibling-session agent worktrees; never part of the repo. ~keep
 .worktrees/
+erl_crash.dump

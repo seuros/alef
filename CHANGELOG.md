@@ -134,6 +134,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself cannot serialize) and a multi-field tuple variant of an adjacently tagged enum (whose
   content serde writes as a JSON array).
 
+- **e2e/snippets**: docs-snippet field facts are now resolved against the call's own declared
+  result type instead of by bare field name across the whole crate IR. `presentation::resolve`
+  and `apply_derived_shows` take the `functions` registry, resolve the call's return type via
+  `resolve_declared_result_type`, and anchor a new `IrResultFieldMap` at it — the same shape
+  `IrEnumMap`/`IrCollectionMap` already use. A call whose return type does not resolve keeps
+  every previous answer unchanged.
+
+- **e2e/node**: a snippet reaching through a field the Node binding declares optional now emits
+  `?.`. Optionality was decided by a unanimity vote over every declaration of the name in the
+  crate, and it never saw the NAPI backend's own widening — a type implementing `Default` has
+  every field emitted as `Option<T>`, so `metadata: PageMetadata` reaches TypeScript as
+  `readonly metadata?: PageMetadata`. Generated snippets emitted `result.metadata.title` and
+  failed `tsc` with `TS18048`. The e2e resolver now asks the binding backend's own
+  `napi_field_is_optional` predicate, so the two cannot drift.
+
+- **e2e/snippets**: an inferred accessor is no longer derived for a field the call's result type
+  does not declare. `FieldResolver::result_field_oracle_knows` accepted any name declared on any
+  IR type, so a non-error fixture asserting on a field that exists on an unrelated struct emitted
+  a non-compiling member access. `is_valid_for_result` deliberately still default-allows an
+  unrecognised name — a hand-authored assertion knows the type the oracle may not — and both
+  directions of that asymmetry are covered by tests.
+
+### Changed
+
+- **e2e**: `render_snippet_body_with_functions` is now implemented by the `r`, `zig`, `node`,
+  `kotlin`, `php`, `ruby`, `elixir`, `python` and `rust` e2e generators, which previously had no
+  access to the free-function registry when rendering a docs snippet.
+
 ### Added
 
 - `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
