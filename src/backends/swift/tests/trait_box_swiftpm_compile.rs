@@ -97,6 +97,12 @@ public final class FixtureSink: SwiftDocumentSinkBridge {
     public func isReady() -> Bool { return false }
 
     public func describe(layout: String) -> String { return layout }
+
+    public func statsHistory() -> [String] { return [] }
+
+    public func lastStats() -> String? { return nil }
+
+    public func record(entries: [String]) {}
 }
 "#;
 
@@ -140,6 +146,13 @@ fn defaulted(mut m: MethodDef) -> MethodDef {
 
 /// A trait whose defaulted methods mention DTO types in both parameter and return position --
 /// the exact combination alef #258 marshalled incorrectly.
+///
+/// `stats_history`, `last_stats` and `record` extend that to DTO types nested in a container. A
+/// bridged `Named` crosses as a JSON `String`, so the protocol declares `[String]` / `String?` /
+/// `[String]` for them while the shim declares whatever the Rust extern block declares -- and the
+/// two only agree when the marshaller understands that a `Vec<Named>` is a `Vec<String>`. Before
+/// this fixture grew those methods the generator emitted `-> RustString { return
+/// bridge.statsHistory() }`, which is a `[String]` returned as a `RustString`. ~keep
 fn fixture_api() -> (ApiSurface, ResolvedCrateConfig) {
     let trait_def = TypeDef {
         name: "DocumentSink".to_string(),
@@ -171,6 +184,27 @@ fn fixture_api() -> (ApiSurface, ResolvedCrateConfig) {
                 TypeRef::String,
                 None,
             )),
+            defaulted(method(
+                "stats_history",
+                vec![],
+                TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+                None,
+            )),
+            defaulted(method(
+                "last_stats",
+                vec![],
+                TypeRef::Optional(Box::new(TypeRef::Named("SinkStats".to_string()))),
+                None,
+            )),
+            method(
+                "record",
+                vec![param(
+                    "entries",
+                    TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+                )],
+                TypeRef::Unit,
+                None,
+            ),
         ],
         ..Default::default()
     };

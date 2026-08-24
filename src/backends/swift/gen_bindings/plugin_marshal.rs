@@ -100,7 +100,7 @@ pub fn swift_shim_param_decode(
             is_throwing: false,
         },
         TypeRef::Vec(inner_ty) => {
-            if matches!(inner_ty.as_ref(), TypeRef::String) {
+            if vec_element_crosses_as_string(inner_ty, excluded_types) {
                 ParamDecode {
                     setup: vec![format!(
                         "var {}_list: [String] = []\n\
@@ -207,6 +207,21 @@ pub fn swift_shim_param_decode(
     }
 }
 
+/// Returns true when a `Vec` element reaches the bridge protocol as a Swift `String`.
+///
+/// `trait_bridge::swift_type_name` recurses through `Vec`, so a `Vec<Named>` whose element is in
+/// the bridge policy set is declared `[String]` on the protocol and travels as `RustVec<RustString>`
+/// across the shim -- `gen_rust_crate::plugin_inbound::inbound_bridge_type` maps it to `Vec<String>`
+/// on the Rust side for the same reason. A `Vec<String>` and a `Vec<bridged Named>` are therefore
+/// the same marshalling problem, and both need the element-wise conversion a `RustVec` requires. ~keep
+fn vec_element_crosses_as_string(inner: &TypeRef, excluded_types: &std::collections::HashSet<String>) -> bool {
+    match inner {
+        TypeRef::String => true,
+        TypeRef::Named(name) => excluded_types.contains(name),
+        _ => false,
+    }
+}
+
 /// Result of parameter decode that can be passed to a bridge method.
 pub struct ParamDecode {
     /// Lines to emit before the bridge call (declarations, JSON decode, etc.)
@@ -224,8 +239,12 @@ pub struct ParamDecode {
 /// - If method returns Unit and no error: `"Void"`.
 /// - If method returns Bool and no error: `"Bool"`.
 /// - If method returns primitive int and no error: the mapped type (UInt32, Int64, etc.).
-/// - If method returns `Vec<String>` and no error: `"RustVec<RustString>"`.
+/// - If method returns `Vec<String>` or `Vec<Named>` and no error: `"RustVec<RustString>"`.
 /// - If method returns [other complex] and no error: `"RustString"` (envelope).
+///
+/// `Vec<Named>` shares the `Vec<String>` mapping because a bridged `Named` crosses as a JSON
+/// `String`: the protocol declares `[String]` and `inbound_bridge_type` declares `Vec<String>` on
+/// the Rust side, so a single `RustString` envelope would match neither end. ~keep
 pub fn swift_shim_return_ffi_type(method: &MethodDef) -> String {
     if method.error_type.is_some() {
         return "String".to_string();
@@ -246,7 +265,9 @@ pub fn swift_shim_return_ffi_type(method: &MethodDef) -> String {
         TypeRef::Primitive(PrimitiveType::Isize) => "UInt".to_string(),
         TypeRef::Primitive(PrimitiveType::F32) => "Float".to_string(),
         TypeRef::Primitive(PrimitiveType::F64) => "Double".to_string(),
-        TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String) => "RustVec<RustString>".to_string(),
+        TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Named(_)) => {
+            "RustVec<RustString>".to_string()
+        }
         _ => "RustString".to_string(),
     }
 }
@@ -256,8 +277,16 @@ pub fn swift_shim_return_ffi_type(method: &MethodDef) -> String {
 /// Handles:
 /// - Throwing methods returning Unit: encode `{"ok":null}` on success, `{"err": "..."}` on error
 /// - Throwing methods returning T: encode `{"ok": <T>}` / `{"err": "..."}`
-/// - Non-throwing methods: passthrough the result or build RustVec for `Vec<String>`
+/// - Non-throwing methods: passthrough the result or build RustVec for `Vec<String>` / `Vec<Named>`
 /// - String return types are wrapped in RustString for FFI boundary
+///
+/// A non-throwing `Unit` method still has to *call* the bridge: the shim returns nothing, but the
+/// conformer's side effect is the entire point of the method, and dropping `bridge_call_expr` here
+/// made every such method a silent no-op that compiled cleanly. ~keep
+///
+/// An `Optional(Named)` return arrives from the bridge as `String?` while the Rust side declares a
+/// plain `String` and decodes it with `serde_json::from_str::<Option<T>>`, so `nil` is sent as the
+/// JSON literal `null` rather than as a Swift optional. ~keep
 ///
 /// A `Named` return is wrapped in `RustString` directly, with no JSON encoding step, because the
 /// bridge protocol already declares it as a `String`: `excluded_named_type_bridge_policy` puts
@@ -290,12 +319,15 @@ pub fn swift_shim_return_marshal(method: &MethodDef, bridge_call_expr: &str) -> 
         }
     } else {
         match &method.return_type {
-            TypeRef::Unit => vec!["return ()".to_string()],
+            TypeRef::Unit => vec![bridge_call_expr.to_string(), "return ()".to_string()],
             TypeRef::String => {
                 vec![format!("return RustString({})", bridge_call_expr)]
             }
             TypeRef::Named(_) => vec![format!("return RustString({})", bridge_call_expr)],
-            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String) => {
+            TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
+                vec![format!("return RustString({} ?? \"null\")", bridge_call_expr)]
+            }
+            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Named(_)) => {
                 vec![
                     format!("let strings = {}", bridge_call_expr),
                     "let vec = RustVec<RustString>()".to_string(),
@@ -569,12 +601,14 @@ mod tests {
         assert!(lines.join("\n").contains("encodeErrEnvelope"));
     }
 
+    /// A non-throwing `Unit` method exists purely for its side effect, so the shim body must
+    /// contain the bridge call. Emitting only `return ()` type-checks and ships a method that
+    /// never reaches the conformer -- a defect no compile gate can see.
     #[test]
-    fn test_return_marshal_non_throwing_unit() {
+    fn test_return_marshal_non_throwing_unit_still_calls_the_bridge() {
         let method = make_method("get_value", vec![], TypeRef::Unit, None);
         let lines = swift_shim_return_marshal(&method, "inner.getValue()");
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "return ()");
+        assert_eq!(lines, vec!["inner.getValue()".to_string(), "return ()".to_string()]);
     }
 
     #[test]
@@ -638,6 +672,92 @@ mod tests {
             !lines[0].contains("JSONEncoder"),
             "a bridged Named return arrives as JSON already; re-encoding double-encodes it, got:\n{}",
             lines[0]
+        );
+    }
+
+    /// A `Vec<Named>` element is a JSON `String` by the time it reaches the shim, so the shim
+    /// declares the same `RustVec<RustString>` a `Vec<String>` does. The catch-all `RustString`
+    /// contradicted both the `[String]` the protocol declares and the `Vec<String>` the Rust
+    /// extern block declares.
+    #[test]
+    fn test_return_ffi_type_non_throwing_vec_named_matches_vec_string() {
+        let named = make_method(
+            "stats_history",
+            vec![],
+            TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+            None,
+        );
+        let strings = make_method("languages", vec![], TypeRef::Vec(Box::new(TypeRef::String)), None);
+        assert_eq!(swift_shim_return_ffi_type(&named), "RustVec<RustString>");
+        assert_eq!(
+            swift_shim_return_ffi_type(&named),
+            swift_shim_return_ffi_type(&strings),
+            "a bridged Named element and a String element cross identically"
+        );
+    }
+
+    /// The bridge hands back `[String]` of JSON payloads. Each element is wrapped, never re-encoded:
+    /// a `JSONEncoder` pass here would double-encode every element and still compile.
+    #[test]
+    fn test_return_marshal_vec_named_builds_rust_vec_without_re_encoding() {
+        let method = make_method(
+            "stats_history",
+            vec![],
+            TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+            None,
+        );
+        let lines = swift_shim_return_marshal(&method, "bridge.statsHistory()");
+        assert_eq!(
+            lines,
+            vec![
+                "let strings = bridge.statsHistory()".to_string(),
+                "let vec = RustVec<RustString>()".to_string(),
+                "for s in strings { vec.push(value: RustString(s)) }".to_string(),
+                "return vec".to_string(),
+            ]
+        );
+        assert!(
+            !lines.join("\n").contains("JSONEncoder"),
+            "elements arrive as JSON already; re-encoding double-encodes them, got:\n{}",
+            lines.join("\n")
+        );
+    }
+
+    /// A `Vec<Named>` parameter arrives as `RustVec<RustString>` and the protocol expects
+    /// `[String]`, so it needs the same element-wise walk `Vec<String>` gets. `.toString()` is not
+    /// a member of `RustVec`.
+    #[test]
+    fn test_param_decode_vec_named_walks_the_rust_vec() {
+        let excluded = std::collections::HashSet::from(["SinkStats".to_string()]);
+        let decode = swift_shim_param_decode(
+            "entries",
+            &TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+            false,
+            &excluded,
+        );
+        assert_eq!(decode.expr, "entries_list");
+        assert!(
+            decode.setup[0].contains("var entries_list: [String] = []"),
+            "expected an element-wise RustVec walk, got:\n{}",
+            decode.setup[0]
+        );
+        assert!(!decode.is_throwing);
+    }
+
+    /// The bridge declares `String?` while the Rust extern declares a plain `String` it feeds to
+    /// `serde_json::from_str::<Option<T>>`. `nil` therefore has to become the JSON literal `null`.
+    #[test]
+    fn test_return_marshal_optional_named_sends_json_null_for_nil() {
+        let method = make_method(
+            "last_stats",
+            vec![],
+            TypeRef::Optional(Box::new(TypeRef::Named("SinkStats".to_string()))),
+            None,
+        );
+        let lines = swift_shim_return_marshal(&method, "bridge.lastStats()");
+        assert_eq!(
+            lines,
+            vec![r#"return RustString(bridge.lastStats() ?? "null")"#.to_string()]
         );
     }
 
