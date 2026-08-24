@@ -3,7 +3,7 @@
 //! Both take `Any...`, and Swift warns on every implicit optional-to-`Any` coercion:
 //! `expression implicitly coerced from 'RustString?' to 'Any'`. The snippet validator compiles
 //! with `-warnings-as-errors` (`snippets::validators::swift`), so that warning is a hard failure —
-//! it is why three crawlberg Swift snippets failed while the same snippets passed in every other
+//! it is why three consumer Swift snippets failed while the same snippets passed in every other
 //! language. This is a display concern only: the accessor chain the snippet builds is correct, and
 //! `?.` is already inserted where the chain needs it.
 //!

@@ -522,7 +522,7 @@ impl SnippetValidator for JavaValidator {
 
     /// ~keep `cannot find symbol` used to be accepted here, and it is javac's diagnostic for
     /// EVERY unresolved name — including a method that simply does not exist on a class that
-    /// resolved perfectly well. 51 generated liter-llm snippets calling `result.error()` on a
+    /// resolved perfectly well. 51 generated consumer snippets calling `result.error()` on a
     /// `BatchObject` with no such accessor were therefore counted `unavailable` rather than
     /// failed (see `runner::finalize_result`). A classpath that was never built produces
     /// `package X does not exist` on the import line instead, which is unambiguous and stays.

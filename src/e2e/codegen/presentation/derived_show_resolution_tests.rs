@@ -48,7 +48,7 @@ fn call_config() -> E2eConfig {
     }
 }
 
-/// A type declaring `error`, standing in for the unrelated IR struct (liter-llm's
+/// A type declaring `error`, standing in for the unrelated IR struct (a consumer's
 /// `ResponseObject`) whose field name is what made the flat reachability oracle accept
 /// `error.status_code` on a result type that has no `error` member at all. ~keep
 fn type_defs_declaring_error() -> Vec<TypeDef> {
@@ -173,7 +173,7 @@ fn a_field_that_resolves_on_the_return_type_still_derives_an_accessor() {
 
 /// A streaming fixture's assertions name stream-level predicates (`stream.has_page_event`,
 /// `stream.event_count_min`), which every backend resolves against the drained chunk list, never
-/// as members of the result. crawlberg's `crawl-stream-events` snippet emitted
+/// as members of the result. A consumer's `crawl-stream-events` snippet emitted
 /// `result.stream.hasPageEvent` on a Dart `List`. ~keep
 #[test]
 fn a_streaming_virtual_field_derives_no_accessor() {
@@ -192,7 +192,7 @@ fn a_streaming_virtual_field_derives_no_accessor() {
 }
 
 /// An assertion *grouping* prefix is not a member path. `rate_limit.min_duration_ms` reached
-/// crawlberg's snippets as `result.rateLimit.minDurationMs` on a `CrawlResult` that declares no
+/// consumer snippets as `result.rateLimit.minDurationMs` on a result type that declares no
 /// `rate_limit` at all — the IR only ever declared `rate_limit_ms`, elsewhere. This is the case
 /// `is_valid_for_result` alone cannot catch: it defaults an unrecognized name to valid, so
 /// `result_field_oracle_knows` has to supply the second half of the answer. ~keep
