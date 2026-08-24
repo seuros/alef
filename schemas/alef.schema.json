@@ -6598,6 +6598,14 @@
         },
         "output": {
           "type": "string"
+        },
+        "sample_base_url": {
+          "default": null,
+          "description": "Public base URL the generated *documentation* snippets bind for a fixture's\n`mock_url` / `mock_url_list` arguments, e.g. `\"https://samples.example.org\"`.\n\nDocumentation-only: the executable e2e suite keeps binding the per-fixture mock\nserver, so configuring this can never send a generated test to the network. Unset\nfalls back to `https://example.com`, the reserved documentation domain, and the\nsnippet run reports every fixture whose published snippet carries it.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
