@@ -167,7 +167,7 @@ impl ValidatorRegistry {
         registry.register(Box::new(go::GoValidator));
         registry.register(Box::new(java::JavaValidator));
         registry.register(Box::new(kotlin::KotlinValidator));
-        registry.register(Box::new(swift::SwiftValidator));
+        registry.register(Box::new(swift::SwiftValidator::default()));
         registry.register(Box::new(zig::ZigValidator));
         registry.register(Box::new(json_validator::JsonValidator));
         registry.register(Box::new(yaml_validator::YamlValidator));

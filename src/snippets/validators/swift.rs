@@ -3,8 +3,19 @@ use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::{SnippetValidator, run_command};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
-pub struct SwiftValidator;
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct SwiftModuleLookup {
+    package_root: std::path::PathBuf,
+    environment: Vec<(String, String)>,
+}
+
+#[derive(Default)]
+pub struct SwiftValidator {
+    module_directories: Mutex<HashMap<SwiftModuleLookup, std::result::Result<Vec<std::path::PathBuf>, String>>>,
+}
 
 impl SnippetValidator for SwiftValidator {
     fn language(&self) -> Language {
@@ -68,7 +79,7 @@ impl SnippetValidator for SwiftValidator {
         let dir = session.scratch_dir()?;
         let file = dir.path().join("snippet.swift");
         std::fs::write(&file, snippet.code.trim())?;
-        let module_directories = swift_module_directories(session)?;
+        let module_directories = self.module_directories(session)?;
         let mut command = std::process::Command::new("swiftc");
         match level {
             ValidationLevel::Syntax => {
@@ -110,6 +121,48 @@ impl SnippetValidator for SwiftValidator {
     }
 }
 
+impl SwiftValidator {
+    fn module_directories(&self, session: &ValidationSession) -> Result<Vec<std::path::PathBuf>> {
+        self.cached_module_directories(session, || swift_module_directories(session))
+    }
+
+    fn cached_module_directories(
+        &self,
+        session: &ValidationSession,
+        resolve: impl FnOnce() -> Result<Vec<std::path::PathBuf>>,
+    ) -> Result<Vec<std::path::PathBuf>> {
+        let lookup = swift_module_lookup(session);
+        let mut cache = self.module_directories.lock().map_err(|error| {
+            crate::snippets::error::Error::Other(format!("locking Swift module-directory cache: {error}"))
+        })?;
+        if let Some(cached) = cache.get(&lookup) {
+            return cached.clone().map_err(crate::snippets::error::Error::Other);
+        }
+        // ~keep Hold the lock while SwiftPM resolves the path: releasing it here lets every
+        // parallel snippet observe the same miss and launch its own `swift build --show-bin-path`.
+        let resolved = resolve().map_err(|error| error.to_string());
+        cache.insert(lookup, resolved.clone());
+        resolved.map_err(crate::snippets::error::Error::Other)
+    }
+}
+
+fn swift_module_lookup(session: &ValidationSession) -> SwiftModuleLookup {
+    let package_root = session
+        .manifest
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .unwrap_or(&session.working_directory)
+        .to_path_buf();
+    SwiftModuleLookup {
+        package_root,
+        environment: session
+            .env
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+    }
+}
+
 fn swift_module_directories(session: &ValidationSession) -> Result<Vec<std::path::PathBuf>> {
     let mut command = std::process::Command::new("swift");
     command.args(["build", "--show-bin-path"]);
@@ -144,6 +197,8 @@ fn swift_module_directories_in(binary_directory: &std::path::Path) -> Result<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Swift is deliberately not batched. `swiftc` compiles one module per invocation, and a
     /// module accepts top-level code in exactly one file: handing it several snippets at once
@@ -156,19 +211,51 @@ mod tests {
         let first = swift_snippet("print(\"one\")\n");
         let second = swift_snippet("print(\"two\")\n");
 
-        assert!(!SwiftValidator.supports_batching());
+        let validator = SwiftValidator::default();
+        assert!(!validator.supports_batching());
         for level in [
             ValidationLevel::Syntax,
             ValidationLevel::Compile,
             ValidationLevel::TypeCheck,
             ValidationLevel::Run,
         ] {
-            let declined = SwiftValidator.validate_batch_in_session(&[&first, &second], level, 10, None);
+            let declined = validator.validate_batch_in_session(&[&first, &second], level, 10, None);
             assert!(
                 declined.is_none(),
                 "{level:?} must fall back to one process per snippet"
             );
         }
+    }
+
+    #[test]
+    fn a_session_resolves_its_swiftpm_module_directories_once() {
+        let validator = SwiftValidator::default();
+        let first_session = ValidationSession {
+            language: Language::Swift,
+            working_directory: PathBuf::from("package"),
+            manifest: Some(PathBuf::from("package/Package.swift")),
+            fingerprint: "first-target-identity".into(),
+            env: Default::default(),
+            include_paths: Vec::new(),
+            rust_features: Vec::new(),
+            rust_dependencies: Default::default(),
+        };
+        let mut second_session = first_session.clone();
+        second_session.fingerprint = "second-target-identity".into();
+        let invocations = AtomicUsize::new(0);
+        let expected = vec![PathBuf::from(".build/debug/Modules")];
+
+        for session in [&first_session, &second_session] {
+            let resolved = validator
+                .cached_module_directories(session, || {
+                    invocations.fetch_add(1, Ordering::SeqCst);
+                    Ok(expected.clone())
+                })
+                .expect("module directories resolve");
+            assert_eq!(resolved, expected);
+        }
+
+        assert_eq!(invocations.load(Ordering::SeqCst), 1);
     }
 
     fn swift_snippet(code: &str) -> crate::snippets::types::Snippet {

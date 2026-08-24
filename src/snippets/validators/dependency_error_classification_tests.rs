@@ -162,7 +162,7 @@ fn go_missing_module_is_still_a_missing_dependency() {
 fn swift_unresolved_name_is_not_a_missing_dependency() {
     let output = "snippet.swift:7:13: error: cannot find 'result' in scope\n";
     assert!(
-        !SwiftValidator.is_dependency_error(output),
+        !SwiftValidator::default().is_dependency_error(output),
         "`cannot find ... in scope` is ambiguous and must not be relabeled: {output}"
     );
 }
@@ -171,7 +171,7 @@ fn swift_unresolved_name_is_not_a_missing_dependency() {
 fn swift_missing_module_is_still_a_missing_dependency() {
     let output = "snippet.swift:1:8: error: no such module 'SampleBindings'\n";
     assert!(
-        SwiftValidator.is_dependency_error(output),
+        SwiftValidator::default().is_dependency_error(output),
         "`no such module` is the genuine unbuilt-artifact shape: {output}"
     );
 }

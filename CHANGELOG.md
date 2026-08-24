@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Swift snippet validation now resolves a session's SwiftPM module directories once per run.
+  Every snippet previously launched its own `swift build --show-bin-path`; 32 concurrent warm
+  lookups measured 1.33 seconds wall and 9.22 seconds CPU, versus 0.33 seconds wall and 0.26
+  seconds CPU for a single lookup, before any `swiftc` validation work began. The cache is
+  keyed on the resolved lookup inputs (package root plus environment) rather than on session
+  identity, and holds no global state.
+
 - `alef validate versions --exit-code` now asks `checks_pass` for its verdict instead of
   re-deriving it. The local copy disagreed in both directions: it exited 0 for a crate whose
   check set was EMPTY — the vacuous pass `checks_pass` explicitly refuses — and it exited 1
