@@ -35,6 +35,25 @@ fn mix_dependency_check(output_dir: &str) -> String {
     format!("[ -d {output_dir}/deps ]")
 }
 
+/// The `gradle` task alef runs for a language's build, keyed by `Language` rather than by
+/// the shared `"gradle"` tool string: `Kotlin` and `KotlinAndroid` both build through gradle,
+/// but `KotlinAndroid`'s release must stay the variant-scoped `assembleRelease` task, never
+/// the umbrella `build` task — `build` pulls in Android's release-signing/ABI validation
+/// (`validateJniLibsForRelease`), which fails without prebuilt per-ABI `.so` files a consumer
+/// stages later in its own publish workflow, not something alef cross-builds. Shared by this
+/// module's own defaults below and by `build_command_for`'s `"gradle"` arm in
+/// `src/cli/pipeline/commands/build/build_command.rs`, so both call sites derive the same
+/// task from `Language` instead of two independent, tool-keyed and Language-keyed answers
+/// that can silently drift apart (xberg-io/alef#259). ~keep
+pub(crate) fn gradle_build_task(lang: Language, release: bool) -> &'static str {
+    match (lang, release) {
+        (Language::KotlinAndroid, false) => "assembleDebug",
+        (Language::KotlinAndroid, true) => "assembleRelease",
+        (_, false) => "build",
+        (_, true) => "build -Prelease",
+    }
+}
+
 /// Return the default build configuration for a language.
 ///
 /// The `output_dir` is the package directory where scaffolded files live
@@ -199,11 +218,11 @@ pub(crate) fn default_build_config(
             dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
-                format!("cd {output_dir} && gradle build"),
+                format!("cd {output_dir} && gradle {}", gradle_build_task(lang, false)),
                 ctx.run_wrapper,
             ))),
             build_release: Some(StringOrVec::Single(wrap(
-                format!("cd {output_dir} && gradle build -Prelease"),
+                format!("cd {output_dir} && gradle {}", gradle_build_task(lang, true)),
                 ctx.run_wrapper,
             ))),
         },
@@ -213,11 +232,11 @@ pub(crate) fn default_build_config(
             dependency_remediation: None,
             before: None,
             build: Some(StringOrVec::Single(wrap(
-                format!("cd {output_dir} && gradle assembleDebug"),
+                format!("cd {output_dir} && gradle {}", gradle_build_task(lang, false)),
                 ctx.run_wrapper,
             ))),
             build_release: Some(StringOrVec::Single(wrap(
-                format!("cd {output_dir} && gradle assembleRelease"),
+                format!("cd {output_dir} && gradle {}", gradle_build_task(lang, true)),
                 ctx.run_wrapper,
             ))),
         },
@@ -575,28 +594,27 @@ mod tests {
         assert_eq!(c.precondition.as_deref(), Some("command -v gradle >/dev/null 2>&1"));
     }
 
-    /// `KotlinAndroid`'s default here is a second, independent derivation of "the
-    /// kotlin_android build command" from `build_command_for`'s `"gradle"` arm in
-    /// `src/cli/pipeline/commands/build.rs` (`cd <settings.gradle-root, found by walking
-    /// up from the source output dir> && gradle build`). This one is reached only through
-    /// `ResolvedCrateConfig::build_command_config_for_language`
-    /// (`src/core/config/resolved/lookups.rs`) when an alef.toml declares ANY
-    /// `[crates.build_commands.kotlin_android]` overlay — even a partial one that leaves
-    /// `build`/`build_release` unset, since `BuildCommandConfig::merge_overlay` keeps this
-    /// default for whatever fields the overlay omits. It also never walks up: `output_dir`
-    /// comes from `package_dir(KotlinAndroid)`, which deliberately ignores an explicit
-    /// `[crates.output] kotlin_android` override (see
-    /// `package_dir_kotlin_ignores_source_output_override`-style tests in
-    /// `resolved/lookups.rs`) and always resolves to the fixed `"packages/kotlin-android"`.
+    /// Pins the intentional `Kotlin` vs `KotlinAndroid` gradle *task* divergence:
+    /// `assembleDebug`/`assembleRelease` (the narrower, variant-scoped AGP task) instead of
+    /// the umbrella `build` task every other gradle-backed language here defaults to.
     ///
-    /// `assembleDebug`/`assembleRelease` and `gradle build` are both defensible commands for
-    /// an Android library module — `assemble*` is the narrower, variant-scoped AGP task,
-    /// while `build` is the umbrella task every other backend arm here defaults to — so this
-    /// pins the current, accepted divergence instead of letting the two silently drift
-    /// further apart. Changing either command, or giving this arm the same walk-up as the
-    /// `build.rs` one, is a deliberate decision that must update this test too. ~keep
+    /// This test's old name claimed to check that divergence against `build_command_for`'s
+    /// `"gradle"` arm in `src/cli/pipeline/commands/build/build_command.rs` — it never did,
+    /// and could not: that function is `pub(super)` to a different module tree, unreachable
+    /// from here. Both this default and that arm now derive their task from
+    /// `gradle_build_task(Language, bool)` above, so they no longer diverge on the task
+    /// itself (they still differ on directory resolution: this one takes `output_dir`
+    /// verbatim, that arm walks up to the nearest `settings.gradle`/`build.gradle` root).
+    /// The actual cross-check that the two call sites agree lives where both functions are
+    /// reachable — `kotlin_android_gradle_arm_matches_build_defaults_default` in
+    /// `build_command_tests.rs`. Its prior absence, next to a same-module test whose name
+    /// implied the comparison had already been made, is what let xberg-io/alef#259 ship:
+    /// the CLI path fell into a tool-keyed `"gradle"` arm that could not distinguish
+    /// `Kotlin` from `KotlinAndroid` and ran the umbrella `build` task for both. Changing
+    /// the task `gradle_build_task` returns is a deliberate decision that must update both
+    /// tests. ~keep
     #[test]
-    fn kotlin_android_default_diverges_intentionally_from_build_command_for_gradle_arm() {
+    fn kotlin_android_gradle_task_diverges_intentionally_from_kotlin() {
         let c = cfg(Language::KotlinAndroid, "packages/kotlin-android", "my-lib");
         let build = c.build.unwrap().commands().join(" ");
         let release = c.build_release.unwrap().commands().join(" ");

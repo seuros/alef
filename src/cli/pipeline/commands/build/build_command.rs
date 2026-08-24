@@ -324,7 +324,6 @@ pub(super) fn build_command_for(
             format!("cd {dir} && go build ./...")
         }
         "gradle" => {
-            let release_property = if release { " -Prelease" } else { "" };
             let source_dir = if crate_dir.is_empty() {
                 config.package_dir(lang)
             } else {
@@ -369,7 +368,13 @@ pub(super) fn build_command_for(
             let build_dir = find_marker_dir(&source_dir, &["settings.gradle.kts", "settings.gradle"])
                 .or_else(|| find_marker_dir(&source_dir, &["build.gradle.kts", "build.gradle"]))
                 .unwrap_or(source_dir);
-            format!("cd {build_dir} && gradle build{release_property}")
+            // The task itself must come from `Language`, not from this arm's shared `"gradle"`
+            // tool string: `Kotlin` and `KotlinAndroid` both dispatch here, but only
+            // `gradle_build_task` can tell them apart. Asking `build_defaults`'s helper keeps
+            // this call site and `default_build_config`'s own Kotlin/KotlinAndroid arms deriving
+            // the same answer instead of two independent ones (xberg-io/alef#259). ~keep
+            let task = crate::core::config::build_defaults::gradle_build_task(lang, release);
+            format!("cd {build_dir} && gradle {task}")
         }
         "swift" => {
             let package_dir = config.package_dir(lang);
