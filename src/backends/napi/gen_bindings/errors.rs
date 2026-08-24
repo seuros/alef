@@ -717,6 +717,22 @@ fn dts_param(p: &ParamDef, is_optional: bool, allow_question_optional: bool) -> 
     }
 }
 
+/// [`param_is_optional`] against a raw `ApiSurface::types` slice, for callers outside this
+/// backend that hold `type_defs` rather than the prebuilt `Default`-implementing name set.
+///
+/// The e2e snippet generator has to know whether a call it renders may end its argument list
+/// early, and that is decided by whichever `.d.ts` the snippet is compiled against — this one for
+/// node. Delegating rather than restating keeps the widening rule in one place: a snippet that
+/// omits an argument the emitted declaration marks required is `TS2554` in the validator. ~keep
+pub(crate) fn napi_param_is_optional(param: &ParamDef, type_defs: &[TypeDef]) -> bool {
+    let default_types: ahash::AHashSet<String> = type_defs
+        .iter()
+        .filter(|type_def| type_def.has_default)
+        .map(|type_def| type_def.name.clone())
+        .collect();
+    param_is_optional(param, &default_types)
+}
+
 fn param_is_optional(p: &ParamDef, default_types: &ahash::AHashSet<String>) -> bool {
     p.optional
         || p.default.is_some()

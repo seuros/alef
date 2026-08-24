@@ -15,8 +15,12 @@ use super::visitors::build_typescript_visitor;
 mod args;
 mod builders;
 mod cache;
+#[cfg(test)]
+mod call_arity_tests;
 mod helpers;
 mod http;
+#[cfg(test)]
+mod loop_binding_tests;
 #[cfg(test)]
 mod node_enum_import_tests;
 mod render;

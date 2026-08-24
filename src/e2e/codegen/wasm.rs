@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use super::E2eCodegen;
 use super::typescript::config::render_global_setup;
 
+#[cfg(test)]
+mod excluded_type_tests;
 mod snippet;
 
 /// WebAssembly e2e code generator.
