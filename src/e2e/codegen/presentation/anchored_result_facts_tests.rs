@@ -119,7 +119,7 @@ fn an_optional_field_on_the_calls_return_type_is_optional_despite_a_required_twi
     );
 }
 
-/// The crawlberg shape, and the one that actually produced `TS18048` on 24 snippets: `metadata`
+/// The consumer shape, and the one that actually produced `TS18048` on 24 snippets: `metadata`
 /// is declared `PageMetadata` — never `Option` — anywhere in the core crate, but its owner
 /// derives `Default`, and the NAPI backend widens every field of a `has_default` type to
 /// `Option<T>`, so the emitted `.d.ts` says `readonly metadata?: PageMetadata`. The snippet must

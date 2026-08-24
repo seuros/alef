@@ -24,7 +24,7 @@ use super::java::JavaValidator;
 use super::rust::RustValidator;
 use super::swift::SwiftValidator;
 
-/// The compiler output alef itself generated in html-to-markdown at 0.67.2: the snippet's call
+/// The compiler output alef itself generated in a consumer repo at 0.67.2: the snippet's call
 /// was emitted as `let _ = convert(...)` while the presentation layer emitted
 /// `println!("{:?}", result.content)`. Every one of the repo's 283 Rust snippets carried it, and
 /// every one was reported `unavailable`. ~keep
@@ -45,17 +45,17 @@ error: could not compile `snippet` (bin \"snippet\") due to 1 previous error
 /// not resolve. Narrowing must not swallow this — an operator who has not run `alef build` still
 /// needs the build hint rather than a wall of red. ~keep
 const RUST_MISSING_CRATE: &str = "\
-error[E0432]: unresolved import `html_to_markdown`
+error[E0432]: unresolved import `sample_bindings`
  --> src/main.rs:1:5
   |
-1 | use html_to_markdown::convert;
-  |     ^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `html_to_markdown`
+1 | use sample_bindings::convert;
+  |     ^^^^^^^^^^^^^^^^ use of unresolved module or unlinked crate `sample_bindings`
 
 error: aborting due to 1 previous error
 error: could not compile `snippet` (bin \"snippet\") due to 1 previous error
 ";
 
-/// The liter-llm Java shape: `BatchObject` resolved fine, it simply has no `error()` accessor. ~keep
+/// The consumer Java shape: `BatchObject` resolved fine, it simply has no `error()` accessor. ~keep
 const JAVA_MISSING_MEMBER: &str = "\
 Example.java:12: error: cannot find symbol
         System.out.println(result.error().statusCode());
@@ -66,8 +66,8 @@ Example.java:12: error: cannot find symbol
 ";
 
 const JAVA_MISSING_PACKAGE: &str = "\
-Example.java:1: error: package io.xberg.literllm does not exist
-import io.xberg.literllm.*;
+Example.java:1: error: package dev.sample.bindings does not exist
+import dev.sample.bindings.*;
 ^
 1 error
 ";
@@ -169,7 +169,7 @@ fn swift_unresolved_name_is_not_a_missing_dependency() {
 
 #[test]
 fn swift_missing_module_is_still_a_missing_dependency() {
-    let output = "snippet.swift:1:8: error: no such module 'LiterLlm'\n";
+    let output = "snippet.swift:1:8: error: no such module 'SampleBindings'\n";
     assert!(
         SwiftValidator.is_dependency_error(output),
         "`no such module` is the genuine unbuilt-artifact shape: {output}"
@@ -190,7 +190,7 @@ fn csharp_unresolved_name_is_not_a_missing_dependency() {
 
 #[test]
 fn csharp_missing_namespace_is_still_a_missing_dependency() {
-    let output = "Program.cs(1,7): error CS0246: The type or namespace name 'LiterLlm' could not be found\n";
+    let output = "Program.cs(1,7): error CS0246: The type or namespace name 'SampleBindings' could not be found\n";
     assert!(
         CsharpValidator.is_dependency_error(output),
         "CS0246 is the genuine unbuilt-package shape: {output}"

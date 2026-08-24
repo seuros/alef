@@ -1,7 +1,7 @@
 //! Null-forgiving placement must not depend on which shape follows the optional collection.
 //!
 //! ~keep `render_csharp_with_optionals` consulted `optional_fields` in its `Field` arm but not in
-//! its `ArrayField` arm, so one emitted snippet could disagree with itself: crawlberg's
+//! its `ArrayField` arm, so one emitted snippet could disagree with itself: a consumer's
 //! `metadata-headings` snippet rendered `result.Metadata.Headings!.Count` on one line and
 //! `result.Metadata.Headings[0].Level` on the next, and only the second is a `CS8602`. Indexing a
 //! nullable collection dereferences it exactly as reading `.Count` does, so both arms have to ask

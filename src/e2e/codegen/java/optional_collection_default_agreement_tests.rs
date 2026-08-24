@@ -86,7 +86,7 @@ fn process_result_type(imports_field: FieldDef) -> TypeDef {
 /// the exact function `alef build` calls for every record type.
 fn render_binding(typ: &TypeDef) -> String {
     test_only_gen_record_type(
-        "io.xberg.sample",
+        "dev.sample.bindings",
         typ,
         &AHashSet::new(),
         &AHashSet::new(),
