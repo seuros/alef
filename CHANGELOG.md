@@ -162,6 +162,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kotlin`, `php`, `ruby`, `elixir`, `python` and `rust` e2e generators, which previously had no
   access to the free-function registry when rendering a docs snippet.
 
+`.
+
+- **java**: An adjacently tagged enum (`#[serde(tag, content)]`) now puts its payload under serde's
+  content key. The Jackson serializer flattened the payload beside the tag — serde's *internal*
+  shape, which Rust rejects — and only did so when the payload happened to be a JSON object, so a
+  newtype variant's scalar payload was dropped outright and crossed the FFI boundary as
+  `{"tag":"variant"}` with the data gone. Both codecs now classify through
+  `codegen::serde_enum_repr`, and an adjacently tagged enum always uses the hand-written codecs
+  because `@JsonTypeInfo` can only express the internal shape. The deserializer moves from raw
+  `push_str` to `sealed_union_deserializer.jinja`.
+- **csharp**: Same fix for the sealed-union `JsonConverter`, which was parameterised by the tag
+  alone and gated its payload write on `ValueKind == Object`, dropping a scalar payload. It now
+  takes a `SerdeEnumRepr` and serialises the payload whole under the content key, reading it back
+  from there.
+- **kotlin / kotlin-android**: Same fix for the shared Jackson codecs. The serializer additionally
+  cast the payload tree to `ObjectNode`, so a newtype variant with a `String` payload threw
+  `ClassCastException` at runtime rather than reaching the wire. Emission moves from raw `push_str`
+  to `tagged_serializer.jinja` / `tagged_deserializer.jinja`; internally tagged output is
+  byte-identical.
+- **pyo3**: The generated per-variant getter returned the whole serialized document, which is the
+  tag envelope rather than the payload under adjacent tagging, and the `.pyi` TypedDicts declared
+  the payload's fields flat beside the tag. Both now read serde's content key; an adjacent struct
+  variant's payload gets its own TypedDict.
+
+Note: `src/codegen/serde_enum_wire_cross_backend_tests.rs` records all five hand-writing backends
+as `AdjacentSupport::Correct`; only Swift and Go were correct before.
+
 ### Added
 
 - `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
