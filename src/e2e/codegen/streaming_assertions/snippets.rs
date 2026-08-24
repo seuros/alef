@@ -1,5 +1,13 @@
 use super::model::StreamingFieldResolver;
 
+/// The crate path the Rust collect recipe writes into every streaming test body.
+///
+/// ~keep The generated e2e crate keys its `tokio-stream` dependency off finding this text in the
+/// bodies it just emitted, so recipe and manifest cannot drift: the recipe below interpolates
+/// this constant rather than spelling the path again. Spelled as the underscored *lib* name that
+/// appears in Rust source — `[dependencies]` needs the hyphenated package name `tokio-stream`.
+pub const RUST_STREAM_CRATE_PATH: &str = "tokio_stream::";
+
 impl StreamingFieldResolver {
     /// Returns the language-specific stream-collect-into-list snippet that
     /// produces `chunks_var` from `stream_var`.
@@ -25,7 +33,7 @@ impl StreamingFieldResolver {
         let item_type = item_type.filter(|value| !value.is_empty());
         match lang {
             "rust" => Some(format!(
-                "let {chunks_var}: Vec<_> = tokio_stream::StreamExt::collect::<Vec<_>>({stream_var}).await\n        .into_iter()\n        .map(|r| r.expect(\"stream item failed\"))\n        .collect();"
+                "let {chunks_var}: Vec<_> = {RUST_STREAM_CRATE_PATH}StreamExt::collect::<Vec<_>>({stream_var}).await\n        .into_iter()\n        .map(|r| r.expect(\"stream item failed\"))\n        .collect();"
             )),
             "go" => Some(format!(
                 "var {chunks_var} []pkg.{}\n\tfor chunk := range {stream_var} {{\n\t\t{chunks_var} = append({chunks_var}, chunk)\n\t}}",

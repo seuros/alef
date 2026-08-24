@@ -18,12 +18,14 @@ mod assertion_synthetic;
 #[cfg(test)]
 mod collection_field_classification_tests;
 #[cfg(test)]
+mod manifest_dependency_tests;
+#[cfg(test)]
 mod test_backend_tests;
 #[cfg(test)]
 mod tests;
 
 pub use cargo_config::render_cargo_config;
-pub use cargo_toml::render_cargo_toml;
+pub use cargo_toml::{CargoTomlInputs, render_cargo_toml};
 pub use mock_server::{render_common_module, render_mock_server_binary, render_mock_server_module};
 
 use crate::core::backend::GeneratedFile;
@@ -37,6 +39,15 @@ use crate::e2e::fixture::{Fixture, FixtureGroup};
 
 use super::E2eCodegen;
 use test_file::{is_skipped, render_test_file};
+
+/// The JSON crate path an emitted Rust test body may name.
+///
+/// ~keep `needs_serde_json` is derived from the call's argument types, which is blind to what an
+/// *assertion* emits: `assertions::containment_predicate` serializes each element through
+/// `serde_json::to_value` for a `contains` over a collection field. A fixture with no
+/// `json_object`/`handle` argument and no mock server therefore wrote the path into its test file
+/// while the manifest declared nothing — the same disagreement `tokio-stream` had.
+const RUST_JSON_CRATE_PATH: &str = "serde_json::";
 
 /// Rust e2e test code generator.
 pub struct RustE2eCodegen;
@@ -123,23 +134,63 @@ impl E2eCodegen for RustE2eCodegen {
             });
         }
 
+        // Per-category test files. Rendered before the manifest because the manifest has to
+        // declare the crates these bodies name: the streaming collect recipe writes
+        // `tokio_stream::` into any streaming body whether or not a mock server is involved, so
+        // asking the emitted text is the only derivation that cannot disagree with it. ~keep
+        let mut test_files = Vec::new();
+        for group in groups {
+            let fixtures: Vec<&Fixture> = group.fixtures.iter().filter(|f| !is_skipped(f, "rust")).collect();
+
+            if fixtures.is_empty() {
+                continue;
+            }
+
+            let filename = format!("{}_test.rs", sanitize_filename(&group.category));
+            let content = render_test_file(
+                &group.category,
+                &fixtures,
+                e2e_config,
+                config,
+                type_defs,
+                enums,
+                functions,
+                &dep_name,
+                needs_mock_server,
+                // The executable suite ignores every fixture's docs client: its own
+                // client must reach the mock server. ~keep
+                None,
+                false,
+            );
+
+            test_files.push(GeneratedFile {
+                path: output_base.join("tests").join(filename),
+                content,
+                generated_header: true,
+            });
+        }
+        let body_names = |path: &str| test_files.iter().any(|file| file.content.contains(path));
+        let needs_tokio_stream = body_names(crate::e2e::codegen::streaming_assertions::RUST_STREAM_CRATE_PATH);
+        let needs_serde_json = needs_serde_json || body_names(RUST_JSON_CRATE_PATH);
+
         let crate_version = resolve_crate_version(e2e_config).or_else(|| config.resolved_version());
         files.push(GeneratedFile {
             path: output_base.join("Cargo.toml"),
-            content: render_cargo_toml(
-                &crate_name,
-                &dep_name,
-                &crate_path,
+            content: render_cargo_toml(&CargoTomlInputs {
+                crate_name: &crate_name,
+                dep_name: &dep_name,
+                crate_path: &crate_path,
                 needs_serde_json,
                 needs_mock_server,
                 needs_http_tests,
                 needs_tokio,
+                needs_tokio_stream,
                 needs_tower_http,
                 needs_anyhow,
-                e2e_config.dep_mode,
-                crate_version.as_deref(),
-                &config.features,
-            ),
+                dep_mode: e2e_config.dep_mode,
+                version: crate_version.as_deref(),
+                features: &config.features,
+            }),
             generated_header: true,
         });
 
@@ -167,37 +218,7 @@ impl E2eCodegen for RustE2eCodegen {
             });
         }
 
-        // Per-category test files.
-        for group in groups {
-            let fixtures: Vec<&Fixture> = group.fixtures.iter().filter(|f| !is_skipped(f, "rust")).collect();
-
-            if fixtures.is_empty() {
-                continue;
-            }
-
-            let filename = format!("{}_test.rs", sanitize_filename(&group.category));
-            let content = render_test_file(
-                &group.category,
-                &fixtures,
-                e2e_config,
-                config,
-                type_defs,
-                enums,
-                functions,
-                &dep_name,
-                needs_mock_server,
-                // The executable suite ignores every fixture's docs client: its own
-                // client must reach the mock server. ~keep
-                None,
-                false,
-            );
-
-            files.push(GeneratedFile {
-                path: output_base.join("tests").join(filename),
-                content,
-                generated_header: true,
-            });
-        }
+        files.extend(test_files);
 
         Ok(files)
     }
