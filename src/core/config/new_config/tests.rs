@@ -279,6 +279,25 @@ fn resolve_multi_crate_output_paths_use_template() {
 }
 
 #[test]
+fn resolve_no_crates_errors_instead_of_silently_processing_nothing() {
+    let cfg: NewAlefConfig = toml::from_str(
+        r#"
+crates = []
+
+[workspace]
+languages = ["python"]
+"#,
+    )
+    .unwrap();
+
+    let err = cfg.resolve().unwrap_err();
+    assert!(
+        matches!(err, ResolveError::NoCratesConfigured),
+        "expected NoCratesConfigured, got: {err}"
+    );
+}
+
+#[test]
 fn resolve_duplicate_crate_name_errors() {
     let cfg: NewAlefConfig = toml::from_str(
         r#"
