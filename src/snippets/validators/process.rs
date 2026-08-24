@@ -25,7 +25,22 @@ fn strip_ansi_codes(input: &str) -> String {
     result
 }
 
+/// How long the output pipes may still be drained once the child itself is no longer running.
+///
+/// `timeout_secs` bounds the *command*, and the child inherits its stdout and stderr to every
+/// descendant it starts. A descendant that outlives the command -- a Gradle daemon, an MSBuild
+/// node, anything a hook backgrounded and never waited on -- keeps the write end of those pipes
+/// open, so a `read_to_string` that waits for end of stream waits for that descendant, not for
+/// the command. That is how a hook under a 1800s budget ran for over half an hour and was never
+/// killed: the wait had already succeeded, and the unbounded drain that followed it answered to
+/// nothing. Everything after the child exits is a leaked writer, so it gets a fixed grace to
+/// flush what is already buffered and is then torn down with the rest of the group. ~keep
+const OUTPUT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Run a child process with a timeout and capture combined stdout/stderr.
+///
+/// Returns within `timeout_secs` plus [`OUTPUT_DRAIN_GRACE`], whatever the child's descendants do
+/// with the pipes they inherited.
 ///
 /// # Errors
 ///
@@ -38,19 +53,28 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|err| crate::snippets::error::Error::Other(format!("spawn failed: {err}")))?;
+    let _tracked = super::termination::track(&child);
     let stdout = child.stdout.take().map(output_reader);
     let stderr = child.stderr.take().map(output_reader);
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let output = collect_output(stdout, stderr)?;
-            Ok((status.success(), strip_ansi_codes(&output)))
+            let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)?;
+            if !drained.complete {
+                tracing::warn!(
+                    command = ?command,
+                    grace_secs = OUTPUT_DRAIN_GRACE.as_secs(),
+                    "a descendant outlived the command still holding its output pipes; killing the process group"
+                );
+                kill_process_tree(&mut child);
+            }
+            Ok((status.success(), strip_ansi_codes(&drained.text)))
         }
         Ok(None) => {
             kill_process_tree(&mut child);
             let _ = child.wait();
-            let _ = collect_output(stdout, stderr);
+            let _ = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE);
             Err(crate::snippets::error::Error::Timeout {
                 command: format!("{command:?}"),
                 timeout_secs,
@@ -59,7 +83,7 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
         Err(err) => {
             kill_process_tree(&mut child);
             let _ = child.wait();
-            let _ = collect_output(stdout, stderr);
+            let _ = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE);
             Err(crate::snippets::error::Error::Other(format!("wait failed: {err}")))
         }
     }
@@ -91,27 +115,80 @@ fn kill_process_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-fn output_reader(mut stream: impl Read + Send + 'static) -> std::thread::JoinHandle<std::io::Result<String>> {
-    std::thread::spawn(move || {
-        let mut output = String::new();
-        stream.read_to_string(&mut output)?;
-        Ok(output)
-    })
+/// How much of a stream is moved into the shared buffer per read. Large enough that a megabyte of
+/// compiler output costs tens of locks rather than thousands. ~keep
+const OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
+
+/// One drained stream. The bytes live behind a lock the reader thread appends to as they arrive,
+/// rather than in a `String` the thread only hands over at end of stream, so a drain that gives up
+/// on a stuck pipe still returns everything the command actually wrote. ~keep
+struct OutputReader {
+    buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    finished: std::sync::mpsc::Receiver<std::io::Result<()>>,
 }
 
-fn collect_output(
-    stdout: Option<std::thread::JoinHandle<std::io::Result<String>>>,
-    stderr: Option<std::thread::JoinHandle<std::io::Result<String>>>,
-) -> Result<String> {
-    let read = |handle: std::thread::JoinHandle<std::io::Result<String>>| {
-        handle
-            .join()
-            .map_err(|_| crate::snippets::error::Error::Other("snippet output reader panicked".into()))?
-            .map_err(crate::snippets::error::Error::from)
-    };
-    let mut output = stdout.map(read).transpose()?.unwrap_or_default();
-    output.push_str(&stderr.map(read).transpose()?.unwrap_or_default());
-    Ok(output)
+/// A command's combined output, and whether every stream reached end of stream before the drain
+/// budget ran out.
+struct DrainedOutput {
+    text: String,
+    complete: bool,
+}
+
+fn output_reader(mut stream: impl Read + Send + 'static) -> OutputReader {
+    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = std::sync::Arc::clone(&buffer);
+    let (sender, finished) = std::sync::mpsc::channel();
+    // The thread is deliberately detached rather than joined: when a leaked descendant holds the
+    // write end open, this read never returns, and joining it is exactly the unbounded wait
+    // `OUTPUT_DRAIN_GRACE` exists to stop. It exits on its own once the last writer closes. ~keep
+    std::thread::spawn(move || {
+        let mut chunk = [0_u8; OUTPUT_CHUNK_BYTES];
+        let outcome = loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break Ok(()),
+                Ok(count) => lock(&sink).extend_from_slice(&chunk[..count]),
+                Err(error) => break Err(error),
+            }
+        };
+        let _ = sender.send(outcome);
+    });
+    OutputReader { buffer, finished }
+}
+
+fn lock(buffer: &std::sync::Mutex<Vec<u8>>) -> std::sync::MutexGuard<'_, Vec<u8>> {
+    buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Drains both streams, giving up `budget` after the first byte is waited on.
+///
+/// Output is decoded lossily: a toolchain that emits a stray non-UTF-8 byte reports a broken
+/// snippet, and losing the whole diagnostic to a decode error helps nobody. ~keep
+fn collect_output_within(
+    stdout: Option<OutputReader>,
+    stderr: Option<OutputReader>,
+    budget: std::time::Duration,
+) -> Result<DrainedOutput> {
+    let deadline = std::time::Instant::now() + budget;
+    let mut bytes = Vec::new();
+    let mut complete = true;
+    for reader in [stdout, stderr].into_iter().flatten() {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        match reader.finished.recv_timeout(remaining) {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => return Err(crate::snippets::error::Error::from(error)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => complete = false,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(crate::snippets::error::Error::Other(
+                    "snippet output reader panicked".into(),
+                ));
+            }
+        }
+        bytes.extend_from_slice(&lock(&reader.buffer));
+    }
+    Ok(DrainedOutput {
+        text: String::from_utf8_lossy(&bytes).into_owned(),
+        complete,
+    })
 }
 
 /// `HOME` is the Unix counterpart of `USERPROFILE` below: cargo, gradle, `dart pub`, `gem`, `mix`,
@@ -402,15 +479,104 @@ mod process_tests {
         assert_eq!(output.len(), 131_072);
     }
 
+    const PROCESS_SETTLE_POLL: Duration = Duration::from_millis(20);
+    const PROCESS_SETTLE_LIMIT: Duration = Duration::from_secs(5);
+
+    fn is_alive(pid: i32) -> bool {
+        // SAFETY: signal 0 performs error checking only and sends nothing.
+        unsafe { libc::kill(pid, 0) == 0 }
+    }
+
+    fn wait_until_gone(pid: i32) -> bool {
+        let deadline = Instant::now() + PROCESS_SETTLE_LIMIT;
+        while Instant::now() < deadline {
+            if !is_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(PROCESS_SETTLE_POLL);
+        }
+        !is_alive(pid)
+    }
+
+    /// Reads the pid a fixture shell wrote to `marker`, waiting for it to appear.
+    fn announced_pid(marker: &std::path::Path) -> i32 {
+        let deadline = Instant::now() + PROCESS_SETTLE_LIMIT;
+        loop {
+            assert!(Instant::now() < deadline, "the fixture never announced a pid");
+            if let Ok(contents) = std::fs::read_to_string(marker)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+            {
+                return pid;
+            }
+            std::thread::sleep(PROCESS_SETTLE_POLL);
+        }
+    }
+
+    /// The deadline has to be enforced against the *tree*, and the tree has to be gone afterwards.
+    ///
+    /// Asserting that the timeout branch was entered would restate the bug rather than catch it:
+    /// the orphaned hook tree this fixes was produced by code whose timeout branch ran. So the
+    /// grandchild announces its own pid and the test waits for that pid to stop existing. ~keep
     #[test]
-    fn timeout_kills_descendants_holding_output_pipes() {
+    fn an_overrunning_command_is_killed_at_the_deadline_along_with_its_grandchildren() {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let marker = directory.path().join("grandchild.pid");
         let mut command = std::process::Command::new("sh");
-        command.args(["-c", "sleep 30 & wait"]);
+        command.args(["-c", &format!("sleep 60 & echo $! > {}; sleep 60", marker.display())]);
         let started = Instant::now();
 
         let error = super::run_command(&mut command, 1).expect_err("command must time out");
+        let grandchild = announced_pid(&marker);
 
         assert!(matches!(error, crate::snippets::error::Error::Timeout { .. }));
-        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(
+            started.elapsed() < Duration::from_secs(1) + super::OUTPUT_DRAIN_GRACE + PROCESS_SETTLE_LIMIT,
+            "run_command overran its own deadline by more than the drain grace"
+        );
+        assert!(
+            wait_until_gone(grandchild),
+            "grandchild {grandchild} outlived the timeout that killed its parent"
+        );
+    }
+
+    /// The regression this whole bound exists for. `sh` exits immediately and successfully, so the
+    /// timed wait is satisfied at once -- but the descendant it backgrounded inherited stdout and
+    /// stderr, and a drain that waits for end of stream waits for *that* process. Before the
+    /// bound, this call took 20 seconds under a 1-second budget and returned `Ok`: a configured
+    /// timeout that was present, entered, and did nothing. ~keep
+    #[test]
+    fn a_descendant_holding_the_pipes_cannot_outlive_the_drain_grace() {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let marker = directory.path().join("holder.pid");
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", &format!("sleep 60 & echo $! > {}; exit 0", marker.display())]);
+        let started = Instant::now();
+
+        let (success, _) = super::run_command(&mut command, 1).expect("the command itself succeeds");
+        let elapsed = started.elapsed();
+        let holder = announced_pid(&marker);
+
+        assert!(success, "the command's own exit status must still be reported");
+        assert!(
+            elapsed < super::OUTPUT_DRAIN_GRACE + PROCESS_SETTLE_LIMIT,
+            "draining a leaked pipe holder took {elapsed:?}, which is not bounded by the drain grace"
+        );
+        assert!(
+            wait_until_gone(holder),
+            "pipe holder {holder} was left running after run_command returned"
+        );
+    }
+
+    /// The bound must not cost a well-behaved command its output: a child that writes and exits is
+    /// still drained in full, not truncated by the grace. ~keep
+    #[test]
+    fn a_command_that_exits_cleanly_still_reports_all_of_its_output() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "echo out; echo err 1>&2"]);
+
+        let (success, output) = super::run_command(&mut command, 5).expect("well-behaved command");
+
+        assert!(success);
+        assert_eq!(output, "out\nerr\n");
     }
 }
