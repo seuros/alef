@@ -254,228 +254,9 @@ pub(crate) struct StaleMismatch {
     pub(crate) computed: Vec<String>,
 }
 
-/// Build/cache directories the verify walk never descends into.
-const VERIFY_SKIP_DIRS: &[&str] = &[
-    ".git",
-    ".alef",
-    "target",
-    "node_modules",
-    "_build",
-    "deps",
-    "parsers",
-    "dist",
-    "dist-node",
-    "vendor",
-    ".venv",
-    ".cache",
-    ".remote-cache",
-    "__pycache__",
-    "build",
-    "tmp",
-    "out",
-    ".idea",
-    ".vscode",
-    // A nested git worktree (`git worktree add .claude/worktrees/<name>`) is a second, complete
-    // checkout of the same repository. Walking it would report another branch's stamps as this
-    // tree's, and it only became reachable once `.claude` was taken off the blanket dot-directory
-    // prune below. A worktree's `.git` is a FILE, not a directory, so the `.git` entry above does
-    // not stop the descent. ~keep
-    "worktrees",
-];
-
-/// Dot-directories [`collect_alef_hashes`] descends into despite its blanket dot-directory prune.
-///
-/// The prune exists to keep the walk out of tool caches, but it is a proxy — "starts with a dot"
-/// is not "is a cache" — and alef writes stamped, alef-owned output into several dot-directories:
-/// `.cargo/config.toml` from [`crate::scaffold::scaffold`], and every `SKILL.md` under an agent
-/// skills root. Those files were stamped and then never read back: the walk pruned their parent
-/// before opening them, so `alef verify` could not report them stale no matter how far they
-/// drifted. Refusing to *stamp* them instead would be worse — the stamp is also what makes poly's
-/// built-in generated-file skip leave them alone, so unstamping them hands their formatting to
-/// poly and their staleness to nobody.
-///
-/// Incomplete by construction, and knowingly so: skills roots are pure configuration
-/// (`DocsSkillsConfig::outputs`), so a consumer that writes skills into a dot-directory not named
-/// here is still invisible to the walk. Closing that fully requires the walk to consult the
-/// resolved config, which it currently has no access to. ~keep
-const VERIFY_SCAN_DOT_DIRS: &[&str] = &[
-    ".cargo", ".github",
-    // Agent-skill roots observed in consumer ownership records (`.alef-ownership.toml` lists
-    // `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md`), so these are not speculative:
-    // alef is already writing stamped `SKILL.md` files under them. ~keep
-    ".agents", ".claude", ".codex", ".cursor", ".gemini",
-];
-
-/// Extensions the ownership walk will open. A generated file whose extension is absent here is
-/// invisible to `alef verify` entirely — not reported stale, not reported missing, and not
-/// visible to [`find_stamp_disagreement`] either.
-///
-/// This list is only ONE of two filters. [`collect_alef_hashes`] needs a scanned extension AND
-/// an `alef:hash:` line, so adding an extension does nothing for a language whose emitted files
-/// carry no stamp at all — measured in a consumer repo, `packages/java` and `packages/go` had
-/// ZERO stamped files while `java`/`go` were already listed here. Those are unreachable by any
-/// extension change; see the task tracking per-file stamping.
-///
-/// Scope of what a passing verify proves, because "verify passed" reads as the stronger claim
-/// downstream: the hash covers generation INPUTS, not output bytes. One stamped manifest per
-/// crate therefore detects input drift for that crate's outputs even when the outputs are
-/// unstamped — but a hand-edit to an emitted file leaves inputs untouched and still verifies
-/// fresh. Demonstrated in tslp: a dependency bumped inside a stamped, alef-generated
-/// `Cargo.toml` reports fresh while the committed bytes differ from what alef would emit.
-/// Freshness means the inputs have not moved, not that the file is what the generator writes.
-///
-/// `zig`/`dart`/`kt`/`kts`/`swift`/`gleam` were missing, which meant the cross-artifact straddle
-/// gate could not see the zig side of a zig-vs-FFI-header straddle — the exact artifact pair it
-/// exists to protect. `properties`/`pro`/`sh`/`props` were also stamped-but-unscanned, and
-/// `packages/csharp/Directory.Build.props` is the ONLY stamped file in that whole package, so
-/// csharp's freshness claim rested entirely on a file this walk never opened. Any new emitting
-/// backend must add its extension here or its output silently leaves the
-/// freshness claim.
-///
-/// This list must stay a **superset** of everything
-/// [`crate::cli::pipeline::generate::write::marker_header_syntax`] can stamp. The walk filters on
-/// extension *before* it reads any content, so an unlisted extension is invisible no matter what
-/// marker the file carries. `xml`/`csproj`/`zon`/`cmake`/`gemspec` were added to that emit table
-/// while missing here, which made their freshness claim unverifiable rather than merely
-/// unverified — a stamped file nothing ever checks. ~keep
-const VERIFY_SCAN_EXTENSIONS: &[&str] = &[
-    "rs",
-    "py",
-    "pyi",
-    "ts",
-    "tsx",
-    "js",
-    "mjs",
-    "cjs",
-    "rb",
-    "rbs",
-    "php",
-    "phpstub",
-    "go",
-    "java",
-    "cs",
-    "ex",
-    "exs",
-    "R",
-    "r",
-    "toml",
-    "json",
-    "md",
-    "h",
-    "c",
-    "yaml",
-    "yml",
-    "zig",
-    "dart",
-    "kt",
-    "kts",
-    "swift",
-    "gleam",
-    "properties",
-    "pro",
-    "sh",
-    "props",
-    "xml",
-    "csproj",
-    "zon",
-    "cmake",
-    "gemspec",
-];
-
-/// Dotfiles alef stamps that [`VERIFY_SCAN_EXTENSIONS`] structurally cannot reach: `Path::extension`
-/// returns `None` for a name that is entirely a leading-dot stem, so `.gitignore` has no extension
-/// to match and would stay invisible no matter what is added to that list. Matched on the whole
-/// file name instead.
-///
-/// Extensionless *stamped* files belong here for the same structural reason, not just dotfiles:
-/// `Makefile`, `Rakefile` and `Makevars*` carry a `#` marker but have no extension to match, and
-/// `go.mod` is matched by name rather than by its `mod` extension deliberately — `.mod` is shared
-/// with unrelated binary formats (Fortran module files, tracker music), so listing the extension
-/// would pull those into the walk. ~keep
-const VERIFY_SCAN_FILENAMES: &[&str] = &[
-    ".gitignore",
-    ".gitattributes",
-    ".editorconfig",
-    "Makefile",
-    "GNUmakefile",
-    "makefile",
-    "go.mod",
-    "Rakefile",
-    "Makevars",
-    "Makevars.in",
-    "Makevars.win.in",
-];
-
-/// Walk `base_dir` and return every alef-owned file paired with its optional
-/// `alef:hash:<hex>` stamp. Skips build/cache directories, every directory git considers
-/// ignored (see [`super::verify_gitignore::gitignored_dirs`]), and files without the Alef
-/// ownership marker. Shared by [`verify_walk`] and [`verify_walk_multi`] so both see the same
-/// file set, and by [`super::verify_orphans::find_orphaned_generated_files`] so the orphan
-/// check sees the identical disk-side file set too. ~keep
-pub(crate) fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, Option<String>, String)> {
-    let mut found = Vec::new();
-    let mut stack: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
-    // A gitignored dependency-fetch cache (a zig package manager's local package cache) or
-    // build-output directory (wasm-pack's own `pkg/`, which copies the crate's real,
-    // alef-marked README into a tree this walk otherwise has no reason to open) is neither
-    // this run's generated output nor its generation input -- it must never be read as either.
-    // See that module's doc for the incident this closes. ~keep
-    let gitignored_dirs = super::verify_gitignore::gitignored_dirs(base_dir);
-
-    while let Some(dir) = stack.pop() {
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let file_type = match entry.file_type() {
-                Ok(ft) => ft,
-                Err(_) => continue,
-            };
-            if file_type.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let pruned_as_dotfile = name.starts_with('.') && !VERIFY_SCAN_DOT_DIRS.contains(&name);
-                let pruned_as_gitignored = path
-                    .strip_prefix(base_dir)
-                    .is_ok_and(|relative| gitignored_dirs.contains(relative));
-                if VERIFY_SKIP_DIRS.contains(&name) || pruned_as_dotfile || pruned_as_gitignored {
-                    continue;
-                }
-                stack.push(path);
-                continue;
-            }
-            if !file_type.is_file() {
-                continue;
-            }
-            let name_ok = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| VERIFY_SCAN_FILENAMES.contains(&n));
-            let ext_ok = name_ok
-                || path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| {
-                        VERIFY_SCAN_EXTENSIONS
-                            .iter()
-                            .any(|allowed| allowed.eq_ignore_ascii_case(e))
-                    })
-                    .unwrap_or(false);
-            if !ext_ok {
-                continue;
-            }
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            if crate::core::hash::content_has_alef_marker(&content) {
-                found.push((path, crate::core::hash::extract_hash(&content), content));
-            }
-        }
-    }
-    found
-}
+/// Re-exported so `helpers`' own callers and tests keep one spelling for the ownership walk
+/// after it moved to [`super::verify_scan`]. ~keep
+pub(crate) use super::verify_scan::collect_alef_hashes;
 
 /// A cross-artifact ABI-generation disagreement: two or more alef-owned files
 /// in the tree carry different values for the same `alef:<key>:` stamp (see
@@ -922,24 +703,21 @@ fn stage_failure_for(
     (files, failures)
 }
 
-/// Multi-crate variant of [`verify_walk`].
+/// The stale subset of an ownership walk's output, against every candidate inputs hash.
 ///
-/// Walk the repo from `base_dir`, find every alef-headered file, and return the
-/// list of stale ones. In a multi-crate workspace each file passes when its
-/// content-derived hash matches one crate's generation-input hash.
-pub(crate) fn verify_walk_multi(
-    base_dir: &std::path::Path,
+/// Takes the walk's result rather than a directory so a caller that needs both the staleness
+/// verdict AND the walk's own coverage tally (`alef verify`, via
+/// [`super::verify_scan::scan`]) can get them from ONE walk. Two walks would be two
+/// answers to "what is on disk", free to disagree about the very set the report describes. ~keep
+pub(crate) fn stale_among(
+    scanned: &[(std::path::PathBuf, Option<String>, String)],
     inputs_hashes: &[String],
-) -> anyhow::Result<Vec<StaleMismatch>> {
+) -> Vec<StaleMismatch> {
     if inputs_hashes.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    if inputs_hashes.len() == 1 {
-        return verify_walk(base_dir, &inputs_hashes[0]);
-    }
-
-    let mut stale: Vec<StaleMismatch> = collect_alef_hashes(base_dir)
-        .into_iter()
+    let mut stale: Vec<StaleMismatch> = scanned
+        .iter()
         .filter(|(_, disk_hash, content)| {
             disk_hash.as_ref().is_none_or(|disk_hash| {
                 !inputs_hashes
@@ -949,16 +727,16 @@ pub(crate) fn verify_walk_multi(
         })
         .map(|(path, disk_hash, content)| StaleMismatch {
             path: path.display().to_string(),
-            embedded: disk_hash.unwrap_or_else(|| "<missing>".to_owned()),
+            embedded: disk_hash.clone().unwrap_or_else(|| "<missing>".to_owned()),
             computed: inputs_hashes
                 .iter()
-                .map(|inputs_hash| crate::core::hash::compute_file_hash(inputs_hash, &content))
+                .map(|inputs_hash| crate::core::hash::compute_file_hash(inputs_hash, content))
                 .collect(),
         })
         .collect();
 
     stale.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(stale)
+    stale
 }
 
 /// Walk the consumer's repo from `base_dir`, find every alef-headered file, and
@@ -974,23 +752,14 @@ pub(crate) fn verify_walk_multi(
 /// Cargo.toml templates, composer.json, package.json, lockfiles, etc.) and alef has
 /// no claim. The Ruby gemspec and `.rubocop.yml` are NOT in this category — both carry the
 /// alef header (`generated_header: true`) and are alef-owned, overwritten on every `alef build`.
+///
+/// `cfg(test)` since `alef verify` moved to the single-walk [`stale_among`] path: the writer-side
+/// stamp-scope tests deliberately assert against the reader side's own function rather than a
+/// local restatement of it, so this stays the shared oracle for them even though the command no
+/// longer routes through it. ~keep
+#[cfg(test)]
 pub(crate) fn verify_walk(base_dir: &std::path::Path, inputs_hash: &str) -> anyhow::Result<Vec<StaleMismatch>> {
-    let mut stale: Vec<StaleMismatch> = collect_alef_hashes(base_dir)
-        .into_iter()
-        .filter(|(_, disk_hash, content)| {
-            disk_hash
-                .as_ref()
-                .is_none_or(|disk_hash| crate::core::hash::compute_file_hash(inputs_hash, content) != *disk_hash)
-        })
-        .map(|(path, disk_hash, content)| StaleMismatch {
-            path: path.display().to_string(),
-            embedded: disk_hash.unwrap_or_else(|| "<missing>".to_owned()),
-            computed: vec![crate::core::hash::compute_file_hash(inputs_hash, &content)],
-        })
-        .collect();
-
-    stale.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(stale)
+    Ok(stale_among(&collect_alef_hashes(base_dir), &[inputs_hash.to_owned()]))
 }
 
 #[cfg(test)]

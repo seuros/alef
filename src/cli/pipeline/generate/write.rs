@@ -364,6 +364,21 @@ pub(super) fn marker_header_syntax(path: &Path) -> Option<MarkerSyntax> {
     }
 }
 
+/// Whether [`marker_header_syntax`] can stamp a file at `path` -- i.e. whether alef, having
+/// decided to write this path, would put a provenance marker in its bytes.
+///
+/// Exists so `alef verify`'s ownership walk can derive its scan set from this emit table
+/// instead of carrying a second, hand-maintained copy of it. That copy had already drifted:
+/// `.clang-format` was added here (it is YAML, so `#` applies) while
+/// `bin_cli::verify_scan::VERIFY_SCAN_FILENAMES` was not extended, and a dotfile with a single
+/// leading dot reports no extension -- so every FFI target's stamped `.clang-format` was
+/// written with a marker that nothing ever read back. A file the scan set omits is not merely
+/// unverified, it is unverifiABLE: the walk filters on name and extension before it reads any
+/// content, so the marker inside is unreachable no matter what it says. ~keep
+pub(crate) fn is_markable_path(path: &Path) -> bool {
+    marker_header_syntax(path).is_some()
+}
+
 /// Render the standard alef header as XML/HTML comments.
 ///
 /// Derived from the `//` rendering rather than re-typing the body so the marker
