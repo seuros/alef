@@ -3,11 +3,12 @@ use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{EnumDef, TypeRef};
 use heck::ToLowerCamelCase;
 
-use super::serializers::{gen_sealed_union_deserializer, gen_sealed_union_serializer};
+use super::serializers::{DEFAULT_TAG_FIELD, gen_sealed_union_deserializer, gen_sealed_union_serializer};
 use crate::backends::java::gen_bindings::helpers::{
     RECORD_LINE_WRAP_THRESHOLD, emit_javadoc, escape_javadoc_line, is_tuple_field_name, java_apply_rename_all,
     qualify_shadowed_type, safe_java_field_name,
 };
+use crate::codegen::serde_enum_repr::serde_enum_repr;
 
 /// True when the Java binding backend emits `enum_def` as a plain `enum` with a `getValue()`
 /// accessor (`simple_enum_class.jinja`), rather than a tagged- or untagged-union wrapper class
@@ -127,7 +128,8 @@ fn gen_java_untagged_wrapper(package: &str, enum_def: &EnumDef, main_class: &str
 }
 
 pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String {
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let repr = serde_enum_repr(enum_def);
+    let tag_field = repr.tag().unwrap_or(DEFAULT_TAG_FIELD);
 
     let variant_names: std::collections::HashSet<&str> = enum_def.variants.iter().map(|v| v.name.as_str()).collect();
     let optional_type = if variant_names.contains("Optional") {
@@ -158,10 +160,14 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
             .any(|v| v.fields.iter().any(|f| matches!(&f.ty, TypeRef::Map(_, _))));
     let needs_optional =
         !variant_names.contains("Optional") && enum_def.variants.iter().any(|v| v.fields.iter().any(|f| f.optional));
-    let needs_unwrapped = enum_def
-        .variants
-        .iter()
-        .any(|v| v.fields.len() == 1 && is_tuple_field_name(&v.fields[0].name));
+    // `@JsonTypeInfo(Id.NAME, property = tag)` can only express serde's *internal* shape, so an
+    // adjacently tagged enum must go through the hand-written codecs whatever its variants look
+    // like — otherwise its payload lands beside the tag instead of under the content key. ~keep
+    let needs_unwrapped = repr.content().is_some()
+        || enum_def
+            .variants
+            .iter()
+            .any(|v| v.fields.len() == 1 && is_tuple_field_name(&v.fields[0].name));
 
     let mut imports: Vec<&str> = vec![];
     if needs_json_property {
@@ -368,9 +374,9 @@ pub(crate) fn gen_java_tagged_union(package: &str, enum_def: &EnumDef) -> String
 
     if needs_unwrapped {
         out.push('\n');
-        gen_sealed_union_deserializer(&mut out, package, enum_def, tag_field);
+        gen_sealed_union_deserializer(&mut out, package, enum_def);
         out.push('\n');
-        gen_sealed_union_serializer(&mut out, package, enum_def, tag_field);
+        gen_sealed_union_serializer(&mut out, package, enum_def);
     }
 
     out

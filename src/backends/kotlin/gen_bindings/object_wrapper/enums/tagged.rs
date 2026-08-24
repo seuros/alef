@@ -1,192 +1,105 @@
-use crate::core::ir::{EnumDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
 
 use super::super::types::primitive_type_name;
 use super::is_tuple_field_name;
 use crate::backends::kotlin::gen_bindings::shared::kotlin_field_name_with_type;
+use crate::backends::kotlin::template_env::render;
 use crate::codegen::naming::wire_variant_value;
+use crate::codegen::serde_enum_repr::SerdeEnumRepr;
 
-/// Emit a Jackson `StdSerializer` for an internally-tagged (`#[serde(tag = ...)]`)
-/// sealed class.  The serializer adds the tag field back into the JSON object so
-/// that round-tripping Kotlin → JSON → Rust works correctly.
-///
-/// Strategy:
-/// - For **newtype/tuple variants** (single `_0` field holding an inner type):
-///   serialize `value.field0` as a JSON object tree, then inject the tag field.
-/// - For **named-field struct variants**: serialize the variant data class as a
-///   tree (Jackson sees it as a plain data class), then inject the tag field.
-/// - **Unit variants**: write `{"<tag>": "<discriminator>"}` directly.
-pub(super) fn emit_kotlin_tagged_serializer(out: &mut String, en: &EnumDef, tag_field: &str) {
-    let name = &en.name;
-    out.push('\n');
-    out.push_str("private class ");
-    out.push_str(name);
-    out.push_str("Serializer : com.fasterxml.jackson.databind.ser.std.StdSerializer<");
-    out.push_str(name);
-    out.push_str(">(");
-    out.push_str(name);
-    out.push_str("::class.java) {\n");
-    out.push_str("    @Suppress(\"LongMethod\")\n");
-    out.push_str("    override fun serialize(\n");
-    out.push_str("        value: ");
-    out.push_str(name);
-    out.push_str(",\n");
-    out.push_str("        gen: com.fasterxml.jackson.core.JsonGenerator,\n");
-    out.push_str("        provider: com.fasterxml.jackson.databind.SerializerProvider,\n");
-    out.push_str("    ) {\n");
-    out.push_str("        @Suppress(\"UNCHECKED_CAST\")\n");
-    out.push_str("        val mapper = (gen.codec as? com.fasterxml.jackson.databind.ObjectMapper) ?: com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()\n");
-    out.push_str("        val node: com.fasterxml.jackson.databind.node.ObjectNode = when (value) {\n");
-
-    for variant in &en.variants {
-        let discriminator = wire_variant_value(
-            &variant.name,
-            variant.serde_rename.as_deref(),
-            en.serde_rename_all.as_deref(),
-        );
-        out.push_str("            is ");
-        out.push_str(name);
-        out.push('.');
-        out.push_str(&variant.name);
-        out.push_str(" -> {\n");
-
-        if variant.fields.is_empty() {
-            out.push_str("                val n = mapper.createObjectNode()\n");
-            out.push_str("                n.put(\"");
-            out.push_str(tag_field);
-            out.push_str("\", \"");
-            out.push_str(&discriminator);
-            out.push_str("\")\n");
-            out.push_str("                n\n");
-        } else if variant.fields.len() == 1 && is_tuple_field_name(&variant.fields[0].name) {
-            let field = &variant.fields[0];
-            let field_name = kotlin_field_name_with_type(
-                &field.name,
-                0,
-                match &field.ty {
-                    TypeRef::Named(n) => Some(n.as_str()),
-                    TypeRef::String => Some("String"),
-                    TypeRef::Primitive(p) => Some(primitive_type_name(p)),
-                    _ => None,
-                },
-                &variant.name,
-                1,
-            );
-            out.push_str("                @Suppress(\"UNCHECKED_CAST\")\n");
-            out.push_str(
-                "                val n = mapper.valueToTree<com.fasterxml.jackson.databind.node.ObjectNode>(value.",
-            );
-            out.push_str(&field_name);
-            out.push_str(") as com.fasterxml.jackson.databind.node.ObjectNode\n");
-            out.push_str("                n.put(\"");
-            out.push_str(tag_field);
-            out.push_str("\", \"");
-            out.push_str(&discriminator);
-            out.push_str("\")\n");
-            out.push_str("                n\n");
-        } else {
-            out.push_str("                @Suppress(\"UNCHECKED_CAST\")\n");
-            out.push_str(
-                "                val n = mapper.valueToTree<com.fasterxml.jackson.databind.node.ObjectNode>(value as ",
-            );
-            out.push_str(name);
-            out.push('.');
-            out.push_str(&variant.name);
-            out.push_str(") as com.fasterxml.jackson.databind.node.ObjectNode\n");
-            out.push_str("                n.put(\"");
-            out.push_str(tag_field);
-            out.push_str("\", \"");
-            out.push_str(&discriminator);
-            out.push_str("\")\n");
-            out.push_str("                n\n");
-        }
-
-        out.push_str("            }\n");
-    }
-
-    out.push_str("        }\n");
-    out.push_str("        mapper.writeTree(gen, node)\n");
-    out.push_str("    }\n");
-    out.push_str("}\n");
+/// True when serde writes only the tag for this variant, with no payload of any kind.
+fn is_unit_variant(variant: &EnumVariant) -> bool {
+    variant.fields.is_empty()
 }
 
-/// Emit a Jackson `StdDeserializer` for an internally-tagged (`#[serde(tag = ...)]`)
-/// sealed class.  The deserializer reads the tag field from the JSON object and
-/// dispatches to the correct variant by calling `ctx.readTreeAsValue`.
-pub(super) fn emit_kotlin_tagged_deserializer(out: &mut String, en: &EnumDef, tag_field: &str) {
-    let name = &en.name;
-    out.push('\n');
-    out.push_str("private class ");
-    out.push_str(name);
-    out.push_str("Deserializer : com.fasterxml.jackson.databind.deser.std.StdDeserializer<");
-    out.push_str(name);
-    out.push_str(">(");
-    out.push_str(name);
-    out.push_str("::class.java) {\n");
-    out.push_str("    @Suppress(\"LongMethod\")\n");
-    out.push_str("    override fun deserialize(\n");
-    out.push_str("        parser: com.fasterxml.jackson.core.JsonParser,\n");
-    out.push_str("        ctx: com.fasterxml.jackson.databind.DeserializationContext,\n");
-    out.push_str("    ): ");
-    out.push_str(name);
-    out.push_str(" {\n");
-    out.push_str("        val node = parser.codec.readTree<com.fasterxml.jackson.databind.node.ObjectNode>(parser)\n");
-    out.push_str("        val tag = node.get(\"");
-    out.push_str(tag_field);
-    out.push_str("\")?.asText()\n");
-    out.push_str("        @Suppress(\"UNCHECKED_CAST\")\n");
-    out.push_str(
-        "        val payload = (node.deepCopy() as com.fasterxml.jackson.databind.node.ObjectNode).apply { remove(\"",
-    );
-    out.push_str(tag_field);
-    out.push_str("\") }\n");
-    out.push_str("        return when (tag) {\n");
+/// True when the variant is a newtype (`Variant(Inner)`) rather than a struct variant.
+fn is_newtype_variant(variant: &EnumVariant) -> bool {
+    variant.fields.len() == 1 && is_tuple_field_name(&variant.fields[0].name)
+}
 
-    for variant in &en.variants {
-        let discriminator = wire_variant_value(
+/// The Kotlin expression yielding a variant's payload from the `value` being serialized.
+///
+/// A newtype variant exposes it as the generated property; a struct variant *is* the payload, so
+/// the sealed base is narrowed to the variant subclass instead.
+fn payload_expression(enum_name: &str, variant: &EnumVariant) -> String {
+    if is_newtype_variant(variant) {
+        let field = &variant.fields[0];
+        let field_name = kotlin_field_name_with_type(
+            &field.name,
+            0,
+            match &field.ty {
+                TypeRef::Named(n) => Some(n.as_str()),
+                TypeRef::String => Some("String"),
+                TypeRef::Primitive(p) => Some(primitive_type_name(p)),
+                _ => None,
+            },
             &variant.name,
-            variant.serde_rename.as_deref(),
-            en.serde_rename_all.as_deref(),
+            1,
         );
-        out.push_str("            \"");
-        out.push_str(&discriminator);
-        out.push_str("\" -> ");
-
-        if variant.fields.is_empty() {
-            out.push_str(name);
-            out.push('.');
-            out.push_str(&variant.name);
-            out.push('\n');
-        } else if variant.fields.len() == 1 && is_tuple_field_name(&variant.fields[0].name) {
-            let inner_class = super::kotlin_class_name_for_type(&variant.fields[0].ty);
-            out.push_str(name);
-            out.push('.');
-            out.push_str(&variant.name);
-            out.push_str("(ctx.readTreeAsValue<");
-            out.push_str(&inner_class);
-            out.push_str(">(payload, ");
-            out.push_str(&inner_class);
-            out.push_str("::class.java))\n");
-        } else {
-            out.push_str("ctx.readTreeAsValue<");
-            out.push_str(name);
-            out.push('.');
-            out.push_str(&variant.name);
-            out.push_str(">(payload, ");
-            out.push_str(name);
-            out.push('.');
-            out.push_str(&variant.name);
-            out.push_str("::class.java)\n");
-        }
+        format!("value.{field_name}")
+    } else {
+        format!("value as {enum_name}.{}", variant.name)
     }
+}
 
-    out.push_str("            else -> throw com.fasterxml.jackson.databind.exc.InvalidFormatException(\n");
-    out.push_str("                parser, \"Unknown ");
-    out.push_str(name);
-    out.push_str(" tag\", tag, ");
-    out.push_str(name);
-    out.push_str("::class.java,\n");
-    out.push_str("            )\n");
-    out.push_str("        }\n");
-    out.push_str("    }\n");
-    out.push_str("}\n");
+/// Everything both Jackson codecs need to know about one variant.
+fn variant_contexts(en: &EnumDef) -> Vec<minijinja::Value> {
+    en.variants
+        .iter()
+        .map(|variant| {
+            let discriminator = wire_variant_value(
+                &variant.name,
+                variant.serde_rename.as_deref(),
+                en.serde_rename_all.as_deref(),
+            );
+            let is_tuple = is_newtype_variant(variant);
+            let inner_class = if is_tuple {
+                super::kotlin_class_name_for_type(&variant.fields[0].ty)
+            } else {
+                String::new()
+            };
+            minijinja::context! {
+                name => &variant.name,
+                discriminator => discriminator,
+                is_unit => is_unit_variant(variant),
+                is_tuple => is_tuple,
+                inner_class => inner_class,
+                payload_expression => payload_expression(&en.name, variant),
+            }
+        })
+        .collect()
+}
+
+/// The template context both codecs share.
+///
+/// `payload_reference` is how the deserializer names the payload node: the adjacent form reads it
+/// lazily through a local function, because a unit variant's document has no content key at all.
+fn codec_context(en: &EnumDef, repr: &SerdeEnumRepr) -> minijinja::Value {
+    let is_adjacent = repr.content().is_some();
+    minijinja::context! {
+        class_name => &en.name,
+        tag_field => repr.tag().unwrap_or_default(),
+        content_field => repr.content(),
+        is_adjacent => is_adjacent,
+        needs_content => en.variants.iter().any(|variant| !is_unit_variant(variant)),
+        payload_reference => if is_adjacent { "payload()" } else { "payload" },
+        variants => variant_contexts(en),
+    }
+}
+
+/// Emit a Jackson `StdSerializer` for a tagged (`#[serde(tag = ...)]`) sealed class.
+///
+/// serde's *internal* form carries the payload's fields flat beside the tag, so the payload is
+/// serialized to a tree and the tag injected into it. serde's *adjacent* form
+/// (`#[serde(tag, content)]`) puts the payload whole under the content key instead — which is also
+/// the only form that survives a scalar payload, since the internal path casts the payload tree to
+/// `ObjectNode` and a `String` payload is a `TextNode`. Which form applies comes from
+/// [`SerdeEnumRepr`], never re-derived here. ~keep
+pub(super) fn emit_kotlin_tagged_serializer(out: &mut String, en: &EnumDef, repr: &SerdeEnumRepr) {
+    out.push_str(&render("tagged_serializer.jinja", codec_context(en, repr)));
+}
+
+/// Emit the Jackson `StdDeserializer` mirroring [`emit_kotlin_tagged_serializer`].
+pub(super) fn emit_kotlin_tagged_deserializer(out: &mut String, en: &EnumDef, repr: &SerdeEnumRepr) {
+    out.push_str(&render("tagged_deserializer.jinja", codec_context(en, repr)));
 }

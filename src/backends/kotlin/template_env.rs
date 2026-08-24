@@ -19,6 +19,14 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("empty_class.jinja", include_str!("templates/empty_class.jinja")),
     (
+        "tagged_serializer.jinja",
+        include_str!("templates/tagged_serializer.jinja"),
+    ),
+    (
+        "tagged_deserializer.jinja",
+        include_str!("templates/tagged_deserializer.jinja"),
+    ),
+    (
         "data_class_header.jinja",
         include_str!("templates/data_class_header.jinja"),
     ),

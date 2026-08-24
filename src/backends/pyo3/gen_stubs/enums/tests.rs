@@ -297,3 +297,58 @@ fn emits_factory_stub_even_with_colliding_hand_written_method() {
         "{stub}"
     );
 }
+
+/// The ground truth for the stub below: serde decides where an adjacently tagged variant's payload
+/// goes, and the TypedDict has to describe that document rather than the internal-tagged one.
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", content = "body")]
+enum AdjacentShape {
+    Circle { radius: f64 },
+}
+
+fn adjacent_shape_enum() -> EnumDef {
+    EnumDef {
+        serde_content: Some("body".to_string()),
+        serde_tag: Some("kind".to_string()),
+        ..enum_def(
+            "AdjacentShape",
+            vec![
+                variant("Empty", vec![]),
+                variant("Circle", vec![field("radius", TypeRef::Primitive(PrimitiveType::F64))]),
+            ],
+        )
+    }
+}
+
+#[test]
+fn adjacent_variant_typeddict_nests_the_payload_under_the_content_key() {
+    let stub = gen_enum_stub(&adjacent_shape_enum(), false, &no_dtos());
+    let wire: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&AdjacentShape::Circle { radius: 1.0 }).expect("serializes"))
+            .expect("serde output is JSON");
+    let content_key = wire
+        .as_object()
+        .expect("adjacent tagging writes an object")
+        .keys()
+        .find(|key| key.as_str() != "kind")
+        .expect("serde writes a content key for a data variant");
+
+    assert!(
+        stub.contains("class AdjacentShapeCirclePayload(TypedDict):\n    radius: float"),
+        "a struct variant's payload is an object in its own right and needs its own TypedDict: {stub}"
+    );
+    assert!(
+        stub.contains(&format!(
+            "class AdjacentShapeCircleVariant(TypedDict):\n    kind: Literal[\"Circle\"]\n    {content_key}: AdjacentShapeCirclePayload"
+        )),
+        "the variant TypedDict must nest the payload under serde's content key {content_key:?}: {stub}"
+    );
+    assert!(
+        !stub.contains("class AdjacentShapeCircleVariant(TypedDict):\n    kind: Literal[\"Circle\"]\n    radius:"),
+        "declaring the payload's fields flat beside the tag is serde's *internal* form: {stub}"
+    );
+    assert!(
+        stub.contains("class AdjacentShapeEmptyVariant(TypedDict):\n    kind: Literal[\"Empty\"]\n"),
+        "a unit variant gets no content key at all, because serde writes none: {stub}"
+    );
+}

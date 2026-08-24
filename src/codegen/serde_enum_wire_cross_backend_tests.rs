@@ -190,6 +190,127 @@ fn swift_bridged_output() -> String {
     generate(&SwiftBackend, &bridged_api(), &bridged_config())
 }
 
+/// Isolate the body of one generated per-variant getter, so an assertion cannot be satisfied by a
+/// sibling getter or by the tag getter below them.
+fn pyo3_variant_getter_body(pyo3: &str, getter: &str) -> String {
+    let marker = format!("fn {getter}(&self, py: Python<'_>)");
+    let start = pyo3
+        .find(&marker)
+        .unwrap_or_else(|| panic!("PyO3 emits a `{marker}` getter:\n{pyo3}"));
+    let rest = &pyo3[start..];
+    let end = rest.find("\n    }\n").expect("the getter is closed");
+    rest[..end].to_string()
+}
+
+/// PyO3 does not hand-write the JSON document — serde does, inside the generated Rust — so what it
+/// can get wrong is *where in that document the payload lives*. The adjacent form puts it under the
+/// content key; handing back the whole document returns the tag envelope instead of the payload.
+#[test]
+fn pyo3_variant_getter_returns_the_payload_not_the_tag_envelope() {
+    let pyo3 = generate(&Pyo3Backend, &plain_api(), &ResolvedCrateConfig::default());
+    let data_variant_tag = serde_variant_tags()
+        .into_iter()
+        .find(|tag| {
+            let form: serde_json::Value = serde_json::from_str(
+                &serde_wire_forms()
+                    .into_iter()
+                    .find(|json| json.contains(tag))
+                    .expect("every tag has a wire form"),
+            )
+            .expect("serde output is JSON");
+            form.get(CONTENT_KEY).is_some()
+        })
+        .expect("the fixture has a variant serde gives a content key");
+
+    let body = pyo3_variant_getter_body(&pyo3, &data_variant_tag);
+    assert!(
+        body.contains(&format!("json.get(\"{CONTENT_KEY}\")")),
+        "the getter must read the payload from serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains("let payload = json;"),
+        "handing back the whole serialized document is serde's *internal* form, where the payload's \
+         fields really are flat beside the tag; under adjacent tagging it returns the envelope and \
+         the caller never sees the payload:\n{body}"
+    );
+    assert!(
+        body.contains(&format!("let tag_field = \"{TAG_KEY}\";")),
+        "the getter must still dispatch on serde's tag key:\n{body}"
+    );
+}
+
+fn kotlin_android_union_output() -> String {
+    generate(&KotlinAndroidBackend, &plain_api(), &ResolvedCrateConfig::default())
+}
+
+/// Isolate one generated Jackson codec class, so an assertion cannot be satisfied by a matching
+/// literal in its sibling or elsewhere in the module.
+fn kotlin_codec_body(kotlin: &str, codec: &str) -> String {
+    let marker = format!("private class {ENUM_NAME}{codec} :");
+    let start = kotlin
+        .find(&marker)
+        .unwrap_or_else(|| panic!("Kotlin-Android emits `{marker}`:\n{kotlin}"));
+    let rest = &kotlin[start..];
+    let end = rest.find("\n}\n").expect("the codec class is closed");
+    rest[..end].to_string()
+}
+
+/// The JSON the generated Kotlin serializer writes for each variant, reconstructed from the
+/// emitted code: each `when` arm builds one object node, and whether it also sets the content key
+/// decides whether the payload reaches the wire.
+fn kotlin_emitted_wire_forms(kotlin: &str) -> Vec<String> {
+    let body = kotlin_codec_body(kotlin, "Serializer");
+    assert!(
+        !body.contains("as com.fasterxml.jackson.databind.node.ObjectNode"),
+        "the payload must not be cast to ObjectNode — a newtype variant's `String` payload is a \
+         TextNode, and the cast throws at runtime instead of putting it on the wire:\n{body}"
+    );
+    let payload_json = serde_json::to_string(SAMPLE_PAYLOAD).expect("the string payload serializes");
+    body.split(&format!("n.put(\"{TAG_KEY}\", \""))
+        .skip(1)
+        .map(|chunk| {
+            let (discriminator, rest) = chunk.split_once('"').expect("each tag put is a closed literal");
+            if rest.contains(&format!("(\"{CONTENT_KEY}\",")) {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\",\"{CONTENT_KEY}\":{payload_json}}}")
+            } else {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\"}}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn kotlin_android_serializer_emits_exactly_what_serde_writes() {
+    let emitted = kotlin_emitted_wire_forms(&kotlin_android_union_output());
+    assert_eq!(
+        emitted,
+        serde_wire_forms(),
+        "the generated Jackson serializer must produce serde's adjacent wire form for every \
+         variant; injecting the tag into the payload's own object is serde's *internal* form, \
+         which Rust rejects, and it cannot represent a scalar payload at all"
+    );
+}
+
+#[test]
+fn kotlin_android_deserializer_reads_the_payload_from_serdes_content_key() {
+    let body = kotlin_codec_body(&kotlin_android_union_output(), "Deserializer");
+    assert!(
+        body.contains(&format!("node.get(\"{CONTENT_KEY}\")")),
+        "the deserializer must read the payload from serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains(&format!("remove(\"{TAG_KEY}\")")),
+        "stripping the tag and treating the remainder as the payload is serde's *internal* form; \
+         an adjacently tagged document keeps its payload under the content key:\n{body}"
+    );
+    for tag in serde_variant_tags() {
+        assert!(
+            body.contains(&format!("\"{tag}\" ->")),
+            "the deserializer must dispatch on serde's variant tag {tag:?}:\n{body}"
+        );
+    }
+}
+
 /// Whether a backend already speaks serde's adjacent form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AdjacentSupport {
@@ -197,6 +318,12 @@ enum AdjacentSupport {
     Correct,
     /// Emits the tag key but no content key — serde's *internal* shape, which Rust refuses for an
     /// adjacently tagged enum. The string records where the divergence lives.
+    ///
+    /// Every backend in [`ADJACENT_TAGGING_SUPPORT`] is currently [`AdjacentSupport::Correct`], so
+    /// nothing constructs this today. It is the slot a newly discovered divergence gets recorded
+    /// in — asserted rather than waived — so it stays. Delete this attribute (not the variant) when
+    /// adding such an entry. ~keep
+    #[expect(dead_code, reason = "the recording slot for the next divergence found")]
     KnownDivergent(&'static str),
 }
 
@@ -210,35 +337,10 @@ enum AdjacentSupport {
 const ADJACENT_TAGGING_SUPPORT: &[(&str, AdjacentSupport)] = &[
     ("swift", AdjacentSupport::Correct),
     ("go", AdjacentSupport::Correct),
-    (
-        "java",
-        AdjacentSupport::KnownDivergent(
-            "backends::java::gen_bindings::types::serializers never reads EnumDef::serde_content, \
-             so it writes the payload's fields flat beside the tag and drops a scalar payload \
-             entirely",
-        ),
-    ),
-    (
-        "csharp",
-        AdjacentSupport::KnownDivergent(
-            "backends/csharp/templates/sealed_union_converter.jinja is parameterised by tag_field \
-             alone, so it reads and writes serde's internal shape",
-        ),
-    ),
-    (
-        "kotlin_android",
-        AdjacentSupport::KnownDivergent(
-            "its Jackson adapter removes the tag node and treats the remainder as the payload, \
-             which is serde's internal shape",
-        ),
-    ),
-    (
-        "pyo3",
-        AdjacentSupport::KnownDivergent(
-            "backends::pyo3::gen_stubs::enums builds `{tag_field: variant}` and merges the payload \
-             fields into the same object",
-        ),
-    ),
+    ("java", AdjacentSupport::Correct),
+    ("csharp", AdjacentSupport::Correct),
+    ("kotlin_android", AdjacentSupport::Correct),
+    ("pyo3", AdjacentSupport::Correct),
 ];
 
 /// Every backend whose generated output mentions the serde tag key at all, whether or not it
@@ -414,5 +516,169 @@ fn support_table_matches_what_each_backend_actually_emits() {
                  start guarding it. Recorded divergence: {where_}"
             ),
         }
+    }
+}
+
+fn java_union_output() -> String {
+    generate(&JavaBackend, &plain_api(), &ResolvedCrateConfig::default())
+}
+
+/// Isolate the body of the generated Jackson serializer so an assertion cannot be satisfied by a
+/// matching literal elsewhere in the file.
+fn java_serialize_body(java: &str) -> String {
+    let start = java
+        .find(&format!("public void serialize({ENUM_NAME} value"))
+        .expect("Java emits a Jackson serializer for the sealed union");
+    let rest = &java[start..];
+    let end = rest.find("\n  }\n").expect("the serialize method is closed");
+    rest[..end].to_string()
+}
+
+/// The JSON the generated Java serializer writes for each variant, reconstructed from the emitted
+/// code rather than restated: the `instanceof` chain supplies each variant's tag and whether it
+/// sets a payload, and the writer block below it supplies where that payload lands.
+fn java_emitted_wire_forms(java: &str) -> Vec<String> {
+    let body = java_serialize_body(java);
+    assert!(
+        body.contains(&format!("gen.writeStringField(\"{TAG_KEY}\", tag);")),
+        "the serializer must write the variant tag under serde's tag key:\n{body}"
+    );
+    assert!(
+        body.contains(&format!("gen.writeFieldName(\"{CONTENT_KEY}\");"))
+            && body.contains("gen.writeTree(MAPPER.valueToTree(inner));"),
+        "the serializer must write the payload whole under serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains("isObject()"),
+        "the payload must not be written only when it happens to be a JSON object — a newtype \
+         variant hands the serializer a bare scalar, and gating on isObject() discards it \
+         silently:\n{body}"
+    );
+    let payload_json = serde_json::to_string(SAMPLE_PAYLOAD).expect("the string payload serializes");
+    body.split("tag = \"")
+        .skip(1)
+        .map(|chunk| {
+            let (discriminator, rest) = chunk.split_once('"').expect("each tag assignment is a closed literal");
+            if rest.contains("inner = null;") {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\"}}")
+            } else {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\",\"{CONTENT_KEY}\":{payload_json}}}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn java_serializer_emits_exactly_what_serde_writes() {
+    let emitted = java_emitted_wire_forms(&java_union_output());
+    assert_eq!(
+        emitted,
+        serde_wire_forms(),
+        "the generated Jackson serializer must produce serde's adjacent wire form for every \
+         variant; flattening the payload beside the tag is serde's *internal* form, which Rust \
+         rejects, and a scalar payload has no fields to flatten so it was dropped outright"
+    );
+}
+
+fn csharp_union_output() -> String {
+    generate(&CsharpBackend, &plain_api(), &ResolvedCrateConfig::default())
+}
+
+/// Isolate the body of the generated `Write` method, so an assertion cannot be satisfied by a
+/// matching literal in the reader above it.
+fn csharp_write_body(csharp: &str) -> String {
+    let start = csharp
+        .find("public override void Write(")
+        .expect("C# emits a JsonConverter for the sealed union");
+    let rest = &csharp[start..];
+    let end = rest.find("\n    }\n").expect("the Write method is closed");
+    rest[..end].to_string()
+}
+
+/// The JSON the generated C# converter writes for each variant, reconstructed from the emitted
+/// code: the `switch` supplies each variant's tag and whether it sets a payload, and the writer
+/// block below it supplies where that payload lands.
+fn csharp_emitted_wire_forms(csharp: &str) -> Vec<String> {
+    let body = csharp_write_body(csharp);
+    assert!(
+        body.contains(&format!("writer.WriteString(\"{TAG_KEY}\", tag);")),
+        "the converter must write the variant tag under serde's tag key:\n{body}"
+    );
+    assert!(
+        body.contains(&format!("writer.WritePropertyName(\"{CONTENT_KEY}\");"))
+            && body.contains("JsonSerializer.Serialize(writer, inner, inner.GetType(), options);"),
+        "the converter must write the payload whole under serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains("JsonValueKind.Object"),
+        "the payload must not be written only when it happens to be a JSON object — a newtype \
+         variant hands the converter a bare scalar, and gating on ValueKind discarded it \
+         silently:\n{body}"
+    );
+    let payload_json = serde_json::to_string(SAMPLE_PAYLOAD).expect("the string payload serializes");
+    body.split("tag = \"")
+        .skip(1)
+        .map(|chunk| {
+            let (discriminator, rest) = chunk.split_once('"').expect("each tag assignment is a closed literal");
+            if rest.contains("inner = null;") {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\"}}")
+            } else {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\",\"{CONTENT_KEY}\":{payload_json}}}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn csharp_converter_emits_exactly_what_serde_writes() {
+    let emitted = csharp_emitted_wire_forms(&csharp_union_output());
+    assert_eq!(
+        emitted,
+        serde_wire_forms(),
+        "the generated System.Text.Json converter must produce serde's adjacent wire form for \
+         every variant; flattening the payload beside the tag is serde's *internal* form, which \
+         Rust rejects, and a scalar payload has no fields to flatten so it was dropped outright"
+    );
+}
+
+#[test]
+fn csharp_converter_reads_the_payload_from_serdes_content_key() {
+    let csharp = csharp_union_output();
+    assert!(
+        csharp.contains(&format!(
+            "root.TryGetProperty(\"{CONTENT_KEY}\", out var contentElement)"
+        )),
+        "the converter must read the payload from serde's content key:\n{csharp}"
+    );
+    assert!(
+        !csharp.contains(&format!("prop.Name != \"{TAG_KEY}\"")),
+        "reassembling the payload from every field that is not the tag is serde's *internal* \
+         form; an adjacently tagged document keeps its payload under the content key:\n{csharp}"
+    );
+    for tag in serde_variant_tags() {
+        assert!(
+            csharp.contains(&format!("\"{tag}\" =>")),
+            "the converter must dispatch on serde's variant tag {tag:?}:\n{csharp}"
+        );
+    }
+}
+
+#[test]
+fn java_deserializer_reads_the_payload_from_serdes_content_key() {
+    let java = java_union_output();
+    assert!(
+        java.contains(&format!("node.get(\"{CONTENT_KEY}\")")),
+        "the deserializer must read the payload from serde's content key:\n{java}"
+    );
+    assert!(
+        !java.contains(&format!("node.remove(\"{TAG_KEY}\")")),
+        "stripping the tag and reading the remainder as the payload is serde's *internal* form; \
+         an adjacently tagged document keeps its payload under the content key:\n{java}"
+    );
+    for tag in serde_variant_tags() {
+        assert!(
+            java.contains(&format!("case \"{tag}\" ->")),
+            "the deserializer must dispatch on serde's variant tag {tag:?}:\n{java}"
+        );
     }
 }

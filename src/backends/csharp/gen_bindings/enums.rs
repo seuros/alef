@@ -3,7 +3,12 @@
 use super::{csharp_file_header, is_tuple_field};
 use crate::backends::csharp::type_map::csharp_type;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name, wire_variant_value};
+use crate::codegen::serde_enum_repr::SerdeEnumRepr;
 use crate::core::ir::EnumDef;
+
+/// `[JsonPolymorphic]`'s default discriminator name, kept for enums that reach the union path
+/// without declaring a serde tag.
+const DEFAULT_TAG_FIELD: &str = "type";
 
 pub(super) fn gen_enum(enum_def: &EnumDef, namespace: &str, text_types: &[String]) -> String {
     use crate::backends::csharp::template_env::render;
@@ -110,7 +115,7 @@ pub(super) fn gen_enum(enum_def: &EnumDef, namespace: &str, text_types: &[String
 fn gen_tagged_union(enum_def: &EnumDef, namespace: &str) -> String {
     use crate::backends::csharp::template_env::render;
 
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let repr = crate::codegen::serde_enum_repr::serde_enum_repr(enum_def);
     let enum_pascal = csharp_type_name(&enum_def.name);
     let ns = namespace;
 
@@ -288,7 +293,7 @@ fn gen_tagged_union(enum_def: &EnumDef, namespace: &str) -> String {
     out.push_str("}\n");
 
     out.push('\n');
-    gen_sealed_union_converter(&mut out, namespace, enum_def, tag_field);
+    gen_sealed_union_converter(&mut out, namespace, enum_def, &repr);
 
     out
 }
@@ -310,7 +315,10 @@ fn gen_tagged_union(enum_def: &EnumDef, namespace: &str) -> String {
 /// because the variant's nested record expects its fields as JSON members but doesn't know to
 /// ignore the discriminator. This converter manually parses the JSON, reads the discriminator,
 /// removes it, and deserializes the remaining fields into the appropriate variant type.
-fn gen_sealed_union_converter(out: &mut String, _namespace: &str, enum_def: &EnumDef, tag_field: &str) {
+///
+/// `#[serde(tag, content)]` puts the payload whole under the content key instead, so the same
+/// converter is parameterised by [`SerdeEnumRepr`] rather than by the tag alone. ~keep
+fn gen_sealed_union_converter(out: &mut String, _namespace: &str, enum_def: &EnumDef, repr: &SerdeEnumRepr) {
     use crate::backends::csharp::template_env::render;
     use minijinja::Value;
 
@@ -343,7 +351,9 @@ fn gen_sealed_union_converter(out: &mut String, _namespace: &str, enum_def: &Enu
         "sealed_union_converter.jinja",
         Value::from_serialize(serde_json::json!({
             "class_name": class_name,
-            "tag_field": tag_field,
+            "tag_field": repr.tag().unwrap_or(DEFAULT_TAG_FIELD),
+            "content_field": repr.content(),
+            "is_adjacent": repr.content().is_some(),
             "variants": variants,
         })),
     ));

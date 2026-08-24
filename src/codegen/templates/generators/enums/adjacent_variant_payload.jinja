@@ -1,0 +1,4 @@
+        let payload = match json.get("{{ content_field }}") {
+            Some(value) => value.clone(),
+            None => serde_json::json!({}),
+        };

@@ -1,6 +1,6 @@
 use super::{pyi_docstring, python_safe_name};
 use crate::backends::pyo3::type_map::python_type;
-use crate::core::ir::{EnumDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, TypeRef};
 use ahash::AHashSet;
 
 /// Map a data-enum factory-constructor param type to its stub annotation, widening dataclass-backed
@@ -59,9 +59,40 @@ pub(super) fn gen_enum_stub(enum_def: &EnumDef, emit_docstrings: bool, coercible
     lines.join("\n")
 }
 
+/// serde's default discriminator key, kept for enums that reach the tagged path without one.
+const DEFAULT_TAG_FIELD: &str = "type";
+
+/// The stub annotation for an adjacently tagged variant's payload, or `None` when the variant is
+/// a unit variant and serde writes no content key for it at all.
+///
+/// A struct variant's payload is an object of its own named fields, which a TypedDict cannot spell
+/// inline, so a companion TypedDict is emitted into `lines` and referenced by name.
+fn adjacent_payload_type(lines: &mut Vec<String>, enum_def: &EnumDef, variant: &EnumVariant) -> Option<String> {
+    if variant.fields.is_empty() {
+        return None;
+    }
+    if variant.is_tuple && variant.fields.len() == 1 {
+        return Some(python_type(&variant.fields[0].ty));
+    }
+    let payload_class = format!("{}{}Payload", enum_def.name, variant.name);
+    lines.push(format!("class {payload_class}(TypedDict):"));
+    for field in &variant.fields {
+        let field_type = python_type(&field.ty);
+        let field_type = if field.optional && !field_type.contains("| None") {
+            format!("{field_type} | None")
+        } else {
+            field_type
+        };
+        lines.push(format!("    {}: {}", python_safe_name(&field.name), field_type));
+    }
+    lines.push(String::new());
+    Some(payload_class)
+}
+
 /// Generate TypedDicts for each variant of a data enum, plus a Union type alias.
 fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercible_dtos: &AHashSet<&str>) {
-    let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let repr = crate::codegen::serde_enum_repr::serde_enum_repr(enum_def);
+    let tag_field = repr.tag().unwrap_or(DEFAULT_TAG_FIELD);
     let rename_all = enum_def.serde_rename_all.as_deref();
 
     let mut variant_class_names = vec![];
@@ -73,18 +104,33 @@ fn gen_data_enum_typeddicts(lines: &mut Vec<String>, enum_def: &EnumDef, coercib
         let tag_value =
             crate::codegen::naming::wire_variant_value(&variant.name, variant.serde_rename.as_deref(), rename_all);
 
+        // serde's adjacent form nests the whole payload under the content key, so the variant's
+        // TypedDict declares that one key. A struct variant's payload is an object in its own
+        // right and gets its own TypedDict; a newtype variant's is whatever it wraps. ~keep
+        let payload_type_name = repr
+            .content()
+            .and_then(|_| adjacent_payload_type(lines, enum_def, variant));
+
         lines.push(format!("class {}(TypedDict):", class_name));
 
         lines.push(format!("    {}: Literal[\"{}\"]", tag_field, tag_value));
 
-        for field in &variant.fields {
-            let field_type = python_type(&field.ty);
-            let field_type = if field.optional && !field_type.contains("| None") {
-                format!("{} | None", field_type)
-            } else {
-                field_type
-            };
-            lines.push(format!("    {}: {}", python_safe_name(&field.name), field_type));
+        match (repr.content(), payload_type_name) {
+            (Some(content_field), Some(payload_type)) => {
+                lines.push(format!("    {content_field}: {payload_type}"));
+            }
+            (Some(_), None) => {}
+            (None, _) => {
+                for field in &variant.fields {
+                    let field_type = python_type(&field.ty);
+                    let field_type = if field.optional && !field_type.contains("| None") {
+                        format!("{} | None", field_type)
+                    } else {
+                        field_type
+                    };
+                    lines.push(format!("    {}: {}", python_safe_name(&field.name), field_type));
+                }
+            }
         }
 
         lines.push("".to_string());
