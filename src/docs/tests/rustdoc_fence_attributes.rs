@@ -74,6 +74,7 @@ fn audit_unknown_language_messages(page: &str) -> Vec<String> {
         include_base_paths: Vec::new(),
         configured_references: Vec::new(),
         exclude: Vec::new(),
+        ..AuditConfig::default()
     });
     report
         .issues

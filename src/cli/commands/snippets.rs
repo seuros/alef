@@ -8,6 +8,7 @@ use crate::snippets::runner::{RunnerConfig, run_validation};
 use crate::snippets::session::SessionSpec;
 use crate::snippets::types::{Language, SideEffectClass, SnippetStatus, ValidationLevel};
 use crate::snippets::validators::ValidatorRegistry;
+use accounting::{AuditOutcome, accounting_scope_line, audit_outcome, configured_curated_paths};
 use clap::Subcommand;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -58,6 +59,17 @@ pub enum SnippetsAction {
 
         #[arg(long)]
         require_frontmatter: bool,
+
+        /// Read `[crates.e2e.snippets].curated_snippets` from this config to tell a
+        /// deliberately hand-authored snippet apart from an unaccounted coverage gap.
+        ///
+        /// Optional, unlike `check`'s `--config`, because `audit`'s inputs are the explicit
+        /// `--snippets`/`--docs` roots and every structural check runs without configuration.
+        /// Only the accounting pass needs it — and it is skipped, by name, when this is unset,
+        /// rather than silently reporting every hand-authored file as a gap or reporting a
+        /// clean accounting it never computed. ~keep
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 
     /// Coverage gap report (unreferenced snippets, missing language variants).
@@ -105,7 +117,8 @@ pub fn run(action: SnippetsAction) -> ExitCode {
             snippets,
             docs,
             require_frontmatter,
-        } => run_audit(&snippets, &docs, require_frontmatter),
+            config,
+        } => run_audit(&snippets, &docs, require_frontmatter, config.as_deref()),
         SnippetsAction::Gaps {
             snippets,
             docs,
@@ -314,6 +327,13 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         .iter()
         .map(|(name, collection_root)| (name.clone(), root.join(collection_root)))
         .collect();
+    let curated_paths = match configured_curated_paths(config_path) {
+        Ok(curated) => curated,
+        Err(error) => {
+            tracing::error!("resolving curated snippet declaration: {error:#}");
+            return ExitCode::FAILURE;
+        }
+    };
     let (audit_failure, gap_failure) = match run_configured_audit_and_gaps(&ConfiguredCheckInputs {
         snippet_directories: &snippet_directories,
         docs_directories: &docs_directories,
@@ -321,6 +341,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         configured_include_base_paths: &config.include_base_paths,
         required_languages: &required_languages,
         exclude: &excluded_paths,
+        curated_paths: &curated_paths,
         readme: crate_config.readme.as_ref(),
         content_collections: &content_collections,
         workspace_root: root,
@@ -372,6 +393,9 @@ struct ConfiguredCheckInputs<'a> {
     configured_include_base_paths: &'a [PathBuf],
     required_languages: &'a [Language],
     exclude: &'a [PathBuf],
+    /// Already-resolved `[crates.e2e.snippets].curated_snippets` paths, spelled the way the
+    /// snippet-root walk produces them.
+    curated_paths: &'a [PathBuf],
     readme: Option<&'a crate::core::config::ReadmeConfig>,
     /// Astro content collection names mapped to their already-resolved roots.
     content_collections: &'a std::collections::BTreeMap<String, PathBuf>,
@@ -415,8 +439,11 @@ struct ConfiguredCheckInputs<'a> {
 fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::Result<(bool, bool)> {
     let mut configured_references =
         crate::snippets::gaps::readme_snippet_references(inputs.workspace_root, inputs.readme);
-    configured_references
-        .extend(crate::snippets::gaps::coverage_ledger_references_allowing_missing_cells(inputs.snippet_directories)?);
+    // Kept apart from the wider reference list: accounting asks specifically whether ALEF
+    // generated a file, which a README mapping or an Astro collection query never answers. ~keep
+    let generated_paths =
+        crate::snippets::gaps::coverage_ledger_references_allowing_missing_cells(inputs.snippet_directories)?;
+    configured_references.extend(generated_paths.iter().cloned());
     configured_references.extend(crate::snippets::gaps::astro_collection_references(
         inputs.docs_directories,
         inputs.content_collections,
@@ -432,6 +459,11 @@ fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::
             include_base_paths: inputs.include_base_paths.to_vec(),
             configured_references: configured_references.clone(),
             exclude: inputs.exclude.to_vec(),
+            accounting: crate::snippets::audit::SnippetAccounting {
+                generated_paths: generated_paths.clone(),
+                curated_paths: inputs.curated_paths.to_vec(),
+                enabled: !generated_paths.is_empty(),
+            },
         }))
     };
 
@@ -686,26 +718,33 @@ fn audit_scope_summary(docs_dirs: &[PathBuf]) -> &'static str {
     }
 }
 
-fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatter: bool) -> ExitCode {
+fn run_audit(
+    snippet_dirs: &[PathBuf],
+    docs_dirs: &[PathBuf],
+    require_frontmatter: bool,
+    config_path: Option<&Path>,
+) -> ExitCode {
     if let Err(code) = reject_missing_configured_directories(snippet_dirs, docs_dirs) {
         return code;
     }
-    let configured_references = match crate::snippets::gaps::coverage_ledger_references(snippet_dirs) {
-        Ok(references) => references,
+    let AuditOutcome {
+        report,
+        accounting_enabled,
+    } = match audit_outcome(snippet_dirs, docs_dirs, require_frontmatter, config_path) {
+        Ok(outcome) => outcome,
         Err(error) => {
-            tracing::error!("reading generated snippet coverage: {error}");
+            tracing::error!("auditing snippets: {error:#}");
             return ExitCode::FAILURE;
         }
     };
-    let config = AuditConfig {
-        docs_dirs: docs_dirs.to_vec(),
-        snippet_dirs: snippet_dirs.to_vec(),
-        require_frontmatter,
-        include_base_paths: docs_dirs.to_vec(),
-        configured_references,
-        exclude: Vec::new(),
-    };
-    let report = audit(&config);
+    crate::bin_cli::output::line(accounting_scope_line(
+        config_path,
+        accounting_enabled,
+        report.curated.len(),
+    ));
+    for path in &report.curated {
+        crate::bin_cli::output::line(format!("  curated {}", path.display()));
+    }
     if report.issues.is_empty() {
         crate::bin_cli::output::line(audit_scope_summary(docs_dirs));
         return ExitCode::SUCCESS;
@@ -870,6 +909,8 @@ fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
     }
     ExitCode::FAILURE
 }
+
+mod accounting;
 
 #[cfg(test)]
 mod tests;

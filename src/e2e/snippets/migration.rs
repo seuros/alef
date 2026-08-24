@@ -206,6 +206,12 @@ fn read_directory(root: &Path, directory: &Path, files: &mut Vec<(PathBuf, Strin
             read_directory(root, &entry.path(), files)?;
         } else if file_type.is_file() {
             let path = entry.path();
+            // alef's own coverage ledger is bookkeeping, not a snippet, and it is never in the
+            // generated file list -- so leaving it in reported it as `no_generated_equivalent`,
+            // i.e. as a migration gap the project was expected to close by hand. ~keep
+            if crate::e2e::snippets::is_snippet_coverage_manifest_path(&path) {
+                continue;
+            }
             let relative = path
                 .strip_prefix(root)
                 .with_context(|| format!("failed to relativize {}", path.display()))?
@@ -454,6 +460,30 @@ mod tests {
                 },
             ],
             "a file alef itself generates must never be reported as having no generated equivalent"
+        );
+    }
+
+    /// alef's own coverage ledger is not a snippet and alef never lists it among the files it
+    /// generates, so a comparison that walked it reported it as `no_generated_equivalent` --
+    /// telling the project to hand-author a replacement for alef's own bookkeeping.
+    #[test]
+    fn the_coverage_ledger_is_not_reported_as_a_migration_gap() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let existing_root = directory.path();
+        fs::create_dir_all(existing_root.join("generated")).expect("create generated tree");
+        fs::write(existing_root.join("generated/.alef-snippet-coverage.json"), "{}").expect("write ledger");
+        fs::write(existing_root.join("orphan.md"), "by hand").expect("write orphan snippet");
+
+        let entries = compare_root(existing_root, &existing_root.join("generated"), &[]).expect("compare snippets");
+
+        assert_eq!(
+            entries,
+            vec![MigrationEntry {
+                path: PathBuf::from("orphan.md"),
+                status: MigrationStatus::NoGeneratedEquivalent,
+                curated: false,
+            }],
+            "alef's own coverage ledger must never be reported as a file the project should author"
         );
     }
 
