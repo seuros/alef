@@ -660,3 +660,42 @@ fn test_enum_variant_with_since_renders_inline_in_table() {
         "variant deprecated note must appear inline in table, got:\n{content}"
     );
 }
+
+/// A configured umbrella that is not `full` must document the items its members gate.
+///
+/// `cfg_feature_satisfied` hard-codes exactly one universal umbrella (`full`), so a binding
+/// configured with a core-crate aggregate such as `wasm-target` used to have every
+/// `#[cfg(feature = "<member>")]` item filtered out of its reference page — while the backend it
+/// documents kept them, because `expand_configured_features` resolves the aggregate through the
+/// core crate's own `[features]` table. Docs must read from the identical derivation or the page
+/// contradicts the binding beside it. ~keep
+#[test]
+fn effective_docs_features_expands_a_configured_core_aggregate() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let core_dir = directory.path().join("crates").join("mylib");
+    std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+    std::fs::write(
+        core_dir.join("Cargo.toml"),
+        "[package]\nname = \"mylib\"\n\n[features]\ndefault = []\n\
+         wasm-target = [\"tree-sitter\"]\ntree-sitter = []\nunrelated = []\n",
+    )
+    .expect("write core Cargo.toml");
+
+    let mut config = cfg_gating_config();
+    config.workspace_root = Some(directory.path().to_path_buf());
+    config.sources = vec![std::path::PathBuf::from("crates/mylib/src/lib.rs")];
+
+    let features =
+        crate::docs::language_pages::effective_docs_features(&make_minimal_api("0.1.0"), &config, Language::Wasm);
+
+    assert!(
+        features.iter().any(|feature| feature == "tree-sitter"),
+        "`wasm-target` enables `tree-sitter` in the core crate's [features] table, so the docs \
+         feature set must contain it, got {features:?}"
+    );
+    assert!(
+        !features.iter().any(|feature| feature == "unrelated"),
+        "expansion must follow the feature graph, not sweep in every declared feature, got \
+         {features:?}"
+    );
+}
