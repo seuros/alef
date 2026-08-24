@@ -58,7 +58,12 @@ pub(super) fn run(cmd: &str, expected_version: &str) -> anyhow::Result<()> {
 /// Extract the version number from `flutter_rust_bridge_codegen --version` output, which is
 /// clap's default `<binary-name> <version>` format (e.g. `"flutter_rust_bridge_codegen 2.13.0\n"`).
 fn parse_version(output: &str) -> Option<String> {
-    output.lines().next()?.split_whitespace().next_back().map(str::to_string)
+    output
+        .lines()
+        .next()?
+        .split_whitespace()
+        .next_back()
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -136,6 +141,9 @@ mod tests {
     fn run_is_ok_when_binary_is_not_on_path() {
         let result = run("alef-frb-version-check-intentionally-not-on-path-xyz789", "2.13.0");
 
-        assert!(result.is_ok(), "a missing binary must not be treated as a mismatch: {result:?}");
+        assert!(
+            result.is_ok(),
+            "a missing binary must not be treated as a mismatch: {result:?}"
+        );
     }
 }
