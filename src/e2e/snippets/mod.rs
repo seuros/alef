@@ -76,6 +76,22 @@ const SERDE_JSON_REQUIREMENT: &str = "crate:serde_json";
 /// resolve the attribute macro (E0433) before any of its actual content is checked.
 const TOKIO_REQUIREMENT: &str = "crate:tokio";
 
+/// `streaming_assertions::StreamingFieldResolver::collect_snippet` drains a Rust stream through ~keep
+/// `tokio_stream::StreamExt`, so a streaming fixture's snippet names a crate no fixture config
+/// declares — alef's own recipe is what put the path there. Spelled with the package's real
+/// hyphenated name, because that is what `[dependencies]` has to resolve on the registry; the
+/// `tokio_stream::` the body writes is the underscored lib name Cargo derives from it.
+const TOKIO_STREAM_REQUIREMENT: &str = "crate:tokio-stream";
+
+/// The crates alef's own Rust snippet recipes name in a body, keyed by the text that proves the
+/// body names them. Fixture config never mentions these: the recipe emitted the path, so the
+/// recipe owes the dependency. ~keep
+pub(crate) const RUST_BODY_CRATE_REQUIREMENTS: &[(&str, &str)] = &[
+    ("serde_json::", SERDE_JSON_REQUIREMENT),
+    ("#[tokio::main]", TOKIO_REQUIREMENT),
+    ("tokio_stream::", TOKIO_STREAM_REQUIREMENT),
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct SnippetCoverageKey {
     pub fixture_id: String,
@@ -712,17 +728,12 @@ fn snippet_requirements(fixture: &Fixture, target: &str, body: &str) -> Vec<Stri
     if target == "rust" && fixture.visitor.is_some() && !requirements.iter().any(|value| value == "feature:visitor") {
         requirements.push("feature:visitor".to_string());
     }
-    if generator_name(target) == "rust"
-        && body.contains("serde_json::")
-        && !requirements.iter().any(|value| value == SERDE_JSON_REQUIREMENT)
-    {
-        requirements.push(SERDE_JSON_REQUIREMENT.to_string());
-    }
-    if generator_name(target) == "rust"
-        && body.contains("#[tokio::main]")
-        && !requirements.iter().any(|value| value == TOKIO_REQUIREMENT)
-    {
-        requirements.push(TOKIO_REQUIREMENT.to_string());
+    if generator_name(target) == "rust" {
+        for (marker, requirement) in RUST_BODY_CRATE_REQUIREMENTS {
+            if body.contains(marker) && !requirements.iter().any(|value| value == requirement) {
+                requirements.push((*requirement).to_string());
+            }
+        }
     }
     requirements
 }

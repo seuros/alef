@@ -223,6 +223,7 @@ impl RustValidator {
         match name {
             "serde_json" => Some(crate::core::template_versions::cargo::SERDE_JSON),
             "tokio" => Some(crate::core::template_versions::cargo::TOKIO),
+            "tokio-stream" => Some(crate::core::template_versions::cargo::TOKIO_STREAM),
             _ => None,
         }
     }
@@ -757,6 +758,39 @@ mod tests {
             manifest.contains("tokio = { version = \"1\", features = [\"full\"] }"),
             "tokio must be pinned with the features `#[tokio::main]` needs: {manifest}"
         );
+    }
+
+    /// `tokio-stream` is the package name Cargo has to resolve on the registry; the body writes
+    /// the `tokio_stream` lib name Cargo derives from it. Getting the two the wrong way round
+    /// still passes every generator-side check and fails only here, on resolution. ~keep
+    #[test]
+    fn a_declared_stream_requirement_enters_the_manifest_under_its_package_name() {
+        let mut declared = snippet("fn main() {}");
+        declared.metadata.requires = vec!["crate:tokio-stream".into()];
+
+        let manifest = RustValidator::cargo_manifest(&[&declared], None).expect("manifest renders");
+
+        assert!(
+            manifest.contains("tokio-stream = \"0.1\""),
+            "the streaming recipe's crate must be pinned under its hyphenated package name: {manifest}"
+        );
+    }
+
+    /// The two halves of this contract live in different modules: `e2e::snippets` decides which
+    /// crate requirement a body earns, and this validator decides what a requirement resolves to.
+    /// A requirement no version table knows fails the whole snippet at manifest-render time. ~keep
+    #[test]
+    fn every_crate_requirement_the_generator_attaches_resolves_to_a_pinned_version() {
+        for (marker, requirement) in crate::e2e::snippets::RUST_BODY_CRATE_REQUIREMENTS {
+            let name = requirement
+                .strip_prefix(crate::e2e::snippets::CRATE_REQUIREMENT_PREFIX)
+                .unwrap_or_else(|| panic!("`{requirement}` (attached for `{marker}`) is not a crate requirement"));
+            assert!(
+                RustValidator::pinned_dependency_version(name).is_some(),
+                "a Rust body containing `{marker}` is given `{requirement}`, but this validator \
+                 cannot pin `{name}`, so the snippet's manifest never renders"
+            );
+        }
     }
 
     #[test]
