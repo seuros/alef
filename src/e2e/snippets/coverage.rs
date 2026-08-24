@@ -18,75 +18,139 @@ pub fn normalize(mut ledger: SnippetCoverageLedger) -> SnippetCoverageLedger {
 }
 
 /// Resolve `[crates.e2e.snippets].curated_snippets` glob patterns against the files that
-/// actually exist under `output`, returning every relative path claimed as curated.
+/// actually exist under `project_root`, returning every project-root-relative path claimed
+/// as curated.
+///
+/// Patterns are resolved against the PROJECT ROOT -- the directory holding `alef.toml` --
+/// and not against `[crates.e2e.snippets].output`. That is the base `output` itself is
+/// written in, so a curated declaration and the generated tree share one key space, the same
+/// invariant [`super::migration::nested_prefix`] enforces for the migration comparison.
+/// Resolving against `output` could only ever name files INSIDE the generated tree, and
+/// hand-authored snippets characteristically sit beside it rather than within it (a
+/// `docs/snippets/cli/` next to `output = "docs/snippets/generated"`); measured across three
+/// consumer trees, every hand-authored snippet was outside `output`, so an `output`-relative
+/// glob could not name a single one of the files the declaration exists to cover. ~keep
 ///
 /// Anti-vacuity by construction: a pattern that matches no file is refused with an error
 /// naming the pattern rather than silently contributing nothing to `curated_paths`. Without
 /// this, a glob typo (a misspelled directory, a pattern anchored the wrong way) would parse
 /// cleanly, mark nothing as curated, and leave every one of the files it was meant to cover
 /// still reported as an unaccounted gap -- the exact defect class this declaration exists to
-/// close. A pattern matching a path this run itself generated is refused for the same
-/// reason in the other direction: a curated declaration must never silently annex alef's own
-/// output.
-pub fn resolve_curated_snippet_paths(
-    output: &Path,
-    patterns: &[String],
-    generated_paths: &[PathBuf],
-) -> Result<Vec<PathBuf>> {
+/// close.
+///
+/// # Errors
+///
+/// Returns an error for an unparseable pattern, a pattern that escapes `project_root` or is
+/// absolute, a pattern matching no file on disk, or an unreadable directory.
+pub fn resolve_curated_snippet_paths(project_root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
     if patterns.is_empty() {
         return Ok(Vec::new());
     }
-    let generated: BTreeSet<&Path> = generated_paths.iter().map(PathBuf::as_path).collect();
-    let existing = existing_relative_files(output)?;
+    let project_root = if project_root.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        project_root
+    };
     let mut curated = BTreeSet::new();
     for pattern in patterns {
+        reject_escaping_pattern(pattern)?;
         let compiled =
             glob::Pattern::new(pattern).with_context(|| format!("invalid curated snippet glob `{pattern}`"))?;
-        let mut matched_any = false;
-        for relative in &existing {
-            if !compiled.matches_path(relative) {
-                continue;
-            }
-            if generated.contains(relative.as_path()) {
-                bail!(
-                    "curated snippet glob `{pattern}` matches `{}`, which alef itself generates this run; \
-                     a curated declaration must never claim a path alef writes",
-                    relative.display()
-                );
-            }
-            matched_any = true;
-            curated.insert(relative.clone());
-        }
-        if !matched_any {
+        let matches = matching_relative_files(project_root, pattern, &compiled)?;
+        if matches.is_empty() {
             bail!(
-                "curated snippet glob `{pattern}` matches no file under `{}`; a curated declaration \
-                 matching zero files is refused rather than silently accepted, since that would leave \
-                 every file it was meant to cover still reported as an unaccounted gap -- fix the \
-                 pattern or remove it",
-                output.display()
+                "curated snippet glob `{pattern}` matches no file under the project root `{}`; a curated \
+                 declaration matching zero files is refused rather than silently accepted, since that would \
+                 leave every file it was meant to cover still reported as an unaccounted gap. Patterns are \
+                 relative to the project root (the directory holding alef.toml), the same base \
+                 `[crates.e2e.snippets].output` is written in -- not relative to `output` itself",
+                project_root.display()
             );
         }
+        curated.extend(matches);
     }
     Ok(curated.into_iter().collect())
 }
 
-fn existing_relative_files(output: &Path) -> Result<Vec<PathBuf>> {
-    if !output.is_dir() {
+/// Refuse a curated path this run itself generated.
+///
+/// A curated declaration must never silently annex alef's own output: reclassifying a
+/// generated file as "not alef's concern" is exactly how a real coverage gap would be
+/// masked. `curated` and `generated` must both be project-root-relative. ~keep
+///
+/// # Errors
+///
+/// Returns an error naming the first path claimed by both sides.
+pub fn reject_generated_curated_paths(curated: &[PathBuf], generated: &[PathBuf]) -> Result<()> {
+    let generated: BTreeSet<&Path> = generated.iter().map(PathBuf::as_path).collect();
+    for path in curated {
+        if generated.contains(path.as_path()) {
+            bail!(
+                "curated snippet declaration claims `{}`, which alef itself generates this run; \
+                 a curated declaration must never claim a path alef writes",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Reject a pattern that leaves the project root or anchors itself absolutely.
+fn reject_escaping_pattern(pattern: &str) -> Result<()> {
+    let path = Path::new(pattern);
+    let escapes = path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_)
+        )
+    });
+    if pattern.trim().is_empty() || escapes {
+        bail!("curated snippet glob `{pattern}` must be a relative path beneath the project root");
+    }
+    Ok(())
+}
+
+/// Walk only the part of the tree a pattern can reach.
+///
+/// Everything before a pattern's first wildcard component is a literal path, so a
+/// project-root-relative declaration costs a walk of `docs/snippets/cli`, not a walk of the
+/// whole repository -- which is what makes project-root-relative patterns affordable at all.
+/// ~keep
+fn matching_relative_files(project_root: &Path, pattern: &str, compiled: &glob::Pattern) -> Result<Vec<PathBuf>> {
+    let search_root = project_root.join(pattern_search_root(pattern));
+    if !search_root.exists() {
         return Ok(Vec::new());
     }
-    let mut files = Vec::new();
-    for entry in walkdir::WalkDir::new(output).follow_links(true) {
-        let entry = entry.with_context(|| format!("failed to walk snippet output {}", output.display()))?;
+    let mut matches = Vec::new();
+    for entry in walkdir::WalkDir::new(&search_root).follow_links(true) {
+        let entry = entry.with_context(|| format!("failed to walk curated snippet root {}", search_root.display()))?;
         if !entry.file_type().is_file() {
             continue;
         }
         let relative = entry
             .path()
-            .strip_prefix(output)
+            .strip_prefix(project_root)
             .with_context(|| format!("failed to relativize {}", entry.path().display()))?;
-        files.push(relative.to_path_buf());
+        if compiled.matches_path(relative) {
+            matches.push(relative.to_path_buf());
+        }
     }
-    Ok(files)
+    Ok(matches)
+}
+
+/// The literal directory prefix of `pattern`: every leading component free of glob syntax.
+fn pattern_search_root(pattern: &str) -> PathBuf {
+    let mut prefix = PathBuf::new();
+    for component in Path::new(pattern).components() {
+        let std::path::Component::Normal(part) = component else {
+            break;
+        };
+        if part.to_string_lossy().contains(['*', '?', '[', ']']) {
+            break;
+        }
+        prefix.push(part);
+    }
+    prefix
 }
 
 /// A one-line coverage summary distinguishing curated files from alef-generated ones, so a
@@ -305,7 +369,7 @@ fn ensure_disjoint(
 
 #[cfg(test)]
 mod curated_snippet_tests {
-    use super::resolve_curated_snippet_paths;
+    use super::{reject_generated_curated_paths, resolve_curated_snippet_paths};
     use std::path::PathBuf;
 
     fn write(directory: &std::path::Path, relative: &str, content: &str) {
@@ -319,10 +383,31 @@ mod curated_snippet_tests {
         let directory = tempfile::tempdir().expect("temp dir");
         write(directory.path(), "docker/quick-start.md", "curated by hand");
 
-        let curated = resolve_curated_snippet_paths(directory.path(), &["docker/*.md".to_string()], &[])
+        let curated = resolve_curated_snippet_paths(directory.path(), &["docker/*.md".to_string()])
             .expect("a matching pattern resolves");
 
         assert_eq!(curated, vec![PathBuf::from("docker/quick-start.md")]);
+    }
+
+    /// The semantics this field was missing: a hand-authored snippet living OUTSIDE the
+    /// configured `output` tree must be declarable. Measured across three consumer trees,
+    /// every hand-authored snippet sat outside `output` -- so under the previous
+    /// `output`-relative resolution no pattern could name a single one of them, and any
+    /// pattern that tried tripped the anti-vacuity guard instead.
+    #[test]
+    fn a_curated_file_outside_the_generated_output_tree_is_declarable() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(
+            directory.path(),
+            "docs/snippets/generated/python/a.md",
+            "alef wrote this",
+        );
+        write(directory.path(), "docs/snippets/cli/quickstart.md", "by hand");
+
+        let curated = resolve_curated_snippet_paths(directory.path(), &["docs/snippets/cli/*.md".to_string()])
+            .expect("a pattern naming a file beside the generated tree must resolve, not trip the anti-vacuity guard");
+
+        assert_eq!(curated, vec![PathBuf::from("docs/snippets/cli/quickstart.md")]);
     }
 
     /// The anti-vacuity requirement pinned literally: a glob that matches zero files must
@@ -334,27 +419,51 @@ mod curated_snippet_tests {
         let directory = tempfile::tempdir().expect("temp dir");
         write(directory.path(), "docker/quick-start.md", "curated by hand");
 
-        let error = resolve_curated_snippet_paths(directory.path(), &["dcoker/*.md".to_string()], &[])
+        let error = resolve_curated_snippet_paths(directory.path(), &["dcoker/*.md".to_string()])
             .expect_err("a glob matching nothing must be refused");
 
         assert!(error.to_string().contains("dcoker/*.md"), "{error}");
         assert!(error.to_string().contains("matches no file"), "{error}");
     }
 
+    /// Anti-vacuity must survive the widening to project-root-relative patterns: a wildcard
+    /// deep inside the tree still has to match a real file. Without the guard the widened
+    /// key space would make every typo free.
+    #[test]
+    fn a_wildcard_pattern_matching_zero_files_still_fails_under_project_root_semantics() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(directory.path(), "docs/snippets/cli/quickstart.md", "by hand");
+
+        let error = resolve_curated_snippet_paths(directory.path(), &["docs/snippets/**/*.mdx".to_string()])
+            .expect_err("a pattern whose extension matches nothing must still be refused");
+
+        assert!(error.to_string().contains("matches no file"), "{error}");
+    }
+
+    /// A curated declaration must stay inside the project: a pattern reaching above the
+    /// project root would claim files no `alef.toml` governs.
+    #[test]
+    fn a_pattern_escaping_the_project_root_is_refused() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(directory.path(), "docs/a.md", "by hand");
+
+        for pattern in ["../outside/*.md", "/etc/*.md"] {
+            let error = resolve_curated_snippet_paths(directory.path(), &[pattern.to_string()])
+                .expect_err("an escaping pattern must be refused");
+            assert!(error.to_string().contains("beneath the project root"), "{error}");
+        }
+    }
+
     /// A pattern that matches only this run's own generated output must never silently
     /// annex it -- that would let a curated declaration mask a real coverage gap by
     /// reclassifying alef's own file as "not alef's concern".
     #[test]
-    fn a_glob_matching_a_generated_path_is_refused() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        write(directory.path(), "python/quick-start.md", "alef wrote this");
-
-        let error = resolve_curated_snippet_paths(
-            directory.path(),
-            &["python/*.md".to_string()],
-            &[PathBuf::from("python/quick-start.md")],
+    fn a_curated_path_that_alef_generates_is_refused() {
+        let error = reject_generated_curated_paths(
+            &[PathBuf::from("docs/snippets/python/quick-start.md")],
+            &[PathBuf::from("docs/snippets/python/quick-start.md")],
         )
-        .expect_err("a glob claiming generated output must be refused");
+        .expect_err("a curated path claiming generated output must be refused");
 
         assert!(error.to_string().contains("alef itself generates"), "{error}");
     }
@@ -363,22 +472,22 @@ mod curated_snippet_tests {
     fn no_configured_globs_yields_no_curated_paths_without_touching_disk() {
         // A directory that does not exist must not error when there are no patterns to
         // resolve -- an unconfigured project pays no cost for this feature.
-        let curated = resolve_curated_snippet_paths(std::path::Path::new("/does/not/exist"), &[], &[])
+        let curated = resolve_curated_snippet_paths(std::path::Path::new("/does/not/exist"), &[])
             .expect("no patterns never touches the filesystem");
 
         assert!(curated.is_empty());
     }
 
-    /// A glob declared for a project that has never generated anything yet (no `output`
-    /// directory on disk at all) must fail exactly like any other zero-match glob -- the
-    /// curated files it claims must already exist, since curated means hand-authored, not
-    /// "will exist eventually".
+    /// A glob declared for a project that has never generated anything yet (nothing on disk
+    /// at all) must fail exactly like any other zero-match glob -- the curated files it
+    /// claims must already exist, since curated means hand-authored, not "will exist
+    /// eventually".
     #[test]
-    fn a_glob_over_a_missing_output_directory_is_refused() {
+    fn a_glob_over_a_missing_directory_is_refused() {
         let directory = tempfile::tempdir().expect("temp dir");
-        let missing_output = directory.path().join("never-created");
+        let missing_root = directory.path().join("never-created");
 
-        let error = resolve_curated_snippet_paths(&missing_output, &["**/*.md".to_string()], &[])
+        let error = resolve_curated_snippet_paths(&missing_root, &["**/*.md".to_string()])
             .expect_err("a glob over a directory that was never generated must be refused");
 
         assert!(error.to_string().contains("matches no file"), "{error}");

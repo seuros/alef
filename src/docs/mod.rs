@@ -536,6 +536,9 @@ fn validate_snippets(
             configured_references: configured_references.clone(),
             exclude: exclude.clone(),
             require_frontmatter: snippet_cfg.require_frontmatter,
+            // `alef validate`'s snippet gate is a structural check; curated accounting belongs
+            // to `alef snippets audit --config`, which reads the declaration directly. ~keep
+            accounting: crate::snippets::audit::SnippetAccounting::default(),
         });
         if audit_report.has_errors() {
             let summary = audit_report

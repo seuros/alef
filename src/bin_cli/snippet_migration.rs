@@ -18,17 +18,26 @@ use std::path::Path;
 /// [`migration::compare_root_curated`] rather than the plain `compare_root`: without them
 /// every hand-authored file reports as `no_generated_equivalent`, so a project with hundreds
 /// of intentionally curated snippets cannot tell a declared file from a real migration gap.
+///
+/// `project_root` is the directory holding `alef.toml` -- the base both `snippet_config.output`
+/// and the curated globs are written in.
+///
+/// # Errors
+///
+/// Returns an error when the comparison cannot be computed or a curated glob is unusable.
 pub(crate) fn compare(
+    project_root: &Path,
     existing_root: &Path,
     snippet_config: &SnippetConfig,
     generated: &[GeneratedFile],
 ) -> Result<Vec<MigrationEntry>> {
-    migration::compare_root_curated(
+    migration::compare_root_curated(&migration::CuratedComparison {
+        project_root,
         existing_root,
-        Path::new(&snippet_config.output),
+        generated_root: Path::new(&snippet_config.output),
         generated,
-        &snippet_config.curated_snippets,
-    )
+        curated_globs: &snippet_config.curated_snippets,
+    })
 }
 
 /// The single token the human-readable report prints for an entry.
@@ -73,22 +82,27 @@ mod tests {
     /// rather than as a coverage gap. Routing the comparison through the curated-*unaware*
     /// `migration::compare_root` — what the command did before this seam existed — makes both
     /// files below indistinguishable `no_generated_equivalent` entries.
+    ///
+    /// Shaped the way a consumer's tree actually is: the migrated root is a subdirectory of the
+    /// project, and the curated file sits BESIDE the generated tree rather than within it, so
+    /// the declaring glob is project-root-relative and reaches outside `output`.
     #[test]
     fn a_declared_curated_file_reports_as_curated_and_an_undeclared_one_stays_a_gap() {
         let directory = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(directory.path().join("docker")).expect("create curated directory");
-        std::fs::write(directory.path().join("docker/quick-start.md"), "hand authored")
+        let existing_root = directory.path().join("docs/snippets");
+        std::fs::create_dir_all(existing_root.join("cli")).expect("create curated directory");
+        std::fs::write(existing_root.join("cli/quick-start.md"), "hand authored")
             .expect("write declared curated snippet");
-        std::fs::write(directory.path().join("orphan.md"), "hand authored").expect("write undeclared snippet");
+        std::fs::write(existing_root.join("orphan.md"), "hand authored").expect("write undeclared snippet");
         let snippet_config = SnippetConfig {
-            output: "docs/snippets-generated".into(),
-            curated_snippets: vec!["docker/*.md".to_string()],
+            output: "docs/snippets/generated".into(),
+            curated_snippets: vec!["docs/snippets/cli/*.md".to_string()],
             ..SnippetConfig::default()
         };
 
-        let entries = compare(directory.path(), &snippet_config, &[]).expect("comparison succeeds");
+        let entries = compare(directory.path(), &existing_root, &snippet_config, &[]).expect("comparison succeeds");
 
-        let curated = entry_for(&entries, "docker/quick-start.md");
+        let curated = entry_for(&entries, "cli/quick-start.md");
         let gap = entry_for(&entries, "orphan.md");
         assert_eq!(curated.status, MigrationStatus::NoGeneratedEquivalent);
         assert!(
@@ -148,7 +162,8 @@ mod tests {
             generated_header: false,
         }];
 
-        let entries = compare(directory.path(), &snippet_config, &generated).expect("comparison succeeds");
+        let entries =
+            compare(directory.path(), directory.path(), &snippet_config, &generated).expect("comparison succeeds");
 
         let entry = entry_for(&entries, "docker/quick-start.md");
         assert_eq!(entry.status, MigrationStatus::Different);
@@ -168,8 +183,30 @@ mod tests {
             ..SnippetConfig::default()
         };
 
-        let error = compare(directory.path(), &snippet_config, &[]).expect_err("an invalid glob must fail");
+        let error =
+            compare(directory.path(), directory.path(), &snippet_config, &[]).expect_err("an invalid glob must fail");
 
         assert!(error.to_string().contains("invalid curated snippet glob"), "{error}");
+    }
+
+    /// Anti-vacuity for the migration path's own key space: a migrated root that does not lie
+    /// beneath the project root leaves every project-root-relative glob unmatchable, so the
+    /// command must refuse rather than report "nothing curated" -- which is precisely what a
+    /// genuinely empty declaration also looks like.
+    #[test]
+    fn a_migrated_root_outside_the_project_refuses_rather_than_reporting_nothing_curated() {
+        let project = tempfile::tempdir().expect("project tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        std::fs::write(outside.path().join("orphan.md"), "hand authored").expect("write snippet");
+        let snippet_config = SnippetConfig {
+            output: "docs/snippets/generated".into(),
+            curated_snippets: vec!["docs/snippets/cli/*.md".to_string()],
+            ..SnippetConfig::default()
+        };
+
+        let error = compare(project.path(), outside.path(), &snippet_config, &[])
+            .expect_err("an unrelatable migrated root must fail rather than silently match nothing");
+
+        assert!(error.to_string().contains("does not lie beneath it"), "{error}");
     }
 }

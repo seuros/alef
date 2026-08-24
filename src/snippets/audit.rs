@@ -3,6 +3,7 @@ use crate::snippets::gaps::{discover_includes, parse_include_target};
 use crate::snippets::parser::{self, FrontmatterStatus};
 use crate::snippets::types::Language;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -14,6 +15,36 @@ pub struct AuditConfig {
     pub include_base_paths: Vec<PathBuf>,
     pub configured_references: Vec<PathBuf>,
     pub exclude: Vec<PathBuf>,
+    /// Accounting inputs: which snippets alef generates, and which the project declares it
+    /// hand-authors. See [`AuditIssueKind::UnaccountedSnippet`].
+    pub accounting: SnippetAccounting,
+}
+
+/// The two claims that let an audit tell a deliberately curated snippet apart from a coverage
+/// gap: what alef's own coverage ledgers say it generated, and what
+/// `[crates.e2e.snippets].curated_snippets` declares as hand-authored on purpose.
+///
+/// Curated paths come from configuration rather than from the coverage ledger, because the
+/// ledger structurally cannot carry them: `e2e::snippets::ledger_paths::resolve_tracked_path`
+/// refuses any recorded path that leaves the ledger's own `output` root, and hand-authored
+/// snippets characteristically live outside `output`. Configuration is also the declaration's
+/// source of truth, so an audit run after an `alef.toml` edit sees the edit without a
+/// regeneration in between. ~keep
+///
+/// All three path lists must be spelled the same way the audit's `snippet_dirs` are, since
+/// that is what the walk produces.
+#[derive(Debug, Clone, Default)]
+pub struct SnippetAccounting {
+    /// Files a coverage ledger records as alef-generated.
+    pub generated_paths: Vec<PathBuf>,
+    /// Files a `curated_snippets` declaration claims as hand-authored.
+    pub curated_paths: Vec<PathBuf>,
+    /// Whether the accounting check runs at all.
+    ///
+    /// Off leaves the audit exactly as it was, so a caller with no configuration to read
+    /// cannot report an accounting verdict it never computed. The CLI names the skip rather
+    /// than printing a bare "Audit clean" over a check that did not run. ~keep
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +63,19 @@ pub enum AuditIssueKind {
     UnknownLanguage,
     UnreadableFile,
     MissingDirectory,
+    /// A snippet under an audited root that neither a coverage ledger claims as generated nor
+    /// a `curated_snippets` declaration claims as hand-authored.
+    ///
+    /// Reported as a warning, not an error: an unaccounted snippet is a coverage observation,
+    /// and one measured consumer tree carries 96 of them. Failing the audit on first sight
+    /// would turn an informational gap into a red CI run for every project that has not
+    /// declared its curated files yet. ~keep
+    UnaccountedSnippet,
+    /// A `curated_snippets` declaration claims a path a coverage ledger says alef generates.
+    ///
+    /// An error, unlike [`Self::UnaccountedSnippet`]: this is a declaration actively laying
+    /// claim to alef's own output, which would let it mask a real coverage gap.
+    CuratedGeneratedSnippet,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +90,13 @@ pub struct AuditIssue {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditReport {
     pub issues: Vec<AuditIssue>,
+    /// Audited snippets a `curated_snippets` declaration accounts for.
+    ///
+    /// Carried positively rather than left as the mere absence of an
+    /// [`AuditIssueKind::UnaccountedSnippet`]: "this file is curated" and "this file was
+    /// never examined" are different facts, and only one of them is a verdict. ~keep
+    #[serde(default)]
+    pub curated: Vec<PathBuf>,
 }
 
 impl AuditReport {
@@ -89,13 +140,84 @@ pub fn audit(config: &AuditConfig) -> AuditReport {
             ));
         }
     }
+    let accounting = account_snippets(config);
+    issues.extend(accounting.issues);
     issues.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
             .then(left.line.cmp(&right.line))
             .then(left.message.cmp(&right.message))
     });
-    AuditReport { issues }
+    AuditReport {
+        issues,
+        curated: accounting.curated,
+    }
+}
+
+/// What the accounting pass produced: issues to merge, and the curated files it recognised.
+struct AccountingOutcome {
+    issues: Vec<AuditIssue>,
+    curated: Vec<PathBuf>,
+}
+
+/// Classify every audited snippet as generated, curated, or unaccounted.
+///
+/// This is the check that gives `alef snippets audit` a curated concept at all: without it a
+/// hand-authored snippet and a genuine coverage gap are the same silence. A file is accounted
+/// for when a coverage ledger records it as generated, or when a `curated_snippets`
+/// declaration claims it; anything else under an audited snippet root is a gap nobody has
+/// spoken for. ~keep
+///
+/// A curated declaration that claims a generated path is an error rather than an
+/// accounting outcome -- see [`AuditIssueKind::CuratedGeneratedSnippet`].
+fn account_snippets(config: &AuditConfig) -> AccountingOutcome {
+    if !config.accounting.enabled {
+        return AccountingOutcome {
+            issues: Vec::new(),
+            curated: Vec::new(),
+        };
+    }
+    let generated: BTreeSet<&Path> = config.accounting.generated_paths.iter().map(PathBuf::as_path).collect();
+    let curated: BTreeSet<&Path> = config.accounting.curated_paths.iter().map(PathBuf::as_path).collect();
+    let mut issues = Vec::new();
+    for claimed in curated.intersection(&generated) {
+        issues.push(issue(
+            AuditIssueKind::CuratedGeneratedSnippet,
+            claimed,
+            1,
+            format!(
+                "curated_snippets claims `{}`, which a coverage ledger records as alef-generated; \
+                 a curated declaration must never claim a path alef writes",
+                claimed.display()
+            ),
+        ));
+    }
+    let mut recognised_curated = Vec::new();
+    for snippet_dir in &config.snippet_dirs {
+        for path in markdown_files(snippet_dir, &config.exclude) {
+            if generated.contains(path.as_path()) {
+                continue;
+            }
+            if curated.contains(path.as_path()) {
+                recognised_curated.push(path);
+                continue;
+            }
+            issues.push(issue(
+                AuditIssueKind::UnaccountedSnippet,
+                &path,
+                1,
+                "snippet is neither recorded as alef-generated by a coverage ledger nor declared in \
+                 [crates.e2e.snippets].curated_snippets; declare it curated or let alef generate it"
+                    .to_string(),
+            ));
+        }
+    }
+    recognised_curated.sort();
+    recognised_curated.dedup();
+    AccountingOutcome {
+        issues,
+        curated: recognised_curated,
+    }
 }
 
 /// Report every configured root that does not exist on disk.
@@ -307,11 +429,28 @@ fn is_excluded(path: &Path, exclude: &[PathBuf]) -> bool {
 
 fn issue(kind: AuditIssueKind, path: &Path, line: usize, message: String) -> AuditIssue {
     AuditIssue {
+        severity: severity_for(&kind),
         kind,
-        severity: AuditSeverity::Error,
         path: path.to_path_buf(),
         line,
         message,
+    }
+}
+
+/// Every kind's severity in one place, so a new kind cannot silently inherit `Error` from a
+/// constructor that hard-coded it. ~keep
+fn severity_for(kind: &AuditIssueKind) -> AuditSeverity {
+    match kind {
+        AuditIssueKind::UnaccountedSnippet => AuditSeverity::Warning,
+        AuditIssueKind::BrokenFrontmatter
+        | AuditIssueKind::MissingFrontmatter
+        | AuditIssueKind::BrokenFence
+        | AuditIssueKind::MissingInclude
+        | AuditIssueKind::InvalidInclude
+        | AuditIssueKind::UnknownLanguage
+        | AuditIssueKind::UnreadableFile
+        | AuditIssueKind::MissingDirectory
+        | AuditIssueKind::CuratedGeneratedSnippet => AuditSeverity::Error,
     }
 }
 
