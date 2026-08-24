@@ -1,14 +1,17 @@
+mod before_hooks;
 mod fingerprint;
+#[cfg(test)]
+mod hook_reuse_tests;
 #[cfg(test)]
 mod preparation_error_tests;
 mod purge;
 
+use before_hooks::{HookOutcomes, run_before_once};
 use fingerprint::session_fingerprint;
 use purge::{cleanup_legacy_scratch_directories, purge_abandoned_scratch, purge_stale_session_scratch};
 
 use crate::snippets::error::{Error, Result};
 use crate::snippets::types::Language;
-use crate::snippets::validators::run_command;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -268,11 +271,12 @@ fn activate_sessions(resolved: &[ResolvedSession<'_>], timeout_secs: u64) -> Vec
         .into_par_iter()
         .map(|indices| {
             span.in_scope(|| {
+                let mut ran = HookOutcomes::default();
                 indices
                     .into_iter()
                     .map(|index| {
                         let (_, spec, session) = &resolved[index];
-                        (index, activate_session(spec, session, timeout_secs))
+                        (index, activate_session(spec, session, timeout_secs, &mut ran))
                     })
                     .collect::<Vec<_>>()
             })
@@ -358,10 +362,15 @@ fn resolve_session(spec: &SessionSpec, timeout_secs: u64) -> Result<ValidationSe
     })
 }
 
-fn activate_session(spec: &SessionSpec, session: &ValidationSession, timeout_secs: u64) -> Result<()> {
+fn activate_session(
+    spec: &SessionSpec,
+    session: &ValidationSession,
+    timeout_secs: u64,
+    ran: &mut HookOutcomes,
+) -> Result<()> {
     let language = spec.language;
     for command in &spec.before {
-        run_before(command, &spec.working_directory, &spec.env, timeout_secs).map_err(|error| match error {
+        run_before_once(command, spec, timeout_secs, ran).map_err(|error| match error {
             // A `before` hook's own timeout is propagated verbatim, not wrapped into
             // `Error::Other`, so `record_preparation_error` can still tell "the build step never
             // finished" apart from every other way session preparation can fail. Wrapping it here
@@ -392,32 +401,6 @@ fn ensure_directory(path: &Path, language: Language) -> Result<()> {
             path.display()
         )))
     }
-}
-
-fn run_before(source: &str, working_directory: &Path, env: &BTreeMap<String, String>, timeout_secs: u64) -> Result<()> {
-    let mut command = shell_command(source);
-    command.current_dir(working_directory);
-    command.envs(env);
-    let (success, output) = run_command(&mut command, timeout_secs)?;
-    if success {
-        Ok(())
-    } else {
-        Err(Error::Other(format!("before command failed: {output}")))
-    }
-}
-
-#[cfg(unix)]
-fn shell_command(source: &str) -> std::process::Command {
-    let mut command = std::process::Command::new("sh");
-    command.args(["-c", source]);
-    command
-}
-
-#[cfg(windows)]
-fn shell_command(source: &str) -> std::process::Command {
-    let mut command = std::process::Command::new("cmd");
-    command.args(["/C", source]);
-    command
 }
 
 #[cfg(test)]

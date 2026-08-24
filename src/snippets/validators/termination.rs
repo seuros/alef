@@ -136,6 +136,11 @@ mod tests {
     const PROCESS_SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
     const PROCESS_SETTLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(5);
 
+    /// Names the file the probe below announces its child's process group in. Its presence is also
+    /// what tells the probe it is running as a probe rather than as an ordinary ignored test.
+    const ORPHAN_PROBE_MARKER: &str = "ALEF_TERMINATION_ORPHAN_PROBE";
+    const ORPHAN_PROBE_NAME: &str = "snippets::validators::termination::tests::orphan_probe_child";
+
     fn slots() -> Vec<AtomicI32> {
         (0..SLOT_COUNT).map(|_| AtomicI32::new(UNUSED_SLOT)).collect()
     }
@@ -269,6 +274,75 @@ mod tests {
                 "signal {signal} must be forwarded to the tracked child groups"
             );
         }
+    }
+
+    /// Not a test: the child half of
+    /// [`a_signalled_alef_does_not_orphan_its_child_tree`]. Runs a `run_command` whose child
+    /// announces its own process group and then outlives any signal the parent will send, so the
+    /// parent can signal *this* process and inspect what is left behind. Inert unless the
+    /// environment names a marker file, so an ordinary `--ignored` run does nothing. ~keep
+    #[test]
+    #[ignore = "spawned as a subprocess by a_signalled_alef_does_not_orphan_its_child_tree"]
+    fn orphan_probe_child() {
+        let Ok(marker) = std::env::var(ORPHAN_PROBE_MARKER) else {
+            return;
+        };
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", &format!("echo $$ > {marker}; sleep 30")]);
+        let _ = super::super::run_command(&mut command, 30);
+    }
+
+    /// The end-to-end measurement of the orphaning half of this module's reason to exist.
+    ///
+    /// A real alef process is spawned, given a child that outlives everything, and then sent
+    /// `SIGINT` -- the same disposition Ctrl-C produces. Because `run_command` puts that child in
+    /// its own process group, the signal cannot reach it by delivery; the only thing that can kill
+    /// it is alef forwarding the signal on. Asserting on the child's continued existence after the
+    /// parent is gone is the whole point: with forwarding removed this passes only if the tree
+    /// really is orphaned. ~keep
+    #[test]
+    fn a_signalled_alef_does_not_orphan_its_child_tree() {
+        let directory = tempfile::tempdir().expect("scratch directory");
+        let marker = directory.path().join("group.pid");
+        let mut probe = std::process::Command::new(std::env::current_exe().expect("the test binary"))
+            .args(["--exact", ORPHAN_PROBE_NAME, "--ignored", "--test-threads=1"])
+            .env(ORPHAN_PROBE_MARKER, &marker)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn the probe");
+
+        let deadline = std::time::Instant::now() + PROCESS_SETTLE_LIMIT;
+        let orphan = loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the probe never announced a child"
+            );
+            if let Ok(contents) = std::fs::read_to_string(&marker)
+                && let Ok(pid) = contents.trim().parse::<i32>()
+                && is_alive(pid)
+            {
+                break pid;
+            }
+            std::thread::sleep(PROCESS_SETTLE_POLL);
+        };
+
+        // SAFETY: signalling one pid this test spawned and owns.
+        let signalled = unsafe { libc::kill(probe.id().cast_signed(), libc::SIGINT) };
+        assert_eq!(signalled, 0, "signalling the probe");
+        probe.wait().expect("the probe exits");
+
+        let survived = !wait_until_gone(orphan);
+        if survived {
+            // SAFETY: a negative pid addresses the process group the probe created.
+            unsafe {
+                libc::kill(-orphan, libc::SIGKILL);
+            }
+        }
+        assert!(
+            !survived,
+            "child group {orphan} outlived the alef process that spawned it -- the tree was orphaned"
+        );
     }
 
     /// `run_command` must put its child in the process-wide table, not just in whatever table a
