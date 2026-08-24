@@ -567,6 +567,50 @@ fn sessions_needed_for_preparation(
         .collect()
 }
 
+/// Per-language counts of snippets whose effective validation level requires a compiled artifact
+/// (`Compile`/`TypeCheck`/`Run`) but whose session cannot be relied on to have produced it: either
+/// no configured session claims the snippet's language at all, the claim is ambiguous, or the
+/// session that does claim it has an empty `before` list -- literally no build step configured to
+/// run first.
+///
+/// Computed purely from `snippets`, `sessions`, and `requested_level`: the exact inputs
+/// `run_validation` is about to use, never a second walk of the filesystem or a second discovery
+/// pass. That is the same guarantee `gap_coverage` gives `VerifyCoverage`/`GapCoverage` -- a count
+/// that describes what this run is actually about to do, not an estimate computed some other way.
+///
+/// `alef docs`/`alef all` never run a per-language build on their own behalf (see
+/// `bin_cli::all_commands::warn_if_snippet_validation_needs_build`'s doc for why), so a session
+/// with nothing configured to run first has no mechanism to have produced the artifact its
+/// snippets are about to validate against. That is the literal shape of "no stage in the invoked
+/// pipeline produced this artifact" -- the ordering half of alef #256. ~keep
+pub(crate) fn missing_build_dependency(
+    snippets: &[Snippet],
+    sessions: &HashMap<String, SessionSpec>,
+    requested_level: ValidationLevel,
+) -> BTreeMap<crate::snippets::types::Language, usize> {
+    let mut counts = BTreeMap::new();
+    for snippet in snippets {
+        if let Some(annotation) = &snippet.annotation
+            && annotation.kind == SnippetAnnotationKind::Skip
+        {
+            continue;
+        }
+        if effective_validation_level(snippet, requested_level) < ValidationLevel::Compile {
+            continue;
+        }
+        let guaranteed = match session_resolution::resolve_session_claim(snippet, sessions, |spec| spec.language) {
+            session_resolution::SessionClaim::Claimed(key) => {
+                sessions.get(key).is_some_and(|spec| !spec.before.is_empty())
+            }
+            session_resolution::SessionClaim::Unclaimed | session_resolution::SessionClaim::Ambiguous(_) => false,
+        };
+        if !guaranteed {
+            *counts.entry(snippet.language).or_insert(0_usize) += 1;
+        }
+    }
+    counts
+}
+
 /// The single resolution `fail_fast_results`, `parallel_results` and
 /// `batch::group_batchable_snippets` all share for "which configured session does this snippet
 /// use" -- see `session_resolution` for why the resolver, not a per-caller string lookup, is what
@@ -951,3 +995,6 @@ mod failure_reporting_tests;
 
 #[cfg(test)]
 mod session_scope_tests;
+
+#[cfg(test)]
+mod build_dependency_tests;
