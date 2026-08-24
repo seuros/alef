@@ -10,32 +10,24 @@ use super::super::types::{FieldResolver, PathSegment};
 impl FieldResolver {
     /// Generate a language-specific accessor expression.
     ///
-    /// When `fixture_field` resolves to a path whose first segment is a virtual
-    /// namespace prefix (not a real result field), the prefix is stripped before
-    /// generating the accessor.  This matches the behaviour of `is_valid_for_result`
-    /// so that paths like `"browser.browser_used"` produce `result.browser_used`
-    /// (Python) / `result.BrowserUsed` (C#) / etc. rather than the raw
-    /// `result.browser.browser_used` which would fail at runtime.
+    /// The path is taken from [`FieldResolver::result_relative_path`]: the alias applied and any
+    /// virtual namespace prefix removed, so `"browser.browser_used"` produces `result.browser_used`
+    /// (Python) / `result.BrowserUsed` (C#) rather than the raw `result.browser.browser_used`,
+    /// which addresses a member no result declares.
+    ///
+    /// ~keep Asking rather than re-deriving is the point, and it is the same correction
+    /// `is_array` took. This method used to carry its own copy of the strip decision, gated on
+    /// `result_fields.contains(..)` where `result_relative_path` asks the broader
+    /// `is_valid_for_result(..)`. That was the un-updated original, not a policy: it predates the
+    /// IR oracle `is_valid_for_result` grew, `result_relative_path`'s doc already claims to apply
+    /// "the same policy `accessor()` applies", and the two C generator sites that inline this very
+    /// block (`c/call_patterns.rs`, `c/test_function.rs`) describe themselves as "matching the
+    /// same logic as FieldResolver::accessor" while using the broad predicate. An accessor that
+    /// lands somewhere no classifier agrees the value lives is what emitted
+    /// `string(result.ActionResults)` — `is_array` consulted the shared answer, this method did
+    /// not, and the generated Go package stopped compiling.
     pub fn accessor(&self, fixture_field: &str, language: &str, result_var: &str) -> String {
-        let resolved = self.resolve(fixture_field);
-        // Strip a leading namespace prefix when the first segment is not a known
-        // result field but the remainder's first segment is.  This handles fixture
-        // paths like `"browser.browser_used"` → actual accessor path `"browser_used"`.
-        let effective = if !self.result_fields.is_empty() {
-            if let Some(stripped) = self.namespace_stripped_path(resolved) {
-                let stripped_first = stripped.split('.').next().unwrap_or(stripped);
-                let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
-                if self.result_fields.contains(stripped_first) {
-                    stripped
-                } else {
-                    resolved
-                }
-            } else {
-                resolved
-            }
-        } else {
-            resolved
-        };
+        let effective = self.result_relative_path(fixture_field);
         let segments = parse_path(effective);
         let segments = self.inject_array_indexing(segments);
         match language {
@@ -186,24 +178,10 @@ impl FieldResolver {
         if !self.is_optional(resolved) {
             return None;
         }
-        // Mirror the namespace-prefix stripping done in `accessor()` so paths
-        // like `"interaction.action_results[0].data"` resolve against the real
-        // result type (`InteractionResult`) rather than the literal namespace.
-        let effective = if !self.result_fields.is_empty() {
-            if let Some(stripped) = self.namespace_stripped_path(resolved) {
-                let stripped_first = stripped.split('.').next().unwrap_or(stripped);
-                let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
-                if self.result_fields.contains(stripped_first) {
-                    stripped
-                } else {
-                    resolved
-                }
-            } else {
-                resolved
-            }
-        } else {
-            resolved
-        };
+        // ~keep Same shared answer `accessor()` renders from, not a mirror of it. The local's
+        // name is derived from this path, so a copy that drifted would name the binding after one
+        // path while the assertion that must reference it was rendered from another.
+        let effective = self.result_relative_path(fixture_field);
         let segments = parse_path(effective);
         let segments = self.inject_array_indexing(segments);
         // Sanitize the resolved path into a snake_case Rust identifier:

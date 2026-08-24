@@ -448,9 +448,14 @@ impl FieldResolver {
     /// (C's accessor chain, brew's jq expression, zig's `std.json.Value` lookup) must
     /// strip that label or they address a member that does not exist. Stripping is
     /// conditional: the remainder's own first segment has to be a real result field,
-    /// so a genuinely nested path (`metrics.total_lines`) keeps its prefix. This is
-    /// the same policy `accessor()` applies for host-language accessor expressions;
-    /// it is kept separate because an accessor is not a serialized-result path.
+    /// so a genuinely nested path (`metrics.total_lines`) keeps its prefix.
+    ///
+    /// ~keep The single definition of where a fixture field's value lives — host-language
+    /// accessors (`accessor`, `rust_unwrap_binding`), serialized-path navigation (zig, brew, C)
+    /// and shape classification (`is_array`) all read it. Each of those used to re-derive it, and
+    /// two of the copies were gated on `result_fields.contains(..)` rather than
+    /// `is_valid_for_result(..)`, so they could place the same field somewhere else. Add callers
+    /// here; do not add a fourth copy.
     pub fn result_relative_path<'a>(&'a self, fixture_field: &'a str) -> &'a str {
         let resolved = self.resolve(fixture_field);
         let Some(stripped) = self.namespace_stripped_path(resolved) else {
