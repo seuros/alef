@@ -144,6 +144,37 @@ pub(super) fn root_declares_first_segment(map: &IrResultFieldMap, first_segment:
     Some(declared.contains(first_segment))
 }
 
+/// Whether the call's result type declares EVERY segment of `path`, walking the IR struct graph
+/// from the root the same way [`walk_to_owner`] does.
+///
+/// [`root_declares_first_segment`] judges the root step only, which leaves a derived accessor free
+/// to invent any deeper segment it likes: a snippet showed `result.document.document_structure`
+/// against a `document` type declaring only `nodes`, because `document` itself was a real field
+/// and nothing looked further. This walks on.
+///
+/// `None` — no answer, caller falls back — for every state where the IR genuinely cannot judge:
+/// an unresolved root, a type this map carries no fields for, a `length`/`count` pseudo-segment,
+/// and (the load-bearing one) a prefix segment whose declared type is not a struct in this map at
+/// all. That last case is a map value, a `serde_json::Value`, a primitive, or a type from outside
+/// the extracted surface — reachable, spellable, and unjudgeable — so it keeps the conservatism
+/// [`root_declares_first_segment`] documents rather than discarding real accessors. Only a segment
+/// the IR positively knows the owner of, and positively does not find, answers `Some(false)`. ~keep
+pub(super) fn root_declares_path(map: &IrResultFieldMap, path: &str) -> Option<bool> {
+    let root = map.root_type.as_deref()?;
+    let segments = parse_path(path);
+    let (last, prefix) = segments.split_last()?;
+
+    let mut owner = root;
+    for segment in prefix {
+        let name = segment_name(segment)?;
+        if !map.declared_fields.get(owner)?.contains(name) {
+            return Some(false);
+        }
+        owner = map.field_types.get(owner)?.get(name)?.as_str();
+    }
+    Some(map.declared_fields.get(owner)?.contains(segment_name(last)?))
+}
+
 /// The `(owner_type, leaf_field_name)` a path resolves to, walking every prefix segment through
 /// `field_types`. `None` when the root is unresolved or any segment names something the IR does
 /// not recognize as a field on the type reached so far.

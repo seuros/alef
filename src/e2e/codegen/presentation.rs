@@ -390,7 +390,7 @@ fn default_operations_from_assertions(
         .assertions
         .iter()
         .filter_map(|assertion| assertion.field.as_deref())
-        .filter(|field| shows_on_result(field, resolver))
+        .filter(|field| shows_on_result(field, resolver, language))
         .filter(|field| {
             let is_new = !seen_fields.contains(field);
             if is_new {
@@ -407,11 +407,35 @@ fn default_operations_from_assertions(
 
 /// Whether a derived field path names a member of the call's result, per the oracles the
 /// assertion renderers already consult. See [`default_operations_from_assertions`].
-fn shows_on_result(field: &str, resolver: &FieldResolver) -> bool {
-    !field.is_empty()
-        && !crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field)
-        && resolver.is_valid_for_result(field)
-        && resolver.result_field_oracle_knows(field) != Some(false)
+///
+/// A refusal is silent unless the consumer's own `alef.toml` declared the path. That case is
+/// config drift — a field path claimed by hand against a result type that does not declare it in
+/// this target — and it is fixable only in the consuming repo, so it is reported rather than
+/// swallowed. A warning, never a failure: the same path can be perfectly reachable in another
+/// target (a Dart freezed union exposes no accessor a PyO3 class does), and refusing to build one
+/// target's docs over a per-target shape difference would be worse than the missing line. ~keep
+fn shows_on_result(field: &str, resolver: &FieldResolver, language: &str) -> bool {
+    if field.is_empty() || crate::e2e::codegen::streaming_assertions::is_streaming_virtual_field(field) {
+        return false;
+    }
+    if !resolver.is_valid_for_result(field) {
+        return false;
+    }
+    if resolver.result_field_oracle_knows(field) == Some(false) {
+        if let Some(config_key) = resolver.declaring_config_key(field) {
+            tracing::warn!(
+                target: "alef::e2e::presentation",
+                field,
+                language,
+                config_key,
+                "`{field}` is declared in `[e2e].{config_key}` but the `{language}` binding's result \
+                 type has no such member, so the documentation snippet omits it. Correct the path \
+                 or drop it from `{config_key}`."
+            );
+        }
+        return false;
+    }
+    true
 }
 
 /// The root variable an accessor chain is anchored on, spelled the way the target
@@ -840,3 +864,7 @@ mod derived_show_resolution_tests;
 #[cfg(test)]
 #[path = "presentation/anchored_result_facts_tests.rs"]
 mod anchored_result_facts_tests;
+
+#[cfg(test)]
+#[path = "presentation/deep_result_path_tests.rs"]
+mod deep_result_path_tests;
