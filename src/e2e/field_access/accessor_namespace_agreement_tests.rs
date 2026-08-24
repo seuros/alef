@@ -215,3 +215,33 @@ fn accessor_renders_exactly_the_result_relative_path_for_every_shape() {
         );
     }
 }
+
+/// The one case where the shared answer is *narrower* than the copy it replaces, pinned so the
+/// trade is deliberate. `is_valid_for_result` lets the IR override `result_fields` for a field the
+/// IR marks `binding_excluded`, and `with_ir_fields` warns loudly that such an entry is a config
+/// bug: no binding emits an accessor for it, so `result.action_results` would not compile either.
+/// Neither spelling compiles here; what changes is that the accessor now lands where `is_array`,
+/// and the zig/brew/C serialized-path navigation, say the value lives. Agreeing with them beats
+/// keeping a private answer for a config state the resolver already reports as broken. ~keep
+#[test]
+fn accessor_declines_to_strip_onto_a_field_the_ir_marks_binding_excluded() {
+    let resolver = FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &set(&["action_results", "final_url"]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .with_ir_fields(HashSet::new(), set(&["action_results"]), HashSet::new());
+
+    assert_eq!(
+        resolver.result_relative_path("interaction.action_results"),
+        "interaction.action_results",
+        "control: the IR overrides the contradicting result_fields entry"
+    );
+    assert_eq!(
+        resolver.accessor("interaction.action_results", "python", "result"),
+        "result.interaction.action_results",
+        "the accessor must not keep a private answer for a config state the resolver rejects"
+    );
+}
