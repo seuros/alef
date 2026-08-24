@@ -16,6 +16,7 @@
 //!   IR/config-derived method shape and FFI body fragments.
 
 mod callbacks;
+mod context;
 mod files;
 mod helpers;
 

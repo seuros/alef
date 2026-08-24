@@ -20,6 +20,7 @@ pub mod serde_enum_repr;
 pub mod shared;
 pub mod type_mapper;
 pub(crate) mod visitor_context;
+pub(crate) mod visitor_context_abi;
 pub(crate) mod visitor_result;
 
 #[cfg(test)]

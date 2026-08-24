@@ -1,40 +1,8 @@
 use heck::ToShoutySnakeCase;
 
 use crate::backends::ffi::template_env::render;
-use crate::core::ir::{ApiSurface, FieldDef, PrimitiveType, TypeDef, TypeRef};
-
-pub(super) struct ContextFieldSpec {
-    name: String,
-    c_type: &'static str,
-    c_init: ContextFieldInit,
-    setup: Option<ContextFieldSetup>,
-    doc: String,
-}
-
-#[derive(Clone, Copy)]
-enum ContextFieldSetupKind {
-    RequiredString,
-    OptionalString,
-}
-
-struct ContextFieldSetup {
-    name: String,
-    kind: ContextFieldSetupKind,
-}
-
-#[derive(Clone, Copy)]
-enum ContextFieldInitKind {
-    RequiredString,
-    OptionalString,
-    Bool,
-    Enum,
-    Passthrough,
-}
-
-struct ContextFieldInit {
-    name: String,
-    kind: ContextFieldInitKind,
-}
+use crate::codegen::visitor_context_abi::{ContextAbiField, ContextFieldShape, context_abi};
+use crate::core::ir::{ApiSurface, TypeDef};
 
 pub(super) fn gen_result_decode_arms(
     result_metadata: &crate::codegen::visitor_result::VisitorResultMetadata,
@@ -71,92 +39,14 @@ pub(super) fn gen_result_decode_arms(
     arms
 }
 
-fn context_c_type(field: &FieldDef, api: &ApiSurface) -> Option<&'static str> {
-    match (&field.ty, field.optional) {
-        (TypeRef::String, false | true) => Some("*const std::ffi::c_char"),
-        (TypeRef::Primitive(PrimitiveType::Bool), false) => Some("i32"),
-        (TypeRef::Primitive(PrimitiveType::U8), false) => Some("u8"),
-        (TypeRef::Primitive(PrimitiveType::U16), false) => Some("u16"),
-        (TypeRef::Primitive(PrimitiveType::U32), false) => Some("u32"),
-        (TypeRef::Primitive(PrimitiveType::U64), false) => Some("u64"),
-        (TypeRef::Primitive(PrimitiveType::I8), false) => Some("i8"),
-        (TypeRef::Primitive(PrimitiveType::I16), false) => Some("i16"),
-        (TypeRef::Primitive(PrimitiveType::I32), false) => Some("i32"),
-        (TypeRef::Primitive(PrimitiveType::I64), false) => Some("i64"),
-        (TypeRef::Primitive(PrimitiveType::Usize), false) => Some("usize"),
-        (TypeRef::Primitive(PrimitiveType::Isize), false) => Some("isize"),
-        (TypeRef::Named(name), false) if api.enums.iter().any(|e| e.name == *name) => Some("i32"),
-        _ => None,
-    }
+/// The `#[repr(C)]` context fields, in the order and at the offsets host bindings read them.
+///
+/// Delegates to the shared derivation so the Java bridge decodes exactly the struct emitted here.
+pub(super) fn context_field_specs(context_def: &TypeDef, api: &ApiSurface) -> Vec<ContextAbiField> {
+    context_abi(context_def, api).fields
 }
 
-pub(super) fn context_field_specs(context_def: &TypeDef, api: &ApiSurface) -> Vec<ContextFieldSpec> {
-    context_def
-        .fields
-        .iter()
-        .filter_map(|field| {
-            let Some(c_type) = context_c_type(field, api) else {
-                tracing::warn!(
-                    "gen_visitor(ffi): skip context field `{}.{}` with unsupported type {:?}",
-                    context_def.name,
-                    field.name,
-                    field.ty
-                );
-                return None;
-            };
-            let doc = field
-                .doc
-                .lines()
-                .next()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .unwrap_or("Context field.")
-                .to_string();
-            let setup = match (&field.ty, field.optional) {
-                (TypeRef::String, false) => Some(ContextFieldSetup {
-                    name: field.name.clone(),
-                    kind: ContextFieldSetupKind::RequiredString,
-                }),
-                (TypeRef::String, true) => Some(ContextFieldSetup {
-                    name: field.name.clone(),
-                    kind: ContextFieldSetupKind::OptionalString,
-                }),
-                _ => None,
-            };
-            let c_init = match (&field.ty, field.optional) {
-                (TypeRef::String, false) => ContextFieldInit {
-                    name: field.name.clone(),
-                    kind: ContextFieldInitKind::RequiredString,
-                },
-                (TypeRef::String, true) => ContextFieldInit {
-                    name: field.name.clone(),
-                    kind: ContextFieldInitKind::OptionalString,
-                },
-                (TypeRef::Primitive(PrimitiveType::Bool), false) => ContextFieldInit {
-                    name: field.name.clone(),
-                    kind: ContextFieldInitKind::Bool,
-                },
-                (TypeRef::Named(name), false) if api.enums.iter().any(|e| e.name == *name) => ContextFieldInit {
-                    name: field.name.clone(),
-                    kind: ContextFieldInitKind::Enum,
-                },
-                _ => ContextFieldInit {
-                    name: field.name.clone(),
-                    kind: ContextFieldInitKind::Passthrough,
-                },
-            };
-            Some(ContextFieldSpec {
-                name: field.name.clone(),
-                c_type,
-                c_init,
-                setup,
-                doc,
-            })
-        })
-        .collect()
-}
-
-pub(super) fn gen_context_struct_fields(fields: &[ContextFieldSpec]) -> String {
+pub(super) fn gen_context_struct_fields(fields: &[ContextAbiField]) -> String {
     fields
         .iter()
         .map(|field| {
@@ -165,42 +55,42 @@ pub(super) fn gen_context_struct_fields(fields: &[ContextFieldSpec]) -> String {
                 minijinja::context! {
                     doc => field.doc.as_str(),
                     name => field.name.as_str(),
-                    c_type => field.c_type,
+                    c_type => field.scalar.rust_c_type(),
                 },
             )
         })
         .collect()
 }
 
-pub(super) fn gen_context_setup(fields: &[ContextFieldSpec]) -> String {
+pub(super) fn gen_context_setup(fields: &[ContextAbiField]) -> String {
     fields
         .iter()
-        .filter_map(|field| field.setup.as_ref())
-        .map(|setup| match setup.kind {
-            ContextFieldSetupKind::RequiredString => render(
+        .filter_map(|field| match field.shape {
+            ContextFieldShape::RequiredString => Some(render(
                 "ffi_visitor_context_required_string_setup.jinja",
-                minijinja::context! { name => setup.name.as_str() },
-            ),
-            ContextFieldSetupKind::OptionalString => render(
+                minijinja::context! { name => field.name.as_str() },
+            )),
+            ContextFieldShape::OptionalString => Some(render(
                 "ffi_visitor_context_optional_string_setup.jinja",
-                minijinja::context! { name => setup.name.as_str() },
-            ),
+                minijinja::context! { name => field.name.as_str() },
+            )),
+            ContextFieldShape::Bool | ContextFieldShape::Enum | ContextFieldShape::Integer => None,
         })
         .collect()
 }
 
-pub(super) fn gen_context_inits(fields: &[ContextFieldSpec]) -> String {
+pub(super) fn gen_context_inits(fields: &[ContextAbiField]) -> String {
     fields
         .iter()
         .map(|field| {
-            let template = match field.c_init.kind {
-                ContextFieldInitKind::RequiredString => "ffi_visitor_context_required_string_init.jinja",
-                ContextFieldInitKind::OptionalString => "ffi_visitor_context_optional_string_init.jinja",
-                ContextFieldInitKind::Bool => "ffi_visitor_context_bool_init.jinja",
-                ContextFieldInitKind::Enum => "ffi_visitor_context_enum_init.jinja",
-                ContextFieldInitKind::Passthrough => "ffi_visitor_context_passthrough_init.jinja",
+            let template = match field.shape {
+                ContextFieldShape::RequiredString => "ffi_visitor_context_required_string_init.jinja",
+                ContextFieldShape::OptionalString => "ffi_visitor_context_optional_string_init.jinja",
+                ContextFieldShape::Bool => "ffi_visitor_context_bool_init.jinja",
+                ContextFieldShape::Enum => "ffi_visitor_context_enum_init.jinja",
+                ContextFieldShape::Integer => "ffi_visitor_context_passthrough_init.jinja",
             };
-            render(template, minijinja::context! { name => field.c_init.name.as_str() })
+            render(template, minijinja::context! { name => field.name.as_str() })
         })
         .collect()
 }

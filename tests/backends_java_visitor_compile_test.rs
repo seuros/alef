@@ -18,7 +18,8 @@ use alef::core::ir::{
     ApiSurface, EnumDef, EnumVariant, FieldDef, FunctionDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef,
     TypeRef,
 };
-use support::{compile_java, extract_java_method, java_available, write_file};
+use std::path::Path;
+use support::{compile_java, extract_java_method, java_available, run_java_args, write_file};
 
 /// Generated files that carry no Jackson references and can therefore be compiled as emitted.
 const REAL_DEPENDENCIES: &[&str] = &[
@@ -389,4 +390,193 @@ fn generated_visitor_bridge_compiles_under_javac() {
 
     let arguments: Vec<&str> = sources.iter().map(String::as_str).collect();
     compile_java(directory.path(), &arguments);
+}
+
+/// A context whose shape is nothing like the six-field one above.
+///
+/// Different arity, no leading enum discriminant, sub-word scalars that force `#[repr(C)]`
+/// padding in two places, and two components the C struct cannot carry at all. The six-field
+/// fixture above happens to match the layout the bridge template used to hardcode, so it stayed
+/// green while every other context shape emitted Java that could not compile. ~keep
+fn span_config() -> ResolvedCrateConfig {
+    let config: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["java", "ffi"]
+
+[[crates]]
+name = "test_lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "test"
+visitor_callbacks = true
+
+[crates.java]
+package = "com.test"
+
+[[crates.trait_bridges]]
+trait_name = "Callback"
+type_alias = "CallbackHandle"
+bind_via = "options_field"
+options_type = "WorkConfig"
+options_field = "hook"
+context_type = "SpanContext"
+result_type = "FlowDecision"
+"#,
+    )
+    .expect("valid Java span config");
+    config.resolve().expect("resolved Java span config").remove(0)
+}
+
+fn optional_field(name: &str, ty: TypeRef) -> FieldDef {
+    FieldDef {
+        optional: true,
+        ..field(name, ty)
+    }
+}
+
+fn span_api() -> ApiSurface {
+    let mut api = visitor_api();
+    api.types[0] = record(
+        "SpanContext",
+        vec![
+            field("label", TypeRef::String),
+            field("severity", TypeRef::Primitive(PrimitiveType::U8)),
+            field("active", TypeRef::Primitive(PrimitiveType::Bool)),
+            field("offset", TypeRef::Primitive(PrimitiveType::I16)),
+            optional_field("note", TypeRef::String),
+            field("weight", TypeRef::Primitive(PrimitiveType::F64)),
+            field("tags", TypeRef::Vec(Box::new(TypeRef::String))),
+        ],
+    );
+    api.types[3] = TypeDef {
+        methods: vec![MethodDef {
+            name: "inspect".to_owned(),
+            params: vec![ParamDef {
+                name: "context".to_owned(),
+                ty: TypeRef::Named("SpanContext".to_owned()),
+                is_ref: true,
+                ..Default::default()
+            }],
+            return_type: TypeRef::Named("FlowDecision".to_owned()),
+            receiver: Some(ReceiverKind::RefMut),
+            has_default_impl: true,
+            ..Default::default()
+        }],
+        ..callback_trait()
+    };
+    api
+}
+
+fn compile_span_bridge(directory: &Path, extra: &[&str]) {
+    let files = generate(&span_api(), &span_config());
+    let mut sources: Vec<String> = Vec::new();
+    for name in BRIDGE_DEPENDENCIES {
+        let content = files
+            .iter()
+            .find(|(file_name, _)| file_name == name)
+            .unwrap_or_else(|| panic!("generated {name} must be emitted"))
+            .1
+            .clone();
+        write_file(directory, &format!("com/test/{name}"), &content);
+        sources.push(format!("com/test/{name}"));
+    }
+    write_file(
+        directory,
+        "com/test/SpanContext.java",
+        include_str!("fixtures/java_visitor_span_context.java"),
+    );
+    sources.push("com/test/SpanContext.java".to_owned());
+    sources.extend(extra.iter().map(|source| (*source).to_owned()));
+
+    let arguments: Vec<&str> = sources.iter().map(String::as_str).collect();
+    compile_java(directory, &arguments);
+}
+
+/// `decodeContext` must construct whatever record the IR describes, not a fixed six-tuple.
+#[test]
+fn generated_visitor_bridge_compiles_for_a_context_of_another_shape() {
+    if !java_available() {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("temporary Java span directory");
+    compile_span_bridge(directory.path(), &[]);
+}
+
+/// The derived offsets must be the ones `#[repr(C)]` actually places the fields at.
+///
+/// A layout that is wrong by a few bytes of padding still type-checks, so `javac` alone proves
+/// nothing about it. Loading the generated class runs `MemoryLayout.structLayout` over the
+/// derived members and lets the probe read the offset constants back. ~keep
+#[test]
+fn generated_visitor_bridge_lays_the_context_out_where_repr_c_does() {
+    if !java_available() {
+        return;
+    }
+    let directory = tempfile::tempdir().expect("temporary Java span probe directory");
+    write_file(
+        directory.path(),
+        "com/test/SpanProbe.java",
+        include_str!("fixtures/java_visitor_span_probe.java"),
+    );
+    compile_span_bridge(directory.path(), &["com/test/SpanProbe.java"]);
+    run_java_args(
+        directory.path(),
+        &["--enable-native-access=ALL-UNNAMED", "-cp", ".", "com.test.SpanProbe"],
+    );
+}
+
+/// The Java layout and the C struct must describe the same fields, in the same order.
+///
+/// Two generators deriving the same shape independently is how the Java bridge came to hardcode
+/// one consumer's context; this pins the two emissions to each other so a future divergence is a
+/// test failure rather than a consumer's broken build. It also pins the skip decision: `weight`
+/// and `tags` have no C representation, so neither side may mention them. ~keep
+#[test]
+fn java_context_layout_names_the_same_fields_as_the_generated_c_struct() {
+    let carried = ["label", "severity", "active", "offset", "note"];
+
+    let java = generate(&span_api(), &span_config());
+    let bridge = &java
+        .iter()
+        .find(|(name, _)| name == "VisitorBridge.java")
+        .expect("generated VisitorBridge.java")
+        .1;
+    let java_order: Vec<&str> = carried
+        .iter()
+        .filter(|field| bridge.contains(&format!("withName(\"{field}\")")))
+        .copied()
+        .collect();
+    assert_eq!(java_order, carried, "{bridge}");
+
+    let ffi = alef::backends::ffi::FfiBackend
+        .generate_bindings(&span_api(), &span_config())
+        .expect("ffi visitor generation must succeed");
+    let struct_source = ffi
+        .iter()
+        .map(|file| file.content.as_str())
+        .find(|content| content.contains("pub struct TestContext {"))
+        .expect("generated #[repr(C)] context struct");
+    let declaration = struct_source
+        .split("pub struct TestContext {")
+        .nth(1)
+        .and_then(|rest| rest.split_once('}'))
+        .expect("context struct body")
+        .0;
+    for (field, c_type) in
+        carried
+            .iter()
+            .zip(["*const std::ffi::c_char", "u8", "i32", "i16", "*const std::ffi::c_char"])
+    {
+        assert!(
+            declaration.contains(&format!("pub {field}: {c_type},")),
+            "`{field}: {c_type}` missing from:{declaration}"
+        );
+    }
+
+    for dropped in ["weight", "tags"] {
+        assert!(!declaration.contains(dropped), "{declaration}");
+        assert!(!bridge.contains(&format!("withName(\"{dropped}\")")), "{bridge}");
+    }
 }

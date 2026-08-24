@@ -1,0 +1,13 @@
+    // `{{ context_type }}` exactly as the FFI backend lays it out in C:
+    // {{ byte_size }} bytes, {{ byte_alignment }}-byte aligned.
+    private static final MemoryLayout CTX_LAYOUT =
+        MemoryLayout.structLayout(
+{% for member in members %}
+            {{ member }}{{ "," if not loop.last }}
+{% endfor %}
+        );
+
+{% for offset in offsets %}
+    private static final long {{ offset.constant }} =
+        CTX_LAYOUT.byteOffset(MemoryLayout.PathElement.groupElement("{{ offset.name }}"));
+{% endfor %}
