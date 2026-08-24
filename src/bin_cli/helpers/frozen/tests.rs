@@ -434,3 +434,55 @@ fn has_adoptable_frozen_files_is_true_when_a_real_adoptable_frozen_file_remains(
     );
     assert!(super::has_adoptable_frozen_files(&frozen));
 }
+
+/// THE Part 1 regression, end to end through the same call `alef verify` makes.
+///
+/// A create-once seed on disk with no marker must not appear in the frozen report at all, and
+/// the report must not name `--clobber-create-once-seeds`. Measured cause: a consumer's two CI
+/// jobs failed on "Frozen generated files detected" listing 102 paths, of which `alef adopt
+/// --converged-only` adopted zero -- 72 refused by alef itself as create-once seeds (13 LICENSE
+/// files, `mvnw`, `gradlew`, `build.zig.zon`, `.gitkeep`s), leaving the destructive flag as the
+/// only escape alef offered for files its own documentation calls user-owned after scaffold.
+///
+/// Driven through `frozen_managed_paths` rather than a hand-built `FrozenFile`, so a
+/// classification change that stopped marking these `create_once` would fail here rather than
+/// pass by accident. `LICENSE` has no extension and so no comment syntax alef will key on,
+/// which is exactly the shape every one of the 72 refused paths had: unmarkABLE, emitted
+/// `generated_header: false`, and therefore a create-once seed by `is_create_once_seed`. ~keep
+#[test]
+fn report_lines_omits_a_create_once_seed_and_never_names_the_clobber_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("LICENSE"), "Copyright the consumer\n").unwrap();
+    let files = vec![gen_file_unheadered("LICENSE", "Copyright <holder>\n")];
+
+    let frozen = frozen_managed_paths(&files, dir.path());
+    assert_eq!(frozen.len(), 1, "the seed is still classified");
+    assert!(
+        frozen[0].create_once,
+        "an unmarked seed with unmarked content is create-once"
+    );
+
+    let report = super::report_lines(&frozen);
+    assert!(
+        report.is_empty(),
+        "a create-once seed must not be reported as frozen: {report:?}"
+    );
+    assert_eq!(super::unmarked_create_once_seeds(&frozen).len(), 1);
+}
+
+/// The other half: a genuinely adoptable frozen file must still get its heading and the exact
+/// marker line to paste in. Without this, deleting the whole report would satisfy the test
+/// above. ~keep
+#[test]
+fn report_lines_still_reports_a_genuinely_adoptable_frozen_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("SomeType.java"), "final class SomeType {}\n").unwrap();
+    let files = vec![gen_file("SomeType.java", "final class SomeType {}\n")];
+
+    let frozen = frozen_managed_paths(&files, dir.path());
+    let report = super::report_lines(&frozen).join("\n");
+    assert!(report.contains("Frozen generated files detected"), "{report}");
+    assert!(report.contains("SomeType.java"), "{report}");
+    assert!(report.contains("add marker:"), "{report}");
+    assert!(super::unmarked_create_once_seeds(&frozen).is_empty());
+}

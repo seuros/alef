@@ -22,7 +22,7 @@ fn managed_paths_split_into_verified_present_and_absent() {
     let managed = paths(directory.path(), &["stamped.toml", "unmarked.json", "never_written.rs"]);
     let marked = paths(directory.path(), &["stamped.toml"]);
 
-    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default());
+    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0);
     assert_eq!(coverage.managed_total, 3);
     assert_eq!(coverage.managed_content_verified, 1);
     assert_eq!(coverage.managed_present_only, 1);
@@ -43,7 +43,7 @@ fn marked_files_outside_the_surface_are_counted_separately() {
     let managed = paths(directory.path(), &["a.rs"]);
     let marked = paths(directory.path(), &["a.rs", "legacy_visitor.py"]);
 
-    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default());
+    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0);
     assert_eq!(coverage.marked_outside_surface, 1);
     assert_eq!(coverage.managed_total, 1);
 }
@@ -63,6 +63,7 @@ fn report_states_that_presence_only_paths_are_not_content_checked() {
         marked_outside_surface: 2,
         files_opened: 40,
         files_unexamined: 900,
+        create_once_unmarked: 0,
     };
     let report = coverage.report_lines().join("\n");
 
@@ -93,6 +94,44 @@ fn report_is_emitted_even_when_nothing_is_outside_the_surface() {
         ..VerifyCoverage::default()
     };
     let lines = coverage.report_lines();
-    assert_eq!(lines.len(), 6, "no orphan line when nothing is orphaned: {lines:?}");
+    assert_eq!(lines.len(), 6, "no orphan or seed line when neither applies: {lines:?}");
     assert!(lines[0].contains("Verify coverage"));
+}
+
+/// Part 1's regression, on the reporting side.
+///
+/// The unmarked create-once seeds must be STATED -- with their count, and as the documented
+/// user-owned steady state rather than as drift -- and the report must not send the reader at
+/// `--clobber-create-once-seeds`, which is the destructive escape the old frozen heading
+/// offered for files alef never rewrites. ~keep
+#[test]
+fn report_states_create_once_seeds_as_coverage_not_as_drift() {
+    let coverage = VerifyCoverage {
+        managed_total: 100,
+        managed_present_only: 72,
+        create_once_unmarked: 72,
+        ..VerifyCoverage::default()
+    };
+    let report = coverage.report_lines().join("\n");
+
+    assert!(
+        report.contains("72 are create-once seeds"),
+        "the seed count must survive the removal of the frozen heading: {report}"
+    );
+    assert!(
+        report.contains("not drift"),
+        "a user-owned seed must not be described as drift: {report}"
+    );
+    assert!(
+        !report.contains("clobber"),
+        "verify must not point a user at --clobber-create-once-seeds for a file it never rewrites: {report}"
+    );
+}
+
+/// A run with no seeds must not print the line at all, so the seed statement stays evidence
+/// that seeds were found rather than boilerplate. ~keep
+#[test]
+fn report_omits_the_seed_line_when_there_are_no_seeds() {
+    let report = VerifyCoverage::default().report_lines().join("\n");
+    assert!(!report.contains("create-once seeds with no marker"), "{report}");
 }

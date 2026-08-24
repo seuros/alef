@@ -45,6 +45,16 @@ pub(crate) struct VerifyCoverage {
     /// Files the walk reached and did not examine at all -- see
     /// [`super::verify_scan::ScanCoverage::unexamined`].
     pub(crate) files_unexamined: usize,
+    /// The subset of [`Self::managed_present_only`] that are create-once seeds carrying no
+    /// provenance marker.
+    ///
+    /// Reported here rather than under a frozen-file heading, and that placement IS the fix:
+    /// alef writes a create-once seed only when its path is absent, so an existing one is a
+    /// user-owned file alef will never rewrite -- not drift, and not something any command can
+    /// or should change. See [`super::helpers::frozen::report_lines`] for the measured incident.
+    /// Stating the number as coverage keeps it visible on a clean run, which the old heading
+    /// (printed only when some other check had already failed) did not. ~keep
+    pub(crate) create_once_unmarked: usize,
 }
 
 impl VerifyCoverage {
@@ -57,12 +67,14 @@ impl VerifyCoverage {
         managed_paths: &std::collections::HashSet<std::path::PathBuf>,
         marked_paths: &std::collections::HashSet<std::path::PathBuf>,
         scan: super::verify_scan::ScanCoverage,
+        create_once_unmarked: usize,
     ) -> Self {
         let mut coverage = Self {
             managed_total: managed_paths.len(),
             marked_outside_surface: marked_paths.difference(managed_paths).count(),
             files_opened: scan.opened,
             files_unexamined: scan.unexamined,
+            create_once_unmarked,
             ..Self::default()
         };
         for path in managed_paths {
@@ -102,17 +114,26 @@ impl VerifyCoverage {
                  so a present-but-wrong file passes)",
                 self.managed_present_only
             ),
-            format!(
-                "    {} absent (reported under the missing-file headings)",
-                self.managed_absent
-            ),
-            format!(
-                "  tree walk: {} file(s) opened, {} never examined (name and extension outside the \
-                 ownership walk's scan set, or not readable as text -- nothing about their contents \
-                 entered this result)",
-                self.files_opened, self.files_unexamined
-            ),
         ];
+        if self.create_once_unmarked > 0 {
+            lines.push(format!(
+                "      of which {} are create-once seeds with no marker: alef writes each of these \
+                 paths only when absent and never revisits it, so the missing marker is the \
+                 documented user-owned steady state, not drift -- nothing needs adopting and no \
+                 rerun changes this line (-vv lists them)",
+                self.create_once_unmarked
+            ));
+        }
+        lines.push(format!(
+            "    {} absent (reported under the missing-file headings)",
+            self.managed_absent
+        ));
+        lines.push(format!(
+            "  tree walk: {} file(s) opened, {} never examined (name and extension outside the \
+             ownership walk's scan set, or not readable as text -- nothing about their contents \
+             entered this result)",
+            self.files_opened, self.files_unexamined
+        ));
         if self.marked_outside_surface > 0 {
             // Deliberately not "see the orphan heading": the orphan check excludes known
             // create-once seed paths on top of this diff, so the two counts legitimately differ
