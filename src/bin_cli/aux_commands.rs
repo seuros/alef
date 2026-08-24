@@ -429,12 +429,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         &api.enums,
                         &api.functions,
                     )?;
-                    let entries = crate::e2e::snippets::migration::compare_root(
-                        &existing_root,
-                        std::path::Path::new(&snippet_config.output),
-                        &generated,
-                    )?;
-                    write_snippet_migration_report(&entries, json)?;
+                    let entries =
+                        crate::bin_cli::snippet_migration::compare(&existing_root, snippet_config, &generated)?;
+                    crate::bin_cli::snippet_migration::write_report(&entries, json)?;
                     Ok(None)
                 }
                 E2eAction::Init => {
@@ -797,26 +794,6 @@ fn effective_e2e_languages(
     } else {
         e2e_config.languages.clone()
     }
-}
-
-fn write_snippet_migration_report(
-    entries: &[crate::e2e::snippets::migration::MigrationEntry],
-    json: bool,
-) -> Result<()> {
-    if json {
-        crate::bin_cli::output::payload(serde_json::to_string_pretty(entries)?);
-        return Ok(());
-    }
-    for entry in entries {
-        use crate::e2e::snippets::migration::MigrationStatus;
-        let status = match entry.status {
-            MigrationStatus::Identical => "identical",
-            MigrationStatus::Different => "different",
-            MigrationStatus::NoGeneratedEquivalent => "no_generated_equivalent",
-        };
-        crate::bin_cli::output::line(format_args!("{status}\t{}", entry.path.display()));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ pub(crate) mod helpers;
 pub(crate) mod output;
 pub(crate) mod publish_commands;
 pub(crate) mod release_commands;
+pub(crate) mod snippet_migration;
 /// Public so `cargo test --lib` can exercise the same file `build.rs` compiles via `#[path]`. ~keep
 pub mod tree_state;
 mod verify_coverage;

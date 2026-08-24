@@ -58,6 +58,7 @@ pub fn compare_root_curated(
     curated_globs: &[String],
 ) -> Result<Vec<MigrationEntry>> {
     let existing = read_existing(existing_root)?;
+    let nested_prefix = nested_generated_prefix(existing_root, generated_root);
     let relative_generated = generated
         .iter()
         .map(|file| {
@@ -68,8 +69,12 @@ pub fn compare_root_curated(
                     generated_root.display()
                 )
             })?;
+            let path = match &nested_prefix {
+                Some(prefix) => prefix.join(path),
+                None => path.to_path_buf(),
+            };
             Ok(GeneratedFile {
-                path: path.to_path_buf(),
+                path,
                 content: file.content.clone(),
                 generated_header: file.generated_header,
             })
@@ -82,6 +87,30 @@ pub fn compare_root_curated(
         &relative_generated,
         curated_globs,
     )
+}
+
+/// Where `generated_root` sits relative to `existing_root`, when alef's configured output tree
+/// lives INSIDE the tree being migrated.
+///
+/// Both sides of the comparison have to be keyed off one base. For parallel trees -- a
+/// handwritten `docs/handwritten` against `output = "docs/generated"` -- each side keys off its
+/// own root and this is `None`, which is the original behaviour. When `output` is a subdirectory
+/// of `existing_root` (`alef e2e snippets-migrate docs/snippets` against
+/// `output = "docs/snippets/generated"`) the walk of `existing_root` enumerates alef's own output
+/// under `generated/...`, so the generated side must carry the same prefix or the two key spaces
+/// are disjoint by construction and every file alef just wrote reports as a migration gap. ~keep
+///
+/// The lexical `strip_prefix` answers the CLI's own shape, where both paths are project-relative;
+/// the absolute retry covers a caller mixing an absolute root with a relative configured output.
+/// Identical roots yield an empty prefix, which is `None` rather than a no-op join.
+fn nested_generated_prefix(existing_root: &Path, generated_root: &Path) -> Option<PathBuf> {
+    let non_empty = |prefix: PathBuf| (!prefix.as_os_str().is_empty()).then_some(prefix);
+    if let Ok(prefix) = generated_root.strip_prefix(existing_root) {
+        return non_empty(prefix.to_path_buf());
+    }
+    let existing = std::path::absolute(existing_root).ok()?;
+    let generated = std::path::absolute(generated_root).ok()?;
+    non_empty(generated.strip_prefix(&existing).ok()?.to_path_buf())
 }
 
 fn read_existing(root: &Path) -> Result<Vec<(PathBuf, String)>> {
@@ -286,6 +315,61 @@ mod tests {
         .expect_err("an invalid glob pattern must fail rather than silently match nothing");
 
         assert!(error.to_string().contains("invalid curated snippet glob"), "{error}");
+    }
+
+    /// The nested-root defect: `alef e2e snippets-migrate docs/snippets` against a project
+    /// whose `[crates.e2e.snippets].output` is `docs/snippets/generated` -- the generated tree
+    /// lives INSIDE the tree being migrated.
+    ///
+    /// The walk of `existing_root` enumerates alef's own output under an `existing_root`-relative
+    /// key (`generated/python/a.md`) while the generated list was keyed against `output`
+    /// (`python/a.md`). The two key spaces are disjoint by construction, so every file alef had
+    /// just written reported as `NoGeneratedEquivalent`. One consumer saw 7796 files it had
+    /// generated itself reported as migration gaps this way.
+    #[test]
+    fn a_generated_tree_nested_inside_the_migrated_root_is_matched_not_reported_as_a_gap() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let existing_root = directory.path();
+        let generated_root = existing_root.join("generated");
+        fs::create_dir_all(generated_root.join("python")).expect("create generated tree");
+        fs::create_dir_all(existing_root.join("cli")).expect("create hand-authored tree");
+        fs::write(generated_root.join("python/a.md"), "alef:hash:abc\nsame").expect("write fresh generated snippet");
+        fs::write(generated_root.join("python/b.md"), "alef:hash:def\nstale").expect("write stale generated snippet");
+        fs::write(existing_root.join("cli/quickstart.md"), "by hand").expect("write hand-authored snippet");
+        let generated = vec![
+            generated(
+                &generated_root.join("python/a.md").to_string_lossy(),
+                "alef:hash:abc\nsame",
+            ),
+            generated(
+                &generated_root.join("python/b.md").to_string_lossy(),
+                "alef:hash:def\nfresh",
+            ),
+        ];
+
+        let entries = compare_root(existing_root, &generated_root, &generated).expect("compare snippets");
+
+        assert_eq!(
+            entries,
+            vec![
+                MigrationEntry {
+                    path: PathBuf::from("cli/quickstart.md"),
+                    status: MigrationStatus::NoGeneratedEquivalent,
+                    curated: false,
+                },
+                MigrationEntry {
+                    path: PathBuf::from("generated/python/a.md"),
+                    status: MigrationStatus::Identical,
+                    curated: false,
+                },
+                MigrationEntry {
+                    path: PathBuf::from("generated/python/b.md"),
+                    status: MigrationStatus::Different,
+                    curated: false,
+                },
+            ],
+            "a file alef itself generates must never be reported as having no generated equivalent"
+        );
     }
 
     fn generated(path: &str, content: &str) -> GeneratedFile {
