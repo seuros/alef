@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.3] - 2026-08-24
+
 ### Fixed
 
 - **e2e/swift**: a getter's bridged shape is now read from the binding backend instead of
@@ -138,11 +140,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asks the same question verify asks — does the file on disk carry an alef marker — so the two
   sides can no longer disagree. Only the hash line is rewritten; the seed's body is untouched.
 
-### Added
-
-- Golden vectors pinning the `alef:hash:` recipe (`compute_inputs_hash` / `compute_file_hash`) to
-  `CODEGEN_FORMAT_VERSION`, the recorded revision of that recipe. Changing the framing now fails a
-  test instead of silently invalidating every stamp in every consumer repo.
 - PHP e2e fixtures no longer drop a deliberate empty string on a `String`/`Option<String>` config
   field. The handle-arg and `options_via = "json"` call sites ran fixture input through a
   type-blind filter that removed every `""`, making PHP the only one of 21 backends that never
@@ -161,24 +158,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid type: string "...", expected adjacently tagged enum ...`; the generated `Codable`
   conformance had the same gap in the decoding direction, and trait-bridge result enums got no
   custom `Codable` at all.
-
-### Added
-
-- `codegen::serde_enum_repr` — the single classifier for serde's four enum representations
-  (external, internal, adjacent, untagged), derived from `serde_tag` / `serde_content` /
-  `serde_untagged` in the IR. Backends must classify through it instead of re-deriving the wire
-  form.
-- A cross-backend guard (`codegen::serde_enum_wire_cross_backend_tests`) that measures each
-  backend's generated JSON for an adjacently tagged fixture enum against what `serde_json`
-  actually writes for an equivalent Rust enum, and records which backends hand-write that JSON so
-  a new one cannot drift in unexamined.
-
-### Notes
-
-- The Swift generator now fails at generation time, rather than emitting JSON Rust cannot accept,
-  for two shapes it does not support: a newtype variant of an internally tagged enum (which serde
-  itself cannot serialize) and a multi-field tuple variant of an adjacently tagged enum (whose
-  content serde writes as a JSON array).
 
 - **e2e/snippets**: docs-snippet field facts are now resolved against the call's own declared
   result type instead of by bare field name across the whole crate IR. `presentation::resolve`
@@ -201,14 +180,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a non-compiling member access. `is_valid_for_result` deliberately still default-allows an
   unrecognised name — a hand-authored assertion knows the type the oracle may not — and both
   directions of that asymmetry are covered by tests.
-
-### Changed
-
-- **e2e**: `render_snippet_body_with_functions` is now implemented by the `r`, `zig`, `node`,
-  `kotlin`, `php`, `ruby`, `elixir`, `python` and `rust` e2e generators, which previously had no
-  access to the free-function registry when rendering a docs snippet.
-
-`.
 
 - **java**: An adjacently tagged enum (`#[serde(tag, content)]`) now puts its payload under serde's
   content key. The Jackson serializer flattened the payload beside the tag — serde's *internal*
@@ -235,7 +206,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Note: `src/codegen/serde_enum_wire_cross_backend_tests.rs` records all five hand-writing backends
 as `AdjacentSupport::Correct`; only Swift and Go were correct before.
 
+### Changed
+
+- **e2e**: `render_snippet_body_with_functions` is now implemented by the `r`, `zig`, `node`,
+  `kotlin`, `php`, `ruby`, `elixir`, `python` and `rust` e2e generators, which previously had no
+  access to the free-function registry when rendering a docs snippet.
+
+
 ### Added
+
+- Golden vectors pinning the `alef:hash:` recipe (`compute_inputs_hash` / `compute_file_hash`) to
+  `CODEGEN_FORMAT_VERSION`, the recorded revision of that recipe. Changing the framing now fails a
+  test instead of silently invalidating every stamp in every consumer repo.
+- `codegen::serde_enum_repr` — the single classifier for serde's four enum representations
+  (external, internal, adjacent, untagged), derived from `serde_tag` / `serde_content` /
+  `serde_untagged` in the IR. Backends must classify through it instead of re-deriving the wire
+  form.
+- A cross-backend guard (`codegen::serde_enum_wire_cross_backend_tests`) that measures each
+  backend's generated JSON for an adjacently tagged fixture enum against what `serde_json`
+  actually writes for an equivalent Rust enum, and records which backends hand-write that JSON so
+  a new one cannot drift in unexamined.
 
 - `tests/test_src_module_reachability_gate.rs`: fails if any `.rs` file under `src/` containing a
   `#[test]` function is unreachable from a crate root. It re-derives the real module graph from
@@ -250,6 +240,14 @@ as `AdjacentSupport::Correct`; only Swift and Go were correct before.
   `[crates.dart] frb_version` (resolved by `backends::dart::naming::dart_frb_version`, defaulting
   to the sibling `FLUTTER_RUST_BRIDGE`), so the second constant was a renovate-bumpable duplicate
   of the same version with nothing keeping the two in sync (#218).
+
+### Notes
+
+- The Swift generator now fails at generation time, rather than emitting JSON Rust cannot accept,
+  for two shapes it does not support: a newtype variant of an internally tagged enum (which serde
+  itself cannot serialize) and a multi-field tuple variant of an adjacently tagged enum (whose
+  content serde writes as a JSON array).
+
 
 ## [0.67.2] - 2026-08-23
 
