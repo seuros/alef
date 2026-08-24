@@ -129,7 +129,7 @@ fn ir_cache_dir(crate_name: &str) -> PathBuf {
 }
 
 /// Check if cached IR is still valid for the given crate.
-pub fn is_ir_cached(crate_name: &str, source_hash: &str) -> bool {
+pub fn is_ir_cached(crate_name: &str, cache_key: &CacheKey) -> bool {
     let dir = ir_cache_dir(crate_name);
     let hash_path = dir.join("ir.hash");
     let ir_path = dir.join("ir.json");
@@ -137,7 +137,7 @@ pub fn is_ir_cached(crate_name: &str, source_hash: &str) -> bool {
         return false;
     }
     match fs::read_to_string(&hash_path) {
-        Ok(cached) => cached.trim() == source_hash,
+        Ok(cached) => cached.trim() == cache_key.as_str(),
         Err(_) => false,
     }
 }
@@ -150,15 +150,16 @@ pub fn read_cached_ir(crate_name: &str) -> anyhow::Result<crate::core::ir::ApiSu
 }
 
 /// Write IR to cache for the given crate.
-pub fn write_ir_cache(crate_name: &str, api: &crate::core::ir::ApiSurface, source_hash: &str) -> anyhow::Result<()> {
+pub fn write_ir_cache(crate_name: &str, api: &crate::core::ir::ApiSurface, cache_key: &CacheKey) -> anyhow::Result<()> {
     let cache_dir = ir_cache_dir(crate_name);
     fs::create_dir_all(&cache_dir)?;
     fs::write(cache_dir.join("ir.json"), serde_json::to_string_pretty(api)?)?;
-    fs::write(cache_dir.join("ir.hash"), source_hash)?;
+    fs::write(cache_dir.join("ir.hash"), cache_key.as_str())?;
     Ok(())
 }
 
-pub use crate::cli::cache_identity::{compute_lang_hash, compute_stage_hash};
+pub use crate::cli::cache_identity::{CacheKey, compute_ir_key, compute_lang_hash, compute_stage_hash};
+pub(crate) use crate::cli::cache_outputs::{outputs_exist, stamped_outputs_agree_with_disk};
 
 /// Per-crate hashes directory: `.alef/<crate>/hashes/`.
 fn hashes_dir(crate_name: &str) -> PathBuf {
@@ -166,18 +167,26 @@ fn hashes_dir(crate_name: &str) -> PathBuf {
 }
 
 /// Check if a language's output is cached for the given crate.
-/// Returns false if the hash doesn't match OR if any previously-generated
-/// output files are missing from disk.
-pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &str) -> bool {
+///
+/// A hit requires the key to match, every manifested output to still be on disk, AND every
+/// manifested output that carries an `alef:hash:` stamp to still agree with that stamp under
+/// `inputs_hash`. The last condition is what makes a hit mean anything: [`outputs_exist`]
+/// tests only for *existence*, so a generated file edited in place stayed a cache hit, and
+/// `alef generate` answered `Generated 0 files` while leaving the edit untouched — a skip
+/// indistinguishable from a verification. The stamp comparison is the same one `alef verify`
+/// runs (`hash::compute_file_hash` against the embedded value), so a tree that passes verify
+/// passes here; unstamped outputs (`generated_header: false`, create-once seeds) have nothing
+/// to compare and keep the existence-only rule. ~keep
+pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &CacheKey, inputs_hash: &str) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{lang}.hash"));
     let manifest_path = dir.join(format!("{lang}.manifest"));
     match fs::read_to_string(&hash_path) {
         Ok(cached) => {
-            if cached.trim() != lang_hash {
+            if cached.trim() != lang_hash.as_str() {
                 return false;
             }
-            outputs_exist(&manifest_path)
+            outputs_exist(&manifest_path) && stamped_outputs_agree_with_disk(&manifest_path, inputs_hash)
         }
         Err(_) => false,
     }
@@ -192,10 +201,10 @@ pub fn is_lang_cached(crate_name: &str, lang: &str, lang_hash: &str) -> bool {
 /// backend whose language-side output tree is much larger is otherwise silent: nothing
 /// else marks the difference between "this backend genuinely emits one file" and "the
 /// caller never folded a later phase's output back in" (alef#158). ~keep
-pub fn write_lang_hash(crate_name: &str, lang: &str, lang_hash: &str, output_paths: &[PathBuf]) -> anyhow::Result<()> {
+pub fn write_lang_hash(crate_name: &str, lang: &str, key: &CacheKey, output_paths: &[PathBuf]) -> anyhow::Result<()> {
     let dir = hashes_dir(crate_name);
     fs::create_dir_all(&dir)?;
-    fs::write(dir.join(format!("{lang}.hash")), lang_hash)?;
+    fs::write(dir.join(format!("{lang}.hash")), key.as_str())?;
     write_manifest(&dir.join(format!("{lang}.manifest")), output_paths)?;
     tracing::debug!(
         crate_name,
@@ -990,13 +999,13 @@ pub fn write_toml_merge_provenance(
 /// Check if a stage's output is cached for the given crate.
 /// Returns false if the hash doesn't match OR if any previously-generated
 /// output files are missing from disk.
-pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &str) -> bool {
+pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{stage}.hash"));
     let manifest_path = dir.join(format!("{stage}.manifest"));
     match fs::read_to_string(&hash_path) {
         Ok(cached) => {
-            if cached.trim() != stage_hash {
+            if cached.trim() != stage_hash.as_str() {
                 return false;
             }
             outputs_exist(&manifest_path)
@@ -1026,6 +1035,9 @@ pub fn read_stage_paths(crate_name: &str, stage: &str) -> Vec<PathBuf> {
 }
 
 /// Write stage hash and output file manifest for the given crate.
+///
+/// Takes `&str`, not [`CacheKey`]: manifest-only callers store a plain content hash here and
+/// never read it back through [`is_stage_cached`]. See `cache_identity`'s module doc. ~keep
 pub fn write_stage_hash(
     crate_name: &str,
     stage: &str,
@@ -1050,42 +1062,6 @@ fn write_manifest(manifest_path: &Path, output_paths: &[PathBuf]) -> anyhow::Res
     }
     fs::write(manifest_path, content)?;
     Ok(())
-}
-
-/// Check that all files listed in a manifest exist on disk. False if any listed file is missing,
-/// if the manifest is empty, or if the manifest could not be read at all.
-///
-/// Every failure to read is a cache **miss**, never a hit. A manifest is absent for three
-/// different reasons -- the stage has never run, the cache predates the manifest format, or the
-/// previous run died between `fs::write`ing the hash and writing the manifest ([`write_lang_hash`]
-/// and [`write_stage_hash`] are two separate writes, so an interrupt leaves exactly a matching
-/// hash with no manifest) -- and only the read itself can no longer tell them apart. The single
-/// caller spends this answer on "may I skip regenerating?", where an unknown costs one
-/// regeneration, while a wrong `true` skips the write entirely and leaves the tree permanently
-/// short of files the cache insists are present. An empty-but-readable manifest already answered
-/// `false`; an unreadable one is strictly less evidence and must not answer better. ~keep
-fn outputs_exist(manifest_path: &Path) -> bool {
-    match fs::read_to_string(manifest_path) {
-        Ok(content) => {
-            let mut paths = content.lines().filter(|line| !line.is_empty()).peekable();
-            paths.peek().is_some() && paths.all(|line| Path::new(line).exists())
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            tracing::debug!(
-                manifest = %manifest_path.display(),
-                "no output manifest recorded; treating the cache entry as a miss"
-            );
-            false
-        }
-        Err(error) => {
-            tracing::warn!(
-                manifest = %manifest_path.display(),
-                %error,
-                "output manifest exists but could not be read; treating the cache entry as a miss"
-            );
-            false
-        }
-    }
 }
 
 /// Hash all files in a directory recursively (for e2e fixture hashing).
@@ -1198,6 +1174,7 @@ pub fn show_status() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::cache_identity::key_for_test as test_key;
 
     fn api_with_ordered_entries(entries: &[(&str, &str)]) -> crate::core::ir::ApiSurface {
         let mut api = crate::core::ir::ApiSurface {
@@ -1261,8 +1238,8 @@ mod tests {
         let generated = "// auto-generated by alef\npub fn sample() {}\n";
         let first_cache_hash = compute_lang_hash(&first_json, "sample", "[sample]\n");
         let second_cache_hash = compute_lang_hash(&second_json, "sample", "[sample]\n");
-        let first_file_hash = crate::core::hash::compute_file_hash(&first_cache_hash, generated);
-        let second_file_hash = crate::core::hash::compute_file_hash(&second_cache_hash, generated);
+        let first_file_hash = crate::core::hash::compute_file_hash(first_cache_hash.as_str(), generated);
+        let second_file_hash = crate::core::hash::compute_file_hash(second_cache_hash.as_str(), generated);
 
         assert_eq!(first_json, second_json);
         assert_eq!(first_cache_hash, second_cache_hash);
@@ -1310,22 +1287,22 @@ mod tests {
 
         let generated = tmp.path().join("bindings.py");
         std::fs::write(&generated, "# generated\n").expect("write generated output");
-        write_lang_hash("sample-crate", "python", "hash-1", &[generated]).expect("write hash and manifest");
+        write_lang_hash("sample-crate", "python", &test_key("hash-1"), &[generated]).expect("write hash and manifest");
         assert!(
-            is_lang_cached("sample-crate", "python", "hash-1"),
+            is_lang_cached("sample-crate", "python", &test_key("hash-1"), "inputs-hash"),
             "a matching hash whose manifested outputs are all present must be a hit"
         );
 
         let manifest = hashes_dir("sample-crate").join("python.manifest");
         std::fs::remove_file(&manifest).expect("remove the manifest, leaving the hash behind");
         assert!(
-            !is_lang_cached("sample-crate", "python", "hash-1"),
+            !is_lang_cached("sample-crate", "python", &test_key("hash-1"), "inputs-hash"),
             "a hash with no manifest at all must not validate a cache hit"
         );
 
         std::fs::create_dir_all(&manifest).expect("put something unreadable where the manifest belongs");
         assert!(
-            !is_lang_cached("sample-crate", "python", "hash-1"),
+            !is_lang_cached("sample-crate", "python", &test_key("hash-1"), "inputs-hash"),
             "a manifest that exists but cannot be read must not validate a cache hit either"
         );
     }
@@ -1401,7 +1378,7 @@ mod tests {
                     path
                 })
                 .collect();
-            write_stage_hash("sample-crate", scenario.stage, "hash-1", &outputs)
+            write_stage_hash("sample-crate", scenario.stage, test_key("hash-1").as_str(), &outputs)
                 .expect("write stage hash and manifest");
 
             if let Some(to_delete) = scenario.delete_output {
@@ -1409,7 +1386,7 @@ mod tests {
             }
 
             assert_eq!(
-                is_stage_cached("sample-crate", scenario.stage, scenario.query_hash),
+                is_stage_cached("sample-crate", scenario.stage, &test_key(scenario.query_hash)),
                 scenario.expect_hit,
                 "scenario `{}` expected hit={}",
                 scenario.name,
@@ -1523,7 +1500,7 @@ mod tests {
             // Run N: the type folded into a capsule type, so `pipeline::generate` no longer emits
             // it, and calls `write_lang_hash` (unconditionally, for every regenerated language) with
             // the smaller list -- exactly the call that used to be misread as the sweep's baseline.
-            write_lang_hash("sample", "python", "lang-hash-n", &[])?;
+            write_lang_hash("sample", "python", &test_key("lang-hash-n"), &[])?;
 
             let dedicated_baseline = read_stage_paths("sample", "all-bindings-python-ownership");
             let lang_manifest = read_lang_manifest("sample", "python");

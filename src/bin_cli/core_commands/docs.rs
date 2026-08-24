@@ -83,7 +83,7 @@ pub(crate) fn handle(
         let doc_paths = pipeline::stampable_output_paths(&files, &base_dir);
         pipeline::finalize_hashes(&doc_paths, &sources_hash, &alef_toml_bytes)?;
         if use_stage_cache {
-            cache::write_stage_hash(&resolved_cfg.name, &docs_stage_key, &stage_hash, &output_paths)?;
+            cache::write_stage_hash(&resolved_cfg.name, &docs_stage_key, stage_hash.as_str(), &output_paths)?;
         }
         grand_total += count;
     }

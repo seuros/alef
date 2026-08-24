@@ -1,10 +1,36 @@
-//! Cache-key identity for the language and stage generation caches.
+//! Cache-key identity for every `.alef/` cache that can *skip* work.
 //!
 //! Split out of [`crate::cli::cache`] so the "what makes a cache entry stale?"
-//! question lives in one bounded place. Two hashes are computed here:
-//! [`compute_lang_hash`] (per target language, consumed by
+//! question lives in one bounded place. Three keys are computed here:
+//! [`compute_ir_key`] (the extracted `ApiSurface`, consumed by
+//! `cache::is_ir_cached`), [`compute_lang_hash`] (per target language, consumed by
 //! `cache::is_lang_cached`) and [`compute_stage_hash`] (per generation stage —
 //! stubs, docs, readme, scaffold, e2e — consumed by `cache::is_stage_cached`).
+//!
+//! # Why the key is a type and not a `String`
+//!
+//! Every key built here folds in the alef build identity, so no cache entry
+//! survives an alef upgrade. That invariant held for the language and stage
+//! caches and was silently missing from the IR cache, which was keyed inline in
+//! `pipeline::extract` on `sources + crate version + config` alone: a newer alef
+//! replayed an older alef's `ApiSurface` verbatim, and — because most
+//! `ApiSurface` fields are `#[serde(default)]` — a field the older extractor
+//! never wrote came back as its default rather than as an error. Both `alef
+//! generate` and `alef verify` consume that surface, so the whole run reported
+//! green over another release's extraction.
+//!
+//! [`CacheKey`]'s field is private to this module, so it cannot be constructed
+//! anywhere else, and the three `is_*_cached` predicates accept nothing else.
+//! A future cache therefore cannot gate a skip on a key that forgot the salt —
+//! not because a test noticed, but because it does not compile. ~keep
+//!
+//! `cache::write_stage_hash` is the one deliberate exception, and takes `&str`:
+//! the `*-ownership` stages and `breaking_changes`' signature baseline reuse it
+//! purely as a named path manifest, storing a plain content hash they never read
+//! back through `is_stage_cached`. Widening [`CacheKey`] to cover them would have
+//! meant handing those call sites a constructor — exactly the escape hatch the
+//! type exists to withhold. The invariant is enforced where it matters, on the
+//! read side that actually decides whether work is skipped. ~keep
 //!
 //! # These are NOT the embedded `alef:hash:` inputs hash
 //!
@@ -18,11 +44,52 @@
 //! output. Adding an input here changes what is regenerated; it does not change
 //! a single byte of any file's embedded hash. ~keep
 
+/// A `.alef/` cache key that is permitted to gate a skip decision.
+///
+/// Constructible only by this module's `compute_*` functions, each of which folds
+/// in the alef build identity. See the module doc for why that is a type
+/// invariant rather than a convention. ~keep
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CacheKey {
+    value: String,
+}
+
+impl CacheKey {
+    /// The key's on-disk textual form, for writing to and comparing against `.alef/`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.value
+    }
+}
+
+/// Mint a distinct [`CacheKey`] per `label`, for tests that only need two keys to differ.
+///
+/// Goes through a real builder rather than exposing a constructor: [`CacheKey`] is unforgeable
+/// on purpose, and a back door here — even a `#[cfg(test)]` one — would be the first thing a
+/// future cache reached for. ~keep
+#[cfg(test)]
+pub(crate) fn key_for_test(label: &str) -> CacheKey {
+    compute_lang_hash("", label, "")
+}
+
+/// Finish a key, folding in the alef build identity that every skip decision depends on.
+///
+/// The only constructor of [`CacheKey`]. Routing all three key builders through it is what
+/// makes "no cache entry outlives the alef build that wrote it" a property of the module
+/// rather than of each call site remembering. ~keep
+fn finish(mut hasher: blake3::Hasher, alef_version: &str) -> CacheKey {
+    hasher.update(binary_identity().as_bytes());
+    hasher.update(alef_version.as_bytes());
+    CacheKey {
+        value: hasher.finalize().to_hex().to_string(),
+    }
+}
+
 /// The alef version that compiled this binary, baked in at build time.
 ///
 /// This is the load-bearing input that [`binary_identity`] cannot be trusted to
 /// supply — see the invalidation note on [`compute_stage_hash`]. ~keep
-fn alef_version() -> &'static str {
+pub(crate) fn alef_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
@@ -51,8 +118,21 @@ fn binary_identity() -> String {
         .unwrap_or_default()
 }
 
+/// Compute the cache key for an extracted `ApiSurface` (`.alef/<crate>/ir.{json,hash}`).
+///
+/// `schema_version` is the serialization generation of `ir.json` itself; the remaining
+/// components are the extraction inputs. The alef build identity is folded in by [`finish`]
+/// because the *extractor* is an input too: `src/extract/` changes between releases, and a
+/// surface produced by an older one is not the surface the current binary would produce.
+/// Nothing else invalidates this cache on an upgrade — the consumer's own `Cargo.toml`
+/// version reaches it only via `crate_version`, which is why an unrelated version bump was
+/// what finally dislodged a months-stale surface in the field. ~keep
+pub fn compute_ir_key(schema_version: &str, sources_hash: &str, crate_version: &str, config_hash: &str) -> CacheKey {
+    compute_ir_key_for_version(alef_version(), schema_version, sources_hash, crate_version, config_hash)
+}
+
 /// Compute hash for a language's output (IR + language-specific config + alef build identity).
-pub fn compute_lang_hash(ir_json: &str, lang: &str, config_toml: &str) -> String {
+pub fn compute_lang_hash(ir_json: &str, lang: &str, config_toml: &str) -> CacheKey {
     compute_lang_hash_for_version(alef_version(), ir_json, lang, config_toml)
 }
 
@@ -65,20 +145,38 @@ pub fn compute_lang_hash(ir_json: &str, lang: &str, config_toml: &str) -> String
 /// consumer silently keeps the previous release's generated code until someone happens to
 /// pass `--clean`. The compile-time version is what guarantees that; [`binary_identity`] is
 /// an additional, failure-prone salt that only narrows same-version rebuilds. ~keep
-pub fn compute_stage_hash(ir_json: &str, stage: &str, config_toml: &str, extra: &[u8]) -> String {
+pub fn compute_stage_hash(ir_json: &str, stage: &str, config_toml: &str, extra: &[u8]) -> CacheKey {
     compute_stage_hash_for_version(alef_version(), ir_json, stage, config_toml, extra)
+}
+
+/// [`compute_ir_key`] with the alef version supplied by the caller, so tests can
+/// observe the effect of an alef upgrade without rebuilding the binary.
+pub(crate) fn compute_ir_key_for_version(
+    alef_version: &str,
+    schema_version: &str,
+    sources_hash: &str,
+    crate_version: &str,
+    config_hash: &str,
+) -> CacheKey {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(schema_version.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(sources_hash.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(crate_version.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(config_hash.as_bytes());
+    finish(hasher, alef_version)
 }
 
 /// [`compute_lang_hash`] with the alef version supplied by the caller, so tests can
 /// observe the effect of an alef upgrade without rebuilding the binary.
-fn compute_lang_hash_for_version(alef_version: &str, ir_json: &str, lang: &str, config_toml: &str) -> String {
+fn compute_lang_hash_for_version(alef_version: &str, ir_json: &str, lang: &str, config_toml: &str) -> CacheKey {
     let mut hasher = blake3::Hasher::new();
     hasher.update(ir_json.as_bytes());
     hasher.update(lang.as_bytes());
     hasher.update(config_toml.as_bytes());
-    hasher.update(binary_identity().as_bytes());
-    hasher.update(alef_version.as_bytes());
-    hasher.finalize().to_hex().to_string()
+    finish(hasher, alef_version)
 }
 
 /// [`compute_stage_hash`] with the alef version supplied by the caller, so tests can
@@ -89,7 +187,7 @@ fn compute_stage_hash_for_version(
     stage: &str,
     config_toml: &str,
     extra: &[u8],
-) -> String {
+) -> CacheKey {
     let mut hasher = blake3::Hasher::new();
     hasher.update(ir_json.as_bytes());
     hasher.update(stage.as_bytes());
@@ -97,9 +195,7 @@ fn compute_stage_hash_for_version(
     if !extra.is_empty() {
         hasher.update(extra);
     }
-    hasher.update(binary_identity().as_bytes());
-    hasher.update(alef_version.as_bytes());
-    hasher.finalize().to_hex().to_string()
+    finish(hasher, alef_version)
 }
 
 #[cfg(test)]
@@ -124,6 +220,73 @@ mod tests {
             before, after,
             "a new alef release must invalidate the stage cache; identical hashes mean \
              `alef generate` skips every stage and silently keeps the old release's output"
+        );
+    }
+
+    const IR_SCHEMA: &str = "ir-cache-v2";
+    const SOURCES_HASH: &str = "sources-abc";
+    const CRATE_VERSION: &str = "1.4.0";
+    const CONFIG_HASH: &str = "config-abc";
+
+    /// The third cache, and the one that shipped without the salt its two siblings already
+    /// had. A newer alef reusing an older alef's `ApiSurface` is worse than reusing its
+    /// generated bytes: `#[serde(default)]` on most `ApiSurface` fields means a field the
+    /// older extractor never wrote deserializes to its default instead of failing, so the
+    /// new binary generates from a surface that is wrong rather than merely old — and
+    /// `alef verify`, which reads the same cache, agrees with it. ~keep
+    #[test]
+    fn ir_key_changes_when_the_alef_version_changes() {
+        let before = compute_ir_key_for_version("0.67.2", IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH);
+        let after = compute_ir_key_for_version("0.67.5", IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH);
+        assert_ne!(
+            before, after,
+            "a new alef release must invalidate the IR cache; identical keys mean the new \
+             binary extracts nothing and generates from the previous release's ApiSurface"
+        );
+    }
+
+    /// Each extraction input must still move the key on its own — otherwise the version salt
+    /// would be masking a key that had stopped distinguishing anything else. ~keep
+    #[test]
+    fn ir_key_still_separates_every_extraction_input_within_one_version() {
+        let version = "0.67.5";
+        let base = compute_ir_key_for_version(version, IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH);
+        assert_ne!(
+            base,
+            compute_ir_key_for_version(version, "ir-cache-v3", SOURCES_HASH, CRATE_VERSION, CONFIG_HASH)
+        );
+        assert_ne!(
+            base,
+            compute_ir_key_for_version(version, IR_SCHEMA, "sources-xyz", CRATE_VERSION, CONFIG_HASH)
+        );
+        assert_ne!(
+            base,
+            compute_ir_key_for_version(version, IR_SCHEMA, SOURCES_HASH, "1.5.0", CONFIG_HASH)
+        );
+        assert_ne!(
+            base,
+            compute_ir_key_for_version(version, IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, "config-xyz")
+        );
+        assert_eq!(
+            base,
+            compute_ir_key_for_version(version, IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH),
+            "the IR key must be deterministic within one alef build"
+        );
+    }
+
+    /// The public entry point must route through the compiled-in version, not merely expose a
+    /// version-aware helper that `pipeline::extract` does not call. ~keep
+    #[test]
+    fn compute_ir_key_uses_the_compiled_in_alef_version() {
+        assert_eq!(
+            compute_ir_key(IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH),
+            compute_ir_key_for_version(
+                env!("CARGO_PKG_VERSION"),
+                IR_SCHEMA,
+                SOURCES_HASH,
+                CRATE_VERSION,
+                CONFIG_HASH
+            )
         );
     }
 

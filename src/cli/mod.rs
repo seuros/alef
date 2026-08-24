@@ -3,6 +3,7 @@
 pub mod breaking_changes;
 pub mod cache;
 pub mod cache_identity;
+mod cache_outputs;
 pub mod commands;
 pub mod dispatch;
 pub mod git;

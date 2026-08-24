@@ -642,7 +642,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             let e2e_output_root = base_dir.join(&e2e_config.output);
                             pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root], &[])?;
 
-                            cache::write_stage_hash(&resolved_cfg.name, "e2e", &e2e_stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&resolved_cfg.name, "e2e", e2e_stage_hash.as_str(), &output_paths)?;
                         }
 
                         for path in output_paths {
@@ -720,7 +720,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             cache::write_stage_hash(
                                 &resolved_cfg.name,
                                 "test-apps",
-                                &test_apps_stage_hash,
+                                test_apps_stage_hash.as_str(),
                                 &output_paths,
                             )?;
                         }
