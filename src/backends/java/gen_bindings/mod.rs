@@ -183,7 +183,7 @@ impl Backend for JavaBackend {
         // init, so binding a symbol the FFI cdylib does not export fails the whole class, not the
         // one call. Drop whatever this binding's feature set does not satisfy — cfg-gated methods
         // included — before anything reads the surface. Mirrors `filtered_jni_api`. ~keep
-        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Java);
+        crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Java);
         let java_features: HashSet<&str> = config
             .features_for_language(Language::Java)
             .iter()
