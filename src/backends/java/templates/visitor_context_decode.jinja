@@ -1,0 +1,25 @@
+    private static {{ context_type }} decodeContext(
+            final MemorySegment ctxPtr) {
+        var ctx = ctxPtr.reinterpret(CTX_LAYOUT.byteSize());
+        return new {{ context_type }}(
+{% for argument in arguments %}
+{% if argument.kind == "required_string" %}
+            ctx.get(ValueLayout.ADDRESS, {{ argument.constant }})
+                .reinterpret(Long.MAX_VALUE).getString(0){{ "," if not loop.last }}
+{% elif argument.kind == "optional_string" %}
+            ctx.get(ValueLayout.ADDRESS, {{ argument.constant }}).equals(MemorySegment.NULL)
+                ? null
+                : ctx.get(ValueLayout.ADDRESS, {{ argument.constant }})
+                    .reinterpret(Long.MAX_VALUE).getString(0){{ "," if not loop.last }}
+{% elif argument.kind == "bool" %}
+            ctx.get(ValueLayout.JAVA_INT, {{ argument.constant }}) != 0{{ "," if not loop.last }}
+{% elif argument.kind == "enum" %}
+            {{ argument.enum_type }}.values()[ctx.get(ValueLayout.JAVA_INT, {{ argument.constant }})]{{ "," if not loop.last }}
+{% elif argument.kind == "integer" %}
+            ctx.get({{ argument.value_layout }}, {{ argument.constant }}){{ "," if not loop.last }}
+{% else %}
+            {{ argument.absent_value }}{{ "," if not loop.last }}
+{% endif %}
+{% endfor %}
+        );
+    }

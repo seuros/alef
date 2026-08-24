@@ -6,6 +6,7 @@ use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, EnumDef, MethodDef, PrimitiveType, TypeDef, TypeRef};
 
 use super::callbacks::{CallbackSpec, ExtraParam};
+use super::context::{ContextDecoding, context_decoding};
 use super::helpers::{
     callback_descriptor, callback_method_type, gen_handle_method, iface_param_str, sanitize_callback_doc, stub_var_name,
 };
@@ -17,11 +18,9 @@ const CHUNK_SIZE: usize = 5;
 pub(super) struct VisitorGeneration {
     trait_name: String,
     context_type: String,
-    /// Java enum type used for the first (discriminant) field of the context_type record.
-    /// Used by the VisitorBridge to convert the raw int discriminant read from the C
-    /// context struct into the typed enum expected by the record constructor.
-    /// `None` when the first field is not a Named enum (defaults to plain int passthrough).
-    node_type_enum: Option<String>,
+    /// `CTX_LAYOUT`, the offset constants and `decodeContext`, derived from the shared
+    /// `#[repr(C)]` context layout the FFI backend emits the struct from. ~keep
+    context_decoding: ContextDecoding,
     result_type: String,
     default_variant: String,
     callbacks: Vec<CallbackSpec>,
@@ -67,10 +66,6 @@ pub(super) fn resolve_visitor_generation(
         );
         return None;
     };
-    let node_type_enum = context_type_def.fields.first().and_then(|field| match &field.ty {
-        TypeRef::Named(name) if api.enums.iter().any(|e| e.name == *name) => Some(name.clone()),
-        _ => None,
-    });
     let Some(result_enum) = api.enums.iter().find(|enum_def| enum_def.name == result_type) else {
         tracing::warn!(
             "Skipping Java visitor generation for trait bridge `{}`: result_type `{result_type}` is absent",
@@ -103,7 +98,7 @@ pub(super) fn resolve_visitor_generation(
     Some(VisitorGeneration {
         trait_name: bridge.trait_name.clone(),
         context_type: context_type.to_string(),
-        node_type_enum,
+        context_decoding: context_decoding(context_type_def, api, context_type),
         result_type: result_type.to_string(),
         default_variant: metadata.default_variant.name,
         callbacks,
@@ -308,7 +303,8 @@ fn gen_visitor_bridge(package: &str, visitor: &VisitorGeneration) -> String {
             package => package,
             trait_name => &visitor.trait_name,
             context_type => &visitor.context_type,
-            node_type_enum => visitor.node_type_enum.as_deref(),
+            context_layout => visitor.context_decoding.layout.trim_end_matches('\n'),
+            decode_context => visitor.context_decoding.decode_method.trim_end_matches('\n'),
             result_type => &visitor.result_type,
             num_callbacks => num_callbacks,
             num_fields => num_fields,

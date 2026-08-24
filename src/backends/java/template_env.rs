@@ -9,6 +9,14 @@ static TEMPLATES: &[(&str, &str)] = &[
     ("facade_file.jinja", include_str!("templates/facade_file.jinja")),
     ("native_lib.jinja", include_str!("templates/native_lib.jinja")),
     ("visitor_bridge.jinja", include_str!("templates/visitor_bridge.jinja")),
+    (
+        "visitor_context_layout.jinja",
+        include_str!("templates/visitor_context_layout.jinja"),
+    ),
+    (
+        "visitor_context_decode.jinja",
+        include_str!("templates/visitor_context_decode.jinja"),
+    ),
     ("trait_interface.jinja", include_str!("templates/trait_interface.jinja")),
     ("trait_bridge.jinja", include_str!("templates/trait_bridge.jinja")),
     (

@@ -86,8 +86,10 @@ pub(crate) struct ContextAbiField {
     pub doc: String,
     pub shape: ContextFieldShape,
     pub scalar: ContextScalar,
-    pub byte_offset: u64,
     /// Padding `#[repr(C)]` inserts before this field to satisfy its alignment.
+    ///
+    /// Host bindings rebuild the offsets from the padded member sequence rather than being handed
+    /// them, so the padding is the offset contract. ~keep
     pub leading_padding: u64,
 }
 
@@ -134,7 +136,6 @@ pub(crate) fn context_abi(context_def: &TypeDef, api: &ApiSurface) -> ContextAbi
             doc: context_field_doc(field),
             shape,
             scalar,
-            byte_offset: offset,
             leading_padding,
         });
         offset += scalar.byte_size();
@@ -235,10 +236,14 @@ mod tests {
             &ApiSurface::default(),
         );
 
-        let offsets: Vec<u64> = abi.fields.iter().map(|field| field.byte_offset).collect();
-        assert_eq!(offsets, vec![0, 8, 12, 16, 24]);
         let padding: Vec<u64> = abi.fields.iter().map(|field| field.leading_padding).collect();
-        assert_eq!(padding, vec![0, 0, 3, 0, 6]);
+        assert_eq!(
+            padding,
+            vec![0, 0, 3, 0, 6],
+            "label@0 severity@8 active@12 offset@16 note@24"
+        );
+        let sizes: Vec<u64> = abi.fields.iter().map(|field| field.scalar.byte_size()).collect();
+        assert_eq!(sizes, vec![8, 1, 4, 2, 8]);
         assert_eq!(abi.byte_size, 32);
         assert_eq!(abi.byte_alignment, 8);
         assert_eq!(abi.trailing_padding, 0);
