@@ -558,7 +558,7 @@ pub(super) fn render_json_assertion(
     let field_path = if raw_field_path.is_empty() {
         raw_field_path.to_string()
     } else {
-        field_resolver.resolve(raw_field_path).to_string()
+        field_resolver.result_relative_path(raw_field_path).to_string()
     };
     let field_path = field_path.trim();
 

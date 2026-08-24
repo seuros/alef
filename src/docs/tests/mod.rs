@@ -46,6 +46,7 @@ mod headings;
 mod java_exception_agreement;
 mod language_pages;
 mod markdown_quality;
+mod rustdoc_fence_attributes;
 mod shared_docs;
 mod strict_attribution;
 mod strict_bail_order;

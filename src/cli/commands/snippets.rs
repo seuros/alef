@@ -628,6 +628,23 @@ fn reject_missing_configured_directories(snippet_dirs: &[PathBuf], docs_dirs: &[
     Ok(())
 }
 
+/// Name the audit's coverage so a clean result cannot be mistaken for a wider one.
+///
+/// ~keep An invocation with no `--docs` root skips the documentation-page checks
+/// (fence languages, include targets) entirely and still printed a bare
+/// "Audit clean: no issues found." A consumer whose CI omitted `--docs` therefore read a
+/// green for a check class that never ran. This is the same defect
+/// `reject_missing_configured_directories` fixed for a *missing* root; an *absent* root
+/// needs saying too, but must not fail the run — auditing snippets alone is legitimate.
+fn audit_scope_summary(docs_dirs: &[PathBuf]) -> &'static str {
+    if docs_dirs.is_empty() {
+        "Audit clean: no issues found in the snippet roots. \
+         Documentation pages were NOT audited — pass --docs to check fence languages and include targets."
+    } else {
+        "Audit clean: no issues found."
+    }
+}
+
 fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatter: bool) -> ExitCode {
     if let Err(code) = reject_missing_configured_directories(snippet_dirs, docs_dirs) {
         return code;
@@ -649,7 +666,7 @@ fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatte
     };
     let report = audit(&config);
     if report.issues.is_empty() {
-        crate::bin_cli::output::line("Audit clean: no issues found.");
+        crate::bin_cli::output::line(audit_scope_summary(docs_dirs));
         return ExitCode::SUCCESS;
     }
     crate::bin_cli::output::line(format!("Audit found {} issue(s):", report.issues.len()));
