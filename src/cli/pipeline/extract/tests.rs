@@ -1,5 +1,7 @@
 use super::external_types::merge_external_type_roots;
-use super::filtering::{apply_exclude_fields, apply_filters, expand_include_list, is_type_excluded};
+use super::filtering::{
+    apply_exclude_fields, apply_filters, expand_include_list, is_type_excluded, unmatched_exclude_entries,
+};
 use super::sanitizer::{TypeSanitization, sanitize_type_ref, sanitize_unknown_types};
 use super::validation::validate_extracted_api;
 use crate::core::config::{ResolvedCrateConfig, SourceCrate};
@@ -267,58 +269,6 @@ fn validate_extracted_api_honors_configured_surface_suppressions() {
     validate_extracted_api(&api, &config).expect("configured diagnostic should be suppressed");
 }
 
-/// Plain (no-`::`) entries match by short name only.
-#[test]
-fn is_type_excluded_plain_entry_matches_by_name() {
-    let exclude = vec!["OutputFormat".to_string()];
-
-    assert!(
-        is_type_excluded("OutputFormat", "sample_crate::types::OutputFormat", &exclude),
-        "plain entry must match when name matches"
-    );
-
-    assert!(
-        !is_type_excluded("SomethingElse", "sample_crate::types::SomethingElse", &exclude),
-        "plain entry must not match when name differs"
-    );
-}
-
-/// Fully-qualified entries match only the specific rust_path, not any type
-/// that merely shares the same short name.
-///
-/// Regression: sample_core::core::config::formats::OutputFormat must be excluded
-/// while sample_core::types::OutputFormat is retained.
-#[test]
-fn is_type_excluded_qualified_entry_matches_rust_path_not_name() {
-    let exclude = vec!["sample_crate::core::config::formats::OutputFormat".to_string()];
-
-    assert!(
-        is_type_excluded(
-            "OutputFormat",
-            "sample_crate::core::config::formats::OutputFormat",
-            &exclude
-        ),
-        "qualified entry must match the exact rust_path"
-    );
-
-    assert!(
-        !is_type_excluded("OutputFormat", "sample_crate::types::OutputFormat", &exclude),
-        "qualified entry must NOT match a different rust_path with the same short name"
-    );
-}
-
-/// Hyphens in rust_path are normalised to underscores before comparison, matching
-/// the convention used throughout alef's path mapping layer.
-#[test]
-fn is_type_excluded_normalises_hyphens_in_rust_path() {
-    let exclude = vec!["my_crate::some_module::Foo".to_string()];
-
-    assert!(
-        is_type_excluded("Foo", "my-crate::some_module::Foo", &exclude),
-        "hyphens in rust_path should be normalised to underscores"
-    );
-}
-
 fn make_typedef(name: &str) -> crate::core::ir::TypeDef {
     crate::core::ir::TypeDef {
         name: name.to_string(),
@@ -406,6 +356,7 @@ fn surface_with(types: Vec<crate::core::ir::TypeDef>, functions: Vec<crate::core
     }
 }
 
+mod config_entry_matching;
 mod external_type_roots;
 
 fn make_unsupported_method(type_name: &str, method_name: &str) -> crate::core::ir::UnsupportedPublicItem {
@@ -439,7 +390,7 @@ fn apply_filters_removes_unsupported_method_when_excluded_by_methods_list() {
     let mut config = ResolvedCrateConfig::default();
     config.exclude.methods = vec!["NodeContext.serialize".to_string()];
 
-    let result = apply_filters(surface, &config);
+    let result = apply_filters(surface, &config).expect("filters must resolve every configured entry");
 
     assert!(
         result.unsupported_public_items.is_empty(),
@@ -461,7 +412,7 @@ fn apply_filters_retains_unsupported_method_when_not_in_exclude_list() {
     let mut config = ResolvedCrateConfig::default();
     config.exclude.methods = vec!["NodeContext.other_method".to_string()];
 
-    let result = apply_filters(surface, &config);
+    let result = apply_filters(surface, &config).expect("filters must resolve every configured entry");
 
     assert_eq!(
         result.unsupported_public_items.len(),
@@ -482,7 +433,7 @@ fn apply_filters_exclude_methods_does_not_affect_unsupported_function_items() {
     let mut config = ResolvedCrateConfig::default();
     config.exclude.methods = vec!["generic_helper".to_string()];
 
-    let result = apply_filters(surface, &config);
+    let result = apply_filters(surface, &config).expect("filters must resolve every configured entry");
 
     assert_eq!(
         result.unsupported_public_items.len(),
@@ -504,7 +455,7 @@ fn apply_filters_retains_unsupported_function_when_included_by_function_list() {
     let mut config = ResolvedCrateConfig::default();
     config.include.functions = vec!["generic_helper".to_string()];
 
-    let result = apply_filters(surface, &config);
+    let result = apply_filters(surface, &config).expect("filters must resolve every configured entry");
 
     assert_eq!(
         result
@@ -530,7 +481,7 @@ fn apply_filters_retains_unsupported_method_when_parent_type_is_included() {
     let mut config = ResolvedCrateConfig::default();
     config.include.types = vec!["NodeContext".to_string()];
 
-    let result = apply_filters(surface, &config);
+    let result = apply_filters(surface, &config).expect("filters must resolve every configured entry");
 
     assert_eq!(
         result
@@ -821,7 +772,7 @@ fn apply_filters_marks_field_binding_excluded_when_listed_in_exclude_fields() {
     let mut config = ResolvedCrateConfig::default();
     config.exclude.fields = vec!["Foo.bar".to_string()];
 
-    let result = apply_filters(surface, &config);
+    let result = apply_filters(surface, &config).expect("filters must resolve every configured entry");
 
     let typ = result
         .types

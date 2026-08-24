@@ -1,16 +1,11 @@
-use crate::core::config::ResolvedCrateConfig;
-use crate::core::ir::{ApiSurface, TypeDef, TypeRef};
+use crate::core::config::{ExcludeConfig, ResolvedCrateConfig};
+use crate::core::ir::{ApiSurface, TypeDef, TypeRef, UnsupportedPublicItem};
 use ahash::{AHashMap, AHashSet};
 
 pub(super) fn is_type_excluded(name: &str, rust_path: &str, exclude_list: &[String]) -> bool {
-    exclude_list.iter().any(|entry| {
-        if entry.contains("::") {
-            let normalised = rust_path.replace('-', "_");
-            normalised == entry.as_str()
-        } else {
-            name == entry.as_str()
-        }
-    })
+    exclude_list
+        .iter()
+        .any(|entry| type_identity_matches(entry, name, rust_path))
 }
 
 /// Reason recorded on `binding_excluded` fields matched via `[crates.exclude].fields`,
@@ -81,6 +76,13 @@ fn apply_exclude_fields_with_warnings(api: &mut ApiSurface, fields: &[String], w
     }
 }
 
+/// The single rule for "does this configured entry name this type?", shared by
+/// `[crates.include].types`, `[crates.exclude].types` and `[crates.exclude].fields`.
+///
+/// A bare entry matches the short name; a `::` entry matches the exact `rust_path`, or — for a
+/// two-segment `crate::Type` entry — any path in that crate ending in `::Type`. The three lists
+/// used to answer this question three different ways, so `exclude.types = ["c::Foo"]` was a silent
+/// no-op for `c::inner::Foo` while `exclude.fields = ["c::Foo.bar"]` matched it. ~keep
 fn type_identity_matches(configured: &str, name: &str, rust_path: &str) -> bool {
     if configured.contains("::") {
         let configured = configured.replace('-', "_");
@@ -103,29 +105,41 @@ fn type_identity_matches(configured: &str, name: &str, rust_path: &str) -> bool 
     }
 }
 
-pub(super) fn apply_filters(mut api: ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
+/// The owning item name an `include` entry is compared against for an unsupported-item
+/// diagnostic: the last path segment for a function, the type before the `.` for a method.
+///
+/// The include *retention* pass and the include *resolution* pass must agree on this, or an
+/// entry that retains a diagnostic is reported as matching nothing. ~keep
+fn owner_name(item: &UnsupportedPublicItem) -> &str {
+    let short_name = item.item_path.rsplit("::").next().unwrap_or(item.item_path.as_str());
+    short_name.split('.').next().unwrap_or(short_name)
+}
+
+pub(super) fn apply_filters(mut api: ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<ApiSurface> {
     let exclude = &config.exclude;
     let include = &config.include;
 
+    warn_unmatched_exclude_entries(&api, exclude);
+
     let mut expanded_include: Option<AHashSet<String>> = None;
     if !include.types.is_empty() {
-        let expanded = expand_include_list(&api, &include.types, &include.functions);
+        let seeds = resolve_include_types(&api, config)?;
+        let expanded = expand_include_list(&api, &seeds, &include.functions);
         api.types.retain(|t| expanded.contains(&t.name));
         api.enums.retain(|e| expanded.contains(&e.name));
         expanded_include = Some(expanded);
     }
     if !include.functions.is_empty() {
+        check_include_functions(&api, &include.functions)?;
         api.functions.retain(|f| include.functions.contains(&f.name));
     }
     if expanded_include.is_some() || !include.functions.is_empty() {
         api.unsupported_public_items.retain(|item| {
-            let short_name = item.item_path.rsplit("::").next().unwrap_or(item.item_path.as_str());
-            let owner_name = short_name.split('.').next().unwrap_or(short_name);
+            let owner = owner_name(item);
             let included_type = expanded_include
                 .as_ref()
-                .is_some_and(|expanded| expanded.contains(owner_name));
-            let included_function =
-                item.item_kind == "function" && include.functions.iter().any(|name| name == owner_name);
+                .is_some_and(|expanded| expanded.contains(owner));
+            let included_function = item.item_kind == "function" && include.functions.iter().any(|name| name == owner);
             included_type || included_function
         });
     }
@@ -193,7 +207,182 @@ pub(super) fn apply_filters(mut api: ApiSurface, config: &ResolvedCrateConfig) -
         apply_exclude_fields(&mut api, &exclude.fields);
     }
 
-    api
+    Ok(api)
+}
+
+/// Resolve every `[crates.include].types` entry against the extracted surface and return the
+/// short names to seed the include expansion with.
+///
+/// `include` is an allowlist, so an entry that resolves to nothing does not merely fail to add a
+/// type — it shrinks the binding, and an entry list that resolves to nothing at all empties the
+/// binding completely while `alef build` still exits 0. A typo, or the qualified `crate::Type`
+/// spelling that `exclude.types` accepts, used to drop every type and enum in silence. Failing
+/// here mirrors `external_types::resolve_root_names`, which already refuses an unresolvable root
+/// on the strictly analogous `[[crates.source_crates]].roots` allowlist. ~keep
+fn resolve_include_types(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Vec<String>> {
+    let mut seeds = Vec::new();
+    let mut unmatched = Vec::new();
+
+    for entry in &config.include.types {
+        let mut matched = false;
+        for typ in &api.types {
+            if type_identity_matches(entry, &typ.name, &typ.rust_path) {
+                seeds.push(typ.name.clone());
+                matched = true;
+            }
+        }
+        for enm in &api.enums {
+            if type_identity_matches(entry, &enm.name, &enm.rust_path) {
+                seeds.push(enm.name.clone());
+                matched = true;
+            }
+        }
+        // Declared opaque types are pushed into the surface by `inject_declared_opaque_types`
+        // after filtering runs, so naming one here is legitimate even though it is absent now.
+        // It needs no seed: injection is unconditional on the include list. ~keep
+        if !matched && config.opaque_types.contains_key(entry) {
+            matched = true;
+        }
+        // A type may exist only as the owner of an `unsupported_public_items` diagnostic, which
+        // the include list is also used to filter; naming one is a match, not a typo. ~keep
+        if !matched
+            && api
+                .unsupported_public_items
+                .iter()
+                .any(|item| owner_name(item) == entry)
+        {
+            matched = true;
+        }
+        if !matched {
+            unmatched.push(format!("`{entry}`"));
+        }
+    }
+
+    if !unmatched.is_empty() {
+        anyhow::bail!(
+            "[crates.include].types matched no type or enum in crate `{}`: {}\n\
+             `include` is an allowlist, so an unmatched entry removes types from every binding \
+             instead of adding one. Use the type's short name, or its full `crate::path::Type`. \
+             The crate exposes {} types and {} enums.",
+            api.crate_name,
+            unmatched.join(", "),
+            api.types.len(),
+            api.enums.len(),
+        );
+    }
+
+    Ok(seeds)
+}
+
+/// Reject `[crates.include].functions` entries that name no public function, for the same reason
+/// [`resolve_include_types`] rejects unmatched type entries. ~keep
+fn check_include_functions(api: &ApiSurface, include_functions: &[String]) -> anyhow::Result<()> {
+    let unmatched: Vec<String> = include_functions
+        .iter()
+        .filter(|entry| {
+            // A generic function reaches the surface only as an `unsupported_public_items`
+            // diagnostic, which the include list also filters; naming one is a match. ~keep
+            !api.functions.iter().any(|func| func.name == **entry)
+                && !api
+                    .unsupported_public_items
+                    .iter()
+                    .any(|item| item.item_kind == "function" && owner_name(item) == entry.as_str())
+        })
+        .map(|entry| format!("`{entry}`"))
+        .collect();
+
+    if !unmatched.is_empty() {
+        anyhow::bail!(
+            "[crates.include].functions matched no public function in crate `{}`: {}\n\
+             `include` is an allowlist, so an unmatched entry removes functions from every \
+             binding instead of adding one. Entries are bare function names. The crate exposes \
+             {} public functions.",
+            api.crate_name,
+            unmatched.join(", "),
+            api.functions.len(),
+        );
+    }
+
+    Ok(())
+}
+
+/// Warn once per `[crates.exclude]` entry that matches nothing in the extracted surface.
+fn warn_unmatched_exclude_entries(api: &ApiSurface, exclude: &ExcludeConfig) {
+    for (list, entry) in unmatched_exclude_entries(api, exclude) {
+        tracing::warn!(entry = %entry, "exclude.{list} entry did not match any extracted item");
+    }
+}
+
+/// Every `[crates.exclude]` entry that matches nothing, as `(list name, entry)`.
+///
+/// An exclusion is only ever observable by what it removes, so a typo'd entry excludes nothing
+/// and reports nothing. `exclude.fields` already warns (see
+/// [`apply_exclude_fields_with_warnings`]); this extends the same diagnostic to the three lists
+/// that had none. Warn rather than fail: an entry may legitimately name a cfg-gated item that is
+/// absent under the currently enabled features. Kept separate from the `tracing` call so the
+/// matching is assertable without installing a subscriber. ~keep
+pub(super) fn unmatched_exclude_entries(api: &ApiSurface, exclude: &ExcludeConfig) -> Vec<(&'static str, String)> {
+    let mut unmatched = Vec::new();
+    let unsupported_short_names: Vec<(&str, &str, &str)> = api
+        .unsupported_public_items
+        .iter()
+        .map(|item| {
+            let short = item.item_path.rsplit("::").next().unwrap_or(item.item_path.as_str());
+            (item.item_kind.as_str(), short, item.item_path.as_str())
+        })
+        .collect();
+
+    for entry in &exclude.types {
+        let matched = api
+            .types
+            .iter()
+            .any(|typ| type_identity_matches(entry, &typ.name, &typ.rust_path))
+            || api
+                .enums
+                .iter()
+                .any(|enm| type_identity_matches(entry, &enm.name, &enm.rust_path))
+            || api
+                .errors
+                .iter()
+                .any(|err| type_identity_matches(entry, &err.name, &err.rust_path))
+            || unsupported_short_names
+                .iter()
+                .any(|(_, short, path)| type_identity_matches(entry, short, path));
+        if !matched {
+            unmatched.push(("types", entry.clone()));
+        }
+    }
+
+    for entry in &exclude.functions {
+        let matched = api.functions.iter().any(|func| func.name == *entry)
+            || unsupported_short_names
+                .iter()
+                .any(|(kind, short, _)| *kind == "function" && short == entry);
+        if !matched {
+            unmatched.push(("functions", entry.clone()));
+        }
+    }
+
+    for entry in &exclude.methods {
+        let matched = api
+            .types
+            .iter()
+            .any(|typ| typ.methods.iter().any(|m| format!("{}.{}", typ.name, m.name) == *entry))
+            || api.services.iter().any(|service| {
+                service
+                    .configurators
+                    .iter()
+                    .any(|m| format!("{}.{}", service.name, m.name) == *entry)
+            })
+            || unsupported_short_names
+                .iter()
+                .any(|(kind, short, _)| *kind == "method" && short == entry);
+        if !matched {
+            unmatched.push(("methods", entry.clone()));
+        }
+    }
+
+    unmatched
 }
 
 /// Expand the include list by transitively discovering all types referenced by fields,

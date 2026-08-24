@@ -52,7 +52,7 @@ pub fn extract(config: &ResolvedCrateConfig, config_path: &Path, clean: bool) ->
 
     merge_external_type_roots(&mut api, config)?;
 
-    api = apply_filters(api, config);
+    api = apply_filters(api, config)?;
 
     inject_declared_opaque_types(&mut api, config);
 
