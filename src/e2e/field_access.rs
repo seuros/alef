@@ -49,3 +49,7 @@ mod accessor_namespace_agreement_tests;
 #[cfg(test)]
 #[path = "field_access/wasm_accessor_tests.rs"]
 mod wasm_accessor_tests;
+
+#[cfg(test)]
+#[path = "field_access/map_key_quoting_tests.rs"]
+mod map_key_quoting_tests;

@@ -1,5 +1,29 @@
 use super::types::PathSegment;
 
+/// Strip one layer of matching `"` / `'` delimiters from the contents of a `[...]` bracket.
+///
+/// A config path may write a map key either bare (`labels[theme]`) or quoted (`labels["theme"]`);
+/// the quotes are path syntax, not part of the key. Every renderer re-adds quoting in its own
+/// target language, so a key that arrived quoted and was carried through verbatim came out
+/// DOUBLY quoted — `labels[""theme""]` (a syntax error in Swift/Go/Java/Ruby/...) or, worse,
+/// `labels["\"theme\""]`, which is valid TypeScript that silently looks up a key no map holds.
+/// Strip here, in the one place that parses brackets, so the renderers stay the only owners of
+/// quoting. A quoted digit key (`labels["0"]`) is the same index as `labels[0]`; the delimiters
+/// carry no type information. ~keep
+fn strip_key_quotes(key: &str) -> &str {
+    for delimiter in ['"', '\''] {
+        if key.len() >= 2 && key.starts_with(delimiter) && key.ends_with(delimiter) {
+            return &key[1..key.len() - 1];
+        }
+    }
+    key
+}
+
+fn is_numeric_key(key: &str) -> bool {
+    let unquoted = strip_key_quotes(key);
+    !unquoted.is_empty() && unquoted.chars().all(|c| c.is_ascii_digit())
+}
+
 pub(super) fn strip_numeric_indices(path: &str) -> String {
     let mut result = String::with_capacity(path.len());
     let mut chars = path.chars().peekable();
@@ -14,7 +38,7 @@ pub(super) fn strip_numeric_indices(path: &str) -> String {
                 }
                 key.push(inner);
             }
-            if closed && !key.is_empty() && key.chars().all(|k| k.is_ascii_digit()) {
+            if closed && is_numeric_key(&key) {
                 // Numeric index — drop it entirely (including any trailing dot).
             } else {
                 result.push('[');
@@ -51,7 +75,7 @@ pub(crate) fn normalize_numeric_indices(path: &str) -> String {
                 }
                 key.push(inner);
             }
-            if closed && !key.is_empty() && key.chars().all(|k| k.is_ascii_digit()) {
+            if closed && is_numeric_key(&key) {
                 result.push_str("[0]");
             } else {
                 result.push('[');
@@ -84,7 +108,7 @@ pub(crate) fn normalize_indices_to_wildcards(path: &str) -> String {
             index.push(inner);
         }
         normalized.push('[');
-        if !index.chars().all(|inner| inner.is_ascii_digit()) {
+        if !is_numeric_key(&index) {
             normalized.push_str(&index);
         }
         normalized.push(']');
@@ -110,7 +134,8 @@ pub(super) fn parse_path(path: &str) -> Vec<PathSegment> {
             segments.push(PathSegment::Length);
         } else if let Some(bracket_pos) = part.find('[') {
             let name = part[..bracket_pos].to_string();
-            let key = part[bracket_pos + 1..].trim_end_matches(']').to_string();
+            // Quotes are bracket syntax, never part of the key — the renderers own quoting.
+            let key = strip_key_quotes(part[bracket_pos + 1..].trim_end_matches(']')).to_string();
             if key.is_empty() {
                 // `foo[]` — a bare bracket LOSES its wildcard meaning here and becomes index 0,
                 // indistinguishable from a hand-written `foo[0]`. Nothing downstream restores it:
