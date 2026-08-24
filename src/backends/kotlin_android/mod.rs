@@ -220,12 +220,20 @@ fn android_project_file(root: &Path, relative_path: &str, content: String) -> Ge
     }
 }
 
+/// The cfg-visible API surface for this backend, filtered by the features the Android artifact
+/// is actually built with.
+///
+/// The configured list is expanded through
+/// [`crate::codegen::cfg::expand_configured_features`] before it is used as the enabled-feature
+/// set. `with_cfg_filtered_deep` matches a `#[cfg(feature = "X")]` gate against that set
+/// LITERALLY, so a consumer who names a core-crate aggregate (the `android-target` shape) under
+/// `[crates.kotlin_android].features` would otherwise have every `#[cfg(feature = "<member>")]`
+/// item dropped from the Android surface even though cargo compiles them — silent underexposure
+/// with no diagnostic, and disagreement with the JNI shim gate, which already expands. ~keep
 fn effective_codegen_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
-    let enabled_features: std::collections::HashSet<&str> = config
-        .features_for_language(Language::KotlinAndroid)
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let expanded =
+        crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::KotlinAndroid));
+    let enabled_features: std::collections::HashSet<&str> = expanded.iter().map(String::as_str).collect();
     let mut api = api.with_cfg_filtered_deep(&enabled_features).with_deduped_functions();
     if let Some(android) = &config.kotlin_android {
         api.types
@@ -539,6 +547,86 @@ features = ["mobile"]
         assert!(
             !kotlin.contains("decoderDetails"),
             "disabled feature API must be omitted: {kotlin}"
+        );
+    }
+
+    /// A configured aggregate feature must expose every member gate it turns on.
+    ///
+    /// `[crates.kotlin_android].features = ["mobile-target"]` with a core crate declaring
+    /// `mobile-target = ["decoder"]` compiles `#[cfg(feature = "decoder")]` items into the
+    /// Android artifact, so they must appear in the Kotlin surface. Matching the configured list
+    /// literally drops them with no diagnostic — API present on desktop, absent on Android.
+    #[test]
+    fn aggregate_feature_members_reach_the_android_surface() {
+        use crate::core::config::NewAlefConfig;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core_dir = dir.path().join("crates").join("demo");
+        std::fs::create_dir_all(core_dir.join("src")).expect("create core crate dir");
+        std::fs::write(
+            core_dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n\n[features]\ndefault = []\n\
+             mobile-target = [\"decoder\"]\ndecoder = []\nunrelated = []\n",
+        )
+        .expect("write core Cargo.toml");
+
+        let raw: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["crates/demo/src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+features = ["mobile-target"]
+"#,
+        )
+        .expect("fixture config parses");
+        let mut config = raw.resolve().expect("fixture config resolves").remove(0);
+        config.workspace_root = Some(dir.path().to_path_buf());
+
+        let api = ApiSurface {
+            crate_name: "demo".into(),
+            version: "0.1.0".into(),
+            functions: vec![
+                crate::core::ir::FunctionDef {
+                    name: "decoder_details".into(),
+                    rust_path: "demo::decoder::decoder_details".into(),
+                    return_type: crate::core::ir::TypeRef::String,
+                    cfg: Some("feature = \"decoder\"".into()),
+                    ..Default::default()
+                },
+                crate::core::ir::FunctionDef {
+                    name: "unrelated_details".into(),
+                    rust_path: "demo::unrelated::unrelated_details".into(),
+                    return_type: crate::core::ir::TypeRef::String,
+                    cfg: Some("feature = \"unrelated\"".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let effective_api = effective_codegen_api(&api, &config);
+        let files = gen_bindings::emit(&effective_api, &config, Path::new("generated"));
+        let kotlin = files
+            .iter()
+            .filter(|file| file.path.extension().is_some_and(|extension| extension == "kt"))
+            .map(|file| file.content.as_str())
+            .collect::<String>();
+
+        assert!(
+            kotlin.contains("decoderDetails"),
+            "`mobile-target` enables `decoder` in the core manifest, so the gated item must be \
+             present in the Android surface:\n{kotlin}"
+        );
+        assert!(
+            !kotlin.contains("unrelatedDetails"),
+            "a feature the aggregate does not reach must stay filtered out:\n{kotlin}"
         );
     }
 
