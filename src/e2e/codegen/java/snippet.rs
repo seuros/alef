@@ -1018,9 +1018,15 @@ mod tests {
             &config,
             &[],
         );
+        // ~keep Anti-vacuity premise: the value really did reach the generator oversized and
+        // really was split. Asserted as `String.join`, never as `" + "` — a `+` between literals
+        // is a compile-time constant expression (JLS 15.29) that `javac` folds straight back into
+        // one `CONSTANT_Utf8`, so a premise phrased that way is satisfied by output that does not
+        // compile. That is precisely how the original fix passed its tests while still emitting
+        // code `javac` rejects.
         assert!(
-            body.contains(" + "),
-            "the generator must have split the oversized value into concatenated literal \
+            body.contains("String.join(\"\", "),
+            "the generator must have split the oversized value into runtime-joined literal \
              chunks, not one giant literal:\n{}",
             &body[..body.len().min(500)]
         );

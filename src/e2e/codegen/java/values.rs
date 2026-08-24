@@ -52,9 +52,17 @@ const JAVA_STRING_LITERAL_CHUNK_CHARS: usize = 8_000;
 /// majority: identifiers, URLs, short fixture fields) render exactly as before, one `"..."`
 /// literal. A value long enough to threaten the cap -- e.g. a large fixture body inlined into a
 /// generated doc snippet or e2e test -- is split into `+`-concatenated literal chunks, each
-/// small enough that no single chunk can approach the limit, and the whole expression is
-/// parenthesized so a caller can chain a method off it (`.replace(...)`) or pass it as a call
-/// argument without knowing whether it rendered one literal or several.
+/// small enough that no single chunk can approach the limit, and the chunks are handed to
+/// `String.join("", ...)` so a caller can chain a method off it (`.replace(...)`) or pass it as a
+/// call argument without knowing whether it rendered one literal or several.
+///
+/// `String.join` rather than `+`, and this is the whole point: `"a" + "b"` between two literals is
+/// a *compile-time constant expression* under JLS 15.29, so `javac` folds it back into a single
+/// `CONSTANT_Utf8` entry and rejects it with `constant string too long` — the very error the
+/// chunking exists to avoid. Splitting into `+`-joined literals therefore changed nothing an
+/// assertion over the rendered text could see, which is exactly why it survived: every test here
+/// measured segment lengths in the emitted string and none of them ever ran `javac`. A method
+/// call is not a constant expression, so each chunk stays its own pool entry. ~keep
 pub(super) fn java_string_literal(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= JAVA_STRING_LITERAL_CHUNK_CHARS {
@@ -64,8 +72,8 @@ pub(super) fn java_string_literal(s: &str) -> String {
         .chunks(JAVA_STRING_LITERAL_CHUNK_CHARS)
         .map(|chunk| format!("\"{}\"", escape_java(&chunk.iter().collect::<String>())))
         .collect::<Vec<_>>()
-        .join(" + ");
-    format!("({joined})")
+        .join(", ");
+    format!("String.join(\"\", {joined})")
 }
 
 /// Emit a Java list of deserialized objects via JsonUtil.
@@ -290,22 +298,32 @@ mod tests {
         "abcdefghij".repeat(10_000) // 100,000 bytes
     }
 
-    /// Regression for alef task #180: a value long enough to threaten the JVM's per-constant
-    /// byte cap must never render as a single literal segment, no matter how it is escaped --
-    /// the cap is structural, not cosmetic. Every `+`-joined segment must independently satisfy
-    /// the limit. ~keep
+    /// A value long enough to threaten the JVM's per-constant byte cap must never render as a
+    /// single literal segment, and must never render as a `+`-joined one either.
+    ///
+    /// ~keep The `+` form was the original fix and it did not work: `"a" + "b"` between two
+    /// literals is a compile-time constant expression (JLS 15.29), so `javac` folds it back into
+    /// one `CONSTANT_Utf8` entry and still reports `constant string too long`. The test that
+    /// guarded it asserted `literal.contains(" + ")` and measured each segment's length — both
+    /// true of output `javac` rejects. Assert the join call here, and let
+    /// `java::snippet`'s javac-backed test be the one that can actually see the failure.
     #[test]
     fn a_value_over_the_jvm_constant_cap_is_never_a_single_literal_segment() {
         let literal = java_string_literal(&oversized_payload());
         assert!(
-            literal.contains(" + "),
-            "an oversized value must be split into multiple concatenated literals: {literal}"
+            literal.starts_with("String.join(\"\", "),
+            "an oversized value must be joined at runtime, not concatenated at compile time: {literal}"
         );
         let inner = literal
-            .strip_prefix('(')
+            .strip_prefix("String.join(\"\", ")
             .and_then(|rest| rest.strip_suffix(')'))
-            .unwrap_or(&literal);
-        for segment in inner.split(" + ") {
+            .unwrap_or_else(|| panic!("expected a String.join expression: {literal}"));
+        let segments: Vec<&str> = inner.split(", ").collect();
+        assert!(
+            segments.len() > 1,
+            "an oversized value must be split into several literals: {literal}"
+        );
+        for segment in segments {
             assert!(
                 segment.len() <= 65_535,
                 "a single Java string literal segment must never exceed the JVM's 65535-byte \
@@ -315,15 +333,27 @@ mod tests {
         }
     }
 
-    /// The parenthesized concatenation must still be usable everywhere a bare literal was --
-    /// as a call argument, or with a method chained directly onto it (e.g. `.replace(...)`,
-    /// as `test_method.rs`'s mock-URL substitution does).
+    /// ~keep A constant-folding form is what made the previous fix inert, so pin its absence
+    /// directly: re-introducing `+` between the chunks would restore the exact defect while
+    /// keeping every length assertion above satisfied.
     #[test]
-    fn an_oversized_literal_is_parenthesized_so_a_caller_can_chain_a_method_onto_it() {
+    fn an_oversized_literal_never_uses_compile_time_concatenation() {
         let literal = java_string_literal(&oversized_payload());
         assert!(
-            literal.starts_with('(') && literal.ends_with(')'),
-            "expected a parenthesized concatenation: {literal}"
+            !literal.contains(" + "),
+            "`+` between literals folds to one constant pool entry and `javac` rejects it: {literal}"
+        );
+    }
+
+    /// The joined expression must still be usable everywhere a bare literal was -- as a call
+    /// argument, or with a method chained directly onto it (e.g. `.replace(...)`, as
+    /// `test_method.rs`'s mock-URL substitution does). A call expression already is.
+    #[test]
+    fn an_oversized_literal_is_a_single_expression_a_caller_can_chain_a_method_onto() {
+        let literal = java_string_literal(&oversized_payload());
+        assert!(
+            literal.starts_with("String.join(") && literal.ends_with(')'),
+            "expected a single self-contained expression: {literal}"
         );
     }
 }
