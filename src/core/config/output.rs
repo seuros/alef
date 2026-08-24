@@ -822,11 +822,14 @@ impl OutputTemplate {
         let path = if let Some(template) = self.entry(lang) {
             PathBuf::from(template.replace("{crate}", crate_name).replace("{lang}", lang))
         } else if multi_crate {
-            PathBuf::from(format!("packages/{lang}/{crate_name}"))
+            PathBuf::from(format!(
+                "{}/{crate_name}",
+                super::resolve_helpers::default_package_root(lang)
+            ))
         } else if let Some(root) = super::resolve_helpers::default_binding_crate_root(crate_name, lang) {
             PathBuf::from(format!("{root}/src"))
         } else {
-            PathBuf::from(format!("packages/{lang}"))
+            PathBuf::from(super::resolve_helpers::default_package_root(lang))
         };
 
         validate_output_path(&path);
