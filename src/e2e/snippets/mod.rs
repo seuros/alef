@@ -170,8 +170,12 @@ pub struct SnippetGenerationReport {
     /// would break every consumer that has lived with the placeholder. It is reported so the
     /// run states what it published rather than implying the snippets are runnable.
     pub placeholder_sample_url_fixtures: Vec<String>,
-    /// Paths under `snippets.output` that `[crates.e2e.snippets].curated_snippets` claims as
+    /// Project-root-relative paths that `[crates.e2e.snippets].curated_snippets` claims as
     /// hand-authored on purpose, resolved by [`coverage::resolve_curated_snippet_paths`].
+    ///
+    /// Project-root-relative rather than `output`-relative because hand-authored snippets
+    /// characteristically sit BESIDE the generated tree rather than inside it; see that
+    /// function for the measurement behind the choice.
     ///
     /// Deliberately not part of [`SnippetCoverageLedger`] -- `coverage.expected`/`generated`/
     /// `missing`/`documented_exceptions` are all keyed by fixture/language cell, and a curated
@@ -456,11 +460,16 @@ fn generate_snippet_report_with_extensions(
     coverage::validate(&coverage)?;
     let placeholder_sample_url_fixtures: Vec<String> = placeholder_sample_url_fixtures.into_iter().collect();
     render_body::report_placeholder_sample_urls(&placeholder_sample_url_fixtures, sample_base_url);
-    let curated_paths = coverage::resolve_curated_snippet_paths(
-        Path::new(&snippets.output),
-        &snippets.curated_snippets,
-        &coverage.generated_paths,
-    )?;
+    // The project root is the process working directory here: `snippets.output` is itself an
+    // unresolved project-root-relative configuration string, and every generated path above is
+    // built by joining it. Curated globs share that base by construction. ~keep
+    let curated_paths = coverage::resolve_curated_snippet_paths(Path::new("."), &snippets.curated_snippets)?;
+    let generated_from_project_root: Vec<PathBuf> = coverage
+        .generated_paths
+        .iter()
+        .map(|relative| Path::new(&snippets.output).join(relative))
+        .collect();
+    coverage::reject_generated_curated_paths(&curated_paths, &generated_from_project_root)?;
     if !snippets.curated_snippets.is_empty() {
         tracing::info!(
             target: "alef::e2e::snippets",

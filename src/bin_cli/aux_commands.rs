@@ -429,8 +429,13 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         &api.enums,
                         &api.functions,
                     )?;
-                    let entries =
-                        crate::bin_cli::snippet_migration::compare(&existing_root, snippet_config, &generated)?;
+                    let project_root = config_path.parent().unwrap_or(std::path::Path::new(""));
+                    let entries = crate::bin_cli::snippet_migration::compare(
+                        project_root,
+                        &existing_root,
+                        snippet_config,
+                        &generated,
+                    )?;
                     crate::bin_cli::snippet_migration::write_report(&entries, json)?;
                     Ok(None)
                 }

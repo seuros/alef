@@ -15,19 +15,22 @@ use super::*;
 /// `report.curated_paths` and must never appear in `coverage.missing` -- the coverage-side
 /// half of the gap this declaration exists to close (a curated file has no fixture behind
 /// it at all, so it was previously invisible to coverage rather than reported).
+///
+/// The curated file deliberately sits OUTSIDE `output`, which is where hand-authored
+/// snippets are actually found; an `output`-relative glob could not have named it.
 #[test]
 fn curated_snippets_are_resolved_into_the_report_and_never_become_missing() {
     let directory = tempfile::tempdir().expect("temp dir");
     let _cwd = crate::test_support::CwdGuard::enter(directory.path());
-    std::fs::create_dir_all("docs/snippets/docker").expect("curated directory");
-    std::fs::write("docs/snippets/docker/quick-start.md", "curated by hand").expect("curated file");
+    std::fs::create_dir_all("docs/curated/docker").expect("curated directory");
+    std::fs::write("docs/curated/docker/quick-start.md", "curated by hand").expect("curated file");
 
     let fixture = documented_fixture();
     let mut e2e = E2eConfig::default();
     e2e.call.function = "built_in_would_fail".into();
     let snippet_config = SnippetConfig {
         output: "docs/snippets".into(),
-        curated_snippets: vec!["docker/*.md".to_string()],
+        curated_snippets: vec!["docs/curated/docker/*.md".to_string()],
         ..SnippetConfig::default()
     };
     let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
@@ -49,7 +52,7 @@ fn curated_snippets_are_resolved_into_the_report_and_never_become_missing() {
 
     assert_eq!(
         report.curated_paths,
-        vec![std::path::PathBuf::from("docker/quick-start.md")]
+        vec![std::path::PathBuf::from("docs/curated/docker/quick-start.md")]
     );
     assert_eq!(report.coverage.generated.len(), 1);
     assert!(
@@ -75,7 +78,7 @@ fn a_curated_glob_matching_zero_files_fails_the_real_generation_run() {
     e2e.call.function = "built_in_would_fail".into();
     let snippet_config = SnippetConfig {
         output: "docs/snippets".into(),
-        curated_snippets: vec!["docker/*.md".to_string()],
+        curated_snippets: vec!["docs/curated/docker/*.md".to_string()],
         ..SnippetConfig::default()
     };
     let extensions: Vec<Box<dyn crate::Extension>> = vec![Box::new(FixtureExtension {
