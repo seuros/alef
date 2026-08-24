@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed snippet session identity so multiple configured targets that resolve to the same `Language` (e.g. `kotlin` + `kotlin_android`, or `typescript`/`node`/`wasm`) no longer collide when they validate the same physical package/working directory. `resolve_session_claim` now only reports `SessionClaim::Ambiguous` when same-language candidates validate genuinely different working directories; candidates sharing one directory collapse to a single deterministic `SessionClaim::Claimed` instead (issue #255).
+- Added `SessionIdentity` trait (`src/snippets/runner/session_resolution.rs`) implemented for `ValidationSession` and `SessionSpec`, giving session-claim resolution access to a session's working directory alongside its language.
+- Added regression coverage asserting session count collapses to one for `kotlin` + `kotlin_android` over one directory and for `typescript` + `node` + `wasm` over one package, plus a control case proving genuinely different directories still resolve as ambiguous.
+
 - Swift snippet validation now resolves a session's SwiftPM module directories once per run.
   Every snippet previously launched its own `swift build --show-bin-path`; 32 concurrent warm
   lookups measured 1.33 seconds wall and 9.22 seconds CPU, versus 0.33 seconds wall and 0.26
