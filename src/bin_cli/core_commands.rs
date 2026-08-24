@@ -15,7 +15,6 @@ mod verify_flags;
 
 use verify_flags::refuse_unimplemented_verify_flags;
 
-
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
     match command {

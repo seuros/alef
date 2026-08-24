@@ -90,8 +90,7 @@ mod tests {
     #[test]
     fn every_requested_flag_is_named_not_just_the_first() {
         let languages = vec!["python".to_string()];
-        let error =
-            refuse_unimplemented_verify_flags(true, true, Some(&languages)).expect_err("must refuse");
+        let error = refuse_unimplemented_verify_flags(true, true, Some(&languages)).expect_err("must refuse");
         let message = error.to_string();
         for flag in ["--compile", "--lint", "--lang"] {
             assert!(message.contains(flag), "{flag} missing from: {message}");

@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fixed: a snippet session's `before` hook is now run once per package instead of once per configured session target. `kotlin` and `kotlin_android` both resolve to `Language::Kotlin`, and `typescript`/`node`/`wasm` all resolve to `Language::TypeScript`, so several targets routinely describe one physical package and each carried its own copy of that package's hook. Every copy was executed, sequentially, before a single snippet could validate — and when the hook outran `timeout_secs`, the run paid that whole timeout once per target. Within an activation group a hook whose command and environment match one already attempted now replays that attempt's outcome; failures replay too, preserving the timeout classification every affected target is reported with.
+- Fixed: `run_command` no longer outlives the timeout it was given. The budget covered only the wait for the direct child; once that child exited, output collection waited for end of stream on pipes every descendant had inherited, so any process outliving the command — a Gradle daemon, an MSBuild node, an unwaited background job — held the call open indefinitely. A one-second budget was measured taking twenty seconds and still returning success. Output readers now buffer as bytes arrive and the drain gives up at a fixed grace, reporting everything the command actually wrote and tearing down the process group of anything still holding the pipes.
+- Fixed: `SIGINT`, `SIGTERM` and `SIGHUP` are now forwarded to every snippet subprocess group before alef exits. Snippet children are spawned into their own process group so a timeout can kill the whole tree, which also removed them from the terminal's foreground group: Ctrl-C reached alef and nothing else, so alef exited 130 while the entire hook tree — shell, build wrapper and build daemon — survived and reparented to PID 1, where a stale daemon goes on to poison the next run. A signal already ignored on entry stays ignored.
+
+- Added `[crates.e2e.snippets].sample_base_url`: the public base URL generated
+  documentation snippets bind for a fixture's `mock_url` / `mock_url_list` arguments. It is
+  documentation-only — the executable e2e suite keeps binding the per-fixture mock server —
+  so a project can publish snippets a reader can actually run without changing what its
+  tests talk to. Relative fixture paths (`"/pdf/report.pdf"`) resolve against the mock
+  server for tests and against the configured host for docs, from the same fixture, with no
+  per-fixture edit. An explicit `$mock_url` placeholder resolves against it too.
+- Changed: a snippet run that publishes the unconfigured `https://example.com` fallback now
+  warns once, naming the affected fixtures and the config key that fixes it, and records
+  them on `SnippetGenerationReport::placeholder_sample_url_fixtures`. Generated output is
+  unchanged when `sample_base_url` is unset. An unusable `sample_base_url` (empty,
+  whitespace-bearing, or scheme-less) fails generation instead of silently falling back.
+- `alef verify` refuses `--compile`, `--lint` and `--lang` instead of discarding them. All
+  three are visible, documented flags (`--compile` reads "Also run compilation check") that
+  the command destructured away, so `alef verify --compile` exited 0 having compiled
+  nothing — indistinguishable from a passing compile check. They now fail with a message
+  naming `alef build --lang` and `alef lint --lang`, which do implement that work.
+  `--exit-code` is unaffected: it is a hidden, documented no-op. Nothing in the polyrepo
+  passes the refused flags today.
+
 - Fixed: `alef --version` no longer reports `tree: DIRTY` for every binary installed with `cargo install --git`. Cargo drops a `.cargo-ok` completion marker into each checkout it creates, and the build stamp classified the working tree with `git status --porcelain`, which counts untracked files. Every git-installed binary therefore printed the "not reproducible from commit" warning, and a warning that fires on every install is one nobody reads — which is how genuinely dirty output ends up attributed to a commit it cannot be reproduced from.
 - Changed: the build-time working-tree classifier now asks `git diff --quiet HEAD` — tracked paths only, index and working tree both, so a staged addition or a deletion still counts as dirty. Untracked files no longer count: reaching the compiler requires a `mod`/`include!` chain rooted at a tracked `src/lib.rs`, so untracked source that actually affects the build drags a tracked modification along with it. A denylist would have covered `.cargo-ok` and then waited for the next tool's marker file.
 - Changed: a repository with no commit yet now stamps `unknown` instead of `clean`. There is no `HEAD` to call the tree clean relative to, and `clean` reads as a provenanced build.
