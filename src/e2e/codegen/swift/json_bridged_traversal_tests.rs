@@ -92,6 +92,10 @@ fn metadata_ir() -> (Vec<TypeDef>, Vec<FunctionDef>) {
 }
 
 fn render_assertion_on(assertion: Assertion) -> String {
+    render_assertion_with_result_fields(assertion, &[])
+}
+
+fn render_assertion_with_result_fields(assertion: Assertion, result_fields: &[&str]) -> String {
     let (type_defs, functions) = metadata_ir();
     let call_config = CallConfig {
         function: "process".to_string(),
@@ -100,6 +104,9 @@ fn render_assertion_on(assertion: Assertion) -> String {
     };
     let mut e2e_config = E2eConfig::default();
     e2e_config.calls.insert("process".to_string(), call_config.clone());
+    e2e_config
+        .result_fields
+        .extend(result_fields.iter().map(|f| (*f).to_string()));
     let fixture = Fixture {
         id: "json_bridged_traversal".to_string(),
         description: "JSON-bridged traversal".to_string(),
@@ -273,6 +280,44 @@ fn should_not_chain_optionally_at_a_non_optional_leaf_behind_an_optional_ancesto
     assert!(
         !out.contains("byline()?.toString()"),
         "must not apply optional chaining to a non-optional RustString leaf, got:\n{out}"
+    );
+}
+
+/// A `result_fields` list naming a nested leaf but not its parent used to make the parent look
+/// like a virtual namespace prefix, so the parent segment was dropped and the accessor was built
+/// on the wrong receiver — `result.favicons()` against a result type that has no such field. The
+/// IR declares `metadata` as a real struct field, which settles it whatever the config omits.
+#[test]
+fn should_not_strip_a_real_struct_segment_that_result_fields_omits() {
+    let out = render_assertion_with_result_fields(
+        assertion("equals", "metadata.favicons.length", Some(serde_json::json!(3))),
+        &["favicons", "title"],
+    );
+    assert!(
+        out.contains("metadata()") || out.contains("metadata."),
+        "the real `metadata` segment must survive, got:\n{out}"
+    );
+    assert!(
+        !out.contains("result.favicons()"),
+        "must not build the accessor on the result when `metadata` is a real field, got:\n{out}"
+    );
+}
+
+/// The companion: a segment the IR does NOT declare on the result type is a genuine virtual
+/// namespace prefix and must still be stripped, or every namespaced fixture path breaks.
+#[test]
+fn should_still_strip_a_virtual_namespace_segment_the_ir_does_not_declare() {
+    let out = render_assertion_with_result_fields(
+        assertion("equals", "browser.title", Some(serde_json::json!("Hello"))),
+        &["title"],
+    );
+    assert!(
+        out.contains("result.title()"),
+        "a virtual namespace prefix must still be stripped down to the real field, got:\n{out}"
+    );
+    assert!(
+        !out.contains("browser()"),
+        "a virtual namespace prefix must still be stripped, got:\n{out}"
     );
 }
 

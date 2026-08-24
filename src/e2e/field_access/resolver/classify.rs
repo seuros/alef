@@ -426,8 +426,38 @@ impl FieldResolver {
         if self.result_fields.contains(first) {
             return None;
         }
+        // ~keep `result_fields` is hand-maintained, so it under-reports: a consumer who listed a
+        // nested leaf without also listing its parent made the parent look like a virtual
+        // namespace, and the parent segment was silently dropped — turning a real nested step into
+        // an accessor on the wrong receiver, against a field the result type does not declare. The
+        // IR already knows which names are real fields of the call's own result type, so ask it
+        // rather than infer absence from a config omission.
+        if self.ir_declares_struct_field_on_root(first) {
+            return None;
+        }
         let suffix = &path[dot_pos + 1..];
         if suffix.is_empty() { None } else { Some(suffix) }
+    }
+
+    /// Whether the IR positively declares `field_name` as a struct-typed field of the call's
+    /// declared result type.
+    ///
+    /// ~keep Reads the roots the enum and collection maps already anchored via
+    /// `resolve_declared_result_type`, so it needs no new wiring and answers `false` whenever no
+    /// IR was supplied — which leaves the pre-existing config-only behaviour intact. Only
+    /// struct-typed fields are recorded in `field_types`, which is exactly the set a dotted path
+    /// can legitimately continue through.
+    fn ir_declares_struct_field_on_root(&self, field_name: &str) -> bool {
+        let roots = [
+            (
+                self.ir_collection_map.root_type.as_deref(),
+                &self.ir_collection_map.field_types,
+            ),
+            (self.ir_enum_map.root_type.as_deref(), &self.ir_enum_map.field_types),
+        ];
+        roots.into_iter().any(|(root, field_types)| {
+            root.is_some_and(|root| field_types.get(root).is_some_and(|f| f.contains_key(field_name)))
+        })
     }
 
     /// Check if a resolved field is an array/Vec type.
