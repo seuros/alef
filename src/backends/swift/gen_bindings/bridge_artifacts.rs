@@ -8,6 +8,8 @@ use heck::{ToLowerCamelCase, ToSnakeCase, ToUpperCamelCase};
 use std::collections::HashSet;
 use std::path::PathBuf;
 
+pub(crate) mod umbrella_header;
+
 pub(crate) fn find_swift_bridge_out_dir(binding_crate_name: &str) -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let workspace_root = std::iter::once(cwd.clone())
@@ -101,7 +103,7 @@ pub(crate) fn emit_swift_bridge_files(
             // the two would disagree on whitespace and the ownership guard would refuse the
             // "fix" as foreign, which is worse than doing nothing. ~keep
             if let Ok(existing) = std::fs::read_to_string(&header_path)
-                && existing.contains("__swift_bridge__$")
+                && umbrella_header::is_populated(&existing)
             {
                 return Ok(None);
             }
@@ -216,22 +218,18 @@ pub(crate) fn emit_swift_bridge_files(
     ));
     let crate_swift_content = make_swift_bridge_ref_ptr_public(&prepend_rust_bridge_c_import(&crate_swift));
 
-    let marker = crate::core::hash::SWIFT_C_UMBRELLA_HEADER_MARKER;
-    let rust_bridge_c_h = format!(
-        "#ifndef RUST_BRIDGE_C_H\n\
-         #define RUST_BRIDGE_C_H\n\
-         \n\
-         {marker}\n\
-         // Concatenates SwiftBridgeCore.h and {binding_crate_name}.h produced by\n\
-         // `cargo build -p {binding_crate_name}` via swift_bridge_build.\n\
-         \n\
-         {core_h}\n\
-         {crate_h}\n\
-         #endif /* RUST_BRIDGE_C_H */\n"
-    );
-
     let sources_rust_bridge = package_root.join("Sources").join("RustBridge");
     let sources_rust_bridge_c = package_root.join("Sources").join("RustBridgeC");
+
+    // Two files existing under `out/` is not on its own evidence that concatenating them
+    // yields a usable header, and this writer is unguarded -- it goes straight to disk. The
+    // committed header is therefore passed in so a partial assembly can be refused in favor of
+    // it, and so an assembly that only differs from it by formatting keeps the committed bytes
+    // instead of restarting the reformat/re-stamp churn. ~keep
+    let committed_header = std::fs::read_to_string(sources_rust_bridge_c.join("RustBridgeC.h")).ok();
+    let rust_bridge_c_h =
+        umbrella_header::resolve_fresh(binding_crate_name, &core_h, &crate_h, committed_header.as_deref())
+            .map_err(|e| anyhow::anyhow!("{e:#} (swift-bridge build output read from {})", out_dir.display()))?;
     let _ = crate_name;
     let files = vec![
         GeneratedFile {

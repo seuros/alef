@@ -1,3 +1,4 @@
+use crate::backends::swift::gen_bindings::bridge_artifacts::umbrella_header;
 use crate::backends::swift::naming::swift_source_ident;
 use crate::codegen::shared::binding_fields;
 use crate::core::backend::GeneratedFile;
@@ -199,7 +200,8 @@ let package = Package(
 
     let test_stub = scaffold_swift_test(api, config, &module);
 
-    let rust_bridge_c_header = build_rust_bridge_c_header(&binding_crate_name);
+    let rust_bridge_c_header = build_rust_bridge_c_header(&binding_crate_name)
+        .with_context(|| format!("building {RUST_BRIDGE_C_HEADER_PATH} for `{binding_crate_name}`"))?;
     let rust_bridge_c_source = build_rust_bridge_c_source(&binding_crate_underscore);
 
     let rust_bridge_swift = format!(
@@ -760,27 +762,21 @@ const RUST_BRIDGE_C_HEADER_PATH: &str = "packages/swift/Sources/RustBridgeC/Rust
 /// header that concatenates `SwiftBridgeCore.h` and `{binding_crate}.h` from the
 /// swift-bridge build output. Otherwise an already-populated header committed on disk
 /// is preserved, and only when neither is available is a placeholder emitted.
-fn build_rust_bridge_c_header(binding_crate_name: &str) -> String {
+fn build_rust_bridge_c_header(binding_crate_name: &str) -> anyhow::Result<String> {
     let fresh_headers = read_swift_bridge_headers(binding_crate_name);
     let existing_header = std::fs::read_to_string(RUST_BRIDGE_C_HEADER_PATH).ok();
     render_rust_bridge_c_header(binding_crate_name, fresh_headers, existing_header.as_deref())
-}
-
-/// A `RustBridgeC.h` is "populated" once it carries swift-bridge's generated C
-/// function declarations. The placeholder only defines base typedefs and never
-/// references a `__swift_bridge__$` symbol, so the presence of that prefix is a
-/// reliable populated/placeholder discriminator — independent of whether the
-/// header was produced by alef's umbrella or by a consumer's own concat script.
-fn header_is_populated(header: &str) -> bool {
-    header.contains("__swift_bridge__$")
 }
 
 /// Decide the content of `RustBridgeC.h`, given the optional fresh swift-bridge
 /// build output and the optional header already present on disk.
 ///
 /// Precedence:
-/// 1. Fresh swift-bridge output (the binding crate was built) → regenerate the
-///    umbrella header from `SwiftBridgeCore.h` + `{crate}.h`.
+/// 1. Fresh swift-bridge output (the binding crate was built) → hand it to
+///    [`umbrella_header::resolve_fresh`], which assembles the umbrella, refuses a
+///    partial assembly, and keeps the committed bytes when the assembly declares
+///    the same C. Tier 1 is *not* an unconditional overwrite: two present input
+///    files are not on their own evidence of a usable header.
 /// 2. No fresh output, but an already-populated header is committed on disk →
 ///    preserve it. `alef all --clean` regenerates without compiling the binding
 ///    crate, so without this guard scaffold would overwrite the real
@@ -793,30 +789,18 @@ fn render_rust_bridge_c_header(
     binding_crate_name: &str,
     fresh_headers: Option<(String, String)>,
     existing_header: Option<&str>,
-) -> String {
+) -> anyhow::Result<String> {
     if let Some((core_h, crate_h)) = fresh_headers {
-        let marker = crate::core::hash::SWIFT_C_UMBRELLA_HEADER_MARKER;
-        return format!(
-            "#ifndef RUST_BRIDGE_C_H\n\
-             #define RUST_BRIDGE_C_H\n\
-             \n\
-             {marker}\n\
-             // Concatenates SwiftBridgeCore.h and {binding_crate_name}.h produced by\n\
-             // `cargo build -p {binding_crate_name}` via swift_bridge_build.\n\
-             \n\
-             {core_h}\n\
-             {crate_h}\n\
-             #endif /* RUST_BRIDGE_C_H */\n"
-        );
+        return umbrella_header::resolve_fresh(binding_crate_name, &core_h, &crate_h, existing_header);
     }
 
     if let Some(existing) = existing_header
-        && header_is_populated(existing)
+        && umbrella_header::is_populated(existing)
     {
-        return existing.to_string();
+        return Ok(existing.to_string());
     }
 
-    format!(
+    Ok(format!(
         "#ifndef RUST_BRIDGE_C_H\n\
          #define RUST_BRIDGE_C_H\n\
          \n\
@@ -890,7 +874,7 @@ fn render_rust_bridge_c_header(
          }} __private__OptionBool;\n\
          \n\
          #endif /* RUST_BRIDGE_C_H */\n"
-    )
+    ))
 }
 
 /// Build the content for `Sources/RustBridgeC/RustBridgeC.c`.
@@ -1191,7 +1175,8 @@ sources = []
                 "// crate\n".into(),
             )),
             Some("// stale __swift_bridge__$old\n"),
-        );
+        )
+        .expect("a complete assembly must resolve");
         assert!(
             out.contains("Concatenates SwiftBridgeCore.h"),
             "expected umbrella, got:\n{out}"
@@ -1210,7 +1195,7 @@ sources = []
     #[test]
     fn render_header_preserves_committed_populated_header() {
         let populated = "#include <stdint.h>\nvoid __swift_bridge__$RustStr$partial_eq(void);\n";
-        let out = render_rust_bridge_c_header("my-lib-swift", None, Some(populated));
+        let out = render_rust_bridge_c_header("my-lib-swift", None, Some(populated)).expect("render");
         assert_eq!(
             out, populated,
             "populated header must be preserved verbatim when no fresh output"
@@ -1223,8 +1208,8 @@ sources = []
     #[test]
     fn render_header_preserves_markerless_populated_header() {
         let populated = "#include <stdint.h>\nvoid __swift_bridge__$Vec_u8$new(void);\n";
-        assert!(header_is_populated(populated));
-        let out = render_rust_bridge_c_header("my-lib-swift", None, Some(populated));
+        assert!(umbrella_header::is_populated(populated));
+        let out = render_rust_bridge_c_header("my-lib-swift", None, Some(populated)).expect("render");
         assert_eq!(out, populated);
     }
 
@@ -1236,19 +1221,20 @@ sources = []
     fn render_header_emits_placeholder_without_populated_source() {
         let placeholder_marker = "Placeholder header for the RustBridgeC SwiftPM target";
 
-        let from_nothing = render_rust_bridge_c_header("my-lib-swift", None, None);
+        let from_nothing = render_rust_bridge_c_header("my-lib-swift", None, None).expect("render");
         assert!(
             from_nothing.contains(placeholder_marker),
             "expected placeholder, got:\n{from_nothing}"
         );
         assert!(
-            !header_is_populated(&from_nothing),
+            !umbrella_header::is_populated(&from_nothing),
             "placeholder must not look populated"
         );
 
         let stale_placeholder = "#ifndef RUST_BRIDGE_C_H\ntypedef struct RustStr { int x; } RustStr;\n";
-        assert!(!header_is_populated(stale_placeholder));
-        let from_placeholder = render_rust_bridge_c_header("my-lib-swift", None, Some(stale_placeholder));
+        assert!(!umbrella_header::is_populated(stale_placeholder));
+        let from_placeholder =
+            render_rust_bridge_c_header("my-lib-swift", None, Some(stale_placeholder)).expect("render");
         assert!(
             from_placeholder.contains(placeholder_marker),
             "expected placeholder, got:\n{from_placeholder}"
