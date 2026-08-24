@@ -78,39 +78,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/visitor_interface.jinja"),
     ),
     (
-        "bridge_class_header.jinja",
-        include_str!("templates/bridge_class_header.jinja"),
-    ),
-    (
-        "bridge_constructor_start.jinja",
-        include_str!("templates/bridge_constructor_start.jinja"),
-    ),
-    (
-        "bridge_constructor_end.jinja",
-        include_str!("templates/bridge_constructor_end.jinja"),
-    ),
-    (
-        "upcall_stub_allocation.jinja",
-        include_str!("templates/upcall_stub_allocation.jinja"),
-    ),
-    ("lifecycle_stub.jinja", include_str!("templates/lifecycle_stub.jinja")),
-    (
-        "bridge_lifecycle_methods.jinja",
-        include_str!("templates/bridge_lifecycle_methods.jinja"),
-    ),
-    (
-        "bridge_method_handler.jinja",
-        include_str!("templates/bridge_method_handler.jinja"),
-    ),
-    (
-        "bridge_helper_methods.jinja",
-        include_str!("templates/bridge_helper_methods.jinja"),
-    ),
-    (
-        "bridge_register_method.jinja",
-        include_str!("templates/bridge_register_method.jinja"),
-    ),
-    (
         "bridge_unregister_method.jinja",
         include_str!("templates/bridge_unregister_method.jinja"),
     ),
@@ -123,10 +90,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_main_class_footer.jinja"),
     ),
     (
-        "ffi_async_wrapper.jinja",
-        include_str!("templates/ffi_async_wrapper.jinja"),
-    ),
-    (
         "ffi_method_signature.jinja",
         include_str!("templates/ffi_method_signature.jinja"),
     ),
@@ -135,12 +98,7 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_try_finally_block_start.jinja"),
     ),
     ("ffi_imports.jinja", include_str!("templates/ffi_imports.jinja")),
-    ("ffi_catch_block.jinja", include_str!("templates/ffi_catch_block.jinja")),
     ("ffi_null_check.jinja", include_str!("templates/ffi_null_check.jinja")),
-    (
-        "ffi_ffi_ptr_cleanup.jinja",
-        include_str!("templates/ffi_ffi_ptr_cleanup.jinja"),
-    ),
     (
         "method_handle_nullable.jinja",
         include_str!("templates/method_handle_nullable.jinja"),
@@ -230,10 +188,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/gen_helper_methods_header.jinja"),
     ),
     (
-        "ffi_invoke_handle_result.jinja",
-        include_str!("templates/ffi_invoke_handle_result.jinja"),
-    ),
-    (
         "ffi_typed_rethrow_catch.jinja",
         include_str!("templates/ffi_typed_rethrow_catch.jinja"),
     ),
@@ -254,10 +208,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_invoke_json_ptr.jinja"),
     ),
     (
-        "ffi_invoke_free_string.jinja",
-        include_str!("templates/ffi_invoke_free_string.jinja"),
-    ),
-    (
         "ffi_return_read_json_list_optional.jinja",
         include_str!("templates/ffi_return_read_json_list_optional.jinja"),
     ),
@@ -274,10 +224,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/convert_with_visitor_signature.jinja"),
     ),
     (
-        "ffi_conversion_options_invoke.jinja",
-        include_str!("templates/ffi_conversion_options_invoke.jinja"),
-    ),
-    (
         "ffi_visitor_create.jinja",
         include_str!("templates/ffi_visitor_create.jinja"),
     ),
@@ -290,21 +236,12 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_options_set_visitor.jinja"),
     ),
     (
-        "ffi_convert_invoke.jinja",
-        include_str!("templates/ffi_convert_invoke.jinja"),
-    ),
-    (
         "ffi_options_free_conditional.jinja",
         include_str!("templates/ffi_options_free_conditional.jinja"),
     ),
     (
         "ffi_result_to_json.jinja",
         include_str!("templates/ffi_result_to_json.jinja"),
-    ),
-    ("ffi_result_free.jinja", include_str!("templates/ffi_result_free.jinja")),
-    (
-        "ffi_visitor_free.jinja",
-        include_str!("templates/ffi_visitor_free.jinja"),
     ),
     (
         "ffi_visitor_cleanup.jinja",
@@ -314,12 +251,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "ffi_options_free.jinja",
         include_str!("templates/ffi_options_free.jinja"),
     ),
-    ("ffi_throw_inner.jinja", include_str!("templates/ffi_throw_inner.jinja")),
     (
         "ffi_result_ptr_call.jinja",
         include_str!("templates/ffi_result_ptr_call.jinja"),
     ),
-    ("ffi_invoke_free.jinja", include_str!("templates/ffi_invoke_free.jinja")),
     ("ffi_invoke_void.jinja", include_str!("templates/ffi_invoke_void.jinja")),
     ("ffi_return_expr.jinja", include_str!("templates/ffi_return_expr.jinja")),
     (
@@ -343,10 +278,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_return_new_handle.jinja"),
     ),
     (
-        "ffi_primitive_result_call.jinja",
-        include_str!("templates/ffi_primitive_result_call.jinja"),
-    ),
-    (
         "ffi_return_primitive_result.jinja",
         include_str!("templates/ffi_return_primitive_result.jinja"),
     ),
@@ -363,14 +294,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/stream_method_optional_string_param.jinja"),
     ),
     (
-        "stream_method_json_param.jinja",
-        include_str!("templates/stream_method_json_param.jinja"),
-    ),
-    (
-        "stream_method_optional_json_param.jinja",
-        include_str!("templates/stream_method_optional_json_param.jinja"),
-    ),
-    (
         "stream_method_optional_named_param.jinja",
         include_str!("templates/stream_method_optional_named_param.jinja"),
     ),
@@ -385,10 +308,6 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "stream_method_unsupported_param.jinja",
         include_str!("templates/stream_method_unsupported_param.jinja"),
-    ),
-    (
-        "stream_method_free_named_ptr.jinja",
-        include_str!("templates/stream_method_free_named_ptr.jinja"),
     ),
     (
         "stream_method_bytes_result.jinja",
@@ -484,14 +403,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/service_metadata_signature_param.jinja"),
     ),
     (
-        "service_metadata_setup_string.jinja",
-        include_str!("templates/service_metadata_setup_string.jinja"),
-    ),
-    (
-        "service_metadata_setup_record.jinja",
-        include_str!("templates/service_metadata_setup_record.jinja"),
-    ),
-    (
         "opaque_resource_declaration.jinja",
         include_str!("templates/opaque_resource_declaration.jinja"),
     ),
@@ -512,10 +423,6 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/opaque_param_lease_assignment.jinja"),
     ),
     (
-        "service_bool_arg_expr.jinja",
-        include_str!("templates/service_bool_arg_expr.jinja"),
-    ),
-    (
         "record_declaration.jinja",
         include_str!("templates/record_declaration.jinja"),
     ),
@@ -526,10 +433,6 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "record_compact_constructor.jinja",
         include_str!("templates/record_compact_constructor.jinja"),
-    ),
-    (
-        "record_unsupported_method.jinja",
-        include_str!("templates/record_unsupported_method.jinja"),
     ),
     (
         "simple_enum_class.jinja",

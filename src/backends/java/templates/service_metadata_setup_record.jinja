@@ -1,6 +1,0 @@
-            String {{ c_name }}Json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString({{ param_name }});
-            MemorySegment {{ c_name }} = (MemorySegment) NativeLib.{{ prefix_upper }}_{{ type_upper }}_FROM_JSON.invoke(callArena.allocateFrom({{ c_name }}Json));
-            if ({{ c_name }} == null || {{ c_name }}.equals(MemorySegment.NULL)) {
-                throw new IllegalStateException("Failed to marshal {{ param_name }}");
-            }
-            nativeResources.register({{ c_name }}, handle -> NativeLib.{{ prefix_upper }}_{{ type_upper }}_FREE.invoke(handle));
