@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `[crates.e2e.snippets].curated_snippets`: glob patterns (relative to `output`) declaring hand-authored snippet files as curated on purpose rather than alef-generated. Resolved into `SnippetGenerationReport::curated_paths` and into `migration::MigrationEntry::curated`, so both the generation report and `alef e2e snippets-migrate` can distinguish a declared, intentional absence of a generated equivalent from a genuine coverage gap.
+- A `curated_snippets` pattern that matches zero files, or that matches a path alef itself generates, now fails the run instead of being silently accepted.
+- Implemented `render_snippet_body` for the brew (shell) e2e code generator: documentation snippets for CLI-based bindings now render a single `binary subcommand "<url>" --flags` line, built from the same call-config resolution the executable brew e2e suite already uses.
+
 ### Fixed
 
 - `docs.snippets` validation now fails fast, before any toolchain runs, when a language needs a compiled artifact (`compile`/`typecheck`/`run`) but has no configured session that could plausibly have produced one yet -- no session at all, an ambiguous session, or a session with an empty `before` list. Warns always; under `strict`, bails immediately instead of spending an hour validating snippets that were doomed from the start (GH #256).
@@ -43,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `checks_pass`, so a single invocation could print `"ok": true` and still exit 1. The
   `blocked_on_publish` doc comment, which asserted the opposite and contradicted both
   `checks_pass` and its tests, is corrected.
+
+- Fixed `alef build`/`alef generate` running the umbrella `gradle build` (and `gradle build -Prelease`) for `kotlin_android` when no `[workspace.build_commands.kotlin_android]` overlay is declared, instead of the intended `gradle assembleDebug`/`gradle assembleRelease`. `build_command_for`'s `"gradle"` arm matched on the shared `bc.tool` string, which cannot distinguish `Kotlin` from `KotlinAndroid`; it now asks a new shared `build_defaults::gradle_build_task(Language, bool)` helper, the same one `default_build_config` uses, so both derivations agree (GH #259). An explicit `[workspace.build_commands.kotlin_android]` overlay is unaffected and continues to win.
+- Fixed `frb_version_check.rs`'s test module failing to compile on Windows (`std::os::unix::fs::PermissionsExt`, `Permissions::from_mode`) by gating the four unix-only items behind `#[cfg(unix)]`, while keeping the four platform-neutral tests running unconditionally on every OS.
+- Fixed `swift_shim_return_marshal` (the Swift trait-box FFI shim) wrapping an enum-typed trait method return directly in `RustString(...)`, which requires a `String` argument and does not compile against an enum value; the shim now JSON-encodes the enum via `JSONEncoder` before wrapping it, decided by consulting `ApiSurface::enums` rather than the `TypeRef::Named` discriminant. Struct-typed (JSON) `Named` returns are unchanged.
+- Fixed the Swift trait-bridge default method stub emitting `return "{}"` for a `has_default_impl` method with a non-excluded enum-typed return, which does not type-check against the enum's own declared Swift return type; it now constructs a real case of the enum when the IR has a fieldless variant, falling back to the prior placeholder body otherwise.
+- Fixed the packaging template environment (`src/publish/package/template_env.rs`) never calling `strip_keep_markers`, the only built-in render path that did not, so a `~keep` marker left in a packaging template would have shipped verbatim into a consumer's package tree.
+- Corrected the swift e2e integration test `count_min_on_optional_vec_of_named_uses_native_optional_count`, which shipped red through 0.67.3 and 0.67.4. Its premise was stale rather than the codegen: `field_needs_json_bridge` has no dependence on the parent's opacity and returns true for any optional `Vec<_>` field, so the JSON-bridged `.toString().count` shape is correct for both parent kinds. Split into paired opaque-parent and first-class-parent tests so a fix that corrects one shape while regressing the other is caught by whichever arm it breaks.
 
 ## [0.67.4] - 2026-08-24
 
