@@ -261,10 +261,10 @@ fn test_private_module_glob_reexport_exposes_all() {
 }
 
 #[test]
-fn test_pub_use_clears_binding_excluded_on_skipped_source() {
+fn test_pub_use_keeps_binding_excluded_on_skipped_source() {
     // `#[cfg(feature = "X")] pub use mod::fn` re-exports a concrete-signature
     // function from a sibling module. The source carries `#[cfg_attr(alef, alef(skip))]`
-    let tmp = std::env::temp_dir().join("alef_test_pub_use_clears_skip");
+    let tmp = std::env::temp_dir().join("alef_test_pub_use_keeps_skip");
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("src")).unwrap();
 
@@ -304,11 +304,19 @@ pub fn do_thing(input: String) -> Result<String, String> {
     assert_eq!(
         entries.len(),
         2,
-        "expected both the inner source (un-excluded by re-export) and the stub to land in the surface; got {entries:?}"
+        "expected both the inner source and the stub to land in the surface; got {entries:?}"
     );
-    assert!(
-        entries.iter().all(|f| !f.binding_excluded),
-        "binding_excluded must be cleared by the pub use re-export; got {entries:?}"
+    let skipped: Vec<&_> = entries.iter().filter(|f| f.binding_excluded).copied().collect();
+    assert_eq!(
+        skipped.len(),
+        1,
+        "the alef(skip) source keeps its exclusion through the re-export; got {entries:?}"
+    );
+    assert_eq!(skipped[0].binding_exclusion_reason.as_deref(), Some("alef(skip)"));
+    assert_eq!(
+        skipped[0].cfg.as_deref().map(|c| c.contains("not")),
+        Some(false),
+        "the excluded entry is the gated source, not the stub; got {entries:?}"
     );
     let cfgs: Vec<&str> = entries.iter().filter_map(|f| f.cfg.as_deref()).collect();
     assert!(

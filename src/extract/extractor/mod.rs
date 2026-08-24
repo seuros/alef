@@ -638,19 +638,21 @@ fn collect_reexport_names_with_cfg(tree: &syn::UseTree, surface: &mut ApiSurface
 
 /// Apply a cfg attribute to an item in the surface by name.
 ///
-/// A `#[cfg(X)] pub use mod::fn` re-export is treated as the canonical public
-/// binding surface, even when the underlying source carries `#[alef(skip)]` or
-/// `#[doc(hidden)]`:
+/// A `#[cfg(X)] pub use mod::fn` re-export contributes the cfg gate, never the
+/// decision about whether the symbol is part of the binding surface:
 ///
-/// - If a same-named function already exists in the surface but is
-///   `binding_excluded`, clear the exclusion. The re-export publicly republishes
-///   the symbol, so the skip annotation on the private source is overridden.
+/// - A declared `#[cfg_attr(alef, alef(skip))]` or `#[doc(hidden)]` on the source
+///   item wins. Re-exporting a skipped symbol must not resurrect it — a re-export
+///   is how ordinary Rust crates publish their module tree, not an opt-in to
+///   binding generation, and resurrecting the item made an explicitly skipped
+///   function abort the run with `lossy_sanitized_surface`. ~keep
 /// - If no same-named function exists at the re-export cfg (typically because
 ///   the source is generic and was dropped at extract time), and a concrete
 ///   same-named entry exists under a disjoint cfg (the `not(X)` stub pattern),
 ///   clone that concrete entry under the re-export's cfg. The cloned entry
 ///   compiles to a call against the crate-root path, which the linker resolves
-///   to whichever cfg-enabled implementation is active at build time. ~keep
+///   to whichever cfg-enabled implementation is active at build time. Only a
+///   non-excluded entry is ever cloned, so a skipped source stays skipped. ~keep
 fn apply_cfg_to_item(surface: &mut ApiSurface, name: &str, cfg: &str) {
     for typ in &mut surface.types {
         if typ.name == name && typ.cfg.is_none() {
@@ -658,15 +660,8 @@ fn apply_cfg_to_item(surface: &mut ApiSurface, name: &str, cfg: &str) {
         }
     }
     for func in &mut surface.functions {
-        if func.name != name {
-            continue;
-        }
-        if func.cfg.is_none() {
+        if func.name == name && func.cfg.is_none() {
             func.cfg = Some(cfg.to_string());
-        }
-        if func.binding_excluded {
-            func.binding_excluded = false;
-            func.binding_exclusion_reason = None;
         }
     }
     for en in &mut surface.enums {
@@ -688,8 +683,6 @@ fn apply_cfg_to_item(surface: &mut ApiSurface, name: &str, cfg: &str) {
         if let Some(stub) = stub_opt {
             let mut paired = stub;
             paired.cfg = Some(cfg.to_string());
-            paired.binding_excluded = false;
-            paired.binding_exclusion_reason = None;
             surface.functions.push(paired);
         }
     }
