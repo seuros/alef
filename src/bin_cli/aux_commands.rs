@@ -392,7 +392,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             let previous_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots, &[])?;
 
-                            cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&e2e_crate.name, &cache_key, stage_hash.as_str(), &output_paths)?;
                         }
                         grand_count += count;
                     }
@@ -684,7 +684,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         } else {
                             pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &sweep_roots, &[])?;
 
-                            cache::write_stage_hash(&e2e_crate.name, &cache_key, &stage_hash, &output_paths)?;
+                            cache::write_stage_hash(&e2e_crate.name, &cache_key, stage_hash.as_str(), &output_paths)?;
                         }
                         grand_count += count;
                     }
@@ -820,7 +820,7 @@ mod tests {
         std::fs::create_dir_all(python_output.parent().expect("output parent")).expect("create output dir");
         std::fs::write(&python_output, "# generated\n").expect("write the scoped run's only output");
         let scoped_hash = cache::compute_stage_hash(ir_json, &scoped_key, config_toml, &[]);
-        cache::write_stage_hash("sample-crate", &scoped_key, &scoped_hash, &[python_output])
+        cache::write_stage_hash("sample-crate", &scoped_key, scoped_hash.as_str(), &[python_output])
             .expect("record the scoped run");
 
         assert!(

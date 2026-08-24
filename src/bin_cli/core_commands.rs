@@ -612,7 +612,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // which is exactly what a create-once file's absence should invalidate, independent
                 // of whether alef may ever overwrite its content. ~keep
                 let all_output_paths: Vec<PathBuf> = files.iter().map(|file| base_dir.join(&file.path)).collect();
-                cache::write_stage_hash(&resolved_cfg.name, "scaffold", &stage_hash, &all_output_paths)?;
+                cache::write_stage_hash(&resolved_cfg.name, "scaffold", stage_hash.as_str(), &all_output_paths)?;
                 grand_total += count;
             }
 
@@ -674,7 +674,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     .collect();
                 let readme_paths = pipeline::stampable_output_paths(&files, &base_dir);
                 pipeline::finalize_hashes(&readme_paths, &sources_hash, &alef_toml_bytes)?;
-                cache::write_stage_hash(&resolved_cfg.name, "readme", &stage_hash, &output_paths)?;
+                cache::write_stage_hash(&resolved_cfg.name, "readme", stage_hash.as_str(), &output_paths)?;
                 grand_total += count;
             }
             tracing::info!("Generated {grand_total} README files");

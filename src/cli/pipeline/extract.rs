@@ -36,10 +36,7 @@ pub fn extract(config: &ResolvedCrateConfig, config_path: &Path, clean: bool) ->
     }
 
     cache::validate_cache_crate_name(&config.name).context("invalid crate name for cache")?;
-    let source_hash = cache::sources_hash(&config.source_hash_paths()).context("failed to compute sources hash")?;
-    let version_for_hash = config.resolved_version().unwrap_or_default();
-    let config_hash = extraction_config_hash(config, config_path)?;
-    let cache_key = format!("{IR_CACHE_SCHEMA_VERSION}:{source_hash}:{version_for_hash}:{config_hash}");
+    let cache_key = ir_cache_key(config, config_path, crate::cli::cache_identity::alef_version())?;
 
     if !clean && cache::is_ir_cached(&config.name, &cache_key) {
         info!("Using cached IR");
@@ -101,6 +98,30 @@ pub fn extract(config: &ResolvedCrateConfig, config_path: &Path, clean: bool) ->
 
     Ok(api)
 }
+/// Build the `.alef/<crate>/ir.hash` key for `config` as the alef release named by
+/// `alef_version` would have built it.
+///
+/// `extract` passes the compiled-in version; the parameter exists so a test can construct the
+/// key a *different* release wrote and assert the current binary refuses to replay it. That
+/// refusal is the whole point of the function: everything below `alef_version` is an
+/// extraction *input*, and none of it moves when only alef moves. ~keep
+fn ir_cache_key(
+    config: &ResolvedCrateConfig,
+    config_path: &Path,
+    alef_version: &str,
+) -> anyhow::Result<crate::cli::cache::CacheKey> {
+    let source_hash = cache::sources_hash(&config.source_hash_paths()).context("failed to compute sources hash")?;
+    let version_for_hash = config.resolved_version().unwrap_or_default();
+    let config_hash = extraction_config_hash(config, config_path)?;
+    Ok(crate::cli::cache_identity::compute_ir_key_for_version(
+        alef_version,
+        IR_CACHE_SCHEMA_VERSION,
+        &source_hash,
+        &version_for_hash,
+        &config_hash,
+    ))
+}
+
 fn extraction_config_hash(config: &ResolvedCrateConfig, config_path: &Path) -> anyhow::Result<String> {
     let config_toml = toml::to_string(config).context("failed to serialize resolved config for IR cache key")?;
     let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);

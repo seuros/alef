@@ -6,7 +6,11 @@ use crate::core::ir::ApiSurface;
 use anyhow::Context as _;
 use rayon::prelude::*;
 use std::path::Path;
-use tracing::{debug, info};
+use tracing::info;
+
+/// Stands in for the inputs hash when the sources cannot be fingerprinted. Not a valid blake3
+/// hex digest, so no stamped file can agree with it and every affected language regenerates.
+const UNVERIFIABLE_INPUTS_HASH: &str = "alef:inputs-unavailable";
 
 /// `write_cache` controls whether a freshly generated language's output paths are
 /// recorded to `.alef/<crate>/hashes/<lang>.{hash,manifest}`. Read-only callers that
@@ -48,6 +52,23 @@ pub fn generate(
     config_toml.push_str("\n# raw alef.toml\n");
     config_toml.push_str(&String::from_utf8_lossy(&alef_toml_bytes));
 
+    // The fingerprint every generated file's `alef:hash:` line was stamped under, so a cache
+    // hit can confirm the files it is vouching for are still the ones alef wrote. Cheap: the
+    // sources hash is served from `.alef/sources_hash.cache`'s stat memo on a warm run.
+    //
+    // An unreadable source is not a hard error here — `extract` already had to read them all to
+    // build the surface this call was handed, so reaching this line without them means the caller
+    // supplied the surface some other way (in-memory callers and tests do). It degrades to a
+    // sentinel no stamp can equal, which turns every stamped output into a disagreement and so
+    // forces regeneration. Unknown inputs must cost a regeneration, never buy a skip. ~keep
+    let inputs_hash = match cache::sources_hash(&config.source_hash_paths()) {
+        Ok(sources_hash) => crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes),
+        Err(error) => {
+            tracing::debug!(%error, "cannot fingerprint sources; per-language cache hits are disabled for this run");
+            UNVERIFIABLE_INPUTS_HASH.to_string()
+        }
+    };
+
     let to_generate: Vec<_> = languages
         .par_iter()
         .filter_map(|&lang| {
@@ -65,8 +86,13 @@ pub fn generate(
 
             let lang_hash = cache::compute_lang_hash(&ir_json, &lang_str, &config_toml);
 
-            if !clean && cache::is_lang_cached(&config.name, &lang_str, &lang_hash) {
-                debug!("  {}: cached, skipping", lang_str);
+            if !clean && cache::is_lang_cached(&config.name, &lang_str, &lang_hash, &inputs_hash) {
+                // `info`, not `debug`: a skipped language contributes nothing to the run's
+                // "Generated N files" line, so at the default verbosity a fully cached run was
+                // reported as an empty one. The count and the skip are the same fact seen from
+                // two sides and both have to be visible, or "0 files" reads as "nothing needed
+                // changing" when it means "nothing was looked at". ~keep
+                info!("  {lang_str}: unchanged since the last run by this alef build, skipping");
                 return None;
             }
 
@@ -660,7 +686,7 @@ mod tests {
             cache::write_lang_hash(
                 "sample",
                 "python",
-                "hash-n-minus-1",
+                &cache::compute_lang_hash("", "hash-n-minus-1", ""),
                 std::slice::from_ref(&dropped_type_file),
             )?;
 
@@ -669,7 +695,7 @@ mod tests {
             // `write_lang_hash` again, unconditionally, with the smaller list --
             // before `all_commands.rs` ever reads the manifest as
             // `previous_paths` for the orphan sweep. ~keep
-            cache::write_lang_hash("sample", "python", "hash-n", &[])?;
+            cache::write_lang_hash("sample", "python", &cache::compute_lang_hash("", "hash-n", ""), &[])?;
 
             // Mirrors exactly what the `alef all` binding-orphan sweep does:
             // read the language manifest as the previous-run baseline. ~keep
