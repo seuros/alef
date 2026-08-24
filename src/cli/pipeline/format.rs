@@ -421,10 +421,24 @@ fn run_workspace_cargo_sort(base_dir: &Path, pass: &mut FormatPass<'_>) {
 }
 
 /// Run `poly lint <base_dir>`. Propagates failure — a non-zero exit is an error.
+///
+/// Unlike the best-effort formatting steps in this module (each one tool among several,
+/// individually skippable and escalated only under `--strict`), `poly` is the entire
+/// implementation of `alef lint` -- there is no partial coverage to fall back to when it is
+/// missing. Warning and returning `Ok(())` here used to report a clean lint pass for a run
+/// that checked nothing, with no `--strict` equivalent available to catch it (unlike `alef
+/// generate`/`alef all`, which do escalate a missing `poly` under `--strict`). ~keep
 pub fn poly_lint(base_dir: &Path) -> anyhow::Result<()> {
-    if !is_tool_available("poly") {
-        warn!("poly not found on PATH (skipping lint)");
-        return Ok(());
+    poly_lint_with(base_dir, &is_tool_available)
+}
+
+/// Testable seam for [`poly_lint`]: resolves `poly`'s presence through `is_available` instead
+/// of PATH, the same seam [`format_generated_reporting_with`] uses, so the missing-`poly` bail
+/// is provable without depending on whether the host running the suite happens to have `poly`
+/// installed. ~keep
+pub(crate) fn poly_lint_with(base_dir: &Path, is_available: &dyn Fn(&str) -> bool) -> anyhow::Result<()> {
+    if !is_available("poly") {
+        anyhow::bail!("poly not found on PATH; \"alef lint\" has nothing else to run -- install poly to lint");
     }
     let path_str = base_dir.to_string_lossy().into_owned();
     let arg_refs: Vec<&str> = vec!["lint", &path_str];

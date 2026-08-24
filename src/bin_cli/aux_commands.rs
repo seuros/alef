@@ -415,11 +415,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let fixtures = crate::e2e::fixture::load_fixtures(fixtures_dir)
                         .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
                     let api = pipeline::extract(resolved_cfg, config_path, false)?;
-                    let fallback_languages = if e2e_config.languages.is_empty() {
-                        crate::e2e::default_e2e_languages(&resolved_cfg.languages)
-                    } else {
-                        e2e_config.languages.clone()
-                    };
+                    let fallback_languages = effective_e2e_languages(e2e_config, &resolved_cfg.languages);
                     let languages = lang
                         .as_deref()
                         .unwrap_or_else(|| snippet_config.languages_or(&fallback_languages));
@@ -485,12 +481,30 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let fixtures = crate::e2e::fixture::load_fixtures(fixtures_dir)
                         .with_context(|| format!("failed to load fixtures from {}", fixtures_dir.display()))?;
+                    // ~keep An unset `[e2e].languages` is the common case (it's documented to
+                    // default to the top-level `languages` list) and must fall back the same way
+                    // `E2eAction::SnippetsMigrate` and `TestAppsAction::Run` already do -- passing
+                    // the raw empty list here silently disabled the "0 test functions" and
+                    // "unsupported language not in the resolved set" checks below.
+                    let validated_languages = effective_e2e_languages(e2e_config, &resolved_cfg.languages);
                     let semantic_errors =
-                        crate::e2e::validate::validate_fixtures_semantic(&fixtures, e2e_config, &e2e_config.languages);
+                        crate::e2e::validate::validate_fixtures_semantic(&fixtures, e2e_config, &validated_languages);
                     all_errors.extend(semantic_errors);
 
                     if all_errors.is_empty() {
-                        crate::bin_cli::output::line("All fixtures are valid.");
+                        if fixtures.is_empty() {
+                            crate::bin_cli::output::line(format_args!(
+                                "No fixtures found under {} -- nothing was validated.",
+                                fixtures_dir.display()
+                            ));
+                        } else {
+                            crate::bin_cli::output::line(format_args!(
+                                "All {} fixture(s) are valid ({} language(s) checked: {}).",
+                                fixtures.len(),
+                                validated_languages.len(),
+                                validated_languages.join(", ")
+                            ));
+                        }
                         Ok(None)
                     } else {
                         use crate::e2e::validate::Severity;
@@ -689,11 +703,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let Some(this_e2e_config) = e2e_crate.e2e.as_ref() else {
                             continue;
                         };
-                        let all_names: Vec<String> = if this_e2e_config.languages.is_empty() {
-                            crate::e2e::default_e2e_languages(&e2e_crate.languages)
-                        } else {
-                            this_e2e_config.languages.clone()
-                        };
+                        let all_names: Vec<String> = effective_e2e_languages(this_e2e_config, &e2e_crate.languages);
                         let names: Vec<String> = match lang.as_deref() {
                             Some(filter) => all_names
                                 .into_iter()
@@ -767,6 +777,26 @@ fn ensure_requested_test_app_targets_ran(lang_filter: Option<&[String]>, ran_any
          for a typo, or that the target is actually enabled for this crate",
         filter.join(", ")
     );
+}
+
+/// The e2e language set a crate's config actually resolves to: `[e2e].languages` when the
+/// crate set it, otherwise the fallback derived from the crate's scaffolded `languages` list.
+///
+/// `E2eConfig::languages` is documented to "default to the top-level `languages` list", but
+/// `#[serde(default)]` only gives an empty `Vec` when the key is omitted -- nothing applies that
+/// documented fallback automatically. Every call site that reads e2e languages must go through
+/// this helper instead of `e2e_config.languages` directly, or an unset `[e2e].languages` (the
+/// common case) silently narrows whatever that call site does to zero languages instead of the
+/// intended default set. ~keep
+fn effective_e2e_languages(
+    e2e_config: &crate::core::config::e2e::E2eConfig,
+    crate_languages: &[crate::core::config::extras::Language],
+) -> Vec<String> {
+    if e2e_config.languages.is_empty() {
+        crate::e2e::default_e2e_languages(crate_languages)
+    } else {
+        e2e_config.languages.clone()
+    }
 }
 
 fn write_snippet_migration_report(
@@ -864,6 +894,46 @@ mod tests {
     #[test]
     fn an_explicit_lang_filter_that_matched_something_is_fine() {
         assert!(ensure_requested_test_app_targets_ran(Some(&["python".to_string()]), true).is_ok());
+    }
+
+    #[test]
+    fn effective_e2e_languages_falls_back_when_config_languages_is_empty() {
+        use crate::core::config::e2e::E2eConfig;
+        use crate::core::config::extras::Language;
+
+        let e2e_config = E2eConfig::default();
+        assert!(
+            e2e_config.languages.is_empty(),
+            "test assumes the default E2eConfig has no explicit [e2e].languages"
+        );
+
+        let names = effective_e2e_languages(&e2e_config, &[Language::Python, Language::Node]);
+
+        assert_eq!(
+            names,
+            crate::e2e::default_e2e_languages(&[Language::Python, Language::Node]),
+            "an unset [e2e].languages must fall back to the crate's scaffolded languages, not resolve to zero"
+        );
+        assert!(!names.is_empty());
+    }
+
+    #[test]
+    fn effective_e2e_languages_honours_explicit_config_languages() {
+        use crate::core::config::e2e::E2eConfig;
+        use crate::core::config::extras::Language;
+
+        let e2e_config = E2eConfig {
+            languages: vec!["swift".to_string()],
+            ..E2eConfig::default()
+        };
+
+        let names = effective_e2e_languages(&e2e_config, &[Language::Python, Language::Node]);
+
+        assert_eq!(
+            names,
+            vec!["swift".to_string()],
+            "an explicit [e2e].languages must win over the crate's scaffolded languages"
+        );
     }
 
     /// The control: with no `--lang` filter, `ran_any == false` means no crate in this run has

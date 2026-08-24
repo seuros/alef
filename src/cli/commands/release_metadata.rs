@@ -222,11 +222,19 @@ fn parse_targets(csv: &str, valid: &HashSet<&str>) -> Result<std::collections::H
         return Ok(enabled);
     }
 
+    // ~keep Distinguishes a caller who explicitly asked for zero targets (`none`, handled
+    // below) from a `--targets` value that is non-empty but reduces to zero real tokens after
+    // splitting on `,` -- e.g. ",,," or a lone "," from a CI variable that interpolated an
+    // empty list into a join. Both used to resolve identically to `release_any: false` with no
+    // diagnostic, so a broken upstream computation and a deliberate "release nothing" looked
+    // the same in the emitted metadata.
+    let mut saw_any_token = false;
     for raw in csv.split(',') {
         let t = raw.trim().to_lowercase();
         if t.is_empty() {
             continue;
         }
+        saw_any_token = true;
         let normalised = normalise_target(&t);
         if normalised == "none" {
             for &vt in valid {
@@ -247,6 +255,14 @@ fn parse_targets(csv: &str, valid: &HashSet<&str>) -> Result<std::collections::H
             );
         }
         enabled.insert(normalised.to_string(), true);
+    }
+
+    if !saw_any_token {
+        anyhow::bail!(
+            "--targets '{csv}' contains no target names after splitting on ',' -- pass 'none' to \
+             explicitly request no release targets, 'all' (or omit the flag) for everything, or a \
+             real comma-separated list"
+        );
     }
 
     Ok(enabled)
@@ -344,6 +360,32 @@ mod tests {
     fn compute_unknown_target_errors() {
         let result = compute("v4.0.0", "unknown-target", None, "release", false, false, None);
         assert!(result.is_err());
+    }
+
+    /// A `--targets` value with real content but zero target tokens after splitting on `,`
+    /// (e.g. a CI variable that interpolated an empty list into a join) used to resolve
+    /// identically to `--targets none`: `release_any: false`, exit 0, no diagnostic. That
+    /// made a broken upstream computation indistinguishable from someone deliberately asking
+    /// for no release targets.
+    #[test]
+    fn compute_targets_of_only_separators_errors_instead_of_silently_releasing_nothing() {
+        for csv in [",,,", ",", " , , ", ",,"] {
+            let result = compute("v4.0.0", csv, None, "release", false, false, None);
+            assert!(
+                result.is_err(),
+                "'--targets {csv}' has no real target tokens and must not silently resolve to \
+                 release_any: false"
+            );
+        }
+    }
+
+    /// The control: an explicit `none` is a deliberate request and must keep succeeding with
+    /// `release_any: false` -- only a CSV with no real tokens at all is rejected.
+    #[test]
+    fn compute_targets_none_still_succeeds_with_release_any_false() {
+        let meta = compute("v4.0.0", "none", None, "release", false, false, None).unwrap();
+        assert!(!meta.release_any);
+        assert_eq!(meta.release_targets, "none");
     }
 
     #[test]

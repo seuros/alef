@@ -17,6 +17,15 @@ use super::workspace::WorkspaceConfig;
 /// Error variants produced when resolving a [`NewAlefConfig`] into per-crate views.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveError {
+    /// The config declares no `[[crates]]` entries at all, so every downstream
+    /// per-crate command (build, publish, tagging, version checks) would silently
+    /// process zero crates and report success.
+    #[error(
+        "no [[crates]] entries defined — alef.toml must declare at least one crate to generate \
+         bindings for; add a [[crates]] table or remove this config"
+    )]
+    NoCratesConfigured,
+
     /// Two `[[crates]]` entries share the same `name`.
     #[error("duplicate crate name `{0}` — every [[crates]] entry must have a unique name")]
     DuplicateCrateName(String),
@@ -86,11 +95,16 @@ impl NewAlefConfig {
     ///
     /// # Errors
     ///
+    /// - [`ResolveError::NoCratesConfigured`] when `[[crates]]` is empty.
     /// - [`ResolveError::DuplicateCrateName`] when two crates share a name.
     /// - [`ResolveError::EmptyLanguages`] when a crate has no target languages.
     /// - [`ResolveError::OverlappingOutputPath`] when two crates resolve to the
     ///   same output directory for the same language.
     pub fn resolve(&self) -> Result<Vec<ResolvedCrateConfig>, ResolveError> {
+        if self.crates.is_empty() {
+            return Err(ResolveError::NoCratesConfigured);
+        }
+
         let mut seen: HashMap<&str, usize> = HashMap::new();
         for (idx, krate) in self.crates.iter().enumerate() {
             if seen.insert(krate.name.as_str(), idx).is_some() {
