@@ -18,8 +18,11 @@ const UNKNOWN: &str = "unknown";
 /// output length varies with repository size and would make stamps incomparable across clones. ~keep
 const SHORT_SHA_LEN: usize = 12;
 
-const TREE_CLEAN: &str = "clean";
-const TREE_DIRTY: &str = "dirty";
+/// The classifier behind `ALEF_BUILD_TREE_STATE`, shared by source with the crate so that
+/// `cargo test --lib` exercises this exact code. A build script cannot depend on the crate it
+/// builds; `#[path]` is how the two get one implementation instead of two. ~keep
+#[path = "src/bin_cli/tree_state.rs"]
+mod tree_state;
 
 fn main() {
     let target = std::env::var("TARGET").unwrap_or_default();
@@ -131,29 +134,11 @@ fn emit_provenance(manifest_dir: &Path) {
         commit.as_deref().unwrap_or(UNKNOWN)
     );
     println!("cargo:rustc-env=ALEF_BUILD_COMMIT_SHORT={short}");
-    println!("cargo:rustc-env=ALEF_BUILD_TREE_STATE={}", tree_state(manifest_dir));
+    println!(
+        "cargo:rustc-env=ALEF_BUILD_TREE_STATE={}",
+        tree_state::classify(manifest_dir)
+    );
     println!("cargo:rustc-env=ALEF_BUILD_TIMESTAMP={}", build_timestamp());
-}
-
-/// Classify the working tree as `clean`, `dirty`, or [`UNKNOWN`].
-///
-/// `--no-optional-locks` keeps `git status` from refreshing and rewriting `.git/index`. Without it
-/// this script would bump the index mtime on every run, cargo would see a watched path change, and
-/// the next build would re-run the script and recompile the crate — forever.
-///
-/// Untracked files count as dirty. They are a deviation from the committed tree, a new untracked
-/// module compiles into the binary like any other, and the tie-break belongs on the safe side:
-/// a spurious `dirty` costs an unnecessary `git status`, whereas a spurious `clean` is exactly the
-/// failure this stamp exists to prevent. ~keep
-fn tree_state(manifest_dir: &Path) -> &'static str {
-    match git(manifest_dir, &["--no-optional-locks", "status", "--porcelain"]) {
-        // `git()` maps empty output to `None`, so a clean tree is indistinguishable here from git
-        // being unavailable. Re-establish the difference by asking a question a repository always
-        // answers and an absent/unusable git never does. ~keep
-        None if git(manifest_dir, &["rev-parse", "--is-inside-work-tree"]).is_none() => UNKNOWN,
-        None => TREE_CLEAN,
-        Some(_) => TREE_DIRTY,
-    }
 }
 
 /// Seconds since the Unix epoch, honoring `SOURCE_DATE_EPOCH` so reproducible-build environments
