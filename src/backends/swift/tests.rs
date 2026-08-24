@@ -1,1 +1,2 @@
 mod bridge_codegen_regressions;
+mod trait_box_swiftpm_compile;

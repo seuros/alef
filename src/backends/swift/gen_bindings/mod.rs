@@ -10,7 +10,7 @@ use crate::backends::swift::gen_rust_crate;
 use crate::backends::swift::type_map::SwiftMapper;
 
 mod adjacent_codable;
-mod boxes;
+pub(super) mod boxes;
 pub(crate) mod bridge_artifacts;
 mod client;
 pub(crate) mod dto;
@@ -600,7 +600,7 @@ impl Backend for SwiftBackend {
         };
 
         for (filename, content) in
-            trait_bridge::gen_trait_bridge_files(&trait_bridge_configs, &box_exclude, &first_class_types, api)
+            trait_bridge::gen_trait_bridge_files(&trait_bridge_configs, &box_exclude, &first_class_types)
         {
             let path = rust_bridge_sources.join(&filename);
             files.push(GeneratedFile {

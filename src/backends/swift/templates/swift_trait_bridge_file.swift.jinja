@@ -12,9 +12,6 @@ import RustBridge
 public protocol {{ protocol }}: SwiftPluginBridge {
 {{ protocol_methods }}}
 
-public extension {{ protocol }} {
-{{ default_methods }}}
-
 /// Internal adapter wrapping a `{{ protocol }}` conformer.
 /// Wraps a user-supplied bridge and forwards calls through marshalling entry points.
 final class {{ adapter_class }} {

@@ -1,1 +1,6 @@
+{% if has_rust_default %}
+    /// The Rust trait declares a default body for this method. alef does not carry that body in
+    /// its IR and cannot reproduce it, so this conformance is required rather than defaulted:
+    /// supply the same value the Rust default would have produced.
+{% endif %}
     func {{ method_name }}({{ params }}){{ throws_clause }} -> {{ return_type }}
