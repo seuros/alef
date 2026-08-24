@@ -1,5 +1,5 @@
 use crate::core::backend::GeneratedFile;
-use crate::core::config::e2e::{E2eConfig, SnippetConfig};
+use crate::core::config::e2e::{DocsSampleBaseUrl, E2eConfig, SnippetConfig};
 use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{EnumDef, TypeDef};
 use crate::e2e::codegen::{E2eCodegen, all_generators};
@@ -16,6 +16,7 @@ mod mock_harness_guard;
 mod mock_url_defaults;
 pub mod ownership;
 mod recipe_policy;
+mod render_body;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SnippetInclusion {
@@ -162,6 +163,13 @@ pub struct SnippetGenerationReport {
     pub coverage: SnippetCoverageLedger,
     /// Always empty on a successful run: a non-empty value aborts generation. ~keep
     pub guard_rejections: Vec<SnippetGuardRejection>,
+    /// Fixtures whose published snippets carry the reserved-domain placeholder because the ~keep
+    /// project configured no `[crates.e2e.snippets].sample_base_url`.
+    ///
+    /// Not a failure -- a project may have no public sample host, and refusing to generate
+    /// would break every consumer that has lived with the placeholder. It is reported so the
+    /// run states what it published rather than implying the snippets are runnable.
+    pub placeholder_sample_url_fixtures: Vec<String>,
 }
 
 struct SnippetRenderContext<'a> {
@@ -264,6 +272,11 @@ fn generate_snippet_report_with_extensions(
     extensions: &[Box<dyn crate::Extension>],
 ) -> Result<SnippetGenerationReport> {
     validate_relative_path(Path::new(&snippets.output), "snippet output")?;
+    // Resolve before anything renders: an unusable `sample_base_url` must fail the run, not ~keep
+    // reach published documentation as a broken address.
+    let sample_base_url = snippets
+        .docs_sample_base_url()
+        .map_err(|error| anyhow::anyhow!("invalid documentation sample base URL: {error}"))?;
     // Pin the *previous* run's ownership record before this run computes, let alone writes,
     // anything. `e2e::run` hands the freshly computed ledger to the same write batch as the
     // snippets, and `.alef-snippet-coverage.json` sorts ahead of every sibling snippet directory
@@ -273,6 +286,7 @@ fn generate_snippet_report_with_extensions(
     let generators = snippet_generators(languages)?;
     let mut generated = BTreeMap::<PathBuf, GeneratedSnippet>::new();
     let mut guard_rejections = Vec::<SnippetGuardRejection>::new();
+    let mut placeholder_sample_url_fixtures = BTreeSet::<String>::new();
     let mut coverage = SnippetCoverageLedger {
         format_version: COVERAGE_MANIFEST_VERSION,
         ..SnippetCoverageLedger::default()
@@ -343,8 +357,15 @@ fn generate_snippet_report_with_extensions(
                 )
             })?;
             let path = snippet_path(&snippets.output, docs, &fixture.id, language, lang)?;
-            let body = match render_snippet_body(extensions, generator.as_ref(), fixture, language, context) {
-                Ok(body) => body,
+            let rendered = match render_body::render_snippet_body(
+                extensions,
+                generator.as_ref(),
+                fixture,
+                language,
+                context,
+                sample_base_url,
+            ) {
+                Ok(rendered) => rendered,
                 Err(error) => {
                     // A guard rejection is a generator defect, not a documented limitation, so ~keep
                     // it is recorded separately and is deliberately *not* eligible for the
@@ -376,6 +397,13 @@ fn generate_snippet_report_with_extensions(
                     continue;
                 }
             };
+            let render_body::RenderedSnippetBody {
+                body,
+                used_placeholder_sample_url,
+            } = rendered;
+            if used_placeholder_sample_url {
+                placeholder_sample_url_fixtures.insert(fixture.id.clone());
+            }
             let content = render_snippet_markdown(&body, fixture, docs, language, lang);
             let requirements = snippet_requirements(fixture, language, &body);
             let file = GeneratedFile {
@@ -418,10 +446,13 @@ fn generate_snippet_report_with_extensions(
     ensure_no_guard_rejections(&guard_rejections)?;
     coverage = coverage::normalize(coverage);
     coverage::validate(&coverage)?;
+    let placeholder_sample_url_fixtures: Vec<String> = placeholder_sample_url_fixtures.into_iter().collect();
+    render_body::report_placeholder_sample_urls(&placeholder_sample_url_fixtures, sample_base_url);
     Ok(SnippetGenerationReport {
         snippets: generated.into_values().collect(),
         coverage,
         guard_rejections,
+        placeholder_sample_url_fixtures,
     })
 }
 
@@ -518,87 +549,6 @@ fn validate_documentation_reference(reference: &str) -> Result<()> {
         return Ok(());
     }
     validate_relative_path(Path::new(reference), "documentation reference")
-}
-
-fn render_snippet_body(
-    extensions: &[Box<dyn crate::Extension>],
-    generator: &dyn E2eCodegen,
-    fixture: &Fixture,
-    language: &str,
-    context: &SnippetRenderContext<'_>,
-) -> Result<String> {
-    let docs_fixture = fixture.docs_call_fixture();
-    for extension in extensions {
-        if let Some(body) = extension
-            .render_e2e_snippet(
-                &docs_fixture,
-                context.e2e,
-                context.crate_config,
-                language,
-                context.type_defs,
-                context.enums,
-            )
-            .map_err(|error| anyhow::anyhow!("extension `{}` could not render snippet: {error:#}", extension.name()))?
-        {
-            if body.trim().is_empty() {
-                bail!("extension `{}` returned an empty snippet body", extension.name());
-            }
-            mock_harness_guard::reject_mock_harness_scaffolding(&body, &docs_fixture, language)?;
-            return Ok(body);
-        }
-    }
-    let call = context.e2e.resolve_call_for_fixture(
-        docs_fixture.call.as_deref(),
-        &docs_fixture.id,
-        &docs_fixture.resolved_category(),
-        &docs_fixture.tags,
-        &docs_fixture.input,
-    );
-    let docs_fixture = mock_url_defaults::with_default_mock_url_literals(docs_fixture, call);
-    let fixture = &docs_fixture;
-    if let Some(kind) = recipe_policy::extension_owned_recipe_kind(fixture, fixture.resolved_args(call)) {
-        bail!("{kind} fixture requires an extension-owned documentation recipe");
-    }
-    let effective_function = call
-        .effective_function(language)
-        .or_else(|| {
-            // The naive identity fallback below derives a symbol name from the raw
-            // `fixture.call` config text (`register_fn`/`unregister_fn`/`clear_fn`), which
-            // can diverge from what the FFI backend actually generates (see
-            // `trait_bridge_function_identity`'s doc comment). A fixture author who set
-            // `skip.languages` for this language has already declared that the harness
-            // (and by extension this naive fallback) cannot speak for it here; only trust
-            // the fallback when the fixture is not skipped for this language. Fixtures with
-            // a real, extension-owned recipe never reach this branch — the extension loop
-            // above already returned their body, and `recipe_policy::extension_owned_recipe_kind`
-            // already bailed for fixtures that require one but lack it.
-            let skipped_for_language = fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(language));
-            (!skipped_for_language && crate::e2e::fixture::canonical_language(language) == "c")
-                .then(|| crate::e2e::codegen::recipe::trait_bridge_function_identity(context.crate_config, fixture))
-                .flatten()
-        })
-        .unwrap_or_default();
-    if effective_function.trim().is_empty() {
-        bail!(
-            "built-in `{language}` snippet recipe has no function identity; configure a call function or provide an extension-owned documentation recipe"
-        );
-    }
-    let body = generator
-        .render_snippet_body_with_functions(
-            fixture,
-            context.e2e,
-            context.crate_config,
-            context.type_defs,
-            context.enums,
-            context.functions,
-            context.errors,
-        )
-        .map_err(|error| anyhow::anyhow!("built-in `{language}` snippet recipe is incompatible: {error:#}"))?;
-    if body.trim().is_empty() {
-        bail!("built-in `{language}` snippet recipe returned an empty body");
-    }
-    mock_harness_guard::reject_mock_harness_scaffolding(&body, fixture, language)?;
-    Ok(body)
 }
 
 /// Turn every guard rejection this run produced into one aborting, attributed error. ~keep

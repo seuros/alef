@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
+mod docs_presentation;
 mod metadata;
 mod protocol;
 pub use metadata::{
@@ -445,35 +446,6 @@ impl Fixture {
         self.docs.as_ref().and_then(|docs| docs.client.as_ref())
     }
 
-    pub fn docs_call_fixture(&self) -> Self {
-        let mut fixture = self.clone();
-        if let Some(input) = self.docs.as_ref().and_then(|docs| docs.input.as_ref()) {
-            fixture.input = input.clone();
-        }
-        if let Some(presentation) = self.docs.as_ref().and_then(|docs| docs.presentation.as_ref()) {
-            if let Some(call) = &presentation.call {
-                fixture.call = Some(call.clone());
-            }
-            if let Some(input) = &presentation.input {
-                fixture.input = input.clone();
-            }
-            for file in &presentation.files {
-                if let Some(value) = fixture.input.pointer_mut(&file.field) {
-                    *value = serde_json::Value::String(file.path.clone());
-                }
-            }
-            if let Some(args) = &presentation.args {
-                fixture.args = args.clone();
-            }
-        }
-        fixture.mock_response = None;
-        if let Some(input) = fixture.input.as_object_mut() {
-            input.remove("mock_responses");
-        }
-        replace_docs_mock_urls(&mut fixture.input);
-        fixture
-    }
-
     pub fn docs_files_for_arg(&self, field: &str) -> Vec<FixtureDocsFileInput> {
         let base = if field == "input" {
             if self.input.get("extract_input").is_some() {
@@ -674,25 +646,6 @@ impl Fixture {
                 .unwrap_or("default")
                 .to_string()
         })
-    }
-}
-
-fn replace_docs_mock_urls(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::String(text) => {
-            *text = text.replace(crate::e2e::codegen::MOCK_URL_PLACEHOLDER, "https://example.com");
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                replace_docs_mock_urls(value);
-            }
-        }
-        serde_json::Value::Object(values) => {
-            for value in values.values_mut() {
-                replace_docs_mock_urls(value);
-            }
-        }
-        _ => {}
     }
 }
 
