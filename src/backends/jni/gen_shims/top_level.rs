@@ -67,12 +67,16 @@ fn emit_jni_type_shims(
     );
 }
 
+/// The feature names the JNI crate's core dependency turns on for the *default* (non-overridden)
+/// target, expanded through the core crate's `[features]` table so a configured aggregate name
+/// satisfies the gates of the members it enables.
+fn jni_default_features(config: &ResolvedCrateConfig) -> Vec<String> {
+    crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::KotlinAndroid))
+}
+
 fn filtered_jni_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
-    let enabled_features = config
-        .features_for_language(Language::KotlinAndroid)
-        .iter()
-        .map(String::as_str)
-        .collect();
+    let expanded = jni_default_features(config);
+    let enabled_features = expanded.iter().map(String::as_str).collect();
     api.with_cfg_filtered_deep(&enabled_features)
 }
 
@@ -203,8 +207,9 @@ fn emit_top_level_function_shims(
     // The symbol is keyed by its resolved predicate because duplicate IR entries can represent the same re-export. ~keep
     let mut emitted_native_symbols: std::collections::HashSet<(String, Option<String>)> =
         std::collections::HashSet::new();
+    let gates = JniTargetGates::resolve(config);
     for function in functions {
-        let Some(target_predicate) = jni_target_predicate(function.cfg.as_deref(), config) else {
+        let Some(target_predicate) = jni_target_predicate(function.cfg.as_deref(), &gates) else {
             continue;
         };
         let method_name = bridge_method_name("", &function.name);
@@ -352,32 +357,62 @@ fn jni_target_overrides(config: &ResolvedCrateConfig) -> &[crate::core::config::
         .unwrap_or_default()
 }
 
-fn jni_target_predicate(cfg: Option<&str>, config: &ResolvedCrateConfig) -> Option<Option<String>> {
-    let overrides = jni_target_overrides(config);
-    let default_features: std::collections::HashSet<&str> = config
-        .features_for_language(Language::KotlinAndroid)
-        .iter()
-        .map(String::as_str)
-        .collect();
-    if overrides.is_empty() {
+/// The feature set each target branch of the JNI crate's core dependency actually enables: the
+/// default branch, plus one entry per `[[crates.jni.target_dep_overrides]]` keyed by its cfg.
+///
+/// Resolved once per emitted `lib.rs` rather than per function: every expansion reads the core
+/// crate's manifest off disk, and [`jni_target_predicate`] is asked once for every function in
+/// the surface. ~keep
+struct JniTargetGates {
+    default_features: Vec<String>,
+    overrides: Vec<(String, Vec<String>)>,
+}
+
+impl JniTargetGates {
+    fn resolve(config: &ResolvedCrateConfig) -> Self {
+        Self {
+            default_features: jni_default_features(config),
+            overrides: jni_target_overrides(config)
+                .iter()
+                .map(|target| {
+                    (
+                        target.cfg.clone(),
+                        crate::codegen::cfg::expand_configured_features(config, &target.features),
+                    )
+                })
+                .collect(),
+        }
+    }
+}
+
+fn feature_name_set(features: &[String]) -> std::collections::HashSet<&str> {
+    features.iter().map(String::as_str).collect()
+}
+
+fn jni_target_predicate(cfg: Option<&str>, gates: &JniTargetGates) -> Option<Option<String>> {
+    let default_features = feature_name_set(&gates.default_features);
+    if gates.overrides.is_empty() {
         return crate::core::ir::cfg_feature_satisfied(cfg, &default_features).then_some(None);
     }
 
     let mut enabled_predicates = Vec::new();
     if crate::core::ir::cfg_feature_satisfied(cfg, &default_features) {
-        let override_predicates = overrides.iter().map(|target| target.cfg.as_str()).collect::<Vec<_>>();
+        let override_predicates = gates
+            .overrides
+            .iter()
+            .map(|(target_cfg, _)| target_cfg.as_str())
+            .collect::<Vec<_>>();
         enabled_predicates.push(format!("not(any({}))", override_predicates.join(", ")));
     }
-    for target in overrides {
-        let features = target.features.iter().map(String::as_str).collect();
-        if crate::core::ir::cfg_feature_satisfied(cfg, &features) {
-            enabled_predicates.push(target.cfg.clone());
+    for (target_cfg, features) in &gates.overrides {
+        if crate::core::ir::cfg_feature_satisfied(cfg, &feature_name_set(features)) {
+            enabled_predicates.push(target_cfg.clone());
         }
     }
 
     match enabled_predicates.len() {
         0 => None,
-        count if count == overrides.len() + 1 => Some(None),
+        count if count == gates.overrides.len() + 1 => Some(None),
         1 => Some(enabled_predicates.pop()),
         _ => Some(Some(format!("any({})", enabled_predicates.join(", ")))),
     }

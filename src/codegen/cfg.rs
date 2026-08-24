@@ -320,6 +320,34 @@ pub fn core_crate_declared_features(config: &ResolvedCrateConfig) -> BTreeSet<St
     read_declared_cargo_features(&manifest_path).unwrap_or_default()
 }
 
+/// Expand a configured feature list into every feature name it actually turns on, by following
+/// the core crate's own `[features]` table.
+///
+/// Cargo enables an aggregate feature's members transitively, but
+/// [`crate::core::ir::cfg_feature_satisfied`] compares a `#[cfg(feature = "X")]` gate against the
+/// configured list LITERALLY, with exactly one umbrella name -- `full` -- hard-coded as
+/// satisfying every gate. So a consumer whose core crate defines its own aggregate (the
+/// `android-target` shape [`crate::scaffold::android_target_feature_line`] already exists to
+/// serve) and who configures that aggregate name for a binding, or for one target of a binding,
+/// gets every `#[cfg(feature = "<member>")]` item silently dropped from that surface even though
+/// the build the aggregate describes compiles them. That is underexposure with no diagnostic:
+/// alef's own scaffolder expands the same aggregate into its members when it writes the binding
+/// crate's `[features]` table, so the two derivations disagree about what the artifact contains.
+/// Expanding the list before it is used as an enabled-feature set makes the filter agree with the
+/// manifest alef itself emits. ~keep
+///
+/// Falls back to `requested` verbatim when the core manifest cannot be located, read, or parsed
+/// -- the same permissive fallback [`core_crate_declared_features`] takes. Widening the enabled
+/// set is only ever safe when the manifest proves the members are enabled; an unreadable manifest
+/// proves nothing, so it must leave the caller exactly where it was. ~keep
+#[must_use]
+pub fn expand_configured_features(config: &ResolvedCrateConfig, requested: &[String]) -> Vec<String> {
+    crate::scaffold::core_feature_closure(config, requested)
+        .0
+        .into_iter()
+        .collect()
+}
+
 /// Insert every name [`undeclared_cfg_features`] finds missing from `existing`'s own
 /// `[features]` table -- forwarding each to `core_crate_name` the same way the sibling rows
 /// `scaffold_ruby_cargo`/`scaffold_elixir_cargo` already write do (`<feature> =
