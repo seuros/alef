@@ -10,6 +10,7 @@ use super::*;
 
 mod coverage;
 mod curated;
+mod rust_crate_requirements;
 mod sample_urls;
 
 #[test]
