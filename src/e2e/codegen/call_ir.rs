@@ -128,6 +128,45 @@ pub(crate) fn resolve_declared_result_type(call: &CallConfig, lang: &str, ir: Ca
     named_type(signature.return_type).map(str::to_string)
 }
 
+/// Which "this argument may be omitted" rule the target language's binding applies to a declared
+/// parameter.
+///
+/// The parameter-list twin of `field_access::ir_result_fields::OptionalityRule`, which carries the
+/// same disagreement for struct *fields*, and it exists for the same reason: node and wasm are one
+/// TypeScript surface compiled by one `tsc`, but they are two bindings, and only one of them
+/// widens. Picking either rule for both breaks the other half — a call that stops early against a
+/// wasm-bindgen declaration is `TS2554: Expected 2 arguments, but got 1`, while spelling a node
+/// argument the `.d.ts` marks `?:` merely adds an `undefined` a reader has to ignore. ~keep
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParamOptionalityRule {
+    /// Only the parameter's own declared type decides. wasm-bindgen emits each parameter straight
+    /// from the Rust signature (`backends::wasm::gen_bindings::functions::orchestration` maps a
+    /// parameter to `Option<T>` if and only if `ParamDef::optional`), so an `Option<T>` reaches
+    /// TypeScript as `t?: T` and everything else stays required.
+    DeclaredType,
+    /// The NAPI rule, per `backends::napi::gen_bindings::errors::param_is_optional`: the
+    /// parameter's own type, OR a declared default, OR its type implementing `Default`.
+    Napi,
+}
+
+impl ParamOptionalityRule {
+    /// The rule the binding generated for `language` applies to its declared parameters.
+    pub(crate) fn for_language(language: &str) -> Self {
+        match language {
+            "node" | "typescript" => Self::Napi,
+            _ => Self::DeclaredType,
+        }
+    }
+
+    /// Whether a call rendered for this binding may omit the argument filling `param`.
+    pub(crate) fn is_optional(self, param: &crate::core::ir::ParamDef, type_defs: &[crate::core::ir::TypeDef]) -> bool {
+        match self {
+            Self::DeclaredType => param.optional,
+            Self::Napi => crate::backends::napi::napi_param_is_optional(param, type_defs),
+        }
+    }
+}
+
 /// What the emitter knows about the *target* function's declared parameters.
 ///
 /// An empty `args` list is ambiguous between "this call genuinely takes zero arguments" and
@@ -206,6 +245,23 @@ impl<'a> TargetParams<'a> {
             .iter()
             .find(|param| param.name == arg_name)
             .or_else(|| params.get(index))
+    }
+
+    /// Whether the binding generated for `language` declares the parameter an `args` entry fills
+    /// as optional, i.e. whether a rendered call may end its argument list before this position.
+    ///
+    /// `None` when nothing was resolved ([`Self::IrAbsent`], [`Self::Unresolvable`], or an `args`
+    /// entry that matches no declared parameter) — the caller keeps whatever it emitted before
+    /// the seam existed, exactly as [`Self::declared_type_name`] does. ~keep
+    pub(crate) fn declares_param_optional(
+        self,
+        language: &str,
+        arg_name: &str,
+        index: usize,
+        type_defs: &[crate::core::ir::TypeDef],
+    ) -> Option<bool> {
+        let param = self.param_for(arg_name, index)?;
+        Some(ParamOptionalityRule::for_language(language).is_optional(param, type_defs))
     }
 
     /// The IR type name declared for the parameter an `args` entry fills, unwrapped through

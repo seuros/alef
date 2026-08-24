@@ -37,6 +37,12 @@ pub(super) fn render_snippet_body_with_ir(
         &fixture.input,
     );
     call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, fixture);
+    // A Java enhanced-for declares its binding in the enclosing method's scope, so a loop named
+    // after the result it iterates is "variable <name> is already defined". Decided before
+    // anything renders — the per-item field accessors below are rooted at this name. ~keep
+    let unshadowed =
+        crate::e2e::codegen::loop_binding::without_shadowed_loop_bindings(fixture, &[call.effective_result_var()]);
+    let fixture = unshadowed.as_ref();
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve("java", fixture, call, type_defs)
         .with_functions(functions);
     let target_params = recipe.target_params("java");

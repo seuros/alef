@@ -159,6 +159,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         config,
         false,
         referenced_enums,
+        crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
     );
 
     if !extra_args.is_empty() {

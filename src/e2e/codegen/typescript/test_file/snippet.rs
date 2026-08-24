@@ -72,7 +72,14 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         &fixture.input,
     );
     call = crate::e2e::codegen::select_best_matching_call(call, e2e_config, fixture);
-    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs);
+    // A `const` loop binding is in its own initializer's scope, so a loop named after the result
+    // it iterates is `TS2448`, not a shadow. Decided before anything renders — the per-item field
+    // accessors below are rooted at this name. ~keep
+    let unshadowed =
+        crate::e2e::codegen::loop_binding::without_shadowed_loop_bindings(fixture, &[call.effective_result_var()]);
+    let fixture = unshadowed.as_ref();
+    let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call, type_defs)
+        .with_functions(functions);
     let override_config = recipe.override_config;
     let options_type = recipe
         .options_type
@@ -121,6 +128,7 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
         config,
         true,
         &mut Default::default(),
+        recipe.target_params(lang),
     );
     if !recipe.extra_args.is_empty() {
         let extras = recipe.extra_args.join(", ");

@@ -1,5 +1,10 @@
 use super::*;
 
+/// `target` is what the core IR declares about the parameters these arguments fill. Only the
+/// documentation-snippet caller supplies a real one; the e2e test-file callers pass
+/// [`crate::e2e::codegen::call_ir::TargetParams::IrAbsent`], which licenses no claim, so every
+/// rendering below falls back to exactly what it emitted before the seam existed. Mirrors the
+/// `go` emitter, which threads the same seam to the same two kinds of caller. ~keep
 #[allow(clippy::too_many_arguments)]
 pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
     input: &serde_json::Value,
@@ -17,6 +22,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
     config: &crate::core::config::ResolvedCrateConfig,
     bind_typed_json_objects: bool,
     referenced_enums: &mut std::collections::BTreeSet<String>,
+    target: crate::e2e::codegen::call_ir::TargetParams<'_>,
 ) -> (Vec<String>, String) {
     let fixture_id = &fixture.id;
     if args.is_empty() {
@@ -272,7 +278,20 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                 // options argument — the overwhelmingly common shape — rendered as
                 // `convert(html, undefined)` against a signature that already reads `options?:`.
                 // Only a real later argument justifies it. ~keep
-                if has_later_arg_value(args, idx + 1, input) || has_later_json_object_default(args, idx + 1, input) {
+                //
+                // ...or the target declaring the parameter required. `optional` here is the
+                // *fixture author's* claim that the value may be left out of the input, which is
+                // not a claim about any binding's signature: node's `.d.ts` widens a parameter
+                // whose type derives `Default` to `settings?:`, and wasm-bindgen widens nothing.
+                // Reading the fixture's flag as if it were both targets' arity is what emitted the
+                // node call shape into a wasm snippet — `TS2554: Expected 2 arguments, but got 1`
+                // under the same `tsc` that accepts the node one. ~keep
+                let target_requires_argument =
+                    target.declares_param_optional(lang, &arg.name, idx, type_defs) == Some(false);
+                if target_requires_argument
+                    || has_later_arg_value(args, idx + 1, input)
+                    || has_later_json_object_default(args, idx + 1, input)
+                {
                     parts.push("undefined".to_string());
                 }
             }
@@ -555,6 +574,7 @@ mod tests {
             &config,
             true,
             &mut Default::default(),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
         );
 
         assert_eq!(

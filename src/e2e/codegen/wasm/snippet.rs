@@ -95,7 +95,51 @@ pub(super) fn render(
         }
         _ => body,
     };
+    if let Some(unexported) = first_unexported_type_reference(&body, config, &wasm_type_prefix) {
+        bail!(
+            "fixture `{}` renders a WASM snippet that names `{unexported}`, but `[crates.wasm] \
+             exclude_types` keeps that type out of the WASM binding, so the package exports no such \
+             symbol -- the snippet would not type-check. Drop the exclusion or give the fixture a \
+             `docs.coverage_exceptions` entry recording why WASM has no example",
+            docs_fixture.id
+        );
+    }
     Ok(body)
+}
+
+/// The first excluded type name the rendered snippet spells, if any.
+///
+/// The snippet's imports are derived from the crate IR (`wasm_prefixed_wrapped_type` prefixes any
+/// name the IR declares), and the IR is not the WASM binding's export list: `exclude_types` keeps
+/// a type out of the generated crate entirely, so a snippet that constructs it imports a symbol
+/// the package does not have. This is the type-side twin of the [`WasmCallability::NotExported`]
+/// refusal above, and it takes the same answer — a fixture whose example cannot be spelled against
+/// this binding is a recorded coverage gap, never a published snippet that fails to compile.
+///
+/// Both spellings are checked because the prefix is applied only to names the IR declares: an
+/// excluded type reached through a config override can appear unprefixed. ~keep
+///
+/// [`WasmCallability::NotExported`]: crate::backends::wasm::WasmCallability::NotExported
+fn first_unexported_type_reference(body: &str, config: &ResolvedCrateConfig, type_prefix: &str) -> Option<String> {
+    let excluded = config.wasm.as_ref().map(|wasm| &wasm.exclude_types)?;
+    excluded
+        .iter()
+        .flat_map(|name| [format!("{type_prefix}{name}"), name.clone()])
+        .find(|spelling| names_identifier(body, spelling))
+}
+
+/// Whether `body` uses `identifier` as a whole identifier rather than inside a longer one, so an
+/// excluded `Config` does not match every `ConfigBuilder` the snippet mentions. ~keep
+fn names_identifier(body: &str, identifier: &str) -> bool {
+    let is_identifier_char = |character: char| character.is_alphanumeric() || character == '_' || character == '$';
+    body.match_indices(identifier).any(|(start, matched)| {
+        let before_is_identifier = body[..start].chars().next_back().is_some_and(is_identifier_char);
+        let after_is_identifier = body[start + matched.len()..]
+            .chars()
+            .next()
+            .is_some_and(is_identifier_char);
+        !before_is_identifier && !after_is_identifier
+    })
 }
 
 #[cfg(test)]
