@@ -60,22 +60,39 @@ impl FieldResolver {
     /// Returns `None` when the path ends *at* the bridged leaf: the leaf itself is a readable
     /// `RustString`, so an `equals`/`contains`/`is_empty` assertion on it is fine.
     pub fn swift_json_bridged_traversal_prefix(&self, field: &str) -> Option<String> {
+        self.swift_json_bridged_prefix(field, false)
+    }
+
+    /// The same fact as [`Self::swift_json_bridged_traversal_prefix`], asked by a caller that will
+    /// step past `field`'s OWN leaf even though the path stops there — iterating it, or reading a
+    /// member off each of its elements.
+    ///
+    /// ~keep A docs snippet's `iterate` operation spells `for item in <accessor>`, which needs
+    /// elements the `RustString` does not have, so the impossibility is the traversal's, not the
+    /// path's. Expressing it as one more caller of the shared walk — rather than a second
+    /// `is_json_bridged_field_name` lookup at the call site — keeps the one predicate the binding
+    /// generator answers (`field_needs_json_bridge`) as the only source of this verdict.
+    pub fn swift_json_bridged_iteration_prefix(&self, field: &str) -> Option<String> {
+        self.swift_json_bridged_prefix(field, true)
+    }
+
+    fn swift_json_bridged_prefix(&self, field: &str, steps_past_leaf: bool) -> Option<String> {
         for candidate in [field, self.resolve(field)] {
-            if let Some(prefix) = self.swift_json_bridged_traversal_prefix_direct(candidate) {
+            if let Some(prefix) = self.swift_json_bridged_prefix_direct(candidate, steps_past_leaf) {
                 return Some(prefix);
             }
         }
         None
     }
 
-    fn swift_json_bridged_traversal_prefix_direct(&self, field: &str) -> Option<String> {
+    fn swift_json_bridged_prefix_direct(&self, field: &str, steps_past_leaf: bool) -> Option<String> {
         let segments: Vec<&str> = field.split('.').collect();
         let last = segments.len().saturating_sub(1);
         let mut prefix: Vec<&str> = Vec::with_capacity(segments.len());
         for (index, segment) in segments.iter().enumerate() {
             let bare = segment.split('[').next().unwrap_or(segment);
             prefix.push(bare);
-            let steps_past = index < last || segment.contains('[');
+            let steps_past = index < last || segment.contains('[') || steps_past_leaf;
             if steps_past && self.swift_first_class_map.is_json_bridged_field_name(bare) {
                 return Some(prefix.join("."));
             }

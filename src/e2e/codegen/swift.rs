@@ -273,6 +273,8 @@ mod is_empty_optional_array_tests;
 #[cfg(test)]
 mod is_true_tests;
 #[cfg(test)]
+mod json_bridged_snippet_tests;
+#[cfg(test)]
 mod json_bridged_traversal_tests;
 #[cfg(test)]
 mod optional_display_tests;
