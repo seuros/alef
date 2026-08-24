@@ -44,7 +44,13 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         .map(|sh| crate::core::hash::compute_inputs_hash(&sh, &alef_toml_bytes))
         .collect();
 
-    let stale = verify_walk_multi(&base_dir, &all_inputs_hashes)?;
+    // One walk, two answers. `stale` is the verdict; `scan_coverage` is how much of the tree
+    // that verdict is about. Deriving the second from a second walk would let the report
+    // describe a file set the verdict never saw -- see `verify_coverage`'s module doc. ~keep
+    let (scanned, scan_coverage) = super::super::verify_scan::scan(&base_dir);
+    let marked_paths: std::collections::HashSet<std::path::PathBuf> =
+        scanned.iter().map(|(path, _, _)| path.clone()).collect();
+    let stale = stale_among(&scanned, &all_inputs_hashes);
 
     let mut snippet_coverage_issues = Vec::new();
     // `verify_walk_multi` only sees files that already exist on disk; a file
@@ -252,6 +258,17 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         for record in &untracked_records {
             crate::bin_cli::output::line(format_args!("  {record} -- fix with: git add {record}"));
         }
+    }
+
+    // Printed unconditionally, before the verdict and on every run including a clean one.
+    // Every finding above is a NEGATIVE claim, and a report made only of negative claims is
+    // indistinguishable from one that examined nothing -- which is exactly how consumer CI
+    // came to read a green `alef verify` as a whole-tree freshness gate when it is a claim
+    // about marker-carrying files only. See `verify_coverage`'s module doc. ~keep
+    for line in super::super::verify_coverage::VerifyCoverage::measure(&all_managed_paths, &marked_paths, scan_coverage)
+        .report_lines()
+    {
+        crate::bin_cli::output::line(line);
     }
 
     if stale.is_empty()

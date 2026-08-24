@@ -30,8 +30,8 @@ pub use scaffold::{
 pub use scaffold_drift::find_create_once_template_drift;
 pub use write::{WriteReport, report_refused_writes};
 pub(crate) use write::{
-    apply_shebang_chmod, atomic_write, ensure_generated_header, is_owned_by_ownership_record, marker_comment_style,
-    provenance_header_for_path, stamp_for_adoption,
+    apply_shebang_chmod, atomic_write, ensure_generated_header, is_markable_path, is_owned_by_ownership_record,
+    marker_comment_style, provenance_header_for_path, stamp_for_adoption,
 };
 pub use write::{
     finalize_hashes, finalize_hashes_after_tree_format, finalize_hashes_sweeping, managed_generated_files,

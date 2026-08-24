@@ -703,24 +703,21 @@ fn stage_failure_for(
     (files, failures)
 }
 
-/// Multi-crate variant of [`verify_walk`].
+/// The stale subset of an ownership walk's output, against every candidate inputs hash.
 ///
-/// Walk the repo from `base_dir`, find every alef-headered file, and return the
-/// list of stale ones. In a multi-crate workspace each file passes when its
-/// content-derived hash matches one crate's generation-input hash.
-pub(crate) fn verify_walk_multi(
-    base_dir: &std::path::Path,
+/// Takes the walk's result rather than a directory so a caller that needs both the staleness
+/// verdict AND the walk's own coverage tally (`alef verify`, via
+/// [`super::verify_scan::scan`]) can get them from ONE walk. Two walks would be two
+/// answers to "what is on disk", free to disagree about the very set the report describes. ~keep
+pub(crate) fn stale_among(
+    scanned: &[(std::path::PathBuf, Option<String>, String)],
     inputs_hashes: &[String],
-) -> anyhow::Result<Vec<StaleMismatch>> {
+) -> Vec<StaleMismatch> {
     if inputs_hashes.is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
-    if inputs_hashes.len() == 1 {
-        return verify_walk(base_dir, &inputs_hashes[0]);
-    }
-
-    let mut stale: Vec<StaleMismatch> = collect_alef_hashes(base_dir)
-        .into_iter()
+    let mut stale: Vec<StaleMismatch> = scanned
+        .iter()
         .filter(|(_, disk_hash, content)| {
             disk_hash.as_ref().is_none_or(|disk_hash| {
                 !inputs_hashes
@@ -730,16 +727,16 @@ pub(crate) fn verify_walk_multi(
         })
         .map(|(path, disk_hash, content)| StaleMismatch {
             path: path.display().to_string(),
-            embedded: disk_hash.unwrap_or_else(|| "<missing>".to_owned()),
+            embedded: disk_hash.clone().unwrap_or_else(|| "<missing>".to_owned()),
             computed: inputs_hashes
                 .iter()
-                .map(|inputs_hash| crate::core::hash::compute_file_hash(inputs_hash, &content))
+                .map(|inputs_hash| crate::core::hash::compute_file_hash(inputs_hash, content))
                 .collect(),
         })
         .collect();
 
     stale.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(stale)
+    stale
 }
 
 /// Walk the consumer's repo from `base_dir`, find every alef-headered file, and
@@ -755,23 +752,14 @@ pub(crate) fn verify_walk_multi(
 /// Cargo.toml templates, composer.json, package.json, lockfiles, etc.) and alef has
 /// no claim. The Ruby gemspec and `.rubocop.yml` are NOT in this category — both carry the
 /// alef header (`generated_header: true`) and are alef-owned, overwritten on every `alef build`.
+///
+/// `cfg(test)` since `alef verify` moved to the single-walk [`stale_among`] path: the writer-side
+/// stamp-scope tests deliberately assert against the reader side's own function rather than a
+/// local restatement of it, so this stays the shared oracle for them even though the command no
+/// longer routes through it. ~keep
+#[cfg(test)]
 pub(crate) fn verify_walk(base_dir: &std::path::Path, inputs_hash: &str) -> anyhow::Result<Vec<StaleMismatch>> {
-    let mut stale: Vec<StaleMismatch> = collect_alef_hashes(base_dir)
-        .into_iter()
-        .filter(|(_, disk_hash, content)| {
-            disk_hash
-                .as_ref()
-                .is_none_or(|disk_hash| crate::core::hash::compute_file_hash(inputs_hash, content) != *disk_hash)
-        })
-        .map(|(path, disk_hash, content)| StaleMismatch {
-            path: path.display().to_string(),
-            embedded: disk_hash.unwrap_or_else(|| "<missing>".to_owned()),
-            computed: vec![crate::core::hash::compute_file_hash(inputs_hash, &content)],
-        })
-        .collect();
-
-    stale.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(stale)
+    Ok(stale_among(&collect_alef_hashes(base_dir), &[inputs_hash.to_owned()]))
 }
 
 #[cfg(test)]

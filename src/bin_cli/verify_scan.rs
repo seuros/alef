@@ -158,14 +158,75 @@ const VERIFY_SCAN_FILENAMES: &[&str] = &[
     "Makevars.win.in",
 ];
 
+/// Whether the ownership walk will open a file at `path`.
+///
+/// Three clauses, and the third is what keeps this honest. The two allowlists above are
+/// hand-maintained and had already drifted from the emit table they are documented to be a
+/// superset of, so this also asks
+/// [`crate::cli::pipeline::is_markable_path`] -- the emit side's own predicate -- directly:
+/// anything alef would stamp on write is opened on read, whatever the allowlists happen to
+/// say today. Widening the scan set can only ever cause more files to be *read*; a file is
+/// still reported only when it carries a marker, so this cannot produce a false finding.
+///
+/// The allowlists stay, and are not redundant: `.json` and `.md` are deliberately absent from
+/// the emit table (no comment syntax, and marked upstream by `docs::render` respectively) yet
+/// must still be read back, which the emit predicate alone would never do. ~keep
+pub(crate) fn is_scannable(path: &std::path::Path) -> bool {
+    let name_ok = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| VERIFY_SCAN_FILENAMES.contains(&name));
+    let extension_ok = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            VERIFY_SCAN_EXTENSIONS
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(extension))
+        });
+    name_ok || extension_ok || crate::cli::pipeline::is_markable_path(path)
+}
+
+/// How much of the tree the ownership walk actually looked at.
+///
+/// `alef verify`'s headline result is a claim about `marked` files and nothing else, while its
+/// name and its use as a CI gate read as a claim about the whole tree. Reporting these three
+/// numbers alongside the verdict is what keeps the two from being confused -- the same fix
+/// `alef snippets audit` needed when a snippets-only invocation printed a bare "Audit clean"
+/// for a run in which the documentation-page checks never executed. ~keep
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScanCoverage {
+    /// Files the walk opened and read as text.
+    pub(crate) opened: usize,
+    /// The subset of [`Self::opened`] carrying an alef provenance marker -- the only files
+    /// whose contents this run holds to a hash.
+    pub(crate) marked: usize,
+    /// Files the walk reached but whose contents never entered the result: either
+    /// [`is_scannable`] rejected the name and extension, or the bytes were not readable as
+    /// text (a jar, a compiled artifact). Both mean the same thing for the verdict -- nothing
+    /// about this file was checked. ~keep
+    pub(crate) unexamined: usize,
+}
+
 /// Walk `base_dir` and return every alef-owned file paired with its optional
 /// `alef:hash:<hex>` stamp. Skips build/cache directories, every directory git considers
 /// ignored (see [`super::verify_gitignore::gitignored_dirs`]), and files without the Alef
-/// ownership marker. Shared by [`super::helpers::verify_walk`] and [`super::helpers::verify_walk_multi`] so both see the same
-/// file set, and by [`super::verify_orphans::find_orphaned_generated_files`] so the orphan
-/// check sees the identical disk-side file set too. ~keep
+/// ownership marker. Shared by [`super::helpers::verify_walk`] and
+/// [`super::helpers::verify_walk_multi`] so both see the same file set, and by
+/// [`super::verify_orphans::find_orphaned_generated_files`] so the orphan check sees the
+/// identical disk-side file set too. ~keep
 pub(crate) fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path::PathBuf, Option<String>, String)> {
+    scan(base_dir).0
+}
+
+/// [`collect_alef_hashes`], plus the tally of what the same walk did *not* examine.
+///
+/// One walk answers both questions on purpose: a separate pass to count coverage would be a
+/// second implementation of the prune and filter rules, free to disagree with the pass whose
+/// coverage it claims to describe. ~keep
+pub(crate) fn scan(base_dir: &std::path::Path) -> (Vec<(std::path::PathBuf, Option<String>, String)>, ScanCoverage) {
     let mut found = Vec::new();
+    let mut coverage = ScanCoverage::default();
     let mut stack: Vec<std::path::PathBuf> = vec![base_dir.to_path_buf()];
     // A gitignored dependency-fetch cache (a zig package manager's local package cache) or
     // build-output directory (wasm-pack's own `pkg/`, which copies the crate's real,
@@ -200,31 +261,26 @@ pub(crate) fn collect_alef_hashes(base_dir: &std::path::Path) -> Vec<(std::path:
             if !file_type.is_file() {
                 continue;
             }
-            let name_ok = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| VERIFY_SCAN_FILENAMES.contains(&n));
-            let ext_ok = name_ok
-                || path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(|e| {
-                        VERIFY_SCAN_EXTENSIONS
-                            .iter()
-                            .any(|allowed| allowed.eq_ignore_ascii_case(e))
-                    })
-                    .unwrap_or(false);
-            if !ext_ok {
+            if !is_scannable(&path) {
+                coverage.unexamined += 1;
                 continue;
             }
             let content = match std::fs::read_to_string(&path) {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(_) => {
+                    coverage.unexamined += 1;
+                    continue;
+                }
             };
+            coverage.opened += 1;
             if crate::core::hash::content_has_alef_marker(&content) {
+                coverage.marked += 1;
                 found.push((path, crate::core::hash::extract_hash(&content), content));
             }
         }
     }
-    found
+    (found, coverage)
 }
+
+#[cfg(test)]
+mod tests;
