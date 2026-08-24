@@ -600,7 +600,7 @@ impl Backend for SwiftBackend {
         };
 
         for (filename, content) in
-            trait_bridge::gen_trait_bridge_files(&trait_bridge_configs, &box_exclude, &first_class_types)
+            trait_bridge::gen_trait_bridge_files(&trait_bridge_configs, &box_exclude, &first_class_types, api)
         {
             let path = rust_bridge_sources.join(&filename);
             files.push(GeneratedFile {
