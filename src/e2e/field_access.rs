@@ -45,3 +45,7 @@ mod is_array_namespace_tests;
 #[cfg(test)]
 #[path = "field_access/accessor_namespace_agreement_tests.rs"]
 mod accessor_namespace_agreement_tests;
+
+#[cfg(test)]
+#[path = "field_access/map_key_quoting_tests.rs"]
+mod map_key_quoting_tests;

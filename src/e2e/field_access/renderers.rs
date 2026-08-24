@@ -8,6 +8,30 @@ use super::types::{PathSegment, SwiftFirstClassMap};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::HashSet;
 
+/// Render `key` as a double-quoted string literal.
+///
+/// `parse_path` yields map keys UNQUOTED, so each renderer adds the quoting its target language
+/// wants — and every target alef emits map access for (Rust, Python, TS/JS, Go, Java, Kotlin,
+/// Swift, Ruby, Elixir, R, C#, Dart, PHP, Zig, Gleam) accepts the same C-style backslash escapes
+/// inside `"`. Interpolating the key raw instead lets a key containing `"` or a newline terminate
+/// the literal early and emit code that does not parse. ~keep
+pub(super) fn quoted_key_literal(key: &str) -> String {
+    let mut literal = String::with_capacity(key.len() + 2);
+    literal.push('"');
+    for character in key.chars() {
+        match character {
+            '\\' => literal.push_str("\\\\"),
+            '"' => literal.push_str("\\\""),
+            '\n' => literal.push_str("\\n"),
+            '\r' => literal.push_str("\\r"),
+            '\t' => literal.push_str("\\t"),
+            _ => literal.push(character),
+        }
+    }
+    literal.push('"');
+    literal
+}
+
 pub(super) fn render_accessor(segments: &[PathSegment], language: &str, result_var: &str) -> String {
     match language {
         "rust" => render_rust(segments, result_var),
@@ -60,7 +84,7 @@ pub(super) fn render_swift(segments: &[PathSegment], result_var: &str) -> String
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -155,7 +179,7 @@ pub(super) fn render_swift_with_first_class_map(
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("{access}[{key}]"));
                 } else {
-                    out.push_str(&format!("{access}[\"{key}\"]"));
+                    out.push_str(&format!("{access}[{}]", quoted_key_literal(key)));
                 }
                 push_key_index_suffix(&mut path_so_far, seg);
                 current_type = map.advance(current_type.as_deref(), field);
@@ -187,7 +211,7 @@ pub(super) fn render_rust(segments: &[PathSegment], result_var: &str) -> String 
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!(".get(\"{key}\").map(|s| s.as_str())"));
+                    out.push_str(&format!(".get({}).map(|s| s.as_str())", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -230,9 +254,9 @@ pub(super) fn render_dot_access(segments: &[PathSegment], result_var: &str, lang
                     } else if language == "elixir" || language == "ruby" {
                         // Ruby/Elixir hashes use `["key"]` bracket access (Ruby's Hash has
                         // no `get` method; Elixir maps use bracket access too).
-                        out.push_str(&format!("[\"{key}\"]"));
+                        out.push_str(&format!("[{}]", quoted_key_literal(key)));
                     } else {
-                        out.push_str(&format!(".get(\"{key}\")"));
+                        out.push_str(&format!(".get({})", quoted_key_literal(key)));
                     }
                 }
             }
@@ -277,7 +301,7 @@ pub(super) fn render_typescript(segments: &[PathSegment], result_var: &str) -> S
                 if !key.is_empty() && key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -304,7 +328,7 @@ pub(super) fn render_wasm(segments: &[PathSegment], result_var: &str) -> String 
             PathSegment::MapAccess { field, key } => {
                 out.push('.');
                 out.push_str(&field.to_lower_camel_case());
-                out.push_str(&format!(".get(\"{key}\")"));
+                out.push_str(&format!(".get({})", quoted_key_literal(key)));
             }
             PathSegment::Length => {
                 out.push_str(".length");
@@ -333,7 +357,7 @@ pub(super) fn render_go(segments: &[PathSegment], result_var: &str) -> String {
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -367,7 +391,7 @@ pub(super) fn render_java(segments: &[PathSegment], result_var: &str) -> String 
                 if is_numeric {
                     out.push_str(&format!("().get({key})"));
                 } else {
-                    out.push_str(&format!("().get(\"{key}\")"));
+                    out.push_str(&format!("().get({})", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -417,7 +441,7 @@ pub(super) fn render_kotlin(segments: &[PathSegment], result_var: &str) -> Strin
                 if is_numeric {
                     out.push_str(&format!("().get({key})"));
                 } else {
-                    out.push_str(&format!("().get(\"{key}\")"));
+                    out.push_str(&format!("().get({})", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
