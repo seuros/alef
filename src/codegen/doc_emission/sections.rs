@@ -223,12 +223,70 @@ pub fn parse_arguments_bullets(body: &str) -> Vec<(String, String)> {
 ///   Rust code even when `rust` itself is omitted
 /// - `"edition2018"`, `"edition2021"`, etc. — edition-gated Rust examples
 pub(super) fn is_rust_fence_tag(tag: &str) -> bool {
-    const RUSTDOC_ATTRS: &[&str] = &["no_run", "ignore", "should_panic", "compile_fail"];
     tag.is_empty()
         || tag == "rust"
         || tag.starts_with("rust,")
-        || RUSTDOC_ATTRS.contains(&tag)
+        || NAMED_RUSTDOC_FENCE_ATTRIBUTES.contains(&tag)
         || tag.starts_with("edition")
+}
+
+/// rustdoc's named code-block attributes, as documented in the rustdoc book.
+///
+/// Excludes `rust` itself, which names the language rather than qualifying the doctest.
+const NAMED_RUSTDOC_FENCE_ATTRIBUTES: &[&str] = &[
+    "no_run",
+    "ignore",
+    "should_panic",
+    "compile_fail",
+    "test_harness",
+    "standalone_crate",
+];
+
+/// Whether `attribute` is a rustdoc code-block attribute rather than renderer meta.
+///
+/// ~keep rustdoc's vocabulary is finite and documented; anything in it steers rustdoc's
+/// doctest harness and means nothing to a markdown renderer, so it is safe to drop.
+/// Anything outside it is deliberately kept — silently discarding a token a consumer
+/// wrote is worse than carrying it through as fence meta.
+fn is_rustdoc_fence_attribute(attribute: &str) -> bool {
+    if attribute == "rust" || NAMED_RUSTDOC_FENCE_ATTRIBUTES.contains(&attribute) {
+        return true;
+    }
+    // `edition2015` / `edition2018` / `edition2021` / `edition2024`.
+    if let Some(year) = attribute.strip_prefix("edition") {
+        return !year.is_empty() && year.chars().all(|character| character.is_ascii_digit());
+    }
+    // Platform-scoped ignores, e.g. `ignore-wasm32`.
+    if let Some(target) = attribute.strip_prefix("ignore-") {
+        return !target.is_empty();
+    }
+    // Expected-error codes on a `compile_fail` block, e.g. `E0308`.
+    if let Some(code) = attribute.strip_prefix('E') {
+        return code.len() == 4 && code.chars().all(|character| character.is_ascii_digit());
+    }
+    false
+}
+
+/// Convert a rustdoc fence info string's comma-separated attribute tail into markdown
+/// fence meta.
+///
+/// ~keep A markdown info string is `<language> <meta…>`: the language is the first
+/// whitespace-delimited token, and commas are not part of that grammar. Copying
+/// rustdoc's `rust,no_run` through verbatim therefore yields the language `rust,no_run`,
+/// which renderers and `alef snippets audit --docs` both reject as unknown. Recognised
+/// rustdoc attributes are dropped; anything unrecognised is re-joined with spaces so it
+/// lands in the meta slot instead of corrupting the language token.
+fn rustdoc_attributes_as_fence_meta(attribute_tail: &str) -> String {
+    let mut meta = String::new();
+    for attribute in attribute_tail.split(',') {
+        let attribute = attribute.trim();
+        if attribute.is_empty() || is_rustdoc_fence_attribute(attribute) {
+            continue;
+        }
+        meta.push(' ');
+        meta.push_str(attribute);
+    }
+    meta
 }
 
 /// Detect the language tag on the first code fence in `body`.
@@ -294,9 +352,9 @@ pub fn replace_fence_lang(body: &str, lang_replacement: &str) -> String {
             if in_fence {
                 // Closing fence: always bare, never re-tagged with a language.
             } else {
-                let after_lang = rest.find(',').map(|i| &rest[i..]).unwrap_or("");
+                let attribute_tail = rest.find(',').map(|index| &rest[index + 1..]).unwrap_or("");
                 out.push_str(lang_replacement);
-                out.push_str(after_lang);
+                out.push_str(&rustdoc_attributes_as_fence_meta(attribute_tail));
             }
             in_fence = !in_fence;
             out.push('\n');
