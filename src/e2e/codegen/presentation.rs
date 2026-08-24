@@ -26,6 +26,49 @@ pub(crate) struct PresentationOperation {
     pub(crate) field_optionals: Vec<bool>,
 }
 
+/// Clamp every operation to a path the target binding can actually spell, dropping the ones with
+/// no spellable form at all.
+///
+/// ~keep swift-bridge collapses a JSON-bridged field to a single `RustString`, so nothing can be
+/// subscripted, indexed, or iterated off it. The e2e generator already refuses exactly those steps
+/// — `swift/leaf_shape.rs` asks [`FieldResolver::swift_json_bridged_traversal_prefix`] and writes a
+/// skip comment — while the snippet generator asked nothing and emitted `labels()["theme"]`
+/// against the very field the e2e file next to it declared unspellable. Two generators, one IR, one
+/// field, opposite verdicts. Routing the snippet through the same derivation is what makes them one
+/// answer; clamping rather than dropping a `show` lands it on the case that derivation explicitly
+/// blesses (a path ending AT the bridged leaf reads fine), so the reader still sees the field.
+///
+/// Inert for every other language: the Swift first-class map is empty unless the Swift snippet
+/// generator built it, and an empty map classifies no field as JSON-bridged.
+fn clamp_swift_json_bridged_paths(
+    operations: Vec<FixtureDocsOperation>,
+    resolver: &FieldResolver,
+) -> Vec<FixtureDocsOperation> {
+    let mut clamped: Vec<FixtureDocsOperation> = Vec::with_capacity(operations.len());
+    for operation in operations {
+        let kept = match operation {
+            FixtureDocsOperation::Show { path, display } => Some(FixtureDocsOperation::Show {
+                path: resolver.swift_json_bridged_traversal_prefix(&path).unwrap_or(path),
+                display,
+            }),
+            // An `iterate` needs elements the `RustString` does not have, and there is no shorter
+            // prefix that iterates instead, so the operation goes rather than the tail. ~keep
+            FixtureDocsOperation::Iterate { ref path, .. }
+                if resolver.swift_json_bridged_iteration_prefix(path).is_some() =>
+            {
+                None
+            }
+            other => Some(other),
+        };
+        // Two `show` paths that differed only past the bridged leaf clamp to the same prefix, and
+        // the snippet would otherwise print it twice. ~keep
+        if let Some(kept) = kept.filter(|kept| !clamped.contains(kept)) {
+            clamped.push(kept);
+        }
+    }
+    clamped
+}
+
 /// True when the value an accessor for `path` yields is optional in the target language.
 ///
 /// An optional link anywhere in the chain makes the whole expression optional — `markdown` being
@@ -226,6 +269,7 @@ pub(crate) fn resolve_with(
     } else {
         operations
     };
+    let operations = clamp_swift_json_bridged_paths(operations, resolver);
     // Only now are the paths this snippet will render known, and the accessor renderers read
     // optionality out of a path set rather than by asking a question -- so the anchored answer
     // for exactly these paths has to be materialised into that set before anything renders. An
