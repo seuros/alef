@@ -7,24 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.67.4] - 2026-08-24
+
 ### Fixed
 
-- Fixed: a snippet session's `before` hook is now run once per package instead of once per configured session target. `kotlin` and `kotlin_android` both resolve to `Language::Kotlin`, and `typescript`/`node`/`wasm` all resolve to `Language::TypeScript`, so several targets routinely describe one physical package and each carried its own copy of that package's hook. Every copy was executed, sequentially, before a single snippet could validate — and when the hook outran `timeout_secs`, the run paid that whole timeout once per target. Within an activation group a hook whose command and environment match one already attempted now replays that attempt's outcome; failures replay too, preserving the timeout classification every affected target is reported with.
-- Fixed: `run_command` no longer outlives the timeout it was given. The budget covered only the wait for the direct child; once that child exited, output collection waited for end of stream on pipes every descendant had inherited, so any process outliving the command — a Gradle daemon, an MSBuild node, an unwaited background job — held the call open indefinitely. A one-second budget was measured taking twenty seconds and still returning success. Output readers now buffer as bytes arrive and the drain gives up at a fixed grace, reporting everything the command actually wrote and tearing down the process group of anything still holding the pipes.
-- Fixed: `SIGINT`, `SIGTERM` and `SIGHUP` are now forwarded to every snippet subprocess group before alef exits. Snippet children are spawned into their own process group so a timeout can kill the whole tree, which also removed them from the terminal's foreground group: Ctrl-C reached alef and nothing else, so alef exited 130 while the entire hook tree — shell, build wrapper and build daemon — survived and reparented to PID 1, where a stale daemon goes on to poison the next run. A signal already ignored on entry stays ignored.
+- a snippet session's `before` hook is now run once per package instead of once per configured session target. `kotlin` and `kotlin_android` both resolve to `Language::Kotlin`, and `typescript`/`node`/`wasm` all resolve to `Language::TypeScript`, so several targets routinely describe one physical package and each carried its own copy of that package's hook. Every copy was executed, sequentially, before a single snippet could validate — and when the hook outran `timeout_secs`, the run paid that whole timeout once per target. Within an activation group a hook whose command and environment match one already attempted now replays that attempt's outcome; failures replay too, preserving the timeout classification every affected target is reported with.
 
-- Added `[crates.e2e.snippets].sample_base_url`: the public base URL generated
-  documentation snippets bind for a fixture's `mock_url` / `mock_url_list` arguments. It is
-  documentation-only — the executable e2e suite keeps binding the per-fixture mock server —
-  so a project can publish snippets a reader can actually run without changing what its
-  tests talk to. Relative fixture paths (`"/pdf/report.pdf"`) resolve against the mock
-  server for tests and against the configured host for docs, from the same fixture, with no
-  per-fixture edit. An explicit `$mock_url` placeholder resolves against it too.
-- Changed: a snippet run that publishes the unconfigured `https://example.com` fallback now
-  warns once, naming the affected fixtures and the config key that fixes it, and records
-  them on `SnippetGenerationReport::placeholder_sample_url_fixtures`. Generated output is
-  unchanged when `sample_base_url` is unset. An unusable `sample_base_url` (empty,
-  whitespace-bearing, or scheme-less) fails generation instead of silently falling back.
+- `run_command` no longer outlives the timeout it was given. The budget covered only the wait for the direct child; once that child exited, output collection waited for end of stream on pipes every descendant had inherited, so any process outliving the command — a Gradle daemon, an MSBuild node, an unwaited background job — held the call open indefinitely. A one-second budget was measured taking twenty seconds and still returning success. Output readers now buffer as bytes arrive and the drain gives up at a fixed grace, reporting everything the command actually wrote and tearing down the process group of anything still holding the pipes.
+
+- `SIGINT`, `SIGTERM` and `SIGHUP` are now forwarded to every snippet subprocess group before alef exits. Snippet children are spawned into their own process group so a timeout can kill the whole tree, which also removed them from the terminal's foreground group: Ctrl-C reached alef and nothing else, so alef exited 130 while the entire hook tree — shell, build wrapper and build daemon — survived and reparented to PID 1, where a stale daemon goes on to poison the next run. A signal already ignored on entry stays ignored.
+
 - `alef verify` refuses `--compile`, `--lint` and `--lang` instead of discarding them. All
   three are visible, documented flags (`--compile` reads "Also run compilation check") that
   the command destructured away, so `alef verify --compile` exited 0 having compiled
@@ -33,14 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--exit-code` is unaffected: it is a hidden, documented no-op. Nothing in the polyrepo
   passes the refused flags today.
 
-- Fixed: `alef --version` no longer reports `tree: DIRTY` for every binary installed with `cargo install --git`. Cargo drops a `.cargo-ok` completion marker into each checkout it creates, and the build stamp classified the working tree with `git status --porcelain`, which counts untracked files. Every git-installed binary therefore printed the "not reproducible from commit" warning, and a warning that fires on every install is one nobody reads — which is how genuinely dirty output ends up attributed to a commit it cannot be reproduced from.
-- Changed: the build-time working-tree classifier now asks `git diff --quiet HEAD` — tracked paths only, index and working tree both, so a staged addition or a deletion still counts as dirty. Untracked files no longer count: reaching the compiler requires a `mod`/`include!` chain rooted at a tracked `src/lib.rs`, so untracked source that actually affects the build drags a tracked modification along with it. A denylist would have covered `.cargo-ok` and then waited for the next tool's marker file.
-- Changed: a repository with no commit yet now stamps `unknown` instead of `clean`. There is no `HEAD` to call the tree clean relative to, and `clean` reads as a provenanced build.
-- Added: `src/bin_cli/tree_state.rs`, the classifier, compiled by `build.rs` via `#[path]` and by the crate normally, so `cargo test --lib` exercises the shipped code instead of a second copy of it. Its tests assert both directions — a checkout dirtied only by untracked files reports clean, and a tracked modification, deletion, or staged addition still reports dirty.
+- `alef --version` no longer reports `tree: DIRTY` for every binary installed with `cargo install --git`. Cargo drops a `.cargo-ok` completion marker into each checkout it creates, and the build stamp classified the working tree with `git status --porcelain`, which counts untracked files. Every git-installed binary therefore printed the "not reproducible from commit" warning, and a warning that fires on every install is one nobody reads — which is how genuinely dirty output ends up attributed to a commit it cannot be reproduced from.
+
 - `alef snippets gaps` now prints a gap-coverage report on every run — snippet roots and files discovered, documentation roots and pages actually opened, references found versus supplied by configuration, and required languages against snippet groups compared — so a "No gaps found." result can no longer read as a wider claim than the check made. A consumer that omitted `required_languages`, `docs_dirs` and `include_base_paths` from its `alef.toml` previously read a clean gap report for a run in which the language-parity check never executed and not one documentation page was opened.
+
 - `alef snippets gaps` now names every unset input (`docs_dirs`/`--docs`, `required_languages`/`-L`, `include_base_paths`/`--include-base-path`) together with the check class its absence disables.
+
 - `alef snippets gaps` gained `--strict`, which fails the run when an unset input left a check class with nothing to compare, so a CI job whose purpose is gap detection cannot go green by being unconfigured. An unset `include_base_paths` is reported but deliberately not strict-fatal: it makes include targets over-report rather than manufacture a false clean.
+
 - `alef snippets check` no longer skips its gap pass silently. With neither `docs_dirs` nor `required_languages` configured under `[crates.docs.snippets]` the pass is still skipped, but the unset keys are now warned about by name, and under `strict` the skipped pass fails the run instead of reporting no failure.
+
 - Split `src/snippets/gaps.rs` unit tests into `src/snippets/gaps/tests.rs`, dropping the file under the repository's 1,000-line cap and removing its file-size ratchet baseline entry.
 
 - **Java visitor bridge now derives the context struct layout from the IR.**
@@ -52,18 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the field offsets, the Panama value layout per field and the constructor arguments are now
   derived per context type, so any field count, order, and scalar width compiles.
 
-
 - **The visitor context C ABI is derived once, in `codegen::visitor_context_abi`.**
   The FFI backend's `context_c_type` / `context_field_specs` decided the `#[repr(C)]` shape and
   which fields have no C representation; the Java bridge re-stated that shape by hand and the two
   drifted. Both backends now read the same derivation — field order, scalar widths, `#[repr(C)]`
   padding, struct size, and the skip decision.
+
 - **Context fields the C struct cannot carry are decoded as Java's own zero value.**
   The FFI backend drops fields with no C representation (floats, collections, nested structs, any
   optional that is not `Option<String>`). The record component still exists, so the Java bridge
   passes `null` for reference components and the primitive zero for value components rather than
   fabricating a value or refusing to emit the bridge at all — the options record that holds the
   callback references the visitor interface whether or not the bridge exists.
+
 - **A payload-carrying context enum is no longer decoded from its discriminant.** The Java binding
   emits tagged and untagged unions as sealed interfaces with no `values()`, so an ordinal cannot
   reconstruct a variant; such a component now takes the absent value instead of emitting Java that
@@ -76,9 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `string(result.ActionResults)` into a generated Go package. Both now call `result_relative_path`,
   so accessor emission, `is_array`, and the zig/brew/C serialized-path navigation share one
   definition of where a field's value lives.
+
 - An accessor whose virtual prefix hides a field the IR reaches but a hand-maintained `result_fields`
   omits now strips that prefix, instead of emitting a member access against the virtual label.
-
 
 - A `result_fields` entry the IR marks `binding_excluded` no longer strips its virtual namespace
   prefix in accessor emission. `with_ir_fields` already warns that such an entry is a config bug and
@@ -90,6 +85,7 @@ Investigated whether `alef adopt`'s `--clobber-create-once-seeds` over-gates an
 *timing* stated in the warning was wrong. Bullets below, for `### Fixed`.
 
 ```markdown
+
 - `alef adopt`'s create-once-seed warning no longer names the wrong command as the moment of
   loss. It said adopting a seed consents to alef "replacing its contents with a placeholder
   seed on the next generate", but `write_scaffold_files_report`'s `can_skip`
@@ -150,6 +146,16 @@ and it never claimed the flag was unnecessary.
   clause of the catch chain rethrows the slot itself, so the `Throwable` typing compiled only by
   virtue of the enclosing outer `catch (Throwable)`.
 
+- a snippet run that publishes the unconfigured `https://example.com` fallback now
+  warns once, naming the affected fixtures and the config key that fixes it, and records
+  them on `SnippetGenerationReport::placeholder_sample_url_fixtures`. Generated output is
+  unchanged when `sample_base_url` is unset. An unusable `sample_base_url` (empty,
+  whitespace-bearing, or scheme-less) fails generation instead of silently falling back.
+
+- the build-time working-tree classifier now asks `git diff --quiet HEAD` — tracked paths only, index and working tree both, so a staged addition or a deletion still counts as dirty. Untracked files no longer count: reaching the compiler requires a `mod`/`include!` chain rooted at a tracked `src/lib.rs`, so untracked source that actually affects the build drags a tracked modification along with it. A denylist would have covered `.cargo-ok` and then waited for the next tool's marker file.
+
+- a repository with no commit yet now stamps `unknown` instead of `clean`. There is no `HEAD` to call the tree clean relative to, and `clean` reads as a provenanced build.
+
 ### Added
 
 - Java: `tests/backends_java_visitor_compile_test.rs` compiles the generated options-field visitor
@@ -175,6 +181,7 @@ and it never claimed the flag was unnecessary.
   only when some other check had already failed. Extends the 0.67.3 stale-seed fix rather than
   duplicating it: that one taught the stamping pass to ask the question verify asks
   (`stampable_output_paths`); this one removes the finding verify had no answer for.
+
 - **`alef verify` now reports its own coverage on every run.** Every finding verify produces is
   a negative claim, so a green result was indistinguishable from a run that examined nothing --
   and consumer CI reads it under job names like "Alef-generated bindings freshness" as a
@@ -186,6 +193,7 @@ and it never claimed the flag was unnecessary.
   examined, unmarked create-once seeds, and marked files the surface does not claim. Follows the
   `alef snippets audit` precedent of naming the check class a run skipped instead of printing a
   bare clean result.
+
 - **A stamped `.clang-format` was written and then never read back by anything.** The ownership
   walk's scan set is documented to be a superset of everything the emit table can stamp, and it
   had drifted: `.clang-format` is scaffolded `generated_header: true` for every FFI target and
@@ -199,6 +207,16 @@ and it never claimed the flag was unnecessary.
   positives.
 
 - **e2e: classify `is_array` by the path the accessor actually addresses.** `FieldResolver::is_array` was a bare `fields_array` set lookup against the raw fixture spelling, while `accessor` — and `result_relative_path`, the answer the zig, brew and C generators share — strip a virtual namespace label first. A field spelled `interaction.action_results` therefore rendered as the slice `result.ActionResults` and classified as not-an-array, so Go's `contains`/`contains_all`/`not_contains`/`contains_any` renderers emitted `string(result.ActionResults)` instead of `jsonString(...)`; converting a `[]T` to `string` is not legal Go, so the generated package failed to build. `is_array` now routes its fallback through `result_relative_path` (which also applies alias resolution) rather than growing a second hand-rolled namespace strip beside `is_optional`'s, keeping one definition of where a fixture field's value lives.
+
+- Added `[crates.e2e.snippets].sample_base_url`: the public base URL generated
+  documentation snippets bind for a fixture's `mock_url` / `mock_url_list` arguments. It is
+  documentation-only — the executable e2e suite keeps binding the per-fixture mock server —
+  so a project can publish snippets a reader can actually run without changing what its
+  tests talk to. Relative fixture paths (`"/pdf/report.pdf"`) resolve against the mock
+  server for tests and against the configured host for docs, from the same fixture, with no
+  per-fixture edit. An explicit `$mock_url` placeholder resolves against it too.
+
+- `src/bin_cli/tree_state.rs`, the classifier, compiled by `build.rs` via `#[path]` and by the crate normally, so `cargo test --lib` exercises the shipped code instead of a second copy of it. Its tests assert both directions — a checkout dirtied only by untracked files reports clean, and a tracked modification, deletion, or staged addition still reports dirty.
 
 ### Removed
 
