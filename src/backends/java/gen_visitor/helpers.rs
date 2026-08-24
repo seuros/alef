@@ -97,7 +97,12 @@ pub(super) fn layout_to_java_class(layout: &str) -> &'static str {
 }
 
 /// Generate one `handle_*` instance method inside `VisitorBridge`.
-pub(super) fn gen_handle_method(out: &mut String, spec: &CallbackSpec, context_type: &str) {
+pub(super) fn gen_handle_method(
+    out: &mut String,
+    spec: &CallbackSpec,
+    context_type: &str,
+    error_result_constant: &str,
+) {
     let mut params = vec![
         "final MemorySegment ctx".to_string(),
         "final MemorySegment userData".to_string(),
@@ -148,6 +153,7 @@ pub(super) fn gen_handle_method(out: &mut String, spec: &CallbackSpec, context_t
             context_type => context_type,
             java_method => &spec.java_method,
             call_args => &call_args,
+            error_result_constant => error_result_constant,
         },
     ));
     out.push('\n');

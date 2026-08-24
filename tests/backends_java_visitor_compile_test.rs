@@ -15,7 +15,8 @@ use alef::backends::java::JavaBackend;
 use alef::core::backend::Backend;
 use alef::core::config::{NewAlefConfig, ResolvedCrateConfig};
 use alef::core::ir::{
-    ApiSurface, EnumDef, EnumVariant, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef,
+    ApiSurface, EnumDef, EnumVariant, FieldDef, FunctionDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef,
+    TypeRef,
 };
 use support::{compile_java, extract_java_method, java_available, write_file};
 
@@ -166,8 +167,12 @@ fn visitor_api() -> ApiSurface {
 }
 
 fn generated_files() -> Vec<(String, String)> {
+    generate(&visitor_api(), &visitor_config())
+}
+
+fn generate(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<(String, String)> {
     JavaBackend
-        .generate_bindings(&visitor_api(), &visitor_config())
+        .generate_bindings(api, config)
         .expect("java visitor generation must succeed")
         .into_iter()
         .map(|file| {
@@ -265,6 +270,122 @@ fn generated_visitor_method_compiles_under_javac() {
         &probe_source(&facade_source(&files)),
     );
     sources.push("com/test/VisitorProbe.java".to_owned());
+
+    let arguments: Vec<&str> = sources.iter().map(String::as_str).collect();
+    compile_java(directory.path(), &arguments);
+}
+
+/// Generated files the bridge compile needs verbatim; the context record is stubbed for Jackson.
+const BRIDGE_DEPENDENCIES: &[&str] = &["VisitorBridge.java", "Callback.java", "FlowDecision.java"];
+
+fn bridge_config() -> ResolvedCrateConfig {
+    let config: NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["java", "ffi"]
+
+[[crates]]
+name = "test_lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "test"
+
+[crates.java]
+package = "com.test"
+
+[[crates.trait_bridges]]
+trait_name = "Callback"
+type_alias = "CallbackHandle"
+bind_via = "options_field"
+options_type = "WorkConfig"
+options_field = "hook"
+context_type = "NodeContext"
+result_type = "FlowDecision"
+"#,
+    )
+    .expect("valid Java bridge config");
+    config.resolve().expect("resolved Java bridge config").remove(0)
+}
+
+fn bridge_api() -> ApiSurface {
+    let mut api = visitor_api();
+    api.types[0] = record(
+        "NodeContext",
+        vec![
+            field("kind", TypeRef::Named("NodeKind".to_owned())),
+            field("name", TypeRef::String),
+            field("depth", TypeRef::Primitive(PrimitiveType::U64)),
+            field("position", TypeRef::Primitive(PrimitiveType::U64)),
+            field("parent", TypeRef::String),
+            field("inline", TypeRef::Primitive(PrimitiveType::Bool)),
+        ],
+    );
+    api.types[3] = TypeDef {
+        methods: vec![MethodDef {
+            name: "inspect".to_owned(),
+            params: vec![ParamDef {
+                name: "context".to_owned(),
+                ty: TypeRef::Named("NodeContext".to_owned()),
+                is_ref: true,
+                ..Default::default()
+            }],
+            return_type: TypeRef::Named("FlowDecision".to_owned()),
+            receiver: Some(ReceiverKind::RefMut),
+            has_default_impl: true,
+            ..Default::default()
+        }],
+        ..callback_trait()
+    };
+    api.enums.push(EnumDef {
+        name: "NodeKind".to_owned(),
+        rust_path: "test_lib::NodeKind".to_owned(),
+        variants: vec![
+            EnumVariant {
+                name: "Element".to_owned(),
+                is_default: true,
+                ..Default::default()
+            },
+            EnumVariant {
+                name: "Text".to_owned(),
+                ..Default::default()
+            },
+        ],
+        has_serde: true,
+        ..Default::default()
+    });
+    api
+}
+
+/// The visitor bridge is the other half of the visitor path and had no compile coverage either.
+///
+/// Its upcall handlers must return a discriminant the native side understands when the host
+/// callback throws, and its `decodeContext` must construct the generated context record. Both are
+/// invisible to substring assertions and both are `javac` errors when wrong. ~keep
+#[test]
+fn generated_visitor_bridge_compiles_under_javac() {
+    if !java_available() {
+        return;
+    }
+    let files = generate(&bridge_api(), &bridge_config());
+    let directory = tempfile::tempdir().expect("temporary Java bridge directory");
+    let mut sources: Vec<String> = Vec::new();
+    for name in BRIDGE_DEPENDENCIES {
+        let content = files
+            .iter()
+            .find(|(file_name, _)| file_name == name)
+            .unwrap_or_else(|| panic!("generated {name} must be emitted"))
+            .1
+            .clone();
+        write_file(directory.path(), &format!("com/test/{name}"), &content);
+        sources.push(format!("com/test/{name}"));
+    }
+    write_file(
+        directory.path(),
+        "com/test/NodeContext.java",
+        include_str!("fixtures/java_visitor_bridge_context.java"),
+    );
+    sources.push("com/test/NodeContext.java".to_owned());
 
     let arguments: Vec<&str> = sources.iter().map(String::as_str).collect();
     compile_java(directory.path(), &arguments);

@@ -265,10 +265,17 @@ fn gen_visitor_bridge(package: &str, visitor: &VisitorGeneration) -> String {
         stub_methods.push(method);
     }
 
+    // An upcall that throws has no discriminant of its own on the wire: the exception is parked in
+    // `visitorError` and rethrown once the native call returns, so the code handed back to C only
+    // has to be a value the native side can act on. The default variant is that value. ~keep
+    let error_result_constant = format!(
+        "VISIT_RESULT_{}",
+        to_class_name(&visitor.default_variant).to_uppercase()
+    );
     let mut handle_methods = Vec::new();
     for spec in &visitor.callbacks {
         let mut method = String::new();
-        gen_handle_method(&mut method, spec, &visitor.context_type);
+        gen_handle_method(&mut method, spec, &visitor.context_type, &error_result_constant);
         handle_methods.push(method);
     }
     let result_constants: Vec<_> = visitor
