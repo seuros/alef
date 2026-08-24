@@ -172,7 +172,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         "NOT ADOPTED -- create-once seeds. alef emits each of these only when the file is \
                          absent, so it is a placeholder that the copy on disk has almost certainly grown \
                          past. Adopting one consents to alef REPLACING its contents with that placeholder \
-                         on the next generate:",
+                         on the next OVERWRITING regen -- an `alef version` sync or `alef all \
+                         --clobber-create-once-seeds`, not the next plain `alef generate`:",
                     );
                     for path in &report.skipped_create_once {
                         crate::bin_cli::output::line(format_args!("  {}", path.display()));

@@ -1,4 +1,5 @@
 mod binary;
+mod create_once_seeds;
 
 use super::*;
 use crate::core::backend::GeneratedFile;
