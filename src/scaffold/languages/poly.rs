@@ -651,7 +651,7 @@ mod tests {
     fn poly_toml() -> String {
         scaffold_poly_config(&ResolvedCrateConfig::default(), &[Language::Rust])
             .into_iter()
-            .find(|file| file.path == PathBuf::from("poly.toml"))
+            .find(|file| file.path == std::path::Path::new("poly.toml"))
             .expect("scaffold emits poly.toml")
             .content
     }

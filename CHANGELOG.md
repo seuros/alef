@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `FieldResolver::accessor` and `FieldResolver::rust_unwrap_binding` each carried a private copy of
+  the virtual-namespace strip decision, gated on `result_fields.contains(..)` where the shared
+  `result_relative_path` asks the broader `is_valid_for_result(..)`. The copies could place the same
+  fixture field somewhere the classifiers did not — the defect shape that emitted
+  `string(result.ActionResults)` into a generated Go package. Both now call `result_relative_path`,
+  so accessor emission, `is_array`, and the zig/brew/C serialized-path navigation share one
+  definition of where a field's value lives.
+- An accessor whose virtual prefix hides a field the IR reaches but a hand-maintained `result_fields`
+  omits now strips that prefix, instead of emitting a member access against the virtual label.
+
+
+- A `result_fields` entry the IR marks `binding_excluded` no longer strips its virtual namespace
+  prefix in accessor emission. `with_ir_fields` already warns that such an entry is a config bug and
+  no binding emits an accessor for the field, so neither spelling compiles; the accessor now agrees
+  with `is_array` and the serialized-path generators rather than keeping a private answer.
+
+Investigated whether `alef adopt`'s `--clobber-create-once-seeds` over-gates an
+**unmarkable** create-once seed. It does not: the gate is correctly protective. Only the
+*timing* stated in the warning was wrong. Bullets below, for `### Fixed`.
+
+```markdown
+- `alef adopt`'s create-once-seed warning no longer names the wrong command as the moment of
+  loss. It said adopting a seed consents to alef "replacing its contents with a placeholder
+  seed on the next generate", but `write_scaffold_files_report`'s `can_skip`
+  (`!overwrite && !generated_header && exists && !is_alef_derived_output`) runs before the
+  ownership guard and consults no ownership signal, so a plain `alef generate` skips an
+  adopted seed exactly as it skips an unadopted one. The replacement lands on the next write
+  that passes `overwrite: true` -- an `alef version` scaffold regen, or
+  `alef all --clobber-create-once-seeds`. An operator who tested the warning by running
+  `alef generate`, saw the file untouched, and concluded the warning was false would have been
+  reading accurate output; the loss was simply still days away. The flag help, the
+  `NOT ADOPTED -- create-once seeds` stdout block, the per-path `warn!` and the seeds-only
+  `bail!` now all name the overwriting regen and say a plain generate skips these paths.
+
+- The gating itself is unchanged, and is now pinned by tests rather than argued from doc
+  comments. For an unmarkable seed (`LICENSE`, `mvnw`, `gradlew`, `.gitkeep` -- paths
+  `marker_comment_style` answers `None` for), `alef adopt --write --clobber-create-once-seeds`
+  writes no byte of the file: `stamp_for` yields `None`, so the entire adoption is one entry in
+  the committed `.alef-ownership.toml`. That entry is precisely what
+  `write_scaffold_files_report` accepts as proof of ownership for an unmarkable path
+  (`owned = has_marker || (!is_markable && is_owned_by_ownership_record(..))`), so the
+  adoption is what clears the guard for the next overwriting write. Five tests in
+  `cli::commands::adopt::tests::create_once_seeds` measure the bytes on both sides of the
+  adoption and both sides of the write, including a control proving the identical
+  `overwrite: true` write refuses when the adoption did not happen.
+```
+
+Note for the integrator: the 0.66 entry ("adopted through the committed record without its
+contents being touched. It remains a create-once seed, so `--clobber-create-once-seeds` is
+still required") is accurate as written and needs no correction — both halves of it are true,
+and it never claimed the flag was unnecessary.
+
 - poly fmt no longer demotes every heading in a Markdown file that contains a stray second
   level-1 heading. The generated `poly.toml` now disables rumdl's `MD025` for `fmt` only: the
   rule still lints, so a stray `#` heading is reported, but its autofix demotes the offending
