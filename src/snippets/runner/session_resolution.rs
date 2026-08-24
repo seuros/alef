@@ -26,20 +26,64 @@
 //! break the tie is a real ambiguity alef must not silently guess at -- `resolve_session_claim`
 //! reports it as [`SessionClaim::Ambiguous`] so `session_preparation_error` can turn it into a
 //! `SnippetStatus::Error` that fails every run, not just `--strict`, instead of it turning into a
-//! `Pass`/`Fail` computed against whichever session happened to prepare first. ~keep
+//! `Pass`/`Fail` computed against whichever session happened to prepare first.
+//!
+//! ## Alef issue #255
+//!
+//! `Language` is a many-to-one projection of a configured target:
+//! `Language::from_session_target` maps both `kotlin` and `kotlin_android` to `Language::Kotlin`,
+//! and `typescript`/`node`/`wasm` all map to `Language::TypeScript`. A consumer whose Kotlin and
+//! Kotlin Android bindings share one Gradle directory (the ordinary case -- Android reuses the JVM
+//! package) configures both targets over that one directory, and a consumer targeting Node and
+//! WASM from one TypeScript package configures all three. Candidate matching that keyed purely on
+//! `language_of` treated these as competing sessions and reported every target-less snippet in
+//! that language as [`SessionClaim::Ambiguous`], even though every candidate validates the exact
+//! same physical package and any one of them would produce an identical result.
+//!
+//! [`SessionIdentity::working_directory`] is the fix: candidates that share one language now only
+//! count as genuinely ambiguous when they also validate different working directories. Same
+//! directory collapses to a single, deterministic [`SessionClaim::Claimed`] (the alphabetically
+//! first target name) instead of an ambiguity report -- session identity is the physical package a
+//! session validates, not the `Language` its target string happens to resolve to. Two candidates
+//! that really do point at different directories are still reported `Ambiguous`, unchanged. ~keep
 
 use crate::snippets::types::{Language, Snippet};
 use std::collections::HashMap;
+use std::path::Path;
+
+/// A configured or prepared session's physical identity: the working directory it actually
+/// validates. `ValidationSession` and `SessionSpec` both carry this field directly; this trait
+/// lets [`resolve_session_claim`] read it generically from whichever the caller passes, the same
+/// way `language_of` already does for [`Language`]. ~keep
+pub(super) trait SessionIdentity {
+    fn working_directory(&self) -> &Path;
+}
+
+impl SessionIdentity for crate::snippets::session::ValidationSession {
+    fn working_directory(&self) -> &Path {
+        &self.working_directory
+    }
+}
+
+impl SessionIdentity for crate::snippets::session::SessionSpec {
+    fn working_directory(&self) -> &Path {
+        &self.working_directory
+    }
+}
 
 /// How a snippet's configured validation session resolves.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum SessionClaim<'a> {
     /// No configured session shares this snippet's language; it validates outside any session.
     Unclaimed,
-    /// Exactly one configured session claims this snippet -- its key into the sessions map.
+    /// Exactly one configured session claims this snippet -- its key into the sessions map. Also
+    /// returned when multiple same-language candidates all share one working directory (alef
+    /// issue #255): they are one physical session under different config aliases, so the
+    /// alphabetically first key is picked deterministically rather than reported as ambiguous.
     Claimed(&'a str),
-    /// Two or more configured sessions share this snippet's language and no explicit `target`
-    /// names one of them. Candidates are sorted for a stable diagnostic. ~keep
+    /// Two or more configured sessions share this snippet's language, validate different working
+    /// directories, and no explicit `target` names one of them. Candidates are sorted for a
+    /// stable diagnostic. ~keep
     Ambiguous(Vec<&'a str>),
 }
 
@@ -56,8 +100,9 @@ pub(super) enum SessionClaim<'a> {
 /// language-matched candidate, because a snippet that named a target asked for that session
 /// specifically, not "guess something in the same language". Only a snippet with no explicit
 /// target considers every session whose own `language` matches; resolution only succeeds there
-/// when exactly one candidate exists.
-pub(super) fn resolve_session_claim<'a, T>(
+/// when exactly one candidate exists, or when every candidate shares one working directory (see
+/// [`SessionIdentity`] and the `#255` module doc). ~keep
+pub(super) fn resolve_session_claim<'a, T: SessionIdentity>(
     snippet: &Snippet,
     entries: &'a HashMap<String, T>,
     language_of: impl Fn(&T) -> Language,
@@ -79,8 +124,28 @@ pub(super) fn resolve_session_claim<'a, T>(
     match candidates.as_slice() {
         [] => SessionClaim::Unclaimed,
         [only] => SessionClaim::Claimed(only),
+        _ if distinct_working_directory_count(entries, &candidates) <= 1 => SessionClaim::Claimed(candidates[0]),
         _ => SessionClaim::Ambiguous(candidates),
     }
+}
+
+/// How many distinct working directories `candidates` actually validate. A count of `1` (or `0`,
+/// unreachable here since `candidates` is never empty in the caller) means every same-language
+/// candidate is the same physical session under a different config alias -- not a real ambiguity.
+/// A count above `1` means the candidates are genuinely different packages and a `target:` is
+/// needed to break the tie. ~keep
+fn distinct_working_directory_count<'a, T: SessionIdentity>(
+    entries: &'a HashMap<String, T>,
+    candidates: &[&str],
+) -> usize {
+    let mut directories: Vec<&'a Path> = candidates
+        .iter()
+        .filter_map(|key| entries.get(*key))
+        .map(SessionIdentity::working_directory)
+        .collect();
+    directories.sort_unstable();
+    directories.dedup();
+    directories.len()
 }
 
 #[cfg(test)]
@@ -112,10 +177,10 @@ mod tests {
         }
     }
 
-    fn session(language: Language) -> ValidationSession {
+    fn session(language: Language, working_directory: &str) -> ValidationSession {
         ValidationSession {
             language,
-            working_directory: PathBuf::new(),
+            working_directory: PathBuf::from(working_directory),
             manifest: None,
             fingerprint: "fingerprint".into(),
             env: Default::default(),
@@ -132,7 +197,7 @@ mod tests {
     /// validated with no session at all. ~keep
     #[test]
     fn a_single_same_language_session_claims_a_target_less_snippet_regardless_of_its_name() {
-        let sessions = HashMap::from([("node".to_string(), session(Language::TypeScript))]);
+        let sessions = HashMap::from([("node".to_string(), session(Language::TypeScript, "packages/node"))]);
         let snippet = snippet(Language::TypeScript, None);
 
         assert_eq!(
@@ -142,16 +207,21 @@ mod tests {
     }
 
     /// The other headline case: two sessions share a language (a consumer's real
-    /// `[sessions.typescript]` + `[sessions.wasm]`, both targeting TypeScript) and the snippet
-    /// gives no explicit target to break the tie. The old fallback picked whichever session
-    /// happened to be spelled like the bare language -- an accident of naming that silently
-    /// starved the other session of any hand-written coverage. This must resolve as ambiguous,
-    /// not as a silent pick. ~keep
+    /// `[sessions.typescript]` + `[sessions.wasm]`, both targeting TypeScript) but validate
+    /// *different* packages, and the snippet gives no explicit target to break the tie. The old
+    /// fallback picked whichever session happened to be spelled like the bare language -- an
+    /// accident of naming that silently starved the other session of any hand-written coverage.
+    /// This must resolve as ambiguous, not as a silent pick. Distinct from alef issue #255's
+    /// same-directory collapse below: these two candidates genuinely disagree about which package
+    /// they validate. ~keep
     #[test]
-    fn two_same_language_sessions_with_no_explicit_target_are_ambiguous() {
+    fn two_same_language_sessions_over_different_directories_are_ambiguous() {
         let sessions = HashMap::from([
-            ("typescript".to_string(), session(Language::TypeScript)),
-            ("wasm".to_string(), session(Language::TypeScript)),
+            (
+                "typescript".to_string(),
+                session(Language::TypeScript, "packages/typescript"),
+            ),
+            ("wasm".to_string(), session(Language::TypeScript, "packages/wasm")),
         ]);
         let snippet = snippet(Language::TypeScript, None);
 
@@ -161,13 +231,74 @@ mod tests {
         );
     }
 
+    /// Alef issue #255: `kotlin` and `kotlin_android` both resolve to `Language::Kotlin` via
+    /// `Language::from_session_target`, and a consumer whose Kotlin Android bindings share the
+    /// same Gradle directory as its Kotlin bindings configures both targets over that one
+    /// directory. Session identity is the working directory, not the resolved `Language` -- this
+    /// must collapse to one claimed session, not an ambiguity report. ~keep
+    #[test]
+    fn kotlin_and_kotlin_android_over_one_directory_collapse_to_one_session() {
+        let sessions = HashMap::from([
+            ("kotlin".to_string(), session(Language::Kotlin, "packages/kotlin")),
+            (
+                "kotlin_android".to_string(),
+                session(Language::Kotlin, "packages/kotlin"),
+            ),
+        ]);
+        let mut candidates: Vec<&str> = sessions.keys().map(String::as_str).collect();
+        candidates.sort_unstable();
+        assert_eq!(
+            distinct_working_directory_count(&sessions, &candidates),
+            1,
+            "kotlin and kotlin_android must resolve to a single physical session, not two"
+        );
+
+        let snippet = snippet(Language::Kotlin, None);
+        assert_eq!(
+            resolve_session_claim(&snippet, &sessions, |session| session.language),
+            SessionClaim::Claimed("kotlin")
+        );
+    }
+
+    /// The other #255 collapse: `typescript`, `node`, and `wasm` all resolve to
+    /// `Language::TypeScript` via `Language::from_session_target`, and a consumer targeting Node
+    /// and WASM from one TypeScript package configures all three over the same directory. This
+    /// must collapse to one claimed session, not three competing candidates. ~keep
+    #[test]
+    fn typescript_node_and_wasm_over_one_package_collapse_to_one_session() {
+        let sessions = HashMap::from([
+            (
+                "typescript".to_string(),
+                session(Language::TypeScript, "packages/typescript"),
+            ),
+            ("node".to_string(), session(Language::TypeScript, "packages/typescript")),
+            ("wasm".to_string(), session(Language::TypeScript, "packages/typescript")),
+        ]);
+        let mut candidates: Vec<&str> = sessions.keys().map(String::as_str).collect();
+        candidates.sort_unstable();
+        assert_eq!(
+            distinct_working_directory_count(&sessions, &candidates),
+            1,
+            "typescript, node, and wasm must resolve to a single physical session, not three"
+        );
+
+        let snippet = snippet(Language::TypeScript, None);
+        assert_eq!(
+            resolve_session_claim(&snippet, &sessions, |session| session.language),
+            SessionClaim::Claimed("node")
+        );
+    }
+
     /// An explicit `target:` still breaks the tie deterministically even when it would otherwise
     /// be ambiguous.
     #[test]
     fn an_explicit_target_resolves_an_otherwise_ambiguous_language() {
         let sessions = HashMap::from([
-            ("typescript".to_string(), session(Language::TypeScript)),
-            ("wasm".to_string(), session(Language::TypeScript)),
+            (
+                "typescript".to_string(),
+                session(Language::TypeScript, "packages/typescript"),
+            ),
+            ("wasm".to_string(), session(Language::TypeScript, "packages/wasm")),
         ]);
         let snippet = snippet(Language::TypeScript, Some("wasm"));
 
@@ -183,7 +314,7 @@ mod tests {
     /// guessing at an unrelated session the snippet never asked for.
     #[test]
     fn an_explicit_target_naming_no_session_does_not_fall_back_to_a_language_match() {
-        let sessions = HashMap::from([("node".to_string(), session(Language::TypeScript))]);
+        let sessions = HashMap::from([("node".to_string(), session(Language::TypeScript, "packages/node"))]);
         let snippet = snippet(Language::TypeScript, Some("wasm"));
 
         assert_eq!(
@@ -194,7 +325,7 @@ mod tests {
 
     #[test]
     fn no_configured_session_for_the_language_is_unclaimed() {
-        let sessions = HashMap::from([("python".to_string(), session(Language::Python))]);
+        let sessions = HashMap::from([("python".to_string(), session(Language::Python, "packages/python"))]);
         let snippet = snippet(Language::TypeScript, None);
 
         assert_eq!(
