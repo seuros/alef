@@ -1,4 +1,7 @@
-use super::{OutputLayout, default_binding_crate_root, relative_slash_path, resolve_output_layout};
+use super::{
+    OutputLayout, default_binding_crate_root, java_project_root, kotlin_project_root, relative_slash_path,
+    resolve_output_layout, strip_trailing_components,
+};
 use std::path::{Path, PathBuf};
 
 /// The one formula every scaffolder's hard-coded `crates/{crate}-<suffix>` manifest path,
@@ -141,4 +144,77 @@ fn relative_slash_path_handles_root_flat_and_workspace_core_crates() {
 fn relative_slash_path_collapses_to_dot_for_identical_roots() {
     let same = Path::new("crates/toolkit-ffi");
     assert_eq!(relative_slash_path(same, same), ".");
+}
+
+#[test]
+fn strip_trailing_components_matches_and_strips_a_tail() {
+    assert_eq!(
+        strip_trailing_components(
+            Path::new("sdk/java/src/main/java/dev/toolkit"),
+            Path::new("src/main/java/dev/toolkit")
+        ),
+        Some(PathBuf::from("sdk/java"))
+    );
+}
+
+#[test]
+fn strip_trailing_components_returns_none_on_mismatch() {
+    assert_eq!(
+        strip_trailing_components(Path::new("sdk/java/dev/toolkit"), Path::new("src/main/java")),
+        None
+    );
+}
+
+#[test]
+fn strip_trailing_components_returns_dot_when_suffix_consumes_the_whole_path() {
+    assert_eq!(
+        strip_trailing_components(Path::new("src/main/java"), Path::new("src/main/java")),
+        Some(PathBuf::from("."))
+    );
+}
+
+/// The three shapes that matter for `java_project_root`: the unconfigured/bare default, the
+/// full Maven `src/main/java/<pkg>/` source path (what `tslp` configures), and a package-path
+/// leaf with no `src/main/java` infix at all. All three must resolve to the same project root
+/// a real `pom.xml` would live in, matching exactly what `JavaBackend`'s own `ends_with`
+/// disambiguation places the sources under.
+#[test]
+fn java_project_root_resolves_every_configured_shape() {
+    let cases: &[(&str, &str, &str)] = &[
+        ("packages/java", "dev/toolkit", "packages/java"),
+        ("packages/java/", "dev/toolkit", "packages/java"),
+        ("sdk/java/src/main/java/", "dev/toolkit", "sdk/java"),
+        ("sdk/java/dev/toolkit", "dev/toolkit", "sdk/java"),
+    ];
+    for (output_dir, package_path, expected_root) in cases {
+        assert_eq!(
+            java_project_root(output_dir, package_path),
+            PathBuf::from(expected_root),
+            "java_project_root({output_dir:?}, {package_path:?})"
+        );
+    }
+}
+
+/// `kotlin_project_root` must follow the same presence-based branch the Kotlin backend's own
+/// generator uses (`explicit_output.kotlin.is_some()`): unconfigured always resolves to the
+/// output path itself (the project root sources are written under `src/main/kotlin/<pkg>`
+/// inside), while a configured path strips the source-set suffix when present and otherwise
+/// passes through unchanged.
+#[test]
+fn kotlin_project_root_resolves_every_configured_shape() {
+    assert_eq!(
+        kotlin_project_root("packages/kotlin", "dev/toolkit", false),
+        PathBuf::from("packages/kotlin"),
+        "unconfigured output is already the project root"
+    );
+    assert_eq!(
+        kotlin_project_root("sdk/kotlin", "dev/toolkit", true),
+        PathBuf::from("sdk/kotlin"),
+        "a configured bare root with no source-set suffix passes through unchanged"
+    );
+    assert_eq!(
+        kotlin_project_root("sdk/kotlin/src/main/kotlin/dev/toolkit", "dev/toolkit", true),
+        PathBuf::from("sdk/kotlin"),
+        "a configured full source-set path resolves to the project root above it"
+    );
 }

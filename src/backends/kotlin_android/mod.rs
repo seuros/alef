@@ -309,6 +309,21 @@ pub fn project_root(config: &ResolvedCrateConfig) -> PathBuf {
     ProjectLayout::resolve(config).package_root
 }
 
+/// The Kotlin source destination this backend writes `<Module>.kt` and client sources into --
+/// `<project_root>/src/main/kotlin/<dotted_package_as_path>/` by default, or the configured
+/// `[crates.output].kotlin_android` path directly when it already names that source-set
+/// directory.
+///
+/// [`crate::backends::kotlin::gen_bindings::jni_emitter::paths::jni_output_path`] calls this
+/// instead of joining a filename directly onto `output_for("kotlin_android")`: that path may
+/// name the Gradle project root rather than a source directory, and treating the project root
+/// as a source directory wrote JNI-mode `.kt` files straight into it instead of under
+/// `src/main/kotlin/<pkg>/`. Only [`ProjectLayout`] knows how to tell the two shapes apart. ~keep
+#[must_use]
+pub fn kotlin_source_dir(config: &ResolvedCrateConfig) -> PathBuf {
+    ProjectLayout::resolve(config).kotlin_source_dir
+}
+
 impl ProjectLayout {
     fn resolve(config: &ResolvedCrateConfig) -> Self {
         let pkg_path = package_path(config);

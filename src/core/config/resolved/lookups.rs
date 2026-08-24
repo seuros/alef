@@ -7,7 +7,7 @@ use crate::core::config::extras::{AdapterConfig, Language};
 use crate::core::config::output::{
     BuildCommandConfig, CleanConfig, LintConfig, SetupConfig, TestAppRunConfig, TestConfig, UpdateConfig,
 };
-use crate::core::config::resolve_helpers::default_binding_crate_root;
+use crate::core::config::resolve_helpers::{default_binding_crate_root, java_project_root, kotlin_project_root};
 use crate::core::config::tools::LangContext;
 use crate::core::config::{
     build_defaults, clean_defaults, lint_defaults, setup_defaults, test_apps_run_defaults, test_defaults,
@@ -89,6 +89,36 @@ impl ResolvedCrateConfig {
                 Some(n) if n >= 2 => format!("packages/go/v{n}"),
                 _ => "packages/go".to_string(),
             },
+            // A configured `[crates.output].java` moves the generated source directory, and
+            // `java_project_root` derives the same Maven project root `JavaBackend` implies for
+            // that path (root-vs-source-dir ambiguity resolved the same way the backend itself
+            // resolves it: does the configured path already end with the package path). Ignoring
+            // config here — as this arm used to — sent `mvn -f {output_dir}/pom.xml` to a
+            // directory java never wrote its sources into whenever the configured tree moved
+            // outside `packages/java`. ~keep
+            Language::Java => {
+                let output_dir = self
+                    .output_for("java")
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "packages/java".to_string());
+                let package_path = self.java_package().replace('.', "/");
+                java_project_root(&output_dir, &package_path)
+                    .to_string_lossy()
+                    .to_string()
+            }
+            // Same split as `Language::Java`, but the plain Kotlin backend's own generator picks
+            // its branch by presence (`explicit_output.kotlin.is_some()`) rather than path shape
+            // -- see `kotlin_project_root`'s doc comment. ~keep
+            Language::Kotlin => {
+                let output_dir = self
+                    .output_for("kotlin")
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "packages/kotlin".to_string());
+                let package_path = self.kotlin_package().replace('.', "/");
+                kotlin_project_root(&output_dir, &package_path, self.explicit_output.kotlin.is_some())
+                    .to_string_lossy()
+                    .to_string()
+            }
             // A configured `[crates.output].kotlin_android` is answered by the backend rather than
             // re-derived here: that key may name either the Gradle project root or the Kotlin
             // source directory inside it, and only the backend's `ProjectLayout` knows how to tell
@@ -697,10 +727,17 @@ python = "crates/demo-py/src/"
         assert_eq!(r.package_dir(Language::Python), "packages/python");
     }
 
+    /// A configured `[crates.output].kotlin` must reach `package_dir`, in both shapes the
+    /// plain Kotlin backend's own generator accepts: a bare project root (files written
+    /// directly there, no source-set suffix), and a full `src/main/kotlin/<pkg>/` source path
+    /// whose project root is the prefix before that suffix. `package_dir` feeds
+    /// `cd {output_dir} && gradle …`, so ignoring the key -- as this test used to assert on
+    /// purpose -- builds a directory the backend never wrote to.
     #[test]
-    fn package_dir_kotlin_ignores_source_output_override() {
-        let r = resolved_one(
-            r#"
+    fn package_dir_kotlin_honors_the_configured_output_path() {
+        let with_output = |output: &str| {
+            resolved_one(&format!(
+                r#"
 [workspace]
 languages = ["kotlin"]
 
@@ -713,10 +750,58 @@ package = "dev.demo"
 target = "jvm"
 
 [crates.output]
-kotlin = "packages/kotlin/src/main/kotlin/dev/demo/kt/"
-"#,
+kotlin = "{output}"
+"#
+            ))
+        };
+
+        assert_eq!(
+            with_output("sdk/kotlin").package_dir(Language::Kotlin),
+            "sdk/kotlin",
+            "a configured bare project root must be the directory the gradle command targets"
         );
-        assert_eq!(r.package_dir(Language::Kotlin), "packages/kotlin");
+        assert_eq!(
+            with_output("sdk/kotlin/src/main/kotlin/dev/demo").package_dir(Language::Kotlin),
+            "sdk/kotlin",
+            "a configured Kotlin source directory must resolve to the project root above it"
+        );
+    }
+
+    /// A configured `[crates.output].java` must reach `package_dir` the same way: `mvn -f
+    /// {output_dir}/pom.xml` must target the directory the Java backend's own `base_path`
+    /// disambiguation places sources under, in every shape that logic accepts -- a bare
+    /// project root, and a full Maven `src/main/java/<pkg>/` source path.
+    #[test]
+    fn package_dir_java_honors_the_configured_output_path() {
+        let with_output = |output: &str| {
+            resolved_one(&format!(
+                r#"
+[workspace]
+languages = ["java"]
+
+[[crates]]
+name = "demo"
+sources = ["src/lib.rs"]
+
+[crates.java]
+package = "dev.demo"
+
+[crates.output]
+java = "{output}"
+"#
+            ))
+        };
+
+        assert_eq!(
+            with_output("sdk/java/").package_dir(Language::Java),
+            "sdk/java",
+            "a configured bare project root must be the directory mvn targets"
+        );
+        assert_eq!(
+            with_output("sdk/java/src/main/java/").package_dir(Language::Java),
+            "sdk/java",
+            "a configured Maven source directory must resolve to the project root above it"
+        );
     }
 
     /// A configured `[crates.output].kotlin_android` must reach `package_dir`, in both shapes the

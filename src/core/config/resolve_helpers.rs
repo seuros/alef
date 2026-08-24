@@ -252,5 +252,71 @@ pub(crate) fn relative_slash_path(base: &Path, target: &Path) -> String {
     }
 }
 
+/// Strip a trailing path `suffix` from `path`, matching components tail-to-head.
+///
+/// Returns `None` when `path` has fewer components than `suffix`, or the trailing components
+/// do not match, so callers can fall back to treating `path` as already being the shorter
+/// shape. `split == 0` (the suffix consumes the whole path) resolves to `"."`, the project
+/// root, rather than an empty (and therefore invalid) `PathBuf`.
+pub(crate) fn strip_trailing_components(path: &Path, suffix: &Path) -> Option<PathBuf> {
+    let path_components: Vec<_> = path.components().collect();
+    let suffix_components: Vec<_> = suffix.components().collect();
+    if path_components.len() < suffix_components.len() {
+        return None;
+    }
+    let split = path_components.len() - suffix_components.len();
+    let tail_matches = path_components[split..]
+        .iter()
+        .zip(suffix_components.iter())
+        .all(|(a, b)| a == b);
+    if !tail_matches {
+        return None;
+    }
+    if split == 0 {
+        return Some(PathBuf::from("."));
+    }
+    Some(path_components[..split].iter().collect())
+}
+
+/// The Maven project root implied by a resolved `java` binding output path.
+///
+/// `[crates.output].java` and the unconfigured `packages/java` default may name the project
+/// root itself, or the Maven standard `src/main/java/<dotted_package_as_path>/` source
+/// directory inside it -- the same root-vs-source-dir ambiguity
+/// [`crate::backends::kotlin_android`]'s `ProjectLayout` resolves for `kotlin_android`.
+/// `JavaBackend`'s own file placement (`backends::java::gen_bindings`) disambiguates by
+/// checking whether the configured path already ends with the package path; `package_dir`
+/// must derive the *same* root from the *same* check, or `mvn -f {root}/pom.xml` and the
+/// scaffolded `lint`/`test`/`clean`/`setup` commands target a directory java never wrote its
+/// sources into. ~keep
+pub(crate) fn java_project_root(output_dir: &str, package_path: &str) -> PathBuf {
+    let source_dir = if output_dir.ends_with(package_path) || output_dir.ends_with(&format!("{package_path}/")) {
+        PathBuf::from(output_dir)
+    } else {
+        PathBuf::from(output_dir).join(package_path)
+    };
+    let without_package = strip_trailing_components(&source_dir, Path::new(package_path)).unwrap_or(source_dir);
+    strip_trailing_components(&without_package, Path::new("src/main/java")).unwrap_or(without_package)
+}
+
+/// The Gradle project root implied by a resolved `kotlin` (JVM, non-Android) binding output
+/// path.
+///
+/// Mirrors [`java_project_root`], but the plain Kotlin backend's own generator picks its
+/// unconfigured-vs-configured branch by *presence* (`explicit_output.kotlin.is_some()`, see
+/// `backends::kotlin::gen_bindings`) rather than by path shape: an unconfigured output path is
+/// always the project root with sources placed under `src/main/kotlin/<pkg>/`, while a
+/// configured path is written to directly, with no source-set suffix appended. `package_dir`
+/// follows the same presence check instead of re-guessing the branch from the path, and falls
+/// back to the configured path unchanged when it does not carry the source-set suffix. ~keep
+pub(crate) fn kotlin_project_root(output_dir: &str, package_path: &str, is_explicitly_configured: bool) -> PathBuf {
+    let output_path = PathBuf::from(output_dir);
+    if !is_explicitly_configured {
+        return output_path;
+    }
+    let full_suffix = Path::new("src/main/kotlin").join(package_path);
+    strip_trailing_components(&output_path, &full_suffix).unwrap_or(output_path)
+}
+
 #[cfg(test)]
 mod tests;
