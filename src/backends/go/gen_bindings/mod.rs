@@ -78,7 +78,7 @@ impl Backend for GoBackend {
             )?;
         }
         let deduped_api = api.with_deduped_functions();
-        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Go);
+        crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Go);
         // Derived from the *unfiltered* surface: the FFI crate defaults every cfg-discovered
         // feature ON, so a gate whose items this Go build filters out is still compiled into the
         // cdylib and still guarded in the header. Emitted once, in `binding.go`'s preamble — cgo

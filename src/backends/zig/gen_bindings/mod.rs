@@ -142,7 +142,7 @@ impl Backend for ZigBackend {
             )?;
         }
         let api = api.with_deduped_functions();
-        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Zig);
+        crate::codegen::cfg::warn_on_ffi_feature_drift(&api, config, Language::Zig);
         let enabled_features: std::collections::HashSet<&str> = config
             .features_for_language(Language::Zig)
             .iter()

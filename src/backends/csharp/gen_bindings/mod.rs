@@ -226,7 +226,7 @@ impl Backend for CsharpBackend {
             &filtered_api
         };
         let deduped_api = api.with_deduped_functions();
-        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Csharp);
+        crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Csharp);
         let enabled_features: HashSet<&str> = config
             .features_for_language(Language::Csharp)
             .iter()

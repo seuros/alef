@@ -151,24 +151,14 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     // never true, which silently drops the export from the cdylib while cbindgen still declares
     // it in the header -- a link failure for every C-ABI consumer. Declare every feature the
     // emitted surface actually gates on. ~keep
-    let extra_declared: &[String] = config.ffi.as_ref().map(|c| c.extra_features.as_slice()).unwrap_or(&[]);
-    let emitted_cfg_features: Vec<String> = crate::codegen::cfg::collect_cfg_features(api)
-        .into_iter()
-        .filter(|name| {
-            !name.is_empty()
-                && name != "serde"
-                && !passthrough_feature_names.contains(&name.as_str())
-                && !extra_declared.iter().any(|declared| declared == name)
-        })
-        .collect();
-    // `extra_features` stays declare-only by design (mutually-exclusive alternatives such as
-    // `wasm-http`); features discovered from emitted gates default ON, preserving the surface
-    // the gate was written to expose while keeping it switchable. ~keep
-    let default_feature_names: Vec<&str> = passthrough_feature_names
-        .iter()
-        .copied()
-        .chain(emitted_cfg_features.iter().map(String::as_str))
-        .collect();
+    //
+    // `default_feature_names` is `effective_ffi_default_features` -- the ONE derivation of what
+    // the compiled FFI cdylib builds with by default. `warn_on_ffi_feature_drift` compares
+    // against this exact same derivation instead of re-deriving it from `passthrough_feature_names`
+    // alone, so the two can no longer disagree about what "the FFI crate's feature set" means
+    // (see github.com/xberg-io/alef/issues/257). ~keep
+    let default_feature_names_owned = crate::codegen::cfg::effective_ffi_default_features(api, config);
+    let default_feature_names: Vec<&str> = default_feature_names_owned.iter().map(String::as_str).collect();
     let core_features_default_list = default_feature_names
         .iter()
         .map(|f| format!("\"{f}\""))

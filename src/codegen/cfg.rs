@@ -159,6 +159,48 @@ pub fn collect_cfg_features(api: &ApiSurface) -> BTreeSet<String> {
     out
 }
 
+/// The full set of Cargo features the generated FFI crate's `Cargo.toml` enables by default,
+/// once `scaffold::languages::ffi::scaffold_ffi` writes it: [`Language::Ffi`]'s configured
+/// feature list (minus `serde`, which is a passthrough dependency, never a default) unioned with
+/// every feature name [`collect_cfg_features`] finds referenced by an emitted
+/// `#[cfg(feature = "X")]` gate in the FFI surface, excluding any name declared in
+/// `[crates.ffi].extra_features` -- those stay declare-only by design (mutually-exclusive
+/// alternatives such as a `wasm-http` backend forwarding feature).
+///
+/// This is the ONE derivation of "what does the compiled FFI cdylib actually build with by
+/// default". `scaffold_ffi` must build its `[features] default = [...]` list from exactly this,
+/// and [`warn_on_ffi_feature_drift`] must compare a binding language's configured feature set
+/// against exactly this -- never against `features_for_language(Language::Ffi)` a second time --
+/// because the FFI cdylib is built once from this effective set, not from its own configured
+/// list alone. Two call sites re-deriving the same answer is exactly how this repo's FFI feature
+/// drift warning went blind to the drift it exists to catch (see
+/// `github.com/xberg-io/alef/issues/257`): the warning compared configured-against-configured
+/// while the scaffolder had long since started unioning in `collect_cfg_features`. ~keep
+///
+/// Preserves the FFI language config's own feature order first, then the cfg-discovered names in
+/// [`collect_cfg_features`]'s sorted order -- matching the order `scaffold_ffi` has always
+/// emitted the `default = [...]` list in.
+#[must_use]
+pub fn effective_ffi_default_features(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<String> {
+    let passthrough: Vec<&str> = config
+        .features_for_language(Language::Ffi)
+        .iter()
+        .map(String::as_str)
+        .filter(|f| *f != "serde")
+        .collect();
+    let extra_declared: &[String] = config.ffi.as_ref().map(|c| c.extra_features.as_slice()).unwrap_or(&[]);
+    let emitted: Vec<String> = collect_cfg_features(api)
+        .into_iter()
+        .filter(|name| {
+            !name.is_empty()
+                && name != "serde"
+                && !passthrough.contains(&name.as_str())
+                && !extra_declared.iter().any(|declared| declared == name)
+        })
+        .collect();
+    passthrough.into_iter().map(str::to_string).chain(emitted).collect()
+}
+
 /// Feature names [`collect_cfg_features`] finds referenced in `api` that `present` does not
 /// contain.
 ///
@@ -451,38 +493,63 @@ pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Langu
 
 /// Warn when a single-surface binding language's configured feature set (used to decide which
 /// `#[cfg(feature = "...")]`-gated FFI exports get glue via [`ApiSurface::with_cfg_filtered_deep`])
-/// diverges from the FFI crate's own configured feature set.
+/// diverges from the FFI crate's own EFFECTIVE default feature set.
 ///
 /// The FFI cdylib is built once, shared by every language binding (`cargo build -p
 /// {ffi_crate}` runs with no `--features` override — see `cli::pipeline::commands::build`), and
-/// its `[features] default = [...]` list is populated from `features_for_language(Language::Ffi)`
-/// (see `scaffold::languages::ffi`). A binding language's own `with_cfg_filtered_deep` call
-/// assumes its configured feature set describes that same compiled artifact; if the two lists
-/// differ, the omission-based filter is filtering against the wrong assumption — the generated
-/// glue can still reference a symbol the shipped library doesn't export, or omit one it does.
-/// alef cannot detect the actual mismatch (it doesn't run `cargo build` here), so this only
-/// flags the config-level drift that would cause it, naming the assumption so it is a visible,
-/// documented constraint rather than a silent landmine. ~keep
-pub fn warn_on_ffi_feature_drift(config: &ResolvedCrateConfig, lang: Language) {
+/// its `[features] default = [...]` list is populated by [`effective_ffi_default_features`] (see
+/// `scaffold::languages::ffi::scaffold_ffi`) — the FFI language config's own feature list
+/// UNIONED with every feature `collect_cfg_features` finds referenced by an emitted cfg gate,
+/// not the FFI language config's feature list alone. A binding language's own
+/// `with_cfg_filtered_deep` call assumes its configured feature set describes that same compiled
+/// artifact; comparing it against `features_for_language(Language::Ffi)` instead of the effective
+/// set is blind to exactly the drift `collect_cfg_features` introduces, which is the common case
+/// (see `github.com/xberg-io/alef/issues/257`). alef cannot detect the actual build-time mismatch
+/// (it doesn't run `cargo build` here), so this only flags the config-level drift that would
+/// cause it, naming the assumption so it is a visible, documented constraint rather than a silent
+/// landmine. ~keep
+///
+/// The two directions of drift have different failure modes, so they get different warnings:
+/// - `lang`-only features (configured for this binding, absent from the FFI effective set) are
+///   UNSAFE: `with_cfg_filtered_deep` keeps glue for a symbol the shipped cdylib was never built
+///   with, which is a link/runtime failure.
+/// - FFI-only features (in the effective set, absent from this binding's configured list) are a
+///   SAFE parity gap: the filter drops glue for a symbol that does exist in the shipped cdylib,
+///   so the binding just doesn't expose it — no broken reference, but a coverage gap worth
+///   flagging. ~keep
+pub fn warn_on_ffi_feature_drift(api: &ApiSurface, config: &ResolvedCrateConfig, lang: Language) {
     if lang == Language::Ffi {
         return;
     }
     let lang_features: BTreeSet<&str> = config.features_for_language(lang).iter().map(String::as_str).collect();
-    let ffi_features: BTreeSet<&str> = config
-        .features_for_language(Language::Ffi)
-        .iter()
-        .map(String::as_str)
-        .collect();
-    if lang_features != ffi_features {
+    let effective_owned = effective_ffi_default_features(api, config);
+    let ffi_effective_features: BTreeSet<&str> = effective_owned.iter().map(String::as_str).collect();
+    if lang_features == ffi_effective_features {
+        return;
+    }
+    let host_only: BTreeSet<&str> = lang_features.difference(&ffi_effective_features).copied().collect();
+    let parity_gap: BTreeSet<&str> = ffi_effective_features.difference(&lang_features).copied().collect();
+    if !host_only.is_empty() {
         tracing::warn!(
             language = %lang,
+            host_only_features = ?host_only,
+            ffi_effective_features = ?ffi_effective_features,
+            "this binding's configured feature set enables features the FFI cdylib's effective \
+             default set does not include; cfg-gated glue for these features is kept by \
+             with_cfg_filtered_deep even though the linked native library was never built with \
+             them — this is unsafe and can produce glue that references symbols the shipped \
+             library doesn't export"
+        );
+    }
+    if !parity_gap.is_empty() {
+        tracing::warn!(
+            language = %lang,
+            parity_gap_features = ?parity_gap,
             lang_features = ?lang_features,
-            ffi_features = ?ffi_features,
-            "configured feature set for this binding differs from [crates.ffi]'s; cfg-gated FFI \
-             exports are included/omitted based on this binding's own feature list, but the \
-             linked native library is built once using the FFI crate's feature list — keep them \
-             in sync (or set them explicitly to the same value) or generated glue may reference \
-             symbols the shipped library doesn't export"
+            "the FFI cdylib's effective default feature set includes features this binding does \
+             not declare; cfg-gated glue for these features is safely omitted by \
+             with_cfg_filtered_deep, but the shipped native library does export them — add them \
+             to this binding's configured feature list to close the coverage gap"
         );
     }
 }

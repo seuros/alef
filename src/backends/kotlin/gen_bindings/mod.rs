@@ -650,7 +650,7 @@ impl Backend for KotlinBackend {
         // emission path below must first drop what this binding's feature set does not satisfy —
         // cfg-gated methods included. Filtering here rather than per-path keeps the four targets
         // (KMP, JNI, JVM, Native) from drifting apart. ~keep
-        crate::codegen::cfg::warn_on_ffi_feature_drift(config, Language::Kotlin);
+        crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Kotlin);
         let kotlin_features: std::collections::HashSet<&str> = config
             .features_for_language(Language::Kotlin)
             .iter()
