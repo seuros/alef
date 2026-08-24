@@ -11,6 +11,10 @@ use super::verify_orphans;
 
 mod docs;
 mod verify;
+mod verify_flags;
+
+use verify_flags::refuse_unimplemented_verify_flags;
+
 
 pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Option<Commands>> {
     let config_path = &context.config_path;
@@ -861,10 +865,19 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
         Commands::Verify {
             exit_code: _,
             report_only,
-            compile: _,
-            lint: _,
-            lang: _,
-        } => verify::run(context, report_only),
+            compile,
+            lint,
+            lang,
+        } => {
+            // ~keep `exit_code` is deliberately ignored: it is `hide = true` and documented as a
+            // deprecated no-op because verification fails by default now. These three are not.
+            // They are visible, documented as doing extra work ("Also run compilation check"),
+            // and were destructured away — so `alef verify --compile` exited 0 having compiled
+            // nothing, which is indistinguishable from a passing compile check. Refuse instead:
+            // a flag that cannot be honored must not report success.
+            refuse_unimplemented_verify_flags(compile, lint, lang.as_deref())?;
+            verify::run(context, report_only)
+        }
         Commands::Diff { exit_code } => {
             let (_workspace, resolved) = load_config(config_path)?;
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
