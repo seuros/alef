@@ -74,56 +74,39 @@ fn tracked_diff_exit_code(manifest_dir: &Path) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{git_add, git_command, git_init, write_file};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// The Cargo checkout-completion marker that caused every `cargo install --git` build to stamp
-    /// itself dirty. Named here so the regression is legible, never matched against. ~keep
+    /// The Cargo checkout-completion marker that made every `cargo install --git` build stamp
+    /// itself dirty. Named here so the regression is legible; never matched against. ~keep
     const CARGO_OK: &str = ".cargo-ok";
 
     const TRACKED_FILE: &str = "tracked.txt";
 
-    /// Run git hermetically: no user or system config, so a developer's `commit.gpgsign`,
-    /// `core.autocrlf`, or hooks cannot decide whether this test passes. ~keep
-    fn git(dir: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null")
-            .env("GIT_AUTHOR_NAME", "alef test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-            .env("GIT_COMMITTER_NAME", "alef test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-            .output()
-            .expect("git is available");
-        assert!(
-            output.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
     /// A repository with one committed file and nothing else.
     fn repo_with_one_commit() -> (TempDir, PathBuf) {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_path_buf();
-        git(&root, &["init", "--quiet", "--initial-branch=main"]);
-        fs::write(root.join(TRACKED_FILE), "committed contents\n").expect("write tracked file");
-        git(&root, &["add", TRACKED_FILE]);
-        git(&root, &["commit", "--quiet", "--no-gpg-sign", "-m", "initial"]);
+        git_init(&root);
+        write_file(&root, TRACKED_FILE, "committed contents\n");
+        git_add(&root, &[TRACKED_FILE]);
+        let status = git_command(&root)
+            .args(["commit", "--quiet", "-m", "initial"])
+            .status()
+            .expect("git commit");
+        assert!(status.success(), "git commit must succeed for a provenance fixture");
         (temp, root)
     }
 
-    /// Whether `git status --porcelain` sees anything — the question the old implementation asked.
-    /// Used only to prove a fixture really is in the state its test claims. ~keep
+    /// Whether `git status --porcelain` sees anything — the question the old classifier asked.
+    /// Used only to prove a fixture really is in the state its test claims it is. ~keep
     fn porcelain_status_is_nonempty(dir: &Path) -> bool {
-        let output = Command::new("git")
+        let output = git_command(dir)
             .args(["--no-optional-locks", "status", "--porcelain"])
-            .current_dir(dir)
             .output()
-            .expect("git is available");
+            .expect("git status");
         !output.stdout.is_empty()
     }
 
@@ -138,8 +121,8 @@ mod tests {
     #[test]
     fn untracked_files_alone_report_clean() {
         let (_temp, root) = repo_with_one_commit();
-        fs::write(root.join(CARGO_OK), "ok").expect("write cargo marker");
-        fs::write(root.join("stray.log"), "noise\n").expect("write stray file");
+        write_file(&root, CARGO_OK, "ok");
+        write_file(&root, "stray.log", "noise\n");
 
         assert!(
             porcelain_status_is_nonempty(&root),
@@ -153,12 +136,12 @@ mod tests {
     }
 
     /// The half that proves the check still checks: relaxing untracked files must not relax
-    /// tracked ones. Without this, [`classify`] returning [`TREE_CLEAN`] unconditionally would
-    /// pass the suite.
+    /// tracked ones. Without this, a [`classify`] that returned [`TREE_CLEAN`] unconditionally
+    /// would pass the suite.
     #[test]
     fn modified_tracked_file_still_reports_dirty() {
         let (_temp, root) = repo_with_one_commit();
-        fs::write(root.join(TRACKED_FILE), "edited contents\n").expect("edit tracked file");
+        write_file(&root, TRACKED_FILE, "edited contents\n");
         assert_eq!(classify(&root), TREE_DIRTY);
     }
 
@@ -173,8 +156,8 @@ mod tests {
     #[test]
     fn staged_new_file_reports_dirty() {
         let (_temp, root) = repo_with_one_commit();
-        fs::write(root.join("added.rs"), "fn added() {}\n").expect("write new file");
-        git(&root, &["add", "added.rs"]);
+        write_file(&root, "added.rs", "fn added() {}\n");
+        git_add(&root, &["added.rs"]);
         assert_eq!(classify(&root), TREE_DIRTY);
     }
 
@@ -182,16 +165,16 @@ mod tests {
     #[test]
     fn untracked_files_do_not_mask_a_tracked_modification() {
         let (_temp, root) = repo_with_one_commit();
-        fs::write(root.join(CARGO_OK), "ok").expect("write cargo marker");
-        fs::write(root.join(TRACKED_FILE), "edited contents\n").expect("edit tracked file");
+        write_file(&root, CARGO_OK, "ok");
+        write_file(&root, TRACKED_FILE, "edited contents\n");
         assert_eq!(classify(&root), TREE_DIRTY);
     }
 
-    /// A crates.io tarball has no `.git`. It must say `unknown` — not `clean`, which would read as
-    /// a provenanced build.
+    /// A crates.io tarball has no `.git`. It must say `unknown` — not `clean`, which would read
+    /// as a provenanced build.
     #[test]
     fn directory_outside_a_repository_reports_unknown() {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = tempfile::tempdir().expect("tempdir");
         assert_eq!(classify(temp.path()), TREE_UNKNOWN);
     }
 
@@ -199,8 +182,8 @@ mod tests {
     /// revision to call the tree clean or dirty relative to.
     #[test]
     fn repository_without_a_commit_reports_unknown() {
-        let temp = TempDir::new().expect("temp dir");
-        git(temp.path(), &["init", "--quiet", "--initial-branch=main"]);
+        let temp = tempfile::tempdir().expect("tempdir");
+        git_init(temp.path());
         assert_eq!(classify(temp.path()), TREE_UNKNOWN);
     }
 }
