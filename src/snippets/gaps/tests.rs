@@ -208,6 +208,124 @@ fn coverage_ledger(format_version: u32) -> SnippetCoverageLedger {
     }
 }
 
+/// Build a coverage ledger and matching snippet tree for three fixtures under `snippets_root`,
+/// mirroring a real e2e-generated tree: `download` was dropped for `java` by
+/// `exclude_functions` (never enters `expected`), `other` genuinely has both languages, and
+/// `flaky` was expected to have both but `java` never got generated -- a real gap that must
+/// keep failing. Returns the snippet root. ~keep
+fn ledger_backed_tree_with_an_excluded_and_a_genuine_gap(snippets_root: &Path) -> PathBuf {
+    let generated_root = snippets_root.join("generated");
+    let mut generated_paths = Vec::new();
+    let mut generated_metadata = Vec::new();
+    let mut expected = Vec::new();
+    let mut generated_keys = Vec::new();
+
+    // (fixture, language, expected?, generated?)
+    let cells = [
+        ("download", "python", true, true),
+        ("download", "java", false, false), // excluded via exclude_functions: never expected
+        ("other", "python", true, true),
+        ("other", "java", true, true),
+        ("flaky", "python", true, true),
+        ("flaky", "java", true, false), // expected, but generation genuinely never produced it
+    ];
+    for (fixture, language, is_expected, is_generated) in cells {
+        let key = SnippetCoverageKey {
+            fixture_id: fixture.into(),
+            language: language.into(),
+        };
+        if is_expected {
+            expected.push(key.clone());
+        }
+        if is_generated {
+            let relative = PathBuf::from(language).join(fixture).join("generated.md");
+            std::fs::create_dir_all(generated_root.join(language).join(fixture)).expect("fixture directory");
+            std::fs::write(
+                generated_root.join(&relative),
+                format!("```{language}\n// {fixture}\n```\n"),
+            )
+            .expect("generated snippet");
+            generated_paths.push(relative.clone());
+            generated_metadata.push(GeneratedSnippetMetadata {
+                key: key.clone(),
+                path: relative,
+                language: language.into(),
+                target: language.into(),
+                session: language.into(),
+                requires: Vec::new(),
+                side_effect: SideEffectClass::Safe,
+            });
+            generated_keys.push(key);
+        }
+    }
+    let ledger = SnippetCoverageLedger {
+        format_version: COVERAGE_MANIFEST_VERSION,
+        generated_paths,
+        generated_metadata,
+        expected,
+        generated: generated_keys,
+        missing: Vec::new(),
+        documented_exceptions: Vec::new(),
+    };
+    std::fs::write(
+        generated_root.join(crate::e2e::snippets::COVERAGE_MANIFEST),
+        serde_json::to_vec_pretty(&ledger).expect("coverage serializes"),
+    )
+    .expect("coverage manifest");
+    generated_root
+}
+
+/// The consumer incident: `exclude_functions` dropped `download` for `java`, so `java` never
+/// enters that fixture's `expected` set. The gap pass must not report that as a missing
+/// language variant -- it never existed to be missing. ~keep
+#[test]
+fn a_function_dropped_by_exclude_functions_is_not_reported_as_a_missing_language_variant() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_tree_with_an_excluded_and_a_genuine_gap(directory.path());
+
+    let report = detect_gaps(&GapConfig {
+        snippet_dirs: vec![snippets],
+        required_languages: vec![Language::Python, Language::Java],
+        ..GapConfig::default()
+    })
+    .expect("gap detection");
+
+    assert!(
+        !report
+            .missing_language_variants
+            .iter()
+            .any(|variant| variant.language == Language::Java && variant.group.ends_with("download/generated.md")),
+        "download's java variant was excluded via exclude_functions, not missing: {:?}",
+        report.missing_language_variants
+    );
+}
+
+/// The other half of the sabotage check for the fix above: a fixture the ledger genuinely
+/// expected in both languages, but only generated one of, must still be reported. Suppressing
+/// every ledger-tracked absence -- not just the ones `expected` actually excludes -- would
+/// satisfy the test above for the wrong reason. ~keep
+#[test]
+fn a_language_the_ledger_expected_but_never_generated_still_reports_a_gap() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_tree_with_an_excluded_and_a_genuine_gap(directory.path());
+
+    let report = detect_gaps(&GapConfig {
+        snippet_dirs: vec![snippets],
+        required_languages: vec![Language::Python, Language::Java],
+        ..GapConfig::default()
+    })
+    .expect("gap detection");
+
+    assert!(
+        report
+            .missing_language_variants
+            .iter()
+            .any(|variant| variant.language == Language::Java && variant.group.ends_with("flaky/generated.md")),
+        "flaky was expected to have a java variant and never generated one -- that is a real gap: {:?}",
+        report.missing_language_variants
+    );
+}
+
 #[test]
 fn resolves_changelog_include_via_project_root_base_path() {
     let dir = tempfile::tempdir().unwrap();

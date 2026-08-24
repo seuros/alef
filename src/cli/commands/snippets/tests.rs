@@ -60,6 +60,83 @@ fn no_language_argument_means_no_filter_at_all() {
     assert!(reject_unrecognised_languages(None).is_ok());
 }
 
+/// `required_languages` takes a snippet fence tag, but the name a user reaches for first is the
+/// directory/session target name they just wrote under `[crates.kotlin_android]` -- and that
+/// name used to be rejected outright with no hint a different vocabulary was expected. ~keep
+#[test]
+fn required_language_accepts_a_session_target_name_as_well_as_a_fence_tag() {
+    assert_eq!(resolve_required_language("kotlin"), Ok(Language::Kotlin));
+    assert_eq!(resolve_required_language("kotlin_android"), Ok(Language::Kotlin));
+    assert_eq!(resolve_required_language("kotlin-android"), Ok(Language::Kotlin));
+    assert_eq!(resolve_required_language("node"), Ok(Language::TypeScript));
+}
+
+/// The other half: a value that resolves to neither vocabulary must still fail loudly, naming
+/// both accepted forms, rather than resolving to `Unknown` and being silently dropped from the
+/// comparison. ~keep
+#[test]
+fn required_language_names_both_accepted_vocabularies_when_it_rejects_a_value() {
+    let error = resolve_required_language("nosuchlang").expect_err("nosuchlang is not a language");
+    assert!(
+        error.contains("nosuchlang"),
+        "error should name the rejected value: {error}"
+    );
+    assert!(
+        error.contains("fence tag") && error.contains("session target"),
+        "error should name both accepted vocabularies: {error}"
+    );
+}
+
+/// `alef snippets gaps --required-languages` used to resolve an unrecognised entry to
+/// `Language::Unknown` and silently filter it out of the comparison instead of failing the
+/// run -- exactly the same shape as the language-filter defect
+/// `a_language_filter_reports_an_unrecognised_tag_instead_of_dropping_it` covers for `--lang`.
+/// ~keep
+#[test]
+fn an_unrecognised_required_language_fails_the_gaps_run_instead_of_being_dropped() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = directory.path().join("snippets");
+    std::fs::create_dir_all(&snippets).expect("snippet directory");
+
+    let required = ["nosuchlang".to_string()];
+    let code = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: &[],
+        required_languages: Some(&required),
+        include_base_paths: &[],
+        strict: false,
+    });
+
+    assert!(
+        !is_success(code),
+        "an unrecognised --required-languages value must fail the run, not silently narrow it"
+    );
+}
+
+/// A session target name in `--required-languages` (`kotlin_android`) must reach the same
+/// language-parity comparison a fence tag (`kotlin`) would -- proving `resolve_required_language`
+/// is actually wired into `run_gaps`, not just unit-tested in isolation.
+#[test]
+fn a_session_target_name_in_required_languages_drives_the_gaps_parity_check() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_snippet_tree(directory.path(), &["python"]);
+
+    let required = ["kotlin_android".to_string()];
+    let code = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: &[],
+        required_languages: Some(&required),
+        include_base_paths: &[],
+        strict: false,
+    });
+
+    assert!(
+        !is_success(code),
+        "kotlin_android must resolve to the Kotlin fence tag and be compared against the tree, \
+         which has no kotlin variant at all -- that is a real gap"
+    );
+}
+
 #[test]
 fn strict_coverage_rejects_every_non_validation_status() {
     assert!(is_incomplete_status(SnippetStatus::Skip));
