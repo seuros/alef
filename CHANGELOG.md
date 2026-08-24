@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-## CHANGELOG bullets — Java visitor path
-
+- poly fmt no longer demotes every heading in a Markdown file that contains a stray second
+  level-1 heading. The generated `poly.toml` now disables rumdl's `MD025` for `fmt` only: the
+  rule still lints, so a stray `#` heading is reported, but its autofix demotes the offending
+  H1 *and every heading after it*, which reparents an entire CHANGELOG under `## [Unreleased]`
+  and makes heading-scoped release-note extraction emit the wrong section. Observed on this
+  repo's own CHANGELOG: 338 lines rewritten, all 122 version sections pushed to H3.
 
 - Java: a visitor upcall whose host callback throws now returns the result enum's default
   discriminant instead of `VISIT_RESULT_ERROR`, a constant the bridge never emitted. Every

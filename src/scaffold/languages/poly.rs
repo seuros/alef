@@ -283,6 +283,15 @@ const RUMDL_DISABLE: &[&str] = &[
     "MD012", "MD013", "MD024", "MD033", "MD036", "MD041", "MD046", "MD051", "MD076",
 ];
 
+/// rumdl rules additionally disabled for `fmt` only, on top of `RUMDL_DISABLE`.
+/// MD025 (multiple top-level headings) still lints, so a stray `#` heading is
+/// reported, but its autofix is destructive: rumdl demotes the offending H1 *and
+/// every heading after it*, which silently reparents an entire CHANGELOG under
+/// `## [Unreleased]` and makes heading-scoped release-note extraction emit the
+/// wrong section. Observed on alef's own CHANGELOG (338 lines rewritten, no
+/// content lost). ~keep
+const RUMDL_FMT_ONLY_DISABLE: &[&str] = &["MD025"];
+
 /// mago rules suppressed: test-assertion style/consistency checks that fire on
 /// the generated PHP e2e suites (phpunit assertions), plus `sensitive-parameter`
 /// which fires on generated extension stubs (a codegen-shaped suggestion, not a
@@ -433,9 +442,16 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
         out.push_str(&format!("[lint]\nworkspace = {workspace}\n\n"));
     }
 
-    let md_disable = toml_array(RUMDL_DISABLE);
-    out.push_str(&format!("[lint.markdown.rumdl]\ndisable = {md_disable}\n\n"));
-    out.push_str(&format!("[fmt.markdown.rumdl]\ndisable = {md_disable}\n\n"));
+    let md_lint_disable = toml_array(RUMDL_DISABLE);
+    let md_fmt_disable = toml_array(
+        &RUMDL_DISABLE
+            .iter()
+            .chain(RUMDL_FMT_ONLY_DISABLE.iter())
+            .copied()
+            .collect::<Vec<_>>(),
+    );
+    out.push_str(&format!("[lint.markdown.rumdl]\ndisable = {md_lint_disable}\n\n"));
+    out.push_str(&format!("[fmt.markdown.rumdl]\ndisable = {md_fmt_disable}\n\n"));
 
     // NOTE: alef deliberately does NOT enable poly's opt-in native-toolchain
 
@@ -625,4 +641,58 @@ pub(crate) fn scaffold_poly_config(config: &ResolvedCrateConfig, languages: &[La
     }
 
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::ResolvedCrateConfig;
+
+    fn poly_toml() -> String {
+        scaffold_poly_config(&ResolvedCrateConfig::default(), &[Language::Rust])
+            .into_iter()
+            .find(|file| file.path == PathBuf::from("poly.toml"))
+            .expect("scaffold emits poly.toml")
+            .content
+    }
+
+    fn disable_list(content: &str, table: &str) -> String {
+        let start = content
+            .find(table)
+            .unwrap_or_else(|| panic!("{table} present in poly.toml"));
+        let rest = &content[start + table.len()..];
+        let open = rest.find('[').expect("disable array opens");
+        let close = rest[open..].find(']').expect("disable array closes") + open;
+        rest[open..=close].to_string()
+    }
+
+    #[test]
+    fn should_disable_md025_for_fmt_only() {
+        let content = poly_toml();
+        assert!(
+            disable_list(&content, "[fmt.markdown.rumdl]").contains("\"MD025\""),
+            "fmt must not run MD025's autofix: it demotes every heading after a stray H1"
+        );
+        assert!(
+            !disable_list(&content, "[lint.markdown.rumdl]").contains("\"MD025\""),
+            "lint must keep reporting MD025 so a stray H1 is still surfaced"
+        );
+    }
+
+    #[test]
+    fn should_keep_shared_rumdl_disables_in_both_tables() {
+        let content = poly_toml();
+        let lint = disable_list(&content, "[lint.markdown.rumdl]");
+        let fmt = disable_list(&content, "[fmt.markdown.rumdl]");
+        for rule in RUMDL_DISABLE {
+            assert!(
+                lint.contains(&format!("\"{rule}\"")),
+                "{rule} missing from lint disable list"
+            );
+            assert!(
+                fmt.contains(&format!("\"{rule}\"")),
+                "{rule} missing from fmt disable list"
+            );
+        }
+    }
 }
