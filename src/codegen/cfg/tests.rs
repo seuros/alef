@@ -842,3 +842,60 @@ fn core_crate_declared_features_empty_when_workspace_root_unset() {
     let config = crate::core::config::ResolvedCrateConfig::default();
     assert!(core_crate_declared_features(&config).is_empty());
 }
+
+/// [`expand_configured_features`] must follow the core crate's own `[features]` table so a
+/// configured aggregate name also stands for every member it enables -- transitively, through a
+/// nested aggregate -- while leaving unrelated names alone.
+///
+/// Without this, `cfg_feature_satisfied` (which matches literally and hard-codes only `full` as a
+/// universal umbrella) reports every `#[cfg(feature = "<member>")]` gate unsatisfied for a
+/// binding configured with the aggregate, and the gated items vanish from that surface with no
+/// diagnostic even though cargo compiles them.
+#[test]
+fn expand_configured_features_follows_the_core_crates_feature_graph() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core_dir = dir.path().join("crates").join("my-lib");
+    std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+    std::fs::write(
+        core_dir.join("Cargo.toml"),
+        "[package]\nname = \"my-lib\"\n\n[features]\ndefault = []\n\
+         mobile-target = [\"tokenizer\", \"text\"]\ntext = [\"markup\"]\nmarkup = []\n\
+         tokenizer = [\"dep:tok\", \"other-crate/tok\"]\nunrelated = []\n",
+    )
+    .expect("write core Cargo.toml");
+    let config = crate::core::config::ResolvedCrateConfig {
+        workspace_root: Some(dir.path().to_path_buf()),
+        name: "my-lib".to_string(),
+        sources: vec![std::path::PathBuf::from("crates/my-lib/src/lib.rs")],
+        ..Default::default()
+    };
+
+    let expanded: BTreeSet<String> = expand_configured_features(&config, &["mobile-target".to_string()])
+        .into_iter()
+        .collect();
+
+    assert_eq!(
+        expanded,
+        BTreeSet::from([
+            "mobile-target".to_string(),
+            "tokenizer".to_string(),
+            "text".to_string(),
+            "markup".to_string(),
+        ]),
+        "the aggregate, its direct members, and the nested aggregate's members must all count as \
+         enabled; `dep:` and `crate/feature` tokens are not local feature names, and an unrelated \
+         feature must not be swept in"
+    );
+}
+
+/// A manifest that cannot be located must leave the requested list exactly as it was: widening
+/// the enabled set is only safe when the manifest proves the members are on.
+#[test]
+fn expand_configured_features_passes_through_when_the_manifest_is_unreachable() {
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    assert_eq!(
+        expand_configured_features(&config, &["tokenizer".to_string()]),
+        vec!["tokenizer".to_string()],
+        "no workspace_root means no manifest to read, so the list must pass through untouched"
+    );
+}
