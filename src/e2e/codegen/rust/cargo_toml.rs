@@ -3,6 +3,43 @@
 use crate::core::hash::{self, CommentStyle};
 use crate::core::template_versions as tv;
 
+/// What the generated Rust e2e crate needs to declare.
+///
+/// ~keep A struct rather than the positional argument list this replaced: the six adjacent
+/// `bool`s were indistinguishable at the call site (every test had to annotate them with
+/// trailing comments to stay readable), and the `too_many_arguments` allow meant adding a
+/// seventh — which is exactly what the `tokio-stream` fix needed — carried no friction at all.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CargoTomlInputs<'a> {
+    /// Package name of the crate under test, as published (`my-crate`).
+    pub crate_name: &'a str,
+    /// Rust library name of the crate under test, as `use`d (`my_crate`).
+    pub dep_name: &'a str,
+    /// Path from the e2e crate to the crate under test, for `DependencyMode::Local`.
+    pub crate_path: &'a str,
+    /// A call argument lowers through `serde_json` (`json_object` / `handle` argument types).
+    pub needs_serde_json: bool,
+    /// At least one fixture is served by the generated mock HTTP server.
+    pub needs_mock_server: bool,
+    /// At least one fixture drives the `axum-test` HTTP integration pattern.
+    pub needs_http_tests: bool,
+    /// At least one emitted test is `async`, so it needs the tokio test runtime.
+    pub needs_tokio: bool,
+    /// At least one emitted test body drains a stream through
+    /// [`crate::e2e::codegen::streaming_assertions::RUST_STREAM_CRATE_PATH`].
+    pub needs_tokio_stream: bool,
+    /// An HTTP fixture configures CORS or static-file middleware.
+    pub needs_tower_http: bool,
+    /// A fixture supplies a `test_backend` argument, so trait-bridge stubs name `anyhow`.
+    pub needs_anyhow: bool,
+    /// Whether the crate under test is referenced by path or by registry version.
+    pub dep_mode: crate::e2e::config::DependencyMode,
+    /// Version of the crate under test, also used as the e2e package's own version.
+    pub version: Option<&'a str>,
+    /// Features to enable on the crate under test.
+    pub features: &'a [String],
+}
+
 /// Render a `Cargo.toml` for the Rust e2e test crate.
 ///
 /// Generates all dependency lines based on which test features are needed
@@ -12,21 +49,22 @@ use crate::core::template_versions as tv;
 /// alphabetical order and `[package.metadata.cargo-machete]` appears
 /// immediately after `[package]`, which is the canonical position that
 /// `cargo sort` would choose if it ran on the file.
-#[allow(clippy::too_many_arguments)]
-pub fn render_cargo_toml(
-    crate_name: &str,
-    dep_name: &str,
-    crate_path: &str,
-    needs_serde_json: bool,
-    needs_mock_server: bool,
-    needs_http_tests: bool,
-    needs_tokio: bool,
-    needs_tower_http: bool,
-    needs_anyhow: bool,
-    dep_mode: crate::e2e::config::DependencyMode,
-    version: Option<&str>,
-    features: &[String],
-) -> String {
+pub fn render_cargo_toml(inputs: &CargoTomlInputs<'_>) -> String {
+    let &CargoTomlInputs {
+        crate_name,
+        dep_name,
+        crate_path,
+        needs_serde_json,
+        needs_mock_server,
+        needs_http_tests,
+        needs_tokio,
+        needs_tokio_stream,
+        needs_tower_http,
+        needs_anyhow,
+        dep_mode,
+        version,
+        features,
+    } = inputs;
     let e2e_name = format!("{dep_name}-e2e-rust");
     // Use only the features explicitly configured in alef.toml.
     // Do NOT auto-add "serde" — the target crate may not have that feature.
@@ -67,9 +105,8 @@ pub fn render_cargo_toml(
     // don't have to remember to add `e2e/rust` to `workspace.exclude`, and
     // `cargo fmt`/`cargo build` work the same whether the parent has a
     // workspace or not.
-    // Mock server requires axum (HTTP router) and tokio-stream (SSE streaming).
-    // The standalone binary additionally needs serde (derive) and walkdir.
-    // Http integration tests require axum-test for the test server.
+    // Mock server requires axum (HTTP router). The standalone binary additionally needs serde
+    // (derive) and walkdir. Http integration tests require axum-test for the test server.
     let needs_axum = needs_mock_server || needs_http_tests;
 
     // Build the cargo-machete ignore list.
@@ -82,7 +119,7 @@ pub fn render_cargo_toml(
         machete_ignored.push("\"serde\"");
         machete_ignored.push("\"walkdir\"");
     }
-    if needs_mock_server {
+    if needs_tokio_stream {
         machete_ignored.push("\"tokio-stream\"");
     }
     if needs_http_tests {
@@ -156,15 +193,6 @@ pub fn render_cargo_toml(
             "walkdir".to_string(),
             format!("walkdir = \"{walkdir}\"", walkdir = tv::cargo::WALKDIR),
         ));
-        if needs_mock_server {
-            dep_entries.push((
-                "tokio-stream".to_string(),
-                format!(
-                    "tokio-stream = \"{tokio_stream}\"",
-                    tokio_stream = tv::cargo::TOKIO_STREAM
-                ),
-            ));
-        }
         if needs_http_tests {
             dep_entries.push(("axum-test".to_string(), "axum-test = \"20\"".to_string()));
             dep_entries.push(("bytes".to_string(), "bytes = \"1\"".to_string()));
@@ -182,6 +210,17 @@ pub fn render_cargo_toml(
                 format!("tempfile = \"{tempfile}\"", tempfile = tv::cargo::TEMPFILE),
             ));
         }
+    }
+    // Not nested under `needs_axum`: the crate path lands in the test bodies from the streaming
+    // collect recipe, which knows nothing about whether a mock server happens to be present. ~keep
+    if needs_tokio_stream {
+        dep_entries.push((
+            "tokio-stream".to_string(),
+            format!(
+                "tokio-stream = \"{tokio_stream}\"",
+                tokio_stream = tv::cargo::TOKIO_STREAM
+            ),
+        ));
     }
     if needs_tokio {
         dep_entries.push((
@@ -225,20 +264,13 @@ mod tests {
     fn render_cargo_toml_local_no_features_produces_path_dep() {
         // When crate_name ("my-crate") differs from dep_name ("my_crate") a
         // `package = …` key is required to tell Cargo the actual crate name.
-        let out = render_cargo_toml(
-            "my-crate",
-            "my_crate",
-            "../../crates/my-crate",
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            DependencyMode::Local,
-            None,
-            &[],
-        );
+        let out = render_cargo_toml(&CargoTomlInputs {
+            crate_name: "my-crate",
+            dep_name: "my_crate",
+            crate_path: "../../crates/my-crate",
+            dep_mode: DependencyMode::Local,
+            ..Default::default()
+        });
         assert!(
             out.contains("my_crate = { package = \"my-crate\", path = \"../../crates/my-crate\" }"),
             "got:\n{out}"
@@ -249,20 +281,13 @@ mod tests {
     #[test]
     fn render_cargo_toml_local_same_name_produces_simple_path_dep() {
         // When crate_name and dep_name are identical no `package` key is needed.
-        let out = render_cargo_toml(
-            "my_crate",
-            "my_crate",
-            "../../crates/my_crate",
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            DependencyMode::Local,
-            None,
-            &[],
-        );
+        let out = render_cargo_toml(&CargoTomlInputs {
+            crate_name: "my_crate",
+            dep_name: "my_crate",
+            crate_path: "../../crates/my_crate",
+            dep_mode: DependencyMode::Local,
+            ..Default::default()
+        });
         assert!(
             out.contains("my_crate = { path = \"../../crates/my_crate\" }"),
             "got:\n{out}"
@@ -275,20 +300,13 @@ mod tests {
         // header_for_config. cargo-sort always strips it, so every prek run
         // oscillated between cargo-sort removing it and alef re-adding it.
         // The e2e rust Cargo.toml must use the plain hash::header (no issues_url).
-        let out = render_cargo_toml(
-            "my-crate",
-            "my_crate",
-            "../../crates/my-crate",
-            false,
-            false,
-            false,
-            false,
-            false,
-            false,
-            DependencyMode::Local,
-            None,
-            &[],
-        );
+        let out = render_cargo_toml(&CargoTomlInputs {
+            crate_name: "my-crate",
+            dep_name: "my_crate",
+            crate_path: "../../crates/my-crate",
+            dep_mode: DependencyMode::Local,
+            ..Default::default()
+        });
         assert!(
             !out.contains("Issues & docs:"),
             "e2e Cargo.toml must not contain 'Issues & docs:' — cargo-sort strips it, \
@@ -301,20 +319,18 @@ mod tests {
         // Regression: alef emitted deps in code order (consumer crate first,
         // then serde_json, axum, serde, walkdir, tokio-stream, tokio).
         // cargo-sort rewrites unsorted blocks causing prek to oscillate.
-        let out = render_cargo_toml(
-            "my-crate",
-            "my_crate",
-            "../../crates/my-crate",
-            true,  // needs_serde_json
-            true,  // needs_mock_server
-            false, // needs_http_tests
-            true,  // needs_tokio
-            false, // needs_tower_http
-            false, // needs_anyhow
-            DependencyMode::Local,
-            Some("1.2.3"),
-            &[],
-        );
+        let out = render_cargo_toml(&CargoTomlInputs {
+            crate_name: "my-crate",
+            dep_name: "my_crate",
+            crate_path: "../../crates/my-crate",
+            needs_serde_json: true,
+            needs_mock_server: true,
+            needs_tokio: true,
+            needs_tokio_stream: true,
+            dep_mode: DependencyMode::Local,
+            version: Some("1.2.3"),
+            ..Default::default()
+        });
         // Extract the [dependencies] block and verify key order.
         let deps_start = out.find("[dependencies]\n").expect("missing [dependencies]");
         let deps_block = &out[deps_start + "[dependencies]\n".len()..];
@@ -337,20 +353,18 @@ mod tests {
         // Regression: older alef put [package.metadata.cargo-machete] at the
         // end of the file.  cargo-sort moves it to immediately after [package],
         // before [[bin]], causing prek to oscillate.
-        let out = render_cargo_toml(
-            "my-crate",
-            "my_crate",
-            "../../crates/my-crate",
-            true,  // needs_serde_json → triggers machete section
-            true,  // needs_mock_server → triggers [[bin]] section
-            false, // needs_http_tests
-            true,  // needs_tokio
-            false, // needs_tower_http
-            false, // needs_anyhow
-            DependencyMode::Local,
-            Some("1.2.3"),
-            &[],
-        );
+        let out = render_cargo_toml(&CargoTomlInputs {
+            crate_name: "my-crate",
+            dep_name: "my_crate",
+            crate_path: "../../crates/my-crate",
+            // `needs_serde_json` triggers the machete section; `needs_mock_server` the [[bin]].
+            needs_serde_json: true,
+            needs_mock_server: true,
+            needs_tokio: true,
+            dep_mode: DependencyMode::Local,
+            version: Some("1.2.3"),
+            ..Default::default()
+        });
         let machete_pos = out
             .find("[package.metadata.cargo-machete]")
             .expect("[package.metadata.cargo-machete] missing");
