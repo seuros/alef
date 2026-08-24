@@ -331,11 +331,9 @@ fn contains_against_vec_dto_aggregates_stringy_accessors() {
     arrays.insert("imports".to_string());
 
     let map = SwiftFirstClassMap {
-        first_class_types: HashSet::new(),
         field_types,
-        vec_field_names: HashSet::new(),
-        root_type: None,
         stringy_fields_by_type,
+        ..SwiftFirstClassMap::default()
     };
     let resolver = FieldResolver::new_with_swift_first_class(
         &HashMap::new(),
@@ -396,11 +394,9 @@ fn contains_aggregator_skips_when_only_one_stringy_field() {
     let mut arrays = HashSet::new();
     arrays.insert("tags".to_string());
     let map = SwiftFirstClassMap {
-        first_class_types: HashSet::new(),
         field_types,
-        vec_field_names: HashSet::new(),
-        root_type: None,
         stringy_fields_by_type,
+        ..SwiftFirstClassMap::default()
     };
     let resolver = FieldResolver::new_with_swift_first_class(
         &HashMap::new(),

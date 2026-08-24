@@ -146,32 +146,10 @@ pub(super) fn render_assertion(
         return;
     }
 
-    // Skip length/count assertions whose collection leaf is bridged to a scalar
-    // `RustString` rather than a countable `RustVec`. swift-bridge JSON-bridges
-    // `Option<Vec<T>>`, `Vec<Vec<_>>`, and `Map` getters to a single `RustString`,
-    // which has no `.count` — so the naive `<collection>().count` the renderer
-    // emits for a trailing `.length`/`.count`/`.size` segment does not compile.
-    // The renderer cannot see the leaf's swift-bridge kind, so guard here and
-    // skip, matching the go/csharp/java backends (which also skip these).
-    //
-    // ~keep This guard runs only after `is_valid_for_result` above accepted the path, so the field
-    // IS resolvable, and `NotAvailableOnResultType` — an `AuthoringGap`, therefore fatal under the
-    // strict gate — was the wrong wording for it: the backend dropped the assertion as an honest
-    // ABI limit while the gate demanded the consumer repair a field path that was never wrong, two
-    // verdicts about one fact with nothing comparing them. `CountOnJsonBridgedLeafInSwift` states
-    // the real reason and carries the classification that reason implies.
-    if let Some(f) = &assertion.field
-        && let Some(collection) = ["length", "count", "size"]
-            .iter()
-            .find_map(|suffix| f.strip_suffix(&format!(".{suffix}")))
-        && !collection.is_empty()
-        && !field_resolver.leaf_is_vec_via_swift_map(field_resolver.resolve(collection))
+    if let Some(line) = super::leaf_shape::json_bridged_traversal_skip(field_resolver, assertion.field.as_deref())
+        .or_else(|| super::leaf_shape::non_countable_leaf_count_skip(field_resolver, assertion.field.as_deref()))
     {
-        let _ = writeln!(
-            out,
-            "        // skipped: {}",
-            FieldSkip::CountOnJsonBridgedLeafInSwift.message(f)
-        );
+        out.push_str(&line);
         return;
     }
 
@@ -289,6 +267,8 @@ pub(super) fn render_assertion(
     // `markdown()` is optional and the `?.` operator wraps the result.
     // Detect this by checking if the accessor contains `?.`.
     let accessor_is_optional = field_expr.contains("?.");
+    let leaf_getter_is_optional =
+        super::leaf_shape::leaf_getter_is_optional(field_resolver, assertion.field.as_deref());
     // First-class Codable Swift struct property access leaves no trailing `()`
     // on the leaf segment — e.g. `result.text` (Swift `String`) vs
     // `result.text()` (RustBridge.RustString). When the leaf is property
@@ -352,6 +332,8 @@ pub(super) fn render_assertion(
         } else {
             field_expr.to_string()
         }
+    } else if field_is_enum && leaf_getter_is_optional {
+        format!("({field_expr}?.toString() ?? \"\")")
     } else if field_is_enum && accessor_is_optional {
         // Enum-typed leaf reached through an ancestor optional chain. The chain's `?`
         // already propagated, so `field_expr` is `Optional<RustString>` even though
@@ -368,6 +350,8 @@ pub(super) fn render_assertion(
         // and returns a `String` across the FFI. In Swift this arrives as `RustString`, so
         // `.toString()` converts it to a Swift `String` — one call, not two.
         format!("{field_expr}.toString()")
+    } else if leaf_getter_is_optional {
+        format!("({field_expr}?.toString() ?? \"\")")
     } else if accessor_is_optional {
         // Ancestor optional chain already propagated `?` (e.g. `result.summary()?.strategy()`),
         // so the whole `field_expr` is Optional<RustString> regardless of whether the leaf

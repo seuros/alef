@@ -262,6 +262,27 @@ pub struct SwiftFirstClassMap {
     pub first_class_types: HashSet<String>,
     pub field_types: HashMap<String, HashMap<String, String>>,
     pub vec_field_names: HashSet<String>,
+    /// Field names whose swift-bridge getter returns one `RustString` holding the whole field
+    /// JSON-encoded, per the binding generator's own `field_needs_json_bridge`.
+    ///
+    /// ~keep Such a leaf is a scalar string at the Swift surface: it has no `.count` and no
+    /// subscript, so a count suffix, an index step and a wildcard step are all equally
+    /// unspellable against it. Recorded as its own set rather than as the complement of
+    /// `vec_field_names`, because that complement also contains every genuine scalar and every
+    /// field the IR never described — those must not be mistaken for a JSON bridge.
+    pub json_bridged_field_names: HashSet<String>,
+    /// `getter_optionality[type_name][field_name]` — whether that field's swift-bridge getter on
+    /// that type returns `Option<..>` rather than a bare value.
+    ///
+    /// ~keep Keyed by owner type, and *presence* is the separate fact from the boolean: an absent
+    /// entry means the IR never described the field, which must not be read as "not optional".
+    /// Recorded because `render_swift_with_first_class_map` deliberately never emits a `?` on the
+    /// leaf segment — it cannot know what the caller will chain onto the accessor — so the caller
+    /// appending `.toString()` is the one that has to know whether the leaf is already
+    /// `Optional<RustString>`. Config-derived `optional_fields` cannot answer it: that set is
+    /// keyed by bare path and drives `Option`-shaped codegen generally, whereas this is the
+    /// narrower question of what the getter's declared return type is.
+    pub getter_optionality: HashMap<String, HashMap<String, bool>>,
     pub root_type: Option<String>,
     /// Per-type readable text accessors. Keyed by IR TypeDef name. Used by the
     /// swift e2e `contains` assertion to aggregate every stringy field on a
@@ -302,6 +323,18 @@ impl SwiftFirstClassMap {
     /// supports `.count` directly; RustString does not.
     pub fn is_vec_field_name(&self, field_name: &str) -> bool {
         self.vec_field_names.contains(field_name)
+    }
+
+    /// True when `field_name`'s swift-bridge getter collapses the field to a single
+    /// JSON-encoded `RustString` on some IR type.
+    pub fn is_json_bridged_field_name(&self, field_name: &str) -> bool {
+        self.json_bridged_field_names.contains(field_name)
+    }
+
+    /// Whether `field_name`'s getter on `type_name` returns `Option<..>`. `None` when the IR
+    /// never described that field on that type.
+    pub fn getter_is_optional(&self, type_name: &str, field_name: &str) -> Option<bool> {
+        self.getter_optionality.get(type_name)?.get(field_name).copied()
     }
 
     /// True when no per-type information is recorded.

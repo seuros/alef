@@ -124,6 +124,8 @@ fn first_class_map() -> SwiftFirstClassMap {
             .collect(),
         field_types: HashMap::new(),
         vec_field_names: HashSet::new(),
+        json_bridged_field_names: HashSet::new(),
+        getter_optionality: HashMap::new(),
         root_type: None,
         stringy_fields_by_type: HashMap::new(),
     }
