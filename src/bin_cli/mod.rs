@@ -11,3 +11,4 @@ pub(crate) mod release_commands;
 mod verify_gitignore;
 mod verify_orphans;
 mod verify_outcome;
+mod verify_scan;
