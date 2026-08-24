@@ -553,7 +553,8 @@ pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef,
             variant.serde_rename.as_deref(),
             enum_def.serde_rename_all.as_deref(),
         );
-        if let Some(tag_field) = enum_def.serde_tag.as_deref() {
+        let repr = crate::codegen::serde_enum_repr::serde_enum_repr(enum_def);
+        if let Some(tag_field) = repr.tag() {
             out.push_str(&crate::codegen::template_env::render(
                 "generators/enums/tag_field_check.jinja",
                 minijinja::context! { tag_field => tag_field },
@@ -567,7 +568,17 @@ pub(crate) fn write_pyo3_variant_accessors(out: &mut String, enum_def: &EnumDef,
             ));
             out.push_str("            return Ok(None);\n");
             out.push_str("        }\n");
-            out.push_str("        let payload = json;\n");
+            match repr.content() {
+                // serde's adjacent form keeps the payload under its own key; handing back the
+                // whole document would return the tag envelope instead of the payload. ~keep
+                Some(content_field) => out.push_str(&crate::codegen::template_env::render(
+                    "generators/enums/adjacent_variant_payload.jinja",
+                    minijinja::context! { content_field => content_field },
+                )),
+                // serde's internal form has the payload's fields flat beside the tag, so the
+                // document *is* the payload.
+                None => out.push_str("        let payload = json;\n"),
+            }
         } else {
             out.push_str(&crate::codegen::template_env::render(
                 "generators/enums/external_variant_payload.jinja",
