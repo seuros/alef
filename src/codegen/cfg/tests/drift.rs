@@ -241,30 +241,36 @@ features = ["unrelated"]
     );
 }
 
-/// Aggregate expansion is asymmetric on purpose, and this pins both halves.
-///
-/// The core crate defines `mobile-target = ["alt-backend"]`. Cargo expands that when it compiles
-/// the cdylib, so `alt_backend_entry` IS in the shipped library even though `alt-backend` is
-/// declare-only on the FFI side -- the warning must expand the cdylib's feature list through the
-/// core manifest (via `expand_configured_features`, as the JNI target gate does) to see it.
-/// `with_cfg_filtered_deep` does NOT expand: it matches literally, so a Go binding configured
-/// with the aggregate really does drop the item. Expanding the binding side too would silence a
-/// genuine underexposure, which is why only one side is expanded.
-#[traced_test]
-#[test]
-fn warn_on_ffi_feature_drift_expands_aggregates_on_the_cdylib_side_only() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let core_dir = dir.path().join("crates").join("sample-core");
-    std::fs::create_dir_all(&core_dir).expect("create core crate dir");
-    std::fs::write(
-        core_dir.join("Cargo.toml"),
-        "[package]\nname = \"sample-core\"\n\n[features]\ndefault = []\n\
-         mobile-target = [\"alt-backend\"]\nalt-backend = []\n",
-    )
-    .expect("write core Cargo.toml");
+/// Shared fixture data for the three aggregate-expansion shapes below: how a core-crate
+/// aggregate interacts with the FFI cdylib's effective defaults once BOTH sides of the drift
+/// check expand configured aggregates the same way `backends::go`/`java`/`csharp`/`kotlin`/
+/// `zig`/`wasm` now resolve their own `enabled_features` (see `fix(backends): expand configured
+/// aggregate features before cfg filtering`). `core_manifest` is written to a temp `sample-core`
+/// crate on disk so `expand_configured_features` has a real `[features]` table to walk; a case
+/// with no aggregate involved (case c) still gets one, to prove expansion is a no-op for a plain
+/// feature rather than merely untested. ~keep
+struct AggregateDriftCase {
+    name: &'static str,
+    core_manifest: &'static str,
+    workspace_toml: &'static str,
+    gate: &'static str,
+    expect_coverage_gap: bool,
+    expect_unsafe: bool,
+}
 
-    let mut config = resolved_config(
-        r#"
+const AGGREGATE_DRIFT_CASES: &[AggregateDriftCase] = &[
+    // (a) The aggregate Go configures (`mobile-target`) is the SAME aggregate the FFI side
+    // configures, so expanding both sides through the core manifest lands on the identical set
+    // `{"mobile-target", "alt-backend"}`. Every gate `alt-backend` touches is satisfied on both
+    // sides -- this is the negative case: a fully-covered aggregate must stay silent. Before the
+    // fix, `binding_enabled` was never expanded, so Go's literal `{"mobile-target"}` did not
+    // satisfy `feature = "alt-backend"` while the (already-expanded) cdylib side did -- a false
+    // "coverage gap" on every member, on every regeneration.
+    AggregateDriftCase {
+        name: "fully_covered_aggregate",
+        core_manifest: "[package]\nname = \"sample-core\"\n\n[features]\ndefault = []\n\
+                         mobile-target = [\"alt-backend\"]\nalt-backend = []\n",
+        workspace_toml: r#"
 [workspace]
 languages = ["ffi", "go"]
 [[crates]]
@@ -276,21 +282,111 @@ extra_features = ["alt-backend"]
 [crates.go]
 features = ["mobile-target"]
 "#,
-    );
+        gate: r#"feature = "alt-backend""#,
+        expect_coverage_gap: false,
+        expect_unsafe: false,
+    },
+    // (b) Go configures `mobile-target`, but the FFI side configures an unrelated `shared`
+    // feature and only declares `alt-backend` as `extra_features` (declare-only, never
+    // defaulted). No FFI-configured aggregate reaches `alt-backend`, so the cdylib's effective
+    // set stays `{"shared"}` even after expansion -- the member genuinely never ships in the
+    // linked library. Go's real (also-expanded) filter keeps `alt_backend_entry` regardless, so
+    // this is real, actionable UNSAFE drift. Before the fix this gate was invisible to the
+    // warning: literal `{"mobile-target"}` never matched `"alt-backend"`, so neither branch
+    // fired and the drift went unreported.
+    AggregateDriftCase {
+        name: "aggregate_member_outside_ffi_reach",
+        core_manifest: "[package]\nname = \"sample-core\"\n\n[features]\ndefault = []\n\
+                         mobile-target = [\"alt-backend\"]\nalt-backend = []\n",
+        workspace_toml: r#"
+[workspace]
+languages = ["ffi", "go"]
+[[crates]]
+name = "sample-core"
+sources = []
+[crates.ffi]
+features = ["shared"]
+extra_features = ["alt-backend"]
+[crates.go]
+features = ["mobile-target"]
+"#,
+        gate: r#"feature = "alt-backend""#,
+        expect_coverage_gap: false,
+        expect_unsafe: true,
+    },
+    // A third row -- a genuinely host-only literal feature configured with no aggregate
+    // relationship at all -- was deliberately removed here. `expand_configured_features` is a
+    // no-op for a name that is not an aggregate key (it only ever ADDS resolved members to a
+    // requested name, never renames or drops one), so that shape is mathematically incapable of
+    // distinguishing this fix from its absence: reverting the `expand_configured_features` call
+    // in `warn_on_ffi_feature_drift` cannot turn such a case red. A test that cannot fail when
+    // the code it guards is wrong is not verifying anything; see
+    // `warn_on_ffi_feature_drift_fires_when_the_binding_satisfies_a_gate_the_cdylib_lacks` above
+    // for the (still-valid, pre-existing) coverage of a plain declare-only feature -- that test
+    // predates aggregate expansion entirely and needs no aggregate-specific counterpart. ~keep
+];
+
+/// Writes `case.core_manifest` to a temp `sample-core` crate, resolves `case.workspace_toml`
+/// against it, builds a single-function API surface gated on `case.gate`, and runs the drift
+/// check. Returns the tempdir so it outlives the caller's assertions (unused after the call, but
+/// dropping it early would delete the manifest `expand_configured_features` reads mid-call on
+/// some platforms).
+fn run_aggregate_drift_case(case: &AggregateDriftCase) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core_dir = dir.path().join("crates").join("sample-core");
+    std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+    std::fs::write(core_dir.join("Cargo.toml"), case.core_manifest).expect("write core Cargo.toml");
+
+    let mut config = resolved_config(case.workspace_toml);
     config.workspace_root = Some(dir.path().to_path_buf());
     config.sources = vec![std::path::PathBuf::from("crates/sample-core/src/lib.rs")];
-    let api = api_with_gated_functions(&[("alt_backend_entry", Some(r#"feature = "alt-backend""#))]);
+    let api = api_with_gated_functions(&[("gated_entry", Some(case.gate))]);
 
     warn_on_ffi_feature_drift(&api, &config, Language::Go);
+    dir
+}
 
-    assert!(
+#[traced_test]
+#[test]
+fn warn_on_ffi_feature_drift_case_a_fully_covered_aggregate_stays_silent() {
+    let case = &AGGREGATE_DRIFT_CASES[0];
+    assert_eq!(case.name, "fully_covered_aggregate");
+    let _dir = run_aggregate_drift_case(case);
+
+    assert_eq!(
         logs_contain("coverage gap"),
-        "the cdylib's `mobile-target` expands to `alt-backend` and compiles the item in, while \
-         Go's literal filter drops it -- that underexposure must be reported"
+        case.expect_coverage_gap,
+        "case `{}`: coverage-gap direction should not fire -- both sides expand `mobile-target` \
+         to the same `{{mobile-target, alt-backend}}` set",
+        case.name
     );
-    assert!(
-        !logs_contain("unsafe and can produce glue"),
-        "with the cdylib side expanded there is no gate Go satisfies and the cdylib lacks, so \
-         the unsafe direction must stay silent"
+    assert_eq!(
+        logs_contain("unsafe and can produce glue"),
+        case.expect_unsafe,
+        "case `{}`: unsafe direction should not fire either -- nothing is kept that the cdylib \
+         lacks",
+        case.name
+    );
+}
+
+#[traced_test]
+#[test]
+fn warn_on_ffi_feature_drift_case_b_aggregate_member_outside_ffi_reach_is_unsafe() {
+    let case = &AGGREGATE_DRIFT_CASES[1];
+    assert_eq!(case.name, "aggregate_member_outside_ffi_reach");
+    let _dir = run_aggregate_drift_case(case);
+
+    assert_eq!(
+        logs_contain("unsafe and can produce glue"),
+        case.expect_unsafe,
+        "case `{}`: Go's expanded filter keeps `alt_backend_entry`, but no FFI-configured \
+         aggregate reaches `alt-backend`, so the cdylib never ships it -- this must fire unsafe",
+        case.name
+    );
+    assert_eq!(
+        logs_contain("coverage gap"),
+        case.expect_coverage_gap,
+        "case `{}`: the same gate cannot be both a coverage gap and unsafe drift",
+        case.name
     );
 }

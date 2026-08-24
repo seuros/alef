@@ -581,17 +581,37 @@ pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Langu
 ///   surface is silently smaller than the artifact it links against. This is the case a
 ///   configured list that satisfies no gate produces, and the one worth naming precisely. ~keep
 ///
-/// Only the FFI side expands aggregate feature names through the core crate's `[features]` table
-/// (via [`expand_configured_features`], as `backends::jni`'s target gate does): cargo really does
-/// enable an aggregate's members when it compiles the cdylib, so the artifact contains them. The
-/// binding side is deliberately NOT expanded — its filter compares literally, so a binding
-/// configured with an aggregate really does drop the members' items, and expanding here would
-/// hide exactly the underexposure this warning exists to report. ~keep
+/// Both sides are expanded through the core crate's `[features]` table (via
+/// [`expand_configured_features`]) before any gate is evaluated. This is not optional symmetry:
+/// `backends::go`/`java`/`csharp`/`kotlin`/`zig`/`wasm` all resolve their OWN `enabled_features`
+/// through [`expand_configured_features`] before calling `with_cfg_filtered_deep` (see
+/// `fix(backends): expand configured aggregate features before cfg filtering`). A binding
+/// configured with a core-crate aggregate therefore really does keep every member's gated item in
+/// its real generated surface -- literal, unexpanded `binding_enabled` here would be reasoning
+/// about a binding-side filter that no longer exists. Three shapes fall out of this:
+///
+/// (a) an aggregate whose entire member set is also reachable on the FFI side (typically because
+///     the FFI language config carries the same aggregate, or every member is unioned in by
+///     [`effective_ffi_default_features`] regardless): every gate the aggregate touches is
+///     satisfied on both sides after expansion, so NOTHING fires. Reporting a coverage gap here
+///     -- as differencing the literal names once did -- would be false: the binding's real filter
+///     keeps exactly what the cdylib ships.
+/// (b) an aggregate with a member the FFI side never reaches (the member is `extra_features`
+///     declare-only AND no FFI-configured aggregate transitively includes it): expansion makes
+///     `binding_enabled` satisfy that member's gate while `cdylib_enabled` still does not, so the
+///     UNSAFE direction fires -- correctly, because the binding's real (also-expanded) filter
+///     keeps glue for a symbol the cdylib build never exports. Before this fix that gate was
+///     invisible to this warning: literal `binding_enabled` never matched the member name, so the
+///     real drift went unreported.
+/// (c) a genuinely host-only literal feature with no aggregate relationship: expanding a name that
+///     is not an aggregate key returns it unchanged ([`expand_configured_features`] only extends a
+///     requested name with its resolved members, never drops or renames it), so plain
+///     feature-vs-feature drift is reported exactly as before. ~keep
 pub fn warn_on_ffi_feature_drift(api: &ApiSurface, config: &ResolvedCrateConfig, lang: Language) {
     if lang == Language::Ffi {
         return;
     }
-    let binding_owned = config.features_for_language(lang);
+    let binding_owned = expand_configured_features(config, config.features_for_language(lang));
     let binding_enabled: HashSet<&str> = binding_owned.iter().map(String::as_str).collect();
     let ffi_owned = expand_configured_features(config, &effective_ffi_default_features(api, config));
     let cdylib_enabled: HashSet<&str> = ffi_owned.iter().map(String::as_str).collect();
