@@ -1,5 +1,5 @@
 use super::super::optional_renderers::{
-    render_csharp_with_optionals, render_dart_with_optionals, render_java_with_optionals,
+    TypescriptMapAccess, render_csharp_with_optionals, render_dart_with_optionals, render_java_with_optionals,
     render_kotlin_android_with_optionals, render_kotlin_with_optionals, render_php_with_getters,
     render_rust_with_optionals, render_typescript_with_optionals, render_zig_with_optionals,
 };
@@ -31,7 +31,23 @@ impl FieldResolver {
         let segments = parse_path(effective);
         let segments = self.inject_array_indexing(segments);
         match language {
-            "typescript" | "node" => render_typescript_with_optionals(&segments, result_var, &self.optional_fields),
+            // `node` and `wasm` are one language and must answer "does this link need `?.`"
+            // once, from the same renderer. `wasm` used to fall through to the catch-all's
+            // `render_wasm`, which knows nothing about optionality, so a fixture with an
+            // `Option<T>` field got `result.document?.nodes` for node and the `TS18048`
+            // `result.document.nodes` for wasm. Only the map lowering differs. ~keep
+            "typescript" | "node" => render_typescript_with_optionals(
+                &segments,
+                result_var,
+                &self.optional_fields,
+                TypescriptMapAccess::Index,
+            ),
+            "wasm" => render_typescript_with_optionals(
+                &segments,
+                result_var,
+                &self.optional_fields,
+                TypescriptMapAccess::MapGet,
+            ),
             "java" => render_java_with_optionals(&segments, result_var, &self.optional_fields),
             "kotlin" => render_kotlin_with_optionals(&segments, result_var, &self.optional_fields),
             // kotlin_android data classes expose fields as Kotlin properties (no parens),
