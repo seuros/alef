@@ -486,9 +486,30 @@ impl FieldResolver {
         })
     }
 
-    /// Check if a resolved field is an array/Vec type.
+    /// Check if a field path is an array/Vec type, per the `fields_array` config.
+    ///
+    /// Accepts the raw fixture spelling as well as an already-resolved path: the second lookup
+    /// asks [`Self::result_relative_path`] where the value actually sits — alias applied, virtual
+    /// namespace prefix stripped — and classifies *that*.
+    ///
+    /// ~keep Asking rather than re-deriving is the point. `accessor()` strips a virtual grouping
+    /// label (`interaction.action_results` addresses `action_results`), so a bare
+    /// `array_fields.contains(field)` answered "not an array" about the very slice the accessor
+    /// had just emitted; Go's `contains` renderer turned that disagreement into
+    /// `string(result.ActionResults)`, which is not a legal conversion for a `[]T` and fails the
+    /// generated package's build. Routing through `result_relative_path` — already the shared
+    /// answer for the zig, brew and C generators — keeps one definition of where the value lives
+    /// instead of growing a second hand-rolled copy of the fallback beside `is_optional`'s.
+    ///
+    /// Recursion is bounded: `result_relative_path` consults `is_valid_for_result` with a single
+    /// dot-free segment, whose `namespace_stripped_path` returns `None` immediately, so the
+    /// re-entry through `is_known_via_sibling_field_config` terminates one level down.
     pub fn is_array(&self, field: &str) -> bool {
-        self.array_fields.contains(field)
+        if self.array_fields.contains(field) {
+            return true;
+        }
+        let relative = self.result_relative_path(field);
+        relative != field && self.array_fields.contains(relative)
     }
 
     /// Check whether `field` (a raw or already-resolved fixture path) is
