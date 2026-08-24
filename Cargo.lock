@@ -48,6 +48,7 @@ dependencies = [
  "heck",
  "insta",
  "jsonschema",
+ "libc",
  "libloading",
  "minijinja",
  "quote",

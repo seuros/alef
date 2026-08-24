@@ -68,6 +68,13 @@ walkdir = "2"
 which = "8"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 
+# `snippets::validators::termination` puts every snippet child in its own process group and then
+# has to forward `SIGINT`/`SIGTERM`/`SIGHUP` to those groups itself, because a detached group never
+# receives the terminal's own signals. `kill(2)` from a signal handler is the only async-signal-safe
+# way to do that, and std exposes neither it nor signal installation. ~keep
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # Pinned to the same minor line generated FFI crates depend on (see e.g.
 # `crates/*-ffi/Cargo.toml` in consumer repos), so the regression test that
