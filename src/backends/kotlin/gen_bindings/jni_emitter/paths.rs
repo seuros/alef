@@ -16,9 +16,17 @@ pub(in crate::backends::kotlin) fn jni_kotlin_package(config: &ResolvedCrateConf
 /// Uses `[crates.output] kotlin_android` when available, otherwise falls
 /// back to `[crates.output] kotlin`, and finally the conventional
 /// `packages/kotlin/src/main/kotlin/<pkg>/` layout.
+///
+/// `output_for("kotlin_android")` answers the Gradle project *root* -- where
+/// `build.gradle.kts` lives -- not a source directory: joining `filename` onto it directly
+/// wrote JNI-mode `.kt` files straight into the project root instead of under
+/// `src/main/kotlin/<pkg>/`. Delegate to the kotlin_android backend's own
+/// [`crate::backends::kotlin_android::kotlin_source_dir`], which already resolves the same
+/// root-vs-source-dir ambiguity `ProjectLayout` handles for that backend's own file
+/// placement. ~keep
 pub(in crate::backends::kotlin) fn jni_output_path(config: &ResolvedCrateConfig, filename: &str) -> PathBuf {
-    if let Some(android_out) = config.output_for("kotlin_android") {
-        return android_out.join(filename);
+    if config.output_for("kotlin_android").is_some() {
+        return crate::backends::kotlin_android::kotlin_source_dir(config).join(filename);
     }
     let kotlin_root = config
         .output_for("kotlin")

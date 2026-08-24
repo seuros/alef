@@ -5,6 +5,30 @@
 mod tests {
     use super::*;
     use crate::core::config::{KotlinAndroidConfig, TraitBridgeConfig};
+    use std::collections::HashMap;
+
+    /// `output_for("kotlin_android")` answers the Gradle project root -- where
+    /// `build.gradle.kts` lives -- not a source directory. Joining a filename onto it
+    /// directly wrote JNI-mode `.kt` files straight into the project root instead of under
+    /// the Gradle Android source-set layout `src/main/kotlin/<pkg>/`.
+    #[test]
+    fn jni_output_path_writes_under_the_kotlin_source_set_not_the_project_root() {
+        let config = ResolvedCrateConfig {
+            name: "toolkit".to_string(),
+            kotlin_android: Some(KotlinAndroidConfig::default()),
+            output_paths: HashMap::from([("kotlin_android".to_string(), PathBuf::from("sdk/android"))]),
+            ..ResolvedCrateConfig::default()
+        };
+
+        let path = jni_output_path(&config, "DemoBridge.kt");
+
+        assert_eq!(
+            path,
+            PathBuf::from("sdk/android/src/main/kotlin/toolkit/DemoBridge.kt"),
+            "expected the file under the Kotlin source set inside the project root, got {}",
+            path.display()
+        );
+    }
 
     #[test]
     fn jni_bridge_object_treats_android_trait_lifecycle_functions_as_managed() {
