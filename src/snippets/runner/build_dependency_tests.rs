@@ -27,9 +27,24 @@ fn snippet(language: crate::snippets::types::Language) -> Snippet {
 }
 
 fn session_with_before(language: crate::snippets::types::Language, before: Vec<&str>) -> SessionSpec {
+    session_with_before_in(language, before, "/crate")
+}
+
+/// Same, but placing the session in a named package directory.
+///
+/// ~keep Ambiguity is decided by the WORKING DIRECTORY, not the language: two same-language
+/// sessions over one directory describe one package and resolve deterministically (see
+/// `session_resolution::resolve_session_claim`). A fixture that wants a genuinely ambiguous
+/// claim must therefore give its sessions distinct directories — reusing the shared `/crate`
+/// helper produces a *resolvable* claim and silently tests the opposite of what it says.
+fn session_with_before_in(
+    language: crate::snippets::types::Language,
+    before: Vec<&str>,
+    working_directory: &str,
+) -> SessionSpec {
     SessionSpec {
         language,
-        working_directory: PathBuf::from("/crate"),
+        working_directory: PathBuf::from(working_directory),
         manifest: None,
         before: before.into_iter().map(str::to_string).collect(),
         env: Default::default(),
@@ -142,8 +157,13 @@ fn a_skip_annotated_snippet_is_excluded() {
     );
 }
 
-/// An ambiguous claim (two sessions, same language, no explicit target) is also unguaranteed:
-/// alef cannot say which of them -- if either -- actually produced the artifact.
+/// An ambiguous claim (two sessions, same language, no explicit target, and genuinely DIFFERENT
+/// packages) is also unguaranteed: alef cannot say which of them -- if either -- produced the
+/// artifact.
+///
+/// ~keep The two directories must differ. Same-language sessions sharing one working directory
+/// describe one package and now resolve deterministically rather than reporting ambiguity, so a
+/// fixture built on the shared `/crate` helper would assert the opposite of its own name.
 #[test]
 fn an_ambiguous_claim_is_reported_as_missing_a_build_dependency() {
     use crate::snippets::types::Language;
@@ -151,11 +171,11 @@ fn an_ambiguous_claim_is_reported_as_missing_a_build_dependency() {
     let sessions = HashMap::from([
         (
             "typescript".to_string(),
-            session_with_before(Language::TypeScript, vec!["pnpm build"]),
+            session_with_before_in(Language::TypeScript, vec!["pnpm build"], "/packages/typescript"),
         ),
         (
             "wasm".to_string(),
-            session_with_before(Language::TypeScript, vec!["wasm-pack build"]),
+            session_with_before_in(Language::TypeScript, vec!["wasm-pack build"], "/packages/wasm"),
         ),
     ]);
     let snippets = vec![snippet(Language::TypeScript)];
