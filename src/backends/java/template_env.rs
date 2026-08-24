@@ -234,8 +234,8 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_invoke_handle_result.jinja"),
     ),
     (
-        "ffi_throw_exception.jinja",
-        include_str!("templates/ffi_throw_exception.jinja"),
+        "ffi_typed_rethrow_catch.jinja",
+        include_str!("templates/ffi_typed_rethrow_catch.jinja"),
     ),
     (
         "ffi_alef_error_comment.jinja",
@@ -303,23 +303,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_visitor_free.jinja"),
     ),
     (
-        "ffi_visitor_operation_catch.jinja",
-        include_str!("templates/ffi_visitor_operation_catch.jinja"),
-    ),
-    (
         "ffi_visitor_cleanup.jinja",
         include_str!("templates/ffi_visitor_cleanup.jinja"),
-    ),
-    (
-        "ffi_catch_exception.jinja",
-        include_str!("templates/ffi_catch_exception.jinja"),
     ),
     (
         "ffi_options_free.jinja",
         include_str!("templates/ffi_options_free.jinja"),
     ),
     ("ffi_throw_inner.jinja", include_str!("templates/ffi_throw_inner.jinja")),
-    ("ffi_throw_outer.jinja", include_str!("templates/ffi_throw_outer.jinja")),
     (
         "ffi_result_ptr_call.jinja",
         include_str!("templates/ffi_result_ptr_call.jinja"),

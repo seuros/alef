@@ -9,6 +9,7 @@ use super::marshal::gen_helper_methods;
 
 mod async_wrappers;
 mod conversion_internals;
+mod error_catch;
 mod params_returns;
 mod sync_functions;
 mod visitor_bridge;
@@ -18,6 +19,8 @@ use visitor_bridge::visitor_bridge_for_function;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod typed_error_rethrow_tests;
 
 pub(crate) fn gen_async_wrapper_method(
     out: &mut String,

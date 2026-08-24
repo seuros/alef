@@ -1,0 +1,13 @@
+{{ indent }}} catch ({{ exception_class }} e) {
+{% if capture_operation_failure %}
+{{ indent }}    operationFailure = e;
+{% endif %}
+{{ indent }}    throw e;
+{{ indent }}} catch (Throwable e) {
+{% if capture_operation_failure %}
+{{ indent }}    operationFailure = new {{ exception_class }}("FFI call failed", e);
+{{ indent }}    throw operationFailure;
+{% else %}
+{{ indent }}    throw new {{ exception_class }}("FFI call failed", e);
+{% endif %}
+{{ indent }}}{{ trailer }}

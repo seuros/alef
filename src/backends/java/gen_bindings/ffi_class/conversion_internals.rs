@@ -174,22 +174,13 @@ fn emit_visitor_result_conversion(out: &mut String, func: &FunctionDef, prefix_u
 }
 
 fn emit_visitor_cleanup(out: &mut String, prefix_upper: &str, exception_class: &str) {
-    for (template, context) in [
-        (
-            "ffi_visitor_operation_catch.jinja",
-            minijinja::context! { exception_class },
-        ),
-        ("ffi_visitor_cleanup.jinja", minijinja::context! { pu => prefix_upper }),
-        ("ffi_catch_exception.jinja", minijinja::context! { exception_class }),
-    ] {
-        out.push_str(&crate::backends::java::template_env::render(template, context));
-    }
-    out.push_str("            throw e;\n        } catch (Throwable e) {\n");
+    super::error_catch::emit_visitor_operation_catch_chain(out, exception_class);
     out.push_str(&crate::backends::java::template_env::render(
-        "ffi_throw_outer.jinja",
-        minijinja::context! { exception_class },
+        "ffi_visitor_cleanup.jinja",
+        minijinja::context! { pu => prefix_upper },
     ));
-    out.push_str("        }\n    }\n");
+    super::error_catch::emit_method_catch_chain(out, exception_class);
+    out.push_str("    }\n");
 }
 
 #[allow(clippy::too_many_arguments)]

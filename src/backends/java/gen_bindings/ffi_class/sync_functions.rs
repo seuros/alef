@@ -396,14 +396,8 @@ fn emit_capsule_construct(out: &mut String, config: &HostCapsuleTypeConfig, clas
 }
 
 fn emit_catch_and_close(out: &mut String, class_name: &str) {
-    out.push_str("        } catch (Throwable e) {\n");
-    out.push_str(&crate::backends::java::template_env::render(
-        "ffi_throw_exception.jinja",
-        minijinja::context! {
-            exception_class => format!("{}Exception", class_name),
-        },
-    ));
-    out.push_str("        }\n    }\n");
+    super::error_catch::emit_method_catch_chain(out, &format!("{}Exception", class_name));
+    out.push_str("    }\n");
 }
 
 #[cfg(test)]
