@@ -184,11 +184,9 @@ impl Backend for JavaBackend {
         // one call. Drop whatever this binding's feature set does not satisfy — cfg-gated methods
         // included — before anything reads the surface. Mirrors `filtered_jni_api`. ~keep
         crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Java);
-        let java_features: HashSet<&str> = config
-            .features_for_language(Language::Java)
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let expanded_java_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Java));
+        let java_features: HashSet<&str> = expanded_java_features.iter().map(String::as_str).collect();
         let api = &crate::backends::ir_order::with_sorted_items(api).with_cfg_filtered_deep(&java_features);
         // The surface as the FFI backend sees it, kept alongside the Java-filtered one so
         // the trait-bridge loop can prove Java's vtable matches the Rust vtable struct. ~keep
