@@ -353,31 +353,6 @@ fn json_value_to_shell_arg(value: &serde_json::Value) -> String {
     }
 }
 
-/// Resolve a fixture field path to the path it actually occupies in the CLI's
-/// JSON output.
-///
-/// `resolve` only applies alias entries; it leaves a virtual namespace prefix in
-/// place. A fixture field like `"batch.completed_count"` names `completed_count`
-/// at the top level of the payload — `batch` is a fixture-side grouping label,
-/// not a JSON object — so resolving alone yields the jq path `.batch.completed_count`,
-/// which is `null` against every real payload and therefore silently asserts
-/// nothing. `FieldResolver::accessor` strips the prefix but returns a *host-language*
-/// accessor expression, which is not a jq path; this mirrors what the C backend
-/// does with the same building blocks instead. ~keep
-fn result_relative_path<'a>(field_resolver: &'a FieldResolver, field: &'a str) -> &'a str {
-    let resolved = field_resolver.resolve(field);
-    let Some(stripped) = field_resolver.namespace_stripped_path(resolved) else {
-        return resolved;
-    };
-    let stripped_first = stripped.split('.').next().unwrap_or(stripped);
-    let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
-    if field_resolver.is_valid_for_result(stripped_first) {
-        stripped
-    } else {
-        resolved
-    }
-}
-
 /// Convert a fixture field path to a jq expression.
 ///
 /// A path like `metadata.title` becomes `.metadata.title`.
@@ -446,7 +421,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(expected) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let expected_str = json_value_to_shell_string(expected);
                 let safe_field = sanitize_ident(field);
@@ -459,7 +434,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(expected) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let expected_str = json_value_to_shell_string(expected);
                 let safe_field = sanitize_ident(field);
@@ -473,7 +448,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
         }
         "not_empty" | "tree_not_null" => {
             if let Some(field) = &assertion.field {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -486,7 +461,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
                 && let Some(val) = &assertion.value
                 && let Some(min) = val.as_u64()
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local count_{safe_field}");
@@ -501,7 +476,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(val) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let threshold = json_value_to_shell_string(val);
                 let safe_field = sanitize_ident(field);
@@ -517,7 +492,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(val) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let threshold = json_value_to_shell_string(val);
                 let safe_field = sanitize_ident(field);
@@ -533,7 +508,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(serde_json::Value::Array(items)) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -549,7 +524,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
         }
         "is_empty" => {
             if let Some(field) = &assertion.field {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -565,7 +540,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(val) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let threshold = json_value_to_shell_string(val);
                 let safe_field = sanitize_ident(field);
@@ -578,7 +553,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(expected) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let expected_str = json_value_to_shell_string(expected);
                 let safe_field = sanitize_ident(field);
@@ -595,7 +570,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
                 && let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local count_{safe_field}");
@@ -608,7 +583,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
         }
         "is_true" => {
             if let Some(field) = &assertion.field {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -618,7 +593,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
         }
         "is_false" => {
             if let Some(field) = &assertion.field {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -630,7 +605,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(val) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let threshold = json_value_to_shell_string(val);
                 let safe_field = sanitize_ident(field);
@@ -711,7 +686,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
                 && let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -727,7 +702,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
                 && let Some(val) = &assertion.value
                 && let Some(n) = val.as_u64()
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
@@ -742,7 +717,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
             if let Some(field) = &assertion.field
                 && let Some(expected) = &assertion.value
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let expected_str = json_value_to_shell_string(expected);
                 let safe_field = sanitize_ident(field);
@@ -759,7 +734,7 @@ fn render_assertion(out: &mut String, assertion: &Assertion, binary_name: &str, 
                 && let Some(expected) = &assertion.value
                 && let Some(pattern) = expected.as_str()
             {
-                let resolved = result_relative_path(field_resolver, field);
+                let resolved = field_resolver.result_relative_path(field);
                 let jq_path = field_to_jq_path(resolved);
                 let safe_field = sanitize_ident(field);
                 let _ = writeln!(out, "  local val_{safe_field}");
