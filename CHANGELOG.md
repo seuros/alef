@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Fold the Go backend's cgo `-D` feature-macro derivation onto `codegen::cfg::effective_ffi_default_features`. `backends::go::cgo_features` carried a private `ffi_default_features` that duplicated the centralized derivation line for line, so an edit to one silently left the other behind and the emitted cgo preamble could stop describing the cdylib it links. Only the Go-specific half stays local: the cbindgen macro-name mangling and the `-D` formatting.
+- Add `the_emitted_cgo_preamble_defines_exactly_the_effective_ffi_default_features`, which reads the `-D` tokens back out of the Go file the backend actually writes and compares them against `effective_ffi_default_features`, so a re-introduced Go-local derivation fails a test instead of shipping a preamble that disagrees with the library.
+
 ## [0.67.5] - 2026-08-24
 
 ### Added
