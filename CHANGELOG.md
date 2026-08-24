@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Java visitor bridge now derives the context struct layout from the IR.**
+  `VisitorBridge.java` hardcoded a six-field context — `tagName`, `depth`, `indexInParent`,
+  `parentTag`, `isInline` — with fixed offsets, a fixed `MemoryLayout`, and a fixed six-argument
+  `decodeContext` return. Generated Java only compiled when the configured `context_type` happened
+  to be exactly `(enum|i32, ptr, i64, i64, ptr, i32)`; every other shape failed `javac` with
+  `constructor <Context> in record <Context> cannot be applied to given types`. The layout,
+  the field offsets, the Panama value layout per field and the constructor arguments are now
+  derived per context type, so any field count, order, and scalar width compiles.
+
+
+- **The visitor context C ABI is derived once, in `codegen::visitor_context_abi`.**
+  The FFI backend's `context_c_type` / `context_field_specs` decided the `#[repr(C)]` shape and
+  which fields have no C representation; the Java bridge re-stated that shape by hand and the two
+  drifted. Both backends now read the same derivation — field order, scalar widths, `#[repr(C)]`
+  padding, struct size, and the skip decision.
+- **Context fields the C struct cannot carry are decoded as Java's own zero value.**
+  The FFI backend drops fields with no C representation (floats, collections, nested structs, any
+  optional that is not `Option<String>`). The record component still exists, so the Java bridge
+  passes `null` for reference components and the primitive zero for value components rather than
+  fabricating a value or refusing to emit the bridge at all — the options record that holds the
+  callback references the visitor interface whether or not the bridge exists.
+- **A payload-carrying context enum is no longer decoded from its discriminant.** The Java binding
+  emits tagged and untagged unions as sealed interfaces with no `values()`, so an ordinal cannot
+  reconstruct a variant; such a component now takes the absent value instead of emitting Java that
+  does not compile.
+
 - `FieldResolver::accessor` and `FieldResolver::rust_unwrap_binding` each carried a private copy of
   the virtual-namespace strip decision, gated on `result_fields.contains(..)` where the shared
   `result_relative_path` asks the broader `is_valid_for_result(..)`. The copies could place the same
