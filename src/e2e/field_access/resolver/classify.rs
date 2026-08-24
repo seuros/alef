@@ -44,6 +44,79 @@ impl FieldResolver {
         self.swift_first_class_map.is_vec_field_name(leaf)
     }
 
+    /// The prefix of `field` that names a JSON-bridged Swift leaf which the path then steps
+    /// *past*, if any.
+    ///
+    /// ~keep swift-bridge collapses a JSON-bridged field to one `RustString`, so the leaf has
+    /// neither `.count` nor a subscript. Every way of stepping past it — a `length`/`count`/
+    /// `size` suffix, an index, a wildcard, or a further field — is therefore equally
+    /// unspellable, and keying the refusal on the traversal rather than on the trailing
+    /// accessor's spelling is what makes those four cases one case. The guard this replaced
+    /// matched only a trailing count suffix, so an indexed path slipped through and the
+    /// generator emitted a broken assertion on the line directly above the correct
+    /// "JSON-bridges it to RustString" skip comment it wrote for the count suffix on that same
+    /// field — one field, two opposite verdicts, adjacent lines.
+    ///
+    /// Returns `None` when the path ends *at* the bridged leaf: the leaf itself is a readable
+    /// `RustString`, so an `equals`/`contains`/`is_empty` assertion on it is fine.
+    pub fn swift_json_bridged_traversal_prefix(&self, field: &str) -> Option<String> {
+        for candidate in [field, self.resolve(field)] {
+            if let Some(prefix) = self.swift_json_bridged_traversal_prefix_direct(candidate) {
+                return Some(prefix);
+            }
+        }
+        None
+    }
+
+    fn swift_json_bridged_traversal_prefix_direct(&self, field: &str) -> Option<String> {
+        let segments: Vec<&str> = field.split('.').collect();
+        let last = segments.len().saturating_sub(1);
+        let mut prefix: Vec<&str> = Vec::with_capacity(segments.len());
+        for (index, segment) in segments.iter().enumerate() {
+            let bare = segment.split('[').next().unwrap_or(segment);
+            prefix.push(bare);
+            let steps_past = index < last || segment.contains('[');
+            if steps_past && self.swift_first_class_map.is_json_bridged_field_name(bare) {
+                return Some(prefix.join("."));
+            }
+        }
+        None
+    }
+
+    /// Whether the swift-bridge getter for `field`'s LAST segment returns `Option<..>`, so that a
+    /// caller chaining onto the rendered accessor must write `?.` rather than `.`.
+    ///
+    /// ~keep Distinct from [`Self::is_optional`], which answers the broader "is this path
+    /// possibly-absent" from config plus IR and is keyed by bare path. This walks the Swift type
+    /// cursor to the leaf's actual owner and reports what that one getter's declared return type
+    /// is. `None` means the IR did not describe the leaf, in which case callers must keep their
+    /// existing behaviour rather than assume either answer.
+    pub fn swift_leaf_getter_is_optional(&self, field: &str) -> Option<bool> {
+        let map = &self.swift_first_class_map;
+        let resolved = self.resolve(field);
+        let segments: Vec<&str> = resolved.split('.').filter(|s| !s.is_empty()).collect();
+        let last = segments.len().checked_sub(1)?;
+        // ~keep Seeded from `ir_collection_map`'s root, not the Swift map's own: the latter is the
+        // `result_type` override / `result_fields` heuristic, which is `None` whenever a consumer's
+        // config never named the type, while `ir_collection_map.root_type` is
+        // `resolve_declared_result_type`'s answer from the call's own signature and is the anchor
+        // the enum and collection maps already share.
+        let mut current = self
+            .ir_collection_map
+            .root_type
+            .clone()
+            .or_else(|| self.ir_enum_map.root_type.clone())
+            .or_else(|| map.root_type.clone())?;
+        for (index, segment) in segments.iter().enumerate() {
+            let bare = segment.split('[').next().unwrap_or(segment);
+            if index == last && !segment.contains('[') {
+                return map.getter_is_optional(&current, bare);
+            }
+            current = map.advance(Some(&current), bare)?;
+        }
+        None
+    }
+
     /// IR type backing the Swift result variable, if known. Used by
     /// `swift_build_accessor` to seed its per-segment type cursor.
     pub fn swift_root_type(&self) -> Option<&String> {

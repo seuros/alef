@@ -253,6 +253,7 @@ mod accessors;
 mod args;
 mod assertions;
 mod http;
+mod leaf_shape;
 mod not_error_assertion;
 mod project;
 mod snippet;
@@ -271,6 +272,8 @@ mod enum_field_classification_tests;
 mod is_empty_optional_array_tests;
 #[cfg(test)]
 mod is_true_tests;
+#[cfg(test)]
+mod json_bridged_traversal_tests;
 #[cfg(test)]
 mod optional_display_tests;
 #[cfg(test)]
