@@ -20,8 +20,10 @@ pub use cleanup::cleanup_orphaned_files;
 pub use commands::{build, clean, fmt, fmt_post_generate, lint, run_post_build, setup, test, test_apps_run, update};
 pub(crate) use commands::{build_with_environment, canonical_frb_generated};
 pub use extract::extract;
-pub use format::{format_generated, format_generated_reporting, warn_missing_formatters};
-pub(crate) use format::{install_poly_hooks, is_tool_available, poly_format, poly_format_strict};
+pub use format::{format_generated, format_generated_reporting, unstamp_before_formatting, warn_missing_formatters};
+pub(crate) use format::{
+    generated_tree_needs_formatting, install_poly_hooks, is_tool_available, poly_format, poly_format_strict,
+};
 pub use generate::{
     WriteReport, collect_alef_headered_paths, diff_files, finalize_hashes, finalize_hashes_after_tree_format,
     finalize_hashes_sweeping, find_create_once_template_drift, generate, generate_public_api, generate_service_api,

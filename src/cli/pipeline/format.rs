@@ -1,3 +1,8 @@
+mod stamp_gate;
+
+pub(crate) use stamp_gate::generated_tree_needs_formatting;
+pub use stamp_gate::unstamp_before_formatting;
+
 use crate::core::config::{Language, OutputLayout, ResolvedCrateConfig};
 use crate::e2e::format::DeferredFormatting;
 use std::collections::HashSet;
@@ -358,6 +363,11 @@ fn converge_full_regen(base_dir: &Path, pass: &mut FormatPass<'_>) {
 /// `mix format`'s correct output by poly's own (incompatible) Elixir formatting
 /// opinion and never report clean, spinning the convergence loop to its cap on
 /// every full regen that generates Elixir.
+///
+/// Deliberately without `--fix-generated`, unlike [`stamp_gate::generated_tree_needs_formatting`]:
+/// this runs *inside* the format pass, after `unstamp_before_formatting` has already cleared the
+/// stamp from everything this run is allowed to reformat. Adding the flag here would make the loop
+/// spin on stamped files the paired `poly fmt --fix` is not touching, and never report clean. ~keep
 fn poly_fmt_is_clean(base_dir: &Path) -> bool {
     let path_str = base_dir.to_string_lossy().into_owned();
     let mut args: Vec<String> = vec!["fmt".to_owned(), "--check".to_owned(), path_str];
