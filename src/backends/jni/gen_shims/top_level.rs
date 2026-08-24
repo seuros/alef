@@ -70,8 +70,47 @@ fn emit_jni_type_shims(
 /// The feature names the JNI crate's core dependency turns on for the *default* (non-overridden)
 /// target, expanded through the core crate's `[features]` table so a configured aggregate name
 /// satisfies the gates of the members it enables.
+///
+/// `scaffold::languages::jni` emits the default branch's core dep through `render_core_dep` with
+/// no `default-features = false` suffix (unlike each `target_dep_overrides` branch, which gets one
+/// unless the override opts back in), so the core crate's own `default = [...]` list is always
+/// active on this branch and belongs in the enabled set. ~keep
 fn jni_default_features(config: &ResolvedCrateConfig) -> Vec<String> {
-    crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::KotlinAndroid))
+    let mut requested = config.features_for_language(Language::KotlinAndroid).to_vec();
+    requested.extend(core_default_features(config));
+    crate::codegen::cfg::expand_configured_features(config, &requested)
+}
+
+/// The core crate's own `[features] default = [...]` list, unexpanded.
+///
+/// Read through the same closure helper the expansion uses, asked for the closure of *nothing* so
+/// only the second element — the declared defaults — is taken. Empty when the manifest cannot be
+/// located, read, or parsed, which leaves callers exactly where they were.
+fn core_default_features(config: &ResolvedCrateConfig) -> Vec<String> {
+    crate::scaffold::core_feature_closure(config, &[])
+        .1
+        .into_iter()
+        .collect()
+}
+
+/// The feature names one `[[crates.jni.target_dep_overrides]]` branch turns on.
+///
+/// `default_features = true` on the override means `scaffold::languages::jni` omits that branch's
+/// `default-features = false`, so the core crate's declared defaults are active there in addition
+/// to the override's own `features` list. Matching only the literal `features` list understates
+/// what the branch compiles and drops the shim for every gate the defaults satisfy — the same
+/// silent underexposure [`expand_configured_features`] exists to close, one level up. ~keep
+///
+/// [`expand_configured_features`]: crate::codegen::cfg::expand_configured_features
+fn jni_override_features(
+    config: &ResolvedCrateConfig,
+    target: &crate::core::config::FfiTargetDepOverride,
+) -> Vec<String> {
+    let mut requested = target.features.clone();
+    if target.default_features {
+        requested.extend(core_default_features(config));
+    }
+    crate::codegen::cfg::expand_configured_features(config, &requested)
 }
 
 fn filtered_jni_api(api: &ApiSurface, config: &ResolvedCrateConfig) -> ApiSurface {
@@ -374,12 +413,7 @@ impl JniTargetGates {
             default_features: jni_default_features(config),
             overrides: jni_target_overrides(config)
                 .iter()
-                .map(|target| {
-                    (
-                        target.cfg.clone(),
-                        crate::codegen::cfg::expand_configured_features(config, &target.features),
-                    )
-                })
+                .map(|target| (target.cfg.clone(), jni_override_features(config, target)))
                 .collect(),
         }
     }

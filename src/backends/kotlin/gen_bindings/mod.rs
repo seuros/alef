@@ -651,11 +651,10 @@ impl Backend for KotlinBackend {
         // cfg-gated methods included. Filtering here rather than per-path keeps the four targets
         // (KMP, JNI, JVM, Native) from drifting apart. ~keep
         crate::codegen::cfg::warn_on_ffi_feature_drift(api, config, Language::Kotlin);
-        let kotlin_features: std::collections::HashSet<&str> = config
-            .features_for_language(Language::Kotlin)
-            .iter()
-            .map(String::as_str)
-            .collect();
+        let expanded_kotlin_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Kotlin));
+        let kotlin_features: std::collections::HashSet<&str> =
+            expanded_kotlin_features.iter().map(String::as_str).collect();
         let cfg_filtered_api = api.with_cfg_filtered_deep(&kotlin_features);
         let api = &cfg_filtered_api;
 

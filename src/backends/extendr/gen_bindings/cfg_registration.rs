@@ -44,7 +44,11 @@ pub(super) fn effective_r_cfg_features(api: &ApiSurface, config: &ResolvedCrateC
     let configured = config.features_for_language(Language::R);
     let default_features = config.r.as_ref().and_then(|r| r.default_features).unwrap_or(true);
     if !configured.is_empty() && !default_features {
-        return configured.to_vec();
+        // The R scaffold writes this list verbatim onto the core dep line, so cargo enables an
+        // aggregate's members even though the aggregate name alone matches no `feature = "X"`
+        // leaf. Resolving it through the core crate's `[features]` table keeps the resolved-gate
+        // surface in step with what the generated Cargo.toml actually compiles. ~keep
+        return crate::codegen::cfg::expand_configured_features(config, configured);
     }
     crate::codegen::cfg::collect_cfg_features(api).into_iter().collect()
 }

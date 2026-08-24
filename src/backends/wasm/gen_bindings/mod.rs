@@ -14,7 +14,7 @@ mod cargo;
 
 use crate::backends::wasm::type_map::WasmMapper;
 use crate::codegen::builder::RustFileBuilder;
-use crate::codegen::{generators, shared};
+use crate::codegen::{cfg::expand_configured_features, generators, shared};
 use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep};
 use crate::core::config::{Language, ResolvedCrateConfig, resolve_output_layout};
 use crate::core::ir::{ApiSurface, ReceiverKind, TypeRef};
@@ -170,7 +170,7 @@ pub(crate) fn function_is_exported(
     if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(function_name, &config.trait_bridges) {
         return false;
     }
-    let enabled_features = config.features_for_language(Language::Wasm);
+    let enabled_features = &expand_configured_features(config, config.features_for_language(Language::Wasm));
     let core_import = config.core_import_for_language(Language::Wasm);
     let source_remaps = config
         .wasm
@@ -361,7 +361,7 @@ impl Backend for WasmBackend {
         let env_shims = wasm_config.map(|c| c.env_shims.clone()).unwrap_or_default();
         let prefix = config.wasm_type_prefix();
 
-        let enabled_features = config.features_for_language(Language::Wasm).to_vec();
+        let enabled_features = expand_configured_features(config, config.features_for_language(Language::Wasm));
         for typ in &api.types {
             if is_gated_behind_disabled_feature(&typ.cfg, &enabled_features) {
                 exclude_types.push(typ.name.clone());

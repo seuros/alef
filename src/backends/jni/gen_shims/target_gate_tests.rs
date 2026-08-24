@@ -22,6 +22,24 @@ mod target_gate_tests {
         config
     }
 
+    /// Like [`config_with_core_aggregate`], but the core crate's `[features] default` list is
+    /// caller-supplied so a test can turn a gate on through the crate's own defaults rather than
+    /// through any configured name.
+    fn config_with_core_defaults(directory: &std::path::Path, defaults: &str, alef_toml: &str) -> ResolvedCrateConfig {
+        let core_dir = directory.join("crates").join("demo");
+        std::fs::create_dir_all(&core_dir).expect("create core crate dir");
+        std::fs::write(
+            core_dir.join("Cargo.toml"),
+            format!("[package]\nname = \"demo\"\n\n[features]\ndefault = [{defaults}]\ndecoder = []\n"),
+        )
+        .expect("write core Cargo.toml");
+
+        let raw: crate::core::config::NewAlefConfig = toml::from_str(alef_toml).expect("fixture config parses");
+        let mut config = raw.resolve().expect("fixture config resolves").remove(0);
+        config.workspace_root = Some(directory.to_path_buf());
+        config
+    }
+
     fn gated_function() -> crate::core::ir::FunctionDef {
         crate::core::ir::FunctionDef {
             name: "decoder_details".into(),
@@ -128,6 +146,124 @@ features = ["mobile-target"]
             content.contains("#[cfg(not(any(target_os = \"android\")))]"),
             "`preview` is not a member of `mobile-target`, so its shim must stay gated off the \
              override target: {content}"
+        );
+    }
+
+    /// The default (non-overridden) branch's core dep is emitted by `scaffold::languages::jni`
+    /// through `render_core_dep` with no `default-features = false`, so the core crate's own
+    /// `default = [...]` list is always active there. Deriving the branch's enabled set from the
+    /// configured `features` list alone understates it, and a crate that turns a feature on by
+    /// default lost every shim behind that gate on every target.
+    #[test]
+    fn the_default_branch_counts_the_core_crates_own_default_features() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config = config_with_core_defaults(
+            directory.path(),
+            "\"decoder\"",
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["crates/demo/src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+features = []
+"#,
+        );
+
+        let content = emit_lib_rs(&api_with(vec![gated_function()]), &config);
+
+        assert!(
+            content.contains("core_crate::decoder::decoder_details()"),
+            "the core crate enables `decoder` by default and this branch never passes \
+             `default-features = false`, so the shim must be emitted: {content}"
+        );
+    }
+
+    /// `FfiTargetDepOverride::default_features = true` makes the scaffold omit that branch's
+    /// `default-features = false`, so the core crate's declared defaults are active on that
+    /// target in addition to the override's own `features` list. Reading only the literal
+    /// `features` list left the branch looking empty, so the shim was emitted behind
+    /// `#[cfg(not(any(<target>)))]` — present everywhere except the one target the override
+    /// exists to describe.
+    #[test]
+    fn an_override_that_keeps_default_features_counts_the_core_crates_defaults() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config = config_with_core_defaults(
+            directory.path(),
+            "\"decoder\"",
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["crates/demo/src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+features = []
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "android"'
+features = []
+default_features = true
+"#,
+        );
+
+        let content = emit_lib_rs(&api_with(vec![gated_function()]), &config);
+
+        assert!(
+            content.contains("core_crate::decoder::decoder_details()"),
+            "the shim must be emitted at all: {content}"
+        );
+        assert!(
+            !content.contains("#[cfg(not(any(target_os = \"android\")))]"),
+            "the override keeps the core crate's defaults, which include `decoder`, so the shim \
+             must NOT be excluded from the override target: {content}"
+        );
+    }
+
+    /// The union must stay conditional on the flag: an override that opts out of the core dep's
+    /// default features does not get them, and a gate only those defaults satisfy stays off that
+    /// target.
+    #[test]
+    fn an_override_without_default_features_does_not_get_the_core_crates_defaults() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let config = config_with_core_defaults(
+            directory.path(),
+            "\"decoder\"",
+            r#"
+[workspace]
+languages = ["kotlin_android", "jni"]
+
+[[crates]]
+name = "demo"
+sources = ["crates/demo/src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.sample_crate"
+namespace = "dev.sample_crate"
+features = []
+
+[[crates.jni.target_dep_overrides]]
+cfg = 'target_os = "android"'
+features = []
+default_features = false
+"#,
+        );
+
+        let content = emit_lib_rs(&api_with(vec![gated_function()]), &config);
+
+        assert!(
+            content.contains("#[cfg(not(any(target_os = \"android\")))]"),
+            "this override passes `default-features = false` and names no features, so nothing \
+             satisfies `decoder` on that target and the shim must stay gated off it: {content}"
         );
     }
 }

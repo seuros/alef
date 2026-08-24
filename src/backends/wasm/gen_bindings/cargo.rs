@@ -81,7 +81,16 @@ pub(super) fn gen_cargo_toml(api: &ApiSurface, config: &ResolvedCrateConfig) -> 
     let features_table = if declared_features.is_empty() {
         String::new()
     } else {
-        let enabled_binding_features: Vec<&str> = features
+        // Matched against the *expanded* configured list, not the literal one. A configured
+        // aggregate (`wasm-target = ["decoder", ...]` in the core crate) is not itself one of
+        // the cfg-referenced names in `declared_features`, so a literal intersection yields
+        // `default = []` — every passthrough row declared and none enabled, which compiles the
+        // gated items out of the wasm crate even though the core dep line turns their core-side
+        // features on. The codegen filter in `mod.rs` expands the same list, so both derivations
+        // must read from the expansion or the manifest and the emitted source disagree. ~keep
+        let expanded_features =
+            crate::codegen::cfg::expand_configured_features(config, config.features_for_language(Language::Wasm));
+        let enabled_binding_features: Vec<&str> = expanded_features
             .iter()
             .map(String::as_str)
             .filter(|name| declared_features.contains(*name))
