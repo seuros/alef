@@ -9,6 +9,7 @@ use super::mock_harness_guard::reject_mock_harness_scaffolding;
 use super::*;
 
 mod coverage;
+mod sample_urls;
 
 #[test]
 fn is_snippet_coverage_manifest_path_matches_only_the_exact_ledger_name() {

@@ -5,6 +5,7 @@ mod defaults;
 mod harness;
 mod package;
 mod root;
+pub mod sample_url;
 mod selection;
 mod snippets;
 
@@ -19,5 +20,8 @@ pub use call::{ArgMapping, CallConfig, CallOverride, StreamingConfig, StreamingR
 pub use harness::{HarnessConfig, HarnessOverride, RouteCallForm};
 pub use package::{DependencyMode, HomebrewCliTest, PackageRef, RegistryConfig};
 pub use root::E2eConfig;
+pub use sample_url::{
+    DEFAULT_DOCS_SAMPLE_BASE_URL, DocsSampleBaseUrl, InvalidSampleBaseUrl, SAMPLE_BASE_URL_CONFIG_KEY,
+};
 pub use selection::SelectWhen;
 pub use snippets::{SnippetCapabilities, SnippetConfig};

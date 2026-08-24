@@ -12,14 +12,18 @@
 //! add an explicit `"url": "$mock_url"` just to keep its snippet publishable does not
 //! scale. This module injects an illustrative literal for any `mock_url` /
 //! `mock_url_list` argument the fixture leaves undeclared, so the zero-edit case is the
-//! default rather than the exception.
+//! default rather than the exception. Which address that is belongs to the project: it
+//! comes from `[crates.e2e.snippets].sample_base_url` (see
+//! [`crate::core::config::e2e::DocsSampleBaseUrl`]), so a project whose sample inputs are
+//! really published somewhere gets snippets a reader can run, rather than a sample domain
+//! of alef's choosing.
 //!
 //! A declared value gets the same treatment when it is mock-server *shorthand* rather
 //! than a meaningful address: a bare path like `"/seed1"` in a `batch_urls` list has no
 //! scheme or host of its own -- every backend's shared arg-binding code (see
 //! `e2e/codegen/*/args.rs`, `*/setup.rs`) resolves it against *some* server base, the
 //! live mock server for the executable suite and, once this module rewrites it, the
-//! same [`DEFAULT_DOCS_MOCK_URL`] literal for docs. A value that already carries a
+//! configured sample base URL for docs. A value that already carries a
 //! scheme (`"http://127.0.0.1:9/"`, `"gopher://invalid.example.com/"`) is left alone:
 //! the fixture author chose that specific address on purpose -- most often the literal
 //! under test in an SSRF or validation fixture -- and rewriting it would silently
@@ -31,13 +35,9 @@
 //! mock server, and doing the same on the executable fixture would point that suite at
 //! an address with no server behind it.
 
-use crate::core::config::e2e::CallConfig;
+use crate::core::config::e2e::sample_url::has_url_scheme;
+use crate::core::config::e2e::{CallConfig, DocsSampleBaseUrl};
 use crate::e2e::fixture::Fixture;
-
-/// The address alef injects for a `mock_url` / `mock_url_list` argument that has no
-/// declared value, so a documentation snippet reads like real client code rather than
-/// harness wiring.
-const DEFAULT_DOCS_MOCK_URL: &str = "https://example.com";
 
 /// Where a `mock_url` / `mock_url_list` argument's declared value stands relative to
 /// this module's zero-edit default.
@@ -48,32 +48,34 @@ enum DeclaredValue {
     Undeclared,
     /// `input` declares a value with no `scheme://`, meaning every backend already
     /// resolves it against a server base rather than treating it as self-contained.
-    /// Carries the docs-ready rewrite (each bare element prefixed with
-    /// [`DEFAULT_DOCS_MOCK_URL`]) so the caller only has to write it back.
+    /// Carries the docs-ready rewrite (each bare element resolved against the configured
+    /// sample base URL) so the caller only has to write it back.
     HarnessRelative(serde_json::Value),
     /// `input` declares a value that already names a scheme: a deliberate literal the
     /// fixture is testing, left untouched.
     AlreadyMeaningful,
 }
 
-/// Whether `value` already names an explicit scheme (`"http://..."`, `"gopher://..."`,
-/// ...) rather than a bare path meant to be resolved against a server base.
-fn has_url_scheme(value: &str) -> bool {
-    value.contains("://")
-}
-
-fn scalar_declared_value(input: &serde_json::Value, field: &str) -> DeclaredValue {
+fn scalar_declared_value(
+    input: &serde_json::Value,
+    field: &str,
+    sample_base_url: DocsSampleBaseUrl<'_>,
+) -> DeclaredValue {
     let Some(value) = crate::e2e::codegen::resolve_field(input, field).as_str() else {
         return DeclaredValue::Undeclared;
     };
     if has_url_scheme(value) {
         DeclaredValue::AlreadyMeaningful
     } else {
-        DeclaredValue::HarnessRelative(serde_json::Value::String(format!("{DEFAULT_DOCS_MOCK_URL}{value}")))
+        DeclaredValue::HarnessRelative(serde_json::Value::String(sample_base_url.join(value)))
     }
 }
 
-fn list_declared_value(input: &serde_json::Value, field: &str) -> DeclaredValue {
+fn list_declared_value(
+    input: &serde_json::Value,
+    field: &str,
+    sample_base_url: DocsSampleBaseUrl<'_>,
+) -> DeclaredValue {
     let Some(elements) = crate::e2e::codegen::resolve_urls_field(input, field).as_array() else {
         return DeclaredValue::Undeclared;
     };
@@ -102,14 +104,14 @@ fn list_declared_value(input: &serde_json::Value, field: &str) -> DeclaredValue 
             if has_url_scheme(url) {
                 serde_json::Value::String(url.to_string())
             } else {
-                serde_json::Value::String(format!("{DEFAULT_DOCS_MOCK_URL}{url}"))
+                serde_json::Value::String(sample_base_url.join(url))
             }
         })
         .collect();
     DeclaredValue::HarnessRelative(serde_json::Value::Array(rewritten))
 }
 
-/// Inject [`DEFAULT_DOCS_MOCK_URL`] for every `mock_url` / `mock_url_list` argument
+/// Inject `sample_base_url` for every `mock_url` / `mock_url_list` argument
 /// `call` declares that this fixture's `input` leaves undeclared or declares only as
 /// mock-server shorthand (a bare path with no scheme), then mark the fixture to bind
 /// the literal instead of the mock server. A fixture that declares a value with an
@@ -118,7 +120,11 @@ fn list_declared_value(input: &serde_json::Value, field: &str) -> DeclaredValue 
 /// `preserve_input_urls`, the literal is silently discarded in favor of the mock server
 /// address in both the executable suite and this snippet, so that case is logged loudly
 /// rather than passed over in silence.
-pub(super) fn with_default_mock_url_literals(mut fixture: Fixture, call: &CallConfig) -> Fixture {
+pub(super) fn with_default_mock_url_literals(
+    mut fixture: Fixture,
+    call: &CallConfig,
+    sample_base_url: DocsSampleBaseUrl<'_>,
+) -> Fixture {
     let candidates: Vec<(String, bool)> = fixture
         .resolved_args(call)
         .iter()
@@ -132,16 +138,16 @@ pub(super) fn with_default_mock_url_literals(mut fixture: Fixture, call: &CallCo
     let mut injected_any = false;
     for (field, is_list) in candidates {
         let declared = if is_list {
-            list_declared_value(&fixture.input, &field)
+            list_declared_value(&fixture.input, &field, sample_base_url)
         } else {
-            scalar_declared_value(&fixture.input, &field)
+            scalar_declared_value(&fixture.input, &field, sample_base_url)
         };
         let value = match declared {
             DeclaredValue::Undeclared => {
                 if is_list {
-                    serde_json::json!([DEFAULT_DOCS_MOCK_URL])
+                    serde_json::json!([sample_base_url.base()])
                 } else {
-                    serde_json::Value::String(DEFAULT_DOCS_MOCK_URL.to_string())
+                    serde_json::Value::String(sample_base_url.base().to_string())
                 }
             }
             DeclaredValue::HarnessRelative(rewritten) => rewritten,
@@ -233,6 +239,16 @@ mod tests {
         }
     }
 
+    /// The placeholder base every test that is not specifically about configuration uses,
+    /// so those tests keep asserting the shape of the rewrite rather than the address.
+    fn placeholder_base() -> DocsSampleBaseUrl<'static> {
+        DocsSampleBaseUrl::resolve(None).expect("an unconfigured base always resolves")
+    }
+
+    fn apply_defaults(fixture: Fixture, call: &CallConfig) -> Fixture {
+        with_default_mock_url_literals(fixture, call, placeholder_base())
+    }
+
     fn call_with_args(args: Vec<ArgMapping>) -> CallConfig {
         CallConfig {
             args,
@@ -248,11 +264,11 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_arg("url")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("url").and_then(|v| v.as_str()),
-            Some(DEFAULT_DOCS_MOCK_URL)
+            Some(placeholder_base().base())
         );
         assert!(
             result.preserve_input_urls,
@@ -268,7 +284,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_arg("url")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("url").and_then(|v| v.as_str()),
@@ -292,7 +308,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_arg("url")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("url").and_then(|v| v.as_str()),
@@ -309,7 +325,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_list_arg("urls")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("urls").and_then(|v| v.as_array()),
@@ -332,7 +348,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_list_arg("urls")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("urls").and_then(|v| v.as_array()),
@@ -352,7 +368,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_list_arg("urls")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("urls").and_then(|v| v.as_array()),
@@ -379,7 +395,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_list_arg("urls")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(result.input.get("urls").and_then(|v| v.as_array()), Some(&vec![]));
         assert!(result.preserve_input_urls);
@@ -402,7 +418,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_arg("url")]);
 
-        with_default_mock_url_literals(fixture, &call);
+        apply_defaults(fixture, &call);
 
         assert!(
             logs_contain("without setting preserve_input_urls"),
@@ -421,7 +437,7 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_arg("url")]);
 
-        with_default_mock_url_literals(fixture, &call);
+        apply_defaults(fixture, &call);
 
         assert!(
             !logs_contain("without setting preserve_input_urls"),
@@ -437,13 +453,77 @@ mod tests {
         };
         let call = call_with_args(vec![mock_url_list_arg("urls")]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert_eq!(
             result.input.get("urls").and_then(|v| v.as_array()),
-            Some(&vec![serde_json::Value::String(DEFAULT_DOCS_MOCK_URL.to_string())])
+            Some(&vec![serde_json::Value::String(placeholder_base().base().to_string())])
         );
         assert!(result.preserve_input_urls);
+    }
+
+    /// The defect this module's configurability exists for: with a project's own sample
+    /// host configured, an undeclared `mock_url` argument must bind that host, not the
+    /// reserved documentation domain a reader cannot fetch anything from.
+    #[test]
+    fn a_configured_sample_base_url_replaces_the_placeholder_for_an_undeclared_argument() {
+        let fixture = Fixture {
+            input: serde_json::json!({}),
+            ..Fixture::default()
+        };
+        let call = call_with_args(vec![mock_url_arg("url")]);
+        let base = DocsSampleBaseUrl::resolve(Some("https://samples.example.org")).expect("valid base");
+
+        let result = with_default_mock_url_literals(fixture, &call, base);
+
+        assert_eq!(
+            result.input.get("url").and_then(|v| v.as_str()),
+            Some("https://samples.example.org")
+        );
+        assert!(result.preserve_input_urls);
+    }
+
+    #[test]
+    fn a_configured_sample_base_url_is_the_base_declared_relative_paths_resolve_against() {
+        let fixture = Fixture {
+            input: serde_json::json!({"urls": ["/pdf/report.pdf", "/pdf/memo.pdf"]}),
+            ..Fixture::default()
+        };
+        let call = call_with_args(vec![mock_url_list_arg("urls")]);
+        let base = DocsSampleBaseUrl::resolve(Some("https://samples.example.org/")).expect("valid base");
+
+        let result = with_default_mock_url_literals(fixture, &call, base);
+
+        assert_eq!(
+            result.input.get("urls").and_then(|v| v.as_array()),
+            Some(&vec![
+                serde_json::Value::String("https://samples.example.org/pdf/report.pdf".to_string()),
+                serde_json::Value::String("https://samples.example.org/pdf/memo.pdf".to_string()),
+            ])
+        );
+        assert!(result.preserve_input_urls);
+    }
+
+    /// A fixture that declares its own absolute sample URL keeps it: the configured base is
+    /// a default for fixtures that declare nothing, never an override of an address a
+    /// fixture author chose.
+    #[test]
+    fn a_declared_absolute_url_outranks_the_configured_sample_base_url() {
+        let fixture = Fixture {
+            preserve_input_urls: true,
+            input: serde_json::json!({"url": "https://docs.example.net/report.pdf"}),
+            ..Fixture::default()
+        };
+        let call = call_with_args(vec![mock_url_arg("url")]);
+        let base = DocsSampleBaseUrl::resolve(Some("https://samples.example.org")).expect("valid base");
+
+        let result = with_default_mock_url_literals(fixture, &call, base);
+
+        assert_eq!(
+            result.input.get("url").and_then(|v| v.as_str()),
+            Some("https://docs.example.net/report.pdf"),
+            "an absolute declared URL is the fixture author's choice and stays verbatim"
+        );
     }
 
     #[test]
@@ -464,7 +544,7 @@ mod tests {
             trait_name: None,
         }]);
 
-        let result = with_default_mock_url_literals(fixture, &call);
+        let result = apply_defaults(fixture, &call);
 
         assert!(!result.preserve_input_urls);
         assert!(result.input.get("url").is_none());
@@ -520,7 +600,7 @@ args = [{ name = "urls", field = "batch_urls", type = "mock_url_list" }]
             &docs_fixture.tags,
             &docs_fixture.input,
         );
-        let docs_fixture = with_default_mock_url_literals(docs_fixture, call);
+        let docs_fixture = with_default_mock_url_literals(docs_fixture, call, placeholder_base());
 
         assert_eq!(
             docs_fixture.input.get("batch_urls").and_then(|v| v.as_array()),

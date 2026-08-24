@@ -1,3 +1,4 @@
+use super::sample_url::{DocsSampleBaseUrl, InvalidSampleBaseUrl};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,9 +11,24 @@ pub struct SnippetConfig {
     pub languages: Vec<String>,
     #[serde(default)]
     pub capabilities: SnippetCapabilities,
+    /// Public base URL the generated *documentation* snippets bind for a fixture's
+    /// `mock_url` / `mock_url_list` arguments, e.g. `"https://samples.example.org"`.
+    ///
+    /// Documentation-only: the executable e2e suite keeps binding the per-fixture mock
+    /// server, so configuring this can never send a generated test to the network. Unset
+    /// falls back to `https://example.com`, the reserved documentation domain, and the
+    /// snippet run reports every fixture whose published snippet carries it.
+    #[serde(default)]
+    pub sample_base_url: Option<String>,
 }
 
 impl SnippetConfig {
+    /// Resolve [`Self::sample_base_url`] into the address documentation snippets bind,
+    /// falling back to the reserved-domain placeholder when the project configures none.
+    pub fn docs_sample_base_url(&self) -> Result<DocsSampleBaseUrl<'_>, InvalidSampleBaseUrl> {
+        DocsSampleBaseUrl::resolve(self.sample_base_url.as_deref())
+    }
+
     pub fn languages_or<'a>(&'a self, fallback: &'a [String]) -> &'a [String] {
         if self.languages.is_empty() {
             fallback
@@ -67,6 +83,32 @@ mod tests {
     ///
     /// Without `#[serde(deny_unknown_fields)]` on `SnippetConfig` this test fails:
     /// `toml::from_str` returns `Ok(..)` and the misplaced keys vanish silently.
+    #[test]
+    fn an_unconfigured_snippet_config_reports_a_placeholder_sample_base_url() {
+        let config = SnippetConfig::default();
+
+        let resolved = config.docs_sample_base_url().expect("no configuration resolves");
+
+        assert_eq!(resolved.base(), "https://example.com");
+        assert!(resolved.is_placeholder());
+    }
+
+    #[test]
+    fn a_configured_sample_base_url_reaches_the_docs_path() {
+        let config: SnippetConfig = toml::from_str(
+            r#"
+            output = "docs/snippets-generated"
+            sample_base_url = "https://samples.example.org/"
+        "#,
+        )
+        .expect("sample_base_url is an accepted key");
+
+        let resolved = config.docs_sample_base_url().expect("a valid base resolves");
+
+        assert_eq!(resolved.base(), "https://samples.example.org");
+        assert!(!resolved.is_placeholder());
+    }
+
     #[test]
     fn misplaced_e2e_fields_under_snippets_table_is_rejected_not_silently_dropped() {
         // Carry exactly one misplaced key. toml reports only the first unknown
