@@ -15,15 +15,24 @@
 //! before committing -- from ever bringing it into line, since poly cannot tell "stamped and
 //! canonical" apart from "stamped and never formatted".
 //!
-//! `alef all` (`all_commands.rs`) already runs post-build before its whole-tree format pass and
-//! does not have this defect; only `alef generate` (`Commands::Generate` in `core_commands.rs`)
-//! did. This module exercises `Commands::Generate` directly (not `alef all`) so a regression in
-//! the specific arm that was fixed is what fails, not a passing sibling command.
+//! An earlier revision of this comment claimed `alef all` "already runs post-build before its
+//! whole-tree format pass and does not have this defect". The first half was true and the second
+//! half was false, and asserting it in prose is how it went unchecked: `alef all` ran ten
+//! `finalize_hashes(&current_gen_paths, ..)` checkpoints -- one per write phase, bindings through
+//! docs -- all of them BEFORE its single format pass, so poly's skip locked out every file the
+//! command emitted, not just post-build-owned ones. Measured on a neutral eight-language fixture:
+//! 21 of the 93 files `alef all` emitted were files `poly fmt` would have rewritten.
+//!
+//! The `alef all` coverage below is therefore an executable version of that claim rather than a
+//! restatement of it. It targets the **scaffold** phase specifically (`packages/python/
+//! pyproject.toml`), because scaffold output is written by a different writer
+//! (`write_scaffold_files_report`, with its create-once branch) than the binding phases and was
+//! the phase the prose claim was most wrong about.
 
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
 use crate::test_support::SkipCommandsGuard;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const FIXTURE_SOURCE: &str = "pub fn greet(name: String) -> String {\n    name\n}\n";
 const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"test-lib\"\nversion = \"0.1.0\"\nedition = \"2024\"\n";
@@ -240,5 +249,207 @@ fn generate_reaches_a_fixed_point_on_post_build_output_across_repeat_runs() {
         second_pass, after_standalone_fmt,
         "a standalone `poly fmt --fix .` run after `alef generate` must not change a byte of an \
          already-canonical, correctly-stamped post-build-owned file"
+    );
+}
+
+/// The `alef all` scaffold-phase fixture: one language whose scaffold output poly has a genuine
+/// opinion about. Python is chosen because `packages/python/pyproject.toml` is scaffold-phase
+/// output (not a binding), and `.toml` is handled by poly's bundled taplo engine, which is
+/// available wherever poly itself is -- no extra host toolchain has to be installed for the
+/// assertions below to mean anything.
+const ALL_FIXTURE_ALEF_TOML: &str = r#"
+[workspace]
+languages = ["python"]
+
+[workspace.scaffold]
+repository = "https://example.invalid/sample/sample-lib"
+license = "MIT"
+authors = ["Sample Author <sample@example.invalid>"]
+description = "Sample fixture library"
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+version_from = "Cargo.toml"
+"#;
+
+const ALL_FIXTURE_CARGO_TOML: &str = "[package]\nname = \"sample-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+
+/// The scaffold-phase path both `alef all` tests below are written against.
+const SCAFFOLD_TARGET: &str = "packages/python/pyproject.toml";
+
+/// The probe file name handed to [`poly_would_reformat`] for [`SCAFFOLD_TARGET`]: poly routes by
+/// extension, so the probe must keep the target's own name to reach the same engine.
+const SCAFFOLD_TARGET_FILE_NAME: &str = "pyproject.toml";
+
+fn write_all_fixture_workspace(root: &Path) {
+    std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
+    std::fs::write(root.join("src/lib.rs"), FIXTURE_SOURCE).expect("write fixture source");
+    std::fs::write(root.join("Cargo.toml"), ALL_FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
+    std::fs::write(root.join("alef.toml"), ALL_FIXTURE_ALEF_TOML).expect("write fixture alef.toml");
+    std::fs::write(root.join("Cargo.lock"), "").expect("write fixture Cargo.lock");
+}
+
+/// Run `alef all` against `root`. `ALEF_SKIP_COMMANDS=cargo` for the same reason as
+/// [`run_generate`]: no real toolchain build is available or wanted here.
+fn run_all(root: &Path) {
+    let _skip_guard = SkipCommandsGuard::set("cargo");
+    let _cwd = crate::test_support::CwdGuard::enter(root);
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+    crate::bin_cli::all_commands::handle(
+        Commands::All {
+            clean: false,
+            clobber_create_once_seeds: false,
+            skip_frb: true,
+            strict: false,
+            skip_snippet_validation: true,
+        },
+        &context,
+    )
+    .expect("alef all must succeed against the fixture");
+}
+
+/// Whether `poly` would rewrite `content` if it were saved under `file_name`.
+///
+/// `--fix-generated` is passed deliberately. Without it, poly refuses to inspect a file carrying
+/// an `alef:hash:` line at all and reports the tree clean -- measured against the `poly` binary
+/// this suite runs against: `skipped <path>: hash-stamped generated file (pass --fix-generated to
+/// format)`, exit 0, under `--check` just as much as under `--fix`. A probe that inherited that
+/// skip would answer "already canonical" for every stamped input regardless of its body, i.e. it
+/// would be a check that cannot fail -- which is the exact defect shape this module exists for.
+/// With the flag, poly inspects the bytes either way and the answer is about the content. ~keep
+fn poly_would_reformat(file_name: &str, content: &str) -> bool {
+    let probe = tempfile::tempdir().expect("probe tempdir");
+    let path = probe.path().join(file_name);
+    std::fs::write(&path, content).expect("write probe file");
+    let output = std::process::Command::new("poly")
+        .args(["fmt", "--check", "--fix-generated", "--no-cache"])
+        .arg(&path)
+        .output()
+        .expect("run poly fmt --check on the probe file");
+    !output.status.success()
+}
+
+/// The scaffold generator's own in-memory bytes for `relative_path`, before any writer or
+/// formatter has touched them.
+///
+/// This is the anti-vacuity control both tests below open with: if the generator's raw output for
+/// the target path were already poly-canonical, "the shipped file is canonical" would hold no
+/// matter when the stamp was applied, and the regression test would pass against the very
+/// ordering it exists to reject. ~keep
+fn raw_scaffold_content(root: &Path, relative_path: &str) -> String {
+    let _cwd = crate::test_support::CwdGuard::enter(root);
+    let config_path = root.join("alef.toml");
+    let (_, resolved) = crate::bin_cli::helpers::load_config(&config_path).expect("load fixture alef.toml");
+    let config = resolved.first().expect("fixture declares exactly one crate");
+    let languages = crate::bin_cli::helpers::resolve_languages(config, None).expect("resolve fixture languages");
+    let api = crate::cli::pipeline::extract(config, &config_path, true).expect("extract fixture API surface");
+    let files = crate::cli::pipeline::scaffold(&api, config, &languages, &config_path).expect("scaffold fixture");
+    let content = files
+        .iter()
+        .find(|file| file.path == Path::new(relative_path))
+        .unwrap_or_else(|| panic!("the scaffold stage must emit {relative_path}"))
+        .content
+        .clone();
+    crate::cli::pipeline::ensure_generated_header(&PathBuf::from(relative_path), &content)
+}
+
+/// The regression test for `alef all`'s scaffold phase: a scaffold-phase file the formatter would
+/// change must ship canonical, in the same run that stamps it.
+///
+/// Before the fix, `alef all` stamped `current_gen_paths` immediately after the scaffold writer
+/// ran -- roughly 480 lines ahead of its only `format_generated_reporting` call -- and poly's
+/// hash-stamped-generated-file skip turned that format pass into a no-op for the file, which
+/// shipped with whatever the scaffold template emitted. ~keep
+#[test]
+fn all_formats_scaffold_output_before_stamping_it() {
+    if !crate::cli::pipeline::is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_all_fixture_workspace(&root);
+
+    let raw = raw_scaffold_content(&root, SCAFFOLD_TARGET);
+    assert!(
+        poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &raw),
+        "control failed: the scaffold generator now emits poly-canonical bytes for \
+         {SCAFFOLD_TARGET}, so this test can no longer tell a formatted pipeline from an \
+         unformatted one. Point it at a scaffold path poly still has an opinion about. Raw \
+         content was:\n{raw}"
+    );
+
+    run_all(&root);
+
+    let shipped = std::fs::read_to_string(root.join(SCAFFOLD_TARGET))
+        .unwrap_or_else(|error| panic!("alef all must emit {SCAFFOLD_TARGET}: {error}"));
+    assert!(
+        shipped.contains("alef:hash:"),
+        "sanity: the shipped scaffold file must actually be stamped, or the claim below is about \
+         a file alef does not own: {shipped}"
+    );
+    assert!(
+        !poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &shipped),
+        "`alef all` shipped a scaffold-phase file poly would still rewrite -- it was stamped \
+         before the format pass, so poly skipped it. Content:\n{shipped}"
+    );
+}
+
+/// The heal half, and the half a pure reordering does not deliver.
+///
+/// A repository generated by a pre-fix alef holds files that are stamped AND non-canonical. Their
+/// generated bodies have not changed, so `write_files_report` (which compares hash-stripped
+/// bodies) does not rewrite them, so they keep the stamp, so poly keeps skipping them -- moving
+/// the stamp later in the run changes nothing for them. Measured on a neutral eight-language
+/// fixture: re-running a reordered-but-not-unstamping alef over a pre-fix tree canonicalised 6 of
+/// the 21 affected files and left the other 15 exactly as it found them.
+///
+/// The pre-fix state is reconstructed here rather than produced by shelling out to an older
+/// binary: the target is written back to the generator's own raw bytes under a well-formed
+/// `alef:hash:` line, which is byte-for-byte what a pre-fix run left behind. ~keep
+#[test]
+fn all_reformats_a_scaffold_file_left_stamped_and_uncanonical_by_an_earlier_run() {
+    if !crate::cli::pipeline::is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_all_fixture_workspace(&root);
+
+    run_all(&root);
+    let target = root.join(SCAFFOLD_TARGET);
+    let canonical = std::fs::read_to_string(&target).expect("the first alef all must emit the scaffold file");
+
+    // The hash value is a placeholder: `finalize_hashes_sweeping` recomputes it at the end of the
+    // next run, and poly's skip only pattern-matches the line's shape, never its correctness.
+    let stale = crate::core::hash::inject_hash_line(&raw_scaffold_content(&root, SCAFFOLD_TARGET), &"a".repeat(64));
+    assert!(
+        crate::core::hash::content_has_alef_marker(&stale) && stale.contains("alef:hash:"),
+        "sanity: the reconstructed pre-fix file must carry both an alef marker and a hash line, \
+         or poly would never have skipped it: {stale}"
+    );
+    assert!(
+        poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &stale),
+        "control failed: the reconstructed pre-fix file is already poly-canonical, so the final \
+         assertion below cannot fail: {stale}"
+    );
+    std::fs::write(&target, &stale).expect("plant the pre-fix file state");
+
+    run_all(&root);
+
+    let healed = std::fs::read_to_string(&target).expect("the scaffold file must survive the second run");
+    assert!(
+        !poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &healed),
+        "`alef all` left a stamped, non-canonical scaffold file exactly as it found it -- poly \
+         skipped it for the stamp it inherited, and nothing stripped that stamp before the format \
+         pass. Content:\n{healed}"
+    );
+    assert_eq!(
+        crate::core::hash::strip_hash_line(&healed),
+        crate::core::hash::strip_hash_line(&canonical),
+        "the healed file's body must match what a from-scratch run produces, not merely be poly-clean"
     );
 }

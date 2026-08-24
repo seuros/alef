@@ -225,8 +225,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // against the last good run's (complete) one, so the previously-working backend's own
             // output -- present in the old set, absent from this one -- reads as orphaned and gets
             // deleted. Both call sites below gate on this being `None` before either line runs; write,
-            // format and `finalize_hashes` still run unconditionally, because unstamped output has no
-            // provenance marker for the ownership guard to recognise next run. ~keep
+            // format and `finalize_hashes` still run unconditionally, so a partially generated suite
+            // still ships settled, stamped bytes. (An earlier revision claimed the reason was that
+            // "unstamped output has no provenance marker for the ownership guard": false -- provenance
+            // is the prose header marker `write_files_report` writes, not the `alef:hash:` line, and
+            // that false claim is what justified the per-phase checkpoints removed from this loop.) ~keep
             let mut e2e_stage_error: Option<anyhow::Error> = None;
 
             for resolved_cfg in &crates_to_process {
@@ -245,6 +248,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
+                // Accumulated across every phase below and stamped exactly ONCE, by the
+                // `finalize_hashes_sweeping` call after the format pass at the end of this loop
+                // body. Every phase used to stamp its own output as soon as it was written -- ten
+                // `finalize_hashes(&current_gen_paths, ..)` checkpoints, all ahead of the only
+                // formatting pass this command runs -- and a stamped file is one poly refuses to
+                // format, so those checkpoints made the format pass a no-op for everything `alef
+                // all` emitted (21 of 93 files on a measured eight-language fixture). See
+                // `pipeline::format::stamp_gate`'s module doc for the mechanism and the measurements.
+                // Losing the checkpoints costs the ownership guard nothing: provenance is the prose
+                // header marker `write_files_report` writes, not the `alef:hash:` line. ~keep
                 let mut current_gen_paths = std::collections::HashSet::new();
                 // Whether formatting is needed this run -- covers every write phase (bindings,
                 // service API, stubs, public API, scaffold, e2e/test-apps, README, docs), not just
@@ -375,7 +388,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
@@ -396,7 +408,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating scaffolding...");
                 // `alef all` always resolves the crate's full configured language set (there is
@@ -426,7 +437,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 let scaffold_sweep_roots = pipeline::generate_sweep_roots(&languages, false, resolved_cfg, &base_dir);
                 pipeline::sweep_manifest_orphans(&previous_scaffold_paths, &scaffold_keep, &scaffold_sweep_roots, &[])?;
                 cache::write_scaffold_manifest(&resolved_cfg.name, &scaffold_output_paths)?;
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
                 // A bare `?`/`return Err` here used to hard-stop the entire run: not just the
@@ -442,7 +452,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
                     stage_failures.record(&format!("[{}] post-build processing", resolved_cfg.name), error);
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating type stubs...");
                 let stubs = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
@@ -484,7 +493,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         .or_default()
                         .extend(pipeline::managed_output_paths(files, &base_dir));
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let mut api_count = 0;
                 if resolved_cfg.generate.public_api {
@@ -529,7 +537,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.version.is_empty() {
                     let pkg = base_dir.join("Package.swift");
@@ -625,6 +632,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
 
+                        // The one pre-`format_generated_reporting` stamp this loop keeps, and the
+                        // only one that is genuinely post-format: `run_formatters` immediately
+                        // above is this subtree's own formatting pass. ~keep
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
                         // A generator failure here must not reach either line below -- see
@@ -649,7 +659,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             current_gen_paths.insert(path);
                         }
                     }
-                    pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                     let test_apps_stage_hash =
                         cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
@@ -704,6 +713,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
                         let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
 
+                        // Kept for the same reason as the `e2e` stage's stamp above: it follows
+                        // that subtree's own native formatting pass, not precedes it. ~keep
                         pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
 
                         // Same hazard, same gate, as the `e2e` stage above -- see `e2e_stage_error`'s
@@ -729,7 +740,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             current_gen_paths.insert(path);
                         }
                     }
-                    pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
                 }
 
                 tracing::info!("Generating READMEs...");
@@ -742,7 +752,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     any_output_changed = true;
                 }
                 current_gen_paths.extend(pipeline::stampable_output_paths(&readme_files, &base_dir));
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Generating docs...");
                 warn_if_snippet_validation_needs_build(resolved_cfg);
@@ -773,7 +782,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     any_output_changed = true;
                 }
                 current_gen_paths.extend(pipeline::stampable_output_paths(&doc_files, &base_dir));
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
                 // Snippet/doc validation (`docs::generate_docs_stage`'s later sub-steps) reads its
                 // input from disk, not from `doc_files` in memory. When the ownership guard refuses
                 // a write earlier in this same run -- e.g. a pre-marker-fix snippet with no durable
@@ -893,8 +901,17 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     cache::write_lang_manifest(&resolved_cfg.name, &language.to_string(), &paths)?;
                 }
 
-                if any_output_changed {
+                // `any_output_changed` alone is the wrong gate for a tree an EARLIER alef stamped
+                // without ever formatting: nothing was written this run, and the tree is still
+                // non-canonical. `generated_tree_needs_formatting` answers "no" on a settled tree,
+                // so the fast path is unchanged -- see `pipeline::format::stamp_gate`. ~keep
+                if any_output_changed || pipeline::generated_tree_needs_formatting(&base_dir) {
                     tracing::info!("Formatting generated files...");
+                    // Scope-symmetric by construction: `finalize_hashes_sweeping` below re-stamps
+                    // `current_gen_paths` plus everything under `cleanup_roots`, a superset of what
+                    // is stripped here, so no file can be left carrying no hash line at all. ~keep
+                    let unstamped = pipeline::unstamp_before_formatting(&current_gen_paths);
+                    tracing::debug!("unstamped {unstamped} generated file(s) so the formatter can see them");
                     // `None` selects the converging whole-tree pass, which is what a full regen needs
                     // and what `converge_full_regen_formatting` documents itself as serving. Passing
                     // `Some(&only_languages_that_wrote_bindings)` would take the single-pass branch
