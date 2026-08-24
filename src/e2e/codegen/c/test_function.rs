@@ -14,10 +14,10 @@ use super::docs_input::render_c_docs_json;
 use super::ffi_constructors::is_std_type_without_ffi_constructor;
 use super::{
     FieldConfigSources, LeafFieldCheck, build_args_string_c, classify_nested_leaf, emit_nested_accessor,
-    ensure_leaf_field_exists, infer_opaque_handle_type, is_primitive_c_type, is_skipped_c_field, json_to_c,
-    render_assertion, render_bytes_test_function, render_c_diagnostic_skip, render_engine_factory_test_function,
-    render_streaming_test_function, resolve_c_client_owner_type, resolve_c_streaming_adapter,
-    resolve_optional_sentinel, try_emit_enum_accessor, validate_c_snippet_metadata,
+    ensure_leaf_field_exists, infer_opaque_handle_type, ir_declares_a_json_string_param, is_primitive_c_type,
+    is_skipped_c_field, json_to_c, render_assertion, render_bytes_test_function, render_c_diagnostic_skip,
+    render_engine_factory_test_function, render_streaming_test_function, resolve_c_client_owner_type,
+    resolve_c_streaming_adapter, resolve_optional_sentinel, try_emit_enum_accessor, validate_c_snippet_metadata,
 };
 
 /// Emit the C error-path epilogue every `expects_error` return site shares: the declared `error`
@@ -272,6 +272,7 @@ pub(super) fn render_snippet_body(context: SnippetContext<'_>) -> anyhow::Result
             &info.args,
             &info.options_type_name,
             true,
+            target_params,
         );
         // The shared, language-agnostic `[crates.e2e.calls.*]` args config has no
         // concept of the C-only trailing `out_error` out-param that trait-bridge
@@ -547,6 +548,7 @@ pub(super) fn render_test_function_impl(
             args,
             options_type_name,
             documentation_snippet,
+            target_params,
         );
         // Argument construction mirrors the void-call path in `render_snippet_body`, for the
         // same reason: with no configured `args` the call's argument list is genuinely empty
@@ -1276,6 +1278,7 @@ pub(super) fn render_test_function_impl(
         args,
         options_type_name,
         documentation_snippet,
+        target_params,
     );
 
     let configured_args = build_args_string_c(
@@ -1527,8 +1530,9 @@ pub(super) fn render_test_function_impl(
 }
 
 /// Construct a typed `AlefHandle` via `{prefix}_{type}_from_json(...)` for every `json_object`
-/// arg with a non-null value, ahead of the call that consumes it, appending the construction
-/// (and any documentation setup/cleanup) to `out`.
+/// arg with a non-null value whose declared parameter actually takes a handle
+/// ([`ir_declares_a_json_string_param`]), ahead of the call that consumes it, appending the
+/// construction (and any documentation setup/cleanup) to `out`.
 ///
 /// Returns the arg-name -> handle-variable map [`build_args_string_c`] needs to splice a real
 /// handle expression instead of a JSON literal, and the `(handle, type_snake)` pairs the caller
@@ -1557,15 +1561,19 @@ fn build_json_object_arg_handles(
     args: &[crate::e2e::config::ArgMapping],
     options_type_name: &str,
     documentation_snippet: bool,
+    target_params: TargetParams<'_>,
 ) -> (HashMap<String, String>, Vec<(String, String)>) {
     let mut typed_arg_handles = HashMap::new();
     let mut typed_arg_cleanup = Vec::new();
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         if arg.arg_type != "json_object" {
             continue;
         }
         let val = crate::e2e::codegen::resolve_field(&fixture.input, &arg.field);
         if val.is_null() {
+            continue;
+        }
+        if ir_declares_a_json_string_param(target_params, &arg.name, index) {
             continue;
         }
         // Fixture keys are camelCase; generated FFI from_json helpers
