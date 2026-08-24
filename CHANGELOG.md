@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/swift**: a getter's bridged shape is now read from the binding backend instead of
+  re-derived. `build_swift_first_class_map` tracked `Vec<Vec<_>>`/`Map<_>` plus two hand-enumerated
+  `Option<Vec<Named(..)>>` cases, so every other optional `Vec` was called countable —
+  `Option<Vec<String>>` among them, which really emits `fn og_locale_alternates(&self) -> String`,
+  making the generator emit `?.count` against a `RustString`. It now calls
+  `field_needs_json_bridge`, the same predicate `wrappers::getters::emit_getters` uses to pick a
+  getter's return type, so the two generators can no longer disagree about one field.
+- **e2e/swift**: two assertion bugs with one cause — the renderer was asked to describe a leaf it
+  does not model. The JSON-bridge guard was keyed on the trailing accessor's spelling (a
+  `length`/`count`/`size` suffix), so it refused a count on a bridged leaf while emitting an
+  indexed accessor against that same leaf — the generator wrote the correct "JSON-bridges it to
+  RustString" skip and a broken assertion on adjacent lines. Keying on whether the path steps past
+  a bridged leaf at all collapses the suffix, index and wildcard cases into one. Separately,
+  `field_expr.contains("?.")` proves an ANCESTOR was optional and never the leaf, yet took
+  precedence over the leaf's own optionality, emitting `article()?.publishedTime().toString()`
+  where `publishedTime()` returns `Optional<RustString>`. The leaf's optionality now comes from the
+  type cursor.
+- **e2e**: `namespace_stripped_path` no longer drops a real struct segment the `result_fields`
+  config omits. Any leading segment absent from that hand-maintained list was treated as a virtual
+  namespace prefix and removed, so a consumer who listed a nested leaf without also listing its
+  parent had the parent silently stripped and the accessor built on the wrong receiver
+  (`result.favicons()` against a result type with no such field). The IR is now asked instead: the
+  enum and collection maps already anchor the call's declared result type, so a first segment that
+  type declares as a struct field is a real nested step whatever the config omits. Absent IR still
+  answers `false`, leaving the config-only behaviour intact.
+
 - **e2e/zig**: JSON-mode assertions no longer navigate a virtual namespace prefix as a real JSON
   key. A fixture field like `batch.completed_count` emitted
   `result.object.get("batch").?.object.get("completed_count").?`, force-unwrapping a key absent
