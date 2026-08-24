@@ -18,6 +18,15 @@ use crate::e2e::codegen::rust::mock_server::render_mock_server_setup;
 
 use super::helpers::{resolve_function_name_for_call, resolve_module_for_call};
 
+/// The local a streaming call's drained items are bound to.
+///
+/// ~keep Exported because a streaming call binds this, and never `result_var`: the raw stream
+/// goes to `stream` and is immediately consumed by the collect snippet, so `result` exists in
+/// no streaming body. The docs-snippet renderer has to present *this* name, and re-deriving
+/// the string there is exactly how the two generators end up disagreeing about which binding
+/// the snippet's tail may reference (`E0425`).
+pub(crate) const STREAMING_COLLECTED_VAR: &str = "chunks";
+
 /// Argument list appended to a `client_factory` call when the project configures no
 /// `[e2e.call.overrides.rust] client_factory_trailing_args`.
 ///
@@ -471,8 +480,7 @@ pub fn render_test_function(
         .flatten();
     // Name of the stream-level variable (the raw stream returned by the call).
     let stream_var = "stream";
-    // Name of the collected-list variable produced by draining the stream.
-    let chunks_var = "chunks";
+    let chunks_var = STREAMING_COLLECTED_VAR;
 
     // Check if any assertion actually uses the result variable.
     // If all assertions are skipped (field not on result type), use `_` to avoid

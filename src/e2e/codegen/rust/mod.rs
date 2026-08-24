@@ -18,6 +18,8 @@ mod assertion_synthetic;
 #[cfg(test)]
 mod collection_field_classification_tests;
 #[cfg(test)]
+mod snippet_result_binding_tests;
+#[cfg(test)]
 mod test_backend_tests;
 #[cfg(test)]
 mod tests;
@@ -264,8 +266,32 @@ fn render_docs_snippet(
     // while this snippet printed `result.<field>`. ~keep
     super::presentation::apply_derived_shows(&mut call_fixture, e2e_config, "rust", type_defs, functions);
     let presentation = super::presentation::resolve(&call_fixture, e2e_config, "rust", type_defs, functions);
+    let call = e2e_config.resolve_call_for_fixture(
+        call_fixture.call.as_deref(),
+        &call_fixture.id,
+        &call_fixture.resolved_category(),
+        &call_fixture.tags,
+        &call_fixture.input,
+    );
     call_fixture.assertions.clear();
     call_fixture.mock_response = None;
+    // Asked of the same oracle, on the same fixture state, that `test_file::test_function` will
+    // ask a moment from now — the clearing above is deliberately already done, because streaming
+    // auto-detection reads `assertions` and `mock_response` and would otherwise answer one thing
+    // here and another there. ~keep
+    let is_streaming =
+        crate::e2e::codegen::streaming_assertions::resolve_is_streaming(&call_fixture, call.streaming_enabled());
+    // A streaming call binds `stream` and then the drained `chunks`; `result_var` is never bound
+    // in that body at all. So every result-rooted tail has to go: the field accessors (which have
+    // no member to resolve against a `Vec` of chunks anyway) and the `match` an error fixture
+    // renders. What the snippet shows instead is the collection the reader actually gets. ~keep
+    let presentation = if is_streaming { Vec::new() } else { presentation };
+    let expects_error = expects_error && !is_streaming;
+    let result_var = if is_streaming {
+        test_file::STREAMING_COLLECTED_VAR
+    } else {
+        call.effective_result_var()
+    };
     // This trait method carries no `functions: &[FunctionDef]` parameter (the free-function
     // registry), so a snippet whose call names a free function rather than an IR type's
     // method resolves no root type for IR-derived enum classification here — it still
@@ -295,13 +321,6 @@ fn render_docs_snippet(
             )
         })
         .collect::<Vec<_>>();
-    let call = e2e_config.resolve_call_for_fixture(
-        call_fixture.call.as_deref(),
-        &call_fixture.id,
-        &call_fixture.resolved_category(),
-        &call_fixture.tags,
-        &call_fixture.input,
-    );
     // An error fixture renders the `Result` through the template's `match`, which both
     // reports the failure and consumes the value — a second unconditional `println!`
     // of `result_var` would then reference a moved binding. ~keep
@@ -309,8 +328,10 @@ fn render_docs_snippet(
     let body = body
         .into_iter()
         .map(|line| {
-            if display_result {
-                line.replacen("let _ =", &format!("let {} =", call.effective_result_var()), 1)
+            // Never for a streaming body: its call line binds `stream`, so there is no `let _ =`
+            // to rebind, and `result_var` here is the collect snippet's own local. ~keep
+            if display_result && !is_streaming {
+                line.replacen("let _ =", &format!("let {result_var} ="), 1)
             } else {
                 line.to_string()
             }
@@ -320,7 +341,7 @@ fn render_docs_snippet(
         "rust/snippet_body.rs.jinja",
         minijinja::context! {
             imports => imports, body => body, is_async => is_async, presentation => presentation,
-            display_result => display_result, result_var => call.effective_result_var(),
+            display_result => display_result, result_var => result_var,
             expects_error => expects_error, returns_void => call.returns_void,
         },
     ))

@@ -11,4 +11,5 @@ mod tests;
 pub use collection::collect_test_filenames;
 pub use file_rendering::render_test_file;
 pub(super) use helpers::is_skipped;
+pub(super) use test_function::STREAMING_COLLECTED_VAR;
 pub use test_function::render_test_function;
