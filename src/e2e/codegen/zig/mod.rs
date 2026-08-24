@@ -92,6 +92,8 @@ mod visitor;
 #[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
+mod namespace_prefixed_field_tests;
+#[cfg(test)]
 mod orelse_null_compile_tests;
 #[cfg(test)]
 mod wire_optional_json_key_tests;

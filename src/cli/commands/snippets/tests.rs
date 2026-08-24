@@ -270,3 +270,23 @@ fn configured_rust_session_enables_crate_features_so_gated_modules_resolve() {
         "crate features must not leak into non-Rust sessions"
     );
 }
+
+/// An audit run that never opened a documentation tree must say so. Reporting a bare
+/// "Audit clean" for a run with no `--docs` root is what let a consumer's CI report green
+/// while the documentation fence check never executed. ~keep
+#[test]
+fn an_audit_with_no_docs_root_names_the_check_class_it_skipped() {
+    let summary = audit_scope_summary(&[]);
+    assert!(
+        summary.contains("NOT audited") && summary.contains("--docs"),
+        "a docs-less audit must name the skipped scope and the flag that enables it; got: {summary}"
+    );
+}
+
+/// Control: with a docs root configured the summary stays the plain clean line, so the
+/// assertion above is discriminating rather than true of every message. ~keep
+#[test]
+fn an_audit_with_a_docs_root_reports_a_plain_clean_result() {
+    let summary = audit_scope_summary(&[PathBuf::from("docs")]);
+    assert_eq!(summary, "Audit clean: no issues found.");
+}

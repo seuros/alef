@@ -357,6 +357,32 @@ impl FieldResolver {
         if suffix.is_empty() { None } else { Some(suffix) }
     }
 
+    /// Resolve a raw fixture field path to the path the value actually occupies on
+    /// the result, with any virtual namespace prefix removed.
+    ///
+    /// ~keep Fixtures group assertions under virtual labels (`batch.completed_count`)
+    /// that have no counterpart in the emitted result — the value sits at
+    /// `completed_count`. Backends that navigate the serialized result by path
+    /// (C's accessor chain, brew's jq expression, zig's `std.json.Value` lookup) must
+    /// strip that label or they address a member that does not exist. Stripping is
+    /// conditional: the remainder's own first segment has to be a real result field,
+    /// so a genuinely nested path (`metrics.total_lines`) keeps its prefix. This is
+    /// the same policy `accessor()` applies for host-language accessor expressions;
+    /// it is kept separate because an accessor is not a serialized-result path.
+    pub fn result_relative_path<'a>(&'a self, fixture_field: &'a str) -> &'a str {
+        let resolved = self.resolve(fixture_field);
+        let Some(stripped) = self.namespace_stripped_path(resolved) else {
+            return resolved;
+        };
+        let stripped_first = stripped.split('.').next().unwrap_or(stripped);
+        let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
+        if self.is_valid_for_result(stripped_first) {
+            stripped
+        } else {
+            resolved
+        }
+    }
+
     /// Check if a resolved field is an array/Vec type.
     pub fn is_array(&self, field: &str) -> bool {
         self.array_fields.contains(field)

@@ -230,11 +230,32 @@ fn test_replace_fence_lang_rust_to_typescript() {
     assert!(out.contains("let x = run();"));
 }
 
+/// rustdoc's attributes steer its doctest harness and are not part of a markdown info
+/// string, whose language is the first whitespace-delimited token. Carrying `,no_run`
+/// through produced the language `typescript,no_run`. ~keep
 #[test]
-fn test_replace_fence_lang_preserves_attrs() {
+fn test_replace_fence_lang_drops_rustdoc_attrs() {
     let body = "```rust,no_run\nlet x = run();\n```";
     let out = replace_fence_lang(body, "typescript");
-    assert!(out.starts_with("```typescript,no_run"));
+    assert!(
+        out.starts_with("```typescript\n"),
+        "rustdoc attributes must not reach the emitted fence; got: {out}"
+    );
+}
+
+/// A token outside rustdoc's documented vocabulary is not alef's to discard, but it must
+/// not corrupt the language token either — it belongs in the fence's meta slot. ~keep
+#[test]
+fn test_replace_fence_lang_moves_unknown_attrs_into_fence_meta() {
+    let body = "```rust,no_run,title=example.rs\nlet x = run();\n```";
+    let out = replace_fence_lang(body, "rust");
+    let fence = out.lines().next().expect("a fence line");
+    assert_eq!(fence, "```rust title=example.rs");
+    assert_eq!(
+        fence.trim_start_matches('`').split_whitespace().next(),
+        Some("rust"),
+        "the language token a markdown renderer reads must be exactly `rust`"
+    );
 }
 
 #[test]
