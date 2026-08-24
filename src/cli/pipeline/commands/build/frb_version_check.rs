@@ -69,7 +69,9 @@ fn parse_version(output: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::io::Write as _;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
 
     #[test]
@@ -97,6 +99,14 @@ mod tests {
     /// <version>` and exits 0 when invoked with `--version`, and returns its absolute path.
     /// `Command::new` accepts a full path directly, so tests never need to touch the real
     /// `PATH` environment variable to stand this fake binary up.
+    ///
+    /// Unix-only: relies on a `#!/bin/sh` shebang plus a `chmod +x` bit, neither of which
+    /// Windows honors -- `CreateProcess` does not interpret shebangs, and Windows has no
+    /// execute permission bit to set. A `.bat` fallback would need its own quoting and its
+    /// own `Command` invocation path (Windows batch files are not directly `CreateProcess`-able
+    /// the way a shebang script is on Unix), which is materially more code for a single fixture
+    /// helper -- so this stays gated rather than grown into two implementations. ~keep
+    #[cfg(unix)]
     fn fake_codegen_binary(dir: &std::path::Path, version: &str) -> std::path::PathBuf {
         let path = dir.join("fake_flutter_rust_bridge_codegen.sh");
         let mut file = std::fs::File::create(&path).expect("must create fake binary script");
@@ -107,6 +117,7 @@ mod tests {
         path
     }
 
+    #[cfg(unix)]
     #[test]
     fn run_is_ok_when_installed_version_matches_the_pin() {
         let dir = tempfile::tempdir().expect("temp dir");
@@ -120,6 +131,7 @@ mod tests {
     /// The regression this whole file exists to catch: a locally installed codegen binary at a
     /// version that disagrees with the project's declared `frb_version` pin must fail loudly,
     /// not silently regenerate output stamped with whatever happens to be on this machine.
+    #[cfg(unix)]
     #[test]
     fn run_fails_loudly_when_installed_version_disagrees_with_the_pin() {
         let dir = tempfile::tempdir().expect("temp dir");

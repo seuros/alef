@@ -168,11 +168,11 @@ kotlin_android = '{deep_source_dir}/'
     let expected_root = project_root.display().to_string();
     assert_eq!(
         build_command_for(Language::KotlinAndroid, &build_config, &config, false),
-        format!("cd {expected_root} && gradle build")
+        format!("cd {expected_root} && gradle assembleDebug")
     );
     assert_eq!(
         build_command_for(Language::KotlinAndroid, &build_config, &config, true),
-        format!("cd {expected_root} && gradle build -Prelease")
+        format!("cd {expected_root} && gradle assembleRelease")
     );
 }
 
@@ -239,7 +239,68 @@ kotlin_android = '{deep_source_dir}/'
     let expected = deep_source_dir.display().to_string();
     assert_eq!(
         build_command_for(Language::KotlinAndroid, &build_config, &config, false),
-        format!("cd {expected}/ && gradle build")
+        format!("cd {expected}/ && gradle assembleDebug")
+    );
+}
+
+/// The missing check whose absence let xberg-io/alef#259 ship: `build_command_for`'s
+/// `"gradle"` arm and `build_defaults::default_build_config`'s `KotlinAndroid` arm must
+/// resolve to the *same* command, not two independent derivations that happen to agree only
+/// when a consumer declares a `[workspace.build_commands.kotlin_android]` overlay. Before
+/// `gradle_build_task` existed, this failed: the gradle arm matched on the `"gradle"` tool
+/// string shared by `Kotlin` and `KotlinAndroid`, so it ran the umbrella `gradle build` for
+/// `KotlinAndroid` too, while `build_defaults` (matched on `Language`) already knew to run
+/// `assembleDebug`/`assembleRelease`. With no directory markers on disk, `build_command_for`'s
+/// walk-up falls back to `source_dir` unchanged, so both sides resolve the identical
+/// `packages/kotlin-android` directory here and a byte-for-byte comparison is meaningful. ~keep
+#[test]
+fn kotlin_android_gradle_arm_matches_build_defaults_default() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.alpha"
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "gradle",
+        crate_suffix: "",
+        build_dep: BuildDependency::Ffi,
+        post_build: Vec::new(),
+    };
+
+    let cli_build = build_command_for(Language::KotlinAndroid, &build_config, &config, false);
+    let cli_release = build_command_for(Language::KotlinAndroid, &build_config, &config, true);
+
+    let defaults = config.build_command_config_for_language(Language::KotlinAndroid);
+    let default_build = defaults
+        .build
+        .expect("KotlinAndroid has a default build command")
+        .commands()
+        .join(" ");
+    let default_release = defaults
+        .build_release
+        .expect("KotlinAndroid has a default build_release command")
+        .commands()
+        .join(" ");
+
+    assert_eq!(
+        cli_build, default_build,
+        "build_command_for's gradle arm must resolve the same KotlinAndroid build command as \
+         build_defaults, not the umbrella `gradle build` shared with Kotlin"
+    );
+    assert_eq!(
+        cli_release, default_release,
+        "build_command_for's gradle arm must resolve the same KotlinAndroid release command as \
+         build_defaults, not the umbrella `gradle build -Prelease` shared with Kotlin"
     );
 }
 
