@@ -45,3 +45,7 @@ mod is_array_namespace_tests;
 #[cfg(test)]
 #[path = "field_access/accessor_namespace_agreement_tests.rs"]
 mod accessor_namespace_agreement_tests;
+
+#[cfg(test)]
+#[path = "field_access/wasm_accessor_tests.rs"]
+mod wasm_accessor_tests;

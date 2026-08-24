@@ -52,10 +52,29 @@ pub(super) fn push_key_index_suffix(path_so_far: &mut String, segment: &PathSegm
     }
 }
 
+/// How one TypeScript-family target spells a map lookup.
+///
+/// ~keep The only thing that has ever differed between the `node` and `wasm` accessor
+/// renderers. NAPI lowers a `HashMap<String, V>` to a plain TypeScript object, so a key is an
+/// index; wasm-bindgen lowers it to a JS `Map`, so a key is a `get` call. Everything else about
+/// the two — segment casing, array indexing, `.length`, and which links need `?.` — is one
+/// answer about one language, and encoding the difference as a parameter is what stops a second
+/// renderer from re-deriving the rest of it. `wasm` used to have that second renderer and it had
+/// no optionality at all, so every `Option<T>` field reached a published wasm snippet unguarded
+/// (`TS18048`) while the same field in the same fixture's node snippet was chained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TypescriptMapAccess {
+    /// `value["key"]`, and `value[0]` for a digit-only key. The NAPI/node lowering.
+    Index,
+    /// `value.get("key")`, for every key. The wasm-bindgen lowering.
+    MapGet,
+}
+
 pub(super) fn render_typescript_with_optionals(
     segments: &[PathSegment],
     result_var: &str,
     optional_fields: &HashSet<String>,
+    map_access: TypescriptMapAccess,
 ) -> String {
     let mut out = result_var.to_string();
     let mut path_so_far = String::new();
@@ -85,13 +104,23 @@ pub(super) fn render_typescript_with_optionals(
                 out.push_str(if previous_optional { "?." } else { "." });
                 out.push_str(&field.to_lower_camel_case());
                 let optional = optional_fields.contains(&path_so_far);
-                if optional {
-                    out.push_str("?.");
-                }
-                if !key.is_empty() && key.chars().all(|character| character.is_ascii_digit()) {
-                    out.push_str(&format!("[{key}]"));
-                } else {
-                    out.push_str(&format!("[{key:?}]"));
+                match map_access {
+                    // A `get` is a member access, so an optional receiver takes the plain `?.`
+                    // that an element access spells `?.[`. ~keep
+                    TypescriptMapAccess::MapGet => {
+                        out.push_str(if optional { "?." } else { "." });
+                        out.push_str(&format!("get({key:?})"));
+                    }
+                    TypescriptMapAccess::Index => {
+                        if optional {
+                            out.push_str("?.");
+                        }
+                        if !key.is_empty() && key.chars().all(|character| character.is_ascii_digit()) {
+                            out.push_str(&format!("[{key}]"));
+                        } else {
+                            out.push_str(&format!("[{key:?}]"));
+                        }
+                    }
                 }
                 push_key_index_suffix(&mut path_so_far, segment);
                 previous_optional = optional;

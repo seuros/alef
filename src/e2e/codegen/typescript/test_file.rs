@@ -29,6 +29,8 @@ mod visitor;
 mod void_not_error_call_tests;
 mod wasm;
 #[cfg(test)]
+mod wasm_optional_chain_tests;
+#[cfg(test)]
 mod wasm_snippet_prefix_tests;
 
 pub use render::render_test_file;
