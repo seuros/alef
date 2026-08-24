@@ -27,6 +27,7 @@ use super::E2eCodegen;
 
 mod category;
 mod run_tests;
+mod snippet;
 
 use category::render_category_file;
 use run_tests::render_run_tests;
@@ -129,6 +130,17 @@ impl E2eCodegen for BrewCodegen {
 
     fn language_name(&self) -> &'static str {
         "brew"
+    }
+
+    fn render_snippet_body(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        _config: &ResolvedCrateConfig,
+        _type_defs: &[crate::core::ir::TypeDef],
+        _enums: &[crate::core::ir::EnumDef],
+    ) -> Result<String> {
+        snippet::render_snippet_body(fixture, e2e_config)
     }
 }
 

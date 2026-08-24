@@ -27,7 +27,7 @@ const MOCK_HARNESS_MARKERS: &[&str] = &[
 /// re-derive it. The `Err` carries a typed [`super::MockHarnessLeak`] so the caller can
 /// route it to a hard, attributed failure rather than to a coverage gap that a
 /// `coverage_exceptions` entry would silently absorb.
-pub(super) fn reject_mock_harness_scaffolding(body: &str, fixture: &Fixture, language: &str) -> Result<()> {
+pub(crate) fn reject_mock_harness_scaffolding(body: &str, fixture: &Fixture, language: &str) -> Result<()> {
     let fixture_route = format!("/fixtures/{}", fixture.id);
     let marker = MOCK_HARNESS_MARKERS
         .iter()

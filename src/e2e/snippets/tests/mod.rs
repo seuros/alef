@@ -9,6 +9,7 @@ use super::mock_harness_guard::reject_mock_harness_scaffolding;
 use super::*;
 
 mod coverage;
+mod curated;
 mod sample_urls;
 
 #[test]

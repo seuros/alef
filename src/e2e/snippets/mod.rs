@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod coverage;
 pub(crate) mod ledger_paths;
 pub mod migration;
-mod mock_harness_guard;
+pub(crate) mod mock_harness_guard;
 mod mock_url_defaults;
 pub mod ownership;
 mod recipe_policy;
@@ -170,6 +170,14 @@ pub struct SnippetGenerationReport {
     /// would break every consumer that has lived with the placeholder. It is reported so the
     /// run states what it published rather than implying the snippets are runnable.
     pub placeholder_sample_url_fixtures: Vec<String>,
+    /// Paths under `snippets.output` that `[crates.e2e.snippets].curated_snippets` claims as
+    /// hand-authored on purpose, resolved by [`coverage::resolve_curated_snippet_paths`].
+    ///
+    /// Deliberately not part of [`SnippetCoverageLedger`] -- `coverage.expected`/`generated`/
+    /// `missing`/`documented_exceptions` are all keyed by fixture/language cell, and a curated
+    /// file has no fixture behind it at all. Kept here instead so a caller can report "N
+    /// curated, M generated" without conflating the two coverage dimensions.
+    pub curated_paths: Vec<PathBuf>,
 }
 
 struct SnippetRenderContext<'a> {
@@ -448,11 +456,24 @@ fn generate_snippet_report_with_extensions(
     coverage::validate(&coverage)?;
     let placeholder_sample_url_fixtures: Vec<String> = placeholder_sample_url_fixtures.into_iter().collect();
     render_body::report_placeholder_sample_urls(&placeholder_sample_url_fixtures, sample_base_url);
+    let curated_paths = coverage::resolve_curated_snippet_paths(
+        Path::new(&snippets.output),
+        &snippets.curated_snippets,
+        &coverage.generated_paths,
+    )?;
+    if !snippets.curated_snippets.is_empty() {
+        tracing::info!(
+            target: "alef::e2e::snippets",
+            "snippet coverage: {}",
+            coverage::summary(curated_paths.len(), coverage.generated_paths.len())
+        );
+    }
     Ok(SnippetGenerationReport {
         snippets: generated.into_values().collect(),
         coverage,
         guard_rejections,
         placeholder_sample_url_fixtures,
+        curated_paths,
     })
 }
 

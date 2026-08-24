@@ -219,7 +219,7 @@ fn render_test_function(
 /// If the fixture tags contain "crawl", returns "crawl".
 /// If the fixture tags contain "map", returns "map".
 /// Otherwise, returns the default subcommand.
-fn determine_subcommand(tags: &[String], default: &str) -> String {
+pub(super) fn determine_subcommand(tags: &[String], default: &str) -> String {
     for tag in tags {
         if tag == "crawl" {
             return "crawl".to_string();
@@ -235,7 +235,7 @@ fn determine_subcommand(tags: &[String], default: &str) -> String {
 ///
 /// Tokens are returned unquoted where safe (flag names) or single-quoted
 /// (string values from the fixture).
-fn build_cli_command(
+pub(super) fn build_cli_command(
     fixture: &Fixture,
     binary_name: &str,
     subcommand: &str,
