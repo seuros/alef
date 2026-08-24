@@ -13,7 +13,7 @@
 
 use crate::backends::swift::gen_bindings::trait_bridge::gen_trait_bridge_files;
 use crate::core::config::TraitBridgeConfig;
-use crate::core::ir::{ApiSurface, EnumDef, EnumVariant, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
+use crate::core::ir::{MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef};
 use std::collections::HashSet;
 
 fn param(name: &str, ty: TypeRef) -> ParamDef {
@@ -47,19 +47,13 @@ fn make_trait(name: &str, methods: Vec<MethodDef>) -> TypeDef {
 /// Render the per-trait bridge file (`Swift{Trait}Bridge.swift`), which carries both the
 /// protocol declarations and the adapter class.
 fn bridge_source(trait_def: &TypeDef) -> String {
-    bridge_source_with_api(trait_def, &ApiSurface::default())
-}
-
-/// Like `bridge_source`, but with a caller-supplied `ApiSurface` -- needed for cases where the
-/// generated content depends on IR lookups beyond the trait itself (e.g. `ApiSurface::enums`).
-fn bridge_source_with_api(trait_def: &TypeDef, api: &ApiSurface) -> String {
     let bridge_cfg = TraitBridgeConfig {
         trait_name: trait_def.name.clone(),
         register_fn: Some(format!("register{}", trait_def.name)),
         ..Default::default()
     };
     let bridges = vec![(trait_def.name.clone(), &bridge_cfg, trait_def)];
-    let files = gen_trait_bridge_files(&bridges, &HashSet::new(), &HashSet::new(), api);
+    let files = gen_trait_bridge_files(&bridges, &HashSet::new(), &HashSet::new());
     let wanted = format!("Swift{}Bridge.swift", trait_def.name);
     files
         .into_iter()
@@ -139,50 +133,97 @@ fn adapter_converts_vec_string_return_element_wise() {
     );
 }
 
-/// Regression test for alef #258: a trait method that both has a Rust-side default
-/// implementation and returns an enum produced a Swift default stub body of `return "{}"`,
-/// a `String` literal that does not type-check against the enum-typed declared return
-/// (`swift_return_type` declares a non-excluded `Named` return as the enum's own Swift type,
-/// not `String`). The default body must ask the IR for a real case of that enum instead.
-#[test]
-fn default_method_for_enum_return_constructs_a_real_enum_case() {
-    let enum_def = EnumDef {
-        name: "ConfidenceLevel".to_string(),
-        rust_path: "testcrate::ConfidenceLevel".to_string(),
-        variants: vec![
-            EnumVariant {
-                name: "High".to_string(),
-                ..Default::default()
-            },
-            EnumVariant {
-                name: "Low".to_string(),
-                ..Default::default()
-            },
-        ],
-        has_serde: true,
-        ..Default::default()
-    };
-    let api = ApiSurface {
-        enums: vec![enum_def],
-        ..Default::default()
-    };
+/// A trait with a defaulted method touching a DTO type in both return and parameter position --
+/// the shape alef #258 marshalled incorrectly twice.
+fn trait_with_defaulted_dto_methods() -> TypeDef {
+    let mut page_layout = method("page_layout", vec![], TypeRef::Named("PageLayout".to_string()), None);
+    page_layout.has_default_impl = true;
 
-    let mut confidence_method = method(
-        "confidence_level",
-        vec![],
-        TypeRef::Named("ConfidenceLevel".to_string()),
+    let mut describe = method(
+        "describe",
+        vec![param("layout", TypeRef::Named("PageLayout".to_string()))],
+        TypeRef::String,
         None,
     );
-    confidence_method.has_default_impl = true;
+    describe.has_default_impl = true;
 
-    let source = bridge_source_with_api(&make_trait("TextBackend", vec![confidence_method]), &api);
+    let mut is_ready = method("is_ready", vec![], TypeRef::Primitive(PrimitiveType::Bool), None);
+    is_ready.has_default_impl = true;
+
+    make_trait("DocumentSink", vec![page_layout, describe, is_ready])
+}
+
+/// alef #258, root cause: `excluded_named_type_bridge_policy` exempted `has_default_impl`
+/// methods, so a defaulted method's `Named` types kept their real Swift names. Those names do not
+/// resolve in `Sources/RustBridge/`, where this file is emitted. Every `Named` type a bridged
+/// trait mentions crosses as a JSON `String`, defaulted method or not.
+#[test]
+fn defaulted_method_named_types_cross_the_boundary_as_json_strings() {
+    let source = bridge_source(&trait_with_defaulted_dto_methods());
 
     assert!(
-        source.contains("return .high"),
-        "default stub must construct a real ConfidenceLevel case, got:\n{source}"
+        source.contains("func pageLayout() -> String"),
+        "a defaulted method's enum return must be declared as a JSON String, got:\n{source}"
     );
     assert!(
-        !source.contains("return \"{}\""),
-        "default stub must not return a bare string literal for an enum-typed return, got:\n{source}"
+        source.contains("func describe(layout: String) -> String"),
+        "a defaulted method's enum parameter must be declared as a JSON String, got:\n{source}"
+    );
+    assert!(
+        !source.contains("PageLayout"),
+        "no DTO type name may appear in a file emitted into RustBridge, got:\n{source}"
+    );
+}
+
+/// alef #258, second failure: rather than fix the policy, 0.67.5 synthesized a default body --
+/// `return .<firstFieldlessCase>` -- which is not the Rust `Default` for any type alef can see.
+/// The IR carries `has_default_impl` but never the default *body*, so alef cannot know the value,
+/// and the inbound Rust wrapper calls the Swift shim for defaulted methods too, so a guess would
+/// replace the Rust default at runtime rather than sit unused. It must not emit one.
+#[test]
+fn no_default_method_bodies_are_synthesized() {
+    let source = bridge_source(&trait_with_defaulted_dto_methods());
+
+    assert!(
+        !source.contains("public extension SwiftDocumentSinkBridge"),
+        "alef must not ship a default-implementation extension it cannot populate correctly, got:\n{source}"
+    );
+    for invented in ["return .", "return true", "return \"{}\"", "return \"\""] {
+        assert!(
+            !source.contains(invented),
+            "invented default body {invented:?} must not be emitted, got:\n{source}"
+        );
+    }
+}
+
+/// A conformer has to know that alef dropped the stub deliberately and that the Rust trait has a
+/// real default it must reproduce -- otherwise the required conformance reads as an alef bug.
+#[test]
+fn defaulted_methods_are_annotated_with_why_no_stub_is_provided() {
+    let source = bridge_source(&trait_with_defaulted_dto_methods());
+
+    assert!(
+        source.contains("supply the same value the Rust default would have produced"),
+        "defaulted protocol methods must explain the missing stub, got:\n{source}"
+    );
+}
+
+/// The note is specific to defaulted methods; a method Rust requires must not claim to have a
+/// default. Without this, the previous assertion would also pass on a note emitted unconditionally.
+#[test]
+fn methods_without_a_rust_default_carry_no_default_note() {
+    let source = bridge_source(&make_trait(
+        "DocumentSink",
+        vec![method(
+            "accept",
+            vec![param("chunk", TypeRef::String)],
+            TypeRef::Unit,
+            None,
+        )],
+    ));
+
+    assert!(
+        !source.contains("supply the same value the Rust default would have produced"),
+        "a method with no Rust default must not be annotated as defaulted, got:\n{source}"
     );
 }

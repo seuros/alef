@@ -259,24 +259,18 @@ pub fn swift_shim_return_ffi_type(method: &MethodDef) -> String {
 /// - Non-throwing methods: passthrough the result or build RustVec for `Vec<String>`
 /// - String return types are wrapped in RustString for FFI boundary
 ///
-/// `enum_names` holds the non-excluded `Named` types that are enums (per the IR's
-/// `ApiSurface::enums`), consulted so an enum-typed return is JSON-encoded before wrapping in
-/// `RustString`, rather than handed to `RustString`'s initializer directly. The bridge protocol
-/// declares an enum return as the enum's own Swift type (see `swift_return_type` in
-/// `trait_bridge.rs`), not a `String`, so `bridge_call_expr` evaluates to a real enum value —
-/// and `RustString` only accepts a `String`. A plain (non-excluded) struct `Named` return has
-/// the same shape today and is left untouched here: `bridge_exclude_types`-filtered callers
-/// only add a name to `enum_names` when the IR says it is an enum.
+/// A `Named` return is wrapped in `RustString` directly, with no JSON encoding step, because the
+/// bridge protocol already declares it as a `String`: `excluded_named_type_bridge_policy` puts
+/// every `Named` type a bridged trait mentions into the JSON-string policy, so `bridge_call_expr`
+/// evaluates to a JSON `String` the conformer produced. Encoding it again here would double-encode
+/// the payload, and — since these shims are emitted into `Sources/RustBridge/`, which cannot name
+/// a downstream DTO — would not even compile. That was alef #258's second failure. ~keep
 ///
 /// The `bridge_call_expr` is the expression that calls the inner bridge method
 /// (e.g., `bridge.processImage(imageBytes: imageBytes, config: config)`).
 ///
 /// Returns lines to emit as the method body (from opening brace to closing brace).
-pub fn swift_shim_return_marshal(
-    method: &MethodDef,
-    bridge_call_expr: &str,
-    enum_names: &std::collections::HashSet<String>,
-) -> Vec<String> {
+pub fn swift_shim_return_marshal(method: &MethodDef, bridge_call_expr: &str) -> Vec<String> {
     if method.error_type.is_some() {
         match &method.return_type {
             TypeRef::Unit => vec![
@@ -300,9 +294,6 @@ pub fn swift_shim_return_marshal(
             TypeRef::String => {
                 vec![format!("return RustString({})", bridge_call_expr)]
             }
-            TypeRef::Named(name) if enum_names.contains(name) => vec![format!(
-                "return RustString(String(data: try! JSONEncoder().encode({bridge_call_expr}), encoding: .utf8)!)"
-            )],
             TypeRef::Named(_) => vec![format!("return RustString({})", bridge_call_expr)],
             TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String) => {
                 vec![
@@ -563,7 +554,7 @@ mod tests {
     #[test]
     fn test_return_marshal_throwing_unit() {
         let method = make_method("initialize", vec![], TypeRef::Unit, Some("Error".to_string()));
-        let lines = swift_shim_return_marshal(&method, "try inner.initialize()", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "try inner.initialize()");
         assert_eq!(lines[0], "do {");
         assert!(lines.join("\n").contains("encodeOkVoidEnvelope"));
         assert!(lines.join("\n").contains("encodeErrEnvelope"));
@@ -572,7 +563,7 @@ mod tests {
     #[test]
     fn test_return_marshal_throwing_string() {
         let method = make_method("process", vec![], TypeRef::String, Some("Error".to_string()));
-        let lines = swift_shim_return_marshal(&method, "try inner.process()", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "try inner.process()");
         assert_eq!(lines[0], "do {");
         assert!(lines.join("\n").contains("encodeOkEnvelope"));
         assert!(lines.join("\n").contains("encodeErrEnvelope"));
@@ -581,7 +572,7 @@ mod tests {
     #[test]
     fn test_return_marshal_non_throwing_unit() {
         let method = make_method("get_value", vec![], TypeRef::Unit, None);
-        let lines = swift_shim_return_marshal(&method, "inner.getValue()", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "inner.getValue()");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "return ()");
     }
@@ -589,11 +580,7 @@ mod tests {
     #[test]
     fn test_return_marshal_non_throwing_bool() {
         let method = make_method("supports_lang", vec![], TypeRef::Primitive(PrimitiveType::Bool), None);
-        let lines = swift_shim_return_marshal(
-            &method,
-            "inner.supportsLanguage(lang)",
-            &std::collections::HashSet::new(),
-        );
+        let lines = swift_shim_return_marshal(&method, "inner.supportsLanguage(lang)");
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("return"));
     }
@@ -601,7 +588,7 @@ mod tests {
     #[test]
     fn test_return_marshal_non_throwing_vec_string() {
         let method = make_method("languages", vec![], TypeRef::Vec(Box::new(TypeRef::String)), None);
-        let lines = swift_shim_return_marshal(&method, "inner.languages()", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "inner.languages()");
         assert!(lines.join("\n").contains("RustVec<RustString>"));
         assert!(lines.join("\n").contains("vec.push"));
     }
@@ -614,47 +601,42 @@ mod tests {
         assert!(!decode.is_throwing);
     }
 
-    /// LOAD-BEARING: a `Named` return that is NOT in `enum_names` (e.g. a visible JSON-serialized
-    /// struct DTO) must keep wrapping the bare bridge call in `RustString(...)` unchanged. A fix
-    /// that routes every `Named` return through JSON encoding — instead of only enum-typed ones —
-    /// would trade the enum miscompile for a different one here, since this arm exists precisely
-    /// to catch an overly broad fix.
+    /// Every `Named` return -- struct or enum -- reaches this function already declared as a JSON
+    /// `String` by `excluded_named_type_bridge_policy`, so the shim wraps the bridge call and
+    /// nothing more.
     #[test]
-    fn test_return_marshal_non_throwing_named_struct_still_wraps_rust_string() {
+    fn test_return_marshal_non_throwing_named_struct_wraps_rust_string() {
         let method = make_method(
             "backend_type",
             vec![],
             TypeRef::Named("TextBackendType".to_string()),
             None,
         );
-        let lines = swift_shim_return_marshal(&method, "bridge.backendType()", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "bridge.backendType()");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "return RustString(bridge.backendType())");
     }
 
-    /// Regression test for the alef #258 shape: a trait-box method returning an enum type must
-    /// not hand the bare enum value to `RustString`'s initializer, which requires a `String` and
-    /// which an enum does not satisfy. `enum_names` (the IR's non-excluded enum names) is the
-    /// deciding signal, not the `Named` discriminant alone.
+    /// alef #258: 0.67.5 routed an enum-typed return through `JSONEncoder().encode(...)` here.
+    /// That was a fix for the wrong layer -- the bridge protocol should never have declared the
+    /// return as the enum's own type in the first place -- and it could not compile, because
+    /// these shims are emitted into `Sources/RustBridge/`, which cannot name (let alone prove
+    /// `Encodable`) a DTO from the target that depends on it. The bridge call yields the JSON
+    /// `String` the conformer produced; encoding it again would double-encode the payload.
     #[test]
-    fn test_return_marshal_non_throwing_named_enum_is_json_encoded() {
+    fn test_return_marshal_named_enum_is_not_re_encoded() {
         let method = make_method(
             "confidence_level",
             vec![],
             TypeRef::Named("ConfidenceLevel".to_string()),
             None,
         );
-        let mut enum_names = std::collections::HashSet::new();
-        enum_names.insert("ConfidenceLevel".to_string());
-        let lines = swift_shim_return_marshal(&method, "bridge.confidenceLevel()", &enum_names);
+        let lines = swift_shim_return_marshal(&method, "bridge.confidenceLevel()");
         assert_eq!(lines.len(), 1);
-        assert_eq!(
-            lines[0],
-            "return RustString(String(data: try! JSONEncoder().encode(bridge.confidenceLevel()), encoding: .utf8)!)"
-        );
+        assert_eq!(lines[0], "return RustString(bridge.confidenceLevel())");
         assert!(
-            !lines[0].contains("RustString(bridge.confidenceLevel())"),
-            "an enum value must not be handed directly to RustString's initializer, got:\n{}",
+            !lines[0].contains("JSONEncoder"),
+            "a bridged Named return arrives as JSON already; re-encoding double-encodes it, got:\n{}",
             lines[0]
         );
     }
@@ -662,7 +644,7 @@ mod tests {
     #[test]
     fn test_return_marshal_non_throwing_usize() {
         let method = make_method("dimensions", vec![], TypeRef::Primitive(PrimitiveType::Usize), None);
-        let lines = swift_shim_return_marshal(&method, "bridge.dimensions()", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "bridge.dimensions()");
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "return UInt(bridge.dimensions())");
     }
@@ -675,7 +657,7 @@ mod tests {
             TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::F32))))),
             Some("Error".to_string()),
         );
-        let lines = swift_shim_return_marshal(&method, "try inner.embed(texts)", &std::collections::HashSet::new());
+        let lines = swift_shim_return_marshal(&method, "try inner.embed(texts)");
         assert!(lines.join("\n").contains("encodeOkEnvelope"));
     }
 }

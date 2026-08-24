@@ -344,10 +344,6 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/swift_bridge_options_forwarder.swift.jinja"),
     ),
     (
-        "swift_trait_default_method.swift.jinja",
-        include_str!("../templates/swift_trait_default_method.swift.jinja"),
-    ),
-    (
         "swift_trait_adapter_method.swift.jinja",
         include_str!("../templates/swift_trait_adapter_method.swift.jinja"),
     ),

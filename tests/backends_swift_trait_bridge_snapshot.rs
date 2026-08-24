@@ -116,7 +116,6 @@ fn test_trait_bridge_sync_method() {
         &bridges,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
     );
 
     assert_eq!(files.len(), 2);
@@ -147,7 +146,6 @@ fn test_trait_bridge_async_method() {
         &bridges,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
     );
 
     assert_eq!(files.len(), 2);
@@ -186,7 +184,6 @@ fn test_trait_bridge_multiple_methods() {
         &bridges,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
     );
 
     assert_eq!(files.len(), 2);
@@ -214,7 +211,6 @@ fn test_trait_bridge_excludes_swift() {
         &bridges,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
     );
 
     assert!(files.is_empty());
@@ -235,7 +231,6 @@ fn test_trait_bridge_skips_options_field() {
         &bridges,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
     );
 
     assert!(files.is_empty());
@@ -262,7 +257,6 @@ fn test_trait_bridge_primitive_params() {
         &bridges,
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
     );
 
     assert_eq!(files.len(), 2);
@@ -290,12 +284,7 @@ fn test_trait_bridge_excluded_type_return() {
     exclude_types.insert("ExtractionResult".to_string());
 
     let bridges = vec![("OcrBackend".to_string(), &bridge_cfg, &trait_def)];
-    let files = gen_trait_bridge_files(
-        &bridges,
-        &exclude_types,
-        &std::collections::HashSet::new(),
-        &alef::core::ir::ApiSurface::default(),
-    );
+    let files = gen_trait_bridge_files(&bridges, &exclude_types, &std::collections::HashSet::new());
 
     assert_eq!(files.len(), 2);
     assert_eq!(files[0].0, "SwiftPluginBridge.swift");

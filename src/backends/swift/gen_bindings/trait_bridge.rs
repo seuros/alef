@@ -12,9 +12,9 @@
 //! 3. A `register<TraitName>(_ bridge: Swift<TraitName>Bridge)` function that
 //!    constructs the adapter and calls into Rust to register it.
 
-use crate::backends::swift::naming::{bridge_protocol_name, swift_source_ident as swift_case_ident};
+use crate::backends::swift::naming::bridge_protocol_name;
 use crate::core::config::TraitBridgeConfig;
-use crate::core::ir::{ApiSurface, TypeDef, TypeRef};
+use crate::core::ir::{TypeDef, TypeRef};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::HashSet;
 
@@ -23,18 +23,14 @@ use std::collections::HashSet;
 /// `exclude_types` is the set of types that are not visible in the generated Swift binding.
 /// `first_class_types` is the set of types that are emitted as first-class structs (and thus
 /// only available in the primary binding module, not accessible from RustBridge trait bridge code).
-/// Both sets of types are marshalled as JSON strings at the trait boundary.
-///
-/// `api` supplies `ApiSurface::enums`, consulted so a default trait method body for an
-/// enum-typed return can construct a real case of that enum instead of a string literal that
-/// only type-checks when the return type is `String`.
+/// Both sets of types are marshalled as JSON strings at the trait boundary, as is every other
+/// `Named` type the trait mentions -- see [`excluded_named_type_bridge_policy`].
 ///
 /// Returns a list of (filename, content) tuples ready for emission.
 pub fn gen_trait_bridge_files(
     bridges: &[(String, &TraitBridgeConfig, &TypeDef)],
     exclude_types: &HashSet<String>,
     first_class_types: &HashSet<String>,
-    api: &ApiSurface,
 ) -> Vec<(String, String)> {
     let mut files = Vec::new();
 
@@ -65,7 +61,7 @@ pub fn gen_trait_bridge_files(
             combined_exclude.insert(first_class.clone());
         }
 
-        let content = gen_single_trait_bridge_file(trait_name, bridge_cfg, trait_def, &combined_exclude, api);
+        let content = gen_single_trait_bridge_file(trait_name, bridge_cfg, trait_def, &combined_exclude);
         let protocol = bridge_protocol_name(trait_name);
         let filename = format!("{protocol}.swift");
         files.push((filename, content));
@@ -100,12 +96,21 @@ pub fn collect_named_types(type_ref: &TypeRef, named_types: &mut HashSet<String>
 }
 
 /// Compute the named types that must cross Swift trait bridge/plugin shim boundaries as strings.
+///
+/// **Every** `Named` type named anywhere in the trait's method signatures belongs in this set,
+/// with no exemption for methods that carry a Rust-side default body. The bridge protocol and the
+/// `Swift{Trait}Box` shims are emitted into `Sources/RustBridge/`, and the package's target graph
+/// runs `<Module> -> RustBridge`, so nothing in `RustBridge` can name a public DTO without
+/// inverting that dependency. `gen_rust_crate::plugin_inbound` states the same contract from the
+/// Rust side: a `Named` value crosses the inbound boundary as a JSON `String`.
+///
+/// A `has_default_impl` exemption here was the root cause of alef #258. It let a defaulted
+/// method's `Named` types keep their real Swift names in the emitted signature, which does not
+/// resolve in `RustBridge`, and then invited two rounds of downstream patching -- an invented
+/// enum case and a `JSONEncoder` call -- that each needed the type to be nameable to work. ~keep
 pub fn excluded_named_type_bridge_policy(trait_def: &TypeDef, excluded_types: &HashSet<String>) -> HashSet<String> {
     let mut policy = excluded_types.clone();
     for method in &trait_def.methods {
-        if method.has_default_impl {
-            continue;
-        }
         for param in &method.params {
             collect_named_types(&param.ty, &mut policy);
         }
@@ -114,32 +119,21 @@ pub fn excluded_named_type_bridge_policy(trait_def: &TypeDef, excluded_types: &H
     policy
 }
 
-/// Returns a Swift case identifier for a fieldless variant of the enum named `name`, asking the
-/// IR (`ApiSurface::enums`) rather than inferring anything from the `Named` discriminant.
-///
-/// Used to build a type-correct default trait method body: a non-excluded enum-typed return is
-/// declared as the enum's own Swift type (see `swift_return_type`), so the default body needs a
-/// real case of that enum, not a string literal. `None` when `name` is not a known enum, or is a
-/// known enum with no fieldless variant to default to (every variant carries data) -- callers
-/// fall back to the pre-existing placeholder body for those cases.
-fn unit_enum_default_case(name: &str, api: &ApiSurface) -> Option<String> {
-    let en = api.enums.iter().find(|e| e.name == name)?;
-    let variant = en.variants.iter().find(|v| v.fields.is_empty())?;
-    Some(swift_case_ident(&variant.name.to_lower_camel_case()))
-}
-
 /// Generate Swift trait bridge code for a single trait.
 ///
 /// `exclude_types` contains type names that are not visible in the Swift binding surface.
 /// These types are marshalled as JSON strings at trait boundaries.
 ///
-/// `api` supplies `ApiSurface::enums` for `unit_enum_default_case`.
+/// No default-method bodies are emitted. A Rust trait's default body is not carried in the IR, so
+/// any Swift stub alef could write here would be a guess -- and the inbound Rust wrapper calls the
+/// Swift shim for defaulted methods too, so that guess would *replace* the Rust default at
+/// runtime rather than shadow an unused stub. Declaring the method and letting conformance fail
+/// is the loud failure; a stub that compiles and returns the wrong value is the silent one. ~keep
 fn gen_single_trait_bridge_file(
     trait_name: &str,
     _bridge_cfg: &TraitBridgeConfig,
     trait_def: &TypeDef,
     exclude_types: &HashSet<String>,
-    api: &ApiSurface,
 ) -> String {
     let bridge_exclude_types = excluded_named_type_bridge_policy(trait_def, exclude_types);
 
@@ -160,52 +154,7 @@ fn gen_single_trait_bridge_file(
                 params => params_sig,
                 throws_clause => throws,
                 return_type => return_type,
-            },
-        ));
-    }
-
-    let mut default_methods = String::new();
-
-    for method in &trait_def.methods {
-        if !method.has_default_impl {
-            continue;
-        }
-
-        let method_camel = method.name.to_lower_camel_case();
-        let params_sig = swift_method_params(&method.params, &bridge_exclude_types);
-        let return_type = swift_return_type(&method.return_type, &bridge_exclude_types);
-        let throws = if method.error_type.is_some() { " throws" } else { "" };
-
-        let default_body = match &method.return_type {
-            TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool) => "return true".to_string(),
-            TypeRef::Primitive(crate::core::ir::PrimitiveType::I32) => "return 50".to_string(),
-            TypeRef::Primitive(crate::core::ir::PrimitiveType::U64) => "return 0".to_string(),
-            TypeRef::Primitive(crate::core::ir::PrimitiveType::Isize) => "return 0".to_string(),
-            TypeRef::String => "return \"\"".to_string(),
-            TypeRef::Unit => "".to_string(),
-            TypeRef::Vec(_) => "return []".to_string(),
-            // A `"{}"` string literal only type-checks against a declared `String` return, which
-            // `swift_return_type` (above) emits for an *excluded* Named type. A non-excluded
-            // enum's declared return is the enum's own type (its real name), so the default body
-            // must construct an actual case of it -- see `unit_enum_default_case`. A non-excluded,
-            // non-enum (struct) Named type keeps the pre-existing `"{}"` body: fixing that is a
-            // separate, broader change out of scope here.
-            TypeRef::Named(name) if !bridge_exclude_types.contains(name) => match unit_enum_default_case(name, api) {
-                Some(case) => format!("return .{case}"),
-                None => "return \"{}\"".to_string(),
-            },
-            TypeRef::Named(_) => "return \"{}\"".to_string(),
-            _ => "return nil".to_string(),
-        };
-
-        default_methods.push_str(&crate::backends::swift::template_env::render(
-            "swift_trait_default_method.swift.jinja",
-            minijinja::context! {
-                method_name => method_camel,
-                params => params_sig,
-                throws_clause => throws,
-                return_type => return_type,
-                default_body => default_body,
+                has_rust_default => method.has_default_impl,
             },
         ));
     }
@@ -268,7 +217,6 @@ fn gen_single_trait_bridge_file(
             adapter_class => format!("Swift{trait_name}Adapter"),
             protocol => protocol,
             protocol_methods => protocol_methods,
-            default_methods => default_methods,
             adapter_methods => adapter_methods,
         },
     )
@@ -568,7 +516,7 @@ mod tests {
         let bridge_cfg = make_bridge_cfg("TextBackend");
         let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
         let exclude_types = HashSet::new();
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
 
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].0, "SwiftPluginBridge.swift");
@@ -588,7 +536,7 @@ mod tests {
         bridge_cfg.exclude_languages = vec!["swift".to_string()];
         let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
         let exclude_types = HashSet::new();
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
 
         assert!(files.is_empty());
     }
@@ -600,7 +548,7 @@ mod tests {
         bridge_cfg.bind_via = BridgeBinding::OptionsField;
         let bridges = vec![("TextBackend".to_string(), &bridge_cfg, &trait_def)];
         let exclude_types = HashSet::new();
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
 
         assert!(files.is_empty());
     }
@@ -696,7 +644,7 @@ mod tests {
         let bridge_cfg = make_bridge_cfg("DocumentExtractor");
         let bridges = vec![("DocumentExtractor".to_string(), &bridge_cfg, &trait_def)];
         let exclude_types = HashSet::new();
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
 
         assert_eq!(files.len(), 2);
         let content = &files[1].1;
@@ -767,7 +715,7 @@ mod tests {
         let mut exclude_types = HashSet::new();
         exclude_types.insert("PrivatePayload".to_string());
 
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
         assert_eq!(files.len(), 2);
         let content = &files[1].1;
 
@@ -911,7 +859,7 @@ mod tests {
         let bridges = vec![("TextExtractor".to_string(), &bridge_cfg, &trait_def)];
         let exclude_types = HashSet::new();
 
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
         assert_eq!(files.len(), 2);
         let content = &files[1].1;
 
@@ -932,7 +880,7 @@ mod tests {
         let bridge_cfg = make_bridge_cfg("TextProcessor");
         let bridges = vec![("TextProcessor".to_string(), &bridge_cfg, &trait_def)];
         let exclude_types = HashSet::new();
-        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new(), &ApiSurface::default());
+        let files = gen_trait_bridge_files(&bridges, &exclude_types, &HashSet::new());
 
         let protocol_file = files
             .iter()

@@ -87,7 +87,7 @@ pub(super) fn emit_inbound_box_files(
     files
 }
 
-pub(super) fn emit_function_param_box_files(
+pub(in crate::backends::swift) fn emit_function_param_box_files(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
     rust_bridge_dir: &std::path::Path,
@@ -207,17 +207,6 @@ func decodeJson<T: Decodable>(_ json: String, as type: T.Type) throws -> T {
                 excluded_types,
             );
 
-        // Named types the IR reports as enums, minus the ones already JSON-excluded at this
-        // trait's boundary (an excluded type's protocol return is already a raw `String`, so
-        // `swift_shim_return_marshal` must not re-JSON-encode it). Only a non-excluded enum
-        // needs the enum-aware marshal -- see that function's doc for why.
-        let bridge_enum_names: HashSet<String> = api
-            .enums
-            .iter()
-            .filter(|en| !bridge_exclude_types.contains(&en.name))
-            .map(|en| en.name.clone())
-            .collect();
-
         for method in &trait_def.methods {
             let method_snake = method.name.to_snake_case();
             let shim_name = format!("alef_{method_snake}");
@@ -296,7 +285,7 @@ func decodeJson<T: Decodable>(_ json: String, as type: T.Type) throws -> T {
                         ),
                     }
                 } else {
-                    let return_lines = swift_shim_return_marshal(method, &bridge_call, &bridge_enum_names);
+                    let return_lines = swift_shim_return_marshal(method, &bridge_call);
                     let mut body = String::new();
                     for line in return_lines {
                         body.push_str(&crate::backends::swift::template_env::render(
@@ -329,7 +318,7 @@ func decodeJson<T: Decodable>(_ json: String, as type: T.Type) throws -> T {
 
                 let call_args_str = call_args.join(", ");
                 let bridge_call = format!("bridge.{method_camel}({call_args_str})");
-                let return_lines = swift_shim_return_marshal(method, &bridge_call, &bridge_enum_names);
+                let return_lines = swift_shim_return_marshal(method, &bridge_call);
                 for line in return_lines {
                     content.push_str(&crate::backends::swift::template_env::render(
                         "swift_function_param_box_setup_line.swift.jinja",
