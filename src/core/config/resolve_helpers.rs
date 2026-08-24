@@ -26,6 +26,23 @@ pub(crate) fn resolve_output_paths(
     paths
 }
 
+/// The default `packages/` root a language's generated tree lives in when neither a per-crate
+/// `[crates.output]` entry nor a workspace `[output]` template names one.
+///
+/// This is `packages/{lang}` for every target except `kotlin_android`, whose Gradle project root is
+/// spelled with a hyphen everywhere else in alef: `package_dir`, the build/lint/test/clean/setup
+/// defaults, the scaffolded `.gitattributes`, `sync_versions` and the backend's own
+/// [`DEFAULT_AAR_ROOT`](crate::backends::kotlin_android::DEFAULT_AAR_ROOT). Spelling this default
+/// from the config key alone made `alef generate` write `packages/kotlin_android` while
+/// `cd {output_dir} && gradle` built `packages/kotlin-android`, so the two never named the same
+/// tree. The constant is read rather than repeated so they cannot drift apart again. ~keep
+pub(crate) fn default_package_root(lang: &str) -> String {
+    match lang {
+        "kotlin_android" => crate::backends::kotlin_android::DEFAULT_AAR_ROOT.to_string(),
+        other => format!("packages/{other}"),
+    }
+}
+
 /// Extract an explicit per-crate output path for a language from [`OutputConfig`].
 pub(crate) fn per_crate_explicit_output(output: &OutputConfig, lang: &Language) -> Option<String> {
     let path = match lang {
