@@ -12,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod coverage;
 pub(crate) mod ledger_paths;
 pub mod migration;
-mod mock_harness_guard;
+pub(crate) mod mock_harness_guard;
 mod mock_url_defaults;
 pub mod ownership;
 mod recipe_policy;
