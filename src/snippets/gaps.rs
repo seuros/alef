@@ -1,5 +1,6 @@
 use crate::snippets::discovery::discover_snippets;
 use crate::snippets::error::Result;
+use crate::snippets::gap_coverage::GapCoverage;
 use crate::snippets::parser;
 use crate::snippets::types::{Language, Snippet, SnippetAnnotationKind};
 use serde::{Deserialize, Serialize};
@@ -56,6 +57,10 @@ pub struct GapReport {
     pub missing_language_variants: Vec<MissingLanguageVariant>,
     pub skips_without_reason: Vec<SnippetLocation>,
     pub unknown_languages: Vec<UnknownLanguage>,
+    /// What this run actually compared. Deliberately not part of [`Self::has_gaps`]: coverage
+    /// is context for the verdict, never a finding of its own. ~keep
+    #[serde(default)]
+    pub coverage: GapCoverage,
 }
 
 impl GapReport {
@@ -79,26 +84,40 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
         .into_iter()
         .filter(|snippet| !is_excluded(&snippet.path, &config.exclude))
         .collect();
-    let mut references: Vec<_> = discover_includes(&config.docs_dirs, &config.include_base_paths)?
+    let (discovered, docs_pages_scanned) = discover_includes_measured(&config.docs_dirs, &config.include_base_paths)?;
+    let mut references: Vec<_> = discovered
         .into_iter()
         .filter(|reference| !is_excluded(&reference.source, &config.exclude))
         .collect();
+    let include_references = references.len();
     references.extend(config.configured_references.iter().map(|target| SnippetReference {
         source: target.clone(),
         target: target.clone(),
         line: 1,
     }));
     let snippet_files = snippet_files(&snippets);
+    let (missing_language_variants, language_groups) = missing_language_variants(&snippets, &config.required_languages);
 
     Ok(GapReport {
         missing_references: missing_references(&references),
         unreferenced_snippets: unreferenced_snippets(&snippet_files, &references),
-        missing_language_variants: missing_language_variants(&snippets, &config.required_languages),
+        missing_language_variants,
         skips_without_reason: skips_without_reason(&snippets),
         unknown_languages: unknown_languages(&config.snippet_dirs)?
             .into_iter()
             .filter(|unknown| !is_excluded(&unknown.path, &config.exclude))
             .collect(),
+        coverage: GapCoverage {
+            snippet_roots: config.snippet_dirs.len(),
+            snippets_discovered: snippet_files.len(),
+            docs_roots: config.docs_dirs.len(),
+            docs_pages_scanned,
+            include_references,
+            configured_references: config.configured_references.len(),
+            required_languages: config.required_languages.len(),
+            language_groups,
+            include_base_paths: config.include_base_paths.len(),
+        },
     })
 }
 
@@ -346,16 +365,32 @@ fn is_excluded(path: &Path, exclude: &[PathBuf]) -> bool {
 ///
 /// Returns an error when a markdown file cannot be read.
 pub fn discover_includes(docs_dirs: &[PathBuf], include_base_paths: &[PathBuf]) -> Result<Vec<SnippetReference>> {
+    Ok(discover_includes_measured(docs_dirs, include_base_paths)?.0)
+}
+
+/// [`discover_includes`], also reporting how many documentation pages were opened.
+///
+/// The page count is the only honest answer to "did the include check look at anything?": a
+/// configured docs root holding no markdown, or holding markdown the walk filters out, yields
+/// zero references for the same reason an unconfigured root does, and the reference count
+/// alone cannot tell the two apart. Measured here rather than by a second walk so the number
+/// describes the walk the findings came from. ~keep
+fn discover_includes_measured(
+    docs_dirs: &[PathBuf],
+    include_base_paths: &[PathBuf],
+) -> Result<(Vec<SnippetReference>, usize)> {
     let mut references = Vec::new();
+    let mut pages_scanned = 0;
     for docs_dir in docs_dirs {
         for path in markdown_files(docs_dir) {
             let content = std::fs::read_to_string(&path)?;
+            pages_scanned += 1;
             references.extend(parse_includes(&content, &path, docs_dir, include_base_paths));
             references.extend(parse_mdx_content_imports(&content, &path));
         }
     }
     references.sort_by(|left, right| left.source.cmp(&right.source).then(left.line.cmp(&right.line)));
-    Ok(references)
+    Ok((references, pages_scanned))
 }
 
 /// Resolve a single include `target` string against the provided base paths.
@@ -520,9 +555,18 @@ fn unreferenced_snippets(snippet_files: &BTreeSet<PathBuf>, references: &[Snippe
     snippet_files.difference(&referenced).cloned().collect()
 }
 
-fn missing_language_variants(snippets: &[Snippet], required_languages: &[Language]) -> Vec<MissingLanguageVariant> {
+/// The missing variants, and the number of snippet groups compared to find them.
+///
+/// The group count is returned because an empty finding list has two very different causes: no
+/// group is missing a language, or no group was found at all. A group key exists only for a
+/// snippet path carrying a recognised `{language}` directory component, so a tree laid out any
+/// other way produces zero groups and a silently empty result. ~keep
+fn missing_language_variants(
+    snippets: &[Snippet],
+    required_languages: &[Language],
+) -> (Vec<MissingLanguageVariant>, usize) {
     if required_languages.is_empty() {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
     let mut groups: BTreeMap<PathBuf, BTreeSet<Language>> = BTreeMap::new();
@@ -533,6 +577,7 @@ fn missing_language_variants(snippets: &[Snippet], required_languages: &[Languag
         groups.entry(group).or_default().insert(snippet.language);
     }
 
+    let group_count = groups.len();
     let mut missing = Vec::new();
     for (group, languages) in groups {
         for language in required_languages {
@@ -544,7 +589,7 @@ fn missing_language_variants(snippets: &[Snippet], required_languages: &[Languag
             }
         }
     }
-    missing
+    (missing, group_count)
 }
 
 fn language_group(path: &Path, language: Language) -> Option<PathBuf> {
