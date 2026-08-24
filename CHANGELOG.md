@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `alef verify` no longer reports create-once scaffold seeds as frozen generated files.
+  `FrozenFile` means "alef would write this path and the write guard refuses it forever", and
+  for a create-once seed the antecedent is false: alef emits the path only when it is absent,
+  so on an existing file there is no write to refuse and nothing is lost by the missing marker.
+  Verify nonetheless listed them under a "Frozen create-once seeds detected" heading whose only
+  remedy was `alef adopt <path> --write --clobber-create-once-seeds` -- a flag alef's own output
+  labels DANGEROUS -- for files this project's documentation calls user-owned after scaffold
+  (`generated_header: false`). Measured in a consumer repo: `alef adopt --converged-only`
+  adopted 0 of 102 reported paths, 72 of them refused by alef itself as seeds, including 13
+  LICENSE files, `e2e/java/mvnw`, `kotlin-android/gradlew`, `build.zig.zon` and several
+  `.gitkeep`s. Recording ownership instead was considered and rejected: it proves nothing
+  further (alef still never rewrites the body, and the stamp covers generation inputs rather
+  than the seed's hand-grown contents) while handing the write guard the licence
+  `--clobber-create-once-seeds` exists to gate. The count is not dropped -- it is stated in the
+  new coverage report on every run, including a clean one, whereas the old heading was printed
+  only when some other check had already failed. Extends the 0.67.3 stale-seed fix rather than
+  duplicating it: that one taught the stamping pass to ask the question verify asks
+  (`stampable_output_paths`); this one removes the finding verify had no answer for.
+- **`alef verify` now reports its own coverage on every run.** Every finding verify produces is
+  a negative claim, so a green result was indistinguishable from a run that examined nothing --
+  and consumer CI reads it under job names like "Alef-generated bindings freshness" as a
+  whole-tree freshness gate. It is a far narrower claim: only files carrying an alef marker on
+  disk are held to a hash; markerless generated output (`.json`, `.jar`, lockfiles) is checked
+  for PATH PRESENCE only, so a present-but-wrong file passes; and anything outside the ownership
+  walk's scan set is never opened at all. Each run now prints the managed surface split into
+  content-verified / present-but-not-content-verified / absent, the files opened versus never
+  examined, unmarked create-once seeds, and marked files the surface does not claim. Follows the
+  `alef snippets audit` precedent of naming the check class a run skipped instead of printing a
+  bare clean result.
+- **A stamped `.clang-format` was written and then never read back by anything.** The ownership
+  walk's scan set is documented to be a superset of everything the emit table can stamp, and it
+  had drifted: `.clang-format` is scaffolded `generated_header: true` for every FFI target and
+  is stamped on write (it is YAML, so `#` line comments apply), but a dotfile with a single
+  leading dot reports `Path::extension() == None` and the name was never added to
+  `VERIFY_SCAN_FILENAMES`. The walk filters on name and extension before reading any content, so
+  the file was not merely unverified but unverifiABLE. The scan predicate now asks the emit
+  side's own `is_markable_path` directly, so anything alef stamps on write is opened on read and
+  the two sides cannot drift apart again by hand. Widening the scan set only causes more files
+  to be read; a file is still reported only when it carries a marker, so this adds no false
+  positives.
+
 - **e2e: classify `is_array` by the path the accessor actually addresses.** `FieldResolver::is_array` was a bare `fields_array` set lookup against the raw fixture spelling, while `accessor` — and `result_relative_path`, the answer the zig, brew and C generators share — strip a virtual namespace label first. A field spelled `interaction.action_results` therefore rendered as the slice `result.ActionResults` and classified as not-an-array, so Go's `contains`/`contains_all`/`not_contains`/`contains_any` renderers emitted `string(result.ActionResults)` instead of `jsonString(...)`; converting a `[]T` to `string` is not legal Go, so the generated package failed to build. `is_array` now routes its fallback through `result_relative_path` (which also applies alias resolution) rather than growing a second hand-rolled namespace strip beside `is_optional`'s, keeping one definition of where a fixture field's value lives.
 
 ## [0.67.3] - 2026-08-24
