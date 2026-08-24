@@ -4,7 +4,7 @@ use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::ApiSurface;
 use ahash::{AHashMap, AHashSet};
 
-use super::async_wrappers::{adapter_param_python_type, emit_adapter_wrapper};
+use super::async_wrappers::{adapter_param_python_type, emit_adapter_wrapper, streaming_item_converter};
 use super::converters::emit_converters;
 use super::function_wrappers::emit_function_wrappers;
 use super::helper_type_mapping::classify_param_type;
@@ -266,6 +266,14 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         }
     }
 
+    let options_dataclass_types =
+        crate::backends::pyo3::gen_bindings::types::options_dataclass_type_names(api, reexported_types);
+    let streaming_item_converters: std::collections::BTreeSet<String> = adapters
+        .iter()
+        .filter_map(|adapter| streaming_item_converter(adapter, &options_dataclass_types))
+        .collect();
+
+    options_imports.extend(streaming_item_converters.iter().map(String::as_str));
     native_imports.sort_unstable();
     options_imports.sort_unstable();
     if !native_imports.is_empty() {
@@ -340,7 +348,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     );
 
     for adapter in adapters {
-        emit_adapter_wrapper(&mut out, adapter, &api.types);
+        emit_adapter_wrapper(&mut out, adapter, &api.types, &options_dataclass_types);
     }
 
     out

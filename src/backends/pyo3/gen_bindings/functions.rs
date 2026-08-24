@@ -9,6 +9,8 @@ mod return_error;
 mod signature_params;
 
 #[cfg(test)]
+mod streaming_yield_tests;
+#[cfg(test)]
 mod tests;
 
 #[allow(unused_imports)]
