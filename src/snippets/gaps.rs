@@ -96,7 +96,9 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
         line: 1,
     }));
     let snippet_files = snippet_files(&snippets);
-    let (missing_language_variants, language_groups) = missing_language_variants(&snippets, &config.required_languages);
+    let expectations = ledger_expectations(&config.snippet_dirs)?;
+    let (missing_language_variants, language_groups) =
+        missing_language_variants(&snippets, &config.required_languages, &expectations);
 
     Ok(GapReport {
         missing_references: missing_references(&references),
@@ -193,44 +195,135 @@ pub fn coverage_ledger_references_allowing_missing_cells(snippet_dirs: &[PathBuf
     collect_coverage_ledger_references(snippet_dirs, MissingCells::Tolerate)
 }
 
+/// Every `.alef-snippet-coverage.json` ledger found beneath `snippet_root`, sorted for stable
+/// ordering. Shared by every caller that needs to locate ledgers before reading them, so the
+/// walk semantics (symlinks never followed, one error format) live in exactly one place. ~keep
+fn find_coverage_manifests(snippet_root: &Path) -> Result<Vec<PathBuf>> {
+    let mut manifests = WalkDir::new(snippet_root)
+        .follow_links(false)
+        .into_iter()
+        .map(|entry| {
+            entry.map_err(|error| {
+                crate::snippets::error::Error::Other(format!(
+                    "walking snippet root {} for coverage ledgers: {error}",
+                    snippet_root.display()
+                ))
+            })
+        })
+        .filter_map(|entry| match entry {
+            Ok(entry)
+                if entry.file_type().is_file() && entry.file_name() == crate::e2e::snippets::COVERAGE_MANIFEST =>
+            {
+                Some(Ok(entry.into_path()))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    manifests.sort();
+    Ok(manifests)
+}
+
+fn manifest_output_root(manifest: &Path) -> Result<&Path> {
+    manifest.parent().ok_or_else(|| {
+        crate::snippets::error::Error::Other(format!("coverage ledger has no output root: {}", manifest.display()))
+    })
+}
+
 fn collect_coverage_ledger_references(snippet_dirs: &[PathBuf], missing_cells: MissingCells) -> Result<Vec<PathBuf>> {
     let mut references = Vec::new();
     for snippet_root in snippet_dirs {
-        let mut manifests = WalkDir::new(snippet_root)
-            .follow_links(false)
-            .into_iter()
-            .map(|entry| {
-                entry.map_err(|error| {
-                    crate::snippets::error::Error::Other(format!(
-                        "walking snippet root {} for coverage ledgers: {error}",
-                        snippet_root.display()
-                    ))
-                })
-            })
-            .filter_map(|entry| match entry {
-                Ok(entry)
-                    if entry.file_type().is_file() && entry.file_name() == crate::e2e::snippets::COVERAGE_MANIFEST =>
-                {
-                    Some(Ok(entry.into_path()))
-                }
-                Ok(_) => None,
-                Err(error) => Some(Err(error)),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        manifests.sort();
-        for manifest in manifests {
-            let output_root = manifest.parent().ok_or_else(|| {
-                crate::snippets::error::Error::Other(format!(
-                    "coverage ledger has no output root: {}",
-                    manifest.display()
-                ))
-            })?;
+        for manifest in find_coverage_manifests(snippet_root)? {
+            let output_root = manifest_output_root(&manifest)?;
             references.extend(read_coverage_ledger_references(output_root, &manifest, missing_cells)?);
         }
     }
     references.sort();
     references.dedup();
     Ok(references)
+}
+
+/// Which languages the e2e snippet pipeline actually expected for each fixture, and which
+/// fixture generated each tracked snippet file.
+///
+/// Read from every coverage ledger beneath the configured snippet roots. A fixture/language
+/// cell an `exclude_functions` list (or any other exclusion surface
+/// `function_excluded_for_language` folds in -- crate-wide `[crates.exclude]`, a per-language
+/// `exclude_types`/`[crates.<lang>].opaque_types` capability gap, a per-crate
+/// `[workspace.crates."<name>"]` override, or a `#[alef::skip]`/`#[alef::exclude]` attribute
+/// upstream in the IR) dropped never enters `expected` in the first place -- see
+/// `e2e::snippets::mod::generate`'s `~keep` comment above `coverage.expected.push`. Reusing that
+/// set here, rather than re-deriving which functions are excluded from `alef.toml` a second
+/// time, is what keeps the language-parity check from disagreeing with the generator that
+/// produced the very tree it is checking. ~keep
+#[derive(Debug, Clone, Default)]
+struct LedgerExpectations {
+    expected_by_fixture: BTreeMap<String, BTreeSet<Language>>,
+    fixture_by_path: BTreeMap<PathBuf, String>,
+    /// Every language that appears in `expected` for *any* fixture, project-wide.
+    ///
+    /// A single fixture's `expected` set cannot by itself tell "this language was excluded for
+    /// this function" apart from "this language is not one the project's e2e generation covers
+    /// at all" -- both look like "language absent from this fixture's expected set". Only the
+    /// first case is a false positive; the second is a language `required_languages` compares
+    /// that e2e generation never touches (a hand-authored addition on top of generated
+    /// snippets), and suppressing it there would silently zero out the parity check for that
+    /// entire language across the whole project. Checking this project-wide set first tells the
+    /// two apart: a language absent here was never covered by the ledger to begin with, so the
+    /// per-fixture absence carries no information and the finding must stand. ~keep
+    covered_languages: BTreeSet<Language>,
+}
+
+impl LedgerExpectations {
+    /// The languages a tracked group is expected to provide, or `None` when no ledger tracks
+    /// any snippet in the group -- a hand-authored tree the e2e pipeline never generated, for
+    /// which the required-languages list itself remains the only source of truth.
+    fn expected_languages(&self, group_fixture: Option<&str>) -> Option<&BTreeSet<Language>> {
+        self.expected_by_fixture.get(group_fixture?)
+    }
+
+    /// Whether a missing `(group, language)` pair is explained by an intentional per-fixture
+    /// exclusion rather than a real gap: the group is ledger-tracked, the language is one the
+    /// ledger covers somewhere in the project, and this fixture's own `expected` set does not
+    /// include it.
+    fn excludes(&self, group_fixture: Option<&str>, language: Language) -> bool {
+        self.covered_languages.contains(&language)
+            && self
+                .expected_languages(group_fixture)
+                .is_some_and(|expected| !expected.contains(&language))
+    }
+}
+
+fn ledger_expectations(snippet_dirs: &[PathBuf]) -> Result<LedgerExpectations> {
+    let mut expectations = LedgerExpectations::default();
+    for snippet_root in snippet_dirs {
+        for manifest in find_coverage_manifests(snippet_root)? {
+            let output_root = manifest_output_root(&manifest)?;
+            let content = std::fs::read_to_string(&manifest)?;
+            let ledger: crate::e2e::snippets::SnippetCoverageLedger = serde_json::from_str(&content)?;
+            for key in &ledger.expected {
+                let language = Language::from_session_target(&key.language);
+                if language == Language::Unknown {
+                    continue;
+                }
+                expectations
+                    .expected_by_fixture
+                    .entry(key.fixture_id.clone())
+                    .or_default()
+                    .insert(language);
+                expectations.covered_languages.insert(language);
+            }
+            for metadata in &ledger.generated_metadata {
+                if let Ok(path) = crate::e2e::snippets::ledger_paths::resolve_tracked_path(output_root, &metadata.path)
+                {
+                    expectations
+                        .fixture_by_path
+                        .insert(path, metadata.key.fixture_id.clone());
+                }
+            }
+        }
+    }
+    Ok(expectations)
 }
 
 /// Resolve every snippet beneath an Astro content collection root when that
@@ -564,29 +657,45 @@ fn unreferenced_snippets(snippet_files: &BTreeSet<PathBuf>, references: &[Snippe
 fn missing_language_variants(
     snippets: &[Snippet],
     required_languages: &[Language],
+    expectations: &LedgerExpectations,
 ) -> (Vec<MissingLanguageVariant>, usize) {
     if required_languages.is_empty() {
         return (Vec::new(), 0);
     }
 
     let mut groups: BTreeMap<PathBuf, BTreeSet<Language>> = BTreeMap::new();
+    let mut group_fixture: BTreeMap<PathBuf, &str> = BTreeMap::new();
     for snippet in snippets {
         let Some(group) = language_group(&snippet.path, snippet.language) else {
             continue;
         };
+        if let Some(fixture_id) = expectations.fixture_by_path.get(&snippet.path) {
+            group_fixture.entry(group.clone()).or_insert(fixture_id.as_str());
+        }
         groups.entry(group).or_default().insert(snippet.language);
     }
 
     let group_count = groups.len();
     let mut missing = Vec::new();
     for (group, languages) in groups {
+        let fixture = group_fixture.get(&group).copied();
         for language in required_languages {
-            if !languages.contains(language) {
-                missing.push(MissingLanguageVariant {
-                    group: group.clone(),
-                    language: *language,
-                });
+            if languages.contains(language) {
+                continue;
             }
+            // A ledger-tracked fixture that never expected this language for e2e generation --
+            // dropped by `exclude_functions` or any surface it folds in -- has no gap here: the
+            // variant was never going to exist. A group no ledger tracks at all (hand-authored,
+            // or generated by a run with no coverage manifest), or a language the ledger never
+            // covers for any fixture, keeps the original behaviour, since `required_languages`
+            // is the only source of truth available for it. ~keep
+            if expectations.excludes(fixture, *language) {
+                continue;
+            }
+            missing.push(MissingLanguageVariant {
+                group: group.clone(),
+                language: *language,
+            });
         }
     }
     (missing, group_count)

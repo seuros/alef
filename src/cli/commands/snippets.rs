@@ -80,6 +80,9 @@ pub enum SnippetsAction {
         #[arg(short, long, num_args = 0..)]
         docs: Vec<PathBuf>,
 
+        /// Languages every language-grouped snippet must provide, either as a snippet fence
+        /// tag (`python`, `go`, `kotlin`, ...) or a session target name (`kotlin_android`,
+        /// `node`, `wasm`, ...).
         #[arg(short = 'L', long, value_delimiter = ',')]
         required_languages: Option<Vec<String>>,
 
@@ -166,6 +169,28 @@ fn parse_language_filter(languages: Option<&[String]>) -> Option<LanguageFilter>
     })
 }
 
+/// Resolve one `required_languages` entry (config key or `--required-languages` value) to a
+/// [`Language`].
+///
+/// Accepts both a snippet fence tag (`python`, `kotlin`) and a session target name
+/// (`kotlin_android`, `kotlin-android`, `node`, `wasm`) -- the vocabulary a consumer's
+/// `alef.toml` already uses for every other per-language surface, and the name a user reaches
+/// for first because it is the directory/target name everywhere else in the file.
+/// `Language::from_fence_tag` alone rejected `kotlin_android`/`kotlin-android` outright with no
+/// hint that a *different* vocabulary was expected. Mirrors [`parse_language_filter`], which
+/// already accepts both forms for `--lang`. ~keep
+fn resolve_required_language(value: &str) -> Result<Language, String> {
+    let language = Language::from_session_target(value);
+    if language == Language::Unknown {
+        Err(format!(
+            "unknown language `{value}` (expected a snippet fence tag such as `python`/`go`/`kotlin`, or a \
+             session target name such as `kotlin_android`/`node`/`wasm`)"
+        ))
+    } else {
+        Ok(language)
+    }
+}
+
 /// Report `--lang` values that named nothing, so a typo cannot silently widen or empty the run.
 fn reject_unrecognised_languages(filter: Option<&LanguageFilter>) -> Result<(), ExitCode> {
     let Some(filter) = filter else { return Ok(()) };
@@ -232,8 +257,8 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
     let required_languages = match config
         .required_languages
         .iter()
-        .map(|language| language.parse::<Language>())
-        .collect::<Result<Vec<Language>, _>>()
+        .map(|language| resolve_required_language(language))
+        .collect::<Result<Vec<Language>, String>>()
     {
         Ok(languages) => languages,
         Err(error) => {
@@ -793,15 +818,26 @@ fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
     if let Err(code) = reject_missing_configured_directories(snippet_dirs, docs_dirs) {
         return code;
     }
-    let required: Vec<Language> = required_languages
+    // An unrecognised `--required-languages` value must not silently drop out of the parity
+    // check: it used to (`Language::from_fence_tag` returning `Unknown` was filtered away with
+    // no message), so a typo -- or reaching for a session target name like `kotlin_android`
+    // instead of its fence tag `kotlin` -- quietly shrank the comparison instead of failing it.
+    // ~keep
+    let required: Vec<Language> = match required_languages
         .map(|languages| {
             languages
                 .iter()
-                .map(|language| Language::from_fence_tag(language))
-                .filter(|language| *language != Language::Unknown)
-                .collect()
+                .map(|language| resolve_required_language(language))
+                .collect::<Result<Vec<Language>, String>>()
         })
-        .unwrap_or_default();
+        .transpose()
+    {
+        Ok(required) => required.unwrap_or_default(),
+        Err(error) => {
+            tracing::error!("invalid --required-languages entry: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let unset = crate::snippets::gap_coverage::unset_gap_inputs(docs_dirs, &required, include_base_paths);
     let resolved_base_paths: Vec<PathBuf> = if include_base_paths.is_empty() {
         docs_dirs.to_vec()
