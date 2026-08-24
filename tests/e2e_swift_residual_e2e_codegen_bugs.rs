@@ -500,15 +500,72 @@ type = "string"
     );
 }
 
-/// Regression for the ci-e2e swift failure (`ContractTests.swift`): an opaque-parent
-/// `Option<Vec<T>>` field (e.g. `elements: Option<Vec<Element>>`) is natively bridged by
-/// swift-bridge as `Optional<RustVec<Element>>`, NOT as a JSON-string `RustString`. The e2e
-/// classifier previously treated `f.optional` on a Vec field as disqualifying it from being
-/// countable, which routed it into the JSON-bridged bucket and made `count_min` fall back to
-/// `.toString().count` — a compile error on `Optional<RustVec<T>>`, which has no `.toString()`.
-/// The fix must emit `?.count ?? 0` on the native `RustVec` handle instead.
+/// Regression for the ci-e2e swift failure (`ContractTests.swift:129`).
+///
+/// This test previously asserted the opposite of what is checked below, on the theory that an
+/// opaque parent's `Option<Vec<Named(struct)>>` field (e.g. `elements: Option<Vec<Element>>`) is
+/// natively bridged by swift-bridge as `Optional<RustVec<Element>>`. That theory does not survive
+/// reading the emitting backend: `field_needs_json_bridge` in
+/// `src/backends/swift/gen_rust_crate/type_bridge.rs` is
+/// `needs_json_bridge(ty) || (optional && matches!(ty, TypeRef::Vec(_)))` — for ANY optional
+/// `Vec<_>` field this is `true` unconditionally, with no dependence on the parent `TypeDef`'s
+/// `is_opaque` at all. Both call sites that decide the Swift-visible getter shape —
+/// `wrappers::getters::emit_getters` (`getters.rs:100`, `:137`, gating which Rust wrapper method
+/// body is emitted) and `extern_block::emit_extern_block_for_type` (`extern_block.rs:142`, gating
+/// the swift-bridge extern signature Swift actually links against) — check this exact predicate
+/// first in their if/else chain, before either one ever consults `parent_first_class`. The
+/// opaque-only "native `RustVec`" branch inside `emit_vec_getter`
+/// (`getter_vec_named_optional.jinja`) is therefore unreachable for `field.optional == true`: the
+/// json-bridge check above always short-circuits it first. Running this exact fixture through
+/// `render_with_config` confirms it: the field renders as `result.elements().toString().count`,
+/// the same JSON-bridged `-> String` shape a first-class parent gets, not `elements()?.count ?? 0`
+/// on a native handle. `count_min` must therefore treat an optional `Vec<Named(struct)>` field as
+/// JSON-bridged regardless of the parent's opacity — the two shapes below (opaque and first-class
+/// parent) must render identically. ~keep
 #[test]
-fn count_min_on_optional_vec_of_named_uses_native_optional_count() {
+fn count_min_on_optional_vec_of_named_struct_is_json_bridged_on_opaque_parent() {
+    let rendered = render_optional_vec_of_named_count_min(true);
+
+    assert!(
+        rendered.contains("result.elements().toString().count"),
+        "count_min on an opaque parent's Option<Vec<Named(struct)>> field must use the \
+         JSON-bridged `.toString().count` shape — the getter returns `-> String`, never \
+         `Optional<RustVec<T>>`. Rendered:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("elements()?.count"),
+        "must not optional-chain `.count` onto a native RustVec handle that this field's \
+         getter never returns. Rendered:\n{rendered}"
+    );
+}
+
+/// Sibling of the opaque-parent case above, asserting the SAME json-bridged shape for a
+/// first-class parent — the exact pairing this bug needs, because a fix for one parent shape
+/// silently regressing the other is precisely how `2332b260a` shipped red through two releases.
+/// See `optional_vec_of_serde_struct_on_first_class_parent_is_json_bridged` in
+/// `src/e2e/codegen/swift/values.rs` for the classifier-level counterpart of this end-to-end
+/// check. ~keep
+#[test]
+fn count_min_on_optional_vec_of_named_struct_is_json_bridged_on_first_class_parent() {
+    let rendered = render_optional_vec_of_named_count_min(false);
+
+    assert!(
+        rendered.contains("result.elements().toString().count"),
+        "count_min on a first-class parent's Option<Vec<Named(struct)>> field must use the \
+         JSON-bridged `.toString().count` shape. Rendered:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("elements()?.count"),
+        "must not optional-chain `.count` onto a native RustVec handle that this field's \
+         getter never returns. Rendered:\n{rendered}"
+    );
+}
+
+/// Shared fixture builder for the two `count_min` json-bridge tests above. `parent_is_opaque`
+/// is the only variable between the two calls — everything else about the shape (an optional
+/// `Vec<Named(struct)>` field on a `has_serde` parent) is held constant so the two assertions are
+/// a true opaque-vs-first-class pair, not two differently-shaped fixtures that happen to agree.
+fn render_optional_vec_of_named_count_min(parent_is_opaque: bool) -> String {
     let toml = r#"
 [workspace]
 languages = ["swift"]
@@ -552,21 +609,7 @@ type = "string"
     );
     elements_field.optional = true;
     let mut parent = make_type("TextResult", vec![elements_field]);
-    // The parent must stay opaque for this shape to be natively bridged. On a first-class parent,
-    // `emit_vec_struct_serde_getter` collapses an optional `Vec<Named(serde struct)>` into a
-    // whole-field `-> String`, a `RustString` in Swift that genuinely has no `.count`. ~keep
-    parent.is_opaque = true;
+    parent.is_opaque = parent_is_opaque;
     let result_ir = vec![parent, make_type("Element", vec![make_field("text", TypeRef::String)])];
-    let rendered = render_with_config(toml, fixture, result_ir);
-
-    assert!(
-        rendered.contains("elements()?.count ?? 0"),
-        "count_min on an Optional<RustVec<T>> field must unwrap with `?.count ?? 0` \
-         on the native RustVec handle. Rendered:\n{rendered}"
-    );
-    assert!(
-        !rendered.contains("elements().toString()"),
-        "must not fall back to `.toString()` on a native Optional<RustVec<T>> handle, \
-         which has no `.toString()` method. Rendered:\n{rendered}"
-    );
+    render_with_config(toml, fixture, result_ir)
 }
