@@ -206,6 +206,8 @@ mod local_naming_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod typed_data_import_tests;
+#[cfg(test)]
 mod void_not_error_call_tests;
 
 /// Returns `None` when no override sets `result_type`; the renderer then falls

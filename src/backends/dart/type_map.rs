@@ -97,6 +97,19 @@ impl TypeMapper for DartMapper {
     }
 }
 
+/// Every class name this mapper can emit that lives in `dart:typed_data`.
+///
+/// Kept beside the mapping that produces them: an emitter deciding whether to import
+/// `dart:typed_data` must consult this rather than spot-check one name, which is how
+/// `Float64List`-typed trait stubs came to be emitted without their library. ~keep
+pub const DART_TYPED_DATA_CLASSES: [&str; 3] = ["Uint8List", "Int64List", "Float64List"];
+
+/// Whether `rendered` -- an already-mapped Dart type or a block of generated Dart --
+/// spells any class from `dart:typed_data`, and therefore needs that import.
+pub fn needs_dart_typed_data(rendered: &str) -> bool {
+    DART_TYPED_DATA_CLASSES.iter().any(|class| rendered.contains(class))
+}
+
 /// Map `Vec<primitive>` to the matching `dart:typed_data` typed list, mirroring
 /// the FRB widening alef applies in `gen_rust_crate`: every Rust integer is
 /// widened to `i64` (→ `Int64List`) and every float to `f64` (→ `Float64List`).

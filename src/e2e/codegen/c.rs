@@ -952,25 +952,7 @@ fn resolve_fixture_call_info(
         trait_bridge_identity.as_ref().map(|(_, name)| name.as_str()),
     );
 
-    if info.function_name.is_empty()
-        && let Some((operation, derived_name)) = trait_bridge_identity
-    {
-        info.function_name = derived_name;
-        // `unregister`/`clear` C exports always take a trailing `out_error` out-param
-        // that the shared, language-agnostic `[crates.e2e.calls.*]` args config has no
-        // way to express (other bindings surface it via an exception/error-return
-        // mechanism instead). `register` needs no such treatment here: register-shaped
-        // fixtures require vtable/user_data wiring this generic void-call fallback does
-        // not build, so they never reach this branch as a `returns_void` call in
-        // practice. See `unregister_fn.jinja` / `clear_fn.jinja` for the ABI shapes.
-        if matches!(
-            operation,
-            crate::e2e::codegen::recipe::TraitBridgeRegistryOperation::Unregister
-                | crate::e2e::codegen::recipe::TraitBridgeRegistryOperation::Clear
-        ) {
-            info.extra_args.push("NULL".to_string());
-        }
-    }
+    trait_bridge_registry_identity::apply(&mut info, call, lang, trait_bridge_identity);
 
     let default_overrides = e2e_config.call.overrides.get(lang);
 
@@ -1045,6 +1027,9 @@ mod snippet_regressions;
 mod std_arg_tests;
 mod streaming;
 mod test_function;
+mod trait_bridge_registry_identity;
+#[cfg(test)]
+mod trait_bridge_registry_symbol_tests;
 mod trait_bridge_snippet;
 mod visitor;
 mod void_call_status;
