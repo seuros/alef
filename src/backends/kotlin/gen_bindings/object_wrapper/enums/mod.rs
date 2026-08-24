@@ -6,6 +6,7 @@ use super::types::{
 use crate::backends::kotlin::gen_bindings::helpers::emit_cleaned_kdoc;
 use crate::backends::kotlin::gen_bindings::shared::{kotlin_field_name_with_type, to_screaming_snake};
 use crate::codegen::naming::wire_variant_value;
+use crate::codegen::serde_enum_repr::SerdeEnumRepr;
 
 mod heterogeneous;
 mod tagged;
@@ -239,17 +240,21 @@ pub(crate) fn emit_enum(en: &EnumDef, out: &mut String, package: &str, text_type
 
         out.push_str("}\n");
 
+        let tagged_repr = match crate::codegen::serde_enum_repr::serde_enum_repr(en) {
+            repr @ (SerdeEnumRepr::Internal { .. } | SerdeEnumRepr::Adjacent { .. }) => Some(repr),
+            SerdeEnumRepr::External | SerdeEnumRepr::Untagged => None,
+        };
         if needs_deserializer {
-            if let Some(tag_field) = &en.serde_tag {
-                emit_kotlin_tagged_deserializer(out, en, tag_field);
+            if let Some(repr) = &tagged_repr {
+                emit_kotlin_tagged_deserializer(out, en, repr);
             } else if en.serde_untagged {
                 emit_kotlin_untagged_deserializer(out, en);
             } else if needs_heterogeneous_default {
                 emit_kotlin_heterogeneous_default_deserializer(out, en);
             }
         }
-        if let Some(tag_field) = &en.serde_tag {
-            emit_kotlin_tagged_serializer(out, en, tag_field);
+        if let Some(repr) = &tagged_repr {
+            emit_kotlin_tagged_serializer(out, en, repr);
         } else if en.serde_untagged {
             emit_kotlin_untagged_serializer(out, en);
         } else if needs_heterogeneous_default {

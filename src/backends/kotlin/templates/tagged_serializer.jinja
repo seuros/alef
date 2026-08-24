@@ -1,0 +1,36 @@
+
+private class {{ class_name }}Serializer : com.fasterxml.jackson.databind.ser.std.StdSerializer<{{ class_name }}>({{ class_name }}::class.java) {
+    @Suppress("LongMethod")
+    override fun serialize(
+        value: {{ class_name }},
+        gen: com.fasterxml.jackson.core.JsonGenerator,
+        provider: com.fasterxml.jackson.databind.SerializerProvider,
+    ) {
+        @Suppress("UNCHECKED_CAST")
+        val mapper = (gen.codec as? com.fasterxml.jackson.databind.ObjectMapper) ?: com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()
+        val node: com.fasterxml.jackson.databind.node.ObjectNode = when (value) {
+{% for variant in variants %}
+            is {{ class_name }}.{{ variant.name }} -> {
+{% if is_adjacent %}
+                val n = mapper.createObjectNode()
+                n.put("{{ tag_field }}", "{{ variant.discriminator }}")
+{% if not variant.is_unit %}
+                n.set<com.fasterxml.jackson.databind.JsonNode>("{{ content_field }}", mapper.valueToTree<com.fasterxml.jackson.databind.JsonNode>({{ variant.payload_expression }}))
+{% endif %}
+                n
+{% elif variant.is_unit %}
+                val n = mapper.createObjectNode()
+                n.put("{{ tag_field }}", "{{ variant.discriminator }}")
+                n
+{% else %}
+                @Suppress("UNCHECKED_CAST")
+                val n = mapper.valueToTree<com.fasterxml.jackson.databind.node.ObjectNode>({{ variant.payload_expression }}) as com.fasterxml.jackson.databind.node.ObjectNode
+                n.put("{{ tag_field }}", "{{ variant.discriminator }}")
+                n
+{% endif %}
+            }
+{% endfor %}
+        }
+        mapper.writeTree(gen, node)
+    }
+}

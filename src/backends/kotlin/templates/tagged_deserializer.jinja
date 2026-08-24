@@ -1,0 +1,37 @@
+
+private class {{ class_name }}Deserializer : com.fasterxml.jackson.databind.deser.std.StdDeserializer<{{ class_name }}>({{ class_name }}::class.java) {
+    @Suppress("LongMethod")
+    override fun deserialize(
+        parser: com.fasterxml.jackson.core.JsonParser,
+        ctx: com.fasterxml.jackson.databind.DeserializationContext,
+    ): {{ class_name }} {
+        val node = parser.codec.readTree<com.fasterxml.jackson.databind.node.ObjectNode>(parser)
+        val tag = node.get("{{ tag_field }}")?.asText()
+{% if is_adjacent %}
+{% if needs_content %}
+        fun payload(): com.fasterxml.jackson.databind.JsonNode =
+            node.get("{{ content_field }}")
+                ?: throw com.fasterxml.jackson.databind.exc.InvalidFormatException(
+                    parser, "Missing '{{ content_field }}' payload for {{ class_name }}", tag, {{ class_name }}::class.java,
+                )
+{% endif %}
+{% else %}
+        @Suppress("UNCHECKED_CAST")
+        val payload = (node.deepCopy() as com.fasterxml.jackson.databind.node.ObjectNode).apply { remove("{{ tag_field }}") }
+{% endif %}
+        return when (tag) {
+{% for variant in variants %}
+{% if variant.is_unit %}
+            "{{ variant.discriminator }}" -> {{ class_name }}.{{ variant.name }}
+{% elif variant.is_tuple %}
+            "{{ variant.discriminator }}" -> {{ class_name }}.{{ variant.name }}(ctx.readTreeAsValue<{{ variant.inner_class }}>({{ payload_reference }}, {{ variant.inner_class }}::class.java))
+{% else %}
+            "{{ variant.discriminator }}" -> ctx.readTreeAsValue<{{ class_name }}.{{ variant.name }}>({{ payload_reference }}, {{ class_name }}.{{ variant.name }}::class.java)
+{% endif %}
+{% endfor %}
+            else -> throw com.fasterxml.jackson.databind.exc.InvalidFormatException(
+                parser, "Unknown {{ class_name }} tag", tag, {{ class_name }}::class.java,
+            )
+        }
+    }
+}

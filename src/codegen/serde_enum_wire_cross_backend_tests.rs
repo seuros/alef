@@ -190,8 +190,81 @@ fn swift_bridged_output() -> String {
     generate(&SwiftBackend, &bridged_api(), &bridged_config())
 }
 
+fn kotlin_android_union_output() -> String {
+    generate(&KotlinAndroidBackend, &plain_api(), &ResolvedCrateConfig::default())
+}
+
+/// Isolate one generated Jackson codec class, so an assertion cannot be satisfied by a matching
+/// literal in its sibling or elsewhere in the module.
+fn kotlin_codec_body(kotlin: &str, codec: &str) -> String {
+    let marker = format!("private class {ENUM_NAME}{codec} :");
+    let start = kotlin
+        .find(&marker)
+        .unwrap_or_else(|| panic!("Kotlin-Android emits `{marker}`:\n{kotlin}"));
+    let rest = &kotlin[start..];
+    let end = rest.find("\n}\n").expect("the codec class is closed");
+    rest[..end].to_string()
+}
+
+/// The JSON the generated Kotlin serializer writes for each variant, reconstructed from the
+/// emitted code: each `when` arm builds one object node, and whether it also sets the content key
+/// decides whether the payload reaches the wire.
+fn kotlin_emitted_wire_forms(kotlin: &str) -> Vec<String> {
+    let body = kotlin_codec_body(kotlin, "Serializer");
+    assert!(
+        !body.contains("as com.fasterxml.jackson.databind.node.ObjectNode"),
+        "the payload must not be cast to ObjectNode — a newtype variant's `String` payload is a \
+         TextNode, and the cast throws at runtime instead of putting it on the wire:\n{body}"
+    );
+    let payload_json = serde_json::to_string(SAMPLE_PAYLOAD).expect("the string payload serializes");
+    body.split(&format!("n.put(\"{TAG_KEY}\", \""))
+        .skip(1)
+        .map(|chunk| {
+            let (discriminator, rest) = chunk.split_once('"').expect("each tag put is a closed literal");
+            if rest.contains(&format!("(\"{CONTENT_KEY}\",")) {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\",\"{CONTENT_KEY}\":{payload_json}}}")
+            } else {
+                format!("{{\"{TAG_KEY}\":\"{discriminator}\"}}")
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn kotlin_android_serializer_emits_exactly_what_serde_writes() {
+    let emitted = kotlin_emitted_wire_forms(&kotlin_android_union_output());
+    assert_eq!(
+        emitted,
+        serde_wire_forms(),
+        "the generated Jackson serializer must produce serde's adjacent wire form for every \
+         variant; injecting the tag into the payload's own object is serde's *internal* form, \
+         which Rust rejects, and it cannot represent a scalar payload at all"
+    );
+}
+
+#[test]
+fn kotlin_android_deserializer_reads_the_payload_from_serdes_content_key() {
+    let body = kotlin_codec_body(&kotlin_android_union_output(), "Deserializer");
+    assert!(
+        body.contains(&format!("node.get(\"{CONTENT_KEY}\")")),
+        "the deserializer must read the payload from serde's content key:\n{body}"
+    );
+    assert!(
+        !body.contains(&format!("remove(\"{TAG_KEY}\")")),
+        "stripping the tag and treating the remainder as the payload is serde's *internal* form; \
+         an adjacently tagged document keeps its payload under the content key:\n{body}"
+    );
+    for tag in serde_variant_tags() {
+        assert!(
+            body.contains(&format!("\"{tag}\" ->")),
+            "the deserializer must dispatch on serde's variant tag {tag:?}:\n{body}"
+        );
+    }
+}
+
 /// Whether a backend already speaks serde's adjacent form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+
 enum AdjacentSupport {
     /// Emits both the tag key and the content key, i.e. serde's adjacent shape.
     Correct,
@@ -212,13 +285,7 @@ const ADJACENT_TAGGING_SUPPORT: &[(&str, AdjacentSupport)] = &[
     ("go", AdjacentSupport::Correct),
     ("java", AdjacentSupport::Correct),
     ("csharp", AdjacentSupport::Correct),
-    (
-        "kotlin_android",
-        AdjacentSupport::KnownDivergent(
-            "its Jackson adapter removes the tag node and treats the remainder as the payload, \
-             which is serde's internal shape",
-        ),
-    ),
+    ("kotlin_android", AdjacentSupport::Correct),
     (
         "pyo3",
         AdjacentSupport::KnownDivergent(
