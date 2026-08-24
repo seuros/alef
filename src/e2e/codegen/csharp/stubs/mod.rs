@@ -1,5 +1,8 @@
 //! C# e2e test-backend stub emission.
 
+#[cfg(test)]
+mod class_scope_tests;
+
 use crate::backends::csharp::trait_bridge::csharp_type_visible_pub;
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::e2e::codegen::TestBackendEmission;
@@ -173,7 +176,7 @@ fn emit_csharp_stub_method(
 
 /// Emit a C# test backend stub.
 ///
-/// Generates a nested private class implementing the bridge interface
+/// Generates a class implementing the bridge interface
 /// (`I{TraitName}`) with minimal stub methods, then returns a
 /// `{TraitName}Bridge.Register(new TestStub_{fixture_id}())` expression
 /// as the registration call site.
@@ -246,10 +249,16 @@ pub(super) fn emit_test_backend_with_class_name(
 
     let mut setup = String::new();
 
-    // Emit a private nested class declaration. This block will be placed at class scope
-    // (not inside any method body) by the caller — the emitter adds 4 more spaces of
-    // indentation, so each line here carries a 4-space prefix matching the visitor pattern.
-    let _ = writeln!(setup, "    private class {stub_class} : {iface_name}");
+    // Emit the class declaration. This block will be placed at class scope (not inside any
+    // method body) by the caller — the emitter adds 4 more spaces of indentation, so each
+    // line here carries a 4-space prefix matching the visitor pattern.
+    //
+    // No explicit accessibility modifier: nested types default to `private` (the e2e test
+    // class context), while types declared at file/namespace scope after top-level
+    // statements default to `internal` — an explicit `private` there is illegal (CS1527),
+    // and a docs snippet emits this same block at exactly that scope. `build_csharp_visitor`
+    // settled on the same spelling for the same reason. ~keep
+    let _ = writeln!(setup, "    class {stub_class} : {iface_name}");
     let _ = writeln!(setup, "    {{");
 
     // Track which super-trait methods we've already emitted to avoid duplication.
