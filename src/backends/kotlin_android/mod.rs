@@ -18,8 +18,11 @@
 //!
 //! Forces `KotlinFfiStyle::Jni` regardless of the workspace configuration.
 //! Consumers must ship a `<crate>-jni` Rust crate exporting
-//! `Java_<package>_<Module>Bridge_native<Method>` symbols per JNI spec §5.11.3
-//! and link `lib<crate>_jni.so` into `jniLibs/<abi>/`.
+//! `Java_<package>_<Module>Bridge_native<Method>` symbols per JNI spec §5.11.3.
+//! The emitted `buildAndroidJniLibs` gradle task cross-compiles that crate with
+//! `cargo-ndk` into `jniLibs/<abi>/` for release and publish task graphs; a
+//! workflow that stages prebuilt libraries there itself is detected and left
+//! alone, and `-Palef.skipAndroidJni=true` disables the task outright.
 //!
 //! Distinct from the JVM-only `alef-backend-kotlin` backend.
 

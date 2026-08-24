@@ -6,9 +6,30 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::template_versions::{maven, toolchain};
 
 use crate::backends::kotlin_android::naming::{
-    aar_artifact_id, aar_group_id, compile_sdk, jvm_target, min_sdk, namespace,
+    aar_artifact_id, aar_group_id, abis, compile_sdk, jvm_target, min_sdk, namespace,
 };
+use crate::backends::kotlin_android::template_env::render;
 use crate::scaffold::{parse_author, scaffold_meta, xml_escape};
+
+/// Render the Gradle task that cross-compiles the JNI crate into `src/main/jniLibs/<abi>/`.
+///
+/// The ABI list is the same [`abis`] the `.gitkeep` scaffolder uses, so the directories alef
+/// creates and the directories alef fills can never name two different sets.
+fn render_jni_libs_task(config: &ResolvedCrateConfig, jni_manifest_workspace_path: &str, jni_lib_name: &str) -> String {
+    let abi_literals = abis(config)
+        .iter()
+        .map(|abi| format!("\"{abi}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    render(
+        "android_jni_libs_task.jinja",
+        minijinja::context! {
+            abi_literals => abi_literals,
+            jni_lib_name => jni_lib_name,
+            jni_manifest_workspace_path => jni_manifest_workspace_path,
+        },
+    )
+}
 
 /// Emit `build.gradle.kts` for the generated AAR module.
 ///
@@ -52,6 +73,7 @@ pub fn emit(config: &ResolvedCrateConfig) -> String {
     let version_placeholder = resolved_version.as_str();
     let jni_manifest_workspace_path = format!("crates/{}-jni/Cargo.toml", config.jni_crate_base());
     let jni_lib_name = config.jni_lib_name();
+    let android_jni_libs_task = render_jni_libs_task(config, &jni_manifest_workspace_path, &jni_lib_name);
 
     let capsule_deps: String = {
         let mut deps: Vec<(String, String)> = config
@@ -359,6 +381,7 @@ tasks.named("preBuild") {{
     dependsOn("validateJniLibsForRelease")
 }}
 
+{android_jni_libs_task}
 mavenPublishing {{
     configure(
         AndroidSingleVariantLibrary(
@@ -567,6 +590,124 @@ description = "Test library"
         assert!(
             !gradle.contains("gradle.taskGraph.hasTask(\"assembleRelease\")"),
             "guard must not use hasTask(String) (bare name never matches the qualified task path)"
+        );
+    }
+
+    /// Shared neutral fixture for the Android ABI cross-compile contract. `extra` is appended
+    /// verbatim so a test can add `[crates.kotlin_android] abis = [...]`.
+    fn android_config_toml(extra: &str) -> String {
+        format!(
+            r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.kotlin_android]
+package = "dev.example"
+{extra}
+
+[crates.jni]
+
+[crates.scaffold]
+repository = "https://github.com/example/test-lib"
+license = "MIT"
+description = "Test library"
+"#
+        )
+    }
+
+    fn emit_android_gradle(extra: &str) -> String {
+        use crate::core::config::new_config::NewAlefConfig;
+
+        let cfg: NewAlefConfig = toml::from_str(&android_config_toml(extra)).expect("fixture config parses");
+        let resolved = cfg.resolve().expect("fixture config resolves");
+        emit(&resolved[0])
+    }
+
+    #[test]
+    fn build_gradle_cross_compiles_the_jni_crate_for_every_configured_abi() {
+        let gradle = emit_android_gradle("");
+
+        assert!(
+            gradle.contains(r#"tasks.register("buildAndroidJniLibs", Exec::class)"#),
+            "the release guard demands lib*_jni.so per ABI, so something must produce it"
+        );
+        assert!(
+            gradle.contains(r#"val androidAbis = listOf("arm64-v8a", "x86_64")"#),
+            "the cross-compile must target the configured ABI list, defaulted to arm64-v8a/x86_64"
+        );
+        assert!(
+            gradle.contains(r#""cargo", "ndk""#),
+            "a host `cargo build` cannot produce an Android ABI library; cargo-ndk must be invoked"
+        );
+        assert!(
+            gradle.contains(r#"listOf("-t", abi)"#),
+            "each configured ABI must be passed to cargo-ndk as its own -t target"
+        );
+        assert!(
+            gradle.contains(r#""-o","#) && gradle.contains("jniLibsRoot.absolutePath"),
+            "cargo-ndk must write straight into src/main/jniLibs so the AAR picks the libraries up"
+        );
+        assert!(
+            gradle.contains(r#"val jniLibsRoot = layout.projectDirectory.dir("src/main/jniLibs").asFile"#),
+            "the cross-compile output root must be the jniLibs source dir the AAR packages"
+        );
+        assert!(
+            gradle.contains(r#"it.resolve("crates/test-lib-jni/Cargo.toml")"#),
+            "the cross-compile must build the crate's own JNI manifest, derived from config"
+        );
+    }
+
+    #[test]
+    fn android_cross_compile_is_wired_ahead_of_the_release_guard_and_the_jni_libs_merge() {
+        let gradle = emit_android_gradle("");
+
+        assert!(
+            gradle.contains("tasks.named(\"validateJniLibsForRelease\") {\n    dependsOn(\"buildAndroidJniLibs\")"),
+            "the guard must depend on the task that satisfies it, or the guard still fails first"
+        );
+        assert!(
+            gradle.contains(r#"it.name.endsWith("JniLibFolders")"#),
+            "AGP's jniLibs merge consumes the cross-compiled output and needs an explicit dependency"
+        );
+    }
+
+    #[test]
+    fn android_cross_compile_skips_debug_graphs_prestaged_libs_and_explicit_opt_out() {
+        let gradle = emit_android_gradle("");
+
+        assert!(
+            gradle.contains("alef.skipAndroidJni"),
+            "a publish workflow that stages prebuilt libraries needs an unconditional opt-out"
+        );
+        assert!(
+            gradle.contains(r#"androidAbis.any { abi -> !jniLibsRoot.resolve(abi).resolve(expectedJniLib).isFile }"#),
+            "already-staged ABI libraries must not be rebuilt, so an NDK-less publish runner keeps working"
+        );
+        assert!(
+            gradle.contains("onlyIf {"),
+            "the release-graph, prestaged and opt-out conditions must gate execution, not configuration"
+        );
+        assert!(
+            gradle.contains("cargo install cargo-ndk"),
+            "a missing cross-compiler must name its own remediation instead of `command not found`"
+        );
+    }
+
+    #[test]
+    fn android_cross_compile_honors_a_configured_abi_list() {
+        let gradle = emit_android_gradle(r#"abis = ["armeabi-v7a"]"#);
+
+        assert!(
+            gradle.contains(r#"val androidAbis = listOf("armeabi-v7a")"#),
+            "the ABI list must come from `[crates.kotlin_android] abis`, never a hardcoded pair"
+        );
+        assert!(
+            !gradle.contains("arm64-v8a\", \"x86_64"),
+            "a configured ABI list must replace the default, not be appended to it"
         );
     }
 }
