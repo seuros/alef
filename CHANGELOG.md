@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **e2e/zig**: JSON-mode assertions no longer navigate a virtual namespace prefix as a real JSON
+  key. A fixture field like `batch.completed_count` emitted
+  `result.object.get("batch").?.object.get("completed_count").?`, force-unwrapping a key absent
+  from every real payload and aborting the generated zig test. The conditional namespace
+  stripping — previously duplicated in the brew and C e2e generators — is now
+  `FieldResolver::result_relative_path`, shared by all three. A genuinely nested path
+  (`metrics.total_lines`) still keeps its full chain.
+- **docs**: rustdoc fence attributes are no longer copied verbatim into generated markdown. A doc
+  comment fence of ` ```rust,no_run ` produced a page whose fence language was the literal
+  `rust,no_run` — a markdown info string's language is its first whitespace-delimited token —
+  which `alef snippets audit --docs` correctly rejected as an unknown fence language. Recognised
+  rustdoc attributes (`no_run`, `ignore`, `should_panic`, `compile_fail`, `test_harness`,
+  `standalone_crate`, `edition####`, `ignore-<target>`, `E####`) are dropped; unrecognised comma
+  tokens move into the fence's meta slot so the language token stays intact. Consumers could not
+  fix this at the source: dropping `no_run` makes the doctest actually execute.
+- **cli**: `alef snippets audit` now names its coverage when no `--docs` root is given. A
+  snippets-only invocation printed a bare `Audit clean: no issues found.` while the
+  documentation-page checks (fence languages, include targets) never ran, so a CI job that
+  omitted `--docs` read green for a check class it had skipped.
+
 - Wire `src/codegen/config_gen/tests/generators.rs` into the module tree
   (`src/codegen/config_gen/tests.rs` was missing `mod generators;`), so its 18 config-generator
   unit tests actually compile and run. Fixed 14 stale `FieldDef`/`TypeDef` struct literals
