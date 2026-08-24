@@ -192,6 +192,35 @@ fn a_fixture_that_declares_its_own_absolute_url_is_not_reported_as_a_placeholder
     );
 }
 
+/// The report field is only half the signal: a `SnippetGenerationReport` field nothing
+/// prints is exactly the silence this change is about. The run must also say it, once,
+/// naming the key that fixes it.
+#[test]
+#[tracing_test::traced_test]
+fn an_unconfigured_run_warns_once_naming_the_key_that_fixes_it() {
+    python_snippet_report(None);
+
+    assert!(
+        logs_contain("sample_base_url"),
+        "the warning must name the config key a project sets to fix this"
+    );
+    assert!(
+        logs_contain("extract_uri"),
+        "the warning must name the affected fixture, not just a count"
+    );
+}
+
+#[test]
+#[tracing_test::traced_test]
+fn a_configured_run_stays_silent() {
+    python_snippet_report(Some(SAMPLE_HOST));
+
+    assert!(
+        !logs_contain("sample_base_url"),
+        "a project that configured a real sample host must not be nagged"
+    );
+}
+
 /// A `sample_base_url` that cannot form a URL fails the run. Falling back to the placeholder
 /// instead would publish a broken address *and* discard the operator's stated intent.
 #[test]
