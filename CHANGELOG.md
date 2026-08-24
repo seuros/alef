@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **e2e: classify `is_array` by the path the accessor actually addresses.** `FieldResolver::is_array` was a bare `fields_array` set lookup against the raw fixture spelling, while `accessor` — and `result_relative_path`, the answer the zig, brew and C generators share — strip a virtual namespace label first. A field spelled `interaction.action_results` therefore rendered as the slice `result.ActionResults` and classified as not-an-array, so Go's `contains`/`contains_all`/`not_contains`/`contains_any` renderers emitted `string(result.ActionResults)` instead of `jsonString(...)`; converting a `[]T` to `string` is not legal Go, so the generated package failed to build. `is_array` now routes its fallback through `result_relative_path` (which also applies alias resolution) rather than growing a second hand-rolled namespace strip beside `is_optional`'s, keeping one definition of where a fixture field's value lives.
+
 ## [0.67.3] - 2026-08-24
 
 ### Fixed
