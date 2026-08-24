@@ -2,6 +2,7 @@ pub mod audit;
 pub mod cache;
 pub mod discovery;
 pub mod error;
+pub mod gap_coverage;
 pub mod gaps;
 pub mod output;
 pub mod parser;

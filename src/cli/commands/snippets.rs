@@ -78,6 +78,16 @@ pub enum SnippetsAction {
         /// unset, only the docs root is searched (preserving the prior behaviour).
         #[arg(long = "include-base-path", num_args = 0..)]
         include_base_paths: Vec<PathBuf>,
+
+        /// Fail instead of passing when an input the verdict depends on is unset.
+        ///
+        /// A CI job whose entire purpose is gap detection must not be able to go green by
+        /// being unconfigured. Without `--docs` no documentation page is opened and the
+        /// include-target check compares nothing; without `--required-languages` the
+        /// language-parity check never runs. Either way an unconfigured run reported
+        /// "No gaps found." ~keep
+        #[arg(long)]
+        strict: bool,
     },
 }
 
@@ -101,7 +111,14 @@ pub fn run(action: SnippetsAction) -> ExitCode {
             docs,
             required_languages,
             include_base_paths,
-        } => run_gaps(&snippets, &docs, required_languages.as_ref(), &include_base_paths),
+            strict,
+        } => run_gaps(&GapInvocation {
+            snippet_dirs: &snippets,
+            docs_dirs: &docs,
+            required_languages: required_languages.as_deref(),
+            include_base_paths: &include_base_paths,
+            strict,
+        }),
     }
 }
 
@@ -301,6 +318,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         snippet_directories: &snippet_directories,
         docs_directories: &docs_directories,
         include_base_paths: &include_base_paths,
+        configured_include_base_paths: &config.include_base_paths,
         required_languages: &required_languages,
         exclude: &excluded_paths,
         readme: crate_config.readme.as_ref(),
@@ -348,6 +366,10 @@ struct ConfiguredCheckInputs<'a> {
     snippet_directories: &'a [PathBuf],
     docs_directories: &'a [PathBuf],
     include_base_paths: &'a [PathBuf],
+    /// The raw `[crates.docs.snippets].include_base_paths` value, before `run_check` substitutes
+    /// the docs roots for an empty list. Kept alongside the resolved list because unset-ness is
+    /// unobservable after that fallback. ~keep
+    configured_include_base_paths: &'a [PathBuf],
     required_languages: &'a [Language],
     exclude: &'a [PathBuf],
     readme: Option<&'a crate::core::config::ReadmeConfig>,
@@ -413,8 +435,27 @@ fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::
         }))
     };
 
+    // Naming the unset keys is the whole point: the skip below is deliberate, but it used to be
+    // silent, so a consumer whose `alef.toml` omitted `docs_dirs` and `required_languages` read a
+    // green `snippets check` for a gap pass that never ran. ~keep
+    let unset = crate::snippets::gap_coverage::unset_gap_inputs(
+        inputs.docs_directories,
+        inputs.required_languages,
+        inputs.configured_include_base_paths,
+    );
+    for line in crate::snippets::gap_coverage::unset_input_lines(&unset, inputs.strict) {
+        tracing::warn!("{line}");
+    }
     if inputs.docs_directories.is_empty() && inputs.required_languages.is_empty() {
-        return Ok((audit_failure, false));
+        let unconfigured_failure = inputs.strict && crate::snippets::gap_coverage::has_vacuous_input(&unset);
+        if unconfigured_failure {
+            tracing::error!(
+                "strict: the snippet gap pass was skipped entirely because neither docs_dirs nor \
+                 required_languages is configured under [crates.docs.snippets]; a strict run must not pass \
+                 on a check that compared nothing"
+            );
+        }
+        return Ok((audit_failure, unconfigured_failure));
     }
     let gap_report = detect_gaps(&GapConfig {
         docs_dirs: inputs.docs_directories.to_vec(),
@@ -690,16 +731,30 @@ fn run_audit(snippet_dirs: &[PathBuf], docs_dirs: &[PathBuf], require_frontmatte
     }
 }
 
-fn run_gaps(
-    snippet_dirs: &[PathBuf],
-    docs_dirs: &[PathBuf],
-    required_languages: Option<&Vec<String>>,
-    include_base_paths: &[PathBuf],
-) -> ExitCode {
+/// One `alef snippets gaps` invocation, grouped so the call stays under clippy's argument
+/// threshold.
+struct GapInvocation<'a> {
+    snippet_dirs: &'a [PathBuf],
+    docs_dirs: &'a [PathBuf],
+    required_languages: Option<&'a [String]>,
+    /// The raw `--include-base-path` list, before the docs-root fallback. Unset-ness is only
+    /// observable here. ~keep
+    include_base_paths: &'a [PathBuf],
+    strict: bool,
+}
+
+fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
+    let GapInvocation {
+        snippet_dirs,
+        docs_dirs,
+        required_languages,
+        include_base_paths,
+        strict,
+    } = *invocation;
     if let Err(code) = reject_missing_configured_directories(snippet_dirs, docs_dirs) {
         return code;
     }
-    let required = required_languages
+    let required: Vec<Language> = required_languages
         .map(|languages| {
             languages
                 .iter()
@@ -708,6 +763,7 @@ fn run_gaps(
                 .collect()
         })
         .unwrap_or_default();
+    let unset = crate::snippets::gap_coverage::unset_gap_inputs(docs_dirs, &required, include_base_paths);
     let resolved_base_paths: Vec<PathBuf> = if include_base_paths.is_empty() {
         docs_dirs.to_vec()
     } else {
@@ -735,9 +791,28 @@ fn run_gaps(
             return ExitCode::FAILURE;
         }
     };
+    // Printed on every run, gaps or none. A coverage report that appears only alongside
+    // findings is absent from precisely the runs whose scope a reader needs to weigh. ~keep
+    for line in report.coverage.report_lines() {
+        crate::bin_cli::output::line(line);
+    }
+    for line in crate::snippets::gap_coverage::unset_input_lines(&unset, strict) {
+        crate::bin_cli::output::line(line);
+    }
+    let unconfigured_failure = strict && crate::snippets::gap_coverage::has_vacuous_input(&unset);
+    if unconfigured_failure {
+        tracing::error!(
+            "--strict: the gap check cannot pass unconfigured — an unset input above left a check class \
+             with nothing to compare, so a clean result would prove nothing"
+        );
+    }
     if !report.has_gaps() {
         crate::bin_cli::output::line("No gaps found.");
-        return ExitCode::SUCCESS;
+        return if unconfigured_failure {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
     }
     if !report.missing_references.is_empty() {
         crate::bin_cli::output::line(format!(

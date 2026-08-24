@@ -68,27 +68,32 @@ fn strict_coverage_rejects_every_non_validation_status() {
     assert!(!is_incomplete_status(SnippetStatus::Pass));
 }
 
-#[test]
-fn configured_audit_is_skipped_without_a_docs_surface() {
-    let directory = tempfile::tempdir().expect("temp directory");
-    let snippets = directory.path().join("snippets");
+fn audit_and_gaps_without_a_docs_surface(directory: &Path, strict: bool) -> (bool, bool) {
+    let snippets = directory.join("snippets");
     std::fs::create_dir_all(&snippets).expect("snippet directory");
     std::fs::write(snippets.join("weird.md"), "```gibberish\nvalue\n```\n").expect("write snippet");
     let snippet_directories = [snippets];
 
-    let (audit_failure, gap_failure) = run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+    run_configured_audit_and_gaps(&ConfiguredCheckInputs {
         snippet_directories: &snippet_directories,
         docs_directories: &[],
         include_base_paths: &[],
+        configured_include_base_paths: &[],
         required_languages: &[],
         exclude: &[],
         readme: None,
         content_collections: &std::collections::BTreeMap::new(),
-        workspace_root: directory.path(),
+        workspace_root: directory,
         require_frontmatter: false,
-        strict: true,
+        strict,
     })
-    .expect("audit and gap pass");
+    .expect("audit and gap pass")
+}
+
+#[test]
+fn configured_audit_is_skipped_without_a_docs_surface() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let (audit_failure, gap_failure) = audit_and_gaps_without_a_docs_surface(directory.path(), false);
 
     assert!(
         !audit_failure,
@@ -97,7 +102,22 @@ fn configured_audit_is_skipped_without_a_docs_surface() {
     );
     assert!(
         !gap_failure,
-        "gaps are meaningless without docs dirs or required languages"
+        "gaps are meaningless without docs dirs or required languages, so a non-strict run stays green"
+    );
+}
+
+/// The `snippets check` half of the same defect: with neither `docs_dirs` nor
+/// `required_languages` configured the gap pass is skipped outright, and it used to report
+/// "no failure" without a word about it — a strict CI gate passing on a check that never ran.
+/// ~keep
+#[test]
+fn a_strict_check_fails_when_the_gap_pass_was_skipped_for_want_of_configuration() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let (_, gap_failure) = audit_and_gaps_without_a_docs_surface(directory.path(), true);
+
+    assert!(
+        gap_failure,
+        "a strict run must not pass on a gap check that compared nothing"
     );
 }
 
@@ -130,6 +150,7 @@ fn readme_snippet_mappings_count_as_references_for_the_strict_gate() {
         snippet_directories: &snippet_directories,
         docs_directories: &docs_directories,
         include_base_paths: &docs_directories,
+        configured_include_base_paths: &docs_directories,
         required_languages: &[],
         exclude: &[],
         readme: Some(&readme),
@@ -151,6 +172,7 @@ fn readme_snippet_mappings_count_as_references_for_the_strict_gate() {
         snippet_directories: &snippet_directories,
         docs_directories: &docs_directories,
         include_base_paths: &docs_directories,
+        configured_include_base_paths: &docs_directories,
         required_languages: &[],
         exclude: &[],
         readme: None,
@@ -289,4 +311,155 @@ fn an_audit_with_no_docs_root_names_the_check_class_it_skipped() {
 fn an_audit_with_a_docs_root_reports_a_plain_clean_result() {
     let summary = audit_scope_summary(&[PathBuf::from("docs")]);
     assert_eq!(summary, "Audit clean: no issues found.");
+}
+
+/// `ExitCode` is neither `PartialEq` nor readable as an integer, so compare the one thing it
+/// does expose. Stable within a process, which is all an in-process assertion needs. ~keep
+fn is_success(code: ExitCode) -> bool {
+    format!("{code:?}") == format!("{:?}", ExitCode::SUCCESS)
+}
+
+/// The consumer incident, reproduced: a snippet tree whose every file is vouched for by a
+/// generated-coverage ledger, so the gap detector finds nothing to report even though it
+/// opened no documentation page and compared no language.
+///
+/// Returns the snippet root. `languages` seeds one snippet file per named language directory,
+/// each already recorded in the ledger. ~keep
+fn ledger_backed_snippet_tree(root: &Path, languages: &[&str]) -> PathBuf {
+    use crate::e2e::snippets::{
+        COVERAGE_MANIFEST, COVERAGE_MANIFEST_VERSION, GeneratedSnippetMetadata, SnippetCoverageKey,
+        SnippetCoverageLedger,
+    };
+
+    let snippets = root.join("snippets");
+    let generated = snippets.join("generated");
+    let mut generated_paths = Vec::new();
+    let mut metadata = Vec::new();
+    let mut keys = Vec::new();
+    for language in languages {
+        let relative = PathBuf::from(language).join("topic").join("generated.md");
+        std::fs::create_dir_all(generated.join(language).join("topic")).expect("language directory");
+        std::fs::write(generated.join(&relative), format!("```{language}\n// generated\n```\n"))
+            .expect("generated snippet");
+        let key = SnippetCoverageKey {
+            fixture_id: "generated".into(),
+            language: (*language).into(),
+        };
+        generated_paths.push(relative.clone());
+        metadata.push(GeneratedSnippetMetadata {
+            key: key.clone(),
+            path: relative,
+            language: (*language).into(),
+            target: (*language).into(),
+            session: (*language).into(),
+            requires: Vec::new(),
+            side_effect: crate::e2e::fixture::SideEffectClass::Safe,
+        });
+        keys.push(key);
+    }
+    let ledger = SnippetCoverageLedger {
+        format_version: COVERAGE_MANIFEST_VERSION,
+        generated_paths,
+        generated_metadata: metadata,
+        expected: keys.clone(),
+        generated: keys,
+        missing: Vec::new(),
+        documented_exceptions: Vec::new(),
+    };
+    std::fs::write(
+        generated.join(COVERAGE_MANIFEST),
+        serde_json::to_vec_pretty(&ledger).expect("ledger serializes"),
+    )
+    .expect("coverage manifest");
+    snippets
+}
+
+/// Half one: an unconfigured gap check must not be able to report a pass under `--strict`.
+///
+/// Without `--strict` it still exits zero — that is the documented behaviour for an
+/// intentionally snippets-only invocation — which is exactly why the strict half has to exist:
+/// a CI job whose entire purpose is gap detection would otherwise go green having compared
+/// nothing. ~keep
+#[test]
+fn an_unconfigured_gap_check_passes_only_until_strict_is_asked_for() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_snippet_tree(directory.path(), &["python"]);
+
+    let lenient = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: &[],
+        required_languages: None,
+        include_base_paths: &[],
+        strict: false,
+    });
+    assert!(
+        is_success(lenient),
+        "the tree really is gap-free by the detector's own reckoning; without --strict that stays a pass"
+    );
+
+    let strict = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: &[],
+        required_languages: None,
+        include_base_paths: &[],
+        strict: true,
+    });
+    assert!(
+        !is_success(strict),
+        "--strict must refuse a verdict reached with no docs root and no required languages"
+    );
+}
+
+/// Half two, the half that keeps half one from being vacuous: a *configured* run still finds a
+/// real gap. A `--strict` flag that failed everything would satisfy the test above on its own.
+/// ~keep
+#[test]
+fn a_configured_gap_check_still_detects_a_real_missing_language_variant() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_snippet_tree(directory.path(), &["python"]);
+    let docs = directory.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("docs root");
+    std::fs::write(docs.join("index.md"), "# Usage\n").expect("docs page");
+
+    let required = ["python".to_string(), "rust".to_string()];
+    let code = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: std::slice::from_ref(&docs),
+        required_languages: Some(&required),
+        include_base_paths: std::slice::from_ref(&docs),
+        strict: false,
+    });
+
+    assert!(
+        !is_success(code),
+        "the tree has a python snippet group and no rust variant; that is a gap and must fail even \
+         without --strict"
+    );
+}
+
+/// The other half of the sabotage check: a fully configured run over a tree with no gap must
+/// still pass under `--strict`. Without this, `--strict` could be a blanket failure and both
+/// tests above would still be green. ~keep
+#[test]
+fn a_configured_strict_gap_check_passes_when_there_is_no_gap() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_snippet_tree(directory.path(), &["python", "rust"]);
+    let docs = directory.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("docs root");
+    std::fs::write(docs.join("index.md"), "# Usage\n").expect("docs page");
+
+    let required = ["python".to_string(), "rust".to_string()];
+    let code = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: std::slice::from_ref(&docs),
+        required_languages: Some(&required),
+        include_base_paths: std::slice::from_ref(&docs),
+        strict: true,
+    });
+
+    assert!(
+        is_success(code),
+        "every required language is present and every snippet is ledger-backed; --strict must not \
+         fail a run that genuinely compared something and found nothing"
+    );
 }
