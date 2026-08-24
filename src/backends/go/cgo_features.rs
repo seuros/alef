@@ -1,7 +1,7 @@
 //! Feature macros the generated cgo preambles must define before including the C header.
 
 use crate::codegen::c_consumer;
-use crate::core::config::{Language, ResolvedCrateConfig};
+use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::ApiSurface;
 
 /// The `-D` flags every generated cgo preamble must carry alongside its `#include` of the FFI
@@ -25,9 +25,29 @@ pub(crate) fn cgo_feature_cflags(api: &ApiSurface, config: &ResolvedCrateConfig)
 }
 
 /// The header guard macros for the features the linked cdylib actually enables, sorted.
+///
+/// The feature list comes from [`crate::codegen::cfg::effective_ffi_default_features`] -- the ONE
+/// derivation of what the compiled FFI cdylib builds with by default -- and never from a local
+/// re-derivation. The macros must describe the *library*, not this binding's own configured
+/// feature list. The two are routinely different: `features_for_language(Language::Go)` decides
+/// which gated call sites `with_cfg_filtered_deep` emits, but the cdylib is built once by
+/// `cargo build -p {ffi_crate}` with no `--features` override, so its exported symbol set is
+/// exactly the FFI crate's `[features] default` list. Deriving the `-D` set from the Go list
+/// instead would define macros for features the library was never built with, turning a clear
+/// compile-time `could not determine what C.<symbol> refers to` into an opaque link failure;
+/// deriving it from the library keeps a genuinely-disabled feature genuinely absent and reports
+/// any Go-vs-FFI divergence at the exact symbol (`warn_on_ffi_feature_drift` warns about the same
+/// divergence at config level).
+///
+/// This function used to answer that question with its own private copy of the derivation, kept
+/// in step with `scaffold::languages::ffi::scaffold_ffi` by hand. That is the exact duplication
+/// `effective_ffi_default_features` was introduced to end (see
+/// `github.com/xberg-io/alef/issues/257`): two generators reading the same IR and disagreeing.
+/// Only the Go-specific half stays here -- the macro-name mangling cbindgen expects
+/// ([`guard_macro_name`]) and the `-D` formatting. ~keep
 pub(crate) fn cgo_feature_macros(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<String> {
     let ffi_prefix = config.ffi_prefix();
-    let mut macros: Vec<String> = ffi_default_features(api, config)
+    let mut macros: Vec<String> = crate::codegen::cfg::effective_ffi_default_features(api, config)
         .iter()
         .map(|feature| guard_macro_name(&ffi_prefix, feature))
         .collect();
@@ -40,48 +60,6 @@ pub(crate) fn cgo_feature_macros(api: &ApiSurface, config: &ResolvedCrateConfig)
 /// crate whose symbol prefix is `ffi_prefix`.
 pub(crate) fn guard_macro_name(ffi_prefix: &str, feature: &str) -> String {
     feature_macro_name(&c_consumer::export_type_prefix(ffi_prefix), feature)
-}
-
-/// The FFI crate's `[features] default` list — the feature set the shipped cdylib is built with.
-///
-/// The macros must describe the *library*, not this binding's own configured feature list. The
-/// two are routinely different: `features_for_language(Language::Go)` decides which gated call
-/// sites `with_cfg_filtered_deep` emits, but the cdylib is built once by `cargo build -p
-/// {ffi_crate}` with no `--features` override, so its exported symbol set is exactly this
-/// `default` list. Deriving the `-D` set from the Go list instead would define macros for
-/// features the library was never built with, turning a clear compile-time
-/// `could not determine what C.<symbol> refers to` into an opaque link failure; deriving it from
-/// the library keeps a genuinely-disabled feature genuinely absent and reports any Go-vs-FFI
-/// divergence at the exact symbol (`warn_on_ffi_feature_drift` warns about the same divergence
-/// at config level).
-///
-/// Mirrors `scaffold::languages::ffi::scaffold_ffi`, which is private to the scaffolding module
-/// and is what actually writes the `default` list into the FFI `Cargo.toml`. The mirror is
-/// verified rather than trusted: `ffi_default_features_matches_the_generated_ffi_cargo_toml`
-/// below drives the real scaffolder and compares, so a change to either derivation fails a test
-/// instead of silently desynchronising the macro set from the library. ~keep
-fn ffi_default_features(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<String> {
-    let passthrough: Vec<&str> = config
-        .features_for_language(Language::Ffi)
-        .iter()
-        .map(String::as_str)
-        .filter(|feature| *feature != "serde")
-        .collect();
-    let extra_declared: &[String] = config.ffi.as_ref().map(|c| c.extra_features.as_slice()).unwrap_or(&[]);
-    let emitted: Vec<String> = crate::codegen::cfg::collect_cfg_features(api)
-        .into_iter()
-        .filter(|name| {
-            !name.is_empty()
-                && name != "serde"
-                && !passthrough.contains(&name.as_str())
-                && !extra_declared.iter().any(|declared| declared == name)
-        })
-        .collect();
-    passthrough
-        .into_iter()
-        .map(str::to_string)
-        .chain(emitted)
-        .collect::<Vec<_>>()
 }
 
 /// Mirrors `backends::ffi::gen_bindings::helpers::cbindgen_feature_defines`, which is private to
@@ -106,8 +84,9 @@ fn feature_macro_name(prefix_upper: &str, feature: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::backend::Backend as _;
-    use crate::core::config::NewAlefConfig;
+    use crate::core::config::{Language, NewAlefConfig};
     use crate::core::ir::FunctionDef;
+    use std::collections::BTreeSet;
 
     fn resolved(toml: &str) -> ResolvedCrateConfig {
         let config: NewAlefConfig = toml::from_str(toml).unwrap();
@@ -235,12 +214,76 @@ module = "github.com/test/ts-pack"
         );
     }
 
+    /// Every `-D` the emitted cgo preamble carries names a feature
+    /// [`crate::codegen::cfg::effective_ffi_default_features`] derives, and every such feature
+    /// gets a `-D` -- read back out of the Go file the backend actually writes, not out of
+    /// [`cgo_feature_macros`], so re-introducing a Go-local derivation of the FFI default feature
+    /// set fails here instead of silently shipping a preamble that disagrees with the cdylib.
+    ///
+    /// That local copy is exactly what this module used to hold: a private `ffi_default_features`
+    /// duplicating the centralized derivation line for line, so an edit to one left the other
+    /// behind. The fixture drives all three inputs that derivation combines -- a configured
+    /// passthrough feature, a feature discovered only from a `#[cfg(feature = ...)]` gate, and a
+    /// declare-only `extra_features` name that must stay OFF -- so a divergence in any of them
+    /// shows up as a missing or extra `-D`, and the controls below fail first if the fixture ever
+    /// stops exercising one. ~keep
+    #[test]
+    fn the_emitted_cgo_preamble_defines_exactly_the_effective_ffi_default_features() {
+        let config = resolved(&config_toml(r#"extra_features = ["wasm-http"]"#));
+        let api = api_with_gated_functions(&[
+            ("ping", None),
+            ("download", Some(r#"feature = "download""#)),
+            ("render", Some(r#"feature = "document-render""#)),
+            ("fetch_wasm", Some(r#"feature = "wasm-http""#)),
+        ]);
+
+        let effective = crate::codegen::cfg::effective_ffi_default_features(&api, &config);
+        assert!(
+            effective.contains(&"full".to_string()),
+            "control: the fixture must exercise a configured passthrough feature, got: {effective:?}"
+        );
+        assert!(
+            effective.contains(&"download".to_string()),
+            "control: the fixture must exercise a feature discovered only from a cfg gate, got: {effective:?}"
+        );
+        assert!(
+            !effective.contains(&"wasm-http".to_string()),
+            "control: the fixture must exercise a declare-only extra feature that stays OFF, got: {effective:?}"
+        );
+
+        let ffi_prefix = config.ffi_prefix();
+        let expected: BTreeSet<String> = effective
+            .iter()
+            .map(|feature| guard_macro_name(&ffi_prefix, feature))
+            .collect();
+
+        let files = crate::backends::go::GoBackend
+            .generate_bindings(&api, &config)
+            .expect("generate the Go backend files");
+        let defined: BTreeSet<String> = files
+            .iter()
+            .flat_map(|file| file.content.split_whitespace())
+            .filter_map(|token| token.strip_prefix("-D"))
+            .filter_map(|token| token.strip_suffix("=1"))
+            .map(str::to_string)
+            .collect();
+
+        assert_eq!(
+            defined, expected,
+            "the cgo preamble's -D set no longer matches codegen::cfg::effective_ffi_default_features; \
+             a macro missing here deletes the guarded declaration before cgo sees it, and an extra one \
+             resurrects a declaration the shipped cdylib never exported"
+        );
+    }
+
     /// The `-D` set describes the shipped cdylib, so it must equal the `[features] default` list
     /// the scaffolder writes into the FFI `Cargo.toml`. Driving the real scaffolder rather than
-    /// asserting a literal is the point: this is the one place the two derivations of "what the
-    /// library was built with" are compared, and it is what stops them drifting apart. ~keep
+    /// asserting a literal is the point: it compares the macros the Go preamble carries against
+    /// the manifest the library is actually built from, which no amount of sharing a derivation
+    /// function guarantees -- the scaffolder could still filter or rename on its way to the
+    /// `default` array. ~keep
     #[test]
-    fn ffi_default_features_matches_the_generated_ffi_cargo_toml() {
+    fn cgo_feature_macros_match_the_generated_ffi_cargo_toml() {
         let config = resolved(&config_toml(r#"extra_features = ["wasm-http"]"#));
         let api = api_with_gated_functions(&[
             ("ping", None),
@@ -267,10 +310,12 @@ module = "github.com/test/ts-pack"
             "control: the scaffolder must default a cfg-discovered feature ON, got: {scaffolded:?}"
         );
 
-        let mut derived = ffi_default_features(&api, &config);
-        let mut expected = scaffolded;
-        derived.sort();
-        expected.sort();
+        let ffi_prefix = config.ffi_prefix();
+        let expected: BTreeSet<String> = scaffolded
+            .iter()
+            .map(|feature| guard_macro_name(&ffi_prefix, feature))
+            .collect();
+        let derived: BTreeSet<String> = cgo_feature_macros(&api, &config).into_iter().collect();
         assert_eq!(
             derived, expected,
             "the cgo -D set is derived from a different feature list than the one the FFI crate is built with"
