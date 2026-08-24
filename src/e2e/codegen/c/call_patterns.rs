@@ -255,20 +255,9 @@ pub(super) fn render_engine_factory_test_function(
             && field_resolver.is_valid_for_result(f)
             && !accessed_fields.iter().any(|(k, _, _)| k == f)
         {
-            let resolved_raw = field_resolver.resolve(f);
-            // Strip virtual namespace prefixes (e.g. "interaction.action_results[0].x"
-            // → "action_results[0].x") matching the same logic as FieldResolver::accessor.
-            let resolved = if let Some(stripped) = field_resolver.namespace_stripped_path(resolved_raw) {
-                let stripped_first = stripped.split('.').next().unwrap_or(stripped);
-                let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
-                if field_resolver.is_valid_for_result(stripped_first) {
-                    stripped
-                } else {
-                    resolved_raw
-                }
-            } else {
-                resolved_raw
-            };
+            // Strips virtual namespace prefixes (e.g. "interaction.action_results[0].x"
+            // → "action_results[0].x") before building the accessor chain.
+            let resolved = field_resolver.result_relative_path(f);
             let local_var = f.replace(['.', '['], "_").replace(']', "");
             let has_map_access = resolved.contains('[');
             if resolved.contains('.') {
@@ -651,3 +640,5 @@ pub(super) fn render_bytes_test_function(
 
 #[cfg(test)]
 mod batch_url_regression_tests;
+#[cfg(test)]
+mod namespace_strip_tests;

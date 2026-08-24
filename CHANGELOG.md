@@ -99,6 +99,16 @@ and it never claimed the flag was unnecessary.
   generated `VisitorBridge.java` previously failed to compile with
   `cannot find symbol: variable VISIT_RESULT_ERROR`.
 
+- C e2e generator: the plain-function and engine-factory accessor emitters each carried a
+  hand-inlined copy of the virtual-namespace strip instead of calling
+  `FieldResolver::result_relative_path`, whose own documentation records that no further
+  copy should exist. Both now call the shared helper, so a fixture field grouped under a
+  virtual label (`interaction.total_count` addressing `total_count`) cannot be classified
+  one way by the resolver and another by the emitter. Behaviour is unchanged; the
+  divergence risk is not. Deleting the strip outright previously kept all 298 C codegen
+  tests green, so the path had no coverage at all — both branches are now pinned by
+  regression tests that fail when the strip is removed.
+
 ### Changed
 
 - Java: the convert-with-visitor `operationFailure` slot is typed as the crate exception rather
