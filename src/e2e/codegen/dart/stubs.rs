@@ -42,18 +42,20 @@ pub fn emit_test_backend(
     let defaults = language_defaults("dart");
     let mapper = DartMapper;
 
-    // Collect all types used in method signatures to determine needed imports.
-    let mut needs_uint8list = false;
-    for method in methods {
-        for param in &method.params {
-            if param.ty == TypeRef::Bytes {
-                needs_uint8list = true;
-            }
-        }
-        if method.return_type == TypeRef::Bytes {
-            needs_uint8list = true;
-        }
-    }
+    // Collect all types used in method signatures to determine needed imports. Asked of
+    // the mapper that spells them rather than matched against `TypeRef::Bytes`: `Vec<f64>`
+    // and `Vec<i64>` render as `Float64List`/`Int64List`, which need the same import while
+    // being nothing like `Bytes` in the IR. ~keep
+    let needs_typed_data = methods.iter().any(|method| {
+        let signature_types = method
+            .params
+            .iter()
+            .map(|param| &param.ty)
+            .chain(std::iter::once(&method.return_type));
+        signature_types
+            .map(|ty| map_dart_type_with_fallback(&mapper, ty))
+            .any(|rendered| crate::backends::dart::type_map::needs_dart_typed_data(&rendered))
+    });
 
     let mut setup = String::new();
     let _ = writeln!(setup, "class {class_name} extends {trait_class} {{");
@@ -152,7 +154,7 @@ pub fn emit_test_backend(
     let _ = writeln!(setup, ");");
 
     let mut type_imports = Vec::new();
-    if needs_uint8list {
+    if needs_typed_data {
         type_imports.push("dart:typed_data".to_string());
     }
 

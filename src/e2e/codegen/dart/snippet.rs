@@ -95,10 +95,11 @@ pub(super) fn render_snippet_body_with_ir(
         || statements
             .iter()
             .any(|statement| statement.contains("File(") || statement.contains("Platform.environment"));
-    // Trait-bridge stubs with `Vec<u8>`/bytes-typed methods (e.g. OcrBackend.processImage)
-    // emit `Uint8List`, which requires `dart:typed_data` — mirrors `has_batch_byte_items` in
-    // the full e2e test-file emitter (test_file.rs).
-    let needs_typed_data = stub_classes.contains("Uint8List");
+    // A trait-bridge stub's signatures are spelled by `DartMapper`, so the question of which
+    // of its class names come from `dart:typed_data` is answered where that mapping lives.
+    // Spot-checking `Uint8List` here missed `Float64List`/`Int64List` — the stub named the
+    // class and the snippet never imported its library. ~keep
+    let needs_typed_data = crate::backends::dart::type_map::needs_dart_typed_data(&stub_classes);
     let presentation = crate::e2e::codegen::presentation::resolve(fixture, e2e_config, "dart", type_defs, functions);
     Ok(crate::e2e::template_env::render(
         "dart/snippet_body.jinja",
