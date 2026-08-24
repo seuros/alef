@@ -3,4 +3,8 @@ async def {{ adapter_name }}({{ params }}) -> {{ return_type }}:
 {% if request_construction %}
 {{ request_construction }}{% endif %}
     async for item in engine.{{ adapter_name }}({{ params_list }}):
+{% if item_converter %}
+        yield {{ item_converter }}(item)
+{% else %}
         yield item
+{% endif %}

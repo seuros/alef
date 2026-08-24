@@ -12,6 +12,28 @@ pub(super) fn adapter_param_python_type(rust_type: &str) -> &str {
     }
 }
 
+/// Name of the `options._from_native_<snake>` converter a streaming adapter's body must apply
+/// to each yielded item, or `None` when the item keeps its single native identity.
+///
+/// Both the `api.py` import list and the generated `yield` expression call this, so the module
+/// the yield type annotation resolves to and the module the yielded value comes from cannot
+/// drift apart.
+pub(super) fn streaming_item_converter(
+    adapter: &crate::core::config::AdapterConfig,
+    options_dataclass_types: &std::collections::HashSet<String>,
+) -> Option<String> {
+    use heck::ToSnakeCase;
+
+    if !matches!(adapter.pattern, crate::core::config::AdapterPattern::Streaming) {
+        return None;
+    }
+    let item_type = adapter.item_type.as_deref()?;
+    if !options_dataclass_types.contains(item_type) {
+        return None;
+    }
+    Some(format!("_from_native_{}", item_type.to_snake_case()))
+}
+
 /// Emit a module-level wrapper function for an adapter-based method.
 ///
 /// Two patterns are supported:
@@ -24,10 +46,16 @@ pub(super) fn adapter_param_python_type(rust_type: &str) -> &str {
 /// (e.g., `url: str`) and constructs the request object before calling the engine method.
 ///
 /// Any other pattern is silently skipped (not applicable to the Python layer).
+///
+/// `options_dataclass_types` names the types that `options.py` emits as public dataclasses
+/// (and therefore also emits a `_from_native_<snake>` converter for). A streamed item whose
+/// type is in that set is annotated as the `options` dataclass, so the body must run the
+/// converter — the engine yields the native `_internal_bindings` pyclass. ~keep
 pub(super) fn emit_adapter_wrapper(
     out: &mut String,
     adapter: &crate::core::config::AdapterConfig,
     types: &[crate::core::ir::TypeDef],
+    options_dataclass_types: &std::collections::HashSet<String>,
 ) {
     use crate::core::config::AdapterPattern;
     use heck::ToSnakeCase;
@@ -126,6 +154,7 @@ pub(super) fn emit_adapter_wrapper(
                     doc_content => doc_content,
                     request_construction => request_construction.unwrap_or_default(),
                     params_list => params_list,
+                    item_converter => streaming_item_converter(adapter, options_dataclass_types).unwrap_or_default(),
                 },
             ));
         }
