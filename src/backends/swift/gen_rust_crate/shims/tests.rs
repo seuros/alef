@@ -117,6 +117,97 @@ fn direct_enum_params_bridge_as_from_string() {
     assert!(!shim.contains("unimplemented!"));
 }
 
+/// An unrecognised wire string used to `panic!` inside the reverse-conversion helper --
+/// undefined behaviour once that unwind crosses the swift-bridge FFI boundary. The helper now
+/// returns `Result<_, String>`; when the wrapped core function is itself infallible (no
+/// `error_type`), the shim's own return type must be forced to `Result<_, String>` purely so the
+/// conversion's `?` has somewhere to propagate to -- otherwise the fix would just move the panic
+/// from inside the helper to a `?` with no enclosing `Result`, which does not compile.
+#[test]
+fn infallible_function_with_direct_enum_param_gets_forced_result_return_and_no_panic() {
+    let mut f = function(vec![param("action", TypeRef::Named("PageAction".to_string()))]);
+    f.error_type = None;
+    f.is_async = false;
+    f.return_type = TypeRef::Unit;
+    let enum_names = HashSet::from(["PageAction"]);
+    let type_paths = HashMap::from([("PageAction".to_string(), "sample_crawler::PageAction".to_string())]);
+    let no_serde_names = HashSet::new();
+    let handle_returned_types = HashSet::new();
+    let capsule_types = std::collections::HashMap::new();
+    let tagged_enum_names = HashSet::new();
+    let context = FunctionShimContext {
+        source_crate: "sample_crawler",
+        type_paths: &type_paths,
+        unit_enum_names: &enum_names,
+        tagged_enum_names: &tagged_enum_names,
+        no_serde_names: &no_serde_names,
+        handle_returned_types: &handle_returned_types,
+        capsule_types: &capsule_types,
+        opaque_types: &ahash::AHashSet::default(),
+    };
+    let shim = emit_function_shim(&f, &context).expect("emit_function_shim");
+    assert!(
+        shim.contains("-> Result<(), String>"),
+        "an infallible function with a fallible enum param conversion must have its shim \
+         return type forced to Result so the conversion error can propagate, got:\n{shim}"
+    );
+    assert!(
+        shim.contains(&format!("{}(&action)?", enum_from_string_fn_name("PageAction"))),
+        "expected the reverse-conversion call to be `?`-propagated, got:\n{shim}"
+    );
+    assert!(
+        shim.contains("Ok(())"),
+        "the originally-infallible success path must be wrapped in Ok(..) once the shim's \
+         return type is forced to Result, got:\n{shim}"
+    );
+    assert!(
+        !shim.contains("panic!"),
+        "must not panic across the FFI boundary, got:\n{shim}"
+    );
+    assert!(
+        !shim.contains(".expect(\"valid"),
+        "must not paper over the fallible conversion with .expect(..) either, got:\n{shim}"
+    );
+}
+
+/// A `Vec<enum>` parameter on an infallible function is the same defect shape as the direct
+/// case: any invalid element used to panic inside the per-element `.map(...)` closure.
+#[test]
+fn infallible_function_with_vec_enum_param_gets_forced_result_return_and_no_panic() {
+    let mut f = function(vec![param(
+        "actions",
+        TypeRef::Vec(Box::new(TypeRef::Named("PageAction".to_string()))),
+    )]);
+    f.error_type = None;
+    f.return_type = TypeRef::Unit;
+    let enum_names = HashSet::from(["PageAction"]);
+    let type_paths = HashMap::from([("PageAction".to_string(), "sample_crawler::PageAction".to_string())]);
+    let no_serde_names = HashSet::new();
+    let handle_returned_types = HashSet::new();
+    let capsule_types = std::collections::HashMap::new();
+    let tagged_enum_names = HashSet::new();
+    let context = FunctionShimContext {
+        source_crate: "sample_crawler",
+        type_paths: &type_paths,
+        unit_enum_names: &enum_names,
+        tagged_enum_names: &tagged_enum_names,
+        no_serde_names: &no_serde_names,
+        handle_returned_types: &handle_returned_types,
+        capsule_types: &capsule_types,
+        opaque_types: &ahash::AHashSet::default(),
+    };
+    let shim = emit_function_shim(&f, &context).expect("emit_function_shim");
+    assert!(shim.contains("-> Result<(), String>"), "got:\n{shim}");
+    assert!(
+        shim.contains("collect::<Result<Vec<_>, String>>()?"),
+        "expected the per-element conversion to collect into a Result and `?`-propagate, got:\n{shim}"
+    );
+    assert!(
+        !shim.contains("panic!"),
+        "must not panic across the FFI boundary, got:\n{shim}"
+    );
+}
+
 /// Data-carrying enums cross swift-bridge as JSON strings. A referenced enum parameter
 /// therefore must be deserialized before it is borrowed for the source call; treating the
 /// bridge `String` as an opaque wrapper emits `&param.0` and fails with E0609.

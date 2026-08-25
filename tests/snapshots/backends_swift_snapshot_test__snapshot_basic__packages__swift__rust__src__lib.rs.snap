@@ -131,11 +131,11 @@ impl Status {
     }
 }
 #[allow(dead_code)]
-fn __alef_status_from_swift_string(value: &str) -> demo::Status {
+fn __alef_status_from_swift_string(value: &str) -> Result<demo::Status, String> {
     match value {
-        "Active" => demo::Status::Active,
-        "Inactive" => demo::Status::Inactive,
-        _ => panic!("unknown Status variant: {}", value),
+        "Active" => Ok(demo::Status::Active),
+        "Inactive" => Ok(demo::Status::Inactive),
+        _ => Err(format!("unknown Status variant: {:?}", value)),
     }
 }
 

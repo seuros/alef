@@ -212,8 +212,18 @@ mod tests {
             "expected the from-string helper for a fieldless enum, got:\n{out}"
         );
         assert!(
-            out.contains("\"Fast\" => mylib::Mode::Fast,"),
-            "expected a bare unit-variant arm, got:\n{out}"
+            out.contains("\"Fast\" => Ok(mylib::Mode::Fast),"),
+            "expected an `Ok`-wrapped unit-variant arm now that the helper is fallible \
+             (unknown wire values used to panic across the FFI boundary), got:\n{out}"
+        );
+        assert!(
+            out.contains("Result<mylib::Mode, String>"),
+            "the helper must return a Result so an unrecognised wire string can be reported \
+             as a real error instead of unwinding a panic across the FFI boundary, got:\n{out}"
+        );
+        assert!(
+            !out.contains("panic!"),
+            "an unrecognised enum wire string must no longer panic across the FFI boundary, got:\n{out}"
         );
     }
 

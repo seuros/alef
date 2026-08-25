@@ -82,7 +82,20 @@ pub(crate) fn emit_type_method_shims(
         }
         let params_str = params_vec.join(", ");
 
-        let return_ty = if method.error_type.is_some() {
+        // See the identical `has_fallible_enum_param`/`forced_fallible` rationale in
+        // `gen_rust_crate::shims::emit_function_shim`: an unrecognised wire string used to
+        // `panic!` inside the enum's `_from_swift_string` helper (UB across the FFI boundary).
+        // The helper now returns `Result<_, String>`; when the method itself is not already
+        // fallible, this wrapper's own return type is forced to `Result<_, String>` purely to
+        // give the conversion's `?` somewhere to propagate to. ~keep
+        let has_fallible_enum_param = method.params.iter().any(|p| match &p.ty {
+            TypeRef::Named(n) => unit_enum_names.contains(n.as_str()),
+            TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if unit_enum_names.contains(n.as_str())),
+            _ => false,
+        });
+        let forced_fallible = has_fallible_enum_param && method.error_type.is_none();
+
+        let return_ty = if method.error_type.is_some() || forced_fallible {
             let ok_ty = crate::backends::swift::gen_rust_crate::type_bridge::bridge_type_with_handles(
                 &method.return_type,
                 handle_returned_types,
@@ -99,6 +112,7 @@ pub(crate) fn emit_type_method_shims(
             )
         };
 
+        let mut pre_call_bindings: Vec<String> = Vec::new();
         let call_args: Vec<String> = method
             .params
             .iter()
@@ -114,29 +128,34 @@ pub(crate) fn emit_type_method_shims(
                     && unit_enum_names.contains(n.as_str())
                 {
                     let fn_name = enum_from_string_fn_name(n);
-                    let map_expr = format!("{name}.into_iter().map(|s| {fn_name}(&s)).collect::<Vec<_>>()");
-                    if p.is_ref {
-                        return format!("&{map_expr}");
-                    }
+                    let bound = format!("__{name}_vec_enum");
+                    let collect_expr = format!("{name}.into_iter().map(|s| {fn_name}(&s)).collect::<Result<Vec<_>, String>>()");
                     if p.optional {
-                        return format!(
-                            "{name}.map(|values| values.into_iter().map(|s| {fn_name}(&s)).collect::<Vec<_>>())"
-                        );
+                        pre_call_bindings.push(format!(
+                            "    let {bound} = {name}.map(|values| values.into_iter().map(|s| {fn_name}(&s)).collect::<Result<Vec<_>, String>>()).transpose()?;"
+                        ));
+                    } else {
+                        pre_call_bindings.push(format!("    let {bound} = {collect_expr}?;"));
                     }
-                    return map_expr;
+                    if p.is_ref {
+                        return format!("&{bound}");
+                    }
+                    return bound;
                 }
                 if let TypeRef::Named(n) = &p.ty
                     && unit_enum_names.contains(n.as_str())
                 {
                     let fn_name = enum_from_string_fn_name(n);
-                    let from_expr = format!("{fn_name}(&{name})");
+                    let bound = format!("__{name}_enum");
                     if p.optional {
-                        return format!("{name}.map(|s| {fn_name}(&s))");
+                        pre_call_bindings.push(format!("    let {bound} = {name}.map(|s| {fn_name}(&s)).transpose()?;"));
+                    } else {
+                        pre_call_bindings.push(format!("    let {bound} = {fn_name}(&{name})?;"));
                     }
                     if p.is_ref {
-                        return format!("&{from_expr}");
+                        return format!("&{bound}");
                     }
-                    return from_expr;
+                    return bound;
                 }
                 if needs_json_bridge(&p.ty) {
                     let native_ty = swift_bridge_rust_type(&p.ty);
@@ -243,6 +262,8 @@ pub(crate) fn emit_type_method_shims(
                     }
                 };
                 format!("{method_call}.await.map_err(|e| e.to_string()){ok_wrap}")
+            } else if forced_fallible {
+                format!("Ok({})", wrap_return(format!("{method_call}.await")))
             } else {
                 wrap_return(format!("{method_call}.await"))
             };
@@ -266,9 +287,17 @@ pub(crate) fn emit_type_method_shims(
                 }
             };
             format!("    {method_call}.map_err(|e| e.to_string()){ok_wrap}")
+        } else if forced_fallible {
+            format!("    Ok({})", wrap_return(method_call))
         } else {
             format!("    {}", wrap_return(method_call))
         };
+        let bindings_str = if pre_call_bindings.is_empty() {
+            String::new()
+        } else {
+            pre_call_bindings.join("\n") + "\n"
+        };
+        let body = format!("{bindings_str}{body}");
 
         let return_clause = if return_ty == "()" {
             String::new()
@@ -408,4 +437,102 @@ pub(crate) fn emit_first_class_dto_method_wrappers(
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::ParamDef;
+
+    fn param(name: &str, ty: TypeRef) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            ty,
+            ..Default::default()
+        }
+    }
+
+    fn opaque_type(name: &str, methods: Vec<crate::core::ir::MethodDef>) -> TypeDef {
+        TypeDef {
+            name: name.to_string(),
+            rust_path: format!("sample_crate::{name}"),
+            is_opaque: true,
+            methods,
+            ..Default::default()
+        }
+    }
+
+    /// Same defect shape and fix as `shims::tests::infallible_function_with_direct_enum_param_*`,
+    /// but for the instance-method wrapper path: an unrecognised wire string used to `panic!`
+    /// inside the reverse-conversion helper, which is UB once it unwinds across the swift-bridge
+    /// FFI boundary. An infallible method (no `error_type`) with a unit-enum param must have its
+    /// wrapper's return type forced to `Result<_, String>` so the `?` in the conversion has
+    /// somewhere to go, and the success path wrapped in `Ok(..)`.
+    #[test]
+    fn infallible_method_with_enum_param_gets_forced_result_return_and_no_panic() {
+        let method = crate::core::ir::MethodDef {
+            name: "set_mode".to_string(),
+            params: vec![param("mode", TypeRef::Named("Mode".to_string()))],
+            return_type: TypeRef::Unit,
+            receiver: Some(ReceiverKind::RefMut),
+            error_type: None,
+            ..Default::default()
+        };
+        let ty = opaque_type("Client", vec![method]);
+        let enum_names = HashSet::from(["Mode"]);
+        let handle_returned_types = HashSet::new();
+        let type_paths = HashMap::new();
+
+        let out = emit_type_method_shims(&ty, "sample_crate", &type_paths, &handle_returned_types, &enum_names);
+
+        assert!(
+            out.contains("-> Result<(), String>"),
+            "an infallible method with a fallible enum param conversion must have its wrapper \
+             return type forced to Result so the conversion error can propagate, got:\n{out}"
+        );
+        assert!(
+            out.contains(&format!("{}(&mode)?", enum_from_string_fn_name("Mode"))),
+            "expected the reverse-conversion call to be `?`-propagated, got:\n{out}"
+        );
+        assert!(
+            out.contains("Ok("),
+            "the originally-infallible success path must be wrapped in Ok(..) once the \
+             wrapper's return type is forced to Result, got:\n{out}"
+        );
+        assert!(
+            !out.contains("panic!"),
+            "must not panic across the FFI boundary, got:\n{out}"
+        );
+        assert!(
+            !out.contains(".expect(\"valid"),
+            "must not paper over the fallible conversion with .expect(..) either, got:\n{out}"
+        );
+    }
+
+    /// A method that is already fallible (`error_type` set) must still `?`-propagate the enum
+    /// conversion, without double-wrapping the return type.
+    #[test]
+    fn fallible_method_with_enum_param_still_propagates_conversion_error() {
+        let method = crate::core::ir::MethodDef {
+            name: "set_mode".to_string(),
+            params: vec![param("mode", TypeRef::Named("Mode".to_string()))],
+            return_type: TypeRef::Unit,
+            receiver: Some(ReceiverKind::RefMut),
+            error_type: Some("ClientError".to_string()),
+            ..Default::default()
+        };
+        let ty = opaque_type("Client", vec![method]);
+        let enum_names = HashSet::from(["Mode"]);
+        let handle_returned_types = HashSet::new();
+        let type_paths = HashMap::new();
+
+        let out = emit_type_method_shims(&ty, "sample_crate", &type_paths, &handle_returned_types, &enum_names);
+
+        assert!(out.contains("-> Result<(), String>"), "got:\n{out}");
+        assert!(
+            out.contains(&format!("{}(&mode)?", enum_from_string_fn_name("Mode"))),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("panic!"), "got:\n{out}");
+    }
 }

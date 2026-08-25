@@ -1,6 +1,6 @@
 #[allow(dead_code)]
-fn {{ fn_name }}(value: &str) -> {{ source_path }} {
+fn {{ fn_name }}(value: &str) -> Result<{{ source_path }}, String> {
     match value {
-{{ variants }}        _ => panic!("unknown {{ enum_name }} variant: {}", value),
+{{ variants }}        _ => Err(format!("unknown {{ enum_name }} variant: {:?}", value)),
     }
 }

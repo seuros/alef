@@ -164,11 +164,11 @@ impl FlowDecision {
     }
 }
 #[allow(dead_code)]
-fn __alef_flow_decision_from_swift_string(value: &str) -> demo::callbacks::FlowDecision {
+fn __alef_flow_decision_from_swift_string(value: &str) -> Result<demo::callbacks::FlowDecision, String> {
     match value {
-        "Accept" => demo::callbacks::FlowDecision::Accept,
-        "Stop" => demo::callbacks::FlowDecision::Stop,
-        _ => panic!("unknown FlowDecision variant: {}", value),
+        "Accept" => Ok(demo::callbacks::FlowDecision::Accept),
+        "Stop" => Ok(demo::callbacks::FlowDecision::Stop),
+        _ => Err(format!("unknown FlowDecision variant: {:?}", value)),
     }
 }
 

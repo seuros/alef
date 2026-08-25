@@ -101,6 +101,7 @@ pub(crate) fn swift_call_arg(
     unit_enum_names: &HashSet<&str>,
     tagged_enum_names: &HashSet<&str>,
     type_paths: &HashMap<String, String>,
+    pre_call_bindings: &mut Vec<String>,
 ) -> String {
     let name = p.name.to_snake_case();
     let original = p.original_type.as_deref().unwrap_or("");
@@ -141,11 +142,18 @@ pub(crate) fn swift_call_arg(
         && unit_enum_names.contains(n.as_str())
     {
         let fn_name = enum_from_string_fn_name(n);
-        let from_expr = format!("{fn_name}(&{name})");
+        // An unrecognised wire string used to `panic!` inside `{fn_name}`, which unwinds across
+        // the swift-bridge FFI boundary -- undefined behaviour at best. The generator now emits
+        // `Result<_, String>` from `{fn_name}`; bind it here with `?` and force the enclosing
+        // shim to return `Result` (see `has_fallible_enum_param`/`forced_fallible` in
+        // `emit_function_shim`) instead of letting the panic reach the boundary. ~keep
+        let bound = format!("__{name}_enum");
         if p.optional {
-            return format!("{name}.map(|s| {fn_name}(&s))");
+            pre_call_bindings.push(format!("    let {bound} = {name}.map(|s| {fn_name}(&s)).transpose()?;"));
+        } else {
+            pre_call_bindings.push(format!("    let {bound} = {fn_name}(&{name})?;"));
         }
-        return from_expr;
+        return bound;
     }
 
     if let TypeRef::Named(n) = &p.ty
@@ -180,16 +188,25 @@ pub(crate) fn swift_call_arg(
     {
         if unit_enum_names.contains(n.as_str()) {
             let fn_name = enum_from_string_fn_name(n);
-            let map_expr = format!("values.into_iter().map(|s| {fn_name}(&s)).collect::<Vec<_>>()");
-            let converted = if p.optional {
-                format!("{name}.map(|values| {map_expr})")
+            let bound = format!("__{name}_vec_enum");
+            // Same `?`-propagation rationale as the direct-enum-param branch above: a bad
+            // element used to reach `{fn_name}`'s `panic!` from inside `.map(...)`. The
+            // `collect::<Result<..>>()` here is deliberately left un-`?`'d in the optional arm --
+            // `?` inside a closure needs an explicit `Result` return type to type-check, so the
+            // closure instead hands `.transpose()` an `Option<Result<..>>` and the single `?`
+            // after it does the unwrapping at this function's own scope. ~keep
+            let collect_expr = format!("values.into_iter().map(|s| {fn_name}(&s)).collect::<Result<Vec<_>, String>>()");
+            if p.optional {
+                pre_call_bindings.push(format!(
+                    "    let {bound} = {name}.map(|values| {collect_expr}).transpose()?;"
+                ));
             } else {
-                format!("{{ let values = {name}; {map_expr} }}")
-            };
-            if p.is_ref && !p.optional {
-                return format!("&{{ let values = {name}; {map_expr} }}");
+                pre_call_bindings.push(format!("    let {bound} = {{ let values = {name}; {collect_expr}? }};"));
             }
-            return converted;
+            if p.is_ref && !p.optional {
+                return format!("&{bound}");
+            }
+            return bound;
         }
         if tagged_enum_names.contains(n.as_str()) {
             let native_ty = source_type(n);
@@ -368,9 +385,32 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
     let is_capsule_return =
         matches!(&effective_return_type, TypeRef::Named(n) if capsule_types.contains_key(n.as_str()));
 
+    // A unit-enum parameter's binding->core conversion can fail on an unrecognised wire string
+    // (see `swift_call_arg`'s `?`-based pre_call_bindings). When the underlying core call is
+    // already fallible (`f.error_type.is_some()`) that failure rides the existing `Result`; when
+    // it is not, the shim's own return type must become `Result<_, String>` purely to carry this
+    // one failure mode, or the `?` in `pre_call_bindings` has nothing to propagate into. ~keep
+    let has_fallible_enum_param = f.params.iter().any(|p| match &p.ty {
+        TypeRef::Named(n) => unit_enum_names.contains(n.as_str()),
+        TypeRef::Vec(inner) => matches!(inner.as_ref(), TypeRef::Named(n) if unit_enum_names.contains(n.as_str())),
+        _ => false,
+    });
+    let forced_fallible = has_fallible_enum_param && f.error_type.is_none();
+
     let (return_ty, has_explicit_return) = if is_capsule_return {
-        ("usize".to_string(), true)
+        if forced_fallible {
+            ("Result<usize, String>".to_string(), true)
+        } else {
+            ("usize".to_string(), true)
+        }
     } else if f.error_type.is_some() {
+        let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
+        if matches!(effective_return_type, TypeRef::Unit) {
+            ("Result<(), String>".to_string(), true)
+        } else {
+            (format!("Result<{ok_ty}, String>"), true)
+        }
+    } else if forced_fallible {
         let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
         if matches!(effective_return_type, TypeRef::Unit) {
             ("Result<(), String>".to_string(), true)
@@ -400,7 +440,7 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
                         "    let {bound_name} = {name}.map(|json_str| {{ let hm = ::serde_json::from_str::<std::collections::HashMap<String, String>>(&json_str).expect(\"valid JSON for {name}\"); hm.into_iter().map(|(k, v)| (std::borrow::Cow::Owned(k), serde_json::Value::String(v))).collect::<ahash::AHashMap<std::borrow::Cow<'static, str>, serde_json::Value>>() }});"
                     ));
                 }
-            swift_call_arg(p, unit_enum_names, tagged_enum_names, type_paths)
+            swift_call_arg(p, unit_enum_names, tagged_enum_names, type_paths, &mut pre_call_bindings)
         })
         .collect();
     let call_args_str = call_args.join(", ");
@@ -533,6 +573,10 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
                 call => &source_call,
                 is_async => f.is_async,
                 has_error => f.error_type.is_some(),
+                // The writeback path's own success value never needed `Ok(...)` before -- only
+                // a fallible enum param (see `forced_fallible` above) makes the *shim*, not the
+                // core call, fallible, so only that value needs the wrap. ~keep
+                force_ok => forced_fallible,
                 return_expr => return_expr,
             },
         )
@@ -540,9 +584,12 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
         .to_string()
     } else if is_capsule_return {
         if f.is_async {
-            format!("{source_call}.await.map(|__cap| __cap.into_raw() as usize).unwrap_or(0)")
+            let expr = format!("{source_call}.await.map(|__cap| __cap.into_raw() as usize).unwrap_or(0)");
+            if forced_fallible { format!("Ok({expr})") } else { expr }
         } else if f.error_type.is_some() {
             format!("{source_call}.map(|__cap| __cap.into_raw() as usize).unwrap_or(0)")
+        } else if forced_fallible {
+            format!("Ok({source_call}.into_raw() as usize)")
         } else {
             format!("{source_call}.into_raw() as usize")
         }
@@ -550,12 +597,20 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
         let mut chain = format!("{source_call}.await");
         if f.error_type.is_some() {
             chain = format!("{chain}.map_err(|e| e.to_string()){value_map}");
+        } else if forced_fallible {
+            chain = format!("Ok({})", direct_wrap(chain));
         } else {
             chain = direct_wrap(chain);
         }
         chain
     } else if f.error_type.is_some() {
         format!("{source_call}.map_err(|e| e.to_string()){value_map}")
+    } else if forced_fallible {
+        if matches!(f.return_type, TypeRef::Unit) {
+            format!("{source_call};\n    Ok(())")
+        } else {
+            format!("Ok({})", direct_wrap(source_call))
+        }
     } else {
         if matches!(f.return_type, TypeRef::Unit) {
             format!("{source_call};")
