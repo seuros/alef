@@ -4,6 +4,27 @@ use crate::core::ir::{FieldDef, TypeRef};
 use super::field_fragments::sanitized_vec_field_to_core_expr;
 use super::{field_references_excluded_type, is_tuple_variant};
 
+/// Wrap a sanitized field's JSON deserialize so a value that fails to parse emits a
+/// `tracing::warn!` before falling back to `Default::default()`, instead of swallowing the
+/// parse error with no diagnostic. Only reachable for `binding_enums_have_data: true` backends
+/// (rustler, magnus), where the field's JSON text comes from a host-language caller. Stays
+/// infallible on purpose: this expression sits inside `impl From<Binding> for Core`, and every
+/// backend call site uses `.into()`, so returning `Result` here would require a coordinated
+/// `TryFrom` migration across backends outside this module's territory. ~keep
+fn sanitized_field_parse_or_warn(access: &str, variant_name: &str, field_name: &str) -> String {
+    let context = format!("variant = \"{variant_name}\", field = \"{field_name}\"");
+    crate::codegen::template_env::render(
+        "conversions/sanitized_json_parse_or_warn",
+        minijinja::context! {
+            access => access,
+            context => context,
+            message => "binding provided unparseable JSON for enum variant field; substituting default",
+        },
+    )
+    .trim_end()
+    .to_string()
+}
+
 /// Generate a match arm for binding -> core direction.
 /// Binding enums are always unit-variant-only. Core enums may have data variants.
 /// For data variants: `BindingEnum::Variant => CoreEnum::Variant(Default::default(), ...)`
@@ -56,12 +77,12 @@ pub fn binding_to_core_match_arm_ext_cfg(
                     let expr = if let TypeRef::Vec(_) = &f.ty {
                         sanitized_vec_field_to_core_expr(name, &f.ty)
                     } else {
-                        format!("serde_json::from_str(&{name}).unwrap_or_default()")
+                        sanitized_field_parse_or_warn(name, variant_name, name)
                     };
                     return if f.is_boxed { format!("Box::new({expr})") } else { expr };
                 }
                 if !config.exclude_types.is_empty() && field_references_excluded_type(&f.ty, config.exclude_types) {
-                    let expr = format!("serde_json::from_str(&{name}).unwrap_or_default()");
+                    let expr = sanitized_field_parse_or_warn(name, variant_name, name);
                     return if f.is_boxed { format!("Box::new({expr})") } else { expr };
                 }
                 let conv = field_conversion_to_core_cfg(name, &f.ty, f.optional, config);
@@ -91,7 +112,8 @@ pub fn binding_to_core_match_arm_ext_cfg(
                         let expr = sanitized_vec_field_to_core_expr(&f.name, &f.ty);
                         return format!("{}: {expr}", f.name);
                     }
-                    return format!("{}: serde_json::from_str(&{}).unwrap_or_default()", f.name, f.name);
+                    let expr = sanitized_field_parse_or_warn(&f.name, variant_name, &f.name);
+                    return format!("{}: {expr}", f.name);
                 }
                 let conv = field_conversion_to_core_cfg(&f.name, &f.ty, f.optional, config);
                 let expr = if let Some(expr) = conv.strip_prefix(&format!("{}: ", f.name)) {

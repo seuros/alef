@@ -102,7 +102,7 @@ fn simple_type() -> TypeDef {
     }
 }
 
-fn simple_enum() -> EnumDef {
+pub(super) fn simple_enum() -> EnumDef {
     EnumDef {
         name: "Backend".to_string(),
         rust_path: "my_crate::Backend".to_string(),

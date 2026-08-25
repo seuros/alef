@@ -1,0 +1,7 @@
+match serde_json::from_str(&{{ access }}) {
+    Ok(v) => v,
+    Err(e) => {
+        tracing::warn!({{ context }}, value = %{{ access }}, error = %e, "{{ message }}");
+        Default::default()
+    }
+}

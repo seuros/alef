@@ -719,3 +719,29 @@ fn gen_pyo3_unit_enum_emits_string_methods() {
     );
     assert!(generated.contains("serde_json::to_value(self)"), "{generated}");
 }
+
+#[test]
+fn variant_constructors_json_field_warns_and_defaults_on_unparseable_json() {
+    use crate::codegen::type_mapper::IdentityMapper;
+    let def = enum_def(
+        "Wrapper",
+        vec![variant("Meta", vec![typed_field("payload", TypeRef::Json)])],
+    );
+
+    let generated = gen_pyo3_data_enum_with_mapper(&def, "core", Some(&IdentityMapper));
+
+    assert!(
+        generated.contains("match serde_json::from_str(&payload) {"),
+        "{generated}"
+    );
+    assert!(generated.contains("Ok(v) => v,"), "{generated}");
+    assert!(
+        generated.contains(
+            "tracing::warn!(field = \"payload\", value = %payload, error = %e, \"constructor argument was not \
+             valid JSON; substituting default\");"
+        ),
+        "{generated}"
+    );
+    assert!(generated.contains("Default::default()"), "{generated}");
+    assert!(!generated.contains("unwrap_or_default()"), "{generated}");
+}

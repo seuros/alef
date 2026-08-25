@@ -203,6 +203,25 @@ pub(crate) fn collect_all_variant_constructors(enum_def: &EnumDef) -> Vec<Varian
 /// `u8..=u32`→`i32` and `u64`/`usize`/`isize`/`f32`→`f64`); when set, primitive fields whose binding
 /// type was remapped are cast back to the core type (`field as u32`). Backends that do not remap
 /// primitives (pyo3) pass `false`.
+/// Wrap a `TypeRef::Json` variant-constructor argument's JSON parse so a caller-supplied string
+/// that fails to parse emits a `tracing::warn!` before falling back to `Default::default()`,
+/// instead of silently becoming `serde_json::Value::Null`. Shared by pyo3 (via this module) and
+/// extendr (`variant_field_init` is called directly from `backends::extendr`); the expression
+/// shape stays a plain value (no signature change), so both callers keep compiling unchanged. ~keep
+fn json_field_parse_or_warn(access: &str, field_name: &str) -> String {
+    let context = format!("field = \"{field_name}\"");
+    crate::codegen::template_env::render(
+        "conversions/sanitized_json_parse_or_warn",
+        minijinja::context! {
+            access => access,
+            context => context,
+            message => "constructor argument was not valid JSON; substituting default",
+        },
+    )
+    .trim_end()
+    .to_string()
+}
+
 pub(crate) fn variant_field_init(
     param: &crate::core::ir::ParamDef,
     promoted: bool,
@@ -258,7 +277,7 @@ pub(crate) fn variant_field_init(
     match &param.ty {
         TypeRef::Named(_) if is_boxed => format!("Box::new({base}.into())"),
         TypeRef::Named(_) | TypeRef::Path => format!("{base}.into()"),
-        TypeRef::Json => format!("serde_json::from_str(&{base}).unwrap_or_default()"),
+        TypeRef::Json => json_field_parse_or_warn(&base, name),
         TypeRef::Char => format!("{base}.chars().next().unwrap_or('*')"),
         TypeRef::Duration => format!("std::time::Duration::from_millis({base})"),
         TypeRef::Bytes => format!("{base}.to_vec().into()"),

@@ -202,6 +202,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/conversions/private_field_from_impl.jinja"),
     ),
     (
+        "conversions/sanitized_json_parse_or_warn",
+        include_str!("templates/conversions/sanitized_json_parse_or_warn.jinja"),
+    ),
+    (
         "structs/default_impl.jinja",
         include_str!("templates/generators/structs/default_impl.jinja"),
     ),
