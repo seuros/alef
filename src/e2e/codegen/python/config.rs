@@ -581,6 +581,59 @@ mod tests {
     }
 
     #[test]
+    fn render_conftest_chdirs_into_test_documents_when_mock_server_also_needed() {
+        // A fixture set can need the mock server (e.g. a `mock_response`) AND read a
+        // file by path in the same run. The mock-server branch must not silently
+        // drop the test_documents chdir just because it also handles mock-server
+        // wiring -- regression for the if/else that made them mutually exclusive.
+        use crate::core::config::e2e::{ArgMapping, CallConfig};
+        use crate::e2e::fixture::{Fixture, FixtureGroup, MockResponse};
+
+        let e2e_config = crate::e2e::config::E2eConfig {
+            call: CallConfig {
+                function: "detect_mime_type_from_bytes".to_string(),
+                args: vec![ArgMapping {
+                    name: "content".to_string(),
+                    field: "input.data".to_string(),
+                    arg_type: "file_path".to_string(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                }],
+                ..CallConfig::default()
+            },
+            ..crate::e2e::config::E2eConfig::default()
+        };
+        let fixture = Fixture {
+            id: "mime_detect_from_path".to_string(),
+            description: "Detect MIME type from a file path".to_string(),
+            input: serde_json::json!({"data": "pdf/fake_memo.pdf"}),
+            mock_response: Some(MockResponse {
+                status: 200,
+                body: Some(serde_json::json!({"mime": "application/pdf"})),
+                stream_chunks: None,
+                headers: Default::default(),
+            }),
+            ..Fixture::default()
+        };
+        let groups = [FixtureGroup {
+            category: "mime".to_string(),
+            fixtures: vec![fixture],
+        }];
+
+        let out = render_conftest(&e2e_config, &groups);
+        assert!(out.contains("mock_server"), "expected mock-server branch; got: {out}");
+        assert!(
+            out.contains("os.chdir(_TEST_DOCUMENTS)"),
+            "mock-server branch must still chdir into test_documents when file fixtures \
+             also exist; got: {out}"
+        );
+    }
+
+    #[test]
     fn render_pyproject_contains_project_section() {
         let out = render_pyproject("my-pkg", "../../packages/python", ">=0.1.0", DependencyMode::Local);
         assert!(out.contains("[project]"), "got: {out}");
