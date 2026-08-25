@@ -58,45 +58,6 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         .iter()
         .any(|f| fixture_has_go_callable(f, e2e_config) || f.is_http_test() || f.visitor.is_some());
 
-    let needs_os = fixtures.iter().any(|f| {
-        if f.is_http_test() {
-            return true;
-        }
-        if !emits_executable_test(f) {
-            return false;
-        }
-        let call_config =
-            e2e_config.resolve_call_for_fixture(f.call.as_deref(), &f.id, &f.resolved_category(), &f.tags, &f.input);
-        let go_override = call_config
-            .overrides
-            .get("go")
-            .or_else(|| e2e_config.call.overrides.get("go"));
-        if go_override.and_then(|o| o.client_factory.as_deref()).is_some() {
-            return true;
-        }
-        let call_args = f.resolved_args(call_config);
-        if call_args
-            .iter()
-            .any(|a| a.arg_type == "mock_url" || a.arg_type == "mock_url_list")
-        {
-            return true;
-        }
-        call_args.iter().any(|a| {
-            if a.arg_type != "bytes" {
-                return false;
-            }
-            let mut current = &f.input;
-            let path = a.field.strip_prefix("input.").unwrap_or(&a.field);
-            for segment in path.split('.') {
-                match current.get(segment) {
-                    Some(next) => current = next,
-                    None => return false,
-                }
-            }
-            current.is_string()
-        })
-    });
-
     let needs_filepath = false;
 
     let needs_json = fixtures.iter().any(|f| {
@@ -227,13 +188,13 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
     }
 
     let needs_assert = body.contains("assert.");
-    // ~keep needs_os is a fixture-level heuristic ("some assertion is of a kind that might want
-    // this package"), deliberately a superset: an assertion can be skipped, degraded to a stub,
-    // or rendered without ever naming the package. Go rejects an unused import, so the rendered
-    // body is the only sound authority — `||` let the heuristic alone force the import and
-    // emitted `"os" imported and not used`. Matches how needs_fmt/needs_pkg below already narrow
-    // their own heuristics.
-    let needs_os = needs_os && body.contains("os.");
+    // ~keep A fixture-level heuristic here previously predicted `os.` usage from is_http_test,
+    // client_factory overrides, and mock_url/bytes-as-path args, then narrowed it with
+    // `body.contains("os.")` to dodge Go's unused-import error. It missed a declared
+    // `fixture.env.api_key_var` (emits `os.Getenv` outside every predicted shape), which
+    // produced the opposite failure: `os.` referenced but not imported. Matches
+    // `needs_strings` below — the rendered body is the only sound and complete authority.
+    let needs_os = body.contains("os.");
     // ~keep `strings.` is emitted from several independent sites (equality/contains/prefix/
     // suffix assertions, declared-error-value checks, HTTP header/body assertions, mock URL
     // list setup) that drift out of sync with any hand-maintained enumeration — a prior

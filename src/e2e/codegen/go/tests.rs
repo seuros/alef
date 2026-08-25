@@ -700,6 +700,95 @@ fn test_result_is_simple_contains_binds_result_and_emits_imports() {
     );
 }
 
+/// Regression test: a fixture that declares `env.api_key_var` but has no
+/// `mock_response`/`http` and no `client_factory` override emits `os.Getenv` in
+/// its live-API-key skip branch (see `test_function.rs`'s `api_key_var` handling).
+/// The old `needs_os` heuristic in `test_file.rs` only recognized http tests,
+/// `client_factory` overrides, `mock_url`/`mock_url_list` args, and bytes-as-path
+/// args -- it never checked `fixture.env.api_key_var`, so this exact shape
+/// referenced `os.` in the rendered body without importing `"os"`.
+#[test]
+fn declared_api_key_var_without_mock_or_client_factory_still_imports_os() {
+    use crate::core::config::e2e::ArgMapping;
+    use crate::e2e::fixture::FixtureEnv;
+
+    let e2e_config = E2eConfig {
+        call: CallConfig {
+            function: "detect_service".to_string(),
+            module: "github.com/example/mylib".to_string(),
+            result_var: "result".to_string(),
+            returns_result: true,
+            args: vec![ArgMapping {
+                name: "query".to_string(),
+                field: "input.query".to_string(),
+                arg_type: "string".to_string(),
+                optional: false,
+                owned: false,
+                element_type: None,
+                go_type: None,
+                vec_inner_is_ref: false,
+                trait_name: None,
+            }],
+            ..CallConfig::default()
+        },
+        ..E2eConfig::default()
+    };
+
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "detect_service_live".to_string(),
+        category: None,
+        description: "Detect service using a live API key".to_string(),
+        tags: vec![],
+        skip: None,
+        env: Some(FixtureEnv {
+            api_key_var: Some("SAMPLE_SERVICE_TOKEN".to_string()),
+        }),
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::json!({"query": "hello"}),
+        mock_response: None,
+        source: String::new(),
+        http: None,
+        asyncapi: None,
+        websocket: None,
+        preserve_input_urls: false,
+        assertions: vec![],
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+    };
+
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+    let enums: Vec<crate::core::ir::EnumDef> = Vec::new();
+    let out = render_test_file(
+        "service_detection",
+        &[&fixture],
+        GoTestFileContext {
+            go_module_path: "github.com/example/mylib",
+            import_alias: "sample_crate",
+            e2e_config: &e2e_config,
+            adapters: &[],
+            data_enum_names: &std::collections::HashSet::new(),
+            config: &config,
+            type_defs: &type_defs,
+            enums: &enums,
+            errors: &[],
+        },
+    );
+
+    assert!(
+        out.contains("os.Getenv(\"SAMPLE_SERVICE_TOKEN\")"),
+        "expected the body to reference os.Getenv for the declared api_key_var; got:\n{out}"
+    );
+    assert!(
+        out.contains("\t\"os\""),
+        "body references os.Getenv, so \"os\" must be imported; got:\n{out}"
+    );
+}
+
 #[test]
 fn main_test_go_http_fixtures_omits_net_http_and_strings_imports() {
     // When needs_mock_server_bootstrap=false (HTTP-fixtures harness path), the bootstrap uses
