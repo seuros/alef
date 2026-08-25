@@ -324,12 +324,23 @@ mod optional_element_mid_tuple {
 
     #[test]
     fn omitted_element_round_trips_both_directions() {
-        let core = CoreOptMid { a: 1.0, b: None, c: 3.0 };
+        let core = CoreOptMid {
+            a: 1.0,
+            b: None,
+            c: 3.0,
+        };
         let json = serde_json::to_string(&core).unwrap();
         assert_eq!(json, "[1.0,3.0]", "omitted b shortens the array");
 
         let dto: BindingOptMid = serde_json::from_str(&json).expect("must decode the shortened array");
-        assert_eq!(dto, BindingOptMid { a: 1.0, b: None, c: 3.0 });
+        assert_eq!(
+            dto,
+            BindingOptMid {
+                a: 1.0,
+                b: None,
+                c: 3.0
+            }
+        );
 
         let round_tripped: CoreOptMid = dto.into();
         assert_eq!(round_tripped, core);
@@ -341,10 +352,24 @@ mod optional_element_mid_tuple {
         // distinct from the omitted (shortened) encoding above but decoding to the same value.
         let json = "[1.0,null,3.0]";
         let dto: BindingOptMid = serde_json::from_str(json).expect("must decode the explicit null element");
-        assert_eq!(dto, BindingOptMid { a: 1.0, b: None, c: 3.0 });
+        assert_eq!(
+            dto,
+            BindingOptMid {
+                a: 1.0,
+                b: None,
+                c: 3.0
+            }
+        );
 
         let round_tripped: CoreOptMid = dto.into();
-        assert_eq!(round_tripped, CoreOptMid { a: 1.0, b: None, c: 3.0 });
+        assert_eq!(
+            round_tripped,
+            CoreOptMid {
+                a: 1.0,
+                b: None,
+                c: 3.0
+            }
+        );
     }
 
     #[test]

@@ -5,7 +5,9 @@ use super::{
 };
 use crate::codegen::generators::{AsyncPattern, RustBindingConfig};
 use crate::codegen::type_mapper::IdentityMapper;
-use crate::core::ir::{CoreWrapper, FieldDef, MethodDef, PrimitiveType, ReceiverKind, SerdeContainerConversion, TypeDef, TypeRef};
+use crate::core::ir::{
+    CoreWrapper, FieldDef, MethodDef, PrimitiveType, ReceiverKind, SerdeContainerConversion, TypeDef, TypeRef,
+};
 use ahash::AHashSet;
 
 fn method(name: &str, receiver: Option<ReceiverKind>, is_async: bool) -> MethodDef {
@@ -173,7 +175,14 @@ fn field_sound_true_for_optional_element_mid_tuple() {
     b.optional = true;
     let typ = type_with_fields(
         "OptMid",
-        vec![f64_field("a"), FieldDef { ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::F64))), ..b }, f64_field("c")],
+        vec![
+            f64_field("a"),
+            FieldDef {
+                ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::F64))),
+                ..b
+            },
+            f64_field("c"),
+        ],
         Default::default(),
     );
     assert!(struct_deserialize_delegation_field_sound(&typ, &[], &[]));
