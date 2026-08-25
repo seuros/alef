@@ -184,6 +184,11 @@ pub(crate) fn scaffold_elixir_cargo(
     };
     let mut always_features: std::collections::BTreeSet<String> = base_features;
     always_features.extend(referenced_features.clone());
+    // A config-only `excluded_default_features` name (gates no `#[cfg(feature = ...)]`, not
+    // listed in `nif_features`, and not a canonical default present in the core crate's
+    // manifest) must still get a forwarding entry below -- alef-task #374, regression in
+    // `cargo_excluded_features_tests`. ~keep
+    always_features.extend(excluded_default_features.iter().map(|name| (*name).to_string()));
 
     // features to the core crate. Without this, #[cfg(feature = "X")] arms fail
     let features_table = {
@@ -672,4 +677,69 @@ fn elixir_nif_targets(config: &ResolvedCrateConfig) -> Vec<String> {
             .map(str::to_string)
             .collect()
         })
+}
+
+#[cfg(test)]
+mod cargo_excluded_features_tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+
+    /// Regression for alef-task #374: an `excluded_default_features` name that gates no item in
+    /// the extracted API surface (e.g. a Cargo-only feature that only affects a dependency's
+    /// `build.rs` linking, such as `libheif-sys` via `heic`) is never discovered by
+    /// `crate::codegen::cfg::collect_cfg_features`, which walks `#[cfg(feature = "X")]`
+    /// attributes on IR nodes. `always_features` unions that discovery set with `base_features`
+    /// (canonical defaults intersected with the core crate's real `Cargo.toml`, or an explicit
+    /// `nif_features` override), but a name that is neither cfg-discoverable, nor listed in
+    /// `nif_features`, nor a canonical default present in the core crate's manifest never reaches
+    /// `always_features` at all -- breaking `mix compile --force` with `--features <name>`-style
+    /// opt-in, exactly the escape hatch `excluded_default_features` documents as always
+    /// available. Deliberately picks `heic` (not one of the hardcoded canonical defaults
+    /// `download`/`serde`/`config`) and configures no `nif_features`, so `base_features` cannot
+    /// smuggle it in either. `get_core_crate_features` also finds no real `Cargo.toml` on disk for
+    /// this fixture's `workspace_root`, so it contributes nothing here.
+    #[test]
+    fn scaffold_elixir_cargo_forwards_excluded_feature_not_referenced_by_any_cfg_attribute() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["elixir"]
+[[crates]]
+name = "sample-lib"
+sources = []
+[crates.elixir]
+excluded_default_features = ["heic"]
+"#,
+        )
+        .expect("valid config");
+        let config = cfg.resolve().expect("resolve").remove(0);
+        let api = ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        let files = scaffold_elixir_cargo(&api, &config).expect("scaffold_elixir_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        assert!(
+            cargo_toml.contains(r#"heic = ["sample-lib/heic"]"#),
+            "a config-only excluded_default_features name (not referenced by any \
+             #[cfg(feature = ...)] in the API surface, not in `nif_features`, and not a canonical \
+             default present in the core crate's manifest) must still get a forwarding entry so \
+             opting back in keeps working:\n{cargo_toml}"
+        );
+        let default_line = cargo_toml
+            .lines()
+            .find(|line| line.starts_with("default = ["))
+            .expect("default array present");
+        assert!(
+            !default_line.contains("heic"),
+            "default = [...] must NOT contain excluded `heic`; got: {default_line}"
+        );
+    }
 }

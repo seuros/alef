@@ -225,7 +225,11 @@ pub(crate) fn emit_cargo_toml(
     let _ = extra_deps_block;
 
     // `#[cfg(feature = "X")]` arms emitted by the codegen produce
-    let cfg_features = shared_cfg::collect_cfg_features(api);
+    let mut cfg_features = shared_cfg::collect_cfg_features(api);
+    // A config-only `excluded_default_features` name (gates no `#[cfg(feature = ...)]`) must
+    // still get a forwarding entry below -- alef-task #374, regression in
+    // `cargo_excluded_features_tests.rs`. ~keep
+    cfg_features.extend(excluded_default_features.iter().cloned());
     let features_table = if cfg_features.is_empty() {
         String::new()
     } else {

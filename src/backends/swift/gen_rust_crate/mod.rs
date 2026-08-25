@@ -8,6 +8,8 @@
 mod callback_files;
 pub(crate) mod cargo;
 #[cfg(test)]
+mod cargo_excluded_features_tests;
+#[cfg(test)]
 mod cargo_sort_order_tests;
 pub(crate) mod default_construction;
 mod deferred_noop;

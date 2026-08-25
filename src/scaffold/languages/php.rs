@@ -282,6 +282,10 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         for name in &php_function_referenced_feature_names(api) {
             features.remove(name);
         }
+        // A config-only `excluded_default_features` name (gates no `#[cfg(feature = ...)]`) must
+        // still get a forwarding entry below -- alef-task #374, regression in the `mod tests`
+        // block above. ~keep
+        features.extend(excluded_default_features.iter().map(|name| (*name).to_string()));
         if features.is_empty() {
             String::new()
         } else {
@@ -617,6 +621,61 @@ mod tests {
         assert_eq!(
             missing_features_for(&pred, &set(&["x"]), &core_defaults),
             BTreeSet::new()
+        );
+    }
+
+    /// Regression for alef-task #374: an `excluded_default_features` name that gates no item in
+    /// the extracted API surface (e.g. a Cargo-only feature that only affects a dependency's
+    /// `build.rs` linking, such as `libheif-sys` via `heic`) is never discovered by
+    /// `crate::codegen::cfg::collect_cfg_features`, which walks `#[cfg(feature = "X")]`
+    /// attributes on IR nodes. The forwarding block carrying `default = [...]` and the
+    /// forwarding lines was empty when discovery found nothing, so a config-only name never got
+    /// its promised opt-in forwarding entry at all -- breaking `cargo build -p <crate>-php
+    /// --features <name>` on desktop, exactly the escape hatch `excluded_default_features`
+    /// documents as always available.
+    #[test]
+    fn scaffold_php_cargo_forwards_excluded_feature_not_referenced_by_any_cfg_attribute() {
+        use crate::core::config::NewAlefConfig;
+
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "sample-lib"
+sources = []
+[crates.php]
+excluded_default_features = ["heic"]
+"#,
+        )
+        .expect("valid config");
+        let config = cfg.resolve().expect("resolve").remove(0);
+        let api = ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        let files = scaffold_php_cargo(&api, &config).expect("scaffold_php_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        assert!(
+            cargo_toml.contains(r#"heic = ["sample-lib/heic"]"#),
+            "a config-only excluded_default_features name (not referenced by any \
+             #[cfg(feature = ...)] in the API surface) must still get a forwarding entry so \
+             `cargo build --features heic` keeps working:\n{cargo_toml}"
+        );
+        let default_line = cargo_toml
+            .lines()
+            .find(|line| line.starts_with("default = ["))
+            .expect("default array present");
+        assert!(
+            !default_line.contains("heic"),
+            "default = [...] must NOT contain excluded `heic`; got: {default_line}"
         );
     }
 }

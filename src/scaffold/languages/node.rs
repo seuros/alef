@@ -273,7 +273,11 @@ pub(crate) fn scaffold_node_cargo(
     let _ = extra_deps_section;
 
     // `#[cfg(feature = "X")]` arms emitted by the codegen produce
-    let cfg_features = shared_cfg::collect_cfg_features(api);
+    let mut cfg_features = shared_cfg::collect_cfg_features(api);
+    // A config-only `excluded_default_features` name (gates no `#[cfg(feature = ...)]`) must
+    // still get a forwarding entry below -- alef-task #374, regression in
+    // `cargo_excluded_features_tests`. ~keep
+    cfg_features.extend(excluded_default_features.iter().map(|name| (*name).to_string()));
     let features_table = if cfg_features.is_empty() {
         String::new()
     } else {
@@ -902,5 +906,68 @@ mod migrate_tests {
         let changed = migrate_node_package_json_service_export(dir.path(), relative_path).expect("must not error");
         assert!(!changed);
         assert!(!dir.path().join(relative_path).exists());
+    }
+}
+
+/// Regression for alef-task #374: an `excluded_default_features` name that gates no item in the
+/// extracted API surface (e.g. a Cargo-only feature that only affects a dependency's `build.rs`
+/// linking, such as `libheif-sys` via `heic`) is never discovered by
+/// `shared_cfg::collect_cfg_features`, which walks `#[cfg(feature = "X")]` attributes on IR
+/// nodes. The `[features]` table was built exclusively from that discovery set, so a
+/// config-only name never got its promised opt-in forwarding entry at all -- breaking
+/// `cargo build -p <crate>-node --features <name>` on desktop, exactly the escape hatch
+/// `excluded_default_features` documents as always available. A test using a name that IS
+/// cfg-discoverable would only exercise the already-working half.
+#[cfg(test)]
+mod cargo_excluded_features_tests {
+    use super::*;
+    use crate::core::config::NewAlefConfig;
+
+    #[test]
+    fn scaffold_node_cargo_forwards_excluded_feature_not_referenced_by_any_cfg_attribute() {
+        let cfg: NewAlefConfig = toml::from_str(
+            r#"
+[workspace]
+languages = ["node"]
+[[crates]]
+name = "sample-lib"
+sources = []
+[crates.node]
+excluded_default_features = ["heic"]
+"#,
+        )
+        .expect("valid config");
+        let config = cfg.resolve().expect("resolve").remove(0);
+        let api = ApiSurface {
+            crate_name: "sample-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+
+        let files = scaffold_node_cargo(&api, &config).expect("scaffold_node_cargo ok");
+        let cargo_toml = &files
+            .iter()
+            .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+            .expect("Cargo.toml emitted")
+            .content;
+
+        assert!(
+            cargo_toml.contains("[features]"),
+            "a config-only excluded_default_features name must still produce a [features] table:\n{cargo_toml}"
+        );
+        assert!(
+            cargo_toml.contains(r#"heic = ["sample-lib/heic"]"#),
+            "a config-only excluded_default_features name (not referenced by any \
+             #[cfg(feature = ...)] in the API surface) must still get a forwarding entry so \
+             `cargo build --features heic` keeps working:\n{cargo_toml}"
+        );
+        let default_line = cargo_toml
+            .lines()
+            .find(|line| line.starts_with("default = ["))
+            .expect("default array present");
+        assert!(
+            !default_line.contains("heic"),
+            "default = [...] must NOT contain excluded `heic`; got: {default_line}"
+        );
     }
 }
