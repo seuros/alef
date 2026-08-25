@@ -1,10 +1,11 @@
 use crate::backends::php::gen_bindings::opaque_files::gen_php_opaque_class_file;
 use crate::backends::php::gen_bindings::php_types::{enum_aware_php_phpdoc_type, enum_aware_php_type};
 use crate::backends::php::gen_bindings::types::{is_tagged_data_enum, is_untagged_data_enum};
+use crate::backends::php::layout::php_class_output_dir;
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::codegen::doc_emission;
 use crate::core::backend::GeneratedFile;
-use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
+use crate::core::config::ResolvedCrateConfig;
 use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::{ApiSurface, TypeRef};
 use ahash::AHashSet;
@@ -390,12 +391,7 @@ pub(super) fn generate_public_api(
         minijinja::Value::default(),
     ));
 
-    let output_dir = config
-        .php
-        .as_ref()
-        .and_then(|p| p.stubs.as_ref())
-        .map(|s| s.output.to_string_lossy().to_string())
-        .unwrap_or_else(|| resolve_output_dir(config.output_paths.get("php"), &config.name, "packages/php/src/"));
+    let output_dir = php_class_output_dir(config);
 
     let mut files: Vec<GeneratedFile> = Vec::new();
     files.push(GeneratedFile {

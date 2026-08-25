@@ -12,6 +12,7 @@ use crate::backends::php::gen_bindings::types::{
     self, gen_enum_constants, gen_flat_data_enum, gen_flat_data_enum_from_impls, gen_flat_data_enum_methods,
     gen_php_struct, is_tagged_data_enum, is_untagged_data_enum,
 };
+use crate::backends::php::layout::php_class_output_dir;
 use crate::backends::php::naming::{php_autoload_namespace, php_ext_api_class_name};
 use crate::backends::php::type_map::PhpMapper;
 use crate::codegen::builder::RustFileBuilder;
@@ -820,12 +821,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         }
     }
 
-    let php_stubs_dir = config
-        .php
-        .as_ref()
-        .and_then(|p| p.stubs.as_ref())
-        .map(|s| s.output.to_string_lossy().to_string())
-        .unwrap_or_else(|| resolve_output_dir(config.output_paths.get("php"), &config.name, "packages/php/src/"));
+    let php_stubs_dir = php_class_output_dir(config);
 
     let php_namespace = php_autoload_namespace(config);
 

@@ -9,14 +9,20 @@ use crate::e2e::config::E2eConfig;
 use crate::e2e::fixture::FixtureGroup;
 
 /// Build the `"autoload"` PSR-4 section that maps the binding's PHP userland
-/// namespace to the local `packages/php/src/` tree.
+/// namespace to the generated class directory.
 ///
 /// The consumer's userland classes (layered over the native ext-php-rs
-/// extension) live in `<pkg_path>/src/` and are NOT registered by the native
-/// extension, so PHPUnit cannot resolve them without this mapping. Both
-/// dependency modes need it: `e2e/php` (Local) and `test_apps/php` (Registry)
-/// sit at the same depth relative to the package, so the same relative
-/// `pkg_path` is correct for both.
+/// extension) are NOT registered by the native extension, so PHPUnit cannot
+/// resolve them without this mapping. Both dependency modes need it: `e2e/php`
+/// (Local) and `test_apps/php` (Registry) sit at the same depth relative to the
+/// repository root, so the same relative `autoload_target` is correct for both.
+///
+/// `autoload_target` is the class directory itself, already relative to the
+/// generated project. This function must not append a `src/` segment of its
+/// own: the layout that directory lives in is decided by
+/// [`php_psr4_target`](crate::backends::php::layout::php_psr4_target), and a
+/// second opinion here is what previously pointed the e2e project at a
+/// `.../src/` subdirectory of the real class tree that no alef stage writes. ~keep
 ///
 /// `pkg_namespace` is the resolved `[crates.php] namespace` and is used
 /// verbatim as the PSR-4 prefix. It must never be re-derived from the composer
@@ -25,16 +31,16 @@ use crate::e2e::fixture::FixtureGroup;
 /// Composer silently autoloads nothing. Namespaces that already contain `\`
 /// (e.g. `Acme\Widget`) are preserved as written; only JSON escaping is
 /// applied.
-fn php_autoload_section(pkg_namespace: &str, pkg_path: &str) -> String {
+fn php_autoload_section(pkg_namespace: &str, autoload_target: &str) -> String {
     format!(
         r#"
   "autoload": {{
     "psr-4": {{
-      "{}\\": "{}/src/"
+      "{}\\": "{}"
     }}
   }},"#,
         pkg_namespace.replace('\\', "\\\\"),
-        pkg_path
+        autoload_target
     )
 }
 
@@ -43,7 +49,7 @@ pub(super) fn render_composer_json(
     e2e_autoload_ns: &str,
     _extension_name: &str,
     pkg_namespace: &str,
-    pkg_path: &str,
+    autoload_target: &str,
     _pkg_version: &str,
     dep_mode: crate::e2e::config::DependencyMode,
 ) -> String {
@@ -86,7 +92,7 @@ pub(super) fn render_composer_json(
             // The userland PHP classes (layered over the PIE-installed native
             // extension) are autoloaded from the local package source, since the
             // registry `require` deliberately omits the package itself.
-            (require, php_autoload_section(pkg_namespace, pkg_path))
+            (require, php_autoload_section(pkg_namespace, autoload_target))
         }
         crate::e2e::config::DependencyMode::Local => {
             let require = format!(
@@ -97,7 +103,7 @@ pub(super) fn render_composer_json(
                 phpunit = tv::packagist::PHPUNIT,
                 guzzle = tv::packagist::GUZZLE,
             );
-            (require, php_autoload_section(pkg_namespace, pkg_path))
+            (require, php_autoload_section(pkg_namespace, autoload_target))
         }
     };
 

@@ -4,6 +4,7 @@
 //! `tests/{Category}Test.php` files from JSON fixtures, driven entirely by
 //! `E2eConfig` and `CallConfig`.
 
+use crate::backends::php::layout::php_psr4_target;
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::Language;
@@ -116,6 +117,7 @@ impl E2eCodegen for PhpCodegen {
         let e2e_autoload_ns = format!("{php_namespace_escaped}\\\\E2e\\\\");
 
         // Generate composer.json.
+        let autoload_target = php_autoload_target(config, php_pkg.as_ref().and_then(|p| p.path.as_deref()));
         files.push(GeneratedFile {
             path: output_base.join("composer.json"),
             content: project::render_composer_json(
@@ -123,7 +125,7 @@ impl E2eCodegen for PhpCodegen {
                 &e2e_autoload_ns,
                 &extension_name,
                 &php_namespace,
-                &pkg_path,
+                &autoload_target,
                 &pkg_version,
                 e2e_config.dep_mode,
             ),
@@ -299,19 +301,38 @@ impl E2eCodegen for PhpCodegen {
     }
 }
 
+/// Number of directory levels between a generated PHP project (`e2e/php`, `test_apps/php`) and
+/// the repository root every alef output path is spelled relative to.
+const E2E_PROJECT_TO_REPO_ROOT: &str = "../../";
+
+/// PSR-4 target the generated `composer.json` maps the binding namespace to.
+///
+/// Unset `[crates.e2e.packages.php] path` — the normal case — resolves the directory alef
+/// actually writes the userland classes into, via the one authority every other PHP stage reads
+/// ([`php_psr4_target`]), so the e2e project and the repository-root manifest cannot name two
+/// different trees. An explicit `path` keeps its historical meaning: a package root whose classes
+/// sit in its nested `src/`. ~keep
+fn php_autoload_target(config: &ResolvedCrateConfig, configured_pkg_path: Option<&str>) -> String {
+    match configured_pkg_path {
+        Some(path) => format!("{}/src/", path.trim_end_matches('/')),
+        None => format!("{E2E_PROJECT_TO_REPO_ROOT}{}", php_psr4_target(config)),
+    }
+}
+
 /// Default `path` for the local PHP composer dependency when
 /// `[crates.e2e.packages.php].path` is unset.
+///
+/// This is the package ROOT — the directory `bootstrap.php` looks for a `vendor/autoload.php`
+/// under — not the class directory. The PSR-4 target is [`php_autoload_target`]'s job; the two
+/// are separate because a co-located layout has its classes in a `src/` child of this root while
+/// the manifest that would create `vendor/` sits at the root itself. ~keep
 ///
 /// Derived from [`ResolvedCrateConfig::package_dir`] for [`Language::Php`], which follows
 /// `[crates.output] php` when configured, or, unconfigured, resolves through
 /// `OutputTemplate::resolve`'s default to `crates/<pkg>-php/src` — the co-located layout
 /// that places the generated userland classes beside the PHP binding crate, matching
-/// where the scaffolder writes `crates/<pkg>-php/Cargo.toml`.
-///
-/// `php_autoload_section` (in `project.rs`) always appends its own `/src/` suffix to
-/// this path to build the PSR-4 mapping, so the trailing `/src` this function's default
-/// already resolves to is stripped here first, or the re-appended `/src/` would double up
-/// into a nonexistent `.../src/src/`. ~keep
+/// where the scaffolder writes `crates/<pkg>-php/Cargo.toml`. The trailing `/src` is stripped
+/// so the result names the crate root rather than its source directory.
 fn default_php_pkg_path(config: &ResolvedCrateConfig) -> String {
     let pkg_dir = config.package_dir(Language::Php);
     let trimmed = pkg_dir.trim_end_matches('/');
@@ -340,5 +361,7 @@ mod visitor;
 
 pub use stubs::{emit_test_backend, emit_test_backend_with_ns};
 
+#[cfg(test)]
+mod composer_autoload_tests;
 #[cfg(test)]
 mod tests;

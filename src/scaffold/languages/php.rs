@@ -1,3 +1,4 @@
+use crate::backends::php::layout::php_psr4_target;
 use crate::backends::php::naming::php_autoload_namespace;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
@@ -420,16 +421,11 @@ pub(crate) fn scaffold_php(_api: &ApiSurface, config: &ResolvedCrateConfig) -> a
         )
     };
 
-    // When `[crates.output] php` is configured (or a language template resolves it), the
-    // generated classes co-locate with this composer.json in `pkg_dir` itself, so PSR-4
-    // autoload must point at the current directory rather than a nested `src/` folder that
-    // no longer exists. Unset config keeps the historical split layout. ~keep
+    // The root manifest autoloads whatever directory the backend writes the classes into, read
+    // from `php_psr4_target` rather than re-derived here — a second derivation is how the e2e
+    // manifest ended up naming a `src/` subdirectory of it that no stage writes. ~keep
     let co_located = config.output_paths.contains_key("php");
-    let root_autoload_src = if co_located {
-        format!("{}/", pkg_dir.trim_end_matches('/'))
-    } else {
-        "packages/php/src/".to_string()
-    };
+    let root_autoload_src = php_psr4_target(config);
 
     let mut files = vec![GeneratedFile {
         path: PathBuf::from("composer.json"),

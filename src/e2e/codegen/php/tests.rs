@@ -499,7 +499,7 @@ mod composer_json_tests {
             "SampleLlm\\\\E2e\\\\",
             "demo_client",
             "Demo\\Client",
-            "../../packages/php",
+            "../../packages/php/src/",
             "1.4.0-rc.32",
             DependencyMode::Registry,
         );
@@ -551,7 +551,7 @@ mod composer_json_tests {
             "SampleLlm\\\\E2e\\\\",
             "demo_client",
             "Demo\\Client",
-            "../../packages/php",
+            "../../packages/php/src/",
             "1.4.0-rc.32",
             DependencyMode::Registry,
         );
@@ -576,7 +576,7 @@ mod composer_json_tests {
             "SampleLlm\\\\E2e\\\\",
             "demo_client",
             "Demo\\Client",
-            "../../packages/php",
+            "../../packages/php/src/",
             "1.4.0-rc.32",
             DependencyMode::Local,
         );
@@ -599,7 +599,7 @@ mod composer_json_tests {
                 "WidgetToolkit\\\\E2e\\\\",
                 "widget_toolkit",
                 "WidgetToolkit",
-                "../../crates/widget-toolkit-php",
+                "../../crates/widget-toolkit-php/src/",
                 "1.0.0",
                 dep_mode,
             );
@@ -623,7 +623,7 @@ mod composer_json_tests {
             "Acme\\\\Widget\\\\E2e\\\\",
             "widget",
             "Acme\\Widget",
-            "../../packages/php",
+            "../../packages/php/src/",
             "1.0.0",
             DependencyMode::Local,
         );
