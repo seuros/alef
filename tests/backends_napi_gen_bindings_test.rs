@@ -2200,6 +2200,7 @@ package_name = "test-lib"
         extra_lint_paths: vec![],
         crate_dir: None,
         target_dep_overrides: Vec::new(),
+        excluded_default_features: Vec::new(),
     });
     resolved
 }
