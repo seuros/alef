@@ -57,11 +57,33 @@ pub(super) fn build_command_for(
             format!("maturin develop --manifest-path {crate_dir}/Cargo.toml{release_flag}")
         }
         "napi" => {
+            // `crate_dir` is empty whenever `[crates.output] node` is not set explicitly (the
+            // common case) — fall back to the same default formula `package_dir` already uses
+            // for scaffolding, matching the `wasm-pack` arm below. Without this, the common
+            // no-override case sent napi a dangling `--manifest-path /Cargo.toml -o `, which
+            // resolves against the repo root instead of the generated crate. ~keep
+            let node_crate_dir = if crate_dir.is_empty() {
+                config.package_dir(lang)
+            } else {
+                crate_dir.to_string()
+            };
+            // napi-rs resolves the package name it bakes into the generated JS loader (and,
+            // with `--platform`, the optional-dependency package names for every target) from
+            // the `package.json` it reads — which defaults to `<cwd>/package.json`, not a path
+            // derived from `--manifest-path`/`-o`. alef always invokes napi from the repo root,
+            // so without `--package-json-path` napi silently reads the *workspace* root's
+            // `package.json` in any repo that has one, and bakes that package's name into the
+            // loader instead of the binding crate's own. `--package-json-path` names the correct
+            // file directly, so the fix holds regardless of `--cwd` and needs no `cd` into the
+            // crate directory (which would also require rewriting `--manifest-path`/`-o` to be
+            // relative to it). See alef#368. ~keep
             format!(
-                "npx --yes -p @napi-rs/cli@{} napi build --platform --manifest-path {}/Cargo.toml -o {} --dts {}{}",
+                "npx --yes -p @napi-rs/cli@{} napi build --platform --manifest-path {}/Cargo.toml -o {} \
+                 --package-json-path {}/package.json --dts {}{}",
                 tv::npm::NAPI_RS_CLI_CRATE,
-                crate_dir,
-                crate_dir,
+                node_crate_dir,
+                node_crate_dir,
+                node_crate_dir,
                 tv::npm::NAPI_AUTO_DTS_FILENAME,
                 release_flag
             )

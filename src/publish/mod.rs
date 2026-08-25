@@ -259,9 +259,14 @@ fn build_command_for_lang(
             let pkg = crate_name_from_output(config, Language::Node).unwrap_or_else(|| format!("{crate_name}-node"));
             let napi_target = target.map(|t| format!(" --target {}", t.triple)).unwrap_or_default();
             let dts = tv::npm::NAPI_AUTO_DTS_FILENAME;
+            // `--package-json-path` pins napi-rs to the binding crate's own `package.json`
+            // instead of letting it default to `<cwd>/package.json` (the repo root this command
+            // runs from), which otherwise bakes the wrong package name into the generated loader
+            // whenever the repo also has a workspace-root `package.json`. See alef#368.
             format!(
                 "napi build --manifest-path crates/{pkg}/Cargo.toml \
-                 -o crates/{pkg} --platform --dts {dts} --release{napi_target}"
+                 -o crates/{pkg} --package-json-path crates/{pkg}/package.json --platform --dts {dts} \
+                 --release{napi_target}"
             )
         }
         Language::Wasm => {

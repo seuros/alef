@@ -21,6 +21,8 @@ use build_command::{build_command_for, output_path_for, resolve_crate_dir};
 mod build_command_tests;
 #[cfg(all(test, unix))]
 mod build_orchestration_tests;
+#[cfg(all(test, unix))]
+mod napi_package_json_path_tests;
 #[cfg(test)]
 mod readiness_tests;
 #[cfg(test)]
