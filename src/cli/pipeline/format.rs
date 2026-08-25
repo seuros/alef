@@ -516,6 +516,44 @@ fn poly_paths(
     }
 }
 
+/// Which of `languages` own any path in `changed_paths`, using the exact same
+/// package_dir/output_for/crate_root directories [`poly_paths`] hands to poly for a partial
+/// regen.
+///
+/// A scaffold-managed manifest (`packages/java/pom.xml`, `crates/<name>-ffi/cmake/*.cmake`,
+/// `packages/python/pyproject.toml`) can change with no corresponding write in the
+/// bindings/service-api/public-api/stubs phases -- e.g. a `package_metadata.license` edit
+/// rewrites every language's manifest but touches no generated source at all. Those phases
+/// are the only places `Commands::Generate` (`bin_cli/core_commands.rs`) inserts into
+/// `changed_languages`, so a scaffold-only write used to leave that language out of
+/// `format_scope` entirely: `reconcile_managed_scaffold_manifests`'s write reached disk
+/// unformatted, and no later pass in a partial `alef generate` run ever saw it. `alef all`'s
+/// full-tree convergence pass (`converge_full_regen`, `only_languages = None`) covers every
+/// byte under `base_dir` regardless of which phase wrote it, which is why the identical
+/// license edit through `alef all` never reproduced this. ~keep
+pub(crate) fn languages_owning_changed_paths(
+    config: &ResolvedCrateConfig,
+    base_dir: &Path,
+    languages: &[Language],
+    changed_paths: &HashSet<PathBuf>,
+) -> HashSet<Language> {
+    if changed_paths.is_empty() {
+        return HashSet::new();
+    }
+    let mut owners = HashSet::new();
+    for &lang in languages {
+        let single = HashSet::from([lang]);
+        let dirs = poly_paths(config, base_dir, Some(&single), &[lang]);
+        if changed_paths
+            .iter()
+            .any(|path| dirs.iter().any(|dir| path.starts_with(dir)))
+        {
+            owners.insert(lang);
+        }
+    }
+    owners
+}
+
 /// Drop every path that lies inside another path in the list. poly walks each root it is
 /// given recursively, so handing it both `crates/x-node` and `crates/x-node/src` would
 /// format the same subtree twice -- and a formatter run twice in one pass is how
