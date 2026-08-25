@@ -501,18 +501,18 @@ mod tests {
     /// Regression test for a shipped defect: a free function whose only non-delegatable params are
     /// required (non-`Option`) `&Named` non-opaque references, returning a bare non-fallible `f64`,
     /// used to fall through to `gen_rustler_unimplemented_body` and emit `compile_error!` into the
-    /// consumer's default build path (`max_sim_score(query: &MultiVectorEmbedding, doc:
-    /// &MultiVectorEmbedding) -> f64`). It must now delegate to the real core call, since this
+    /// consumer's default build path (`score_pair(query: &SampleVector, candidate:
+    /// &SampleVector) -> f64`). It must now delegate to the real core call, since this
     /// generator's own call-arg closure already knows how to convert a required `&Named` param via
     /// `&{name}.clone().into()`.
     #[test]
     fn required_named_ref_params_with_bare_f64_return_delegate_instead_of_compile_error() {
         let func = FunctionDef {
-            name: "max_sim_score".to_string(),
-            rust_path: "xberg::late_interaction::max_sim_score".to_string(),
+            name: "score_pair".to_string(),
+            rust_path: "sample_crate::vector_ops::score_pair".to_string(),
             params: vec![
-                required_named_ref_param("query", "MultiVectorEmbedding"),
-                required_named_ref_param("doc", "MultiVectorEmbedding"),
+                required_named_ref_param("query", "SampleVector"),
+                required_named_ref_param("candidate", "SampleVector"),
             ],
             return_type: TypeRef::Primitive(PrimitiveType::F64),
             ..FunctionDef::default()
@@ -523,7 +523,7 @@ mod tests {
             &RustlerMapper,
             &AHashSet::default(),
             &AHashSet::default(),
-            "xberg",
+            "sample_crate",
             &AHashSet::default(),
             &AHashMap::default(),
         );
@@ -533,7 +533,7 @@ mod tests {
             "a required &Named param must not force compile_error! for a non-fallible return: {body}"
         );
         assert!(
-            body.contains("late_interaction::max_sim_score(&query.clone().into(), &doc.clone().into())"),
+            body.contains("vector_ops::score_pair(&query.clone().into(), &candidate.clone().into())"),
             "expected the function to delegate to the real core call, got: {body}"
         );
     }

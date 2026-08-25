@@ -199,18 +199,18 @@ fn preserves_order_and_only_mutates_cfg() {
 fn merges_gated_cfgs_by_disjunct_not_by_raw_text() {
     let input = vec![
         make_fn(
-            "max_sim_score",
-            "krate::max_sim_score",
-            Some(r#"any(feature = "late-interaction-presets", feature = "late-interaction")"#),
+            "score_pair",
+            "krate::score_pair",
+            Some(r#"any(feature = "scoring-presets", feature = "scoring")"#),
             &[],
         ),
         make_fn(
-            "max_sim_score",
-            "krate::max_sim_score",
-            Some(r#"feature = "late-interaction-presets""#),
+            "score_pair",
+            "krate::score_pair",
+            Some(r#"feature = "scoring-presets""#),
             &[],
         ),
-        make_fn("max_sim_score", "krate::max_sim_score", None, &[]),
+        make_fn("score_pair", "krate::score_pair", None, &[]),
     ];
 
     let out = regate_ungated_same_name_functions(&input);
@@ -218,18 +218,18 @@ fn merges_gated_cfgs_by_disjunct_not_by_raw_text() {
     assert_eq!(out.len(), 3);
     assert_eq!(
         out[0].cfg.as_deref(),
-        Some(r#"any(feature = "late-interaction-presets", feature = "late-interaction")"#),
+        Some(r#"any(feature = "scoring-presets", feature = "scoring")"#),
         "gated arms are never rewritten, only referenced"
     );
     assert_eq!(
         out[1].cfg.as_deref(),
-        Some(r#"feature = "late-interaction-presets""#),
+        Some(r#"feature = "scoring-presets""#),
         "gated arms are never rewritten, only referenced"
     );
 
     let fallback_cfg = out[2].cfg.as_deref().expect("the ungated fallback must now be gated");
     assert_eq!(
-        fallback_cfg, r#"not(any(feature = "late-interaction-presets", feature = "late-interaction"))"#,
+        fallback_cfg, r#"not(any(feature = "scoring-presets", feature = "scoring"))"#,
         "the second arm's cfg is already one of the first arm's disjuncts, so OR-merging it again \
          must not produce a redundant any(any(...), ...) gate; got: {fallback_cfg}"
     );
