@@ -597,3 +597,144 @@ fn readme_references_honor_per_mapping_roots() {
         ]
     );
 }
+
+/// Table-driven: every finding kind against every `strict` setting.
+///
+/// `alef snippets check` and `alef snippets gaps` both reduce a [`GapReport`] to a pass/fail
+/// verdict through [`GapReport::is_failure`] -- before it existed, `gaps` failed unconditionally
+/// on ANY finding (including an unreferenced-only one) while `check` already gated exactly that
+/// one finding class on `strict`. Every structural row proves `has_structural_gaps` inspects
+/// that field (not just the first one checked), and each is paired with its own `strict` toggle
+/// to prove `strict` cannot suppress a structural finding. Only the `unreferenced_only` pair
+/// differs across `strict`, which is the row that would catch a regression back to "any finding
+/// always fails" or forward to "strict changes nothing". ~keep
+#[test]
+fn is_failure_gates_only_unreferenced_snippets_on_strict() {
+    struct Row {
+        label: &'static str,
+        report: GapReport,
+        strict: bool,
+        expected: bool,
+    }
+
+    let missing_reference = || GapReport {
+        missing_references: vec![SnippetReference {
+            source: PathBuf::from("a.md"),
+            target: PathBuf::from("b.md"),
+            line: 1,
+        }],
+        ..GapReport::default()
+    };
+    let missing_variant = || GapReport {
+        missing_language_variants: vec![MissingLanguageVariant {
+            group: PathBuf::from("group.md"),
+            language: Language::Python,
+        }],
+        ..GapReport::default()
+    };
+    let skip_without_reason = || GapReport {
+        skips_without_reason: vec![SnippetLocation {
+            path: PathBuf::from("p.md"),
+            line: 1,
+            block_index: 0,
+        }],
+        ..GapReport::default()
+    };
+    let unknown_language = || GapReport {
+        unknown_languages: vec![UnknownLanguage {
+            path: PathBuf::from("p.md"),
+            line: 1,
+            tag: "nosuchlang".to_string(),
+        }],
+        ..GapReport::default()
+    };
+    let unreferenced_only = || GapReport {
+        unreferenced_snippets: vec![PathBuf::from("orphan.md")],
+        ..GapReport::default()
+    };
+
+    let rows = vec![
+        Row {
+            label: "empty report, not strict",
+            report: GapReport::default(),
+            strict: false,
+            expected: false,
+        },
+        Row {
+            label: "empty report, strict",
+            report: GapReport::default(),
+            strict: true,
+            expected: false,
+        },
+        Row {
+            label: "missing reference, not strict",
+            report: missing_reference(),
+            strict: false,
+            expected: true,
+        },
+        Row {
+            label: "missing reference, strict",
+            report: missing_reference(),
+            strict: true,
+            expected: true,
+        },
+        Row {
+            label: "missing language variant, not strict",
+            report: missing_variant(),
+            strict: false,
+            expected: true,
+        },
+        Row {
+            label: "missing language variant, strict",
+            report: missing_variant(),
+            strict: true,
+            expected: true,
+        },
+        Row {
+            label: "skip without reason, not strict",
+            report: skip_without_reason(),
+            strict: false,
+            expected: true,
+        },
+        Row {
+            label: "skip without reason, strict",
+            report: skip_without_reason(),
+            strict: true,
+            expected: true,
+        },
+        Row {
+            label: "unknown language, not strict",
+            report: unknown_language(),
+            strict: false,
+            expected: true,
+        },
+        Row {
+            label: "unknown language, strict",
+            report: unknown_language(),
+            strict: true,
+            expected: true,
+        },
+        Row {
+            label: "unreferenced only, not strict",
+            report: unreferenced_only(),
+            strict: false,
+            expected: false,
+        },
+        Row {
+            label: "unreferenced only, strict",
+            report: unreferenced_only(),
+            strict: true,
+            expected: true,
+        },
+    ];
+
+    for row in rows {
+        assert_eq!(
+            row.report.is_failure(row.strict),
+            row.expected,
+            "row `{}` expected is_failure == {}",
+            row.label,
+            row.expected
+        );
+    }
+}

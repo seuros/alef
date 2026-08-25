@@ -1,6 +1,24 @@
 use crate::core::config::{Language, ResolvedCrateConfig};
 use std::collections::HashSet;
 
+/// The function and type names excluded from `lang`'s bindings by `alef.toml`.
+///
+/// Every arm folds in the crate-wide `[crates.exclude]` list plus zero or more per-language
+/// `exclude_functions`/`exclude_types` lists, unioned rather than replaced. The FFI-derived
+/// language families (`go`, `java`, `kotlin`, `kotlin_android`, `csharp`) additionally fold in
+/// `[crates.ffi]`, since their generated code calls through the C ABI that backend emits.
+/// `kotlin_android` and `jni` additionally fold in `[crates.jni].exclude_functions`: the JNI
+/// shim crate (`alef-backend-jni`) is what `kotlin_android` actually calls through, so a
+/// function excluded only at the JNI level has no shim for `kotlin_android` to reach either.
+/// `[crates.jni]` has no `exclude_types` field, so only the function half is folded for it.
+///
+/// This is the ONLY exclusion surface this function reads. It does not consult
+/// `[opaque_types]` (a type-remapping declaration, not an exclusion list), `#[alef::skip]` /
+/// `#[doc(hidden)]` (the extraction-time `binding_excluded` IR flag, honored separately and
+/// uniformly across every language by each consumer -- e.g. `generate_lang_doc`'s own
+/// `!f.binding_excluded` filter), or any crate-level override -- `[[crates]]` is a plain array
+/// keyed by `name`, not a `[workspace.crates."<name>"]` map, and there is no such override
+/// surface to fold in. ~keep
 pub(crate) fn language_excludes(config: &ResolvedCrateConfig, lang: Language) -> (HashSet<String>, HashSet<String>) {
     let mut functions: HashSet<String> = config.exclude.functions.iter().cloned().collect();
     let mut types: HashSet<String> = config.exclude.types.iter().cloned().collect();
@@ -72,8 +90,19 @@ pub(crate) fn language_excludes(config: &ResolvedCrateConfig, lang: Language) ->
             if let Some(c) = &config.ffi {
                 extend_excludes(&mut functions, &mut types, &c.exclude_functions, &c.exclude_types);
             }
+            // KotlinAndroid is JNI's consumer: the paired `[crates.kotlin_android]` section
+            // configures the Kotlin surface, but the JNI shim crate itself
+            // (`alef-backend-jni`) is the one that actually honors `[crates.jni]`. A function
+            // excluded only there still has no JNI shim to call through, so it must drop out
+            // of the KotlinAndroid docs/ledger surface too, not just the JNI one. ~keep
+            if let Some(c) = &config.jni {
+                functions.extend(c.exclude_functions.iter().cloned());
+            }
         }
         Language::Jni => {
+            if let Some(c) = &config.jni {
+                functions.extend(c.exclude_functions.iter().cloned());
+            }
             if let Some(c) = &config.ffi {
                 extend_excludes(&mut functions, &mut types, &c.exclude_functions, &c.exclude_types);
             }

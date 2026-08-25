@@ -137,6 +137,71 @@ fn a_session_target_name_in_required_languages_drives_the_gaps_parity_check() {
     );
 }
 
+/// Table-driven over {flag, config, both, neither}: `deny_unclassified` used to read the raw
+/// `--strict` flag alone, so `[crates.docs.snippets].strict = true` (config-only) left
+/// unclassified snippets un-denied while `--strict` (flag-only) denied them -- an asymmetry a
+/// consumer reading `strict = true` in their `alef.toml` had no reason to expect. `strict` here
+/// is `run_check`'s already-unified `force_strict || config.strict`, so this table proves the
+/// three "strict is on" cells (flag, config, both) all resolve identically, and the fourth
+/// proves `deny_unclassified` remains available as an a-la-carte opt-in with strict off. ~keep
+#[test]
+fn deny_unclassified_ignores_which_source_strict_came_from() {
+    struct Row {
+        label: &'static str,
+        force_strict: bool,
+        config_strict: bool,
+        config_deny_unclassified: bool,
+        expected: bool,
+    }
+    let rows = [
+        Row {
+            label: "neither flag nor config strict, no opt-in",
+            force_strict: false,
+            config_strict: false,
+            config_deny_unclassified: false,
+            expected: false,
+        },
+        Row {
+            label: "--strict flag only",
+            force_strict: true,
+            config_strict: false,
+            config_deny_unclassified: false,
+            expected: true,
+        },
+        Row {
+            label: "config strict only -- the asymmetry this fixes",
+            force_strict: false,
+            config_strict: true,
+            config_deny_unclassified: false,
+            expected: true,
+        },
+        Row {
+            label: "both flag and config strict",
+            force_strict: true,
+            config_strict: true,
+            config_deny_unclassified: false,
+            expected: true,
+        },
+        Row {
+            label: "deny_unclassified opt-in alone, no strict from either source",
+            force_strict: false,
+            config_strict: false,
+            config_deny_unclassified: true,
+            expected: true,
+        },
+    ];
+    for row in rows {
+        let strict = row.force_strict || row.config_strict;
+        assert_eq!(
+            resolved_deny_unclassified(row.config_deny_unclassified, strict),
+            row.expected,
+            "row `{}` expected deny_unclassified == {}",
+            row.label,
+            row.expected
+        );
+    }
+}
+
 #[test]
 fn strict_coverage_rejects_every_non_validation_status() {
     assert!(is_incomplete_status(SnippetStatus::Skip));
@@ -514,6 +579,49 @@ fn a_configured_gap_check_still_detects_a_real_missing_language_variant() {
         !is_success(code),
         "the tree has a python snippet group and no rust variant; that is a gap and must fail even \
          without --strict"
+    );
+}
+
+/// `alef snippets gaps` used to fail unconditionally on ANY finding, including an
+/// unreferenced-only one -- the exact finding `alef snippets check` already gated on `strict`
+/// via `GapReport::is_failure`. This is that same finding driven through the standalone `gaps`
+/// command instead, proving both commands now reach the same verdict from it. ~keep
+#[test]
+fn gaps_command_only_fails_on_an_unreferenced_only_finding_under_strict() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let snippets = ledger_backed_snippet_tree(directory.path(), &["python"]);
+    // An extra snippet, outside the ledger tree and never `--8<--`-included by any
+    // documentation page below -- the only finding this run should produce.
+    std::fs::create_dir_all(snippets.join("python")).expect("python snippet directory");
+    std::fs::write(snippets.join("python/orphan.md"), "```python\n# orphan\n```\n").expect("orphan snippet");
+    let docs = directory.path().join("docs");
+    std::fs::create_dir_all(&docs).expect("docs root");
+    std::fs::write(docs.join("index.md"), "# Usage\n").expect("docs page");
+    let required = ["python".to_string()];
+
+    let lenient = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: std::slice::from_ref(&docs),
+        required_languages: Some(&required),
+        include_base_paths: std::slice::from_ref(&docs),
+        strict: false,
+    });
+    assert!(
+        is_success(lenient),
+        "an unreferenced-only finding must not fail `gaps` without --strict, matching `check`'s \
+         existing split between structural and unreferenced-snippet findings"
+    );
+
+    let strict = run_gaps(&GapInvocation {
+        snippet_dirs: std::slice::from_ref(&snippets),
+        docs_dirs: std::slice::from_ref(&docs),
+        required_languages: Some(&required),
+        include_base_paths: std::slice::from_ref(&docs),
+        strict: true,
+    });
+    assert!(
+        !is_success(strict),
+        "--strict must still fail `gaps` on the identical unreferenced finding"
     );
 }
 

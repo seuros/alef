@@ -190,6 +190,46 @@ fn side_effect_policy_only_blocks_execution() {
     );
 }
 
+fn unclassified_snippet() -> Snippet {
+    Snippet {
+        metadata: SnippetMetadata {
+            side_effect: None,
+            ..SnippetMetadata::default()
+        },
+        ..network_snippet()
+    }
+}
+
+/// `deny_unclassified` is the gate that actually decides whether a snippet with no side-effect
+/// classification reaches real execution at `ValidationLevel::Run` or is pre-emptively skipped.
+/// `cli::commands::snippets::resolved_deny_unclassified` decides the boolean fed into this
+/// field from `--strict` and `[crates.docs.snippets].strict`/`deny_unclassified`; this proves
+/// the field itself has the effect that decision assumes, at both settings. ~keep
+#[test]
+fn deny_unclassified_rejects_only_when_enabled() {
+    let snippet = unclassified_snippet();
+    let permissive = RunnerConfig {
+        level: ValidationLevel::Run,
+        deny_unclassified: false,
+        ..RunnerConfig::default()
+    };
+    let strict = RunnerConfig {
+        level: ValidationLevel::Run,
+        deny_unclassified: true,
+        ..RunnerConfig::default()
+    };
+
+    assert_eq!(
+        side_effect_rejection(&snippet, &permissive),
+        None,
+        "an unclassified snippet must be allowed through when deny_unclassified is off"
+    );
+    assert_eq!(
+        side_effect_rejection(&snippet, &strict).as_deref(),
+        Some("unclassified side effects are denied")
+    );
+}
+
 #[test]
 fn annotations_cap_validation_instead_of_skipping_it() {
     let mut snippet = network_snippet();

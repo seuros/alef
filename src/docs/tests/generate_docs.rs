@@ -124,6 +124,60 @@ exclude_functions = ["ffi_only"]
     );
 }
 
+/// `[crates.jni].exclude_functions` names a function the JNI shim crate never generates a
+/// binding for, so KotlinAndroid -- the language that calls through that shim -- has no way to
+/// reach it either. `language_excludes`'s `Language::KotlinAndroid` arm used to fold only
+/// `[crates.kotlin_android]` and `[crates.ffi]`, never `[crates.jni]`, so a function excluded
+/// only at the JNI level still showed up as "expected" on the KotlinAndroid docs page and in the
+/// snippet coverage ledger with no way for a consumer to silence it. ~keep
+#[test]
+fn test_generate_docs_respects_jni_exclude_functions_for_kotlin_android() {
+    let config = config_from_toml(
+        r#"
+[workspace]
+languages = ["kotlin_android"]
+
+[[crates]]
+name = "mylib"
+sources = ["src/lib.rs"]
+
+[crates.jni]
+exclude_functions = ["jni_only"]
+
+[crates.kotlin_android]
+exclude_functions = ["android_only"]
+"#,
+    );
+    let mut api = make_minimal_api("1.2.3");
+    api.functions = vec![
+        make_function("jni_only", vec![], TypeRef::Unit, false, None),
+        make_function("android_only", vec![], TypeRef::Unit, false, None),
+        make_function("scrape", vec![], TypeRef::Unit, false, None),
+    ];
+
+    let files = generate_docs(&api, &config, &[Language::KotlinAndroid], "out").unwrap();
+    let kotlin_android = files
+        .iter()
+        .find(|f| f.path.to_str().unwrap().contains("api-kotlin-android"))
+        .unwrap();
+
+    assert!(
+        !kotlin_android.content.contains("jniOnly"),
+        "JniConfig::exclude_functions must hide the function from the KotlinAndroid docs page:\n{}",
+        kotlin_android.content
+    );
+    assert!(
+        !kotlin_android.content.contains("androidOnly"),
+        "the KotlinAndroid-level list must still apply alongside the JNI-level list:\n{}",
+        kotlin_android.content
+    );
+    assert!(
+        kotlin_android.content.contains("scrape"),
+        "a function excluded in neither list must still appear:\n{}",
+        kotlin_android.content
+    );
+}
+
 #[test]
 fn test_generate_docs_produces_one_file_per_language_plus_three_shared() {
     let api = make_minimal_api("1.2.3");
