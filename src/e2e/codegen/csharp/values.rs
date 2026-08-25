@@ -90,6 +90,35 @@ pub(super) fn render_sealed_display(
     out
 }
 
+/// Merge per-call C# `enum_fields` keys with the global file-level `fields_enum` set so
+/// call-specific enum-typed result fields (e.g. BatchObject's `status` → BatchStatus) trigger
+/// enum coercion in assertions even when the global set does not list them. The file-level
+/// `enum_fields` argument carries the default-call's override; `cs_overrides.enum_fields`
+/// carries the per-fixture-call's override (e.g. retrieve_batch.overrides.csharp.enum_fields).
+///
+/// Must be the EFFECTIVE set: a per-call `fields_enum` REPLACES the global rather than merging,
+/// so reading the global directly discards the override outright. Every other language resolves
+/// this through the accessor; C# was the only one reading the raw global. This is a different
+/// axis from the per-language `enum_fields` override maps merged in just below. ~keep
+pub(super) fn effective_csharp_enum_fields(
+    e2e_config: &crate::e2e::config::E2eConfig,
+    call_config: &crate::e2e::config::CallConfig,
+    enum_fields: &std::collections::HashMap<String, String>,
+    cs_overrides: Option<&crate::e2e::config::CallOverride>,
+) -> std::collections::HashSet<String> {
+    let mut effective_enum_fields: std::collections::HashSet<String> =
+        e2e_config.effective_fields_enum(call_config).clone();
+    for k in enum_fields.keys() {
+        effective_enum_fields.insert(k.clone());
+    }
+    if let Some(o) = cs_overrides {
+        for k in o.enum_fields.keys() {
+            effective_enum_fields.insert(k.clone());
+        }
+    }
+    effective_enum_fields
+}
+
 /// Convert a `serde_json::Value` to a C# literal string.
 pub(super) fn json_to_csharp(value: &serde_json::Value) -> String {
     match value {

@@ -927,5 +927,8 @@ mod import_pruning_tests;
 mod tests;
 
 #[cfg(test)]
+#[path = "go/tests/go_mod_tests.rs"]
+mod go_mod_tests;
+#[cfg(test)]
 #[path = "go/tests/import_set_tests.rs"]
 mod import_set_tests;

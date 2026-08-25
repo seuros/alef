@@ -14,6 +14,7 @@ mod args;
 #[cfg(test)]
 mod assertion_containment_tests;
 mod assertion_helpers;
+mod assertion_streaming;
 mod assertion_synthetic;
 #[cfg(test)]
 mod collection_field_classification_tests;

@@ -55,7 +55,6 @@ src/e2e/codegen/csharp/setup.rs 1141
 src/e2e/codegen/csharp/tests.rs 1257
 src/e2e/codegen/dart/test_case.rs 1209
 src/e2e/codegen/elixir/assertions.rs 1616
-src/e2e/codegen/elixir/test_case.rs 1035
 src/e2e/codegen/go/assertions.rs 1535
 src/e2e/codegen/go/setup.rs 1429
 src/e2e/codegen/go/snippet.rs 2054
