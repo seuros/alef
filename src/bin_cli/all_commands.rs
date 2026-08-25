@@ -349,6 +349,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         previous_binding_ownership.get(language).cloned().unwrap_or_default(),
                     );
                 }
+                // `binding_ownership`'s cache-hit entries just above exist to answer exactly the
+                // question the sweep below asks, but the sweep's `keep` set is `current_gen_paths`,
+                // not `binding_ownership` -- and `current_gen_paths` is populated only from what
+                // `bindings`/`stubs`/`public_api_files` actually returned this run, so a language
+                // `pipeline::generate` skipped as cache-hit counted as having emitted nothing. The
+                // manifest-based route in `sweep_manifest_orphans` (unlike its disk-scan route) has
+                // no per-root "nothing recorded here" guard, so it deleted that language's still-valid
+                // binding output on every cache hit -- `<lang>.manifest` stayed intact and non-empty,
+                // but a file it named was gone, so the next run's `outputs_exist` read that as a miss,
+                // regenerated, and the following hit deleted it again: an unbroken hit/miss/hit/miss
+                // cycle (alef-tasks#303). Folding `binding_ownership` in here closes that gap. ~keep
+                current_gen_paths.extend(binding_ownership.values().flatten().cloned());
 
                 let mut binding_count: usize = 0;
                 for (lang, lang_files) in &bindings {
