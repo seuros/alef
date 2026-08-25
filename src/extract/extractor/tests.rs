@@ -44,6 +44,7 @@ fn extract_from_source(source: &str) -> ApiSurface {
 
 mod cfg_test_gating;
 mod defaults;
+mod duplicate_items;
 mod exclusions;
 mod extraction_area;
 mod futures_returns;

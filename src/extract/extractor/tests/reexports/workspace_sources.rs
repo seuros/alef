@@ -169,3 +169,58 @@ fn test_find_crate_source_hyphen_underscore_alt() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// Task #385 candidate reproduction: the same workspace-sibling item re-exported from two
+/// different local modules must resolve to a single `ApiSurface` entry, not one per `use` path.
+/// `resolve_external_use` marks the sibling source file `visited` on its first extraction, so
+/// the second `pub use` of the same item is a no-op rather than a second merge. ~keep
+#[test]
+fn test_pub_use_same_external_item_from_two_local_modules_not_duplicated() {
+    let tmp = std::env::temp_dir().join("alef_test_reexport_two_local_paths");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("crates/other_crate/src")).unwrap();
+
+    std::fs::write(
+        tmp.join("Cargo.toml"),
+        r#"
+[workspace]
+members = ["crates/other_crate"]
+
+[workspace.dependencies]
+other_crate = { path = "crates/other_crate" }
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        tmp.join("crates/other_crate/src/lib.rs"),
+        "pub struct ServerConfig { pub host: String }\n",
+    )
+    .unwrap();
+
+    let our_lib = tmp.join("crates/my_crate/src/lib.rs");
+    std::fs::create_dir_all(our_lib.parent().unwrap()).unwrap();
+    std::fs::write(
+        &our_lib,
+        r#"
+pub use other_crate::ServerConfig;
+pub mod api {
+    pub use other_crate::ServerConfig;
+}
+"#,
+    )
+    .unwrap();
+
+    let sources: Vec<&Path> = vec![our_lib.as_path()];
+    let surface = extract(&sources, "my_crate", "0.1.0", Some(&tmp)).unwrap();
+
+    assert_eq!(
+        surface.types.len(),
+        1,
+        "ServerConfig re-exported from two local modules must appear once, not twice"
+    );
+    assert_eq!(surface.types[0].name, "ServerConfig");
+    assert_eq!(surface.types[0].rust_path, "my_crate::ServerConfig");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
