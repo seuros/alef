@@ -228,6 +228,24 @@ fn render_args(params: &[ParamDef], lang: Language, ffi_prefix: &str) -> String 
 }
 
 fn sample_param_value(param: &ParamDef, lang: Language, ffi_prefix: &str) -> String {
+    // ~keep The Rust page documents the crate itself, so a borrowed param has to be *passed*
+    // borrowed or the example will not compile against the signature printed directly above it.
+    // String/Char/Path/Bytes are excluded because their samples are already borrow-shaped
+    // literals (`"value"` is a `&str`, `b"data"` a `&[u8; N]`). An optional param is excluded
+    // because its sample is a bare value that does not fit `Option<_>` to begin with; a borrow
+    // marker would not make it fit.
+    if lang == Language::Rust
+        && param.is_ref
+        && !param.optional
+        && !matches!(
+            &param.ty,
+            TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Bytes
+        )
+    {
+        let borrow = if param.is_mut { "&mut " } else { "&" };
+        return format!("{borrow}{}", sample_value(&param.ty, lang, ffi_prefix));
+    }
+
     if matches!(lang, Language::Ffi | Language::C) && matches!(&param.ty, TypeRef::Named(_)) {
         // ~keep Every Named-type param is a scalar `AlefHandle` (uint64_t) in the C
         // ABI, whether it's passed by value, by ref, or is optional — there is no

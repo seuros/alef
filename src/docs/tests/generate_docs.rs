@@ -569,19 +569,6 @@ fn streaming_adapter_api(config: &ResolvedCrateConfig) -> ApiSurface {
     api
 }
 
-fn doc_content<'a>(files: &'a [crate::core::backend::GeneratedFile], slug: &str) -> &'a str {
-    let expected_name = format!("{slug}.md");
-    files
-        .iter()
-        .find(|file| {
-            file.path
-                .file_name()
-                .is_some_and(|name| name.to_string_lossy() == expected_name)
-        })
-        .map(|file| file.content.as_str())
-        .unwrap_or_else(|| panic!("missing generated doc file for {slug}"))
-}
-
 /// Regression test for a real generated-doc defect: an authored `# Example` whose source
 /// fence is bare (rustdoc's implicit-Rust convention, as `html-to-markdown`'s `convert()`
 /// doc comment uses) must render with a bare closing fence in `api-rust.md`, not a closing

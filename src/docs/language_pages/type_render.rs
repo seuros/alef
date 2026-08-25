@@ -5,6 +5,7 @@ use crate::docs::descriptions::generate_field_description;
 use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at};
 use crate::docs::formatting::{doc_type_with_optional, escape_table_cell, format_field_default};
 use crate::docs::naming::{field_name, type_name};
+use crate::docs::rust_types::rust_field_type;
 use crate::docs::type_mapping::FFI_HANDLE_TYPE_NAME;
 use crate::docs::{clean_doc, template_env};
 
@@ -149,7 +150,11 @@ pub(super) fn render_type(
         out.push_str("|-------|------|---------|-------------|\n");
         for field in fields {
             let fname = field_name(&field.name, lang);
-            let fty = doc_type_with_optional(&field.ty, lang, field.optional, ffi_prefix);
+            let fty = if lang == Language::Rust {
+                rust_field_type(field, ffi_prefix)
+            } else {
+                doc_type_with_optional(&field.ty, lang, field.optional, ffi_prefix)
+            };
             let fdefault = format_field_default(field, lang, api, ffi_prefix);
             let fdoc = {
                 let raw = clean_doc_inline(&field.doc, lang);

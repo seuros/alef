@@ -39,6 +39,19 @@ fn empty_type(name: &str) -> TypeDef {
     }
 }
 
+fn doc_content<'a>(files: &'a [crate::core::backend::GeneratedFile], slug: &str) -> &'a str {
+    let expected_name = format!("{slug}.md");
+    files
+        .iter()
+        .find(|file| {
+            file.path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy() == expected_name)
+        })
+        .map(|file| file.content.as_str())
+        .unwrap_or_else(|| panic!("missing generated doc file for {slug}"))
+}
+
 mod function_dedup;
 mod generate_docs;
 mod generated_stage;
@@ -46,6 +59,7 @@ mod headings;
 mod java_exception_agreement;
 mod language_pages;
 mod markdown_quality;
+mod rust_reference;
 mod rustdoc_fence_attributes;
 mod shared_docs;
 mod snippet_build_dependency_removed;

@@ -1,4 +1,4 @@
-use crate::core::ir::{ApiSurface, TypeRef};
+use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use tracing::info;
 
@@ -12,13 +12,7 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
 
     for typ in &mut api.types {
         for field in &mut typ.fields {
-            let original = extract_tuple_vec_original_type(&field.ty);
-            if sanitize_type_ref(&mut field.ty, &known_types, &known_enums).is_lossy() {
-                field.sanitized = true;
-                if let Some(orig) = original {
-                    field.original_type = Some(orig);
-                }
-            }
+            sanitize_field(field, &known_types, &known_enums);
             if !field.sanitized
                 && let Some(path) = field.type_rust_path.as_deref()
                 && let Some(name) = named_type_name(&field.ty)
@@ -27,6 +21,7 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
                 if known_name
                     && !field_path_matches_known_type(path, name, &known_type_paths, &known_enum_paths, &api_crate_name)
                 {
+                    record_pre_sanitization_type(field);
                     field.ty = TypeRef::String;
                     field.sanitized = true;
                 }
@@ -73,28 +68,48 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
     for enum_def in &mut api.enums {
         for variant in &mut enum_def.variants {
             for field in &mut variant.fields {
-                let original = extract_tuple_vec_original_type(&field.ty);
-                if sanitize_type_ref(&mut field.ty, &known_types, &known_enums).is_lossy() {
-                    field.sanitized = true;
-                    if let Some(orig) = original {
-                        field.original_type = Some(orig);
-                    }
-                }
+                sanitize_field(field, &known_types, &known_enums);
             }
         }
     }
     for error_def in &mut api.errors {
         for variant in &mut error_def.variants {
             for field in &mut variant.fields {
-                let original = extract_tuple_vec_original_type(&field.ty);
-                if sanitize_type_ref(&mut field.ty, &known_types, &known_enums).is_lossy() {
-                    field.sanitized = true;
-                    if let Some(orig) = original {
-                        field.original_type = Some(orig);
-                    }
-                }
+                sanitize_field(field, &known_types, &known_enums);
             }
         }
+    }
+}
+
+/// Sanitize `field.ty` in place, keeping a record of the Rust type it had beforehand.
+///
+/// `extract_tuple_vec_original_type` only recognizes the tuple-Vec and fixed-tuple-array shapes
+/// the wasm backend reconstructs; every other lossy rewrite used to leave `original_type` unset,
+/// which erased the declared type name for good. `type_rust_path` does not cover the gap either
+/// -- `extract_field_type_rust_path` returns `None` for the single-segment path an imported type
+/// has at its use site. The Rust reference page is the surface that needs the name back, since
+/// it documents the crate rather than a binding. Every backend reader of `original_type` on a
+/// *field* gates on a `Vec<(` or `[(` prefix (`is_sanitized_tuple_vec` /
+/// `is_sanitized_fixed_tuple_array` in `backends/wasm/gen_bindings/enums.rs`), so the wider
+/// population stays inert for them. ~keep
+fn sanitize_field(field: &mut FieldDef, known_types: &AHashSet<String>, known_enums: &AHashSet<String>) {
+    let tuple_original = extract_tuple_vec_original_type(&field.ty);
+    let pre_sanitization = field.ty.rust_source_display();
+    if sanitize_type_ref(&mut field.ty, known_types, known_enums).is_lossy() {
+        field.sanitized = true;
+        if let Some(orig) = tuple_original {
+            field.original_type = Some(orig);
+        } else if field.original_type.is_none() {
+            field.original_type = Some(pre_sanitization);
+        }
+    }
+}
+
+/// Record `field`'s current type as its pre-sanitization type for a caller that is about to
+/// overwrite `field.ty` itself rather than going through [`sanitize_field`]. ~keep
+fn record_pre_sanitization_type(field: &mut FieldDef) {
+    if field.original_type.is_none() {
+        field.original_type = Some(field.ty.rust_source_display());
     }
 }
 

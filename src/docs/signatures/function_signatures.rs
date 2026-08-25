@@ -59,13 +59,26 @@ fn test_render_python_fn_sig_complex_return_type() {
 fn test_render_rust_fn_sig_basic() {
     let func = make_function(
         "convert",
-        vec![make_param("source", TypeRef::String, false)],
+        vec![make_ref_param("source", TypeRef::String, false)],
         TypeRef::String,
         false,
         None,
     );
     let sig = render_rust_fn_sig(&func, TEST_PREFIX);
     assert_eq!(sig, "pub fn convert(source: &str) -> String");
+}
+
+#[test]
+fn test_render_rust_fn_sig_keeps_an_owned_string_param_owned() {
+    let func = make_function(
+        "convert",
+        vec![make_param("source", TypeRef::String, false)],
+        TypeRef::String,
+        false,
+        None,
+    );
+    let sig = render_rust_fn_sig(&func, TEST_PREFIX);
+    assert_eq!(sig, "pub fn convert(source: String) -> String");
 }
 
 #[test]
@@ -80,7 +93,7 @@ fn test_render_rust_fn_sig_optional_param() {
     let func = make_function(
         "search",
         vec![
-            make_param("query", TypeRef::String, false),
+            make_ref_param("query", TypeRef::String, false),
             make_param("limit", TypeRef::Primitive(PrimitiveType::U32), true),
         ],
         TypeRef::Vec(Box::new(TypeRef::String)),
@@ -95,7 +108,7 @@ fn test_render_rust_fn_sig_optional_param() {
 fn test_render_rust_fn_sig_error_type_with_return() {
     let func = make_function(
         "parse",
-        vec![make_param("source", TypeRef::String, false)],
+        vec![make_ref_param("source", TypeRef::String, false)],
         TypeRef::Named("Ast".to_string()),
         false,
         Some("ParseError"),
@@ -357,9 +370,9 @@ fn test_param_list_rust_string_params_use_refs() {
     let func = make_function(
         "process",
         vec![
-            make_param("name", TypeRef::String, false),
-            make_param("initial", TypeRef::Char, false),
-            make_param("data", TypeRef::Bytes, false),
+            make_ref_param("name", TypeRef::String, false),
+            make_ref_param("initial", TypeRef::Char, false),
+            make_ref_param("data", TypeRef::Bytes, false),
         ],
         TypeRef::Unit,
         false,

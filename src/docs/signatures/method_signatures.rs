@@ -155,7 +155,7 @@ fn test_render_method_signature_rust_async() {
 fn test_render_method_signature_rust_static() {
     let method = make_method(
         "new",
-        vec![make_param("name", TypeRef::String, false)],
+        vec![make_ref_param("name", TypeRef::String, false)],
         TypeRef::Named("Document".to_string()),
         false,
         true,
@@ -183,7 +183,7 @@ fn test_render_method_signature_rust_optional_return() {
 fn test_render_method_signature_rust_with_error_type() {
     let method = make_method(
         "parse",
-        vec![make_param("source", TypeRef::String, false)],
+        vec![make_ref_param("source", TypeRef::String, false)],
         TypeRef::Named("Ast".to_string()),
         false,
         false,

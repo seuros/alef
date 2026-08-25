@@ -19,6 +19,7 @@ pub(crate) mod language_pages;
 pub(crate) mod naming;
 mod render;
 mod rust_static;
+pub(crate) mod rust_types;
 mod shared_pages;
 mod signatures;
 mod sorting;

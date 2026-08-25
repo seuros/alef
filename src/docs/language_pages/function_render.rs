@@ -5,6 +5,7 @@ use crate::docs::doc_cleaning::{clean_doc_inline, demote_headings_to_start_at, e
 use crate::docs::examples::render_function_example;
 use crate::docs::formatting::{doc_type_with_optional, escape_table_cell, format_error_phrase};
 use crate::docs::naming::{field_name, func_name, lang_code_fence};
+use crate::docs::rust_types::rust_param_type;
 use crate::docs::signatures::render_function_signature;
 use crate::docs::{clean_doc, doc_type, template_env, version_labels};
 
@@ -114,7 +115,11 @@ pub(super) fn push_parameters_table(
     out.push_str("|------|------|----------|-------------|\n");
     for param in params {
         let pname = field_name(&param.name, lang);
-        let pty = doc_type_with_optional(&param.ty, lang, param.optional, ffi_prefix);
+        let pty = if lang == Language::Rust {
+            rust_param_type(param, ffi_prefix)
+        } else {
+            doc_type_with_optional(&param.ty, lang, param.optional, ffi_prefix)
+        };
         let required = if param.optional { "No" } else { "Yes" };
         let pdoc = param_docs
             .get(param.name.as_str())

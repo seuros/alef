@@ -2,6 +2,7 @@ use crate::core::config::Language;
 use crate::core::ir::{FunctionDef, MethodDef, TypeRef};
 use crate::docs::formatting::{IdentifierPosition, report_identifier_violation};
 use crate::docs::naming::{field_name, func_name, method_name, to_camel_case, type_name};
+use crate::docs::rust_types::{rust_param_type, rust_receiver};
 use crate::docs::type_mapping::{FFI_HANDLE_TYPE_NAME, doc_type};
 use heck::ToSnakeCase;
 
@@ -335,19 +336,7 @@ pub(crate) fn render_rust_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
     let params: Vec<String> = func
         .params
         .iter()
-        .map(|p| {
-            let pname = p.name.to_snake_case();
-            let pty = doc_type(&p.ty, Language::Rust, ffi_prefix);
-            if p.optional {
-                format!("{pname}: Option<{pty}>")
-            } else {
-                match &p.ty {
-                    TypeRef::String | TypeRef::Char => format!("{pname}: &str"),
-                    TypeRef::Bytes => format!("{pname}: &[u8]"),
-                    _ => format!("{pname}: {pty}"),
-                }
-            }
-        })
+        .map(|p| format!("{}: {}", p.name.to_snake_case(), rust_param_type(p, ffi_prefix)))
         .collect();
     let ret = doc_type(&func.return_type, Language::Rust, ffi_prefix);
     let error_part = if let Some(err) = &func.error_type {
@@ -913,23 +902,13 @@ pub(crate) fn render_method_signature_with_override(
             format!("{} {}({});", ret, name, params.join(", "))
         }
         Language::Rust => {
-            let params: Vec<String> = method
-                .params
-                .iter()
-                .map(|p| {
-                    let pname = p.name.to_snake_case();
-                    let pty = doc_type(&p.ty, lang, ffi_prefix);
-                    if p.optional {
-                        format!("{pname}: Option<{pty}>")
-                    } else {
-                        match &p.ty {
-                            TypeRef::String | TypeRef::Char => format!("{pname}: &str"),
-                            TypeRef::Bytes => format!("{pname}: &[u8]"),
-                            _ => format!("{pname}: {pty}"),
-                        }
-                    }
-                })
-                .collect();
+            let mut params: Vec<String> = rust_receiver(method).map(str::to_string).into_iter().collect();
+            params.extend(
+                method
+                    .params
+                    .iter()
+                    .map(|p| format!("{}: {}", p.name.to_snake_case(), rust_param_type(p, ffi_prefix))),
+            );
             let ret = if let Some(err) = &method.error_type {
                 let err_ty = type_name(err, Language::Rust, ffi_prefix);
                 if ret == "()" {
@@ -941,20 +920,10 @@ pub(crate) fn render_method_signature_with_override(
                 ret
             };
             let fn_keyword = if method.is_async { "pub async fn" } else { "pub fn" };
-            if method.is_static {
-                if ret == "()" {
-                    format!("{fn_keyword} {}({})", name, params.join(", "))
-                } else {
-                    format!("{fn_keyword} {}({}) -> {}", name, params.join(", "), ret)
-                }
+            if ret == "()" {
+                format!("{fn_keyword} {}({})", name, params.join(", "))
             } else {
-                let mut all_params = vec!["&self".to_string()];
-                all_params.extend(params);
-                if ret == "()" {
-                    format!("{fn_keyword} {}({})", name, all_params.join(", "))
-                } else {
-                    format!("{fn_keyword} {}({}) -> {}", name, all_params.join(", "), ret)
-                }
+                format!("{fn_keyword} {}({}) -> {}", name, params.join(", "), ret)
             }
         }
         Language::Kotlin | Language::KotlinAndroid => {

@@ -804,3 +804,44 @@ fn apply_filters_marks_field_binding_excluded_when_listed_in_exclude_fields() {
         "Foo.baz not listed in exclude.fields must remain included"
     );
 }
+
+/// A field whose named type is not part of the binding surface is sanitized to `String`, which
+/// erases the only record of what the Rust source actually declared. `type_rust_path` does not
+/// cover it: `extract_field_type_rust_path` returns `None` for a single-segment path, which is
+/// exactly what an imported type looks like at the use site. `original_type` is the documented
+/// carrier for the pre-sanitization type, so it must be populated here too -- otherwise the Rust
+/// reference page has nothing left to render but the placeholder. ~keep
+#[test]
+fn sanitize_records_the_pre_sanitization_type_of_an_unknown_named_field() {
+    let mut api = ApiSurface {
+        crate_name: "sample".to_string(),
+        types: vec![crate::core::ir::TypeDef {
+            name: "TextOptions".to_string(),
+            rust_path: "sample::TextOptions".to_string(),
+            fields: vec![
+                crate::core::ir::FieldDef {
+                    name: "pool".to_string(),
+                    ty: TypeRef::Named("PoolSettings".to_string()),
+                    optional: true,
+                    ..crate::core::ir::FieldDef::default()
+                },
+                crate::core::ir::FieldDef {
+                    name: "stages".to_string(),
+                    ty: TypeRef::Vec(Box::new(TypeRef::Named("StageSpec".to_string()))),
+                    ..crate::core::ir::FieldDef::default()
+                },
+            ],
+            ..crate::core::ir::TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    sanitize_unknown_types(&mut api);
+
+    let pool = &api.types[0].fields[0];
+    assert!(pool.sanitized);
+    assert_eq!(pool.original_type.as_deref(), Some("PoolSettings"));
+    let stages = &api.types[0].fields[1];
+    assert!(stages.sanitized);
+    assert_eq!(stages.original_type.as_deref(), Some("Vec<StageSpec>"));
+}

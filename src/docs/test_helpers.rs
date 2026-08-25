@@ -26,6 +26,15 @@ pub(crate) fn make_param(name: &str, ty: TypeRef, optional: bool) -> crate::core
     }
 }
 
+/// A param the Rust source declared as `&T`, which `extract_params` records as `is_ref`. The
+/// Rust reference page is the only surface that renders the borrow. ~keep
+pub(crate) fn make_ref_param(name: &str, ty: TypeRef, optional: bool) -> crate::core::ir::ParamDef {
+    crate::core::ir::ParamDef {
+        is_ref: true,
+        ..make_param(name, ty, optional)
+    }
+}
+
 pub(crate) fn make_method(
     name: &str,
     params: Vec<crate::core::ir::ParamDef>,
