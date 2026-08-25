@@ -340,9 +340,15 @@ fn generate_snippet_report_with_extensions(
             // fixture out of the executable harness only and must NOT suppress a
             // documentation snippet -- see `call_skip_reason`'s doc comment and
             // `documentation_rendering_is_independent_of_test_harness_skips`. ~keep
+            // A function/method the IR itself marked `binding_excluded`
+            // (`#[alef::skip]`/`#[doc(hidden)]`) is excluded from every non-Rust binding
+            // regardless of `alef.toml` -- `function_excluded_for_language` only ever
+            // consults `alef.toml`-configured lists and never sees this flag. See
+            // `function_binding_excluded_for_language`'s doc comment. ~keep
             if crate::e2e::codegen::call_skip_reason(fixture, language, context.e2e).is_some()
                 || function_excluded_for_language(fixture, language, generator.language_name(), context)
                 || visitor_excluded_for_language(fixture, generator.language_name(), context)
+                || function_binding_excluded_for_language(fixture, language, generator.language_name(), context)
             {
                 continue;
             }
@@ -879,6 +885,78 @@ fn visitor_excluded_for_language(
     };
     let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(context.crate_config, lang);
     excluded_functions.contains(crate::e2e::fixture::VISITOR_EXCLUDE_FUNCTION_NAME)
+}
+
+/// Whether the function or method a fixture's call resolves to for `language` is
+/// `binding_excluded` in the IR -- i.e. marked `#[alef::skip]`/`#[doc(hidden)]` at
+/// extraction time, which excludes it from every generated binding regardless of what
+/// `alef.toml` configures.
+///
+/// This is deliberately separate from [`function_excluded_for_language`]:  that helper
+/// only ever consults `alef.toml`-configured `exclude_functions` lists via
+/// [`crate::docs::language_pages::excludes::language_excludes`], which never reads
+/// `FunctionDef::binding_excluded` / `MethodDef::binding_excluded` at all -- see
+/// `src/snippets/gaps.rs`'s `LedgerExpectations` doc comment, which documented this exact
+/// gap before this function closed it. Without this check a function a Rust author
+/// explicitly opted out of every binding still entered `coverage.expected` for every
+/// non-Rust language, and the snippet coverage ledger reported the resulting absence as a
+/// gap the consumer has no `alef.toml` knob to silence -- it was never a gap.
+///
+/// Mirrors the `lang == Language::Rust || !binding_excluded` rule
+/// `docs::language_pages::mod::generate_lang_doc` already applies for the same flag: the
+/// Rust documentation page still lists a `binding_excluded` item (it exists in Rust
+/// source, it is just not exposed to other-language bindings), so `"rust"` is carved out
+/// here too and never treated as excluded.
+///
+/// Resolution mirrors [`crate::e2e::codegen::call_ir::CallIr::signature`]'s
+/// free-function-first, then agreeing-methods fallback, but answers the `binding_excluded`
+/// question instead of a signature: a free function of the resolved name wins
+/// unambiguously (a crate has at most one `pub fn` of a given path), and when only methods
+/// match, every same-named method across every type must agree on the flag or this
+/// answers `false` (not excluded) rather than guessing. This mirrors `CallIr::signature`'s
+/// conservatism on disagreement -- "learned nothing" -- deliberately: treating
+/// disagreement as excluded would drop a cell that is still fully bindable through at
+/// least one of the disagreeing types, which is worse than occasionally letting a
+/// genuinely-excluded cell surface as a coverage gap a human can then triage with a
+/// `docs.coverage_exceptions` entry. ~keep
+fn function_binding_excluded_for_language(
+    fixture: &Fixture,
+    language: &str,
+    generator_language_name: &str,
+    context: &SnippetRenderContext<'_>,
+) -> bool {
+    let Some(DocumentationLanguage::Binding(lang)) = parse_language(generator_language_name) else {
+        return false;
+    };
+    if lang == Language::Rust {
+        return false;
+    }
+    let docs_fixture = fixture.docs_call_fixture();
+    let call = context.e2e.resolve_call_for_fixture(
+        docs_fixture.call.as_deref(),
+        &docs_fixture.id,
+        &docs_fixture.resolved_category(),
+        &docs_fixture.tags,
+        &docs_fixture.input,
+    );
+    let Some(function_name) = call.core_lookup_name(language) else {
+        return false;
+    };
+    if let Some(function) = context.functions.iter().find(|function| function.name == function_name) {
+        return function.binding_excluded;
+    }
+    let mut methods = context
+        .type_defs
+        .iter()
+        .flat_map(|type_def| type_def.methods.iter())
+        .filter(|method| method.name == function_name);
+    let Some(first) = methods.next() else {
+        return false;
+    };
+    if !methods.all(|other| other.binding_excluded == first.binding_excluded) {
+        return false;
+    }
+    first.binding_excluded
 }
 
 fn snippet_path(
