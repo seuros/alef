@@ -183,8 +183,18 @@ fn generate_formats_post_build_output_before_stamping_it() {
     // fix this failed here -- the shipped header still carried the RAW 2-space body under a
     // hash that matched it (self-consistent, but never canonical), and poly does not
     // distinguish "correctly stamped" from "stamped over non-canonical bytes".
+    //
+    // `--fix-generated` is load-bearing, not decoration: the sanity assertion above proves the
+    // header is stamped, and poly refuses to even inspect a hash-stamped file under a plain
+    // `--check` -- measured directly against the `poly` binary this suite runs against, a
+    // stamped file with deliberately non-canonical bytes still reports `--check` clean and exits
+    // 0. Without the flag this call would tell us nothing about `RustBridgeC.h` at all; the
+    // `content.contains(...)` assertion above would be the ONLY thing standing between this test
+    // and a silent pass on the pre-fix ordering. With the flag, poly inspects the stamped body
+    // regardless of the hash line, so this assertion is a genuine second check on the same
+    // property, not a check that cannot fail. ~keep
     let check = std::process::Command::new("poly")
-        .args(["fmt", "--check", "."])
+        .args(["fmt", "--check", "--fix-generated", "."])
         .current_dir(&root)
         .output()
         .expect("run poly fmt --check");
@@ -195,8 +205,9 @@ fn generate_formats_post_build_output_before_stamping_it() {
     );
     assert!(
         check.status.success(),
-        "`poly fmt --check .` must report the tree clean immediately after `alef generate` -- a \
-         post-build-owned file was formatted after being stamped, not before. Output:\n{check_output}"
+        "`poly fmt --check --fix-generated .` must report the tree clean immediately after `alef \
+         generate` -- a post-build-owned file was formatted after being stamped, not before. \
+         Output:\n{check_output}"
     );
 }
 
