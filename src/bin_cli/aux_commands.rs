@@ -829,12 +829,12 @@ mod tests {
             .expect("record the scoped run");
 
         assert!(
-            cache::is_stage_cached("sample-crate", &scoped_key, &scoped_hash),
+            cache::is_stage_cached("sample-crate", &scoped_key, &scoped_hash, "inputs-hash"),
             "a repeat of the same scoped run must still hit its own cache"
         );
         let full_hash = cache::compute_stage_hash(ir_json, &full_key, config_toml, &[]);
         assert!(
-            !cache::is_stage_cached("sample-crate", &full_key, &full_hash),
+            !cache::is_stage_cached("sample-crate", &full_key, &full_hash, "inputs-hash"),
             "an unscoped run must regenerate rather than inherit a --lang-scoped run's partial output"
         );
         assert!(
