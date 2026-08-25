@@ -265,6 +265,15 @@
             "string",
             "null"
           ]
+        },
+        "timeout_seconds": {
+          "description": "Ceiling in seconds for this language's post-build `RunCommand` step (e.g. Swift's\n`cargo build --release` for the swift-bridge crate). `None` keeps alef's built-in\nceiling (`RUN_COMMAND_TIMEOUT` in `cli::pipeline::commands::build`, 1800s). Raise this\nwhen a cold release build in a large workspace legitimately runs longer than that --\nalef #364 hit exactly this for a Swift `cargo build --release` that was making\ncontinuous progress past 30 minutes. Only governs a post-build `RunCommand` step; the\n`build`/`build_release` commands above run unbounded, same as before this field existed.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "type": "object"

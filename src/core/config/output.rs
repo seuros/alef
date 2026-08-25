@@ -737,6 +737,14 @@ pub struct BuildCommandConfig {
     pub build: Option<StringOrVec>,
     /// Command(s) to build in release mode.
     pub build_release: Option<StringOrVec>,
+    /// Ceiling in seconds for this language's post-build `RunCommand` step (e.g. Swift's
+    /// `cargo build --release` for the swift-bridge crate). `None` keeps alef's built-in
+    /// ceiling (`RUN_COMMAND_TIMEOUT` in `cli::pipeline::commands::build`, 1800s). Raise this
+    /// when a cold release build in a large workspace legitimately runs longer than that --
+    /// alef #364 hit exactly this for a Swift `cargo build --release` that was making
+    /// continuous progress past 30 minutes. Only governs a post-build `RunCommand` step; the
+    /// `build`/`build_release` commands above run unbounded, same as before this field existed.
+    pub timeout_seconds: Option<u64>,
 }
 
 impl BuildCommandConfig {
@@ -766,6 +774,9 @@ impl BuildCommandConfig {
         }
         if other.build_release.is_some() {
             self.build_release = other.build_release.clone();
+        }
+        if other.timeout_seconds.is_some() {
+            self.timeout_seconds = other.timeout_seconds;
         }
         self
     }
