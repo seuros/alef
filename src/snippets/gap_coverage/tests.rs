@@ -4,11 +4,12 @@ fn dirs(paths: &[&str]) -> Vec<PathBuf> {
     paths.iter().map(PathBuf::from).collect()
 }
 
-/// The consumer incident: all three inputs omitted. Every one has to be named, together with
-/// the check class it disabled. ~keep
+/// The consumer incident: all three inputs omitted, with a real `--8<--` target found so
+/// `include_base_paths` is actionable too. Every one has to be named, together with the check
+/// class it disabled. ~keep
 #[test]
 fn every_unset_gap_input_is_named_with_the_check_it_disables() {
-    let unset = unset_gap_inputs(&[], &[], &[]);
+    let unset = unset_gap_inputs(&[], &[], &[], 1);
 
     let keys: Vec<&str> = unset.iter().map(|input| input.key).collect();
     assert_eq!(keys, vec!["docs_dirs", "required_languages", "include_base_paths"]);
@@ -25,7 +26,7 @@ fn every_unset_gap_input_is_named_with_the_check_it_disables() {
 /// unconditional noise rather than a signal. ~keep
 #[test]
 fn a_fully_configured_gap_check_reports_no_unset_input() {
-    let unset = unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &dirs(&["."]));
+    let unset = unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &dirs(&["."]), 3);
 
     assert!(unset.is_empty(), "nothing may be reported unset; got {unset:?}");
     assert!(unset_input_lines(&unset, false).is_empty());
@@ -40,26 +41,28 @@ fn only_the_vacuity_causing_inputs_are_strict_fatal() {
     assert!(has_vacuous_input(&unset_gap_inputs(
         &[],
         &[Language::Python],
-        &dirs(&["."])
+        &dirs(&["."]),
+        2
     )));
     assert!(has_vacuous_input(&unset_gap_inputs(
         &dirs(&["docs"]),
         &[],
-        &dirs(&["."])
+        &dirs(&["."]),
+        2
     )));
     assert!(
-        !has_vacuous_input(&unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &[])),
+        !has_vacuous_input(&unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &[], 3)),
         "an unset include_base_paths over-reports and must not fail a strict run on its own"
     );
 }
 
 #[test]
 fn the_unset_warning_points_at_strict_mode_only_when_the_verdict_is_vacuous() {
-    let vacuous = unset_input_lines(&unset_gap_inputs(&[], &[], &[]), false).join("\n");
+    let vacuous = unset_input_lines(&unset_gap_inputs(&[], &[], &[], 1), false).join("\n");
     assert!(vacuous.contains("--strict"), "got: {vacuous}");
     assert!(vacuous.contains("proves less than it appears to"), "got: {vacuous}");
 
-    let only_base_paths = unset_input_lines(&unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &[]), false);
+    let only_base_paths = unset_input_lines(&unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &[], 1), false);
     assert_eq!(
         only_base_paths.len(),
         2,
@@ -70,10 +73,38 @@ fn the_unset_warning_points_at_strict_mode_only_when_the_verdict_is_vacuous() {
 /// Under `--strict` the run fails, so advising the reader to pass `--strict` would be absurd.
 #[test]
 fn a_strict_run_does_not_advise_passing_strict() {
-    let lines = unset_input_lines(&unset_gap_inputs(&[], &[], &[]), true).join("\n");
+    let lines = unset_input_lines(&unset_gap_inputs(&[], &[], &[], 1), true).join("\n");
 
     assert!(lines.contains("docs_dirs unset"), "got: {lines}");
     assert!(!lines.contains("pass --strict"), "got: {lines}");
+}
+
+/// The reported incident: an Astro/MDX-only docs site has no `--8<--` targets at all, only MDX
+/// content imports (which never use `include_base_paths`). `check` has no `--include-base-path`
+/// flag and would otherwise emit an unsilenceable warning about a setting that has nothing to
+/// act on. ~keep
+#[test]
+fn a_docs_tree_with_no_mkdocs_includes_does_not_warn_about_unset_include_base_paths() {
+    let unset = unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &[], 0);
+
+    assert!(
+        unset.is_empty(),
+        "no `--8<--` target was found, so an unset include_base_paths is not actionable: {unset:?}"
+    );
+}
+
+/// Control for the incident fix above: a docs tree that really does use `--8<--` targets must
+/// still get the warning, or the fix could have been "delete the warning" instead of "scope it
+/// to when it is actionable". ~keep
+#[test]
+fn a_docs_tree_with_mkdocs_includes_still_warns_about_unset_include_base_paths() {
+    let unset = unset_gap_inputs(&dirs(&["docs"]), &[Language::Python], &[], 1);
+
+    assert_eq!(
+        unset.iter().map(|input| input.key).collect::<Vec<_>>(),
+        vec!["include_base_paths"],
+        "a `--8<--` target was found, so the unset base-path list is actionable: {unset:?}"
+    );
 }
 
 /// The exact incident shape: snippets discovered, all of them vouched for by a coverage
@@ -87,6 +118,7 @@ fn coverage_names_the_zeroes_that_make_a_clean_verdict_vacuous() {
         docs_roots: 0,
         docs_pages_scanned: 0,
         include_references: 0,
+        mkdocs_include_references: 0,
         configured_references: 148,
         required_languages: 0,
         language_groups: 0,
@@ -115,6 +147,7 @@ fn coverage_of_a_configured_run_carries_no_emptiness_warning() {
         docs_roots: 1,
         docs_pages_scanned: 62,
         include_references: 130,
+        mkdocs_include_references: 130,
         configured_references: 18,
         required_languages: 3,
         language_groups: 40,
