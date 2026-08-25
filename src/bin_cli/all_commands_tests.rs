@@ -1,7 +1,7 @@
+use super::all_commands_run_setup::snippet_validation_needs_build_artifacts;
 use super::{
     create_once_overwrite, handle, refused_snippet_dir_paths, report_deferred_formatting,
-    snippet_validation_needs_build_artifacts, sync_registry_versions_before_all,
-    warn_if_snippet_validation_needs_build,
+    sync_registry_versions_before_all, warn_if_snippet_validation_needs_build,
 };
 use crate::bin_cli::args::Commands;
 use crate::bin_cli::dispatch::DispatchContext;
