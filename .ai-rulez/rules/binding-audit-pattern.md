@@ -1,6 +1,7 @@
 ---
 priority: high
 ---
+
 Audit bindings for coverage gaps — is every public Rust item exposed in every target language binding?
 
 **Steps:**

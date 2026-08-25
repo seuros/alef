@@ -251,8 +251,10 @@ mod tests {
     #[test]
     fn a_java_package_override_passes() {
         let config = make_config("sample_crate");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_java_override("io.example.widget");
+        let e2e_config = E2eConfig {
+            call: call_with_java_override("io.example.widget"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["java".to_string()]);
 
@@ -262,8 +264,10 @@ mod tests {
     #[test]
     fn a_java_override_naming_a_class_fails() {
         let config = make_config("sample_crate");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_java_override("io.xberg.Xberg");
+        let e2e_config = E2eConfig {
+            call: call_with_java_override("io.xberg.Xberg"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["java".to_string()]);
 
@@ -297,8 +301,10 @@ mod tests {
     #[test]
     fn a_single_segment_lowercase_java_module_passes() {
         let config = make_config("sample_crate");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_java_override("widget");
+        let e2e_config = E2eConfig {
+            call: call_with_java_override("widget"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["java".to_string()]);
 
@@ -308,8 +314,10 @@ mod tests {
     #[test]
     fn java_is_not_checked_when_java_is_not_an_active_language() {
         let config = make_config("sample_crate");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_java_override("io.xberg.Xberg");
+        let e2e_config = E2eConfig {
+            call: call_with_java_override("io.xberg.Xberg"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["python".to_string()]);
 
@@ -319,8 +327,10 @@ mod tests {
     #[test]
     fn a_resolvable_go_module_override_passes() {
         let config = make_config("sample-widget-rs");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_go_override("github.com/example/sample-widget");
+        let e2e_config = E2eConfig {
+            call: call_with_go_override("github.com/example/sample-widget"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
 
@@ -330,8 +340,10 @@ mod tests {
     #[test]
     fn a_bare_word_go_module_override_fails() {
         let config = make_config("sample-widget-rs");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_go_override("widget");
+        let e2e_config = E2eConfig {
+            call: call_with_go_override("widget"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
 
@@ -401,8 +413,10 @@ module = "{go_module}"
     #[test]
     fn a_bare_word_go_override_still_fails_even_when_go_module_config_is_set() {
         let config = config_with_go_module("sample-widget-rs", "github.com/example/sample-widget");
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_with_go_override("widget");
+        let e2e_config = E2eConfig {
+            call: call_with_go_override("widget"),
+            ..E2eConfig::default()
+        };
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
 

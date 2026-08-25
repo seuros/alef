@@ -259,8 +259,10 @@ mod tests {
     #[test]
     fn matching_args_pass() {
         let functions = vec![function("complete", vec![param("prompt"), optional_param("model")])];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("prompt", false), arg("model", true)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false), arg("model", true)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -271,8 +273,10 @@ mod tests {
     #[test]
     fn an_arg_naming_a_removed_parameter_is_flagged() {
         let functions = vec![function("complete", vec![param("prompt")])];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("prompt", false), arg("concurrency", true)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false), arg("concurrency", true)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -290,8 +294,10 @@ mod tests {
     #[test]
     fn a_missing_required_parameter_is_flagged() {
         let functions = vec![function("complete", vec![param("prompt"), param("config")])];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("prompt", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -309,8 +315,10 @@ mod tests {
     #[test]
     fn a_missing_optional_parameter_is_not_flagged() {
         let functions = vec![function("complete", vec![param("prompt"), optional_param("model")])];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("prompt", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -330,8 +338,10 @@ mod tests {
                 },
             ],
         )];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("prompt", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -342,8 +352,10 @@ mod tests {
     #[test]
     fn an_unresolvable_call_licenses_no_claim() {
         let functions = vec![function("complete", vec![param("prompt")])];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("mystery", vec![arg("wrong_name", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("mystery", vec![arg("wrong_name", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -357,8 +369,10 @@ mod tests {
 
     #[test]
     fn an_empty_ir_skips_validation_entirely() {
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("wrong_name", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("wrong_name", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &[], &[], &["rust".to_string()]);
@@ -372,8 +386,10 @@ mod tests {
             binding_excluded: true,
             ..function("complete", vec![param("prompt")])
         }];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("wrong_name", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("wrong_name", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
@@ -388,8 +404,10 @@ mod tests {
     #[test]
     fn a_fixture_level_args_override_replaces_the_call_args_for_validation() {
         let functions = vec![function("complete", vec![param("prompt"), param("visitor")])];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("complete", vec![arg("prompt", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false)]),
+            ..E2eConfig::default()
+        };
         let mut fixture = fixture_with_call("with_visitor", None);
         fixture.args = vec![arg("prompt", false), arg("visitor", false)];
         let fixtures = vec![fixture];
@@ -411,8 +429,10 @@ mod tests {
             }],
             ..TypeDef::default()
         }];
-        let mut e2e_config = E2eConfig::default();
-        e2e_config.call = call_named("chat", vec![arg("wrong_name", false), arg("request", false)]);
+        let e2e_config = E2eConfig {
+            call: call_named("chat", vec![arg("wrong_name", false), arg("request", false)]),
+            ..E2eConfig::default()
+        };
         let fixtures = vec![fixture_with_call("basic", None)];
 
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &[], &type_defs, &["rust".to_string()]);
