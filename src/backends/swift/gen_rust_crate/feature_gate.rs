@@ -304,6 +304,63 @@ mod tests {
         assert_eq!(features, vec!["unrelated".to_string()]);
     }
 
+    /// Regression for the open risk in alef-task #319: widening a companion feature into the
+    /// core dependency's `features = [...]` line bypassed `excluded_default_features` entirely
+    /// -- that exclusion only trimmed the wrapper crate's own `default = [...]` array
+    /// (`effective_swift_codegen_features`), not the list this function feeds straight into
+    /// `cargo::emit_cargo_toml`'s dependency line. Measured against a synthetic fixture
+    /// workspace (`cargo tree -e features`): the dependency line does not set
+    /// `default-features = false`, and the companion feature is opt-in on the source crate (not
+    /// part of its own `default`), so nothing else would have turned it on -- the widening was a
+    /// genuine new activation of a pkg-config-only native dependency, not something feature
+    /// unification would already have done. A name in `excluded_default_features` must never be
+    /// widened in, even when its sibling in the same `any(...)` group is active.
+    #[test]
+    fn configured_swift_features_never_widens_an_excluded_companion() {
+        let temp = tempfile::tempdir().expect("create fixture workspace root");
+        let crate_dir = temp.path().join("crates").join("demo_core");
+        std::fs::create_dir_all(&crate_dir).expect("create fixture crate dir");
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            "[features]\nocr = []\nocr-wasm = []\nheic = []\n",
+        )
+        .expect("write fixture Cargo.toml");
+
+        let config = ResolvedCrateConfig {
+            name: "demo".to_string(),
+            features: vec!["ocr".to_string()],
+            workspace_root: Some(temp.path().to_path_buf()),
+            swift: Some(crate::core::config::languages::SwiftConfig {
+                excluded_default_features: vec!["heic".to_string()],
+                ..Default::default()
+            }),
+            ..ResolvedCrateConfig::default()
+        };
+        // A three-way `any(...)` gate shared by unrelated capabilities (as in xberg's
+        // `extraction/exif.rs`): `ocr` and `ocr-wasm` are genuine alternatives, `heic` merely
+        // co-occurs in the same gate and pulls in a pkg-config-only native dependency.
+        let api = ApiSurface {
+            crate_name: "demo".to_string(),
+            types: vec![crate::core::ir::TypeDef {
+                name: "ExifReader".to_string(),
+                rust_path: "demo::ExifReader".to_string(),
+                cfg: Some(r#"any(feature = "ocr", feature = "ocr-wasm", feature = "heic")"#.to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let features = configured_swift_features(&config, "demo_core", &api);
+        assert!(
+            !features.iter().any(|f| f == "heic"),
+            "an excluded companion must never be widened into the dependency's features list, got: {features:?}"
+        );
+        assert!(
+            features.iter().any(|f| f == "ocr-wasm"),
+            "a non-excluded companion in the same group must still be widened in, got: {features:?}"
+        );
+    }
+
     /// A crate whose cfg gates carry no `any(...)` alternative at all — every gate is a bare
     /// `feature = "..."` — has nothing for [`collect_cfg_feature_alternatives`] to find, so the
     /// configured feature list must pass through completely unchanged. The source crate declares

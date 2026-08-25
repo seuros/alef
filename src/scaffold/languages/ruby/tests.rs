@@ -646,3 +646,107 @@ fn rubocop_config_excludes_the_alef_owned_gemspec_and_rakefile() {
         rubocop_yml.content
     );
 }
+
+/// `ruby_core_dep_features` must drop an excluded name from the core dependency's own explicit
+/// `features = [...]` line -- the surface `configured_swift_features`'s widening bug (see
+/// `feature_gate::configured_swift_features`) showed the analogous `excluded_default_features`
+/// check must also reach, not just the wrapper's `default = [...]` array. Asserts both
+/// directions: an excluded name never appears, and a name nobody excluded still does.
+#[test]
+fn ruby_core_dep_features_drops_excluded_names_but_keeps_others() {
+    let config = resolve_config(
+        r#"
+[workspace]
+languages = ["ruby"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.ruby]
+features = ["native-http", "wasm-http"]
+excluded_default_features = ["native-http"]
+"#,
+    );
+    let excluded: std::collections::HashSet<&str> = ["native-http"].into_iter().collect();
+
+    let features_str = ruby_core_dep_features(&config, &excluded);
+
+    assert!(
+        !features_str.contains("native-http"),
+        "an excluded name must never reach the dependency's features = [...] line: {features_str}"
+    );
+    assert!(
+        features_str.contains("wasm-http"),
+        "a feature nobody excluded must still be forwarded: {features_str}"
+    );
+}
+
+/// End-to-end regression for the reported defect: a `[crates.ruby].target_dep_overrides` entry
+/// excludes a feature for one platform, but `scaffold_ruby_cargo`'s wrapper-level
+/// `[features] default = [...]` array previously forwarded every `collect_cfg_features` name
+/// unconditionally, re-enabling the excluded dependency one layer down regardless of platform.
+/// `excluded_default_features` must keep the name out of that `default` array (while still
+/// declaring it, so `cargo build --features <name>` keeps working) without dropping an
+/// unrelated, non-excluded feature from the same array.
+#[test]
+fn scaffold_ruby_cargo_excludes_named_feature_from_wrapper_default_but_keeps_others() {
+    let config = resolve_config(
+        r#"
+[workspace]
+languages = ["ruby"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.ruby]
+gem_name = "test_lib"
+excluded_default_features = ["native-http"]
+[[crates.ruby.target_dep_overrides]]
+cfg = 'target_os = "windows"'
+features = ["wasm-http"]
+default_features = false
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![
+            TypeDef {
+                name: "NativeOnly".to_string(),
+                rust_path: "my_lib::NativeOnly".to_string(),
+                cfg: Some(r#"feature = "native-http""#.to_string()),
+                ..Default::default()
+            },
+            TypeDef {
+                name: "WasmOnly".to_string(),
+                rust_path: "my_lib::WasmOnly".to_string(),
+                cfg: Some(r#"feature = "wasm-http""#.to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    let files = scaffold_ruby_cargo(&api, &config).expect("scaffold_ruby_cargo ok");
+    let cargo_toml = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+        .expect("Cargo.toml emitted")
+        .content;
+
+    let default_line = cargo_toml
+        .lines()
+        .find(|line| line.starts_with("default = ["))
+        .expect("default array present");
+    assert!(
+        !default_line.contains("native-http"),
+        "excluded_default_features must drop the name from the wrapper's own default array:\n{default_line}"
+    );
+    assert!(
+        default_line.contains("wasm-http"),
+        "a feature nobody excluded must still be forwarded into default:\n{default_line}"
+    );
+    assert!(
+        cargo_toml.contains(r#"native-http = ["my-lib/native-http"]"#),
+        "the excluded feature stays declared (so `cargo build --features native-http` still \
+         works), just not defaulted:\n{cargo_toml}"
+    );
+}
