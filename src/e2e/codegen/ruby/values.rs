@@ -25,35 +25,6 @@ pub(super) fn qualify_ruby_type(module_name: &str, type_name: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod qualify_ruby_type_tests {
-    use super::qualify_ruby_type;
-
-    #[test]
-    fn bare_name_is_qualified_under_the_module() {
-        assert_eq!(
-            qualify_ruby_type("sample", "DocumentRequest"),
-            "Sample::DocumentRequest"
-        );
-    }
-
-    #[test]
-    fn name_already_qualified_under_the_same_module_is_not_doubled() {
-        assert_eq!(
-            qualify_ruby_type("sample", "Sample::DocumentRequest"),
-            "Sample::DocumentRequest"
-        );
-    }
-
-    #[test]
-    fn name_qualified_under_a_foreign_module_is_preserved_verbatim() {
-        assert_eq!(
-            qualify_ruby_type("sample", "Zzz::DocumentRequest"),
-            "Zzz::DocumentRequest"
-        );
-    }
-}
-
 /// Convert a `serde_json::Value` to a Ruby literal string, preferring single quotes.
 pub(super) fn json_to_ruby(value: &serde_json::Value) -> String {
     match value {
@@ -112,4 +83,33 @@ pub(super) fn is_base64(s: &str) -> bool {
     }
 
     true
+}
+
+#[cfg(test)]
+mod qualify_ruby_type_tests {
+    use super::qualify_ruby_type;
+
+    #[test]
+    fn bare_name_is_qualified_under_the_module() {
+        assert_eq!(
+            qualify_ruby_type("sample", "DocumentRequest"),
+            "Sample::DocumentRequest"
+        );
+    }
+
+    #[test]
+    fn name_already_qualified_under_the_same_module_is_not_doubled() {
+        assert_eq!(
+            qualify_ruby_type("sample", "Sample::DocumentRequest"),
+            "Sample::DocumentRequest"
+        );
+    }
+
+    #[test]
+    fn name_qualified_under_a_foreign_module_is_preserved_verbatim() {
+        assert_eq!(
+            qualify_ruby_type("sample", "Zzz::DocumentRequest"),
+            "Zzz::DocumentRequest"
+        );
+    }
 }

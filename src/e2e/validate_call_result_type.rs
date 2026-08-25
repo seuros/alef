@@ -455,8 +455,10 @@ mod tests {
     #[test]
     fn result_is_bytes_does_not_license_a_primitive_result_type_override() {
         let type_defs = vec![make_type("ChatCompletionResponse")];
-        let mut call = CallConfig::default();
-        call.result_is_bytes = true;
+        let mut call = CallConfig {
+            result_is_bytes: true,
+            ..CallConfig::default()
+        };
         let override_config = CallOverride {
             result_type: Some("char*".to_string()),
             ..CallOverride::default()
