@@ -12,8 +12,16 @@ use super::functions::emit_rustdoc;
 /// True if this enum is a serde-tagged data enum (`#[serde(tag = "...")]` with variant fields).
 /// These are emitted as a flat wasm-bindgen struct with a discriminator field and the union of
 /// all variant fields (each made optional) — analogous to the NAPI tagged-enum-as-object path.
+///
+/// Also true for a default-representation (externally tagged, no
+/// `#[serde(tag/content/untagged)]`) enum that carries a payload variant (e.g. `Custom(String)`):
+/// a plain `#[wasm_bindgen]` C-style enum can only hold unit variants, so without this the
+/// payload was silently dropped (`Custom = 1` with no field). Route it through the same
+/// discriminator-struct emitter as an explicitly tagged enum, defaulting the discriminant field
+/// name to "type" like `gen_tagged_enum_as_struct` already does. ~keep
 pub(super) fn is_tagged_data_enum(enum_def: &EnumDef) -> bool {
-    enum_def.serde_tag.is_some() && enum_def.variants.iter().any(|v| !v.fields.is_empty())
+    let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    has_data_variants && (enum_def.serde_tag.is_some() || !enum_def.serde_untagged)
 }
 
 /// True if this enum is a serde-untagged data enum (`#[serde(untagged)]` with at least one

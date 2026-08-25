@@ -535,8 +535,9 @@ impl Backend for NapiBackend {
             let has_data_variants = e.variants.iter().any(|v| !v.fields.is_empty());
             // Mirrors `enums::gen_enum`'s gate: internal tagging is always an object, even for
             // all-unit variants, so the binding<->core conversion must go through the tagged-enum
-            // templates rather than the plain-enum match. (~keep)
-            let is_tagged_data_enum = e.serde_tag.is_some();
+            // templates rather than the plain-enum match. A default (externally tagged) enum with
+            // a payload variant is routed the same way — see `enums::gen_enum`. (~keep)
+            let is_tagged_data_enum = e.serde_tag.is_some() || (has_data_variants && !e.serde_untagged);
             let is_untagged_data_enum = e.serde_untagged && has_data_variants;
             if is_tagged_data_enum {
                 builder.add_item(&methods::gen_tagged_enum_binding_to_core(
@@ -601,7 +602,8 @@ impl Backend for NapiBackend {
             .collect();
         for enum_def in api.enums.iter() {
             // Mirrors `enums::gen_enum`'s gate (~keep)
-            let is_tagged_data_enum = enum_def.serde_tag.is_some();
+            let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+            let is_tagged_data_enum = enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged);
             if !is_tagged_data_enum {
                 continue;
             }
@@ -666,7 +668,7 @@ impl Backend for NapiBackend {
                     if let Some(enum_def) = api.enums.iter().find(|e| e.name == enum_name) {
                         let has_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
                         // Mirrors `enums::gen_enum`'s gate (~keep)
-                        if enum_def.serde_tag.is_some() {
+                        if enum_def.serde_tag.is_some() || (has_data_variants && !enum_def.serde_untagged) {
                             continue;
                         }
                         if enum_def.serde_untagged && has_data_variants {

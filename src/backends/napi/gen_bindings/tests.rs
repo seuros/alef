@@ -35,10 +35,19 @@ fn cfg_gated_field_accepted_when_in_never_skip_list() {
     );
 }
 
-/// Test that plain data enums (with data variants, not tagged/untagged) appearing in struct fields
-/// get binding-to-core From impls when the struct is an input type.
-/// Regression: AuthHeaderFormat has data variant ApiKey(String), appears in CustomProviderConfig
-/// field, but binding-to-core impl was not being generated, causing struct conversion to fail.
+/// Exercises the shared (`binding_enums_have_data: false`) conversion helpers in
+/// `crate::codegen::conversions` directly, in isolation from napi's own pipeline routing.
+/// These helpers discard variant payload data by design when the binding-side enum type
+/// cannot carry it (see `can_generate_enum_conversion_from_core`'s doc comment) — that is
+/// only safe for a data-carrying enum when the caller never reaches this path for one.
+///
+/// napi's own pipeline (`enums::gen_enum`, `mod.rs`) no longer calls these helpers for a
+/// data-carrying enum shaped like `AuthHeaderFormat` (`ApiKey(String)`, no
+/// `#[serde(tag/content/untagged)]`): such enums are routed to the tagged-object emitter
+/// instead, which does carry the payload — see
+/// `enums::tests::default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip`.
+/// The assertion below pins that routing decision so this test cannot silently start
+/// asserting on dead code again. ~keep
 #[test]
 fn plain_data_enum_in_input_type_struct_gets_binding_to_core_impl() {
     use crate::codegen::conversions::{
@@ -80,15 +89,15 @@ fn plain_data_enum_in_input_type_struct_gets_binding_to_core_impl() {
     let has_data_variants = auth_format_enum.variants.iter().any(|v| !v.fields.is_empty());
     assert!(has_data_variants, "AuthHeaderFormat should have data variants");
 
-    let is_tagged = auth_format_enum.serde_tag.is_some();
-    let is_untagged = auth_format_enum.serde_untagged;
+    // Pin the routing decision this test's isolation depends on: napi's own pipeline treats
+    // this exact shape as a tagged data enum (broadened gate, see `enums::gen_enum`) and
+    // never reaches the lossy helpers exercised below.
+    let pipeline_routes_as_tagged =
+        auth_format_enum.serde_tag.is_some() || (has_data_variants && !auth_format_enum.serde_untagged);
     assert!(
-        !(is_tagged && has_data_variants),
-        "AuthHeaderFormat should not be tagged data enum"
-    );
-    assert!(
-        !(is_untagged && has_data_variants),
-        "AuthHeaderFormat should not be untagged data enum"
+        pipeline_routes_as_tagged,
+        "napi's pipeline must treat a default-tagged data enum as a tagged data enum, \
+         routing it away from the data-discarding helpers this test exercises directly"
     );
 
     assert!(

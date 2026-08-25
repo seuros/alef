@@ -51,6 +51,100 @@ fn gen_enum_produces_wasm_bindgen_attribute() {
     assert!(result.contains("Blue = 2,"));
 }
 
+/// Regression: a default-representation (externally tagged, no
+/// `#[serde(tag/content/untagged)]`) data enum shaped like alef's own `FormatMetadata` fixture
+/// (see `tests/backends_kotlin_android_gen_bindings_test.rs`), with a `Custom(String)` payload
+/// variant alongside a unit variant, must not be emitted as a plain `#[wasm_bindgen]` C-style
+/// enum — that representation only holds unit variants, so `Custom`'s payload was silently
+/// dropped (`Custom = 1` with no field) before this fix. It must route through the same
+/// discriminator-struct emitter used for an explicit `#[serde(tag = "...")]` enum, and the
+/// binding<->core conversions must carry the payload both ways. ~keep
+#[test]
+fn default_tagged_data_enum_preserves_custom_string_variant_payload_round_trip() {
+    let e = EnumDef {
+        name: "FormatMetadata".to_string(),
+        rust_path: "demo::FormatMetadata".to_string(),
+        original_rust_path: String::new(),
+        variants: vec![
+            EnumVariant {
+                name: "Pdf".to_string(),
+                fields: vec![],
+                doc: String::new(),
+                is_default: false,
+                serde_rename: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_tuple: false,
+                originally_had_data_fields: false,
+                cfg: None,
+                version: Default::default(),
+            },
+            EnumVariant {
+                name: "Custom".to_string(),
+                fields: vec![FieldDef {
+                    name: "_0".to_string(),
+                    ty: TypeRef::String,
+                    ..Default::default()
+                }],
+                doc: String::new(),
+                is_default: false,
+                serde_rename: None,
+                binding_excluded: false,
+                binding_exclusion_reason: None,
+                is_tuple: true,
+                originally_had_data_fields: false,
+                cfg: None,
+                version: Default::default(),
+            },
+        ],
+        methods: vec![],
+        doc: String::new(),
+        cfg: None,
+        is_copy: false,
+        has_serde: true,
+        has_default: false,
+        serde_content: None,
+        serde_tag: None,
+        serde_untagged: false,
+        serde_rename_all: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        excluded_variants: vec![],
+        version: Default::default(),
+    };
+
+    let output = gen_enum(&e, "Wasm");
+    assert!(
+        output.contains("pub struct WasmFormatMetadata"),
+        "a payload-carrying default-tagged enum must become a discriminator struct, \
+         not a plain #[wasm_bindgen] C-style enum; got:\n{output}"
+    );
+    assert!(
+        output.contains("pub(crate) _0: Option<String>"),
+        "the Custom(String) payload field must survive on the binding struct; got:\n{output}"
+    );
+    assert!(
+        !output.contains(" = 0,") && !output.contains(" = 1,"),
+        "a data-carrying enum must not be emitted as a discriminant-valued C-style enum; got:\n{output}"
+    );
+
+    // config/input direction: JS object -> core enum.
+    let binding_to_core = gen_tagged_enum_binding_to_core(&e, "demo", "Wasm");
+    assert!(
+        binding_to_core.contains(r#""Custom" => Self::Custom(val._0.clone().unwrap_or_default())"#),
+        "binding-to-core conversion must forward the Custom payload, not discard it; got:\n{binding_to_core}"
+    );
+
+    // result/output direction: core enum -> JS object.
+    let core_to_binding = gen_tagged_enum_core_to_binding(&e, "demo", "Wasm");
+    assert!(
+        core_to_binding.contains("demo::FormatMetadata::Custom(field0) => Self {")
+            && core_to_binding.contains(r#"r#type: "Custom".to_string(),"#)
+            && core_to_binding.contains("_0: Some(field0),"),
+        "core-to-binding conversion must forward the Custom payload, not discard it; got:\n{core_to_binding}"
+    );
+}
+
 #[test]
 fn gen_enum_empty_variants_no_panic() {
     let e = make_enum("Empty", &[]);
