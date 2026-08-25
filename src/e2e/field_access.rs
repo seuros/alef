@@ -7,12 +7,14 @@
 mod ir_collection;
 mod ir_enum;
 mod ir_result_fields;
+mod leaf_anchor;
 mod optional_renderers;
 mod parse;
 mod renderers;
 mod resolver;
 mod types;
 
+pub use leaf_anchor::LeafAnchor;
 pub use types::{
     DartFirstClassMap, FieldResolver, IrCollectionMap, IrEnumMap, IrResultFieldMap, PhpGetterMap, StringyField,
     StringyFieldKind, SwiftFirstClassMap,

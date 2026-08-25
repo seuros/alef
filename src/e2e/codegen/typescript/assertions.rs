@@ -1,5 +1,6 @@
 //! Assertion rendering for TypeScript e2e tests.
 
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
@@ -105,7 +106,7 @@ pub(super) fn render_assertion(
             out.push_str(&format!("    // skipped: {reason}\n"));
             return;
         }
-        if render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming) {
+        if render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming, field_resolver, lang) {
             return;
         }
     }
@@ -252,14 +253,18 @@ fn render_synthetic_field_assertion(
     result_var: &str,
     field: &str,
     is_streaming: bool,
+    field_resolver: &FieldResolver,
+    lang: &str,
 ) -> bool {
     match field {
         "chunks_have_content" => {
+            let result_var = &chunks_result_var(field_resolver, lang, result_var);
             let pred = format!("({result_var}.chunks ?? []).every((c: {{ content?: string }}) => !!c.content)");
             emit_bool_assertion(out, &pred, assertion.assertion_type.as_str(), field);
             true
         }
         "chunks_have_embeddings" => {
+            let result_var = &chunks_result_var(field_resolver, lang, result_var);
             let pred = format!(
                 "({result_var}.chunks ?? []).every((c: {{ embedding?: number[] }}) => c.embedding != null && c.embedding.length > 0)"
             );
@@ -267,6 +272,7 @@ fn render_synthetic_field_assertion(
             true
         }
         "chunks_have_heading_context" => {
+            let result_var = &chunks_result_var(field_resolver, lang, result_var);
             let pred = format!(
                 "({result_var}.chunks ?? []).every((c: {{ metadata?: {{ headingContext?: string }} }}) => c.metadata?.headingContext != null)"
             );
@@ -274,6 +280,7 @@ fn render_synthetic_field_assertion(
             true
         }
         "first_chunk_starts_with_heading" => {
+            let result_var = &chunks_result_var(field_resolver, lang, result_var);
             let pred = format!("({result_var}.chunks ?? []).at(0)?.metadata?.headingContext != null");
             emit_bool_assertion(out, &pred, assertion.assertion_type.as_str(), field);
             true

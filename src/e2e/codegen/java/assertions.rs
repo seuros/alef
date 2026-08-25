@@ -7,6 +7,7 @@
 //! special case for `not_error` (now folded into the general arm) — a net small growth of
 //! wiring and doc comments, not new unrelated functionality.
 
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
@@ -156,6 +157,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_content" => {
+                let result_var = &chunks_result_var(field_resolver, "java", result_var);
                 let pred = format!(
                     "java.util.Optional.ofNullable({result_var}.chunks()).orElse(java.util.List.of()).stream().allMatch(c -> c.content() != null && !c.content().isBlank())"
                 );
@@ -171,6 +173,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_heading_context" => {
+                let result_var = &chunks_result_var(field_resolver, "java", result_var);
                 let pred = format!(
                     "java.util.Optional.ofNullable({result_var}.chunks()).orElse(java.util.List.of()).stream().allMatch(c -> c.metadata().headingContext() != null)"
                 );
@@ -186,6 +189,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_embeddings" => {
+                let result_var = &chunks_result_var(field_resolver, "java", result_var);
                 let pred = format!(
                     "java.util.Optional.ofNullable({result_var}.chunks()).orElse(java.util.List.of()).stream().allMatch(c -> c.embedding() != null && !c.embedding().isEmpty())"
                 );
@@ -201,6 +205,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "first_chunk_starts_with_heading" => {
+                let result_var = &chunks_result_var(field_resolver, "java", result_var);
                 let pred = format!(
                     "java.util.Optional.ofNullable({result_var}.chunks()).orElse(java.util.List.of()).stream().findFirst().map(c -> c.metadata().headingContext() != null).orElse(false)"
                 );

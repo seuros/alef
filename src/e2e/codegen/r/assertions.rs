@@ -7,6 +7,8 @@ use std::fmt::Write as FmtWrite;
 
 use super::values::json_to_r;
 
+mod chunks_synthetic;
+
 pub(super) struct RAssertionContext<'a> {
     pub(super) field_resolver: &'a FieldResolver,
     pub(super) result_is_simple: bool,
@@ -32,78 +34,7 @@ pub(super) fn render_assertion(
     // so they are never treated as struct attribute accesses on the result.
     if let Some(f) = &assertion.field {
         match f.as_str() {
-            "chunks_have_content" => {
-                let pred = format!("all(sapply({result_var}$chunks %||% list(), function(c) nchar(c$content) > 0))");
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        let _ = writeln!(out, "  expect_true({pred})");
-                    }
-                    "is_false" => {
-                        let _ = writeln!(out, "  expect_false({pred})");
-                    }
-                    other => {
-                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
-                    }
-                }
-                return;
-            }
-            "chunks_have_embeddings" => {
-                let pred = format!(
-                    "all(sapply({result_var}$chunks %||% list(), function(c) !is.null(c$embedding) && length(c$embedding) > 0))"
-                );
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        let _ = writeln!(out, "  expect_true({pred})");
-                    }
-                    "is_false" => {
-                        let _ = writeln!(out, "  expect_false({pred})");
-                    }
-                    other => {
-                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
-                    }
-                }
-                return;
-            }
-            "chunks_have_heading_context" => {
-                // extendr exposes `Chunk.metadata` and its nested `heading_context` the same
-                // way it exposes `content`/`embedding` above (both accessed via plain `$` a few
-                // lines up) -- an `Option<T>::None` maps to R `NULL`, so the field itself is
-                // directly checkable. A predicate over `content` length would be a proxy: it
-                // can pass on a chunk whose heading metadata was never attached, and fail on
-                // one where it was but the content happens to be short. ~keep
-                let pred = format!(
-                    "!is.null({result_var}$chunks) && length({result_var}$chunks) > 0 && all(sapply({result_var}$chunks, function(c) !is.null(c$metadata) && !is.null(c$metadata$heading_context)))"
-                );
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        let _ = writeln!(out, "  expect_true({pred})");
-                    }
-                    "is_false" => {
-                        let _ = writeln!(out, "  expect_false({pred})");
-                    }
-                    other => {
-                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
-                    }
-                }
-                return;
-            }
-            "first_chunk_starts_with_heading" => {
-                // Same field as `chunks_have_heading_context` above, restricted to the first
-                // chunk -- not a `content`-prefix proxy. ~keep
-                let pred = format!(
-                    "!is.null({result_var}$chunks) && length({result_var}$chunks) > 0 && !is.null({result_var}$chunks[[1]]$metadata) && !is.null({result_var}$chunks[[1]]$metadata$heading_context)"
-                );
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        let _ = writeln!(out, "  expect_true({pred})");
-                    }
-                    "is_false" => {
-                        let _ = writeln!(out, "  expect_false({pred})");
-                    }
-                    other => {
-                        panic!("R e2e generator: unsupported assertion type '{other}' on synthetic field '{f}'");
-                    }
-                }
+            _ if chunks_synthetic::try_render(out, assertion, result_var, f, context.field_resolver) => {
                 return;
             }
             // ---- EmbedResponse virtual fields ----

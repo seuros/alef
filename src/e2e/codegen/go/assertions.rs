@@ -1,5 +1,6 @@
 //! Go assertion rendering.
 
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
@@ -36,6 +37,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_content" => {
+                let result_var = &chunks_result_var(field_resolver, "go", result_var);
                 let pred = format!(
                     "func() bool {{ chunks := {result_var}.Chunks; if chunks == nil {{ return false }}; for _, c := range chunks {{ if c.Content == \"\" {{ return false }} }}; return true }}()"
                 );
@@ -53,6 +55,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_embeddings" => {
+                let result_var = &chunks_result_var(field_resolver, "go", result_var);
                 let pred = format!(
                     "func() bool {{ chunks := {result_var}.Chunks; if chunks == nil {{ return false }}; for _, c := range chunks {{ if c.Embedding == nil || len(*c.Embedding) == 0 {{ return false }} }}; return true }}()"
                 );
@@ -70,6 +73,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_heading_context" => {
+                let result_var = &chunks_result_var(field_resolver, "go", result_var);
                 let pred = format!(
                     "func() bool {{ chunks := {result_var}.Chunks; if chunks == nil {{ return false }}; for _, c := range chunks {{ if c.Metadata.HeadingContext == nil {{ return false }} }}; return true }}()"
                 );
@@ -87,6 +91,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "first_chunk_starts_with_heading" => {
+                let result_var = &chunks_result_var(field_resolver, "go", result_var);
                 let pred = format!(
                     "func() bool {{ chunks := {result_var}.Chunks; if chunks == nil || len(chunks) == 0 {{ return false }}; return chunks[0].Metadata.HeadingContext != nil }}()"
                 );

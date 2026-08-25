@@ -1,5 +1,6 @@
 //! C# assertion rendering for generated e2e tests.
 
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_csharp;
 use crate::e2e::field_access::FieldResolver;
@@ -102,6 +103,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_content" => {
+                let result_var = &chunks_result_var(field_resolver, "csharp", result_var);
                 render_synthetic_bool_assertion(
                     out,
                     f,
@@ -111,6 +113,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_embeddings" => {
+                let result_var = &chunks_result_var(field_resolver, "csharp", result_var);
                 render_synthetic_bool_assertion(
                     out,
                     f,
@@ -120,6 +123,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_heading_context" => {
+                let result_var = &chunks_result_var(field_resolver, "csharp", result_var);
                 render_synthetic_bool_assertion(
                     out,
                     f,
@@ -129,6 +133,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "first_chunk_starts_with_heading" => {
+                let result_var = &chunks_result_var(field_resolver, "csharp", result_var);
                 render_synthetic_bool_assertion(
                     out,
                     f,

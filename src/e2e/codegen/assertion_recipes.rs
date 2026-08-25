@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 
 use crate::core::config::e2e::{CallConfig, E2eConfig};
-use crate::e2e::field_access::FieldResolver;
+use crate::e2e::field_access::{FieldResolver, LeafAnchor};
 use crate::e2e::fixture::{Assertion, Fixture};
 
 // Compatibility recipe names for fixture-declared opt-ins. Do not enable
@@ -19,22 +19,40 @@ pub(crate) const KEYWORDS_RECIPE: &str = "keywords";
 pub(crate) const STREAMING_RECIPE: &str = "streaming";
 pub(crate) const TREE_RECIPE: &str = "tree";
 
-/// Whether the call's own result type declares `chunks` — the field every `CHUNKS_RECIPE`
-/// synthetic handler (`chunks_have_content`, `chunks_have_embeddings`,
-/// `chunks_have_heading_context`, `first_chunk_starts_with_heading`) hardcodes as
-/// `{result_var}.chunks` before any generic field validation runs.
+/// Whether the call's own result type declares `chunks`, directly or through a `result_fields`-
+/// declared envelope prefix — the field every `CHUNKS_RECIPE` synthetic handler
+/// (`chunks_have_content`, `chunks_have_embeddings`, `chunks_have_heading_context`,
+/// `first_chunk_starts_with_heading`) hardcoded as `{result_var}.chunks` before any generic field
+/// validation ran.
 ///
 /// ~keep These handlers used to intercept unconditionally, ahead of `is_valid_for_result`, so a
 /// crate where `chunks` is declared on some OTHER type in the same IR (e.g. a nested
 /// `Document` reached through `Envelope.results`) but not on the call's own root type still got
-/// `result.chunks` emitted — code that does not compile. `result_field_oracle_knows` is the
-/// anchored, whole-path oracle `root_declares_path` already backs; asked with the literal name
-/// every one of these handlers accesses, it gives the same "refuse only when positively known
-/// absent" answer #291 already established for the derived-snippet path. `Some(true)` (the root
-/// declares it) and `None` (no anchor, or the call's root type isn't in this map — the
-/// pre-existing default) both keep rendering; only `Some(false)` refuses.
+/// `result.chunks` emitted — code that does not compile. `FieldResolver::anchor_leaf` is the
+/// anchored, whole-path oracle that first asks the same question `root_declares_path` always
+/// answered (refuse only when positively known absent, same as #291 established for the
+/// derived-snippet path), and — new here — tries every `result_fields` prefix the IR confirms
+/// reaches `chunks` before agreeing with that refusal. `Some(LeafAnchor::Direct)` (the root
+/// declares it, or no anchor exists at all — the pre-existing default) and
+/// `Some(LeafAnchor::Prefixed(_))` (an envelope prefix reaches it) both keep rendering; only
+/// `None` refuses.
 pub(crate) fn chunks_field_declared_by_result(field_resolver: &FieldResolver) -> bool {
-    field_resolver.result_field_oracle_knows(CHUNKS_RECIPE) != Some(false)
+    field_resolver.anchor_leaf(CHUNKS_RECIPE).is_some()
+}
+
+/// The expression each `CHUNKS_RECIPE` synthetic handler should anchor `.chunks` (or the target
+/// language's cased equivalent) onto, in `language`'s accessor syntax.
+///
+/// Delegates the per-language spelling to [`FieldResolver::accessor`] — the same renderer every
+/// generic field access already goes through — so casing, optional-chaining and index syntax for
+/// the prefix stay in the one place that already owns them, instead of a second hand-rolled copy
+/// per backend. Returns `result_var` unchanged whenever [`chunks_field_declared_by_result`] would
+/// refuse (callers must check that first) or when the root declares `chunks` directly.
+pub(crate) fn chunks_result_var(field_resolver: &FieldResolver, language: &str, result_var: &str) -> String {
+    match field_resolver.anchor_leaf(CHUNKS_RECIPE) {
+        Some(LeafAnchor::Prefixed(prefix)) => field_resolver.accessor(&prefix, language, result_var),
+        _ => result_var.to_string(),
+    }
 }
 
 /// The four synthetic handlers that hardcode `result.chunks`.

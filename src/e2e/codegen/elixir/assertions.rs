@@ -1,3 +1,4 @@
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
@@ -54,6 +55,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_content" => {
+                let result_var = &chunks_result_var(field_resolver, "elixir", result_var);
                 let pred =
                     format!("Enum.all?({result_var}.chunks || [], fn c -> c.content != nil and c.content != \"\" end)");
                 match assertion.assertion_type.as_str() {
@@ -70,6 +72,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_embeddings" => {
+                let result_var = &chunks_result_var(field_resolver, "elixir", result_var);
                 let pred = format!(
                     "Enum.all?({result_var}.chunks || [], fn c -> c.embedding != nil and c.embedding != [] end)"
                 );
@@ -87,6 +90,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_heading_context" => {
+                let result_var = &chunks_result_var(field_resolver, "elixir", result_var);
                 let pred = format!(
                     "Enum.all?({result_var}.chunks || [], fn c -> c.metadata != nil and c.metadata.heading_context != nil end)"
                 );
@@ -109,6 +113,7 @@ pub(super) fn render_assertion(
                 // content happens to start with "#" for an unrelated reason (a literal markdown
                 // heading in the source, not `prepend_heading_context`) would pass the old proxy
                 // and hide a genuine `heading_context` regression. ~keep
+                let result_var = &chunks_result_var(field_resolver, "elixir", result_var);
                 let expr = format!(
                     "case List.first({result_var}.chunks || []) do
         c when is_map(c) -> c.metadata != nil and c.metadata.heading_context != nil

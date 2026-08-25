@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::values::json_to_ruby;
 
+mod chunks_synthetic;
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_assertion(
     out: &mut String,
@@ -100,75 +102,7 @@ pub(super) fn render_assertion(
         }
 
         match f.as_str() {
-            "chunks_have_content" => {
-                let pred = format!("({result_var}.chunks || []).all? {{ |c| c.content && !c.content.empty? }}");
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        out.push_str(&format!("    expect({pred}).to be(true)\n"));
-                    }
-                    "is_false" => {
-                        out.push_str(&format!("    expect({pred}).to be(false)\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "    # skipped: unsupported assertion type on synthetic field '{f}'\n"
-                        ));
-                    }
-                }
-                return;
-            }
-            "chunks_have_heading_context" => {
-                let pred = format!(
-                    "({result_var}.chunks || []).all? {{ |c| c.metadata && !c.metadata.heading_context.nil? }}"
-                );
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        out.push_str(&format!("    expect({pred}).to be(true)\n"));
-                    }
-                    "is_false" => {
-                        out.push_str(&format!("    expect({pred}).to be(false)\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "    # skipped: unsupported assertion type on synthetic field '{f}'\n"
-                        ));
-                    }
-                }
-                return;
-            }
-            "first_chunk_starts_with_heading" => {
-                let pred = format!("!({result_var}.chunks || []).first&.metadata&.heading_context.nil?");
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        out.push_str(&format!("    expect({pred}).to be(true)\n"));
-                    }
-                    "is_false" => {
-                        out.push_str(&format!("    expect({pred}).to be(false)\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "    # skipped: unsupported assertion type on synthetic field '{f}'\n"
-                        ));
-                    }
-                }
-                return;
-            }
-            "chunks_have_embeddings" => {
-                let pred =
-                    format!("({result_var}.chunks || []).all? {{ |c| !c.embedding.nil? && !c.embedding.empty? }}");
-                match assertion.assertion_type.as_str() {
-                    "is_true" => {
-                        out.push_str(&format!("    expect({pred}).to be(true)\n"));
-                    }
-                    "is_false" => {
-                        out.push_str(&format!("    expect({pred}).to be(false)\n"));
-                    }
-                    _ => {
-                        out.push_str(&format!(
-                            "    # skipped: unsupported assertion type on synthetic field '{f}'\n"
-                        ));
-                    }
-                }
+            _ if chunks_synthetic::try_render(out, assertion, result_var, f, field_resolver) => {
                 return;
             }
             // ---- EmbedResponse virtual fields ----

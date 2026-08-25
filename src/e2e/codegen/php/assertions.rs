@@ -1,5 +1,6 @@
 //! PHP fixture assertion rendering helpers.
 
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::assertion_type_skip::{
     streaming_assertion_type_skip_line, streaming_assertion_value_skip_line,
 };
@@ -27,6 +28,7 @@ pub(super) fn render_assertion(
     if let Some(f) = &assertion.field {
         match f.as_str() {
             "chunks_have_content" => {
+                let result_var = &chunks_result_var(field_resolver, "php", result_var);
                 let pred = format!(
                     "array_reduce(${result_var}->chunks ?? [], fn($carry, $c) => $carry && !empty($c->content), true)"
                 );
@@ -42,6 +44,7 @@ pub(super) fn render_assertion(
                 return;
             }
             "chunks_have_embeddings" => {
+                let result_var = &chunks_result_var(field_resolver, "php", result_var);
                 let pred = format!(
                     "array_reduce(${result_var}->chunks ?? [], fn($carry, $c) => $carry && !empty($c->embedding), true)"
                 );

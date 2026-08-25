@@ -9,6 +9,8 @@ use crate::e2e::fixture::Assertion;
 
 use super::json::{python_string_literal, value_to_python_string};
 
+mod chunks_synthetic;
+
 /// Render a single assertion into the test function body.
 pub(super) fn render_assertion(
     out: &mut String,
@@ -54,7 +56,7 @@ pub(super) fn render_assertion(
             let _ = writeln!(out, "    # skipped: {reason}");
             return;
         }
-        if render_synthetic_field(out, assertion, result_var, f) {
+        if render_synthetic_field(out, assertion, result_var, f, field_resolver) {
             return;
         }
     }
@@ -205,33 +207,15 @@ fn render_python_wildcard_assertion(
     }
 }
 
-fn render_synthetic_field(out: &mut String, assertion: &Assertion, result_var: &str, field: &str) -> bool {
+fn render_synthetic_field(
+    out: &mut String,
+    assertion: &Assertion,
+    result_var: &str,
+    field: &str,
+    field_resolver: &FieldResolver,
+) -> bool {
     match field {
-        "chunks_have_content" => {
-            let pred = format!("all(c.content for c in ({result_var}.chunks or []))");
-            emit_bool_assertion(out, &pred, assertion.assertion_type.as_str(), field);
-            true
-        }
-        "chunks_have_heading_context" => {
-            let pred = format!(
-                "all(c.metadata and c.metadata.heading_context is not None for c in ({result_var}.chunks or []))"
-            );
-            emit_bool_assertion(out, &pred, assertion.assertion_type.as_str(), field);
-            true
-        }
-        "first_chunk_starts_with_heading" => {
-            let pred = format!(
-                "bool(({result_var}.chunks or []) and ({result_var}.chunks[0].metadata and {result_var}.chunks[0].metadata.heading_context))"
-            );
-            emit_bool_assertion(out, &pred, assertion.assertion_type.as_str(), field);
-            true
-        }
-        "chunks_have_embeddings" => {
-            let pred =
-                format!("all(c.embedding is not None and len(c.embedding) > 0 for c in ({result_var}.chunks or []))");
-            emit_bool_assertion(out, &pred, assertion.assertion_type.as_str(), field);
-            true
-        }
+        _ if chunks_synthetic::try_render(out, assertion, result_var, field, field_resolver) => true,
         "embeddings" => {
             render_embeddings_assertion(out, assertion, result_var);
             true
@@ -973,14 +957,14 @@ mod tests {
     fn python_synthetic_chunks_unsupported_type_fails_loudly() {
         let assertion = make_assertion("bogus_type", Some("chunks_have_content"), None);
         let mut out = String::new();
-        render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content");
+        render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content", &empty_resolver());
     }
 
     #[test]
     fn python_synthetic_chunks_supported_type_renders_assertion() {
         let assertion = make_assertion("is_true", Some("chunks_have_content"), None);
         let mut out = String::new();
-        let handled = render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content");
+        let handled = render_synthetic_field(&mut out, &assertion, "result", "chunks_have_content", &empty_resolver());
         assert!(handled);
         assert_eq!(
             out.trim(),
@@ -993,14 +977,14 @@ mod tests {
     fn python_synthetic_embeddings_unsupported_type_fails_loudly() {
         let assertion = make_assertion("bogus_type", Some("embeddings"), None);
         let mut out = String::new();
-        render_synthetic_field(&mut out, &assertion, "result", "embeddings");
+        render_synthetic_field(&mut out, &assertion, "result", "embeddings", &empty_resolver());
     }
 
     #[test]
     fn python_synthetic_embeddings_supported_type_renders_assertion() {
         let assertion = make_assertion("not_empty", Some("embeddings"), None);
         let mut out = String::new();
-        let handled = render_synthetic_field(&mut out, &assertion, "result", "embeddings");
+        let handled = render_synthetic_field(&mut out, &assertion, "result", "embeddings", &empty_resolver());
         assert!(handled);
         assert_eq!(out.trim(), "assert len(result) > 0  # noqa: S101");
     }
@@ -1010,7 +994,13 @@ mod tests {
         let assertion = make_assertion("bogus_type", Some("embedding_dimensions"), None);
         let mut out = String::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            render_synthetic_field(&mut out, &assertion, "result", "embedding_dimensions");
+            render_synthetic_field(
+                &mut out,
+                &assertion,
+                "result",
+                "embedding_dimensions",
+                &empty_resolver(),
+            );
         }));
         assert!(result.is_err(), "expected a panic for unsupported assertion type");
         assert!(
@@ -1027,7 +1017,13 @@ mod tests {
             Some(serde_json::Value::from(10)),
         );
         let mut out = String::new();
-        let handled = render_synthetic_field(&mut out, &assertion, "result", "embedding_dimensions");
+        let handled = render_synthetic_field(
+            &mut out,
+            &assertion,
+            "result",
+            "embedding_dimensions",
+            &empty_resolver(),
+        );
         assert!(handled);
         assert_eq!(
             out.trim(),

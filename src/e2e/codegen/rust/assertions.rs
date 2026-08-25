@@ -2,6 +2,7 @@
 
 use std::fmt::Write as FmtWrite;
 
+use crate::e2e::codegen::assertion_recipes::chunks_result_var;
 use crate::e2e::codegen::field_skip::{FieldSkip, nested_wildcard_skip_line};
 use crate::e2e::escape::escape_rust;
 use crate::e2e::field_access::FieldResolver;
@@ -214,18 +215,22 @@ pub fn render_assertion_with_streaming(
                 return;
             }
             "chunks_have_content" => {
+                let result_var = &chunks_result_var(field_resolver, "rust", result_var);
                 render_chunks_have_content(out, result_var, assertion.assertion_type.as_str());
                 return;
             }
             "chunks_have_embeddings" => {
+                let result_var = &chunks_result_var(field_resolver, "rust", result_var);
                 render_chunks_have_embeddings(out, result_var, assertion.assertion_type.as_str());
                 return;
             }
             "chunks_have_heading_context" => {
+                let result_var = &chunks_result_var(field_resolver, "rust", result_var);
                 render_chunks_have_heading_context(out, result_var, assertion.assertion_type.as_str());
                 return;
             }
             "first_chunk_starts_with_heading" => {
+                let result_var = &chunks_result_var(field_resolver, "rust", result_var);
                 render_first_chunk_starts_with_heading(out, result_var, assertion.assertion_type.as_str());
                 return;
             }

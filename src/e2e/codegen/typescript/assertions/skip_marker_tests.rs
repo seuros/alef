@@ -7,7 +7,19 @@ use super::render_synthetic_field_assertion;
 use crate::e2e::codegen::assertion_type_skip::AssertionTypeSkip;
 use crate::e2e::codegen::field_skip::FieldSkip;
 use crate::e2e::codegen::{SkipVerdict, fail_on_unavailable_field_markers, take_skip_records};
+use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::Assertion;
+use std::collections::{HashMap, HashSet};
+
+fn empty_resolver() -> FieldResolver {
+    FieldResolver::new(
+        &HashMap::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+}
 
 fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json::Value>) -> (String, bool) {
     let assertion = Assertion {
@@ -17,7 +29,8 @@ fn render_streaming(assertion_type: &str, field: &str, value: Option<serde_json:
         ..Assertion::default()
     };
     let mut out = String::new();
-    let handled = render_synthetic_field_assertion(&mut out, &assertion, "result", field, true);
+    let handled =
+        render_synthetic_field_assertion(&mut out, &assertion, "result", field, true, &empty_resolver(), "node");
     (out, handled)
 }
 
