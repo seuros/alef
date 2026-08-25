@@ -149,6 +149,48 @@ pub(crate) fn binding_excluded_for_language(name: &str, language: &str, ir: Call
     first.binding_excluded
 }
 
+/// Whether `name` resolves, in [`CallIr::signature`], *only* through a method every same-named
+/// candidate is marked [`crate::core::ir::ADAPTER_HANDLED_REASON_PREFIX`]-excluded -- i.e. no
+/// free function of that name exists in `ir.functions`, and every same-named method across every
+/// type is an `[[crates.adapters]]` target.
+///
+/// This is the "ambiguous name -> skip" convention (`CallIr::signature` already applies it to
+/// disagreeing same-named methods) extended to the one case `signature`'s own priority rule
+/// cannot detect: free functions win when one is *visible*, but an adapter-handled method's own
+/// exclusion reason is direct evidence that *something else* -- the adapter's own generated
+/// wrapper, or a hand-authored sibling free function written to mirror this call's calling
+/// convention for the polyglot e2e surface -- answers calls to this name for every binding, Rust
+/// included (the adapter reroutes the call itself; Rust's own e2e suite renders positionally from
+/// configured `args`, not from the excluded method's signature, same as every other backend). A
+/// same-named sibling can be independently excluded from `ApiSurface.functions` (its own
+/// `#[alef::skip]`, or a crate-wide `exclude.functions` entry matching its bare name) and thereby
+/// invisible to `signature`'s functions-first lookup, which is exactly the gap `alef-tasks#361`
+/// surfaced: the method fallback resolved with total confidence to a signature that was not what
+/// any binding, including Rust's, actually called. Skipping here does not weaken
+/// [`binding_excluded_for_language`]'s existing rust carve-out for the *ordinary*
+/// `binding_excluded` case (a method excluded for reasons unrelated to an adapter) -- only the
+/// adapter-marked reason licenses "say nothing" over "say wrong". ~keep
+pub(crate) fn resolves_only_via_adapter_handled_method(name: &str, ir: CallIr<'_>) -> bool {
+    if ir.functions.iter().any(|function| function.name == name) {
+        return false;
+    }
+    let methods: Vec<_> = ir
+        .type_defs
+        .iter()
+        .flat_map(|type_def| type_def.methods.iter())
+        .filter(|method| method.name == name)
+        .collect();
+    !methods.is_empty() && methods.iter().all(|method| is_adapter_handled(method))
+}
+
+fn is_adapter_handled(method: &crate::core::ir::MethodDef) -> bool {
+    method.binding_excluded
+        && method
+            .binding_exclusion_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with(crate::core::ir::ADAPTER_HANDLED_REASON_PREFIX))
+}
+
 /// The named type reached through any number of `Option`/`Vec` wrappers, or `None` for a type
 /// that names nothing (a primitive, a tuple, a map).
 pub(crate) fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {

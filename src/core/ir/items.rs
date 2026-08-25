@@ -193,6 +193,24 @@ pub struct FieldDef {
     pub version: VersionAnnotation,
 }
 
+/// Stable prefix `pipeline::extract`'s adapter-marking pass writes into a method's
+/// [`MethodDef::binding_exclusion_reason`] when an `[[crates.adapters]]` entry's
+/// `(owner_type, core_path)` names it.
+///
+/// `binding_exclusion_reason` is documented as "used in diagnostics" -- free text, not a
+/// contract -- but this one prefix is the sole exception: it is also read back by
+/// `crate::e2e::codegen::call_ir` to recognize the one call-resolution case
+/// [`crate::e2e::codegen::call_ir::CallIr::signature`]'s method fallback cannot see through on
+/// its own. An adapter can re-expose a method's calling convention under a different shape --
+/// often a same-named sibling free function, kept purely to give e2e config a Rust-side
+/// identifier to point `[e2e.calls.*]` at -- and that sibling can be independently excluded from
+/// `ApiSurface.functions` (its own `#[alef::skip]`, or a crate-wide `exclude.functions` entry
+/// matching its bare name) without anything re-checking whether the *method's* exclusion reason
+/// still means what the fallback assumes. Reading this marker back is asking the extractor's own
+/// answer rather than re-deriving it, per this repo's rule against two components computing the
+/// same fact separately. ~keep
+pub(crate) const ADAPTER_HANDLED_REASON_PREFIX: &str = "handled by [[crates.adapters]]";
+
 /// A method on a public struct.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MethodDef {
