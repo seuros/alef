@@ -20,6 +20,8 @@ mod call_arity_tests;
 mod helpers;
 mod http;
 #[cfg(test)]
+mod json_object_field_agreement_tests;
+#[cfg(test)]
 mod loop_binding_tests;
 #[cfg(test)]
 mod node_enum_import_tests;
