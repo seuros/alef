@@ -11,8 +11,10 @@ use crate::extract::validation::sanitized_public_api_diagnostics;
 use ahash::AHashSet;
 
 mod readiness;
+mod since_version;
 
 use readiness::backend_readiness_diagnostics;
+use since_version::since_version_diagnostics;
 use std::fmt;
 
 /// Validation severity.
@@ -46,6 +48,8 @@ pub enum ValidationCode {
     UnconsumedConfig,
     UnreadableFieldDefault,
     SerdeContainerConversionUnsupported,
+    SinceNewerThanCrateVersion,
+    SinceVersionUnparseable,
 }
 
 /// Diagnostics that are never safe to suppress globally.
@@ -68,6 +72,8 @@ impl fmt::Display for ValidationCode {
             Self::UnconsumedConfig => f.write_str("unconsumed_config"),
             Self::UnreadableFieldDefault => f.write_str("unreadable_field_default"),
             Self::SerdeContainerConversionUnsupported => f.write_str("serde_container_conversion_unsupported"),
+            Self::SinceNewerThanCrateVersion => f.write_str("since_newer_than_crate_version"),
+            Self::SinceVersionUnparseable => f.write_str("since_version_unparseable"),
         }
     }
 }
@@ -269,6 +275,7 @@ pub fn validate_api_surface_for_resolved_languages(
         bridged_trait_names,
         resolved_languages,
     ));
+    report.extend(since_version_diagnostics(api));
     report
 }
 
