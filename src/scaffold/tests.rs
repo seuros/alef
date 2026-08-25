@@ -92,6 +92,7 @@ mod dependency_key_order;
 mod extra_deps;
 mod ffi_go_java_ruby;
 mod general;
+mod java_checkstyle;
 mod java_pom_compiler;
 mod language_elixir;
 mod language_php_dart;
