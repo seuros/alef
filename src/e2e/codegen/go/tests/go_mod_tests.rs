@@ -1,0 +1,198 @@
+//! Coverage for `render_go_mod`: registry vs local mode, testify indirect deps, and extras
+//! (dependencies/dev-dependencies) merging, sorting, and idempotency.
+//!
+//! Split out of `tests.rs`, which is over the 1000-line cap and may not grow.
+
+use super::render_go_mod;
+
+#[test]
+fn render_go_mod_without_extras() {
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", None);
+    assert!(
+        out.contains("github.com/example/mylib v1.0.0"),
+        "should contain main module require"
+    );
+    assert!(
+        out.contains("github.com/stretchr/testify v1.11.1"),
+        "should contain testify require"
+    );
+    assert!(
+        !out.contains("github.com/tree-sitter"),
+        "should not contain tree-sitter without extras"
+    );
+}
+
+#[test]
+fn render_go_mod_includes_testify_indirect_deps() {
+    // A go.mod that lists testify but omits its transitive deps makes `go test`
+    // abort with "updates to go.mod needed; ... go mod tidy". The generated
+    // test_app must carry a complete dependency graph so it builds without a
+    // manual tidy (and offline).
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", None);
+    for indirect in [
+        "github.com/davecgh/go-spew v1.1.1 // indirect",
+        "github.com/pmezard/go-difflib v1.0.0 // indirect",
+        "gopkg.in/yaml.v3 v3.0.1 // indirect",
+    ] {
+        assert!(
+            out.contains(indirect),
+            "go.mod must contain testify indirect dep `{indirect}`, got:\n{out}"
+        );
+    }
+}
+
+#[test]
+fn render_go_mod_registry_mode_uses_sibling_module_path() {
+    // Registry mode (no replace): the main module must NOT be a subpath of the
+    // module under test, or Go ignores the `require` directive and resolves a
+    // stray upstream tag instead of the pinned version.
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", None);
+    assert!(
+        out.contains("module github.com/example/mylib-e2e"),
+        "registry-mode main module must be a sibling path, got: {out}"
+    );
+    assert!(
+        !out.contains("module github.com/example/mylib/e2e"),
+        "registry-mode main module must not shadow the module under test, got: {out}"
+    );
+}
+
+#[test]
+fn render_go_mod_local_mode_uses_nested_module_path() {
+    // Local mode (replace present): a nested `/e2e` main module resolves via the
+    // replace directive, so keep the historical nested path.
+    let out = render_go_mod("github.com/example/mylib", Some("../../packages/go"), "v0.0.0", None);
+    assert!(
+        out.contains("module github.com/example/mylib/e2e"),
+        "local-mode main module should stay nested, got: {out}"
+    );
+}
+
+#[test]
+fn render_go_mod_with_extras_includes_requires() {
+    use crate::core::config::manifest_extras::{ExtraDepSpec, ManifestExtras};
+    let mut extras = ManifestExtras::default();
+    extras.dev_dependencies.insert(
+        "github.com/tree-sitter/go-tree-sitter".to_string(),
+        ExtraDepSpec::Simple("v0.24.0".to_string()),
+    );
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    assert!(
+        out.contains("github.com/tree-sitter/go-tree-sitter v0.24.0"),
+        "should include tree-sitter extra, got: {out}"
+    );
+    assert!(
+        out.contains("github.com/example/mylib v1.0.0"),
+        "should still contain main module"
+    );
+}
+
+#[test]
+fn render_go_mod_extras_with_replace_directive() {
+    use crate::core::config::manifest_extras::{ExtraDepSpec, ManifestExtras};
+    let mut extras = ManifestExtras::default();
+    extras.dependencies.insert(
+        "github.com/upstream/lib".to_string(),
+        ExtraDepSpec::Simple("v0.5.0".to_string()),
+    );
+    let out = render_go_mod(
+        "github.com/example/mylib",
+        Some("../../packages/go"),
+        "v0.0.0",
+        Some(&extras),
+    );
+    assert!(
+        out.contains("github.com/upstream/lib v0.5.0"),
+        "should include upstream lib"
+    );
+    assert!(
+        out.contains("replace github.com/example/mylib => ../../packages/go"),
+        "should include replace directive"
+    );
+}
+
+#[test]
+fn render_go_mod_empty_extras_matches_no_extras() {
+    use crate::core::config::manifest_extras::ManifestExtras;
+    let extras = ManifestExtras::default();
+    let without_empty = render_go_mod("github.com/example/mylib", None, "v1.0.0", None);
+    let with_empty = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    assert_eq!(without_empty, with_empty, "empty extras should be equivalent to None");
+}
+
+#[test]
+fn render_go_mod_extras_are_sorted_deterministically() {
+    use crate::core::config::manifest_extras::{ExtraDepSpec, ManifestExtras};
+    let mut extras = ManifestExtras::default();
+    extras.dev_dependencies.insert(
+        "github.com/z-last/lib".to_string(),
+        ExtraDepSpec::Simple("v1.0.0".to_string()),
+    );
+    extras.dev_dependencies.insert(
+        "github.com/a-first/lib".to_string(),
+        ExtraDepSpec::Simple("v2.0.0".to_string()),
+    );
+    extras.dependencies.insert(
+        "github.com/m-middle/lib".to_string(),
+        ExtraDepSpec::Simple("v3.0.0".to_string()),
+    );
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    let first_idx = out.find("github.com/a-first/lib").expect("should find a-first");
+    let middle_idx = out.find("github.com/m-middle/lib").expect("should find m-middle");
+    let last_idx = out.find("github.com/z-last/lib").expect("should find z-last");
+    assert!(
+        first_idx < middle_idx && middle_idx < last_idx,
+        "extras should be sorted alphabetically: {out}"
+    );
+}
+
+#[test]
+fn render_go_mod_extras_handles_detailed_form_with_version() {
+    use crate::core::config::manifest_extras::{ExtraDepSpec, ManifestExtras};
+    let mut extras = ManifestExtras::default();
+    let mut table = toml::Table::new();
+    table.insert("version".to_string(), toml::Value::String("v0.25.0".to_string()));
+    table.insert("features".to_string(), toml::Value::String("debug".to_string()));
+    extras.dev_dependencies.insert(
+        "github.com/example/with-features".to_string(),
+        ExtraDepSpec::Detailed(table),
+    );
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    assert!(
+        out.contains("github.com/example/with-features v0.25.0"),
+        "should extract version from detailed form, got: {out}"
+    );
+}
+
+#[test]
+fn render_go_mod_extras_skips_entries_without_version() {
+    use crate::core::config::manifest_extras::{ExtraDepSpec, ManifestExtras};
+    let mut extras = ManifestExtras::default();
+    let mut table = toml::Table::new();
+    table.insert(
+        "git".to_string(),
+        toml::Value::String("https://example.com".to_string()),
+    );
+    extras.dev_dependencies.insert(
+        "github.com/example/no-version".to_string(),
+        ExtraDepSpec::Detailed(table),
+    );
+    let out = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    assert!(
+        !out.contains("github.com/example/no-version"),
+        "should skip extras without version field, got: {out}"
+    );
+}
+
+#[test]
+fn render_go_mod_extras_idempotent() {
+    use crate::core::config::manifest_extras::{ExtraDepSpec, ManifestExtras};
+    let mut extras = ManifestExtras::default();
+    extras.dev_dependencies.insert(
+        "github.com/tree-sitter/go-tree-sitter".to_string(),
+        ExtraDepSpec::Simple("v0.24.0".to_string()),
+    );
+    let first = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    let second = render_go_mod("github.com/example/mylib", None, "v1.0.0", Some(&extras));
+    assert_eq!(first, second, "re-rendering with same extras should be stable");
+}
