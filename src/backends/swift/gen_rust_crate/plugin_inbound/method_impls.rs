@@ -2,7 +2,7 @@ use crate::backends::swift::gen_rust_crate::type_bridge::swift_bridge_rust_type;
 use crate::core::ir::{ApiSurface, MethodDef, ParamDef, TypeRef};
 use heck::ToSnakeCase;
 
-use super::{inbound_bridge_type, needs_inbound_json_bridge};
+use super::{inbound_bridge_type, is_vec_of_named, needs_inbound_json_bridge};
 
 /// Returns true if `ty` references a `Named(name)` at any depth where `name` resolves
 /// to a trait — either present in `api.types` or stripped from the binding surface
@@ -137,6 +137,27 @@ pub(super) fn emit_inbound_method_impl(
                 call_expr => &call_expr,
             },
         ));
+    } else if is_vec_of_named(&method.return_type) {
+        // alef-tasks #308: `Vec<Named>` crosses per-element (`Vec<String>`), not as one JSON
+        // blob, so it needs its own decode -- `needs_inbound_json_bridge` deliberately excludes
+        // this shape (see the rule in `plugin_inbound::inbound_bridge_type`). `call_expr` really
+        // returns `Vec<String>` here (matching `inbound_bridge_type`'s extern-block type), and
+        // each element is decoded on its own, then collected into the native `Vec<T>`. ~keep
+        let elem_native_ty = match &method.return_type {
+            TypeRef::Vec(inner) => inbound_native_return_ty(inner, source_crate, type_paths),
+            _ => unreachable!("is_vec_of_named guarantees a Vec"),
+        };
+        let native_ty = inbound_native_return_ty(&method.return_type, source_crate, type_paths);
+        out.push_str(&crate::backends::swift::template_env::render(
+            "inbound_method_json_vec_return.rs.jinja",
+            minijinja::context! {
+                call_expr => &call_expr,
+                elem_native_ty => &elem_native_ty,
+                native_ty => &native_ty,
+                trait_snake => trait_snake,
+                method_snake => &method_snake,
+            },
+        ));
     } else if needs_inbound_json_bridge(&method.return_type) {
         let native_ty = inbound_native_return_ty(&method.return_type, source_crate, type_paths);
         out.push_str(&crate::backends::swift::template_env::render(
@@ -172,6 +193,13 @@ pub(super) fn emit_inbound_method_impl(
 fn inbound_param_to_bridge(p: &ParamDef) -> Option<String> {
     let local = inbound_local_name(p);
     let name = p.name.to_snake_case();
+
+    if is_vec_of_named(&p.ty) {
+        // alef-tasks #308: mirror of the per-element return decode above. The extern "Swift"
+        // declaration expects `Vec<String>` (`inbound_bridge_type`), so each native element is
+        // encoded on its own before the call, rather than serializing the whole Vec as one blob.
+        return Some(inbound_vec_named_param_bridge(p));
+    }
 
     if needs_inbound_json_bridge(&p.ty) {
         if p.optional {
@@ -214,6 +242,30 @@ fn inbound_param_to_bridge(p: &ParamDef) -> Option<String> {
         }
         TypeRef::Vec(_) if p.is_ref => Some(format!("let {local} = {name}.to_vec();")),
         _ => None,
+    }
+}
+
+/// Emit the `let` binding that encodes a `Vec<Named>` param element-wise into `Vec<String>`,
+/// matching the `Vec<String>` the extern "Swift" declaration expects (`inbound_bridge_type`).
+/// A single `serde_json::to_string` of the whole `Vec` would produce one `String`, not a
+/// `Vec<String>`, and would not compile against the extern block's param type. ~keep
+fn inbound_vec_named_param_bridge(p: &ParamDef) -> String {
+    let local = inbound_local_name(p);
+    let name = p.name.to_snake_case();
+    let iter_method = if p.is_ref { "iter" } else { "into_iter" };
+    let elem_encode = if p.is_ref {
+        "::serde_json::to_string(e)"
+    } else {
+        "::serde_json::to_string(&e)"
+    };
+    if p.optional {
+        format!(
+            "let {local} = {name}.map(|v| v.{iter_method}().map(|e| {elem_encode}.expect(\"serializable param {name} element\")).collect::<Vec<String>>());"
+        )
+    } else {
+        format!(
+            "let {local} = {name}.{iter_method}().map(|e| {elem_encode}.expect(\"serializable param {name} element\")).collect::<Vec<String>>();"
+        )
     }
 }
 
@@ -375,5 +427,124 @@ fn primitive_str(p: &crate::core::ir::PrimitiveType) -> &'static str {
         Usize => "usize",
         F32 => "f32",
         F64 => "f64",
+    }
+}
+
+/// UNVERIFIED end-to-end by any compile gate: `trait_box_swiftpm_compile.rs` only compiles the
+/// generator's outbound `gen_bindings` output, never the `gen_rust_crate` Rust source these
+/// functions produce. These unit tests are the only coverage for alef-tasks #308's fix. ~keep
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn named_vec_param(name: &str, type_name: &str, optional: bool, is_ref: bool) -> ParamDef {
+        ParamDef {
+            name: name.to_string(),
+            ty: TypeRef::Vec(Box::new(TypeRef::Named(type_name.to_string()))),
+            optional,
+            is_ref,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_param_to_bridge_vec_named_encodes_per_element_owned() {
+        let p = named_vec_param("entries", "SinkStats", false, false);
+        let line = inbound_param_to_bridge(&p).expect("Vec<Named> param needs a bridge line");
+
+        assert_eq!(
+            line,
+            "let entries = entries.into_iter().map(|e| ::serde_json::to_string(&e)\
+             .expect(\"serializable param entries element\")).collect::<Vec<String>>();"
+        );
+    }
+
+    #[test]
+    fn test_param_to_bridge_vec_named_encodes_per_element_ref() {
+        let p = named_vec_param("entries", "SinkStats", false, true);
+        let line = inbound_param_to_bridge(&p).expect("Vec<Named> param needs a bridge line");
+
+        assert!(
+            line.contains(".iter().map(|e| ::serde_json::to_string(e)"),
+            "got: {line}"
+        );
+        assert!(
+            !line.contains("to_string(&e)"),
+            "a ref element must not be re-borrowed: {line}"
+        );
+    }
+
+    #[test]
+    fn test_param_to_bridge_vec_named_encodes_per_element_optional() {
+        let p = named_vec_param("entries", "SinkStats", true, false);
+        let line = inbound_param_to_bridge(&p).expect("Vec<Named> param needs a bridge line");
+
+        assert!(
+            line.starts_with("let entries = entries.map(|v| v.into_iter().map(|e|"),
+            "got: {line}"
+        );
+        assert!(line.ends_with("collect::<Vec<String>>());"), "got: {line}");
+    }
+
+    /// A whole-Vec `serde_json::to_string` would produce one `String`, not the `Vec<String>`
+    /// the extern "Swift" declaration expects (alef-tasks #308).
+    #[test]
+    fn test_param_to_bridge_vec_named_is_not_a_single_blob() {
+        let p = named_vec_param("entries", "SinkStats", false, false);
+        let line = inbound_param_to_bridge(&p).expect("Vec<Named> param needs a bridge line");
+
+        assert!(
+            !line.contains("::serde_json::to_string(&entries)"),
+            "must not serialize the whole Vec as one blob: {line}"
+        );
+    }
+
+    fn stats_history_method() -> MethodDef {
+        MethodDef {
+            name: "stats_history".to_string(),
+            return_type: TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+            ..Default::default()
+        }
+    }
+
+    /// alef-tasks #308: before the fix, `needs_inbound_json_bridge(Vec<Named>)` was `false`, so
+    /// the method fell through to a bare passthrough of `call_expr` -- which the extern block
+    /// declares `Vec<String>` -- into an impl return type of `Vec<SinkStats>`. That is a type
+    /// mismatch the SwiftPM gate cannot see because it never compiles this generator's Rust
+    /// output.
+    #[test]
+    fn test_emit_inbound_method_impl_vec_named_return_decodes_per_element() {
+        let method = stats_history_method();
+        let api = ApiSurface::default();
+        let mut out = String::new();
+
+        emit_inbound_method_impl(
+            &mut out,
+            &method,
+            "document_sink",
+            "fixture_core",
+            &std::collections::HashMap::new(),
+            "SinkError",
+            false,
+            &std::collections::HashSet::new(),
+            &api,
+        );
+
+        assert!(
+            out.contains("__strings"),
+            "expected the per-element decode helper, got:\n{out}"
+        );
+        assert!(
+            out.contains("::serde_json::from_str::<fixture_core::SinkStats>(&s)"),
+            "expected each element decoded on its own, got:\n{out}"
+        );
+        assert!(
+            out.contains(".collect::<Vec<fixture_core::SinkStats>>()"),
+            "expected the collected native Vec<T>, got:\n{out}"
+        );
+        assert!(
+            !out.contains("let json = self.inner.alef_stats_history();"),
+            "must not treat Vec<String> as a single JSON blob, got:\n{out}"
+        );
     }
 }
