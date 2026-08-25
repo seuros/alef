@@ -633,8 +633,16 @@ pub(crate) fn strip_rust_sections(doc: &str) -> String {
 /// Returns true if a code block's content contains Rust-specific patterns.
 pub(crate) fn is_rust_code_block(content: &str) -> bool {
     let first_line = content.lines().next().unwrap_or("");
-    let fence_lang = first_line.trim_start_matches('`').trim().to_lowercase();
-    if matches!(fence_lang.as_str(), "rust" | "rust,no_run" | "rust,ignore" | "") {
+    let fence_info = first_line.trim_start_matches('`').trim().to_lowercase();
+    // The fence info string is language plus optional rustdoc doctest attributes
+    // (`rust,no_run`, a bare `no_run`, `rust,no_run,should_panic`, ...); only
+    // `Language::from_fence_info` knows that vocabulary. Matching the raw string
+    // against a handful of literal combinations (the previous approach) silently
+    // stopped recognizing every combination it didn't happen to enumerate, which let
+    // unrecognized-but-still-Rust blocks survive untouched into non-Rust language
+    // pages. ~keep
+    let fence_lang = fence_info.split_whitespace().next().unwrap_or("");
+    if crate::snippets::types::Language::from_fence_info(fence_lang) == crate::snippets::types::Language::Rust {
         for line in content.lines().skip(1) {
             if line.starts_with("use ")
                 || line.contains("unwrap()")
