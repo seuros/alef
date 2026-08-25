@@ -265,8 +265,8 @@ fn build_command_for_lang(
             // whenever the repo also has a workspace-root `package.json`. See alef#368.
             format!(
                 "napi build --manifest-path crates/{pkg}/Cargo.toml \
-                 -o crates/{pkg} --package-json-path crates/{pkg}/package.json --platform --dts {dts} \
-                 --release{napi_target}"
+                 -o crates/{pkg} --package-json-path crates/{pkg}/package.json --platform --no-js \
+                 --dts {dts} --release{napi_target}"
             )
         }
         Language::Wasm => {

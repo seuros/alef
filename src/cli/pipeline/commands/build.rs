@@ -22,6 +22,7 @@ mod build_command_tests;
 #[cfg(all(test, unix))]
 mod build_orchestration_tests;
 #[cfg(all(test, unix))]
+mod napi_js_ownership_tests;
 mod napi_package_json_path_tests;
 #[cfg(test)]
 mod readiness_tests;

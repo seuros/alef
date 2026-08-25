@@ -78,7 +78,7 @@ pub(super) fn build_command_for(
             // crate directory (which would also require rewriting `--manifest-path`/`-o` to be
             // relative to it). See alef#368. ~keep
             format!(
-                "npx --yes -p @napi-rs/cli@{} napi build --platform --manifest-path {}/Cargo.toml -o {} \
+                "npx --yes -p @napi-rs/cli@{} napi build --platform --no-js --manifest-path {}/Cargo.toml -o {} \
                  --package-json-path {}/package.json --dts {}{}",
                 tv::npm::NAPI_RS_CLI_CRATE,
                 node_crate_dir,

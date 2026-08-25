@@ -605,7 +605,7 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     ]
   }},
   "scripts": {{
-    "build": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi build --platform --dts {napi_dts} --release",
+    "build": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi build --platform --no-js --dts {napi_dts} --release",
     "artifacts": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi artifacts",
     "prepublishOnly": "npx --yes -p @napi-rs/cli@{napi_rs_cli_crate} napi prepublish -t npm --skip-optional-publish"
   }},
@@ -648,6 +648,14 @@ pub(crate) fn scaffold_node(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             content: crate_pkg,
             generated_header: false,
         },
+        // `generated_header: false` -- user-owned after this scaffold. `napi build`'s own
+        // `--js` output filename defaults to `index.js` too, and (unlike `--dts`) napi-rs
+        // supports disabling that output entirely with `--no-js` (see the `"build"` script
+        // above and `build_command_for`'s `"napi"` arm), rather than needing a redirect: this
+        // hand-derived platform-dispatch file already does everything napi-rs's own auto
+        // dispatch file would, so nothing consumes the napi-rs version. Without `--no-js`,
+        // every `napi build --platform` invocation -- the default node build step, `alef
+        // publish`, and the scaffolded `npm run build` -- would silently overwrite this file. ~keep
         GeneratedFile {
             path: PathBuf::from(format!("crates/{crate_dir}-node/index.js")),
             content: crate_index_js,
