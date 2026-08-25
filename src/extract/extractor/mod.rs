@@ -27,16 +27,17 @@ use self::helpers::{
 use self::paths::{apply_parent_reexport_shortening, derive_module_path};
 use self::postprocess::{
     resolve_enum_field_defaults, resolve_newtypes, resolve_public_default_functions, resolve_trait_sources,
+    warn_on_default_disagreements,
 };
 use self::reexports::{extract_module, resolve_use_tree};
 use self::types::{extract_enum, extract_error_enum, extract_struct};
 
 /// A struct's field name → the serde reader's default for that field, keyed by the struct's
 /// `rust_path` at the moment it was extracted. Threaded from `extract_struct`
-/// (`extract::extractor::types`) through `extract_items`/`extract_module` down to
-/// `functions::impl_blocks`, so a manual `impl Default` — parsed later, possibly from a
-/// different source file — can still be compared against the serde reader's value. See
-/// `postprocess::warn_on_default_disagreement`.
+/// (`extract::extractor::types`) through `extract_items`/`extract_module` and accumulated across
+/// every source file, so a manual `impl Default` — parsed later, possibly from a different
+/// source file — can still be compared against the serde reader's value once the whole crate has
+/// been extracted. See `postprocess::warn_on_default_disagreements`.
 ///
 /// Keyed by `rust_path` as extracted, not re-resolved after reexport shortening or
 /// disambiguation rename the path: both of those run only after the struct's own
@@ -143,6 +144,12 @@ pub fn extract(
     resolve_newtypes(&mut surface);
 
     resolve_enum_field_defaults(&mut surface);
+
+    // Deferred to here rather than run inline while each source file was still being walked: it
+    // needs every enum in the crate already extracted to tell a genuine agreement (an enum field
+    // set to its own `#[default]` variant) apart from a real disagreement. See
+    // `postprocess::warn_on_default_disagreements`. ~keep
+    warn_on_default_disagreements(&surface, &pending_serde_defaults);
 
     disambiguation::disambiguate_type_names(&mut surface);
 
@@ -555,7 +562,6 @@ fn extract_items(
                 result_wrapping_aliases,
                 &literal_consts,
                 &constructors,
-                &*pending_serde_defaults,
             );
         }
     }

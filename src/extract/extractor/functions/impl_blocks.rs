@@ -1,10 +1,8 @@
 use crate::core::ir::{ApiSurface, DefaultValue, MethodDef, TypeDef, UnsupportedPublicItem};
 use ahash::AHashMap;
 
-use super::super::SerdeDefaultsByType;
 use super::super::defaults::{ConstructorIndex, extract_default_values};
 use super::super::helpers::{build_rust_path, extract_binding_exclusion_reason, extract_cfg_condition, is_test_gated};
-use super::super::postprocess::{enum_default_variant_names, warn_on_default_disagreement};
 use super::extract_method;
 
 fn has_non_lifetime_generics(generics: &syn::Generics) -> bool {
@@ -58,7 +56,6 @@ pub(crate) fn extract_impl_block(
     result_wrapping_aliases: &ahash::AHashSet<String>,
     literal_consts: &AHashMap<String, DefaultValue>,
     constructors: &ConstructorIndex<'_>,
-    pending_serde_defaults: &SerdeDefaultsByType,
 ) {
     // Honor `#[cfg_attr(alef, alef(skip))]` (or bare `#[alef(skip)]`) on the impl block
     if extract_binding_exclusion_reason(&item.attrs).is_some() {
@@ -79,7 +76,6 @@ pub(crate) fn extract_impl_block(
             literal_consts,
             impl_cfg.as_deref(),
             constructors,
-            pending_serde_defaults,
         );
         return;
     }
@@ -297,7 +293,6 @@ fn extract_trait_impl_methods(
     literal_consts: &AHashMap<String, DefaultValue>,
     impl_cfg: Option<&str>,
     constructors: &ConstructorIndex<'_>,
-    pending_serde_defaults: &SerdeDefaultsByType,
 ) {
     let type_name = match &*item.self_ty {
         syn::Type::Path(p) => p.path.segments.last().map(|s| s.ident.to_string()),
@@ -391,21 +386,21 @@ fn extract_trait_impl_methods(
         // is `DefaultValue::Unresolved`'s job, not this flag's. ~keep
         let self_type = type_def.name.clone();
         type_def.has_default = true;
-        extract_default_values(item, &self_type, &mut type_def.fields, literal_consts, constructors);
-        if let Some(serde_defaults) = pending_serde_defaults.get(&type_def.rust_path) {
-            // Only the enums this crate has extracted so far (this file's own module, plus any
-            // earlier file in `sources`) are visible here — a manual `impl Default` naming a
-            // variant of an enum declared in a *later* source file cannot be proven to agree, so
-            // it falls back to `warn_on_default_disagreement`'s ordinary (warn-on-mismatch)
-            // behavior instead of guessing. See `agrees_via_enum_default`. ~keep
-            let enum_default_variants = enum_default_variant_names(&surface.enums);
-            warn_on_default_disagreement(
-                &type_def.rust_path,
-                &type_def.fields,
-                serde_defaults,
-                &enum_default_variants,
-            );
-        }
+        // `warn_on_default_disagreement` is deliberately not called here: at this point in the
+        // per-file walk, an enum declared in a source file this crate has not yet reached (or
+        // even the same file, later) is still absent from `surface.enums`, so `agrees_via_enum_
+        // default` could not prove a genuine agreement and would warn a false positive purely
+        // from `mod` declaration order. `postprocess::warn_on_default_disagreements` runs the
+        // same check once, after every source file has been extracted. ~keep
+        let binding_excluded = type_def.binding_excluded;
+        extract_default_values(
+            item,
+            &self_type,
+            &mut type_def.fields,
+            literal_consts,
+            constructors,
+            binding_excluded,
+        );
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {
