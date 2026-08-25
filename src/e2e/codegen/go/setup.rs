@@ -9,11 +9,22 @@ fn json_object_go_type<'a>(arg: &'a crate::e2e::config::ArgMapping, options_type
     arg.go_type.as_deref().or(arg.element_type.as_deref()).or(options_type)
 }
 
+/// Qualify `type_name` with `import_alias`, applying the same Go acronym uppercasing the real
+/// Go backend applies when it emits the type's declaration
+/// (`backends::go::gen_bindings::types::structs::gen_struct_type`,
+/// `backends::go::gen_bindings::types::enums`).
+///
+/// `type_name` here is an IR name straight off the Rust source (e.g. `JsonSchemaFormat`), not
+/// a Go identifier — every real emitter call site runs it through
+/// [`crate::codegen::naming::go_type_name`] before writing it out, and this snippet-literal path
+/// must resolve to the identical identifier or the generated Go does not compile.
+/// `go_type_name` is idempotent on a name that is already correctly cased (e.g. an explicit
+/// `arg.go_type` config override), so applying it unconditionally is safe. ~keep
 fn qualified_go_type(import_alias: &str, type_name: &str) -> String {
     if type_name.contains('.') {
         type_name.to_string()
     } else {
-        format!("{import_alias}.{type_name}")
+        format!("{import_alias}.{}", crate::codegen::naming::go_type_name(type_name))
     }
 }
 
@@ -1170,6 +1181,54 @@ mod file_dto_tests {
         assert!(
             !rendered.contains("MaxChars:"),
             "must not PascalCase the serde wire name into an unknown field identifier: {rendered}"
+        );
+    }
+
+    /// Task #363: `qualified_go_type` used to splice the raw IR type name straight after the
+    /// import alias (`format!("{import_alias}.{type_name}")`), instead of routing it through
+    /// `crate::codegen::naming::go_type_name` the way every real emitter call site does
+    /// (`backends::go::gen_bindings::types::structs::gen_struct_type`,
+    /// `backends::go::gen_bindings::types::enums`). For a type whose Rust name contains an
+    /// initialism, that produced a snippet referencing a type the real binding never declares
+    /// (`pkg.JsonSchemaFormat` instead of `pkg.JSONSchemaFormat`), which does not compile.
+    ///
+    /// This asserts the snippet generator's qualified type name is byte-identical to what the
+    /// Go backend's own naming helper produces for the same IR name — not merely that some name
+    /// is emitted, which would reproduce the original blind spot. ~keep
+    #[test]
+    fn qualified_dto_type_name_matches_the_go_backends_acronym_casing() {
+        let types = [TypeDef {
+            name: "SampleJsonSchema".into(),
+            fields: vec![FieldDef {
+                name: "strict".into(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
+                ..FieldDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let rendered = native_go_dto_literal(
+            &serde_json::json!({"strict": true}),
+            "SampleJsonSchema",
+            GoValueContext {
+                import_alias: "pkg",
+                type_defs: &types,
+                enums: &[],
+                files: &[],
+            },
+        )
+        .expect("no refusal")
+        .expect("native DTO");
+
+        let backend_name = crate::codegen::naming::go_type_name("SampleJsonSchema");
+        let expected = format!("pkg.{backend_name}");
+        assert!(
+            rendered.starts_with(&expected),
+            "snippet literal's qualified type name must be byte-identical to the Go backend's \
+             own naming helper (`{expected}`), got: {rendered}"
+        );
+        assert!(
+            !rendered.contains("pkg.SampleJsonSchema"),
+            "must not re-derive casing locally and emit the raw un-acronymed IR name: {rendered}"
         );
     }
 }
