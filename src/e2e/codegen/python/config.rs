@@ -346,7 +346,27 @@ pub(super) fn render_conftest(e2e_config: &E2eConfig, groups: &[FixtureGroup]) -
     // by a consumer extension (Extension::emit_e2e "python" arm).
     // alef falls through to the client/mock-server or minimal conftest below.
     if has_mock_server_fixtures {
-        // Mock-server pattern (non-HTTP fixtures)
+        // Mock-server pattern (non-HTTP fixtures). A fixture set can need the mock
+        // server AND read a file by path in the same run, so the chdir below is
+        // additive to this branch rather than exclusive to the has_file_fixtures
+        // branch further down -- an if/else here would silently drop the chdir
+        // whenever both kinds of fixture coexist, leaving file_path/bytes args
+        // unresolved against pytest's actual invocation cwd. ~keep
+        let file_fixtures_chdir = if has_file_fixtures {
+            let test_documents_dir = &e2e_config.test_documents_dir;
+            format!(
+                r#"
+# Change to the configured test-documents directory so that fixture file
+# paths like "pdf/fake_memo.pdf" resolve correctly when running pytest
+# from e2e/python/.
+_TEST_DOCUMENTS = _E2E_DIR.parent / "{test_documents_dir}"
+if _TEST_DOCUMENTS.is_dir():
+    os.chdir(_TEST_DOCUMENTS)
+"#
+            )
+        } else {
+            String::new()
+        };
         format!(
             r#"{header}"""Pytest configuration for e2e tests."""
 from __future__ import annotations
@@ -366,6 +386,7 @@ _HERE = Path(__file__).parent
 _E2E_DIR = _HERE.parent
 _MOCK_SERVER_BIN = _E2E_DIR / "rust" / "target" / "release" / "mock-server"
 _FIXTURES_DIR = _E2E_DIR.parent / "fixtures"
+{file_fixtures_chdir}
 
 
 @pytest.fixture(scope="session", autouse=True)
