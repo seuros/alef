@@ -403,9 +403,15 @@ mod tests {
             let type_defs = envelope_and_document_type_defs();
             let map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
             let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
-            FieldResolver::new(&HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new())
-                .with_ir_result_fields(map, Some(root_type.to_string()))
-                .with_ir_fields(reachable, excluded, optional)
+            FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .with_ir_result_fields(map, Some(root_type.to_string()))
+            .with_ir_fields(reachable, excluded, optional)
         }
 
         /// The defect: a call whose own root type (`Envelope`) never declares `chunks` — it is
@@ -439,10 +445,15 @@ mod tests {
             let type_defs = envelope_and_document_type_defs();
             let map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
             let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
-            let resolver =
-                FieldResolver::new(&HashMap::new(), &HashSet::new(), &HashSet::new(), &HashSet::new(), &HashSet::new())
-                    .with_ir_result_fields(map, None)
-                    .with_ir_fields(reachable, excluded, optional);
+            let resolver = FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .with_ir_result_fields(map, None)
+            .with_ir_fields(reachable, excluded, optional);
             assert!(chunks_field_declared_by_result(&resolver));
         }
     }

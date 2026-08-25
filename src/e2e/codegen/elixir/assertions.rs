@@ -47,11 +47,17 @@ pub(super) fn render_assertion(
     // so they are never treated as struct field accesses on the result.
     if let Some(f) = &assertion.field {
         match f.as_str() {
-            "chunks_have_content" | "chunks_have_embeddings" | "chunks_have_heading_context"
+            "chunks_have_content"
+            | "chunks_have_embeddings"
+            | "chunks_have_heading_context"
             | "first_chunk_starts_with_heading"
                 if !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver) =>
             {
-                let _ = writeln!(out, "      # skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
+                let _ = writeln!(
+                    out,
+                    "      # skipped: {}",
+                    FieldSkip::NotAvailableOnResultType.message(f)
+                );
                 return;
             }
             "chunks_have_content" => {

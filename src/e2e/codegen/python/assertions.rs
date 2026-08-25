@@ -52,7 +52,9 @@ pub(super) fn render_assertion(
     if let Some(f) = &assertion.field {
         if matches!(
             f.as_str(),
-            "chunks_have_content" | "chunks_have_embeddings" | "chunks_have_heading_context"
+            "chunks_have_content"
+                | "chunks_have_embeddings"
+                | "chunks_have_heading_context"
                 | "first_chunk_starts_with_heading"
         ) && !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver)
         {

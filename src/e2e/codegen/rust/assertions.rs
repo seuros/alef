@@ -200,7 +200,9 @@ pub fn render_assertion_with_streaming(
     // the is_valid_for_result check so they are never treated as field accesses.
     if let Some(f) = &assertion.field {
         match f.as_str() {
-            "chunks_have_content" | "chunks_have_embeddings" | "chunks_have_heading_context"
+            "chunks_have_content"
+            | "chunks_have_embeddings"
+            | "chunks_have_heading_context"
             | "first_chunk_starts_with_heading"
                 if !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver) =>
             {
@@ -1772,8 +1774,20 @@ mod tests {
         let assertion = make_assertion("is_true", Some("chunks_have_content"), None);
         let mut out = String::new();
         render_assertion(
-            &mut out, &assertion, "result", "my_mod", "dep", false, &[], resolver, false, false, false, false,
-            false, None,
+            &mut out,
+            &assertion,
+            "result",
+            "my_mod",
+            "dep",
+            false,
+            &[],
+            resolver,
+            false,
+            false,
+            false,
+            false,
+            false,
+            None,
         );
         out
     }
