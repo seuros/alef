@@ -161,27 +161,14 @@ pub(crate) fn scaffold_elixir_cargo(
     // Collect every upstream feature name referenced via `#[cfg(feature = "X")]` in the
     let referenced_features = crate::codegen::cfg::collect_cfg_features(api);
 
-    let base_features = if let Some(elixir_config) = config.elixir.as_ref() {
-        if let Some(nif_features) = elixir_config.nif_features.clone() {
-            nif_features.into_iter().collect()
-        } else {
-            let canonical_defaults = vec!["download", "serde", "config"];
-            let core_features = get_core_crate_features(config, &core_crate_dir);
-            canonical_defaults
-                .into_iter()
-                .filter(|f| core_features.contains(*f))
-                .map(|s| s.to_string())
-                .collect()
-        }
-    } else {
-        let canonical_defaults = vec!["download", "serde", "config"];
-        let core_features = get_core_crate_features(config, &core_crate_dir);
-        canonical_defaults
-            .into_iter()
-            .filter(|f| core_features.contains(*f))
-            .map(|s| s.to_string())
-            .collect()
-    };
+    // No `[crates.elixir] nif_features` override -> mirror the core crate's own declared
+    // `[features] default = [...]` list rather than any alef-side guess at feature identity.
+    // A consumer whose core crate declares no defaults simply forwards none. ~keep
+    let base_features: std::collections::BTreeSet<String> =
+        match config.elixir.as_ref().and_then(|c| c.nif_features.clone()) {
+            Some(nif_features) => nif_features.into_iter().collect(),
+            None => crate::scaffold::core_feature_closure(config, &[]).1,
+        };
     let mut always_features: std::collections::BTreeSet<String> = base_features;
     always_features.extend(referenced_features.clone());
 
@@ -620,39 +607,6 @@ end
     }
 
     Ok(files)
-}
-
-/// Extract feature names from the core crate's Cargo.toml `[features]` block.
-/// Returns a sorted set of features that actually exist in the core crate.
-fn get_core_crate_features(config: &ResolvedCrateConfig, core_crate_dir: &str) -> std::collections::BTreeSet<String> {
-    let mut features = std::collections::BTreeSet::new();
-
-    let root = match config.workspace_root.as_deref() {
-        Some(p) => p.to_path_buf(),
-        None => match std::env::current_dir() {
-            Ok(p) => p,
-            Err(_) => return features,
-        },
-    };
-
-    let cargo_toml = root.join("crates").join(core_crate_dir).join("Cargo.toml");
-    let Ok(content) = std::fs::read_to_string(&cargo_toml) else {
-        return features;
-    };
-
-    // `toml` 1.x's `FromStr for Value` parses a bare value, not a document; use `from_str`
-    // or every real Cargo.toml silently yields an empty feature list. ~keep
-    let Ok(manifest) = toml::from_str::<toml::Value>(&content) else {
-        return features;
-    };
-    let Some(feature_table) = manifest.get("features").and_then(toml::Value::as_table) else {
-        return features;
-    };
-    for name in feature_table.keys() {
-        features.insert(name.to_string());
-    }
-
-    features
 }
 
 fn elixir_nif_targets(config: &ResolvedCrateConfig) -> Vec<String> {

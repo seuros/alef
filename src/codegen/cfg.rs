@@ -574,8 +574,7 @@ pub fn resolve_against_workspace_root(config: &ResolvedCrateConfig, relative: &P
 /// Elixir NIF into one whose function silently returns `:nif_not_loaded` at runtime while the
 /// generated docs and type stubs keep advertising it. This is a best-effort, read-only check: a
 /// missing or unparseable manifest is treated as "nothing to verify yet", not an error, mirroring
-/// `scaffold::languages::elixir::get_core_crate_features`'s same permissive philosophy for the
-/// same class of file. ~keep
+/// `scaffold::core_feature_closure`'s same permissive philosophy for the same class of file. ~keep
 pub fn warn_on_undeclared_binding_cfg_features(api: &ApiSurface, language: Language, manifest_path: &Path) {
     let Some(enabled_by_default) = read_default_enabled_cargo_features(manifest_path) else {
         return;
