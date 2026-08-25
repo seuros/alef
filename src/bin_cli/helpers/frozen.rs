@@ -25,8 +25,17 @@ mod tests;
 /// generation can write it cleanly. ~keep
 pub(crate) struct FrozenFile {
     pub(crate) path: String,
-    /// The literal marker line to add to the top of the file, or `None` when
+    /// The literal marker line `alef adopt` would add to the top of the file, or `None` when
     /// the format has no comment syntax to carry one (`.json`, lockfiles).
+    ///
+    /// Informational only -- [`report_lines`] never instructs a reader to paste this in by
+    /// hand. `crate::cli::pipeline::generate::write::report_refused_writes` (the write guard's
+    /// own refusal message) is explicit that hand-adding the marker is unsafe: "a refusal can
+    /// be protecting a deliberate hand-edit, and stamping it blind re-enables exactly the
+    /// clobbering the guard exists to prevent." `alef verify`'s report used to say the opposite
+    /// -- "add the marker shown" -- which pointed a reader at the one workflow alef's own write
+    /// guard warns against, instead of at `alef adopt`, the reviewed, diffed path that exists
+    /// for exactly this. ~keep
     pub(crate) remedy: Option<String>,
     /// A leading line in the existing file that looks like a failed attempt at a marker --
     /// see [`crate::core::hash::near_miss_marker`] -- so the report can point at what's already
@@ -217,8 +226,11 @@ pub(crate) fn report_lines(frozen: &[FrozenFile]) -> Vec<String> {
     }
     let mut lines = vec![
         "Frozen generated files detected (alef owns these paths but the files carry no provenance \
-         marker, so alef refuses to write them -- review each file, then either add the marker shown \
-         and rerun `alef generate`, or delete the file so generation can write it cleanly):"
+         marker, so alef refuses to write them -- review each file, then either run `alef adopt \
+         <path> --write` to take ownership, or delete the file so generation can write it cleanly. \
+         Never hand-add the marker line: alef's own write guard treats that as re-enabling exactly \
+         the clobbering it exists to prevent -- see \
+         `crate::cli::pipeline::generate::write::report_refused_writes`):"
             .to_owned(),
     ];
     for file in adoptable {
@@ -230,7 +242,10 @@ pub(crate) fn report_lines(frozen: &[FrozenFile]) -> Vec<String> {
             ));
         }
         lines.push(match &file.remedy {
-            Some(remedy) => format!("    add marker: {remedy}"),
+            Some(remedy) => format!(
+                "    run `alef adopt <path> --write` to add it (marker `alef adopt` would write: \
+                 {remedy})"
+            ),
             None => "    this format has no comment syntax to carry a marker, so alef proves ownership \
                      through the committed .alef-ownership.toml record instead -- run `alef adopt <path> \
                      --write` to record it there, or delete the file so the next `alef generate` writes \
