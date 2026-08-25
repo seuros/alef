@@ -247,15 +247,18 @@ fn collect_coverage_ledger_references(snippet_dirs: &[PathBuf], missing_cells: M
 /// fixture generated each tracked snippet file.
 ///
 /// Read from every coverage ledger beneath the configured snippet roots. A fixture/language
-/// cell an `exclude_functions` list (or any other exclusion surface
-/// `function_excluded_for_language` folds in -- crate-wide `[crates.exclude]`, a per-language
-/// `exclude_types`/`[crates.<lang>].opaque_types` capability gap, a per-crate
-/// `[workspace.crates."<name>"]` override, or a `#[alef::skip]`/`#[alef::exclude]` attribute
-/// upstream in the IR) dropped never enters `expected` in the first place -- see
-/// `e2e::snippets::mod::generate`'s `~keep` comment above `coverage.expected.push`. Reusing that
-/// set here, rather than re-deriving which functions are excluded from `alef.toml` a second
-/// time, is what keeps the language-parity check from disagreeing with the generator that
-/// produced the very tree it is checking. ~keep
+/// cell `function_excluded_for_language` drops never enters `expected` in the first place --
+/// see `e2e::snippets::mod::generate`'s `~keep` comment above `coverage.expected.push`. That
+/// gate reuses [`crate::docs::language_pages::excludes::language_excludes`], which folds the
+/// crate-wide `[crates.exclude].functions` list together with every per-language
+/// `[crates.<lang>].exclude_functions` list `language_excludes` has an arm for (including the
+/// FFI-derived families' own `[crates.ffi].exclude_functions` union). It does NOT consult
+/// `[opaque_types]`, `#[alef::skip]`/`#[doc(hidden)]` (the `binding_excluded` IR flag, which
+/// applies uniformly across every language rather than per-language), or the type half of
+/// `language_excludes`'s return value -- `function_excluded_for_language` only ever checks
+/// function names. Reusing `language_excludes` here, rather than re-deriving which functions
+/// are excluded from `alef.toml` a second time, is what keeps the language-parity check from
+/// disagreeing with the generator that produced the very tree it is checking. ~keep
 #[derive(Debug, Clone, Default)]
 struct LedgerExpectations {
     expected_by_fixture: BTreeMap<String, BTreeSet<Language>>,
