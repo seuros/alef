@@ -870,6 +870,93 @@ mod tests {
         );
     }
 
+    /// `display: true` on a `Show` path whose IR-resolved type is a struct/enum this crate
+    /// defines must be downgraded to the debug formatter -- `extract` never records `Display`
+    /// impls (`STD_TRAITS` discards them), so `println!("{}", result.data)` against a `Data`
+    /// struct with no hand-written `Display` is a snippet that does not compile. A sibling
+    /// `Show` on a plain `String` field must keep `display: true` unchanged -- the whole point
+    /// of the flag.
+    #[test]
+    fn resolve_downgrades_display_true_against_an_ir_struct_field_but_keeps_it_for_a_scalar() {
+        use crate::core::ir::{FieldDef, FunctionDef, TypeDef, TypeRef};
+
+        let mut fixture = fixture();
+        fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![
+            FixtureDocsOperation::Show {
+                path: "data".into(),
+                display: true,
+            },
+            FixtureDocsOperation::Show {
+                path: "text".into(),
+                display: true,
+            },
+        ];
+        let config = config();
+
+        let process_result = TypeDef {
+            name: "ProcessResult".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "data".to_string(),
+                    ty: TypeRef::Named("Data".to_string()),
+                    ..FieldDef::default()
+                },
+                FieldDef {
+                    name: "text".to_string(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                },
+            ],
+            ..TypeDef::default()
+        };
+        let data = TypeDef {
+            name: "Data".to_string(),
+            ..TypeDef::default()
+        };
+        let process_fn = FunctionDef {
+            name: "process".to_string(),
+            return_type: TypeRef::Named("ProcessResult".to_string()),
+            ..FunctionDef::default()
+        };
+
+        let operations = resolve(
+            &fixture,
+            &config,
+            "rust",
+            &[process_result, data],
+            std::slice::from_ref(&process_fn),
+        );
+        let by_path = |path: &str| operations.iter().find(|op| op.expression.ends_with(path)).unwrap();
+
+        assert!(
+            !by_path("data").display,
+            "a struct-typed field must be downgraded to the debug formatter"
+        );
+        assert!(
+            by_path("text").display,
+            "a scalar field must keep its authored display: true"
+        );
+
+        let rust_output = crate::e2e::template_env::render(
+            "rust/snippet_body.rs.jinja",
+            minijinja::context! { imports => Vec::<String>::new(), body => vec!["let result = process();"],
+            is_async => false, presentation => operations },
+        );
+        assert!(
+            rust_output.contains("println!(\"{:?}\", result.data);"),
+            "{rust_output}"
+        );
+        assert!(
+            rust_output.contains("println!(\"{}\", result.text);"),
+            "{rust_output}"
+        );
+    }
+
     /// The shape every fixture-driven (non-hand-authored) docs fixture takes: `docs` is
     /// present so the fixture DOES get a snippet, but nobody hand-annotated `shows` or
     /// `presentation` -- the only field knowledge lives in `assertions`. Before this fell
