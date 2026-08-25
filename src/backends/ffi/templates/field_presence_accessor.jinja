@@ -1,0 +1,39 @@
+{% if source_cfg -%}
+#[cfg({{ source_cfg }})]
+{% endif -%}
+/// Report whether the `{{ field_name }}` field on a `{{ type_name }}` is `Some`.
+///
+/// `{{ prefix }}_{{ type_snake }}_{{ field_name }}` cannot distinguish a `None` field from a
+/// legitimate zero-valued `Some` at the C ABI boundary -- there is no null representation for a
+/// numeric return, so both collapse to the same sentinel. Call this function first: `1` means
+/// the field getter's return value is meaningful, `0` means the field is absent and the getter's
+/// sentinel must be ignored, `-1` reports an invalid handle (see `{{ prefix }}_last_error_code`).
+/// # Safety
+/// Pointer must be a valid handle returned by this library.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn {{ prefix }}_{{ type_snake }}_has_{{ field_name }}(handle: AlefHandle) -> i32 {
+    catch_ffi_panic(-1, || {
+    if handle == 0 {
+        return -1;
+    }
+    let result = with_handle::<{% if serialized_handle %}SerializedHandle<{{ qualified }}>{% else %}{{ qualified }}{% endif %}, _>(handle, |{% if serialized_handle %}snapshot{% else %}obj{% endif %}| {
+{% if serialized_handle %}
+        serde_json::from_str::<{{ qualified }}>(&snapshot.json).map(|obj| obj.{{ field_name }}.is_some() as i32)
+{% else %}
+        obj.{{ field_name }}.is_some() as i32
+{% endif %}
+    });
+{% if serialized_handle %}
+    match result {
+        Ok(Ok(value)) => value,
+        Ok(Err(error)) => { set_last_error(2, &error.to_string()); -1 }
+        Err(error) => { set_handle_error(&error); -1 }
+    }
+{% else %}
+    match result {
+        Ok(value) => value,
+        Err(error) => { set_handle_error(&error); -1 }
+    }
+{% endif %}
+    })
+}

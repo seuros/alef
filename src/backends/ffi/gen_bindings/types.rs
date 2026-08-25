@@ -241,6 +241,50 @@ pub(super) fn gen_field_accessor(
     ))
 }
 
+/// True when a field's FFI getter cannot distinguish `None` from a legitimate zero-valued
+/// `Some` using its return value alone -- i.e. the C ABI has no null representation for the
+/// field's leaf type, so both collapse to the same sentinel in `null_return_value`.
+/// Pointer-shaped returns (String/Path/Json/Bytes/Vec/Map/Char) and handle-shaped returns
+/// (Named types, where handle `0` is reserved and `insert_handle` never allocates it) already
+/// carry a real null and are excluded. Recurses through a nested `Option<Option<T>>` (the
+/// update-struct "field not touched" pattern) because the outer getter still emits one sentinel
+/// for both `None` and `Some(None)`. ~keep
+pub(super) fn optional_field_needs_presence_accessor(ty: &TypeRef) -> bool {
+    match ty {
+        TypeRef::Primitive(_) | TypeRef::Duration => true,
+        TypeRef::Optional(inner) => optional_field_needs_presence_accessor(inner),
+        _ => false,
+    }
+}
+
+/// Generate a companion `{prefix}_{type_snake}_has_{field_name}` presence accessor for an
+/// optional scalar field, so callers can distinguish `None` from a zero-valued `Some` before
+/// trusting the sibling getter's return value. Only call when
+/// `optional_field_needs_presence_accessor(&field.ty)` is true.
+pub(super) fn gen_field_presence_accessor(typ: &TypeDef, field: &FieldDef, prefix: &str, core_import: &str) -> String {
+    let type_snake = c_symbol_component(&typ.name);
+    let type_name = &typ.name;
+    let qualified_base = core_type_path(typ, core_import);
+    let qualified = if typ.has_lifetime_params {
+        format!("{qualified_base}<'static>")
+    } else {
+        qualified_base
+    };
+
+    crate::backends::ffi::template_env::render(
+        "field_presence_accessor.jinja",
+        context! {
+            field_name => &field.name,
+            type_name => type_name,
+            type_snake => type_snake,
+            prefix => prefix,
+            qualified => qualified,
+            serialized_handle => typ.has_lifetime_params,
+            source_cfg => typ.cfg.as_deref().unwrap_or(""),
+        },
+    )
+}
+
 /// Unwrap a field type to its underlying `Named` type name, peeling an outer
 /// `Optional`. Returns `None` for primitives, strings, collections, etc.
 fn underlying_named_type(ty: &TypeRef) -> Option<&str> {

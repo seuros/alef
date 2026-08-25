@@ -1,4 +1,5 @@
 use super::super::FfiBackend;
+use super::super::types::{gen_field_accessor, gen_field_presence_accessor, optional_field_needs_presence_accessor};
 use super::common::*;
 use crate::core::backend::Backend;
 use crate::core::ir::*;
@@ -629,4 +630,317 @@ fn test_binding_excluded_field_emits_no_accessor() {
         excluded.contains("_name("),
         "sibling non-excluded fields must still emit accessors"
     );
+}
+
+/// `optional_field_needs_presence_accessor` decides which leaf types collapse `None` into the
+/// same sentinel a legitimate `Some` can also produce -- the exact defect a `has_<field>`
+/// companion getter exists to fix. Table-driven over every primitive plus `Duration`
+/// (ambiguous: the C ABI has no null for a number, so both need a presence companion) and every
+/// pointer/handle-shaped leaf (already distinguishable via a real null pointer or a
+/// reserved-zero handle -- `insert_handle` never allocates handle `0` -- so no companion is
+/// needed). Also covers the nested `Option<Option<Primitive>>` update-struct shape, whose outer
+/// getter still emits one sentinel for both `None` and `Some(None)`. ~keep
+#[test]
+fn presence_accessor_predicate_covers_every_optional_leaf_shape() {
+    let ambiguous_cases = [
+        ("f32", TypeRef::Primitive(PrimitiveType::F32)),
+        ("f64", TypeRef::Primitive(PrimitiveType::F64)),
+        ("i32", TypeRef::Primitive(PrimitiveType::I32)),
+        ("u64", TypeRef::Primitive(PrimitiveType::U64)),
+        ("bool", TypeRef::Primitive(PrimitiveType::Bool)),
+        ("usize", TypeRef::Primitive(PrimitiveType::Usize)),
+        ("Duration", TypeRef::Duration),
+        (
+            "nested Option<Option<Primitive>>",
+            TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I32))),
+        ),
+    ];
+    for (label, ty) in ambiguous_cases {
+        assert!(
+            optional_field_needs_presence_accessor(&ty),
+            "{label} getter has no null representation and must require a presence companion"
+        );
+    }
+
+    let distinguishable_cases = [
+        ("String", TypeRef::String),
+        ("Named", TypeRef::Named("Child".to_string())),
+        ("Bytes", TypeRef::Bytes),
+        ("Path", TypeRef::Path),
+        ("Json", TypeRef::Json),
+        ("Char", TypeRef::Char),
+    ];
+    for (label, ty) in distinguishable_cases {
+        assert!(
+            !optional_field_needs_presence_accessor(&ty),
+            "{label} getter already returns a real null/reserved-zero sentinel and must not get a presence companion"
+        );
+    }
+}
+
+/// Wiring test: `gen_lib_rs`, invoked through the real `Backend::generate_bindings` entry point
+/// (not a direct helper call), must emit a `has_<field>` companion for every optional field whose
+/// leaf type is ambiguous, and must NOT emit one for a field that already has a real null. This
+/// proves the gate in `lib_rs.rs`'s field loop actually reaches every shape it claims to, for
+/// every scalar kind named in the consumer's report -- not just floats. ~keep
+#[test]
+fn generated_bindings_emit_presence_companion_for_every_ambiguous_optional_field_only() {
+    let fields = vec![
+        FieldDef {
+            name: "margin_fraction".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::F64),
+            optional: true,
+            ..FieldDef::default()
+        },
+        FieldDef {
+            name: "retry_count".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::I32),
+            optional: true,
+            ..FieldDef::default()
+        },
+        FieldDef {
+            name: "max_bytes".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U64),
+            optional: true,
+            ..FieldDef::default()
+        },
+        FieldDef {
+            name: "enabled".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::Bool),
+            optional: true,
+            ..FieldDef::default()
+        },
+        FieldDef {
+            name: "timeout".to_string(),
+            ty: TypeRef::Duration,
+            optional: true,
+            ..FieldDef::default()
+        },
+        FieldDef {
+            name: "label".to_string(),
+            ty: TypeRef::String,
+            optional: true,
+            ..FieldDef::default()
+        },
+    ];
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "SampleConfig".to_string(),
+            rust_path: "my_lib::SampleConfig".to_string(),
+            fields,
+            is_clone: true,
+            has_serde: true,
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+    let config = resolved_one(
+        r#"
+[workspace]
+languages = ["ffi"]
+
+[[crates]]
+name = "my-lib"
+sources = ["src/lib.rs"]
+
+[crates.ffi]
+prefix = "smp"
+"#,
+    );
+    let backend = FfiBackend;
+    let lib = backend
+        .generate_bindings(&api, &config)
+        .unwrap()
+        .into_iter()
+        .find(|f| f.path.ends_with("lib.rs"))
+        .unwrap()
+        .content;
+
+    for field_name in ["margin_fraction", "retry_count", "max_bytes", "enabled", "timeout"] {
+        let has_fn_signature = format!("fn smp_sample_config_has_{field_name}(handle: AlefHandle) -> i32");
+        assert!(
+            lib.contains(&has_fn_signature),
+            "expected presence companion `{has_fn_signature}` for ambiguous optional field, got:\n{lib}"
+        );
+        assert!(
+            lib.contains(&format!("obj.{field_name}.is_some() as i32")),
+            "presence companion for `{field_name}` must check obj.{field_name}.is_some(), got:\n{lib}"
+        );
+    }
+
+    assert!(
+        !lib.contains("smp_sample_config_has_label"),
+        "String field already returns a real null on None and must not get a presence companion, got:\n{lib}"
+    );
+}
+
+/// Compiles and runs the ACTUAL generated `has_<field>` companion and its sibling getter
+/// together, proving at runtime -- not just by string-matching the rendered source -- that
+/// `None` and a zero-valued `Some` are distinguishable for every scalar leaf named in the
+/// consumer's report (f64, i32, u64, bool, Duration). Round-trips BOTH directions: the getter's
+/// own return value collapses `None` and `Some(zero)` to the identical sentinel (asserted first,
+/// to prove the underlying ambiguity the presence companion exists to resolve), while the
+/// companion distinguishes them via `is_some()` in both the absent (`0`) and present (`1`) case.
+/// ~keep
+#[test]
+fn presence_companion_distinguishes_none_from_zero_valued_some_at_runtime() {
+    let field = |name: &str, ty: TypeRef| FieldDef {
+        name: name.to_string(),
+        ty,
+        optional: true,
+        ..FieldDef::default()
+    };
+    let fields = vec![
+        field("margin_fraction", TypeRef::Primitive(PrimitiveType::F64)),
+        field("retry_count", TypeRef::Primitive(PrimitiveType::I32)),
+        field("max_bytes", TypeRef::Primitive(PrimitiveType::U64)),
+        field("enabled", TypeRef::Primitive(PrimitiveType::Bool)),
+        field("timeout", TypeRef::Duration),
+    ];
+    let typ = TypeDef {
+        name: "SampleConfig".to_string(),
+        rust_path: "sample_core::SampleConfig".to_string(),
+        fields: fields.clone(),
+        ..TypeDef::default()
+    };
+
+    let mut generated = String::new();
+    for f in &fields {
+        generated.push_str(
+            &gen_field_accessor(
+                &typ,
+                f,
+                "smp",
+                "sample_core",
+                &ahash::AHashMap::new(),
+                &ahash::AHashSet::new(),
+                &ahash::AHashSet::new(),
+                &std::collections::HashMap::new(),
+            )
+            .expect("field accessor"),
+        );
+        generated.push('\n');
+        generated.push_str(&gen_field_presence_accessor(&typ, f, "smp", "sample_core"));
+        generated.push('\n');
+    }
+
+    let last_error = crate::backends::ffi::template_env::render(
+        "last_error.jinja",
+        minijinja::context! {
+            prefix => "smp",
+            builtin_prefix => "",
+            error_code_impls => Vec::<String>::new(),
+            has_error_code_impls => false,
+            taxonomy => Vec::<String>::new(),
+            no_error_code => 0,
+            conversion_error_code => 1,
+            unknown_error_code => 2,
+            panic_error_code => 3,
+            invalid_handle_error_code => 4,
+        },
+    );
+    // `insert_serialized_handle` pulls in `serde`/`serde_json`, unneeded by this harness (none of
+    // these fields are serialized handles) and unavailable to a bare `rustc` invocation with no
+    // Cargo dependency graph. Strip it, matching the same excision `handle_registry.rs`'s own
+    // compile-and-run regression test uses for the identical reason.
+    let mut handle_registry =
+        crate::backends::ffi::template_env::render("handle_registry.rs.jinja", minijinja::context! {});
+    let serialized_start = handle_registry
+        .find("struct SerializedHandle")
+        .expect("serialized helper start");
+    let core_registry_resume = handle_registry[serialized_start..]
+        .find("fn with_handle")
+        .map(|offset| serialized_start + offset)
+        .expect("core registry helpers resume");
+    handle_registry.replace_range(serialized_start..core_registry_resume, "");
+
+    let source = format!(
+        r#"
+use std::cell::RefCell;
+use std::ffi::{{c_char, CString}};
+
+mod sample_core {{
+    #[derive(Clone, Default)]
+    pub struct SampleConfig {{
+        pub margin_fraction: Option<f64>,
+        pub retry_count: Option<i32>,
+        pub max_bytes: Option<u64>,
+        pub enabled: Option<bool>,
+        pub timeout: Option<std::time::Duration>,
+    }}
+}}
+
+{last_error}
+{handle_registry}
+{generated}
+
+fn main() {{
+  unsafe {{
+    let absent = insert_handle(sample_core::SampleConfig::default()).expect("insert absent");
+    let present_zero = insert_handle(sample_core::SampleConfig {{
+        margin_fraction: Some(0.0),
+        retry_count: Some(0),
+        max_bytes: Some(0),
+        enabled: Some(false),
+        timeout: Some(std::time::Duration::ZERO),
+    }})
+    .expect("insert present-zero");
+
+    // Direction 1: the getter alone cannot tell `None` from `Some(zero)` -- both collapse to
+    // the same sentinel. This is the defect being guarded against, asserted here so a future
+    // regression that removes the presence companion's *reason to exist* is still caught.
+    assert_eq!(smp_sample_config_margin_fraction(absent), 0.0);
+    assert_eq!(smp_sample_config_margin_fraction(present_zero), 0.0);
+    assert_eq!(smp_sample_config_retry_count(absent), 0);
+    assert_eq!(smp_sample_config_retry_count(present_zero), 0);
+    assert_eq!(smp_sample_config_max_bytes(absent), 0);
+    assert_eq!(smp_sample_config_max_bytes(present_zero), 0);
+    assert_eq!(smp_sample_config_enabled(absent), 0);
+    assert_eq!(smp_sample_config_enabled(present_zero), 0);
+    assert_eq!(smp_sample_config_timeout(absent), 0);
+    assert_eq!(smp_sample_config_timeout(present_zero), 0);
+
+    // Direction 2: the presence companion distinguishes them, in both the absent (0) and
+    // present (1) case, for every scalar leaf.
+    assert_eq!(smp_sample_config_has_margin_fraction(absent), 0);
+    assert_eq!(smp_sample_config_has_margin_fraction(present_zero), 1);
+    assert_eq!(smp_sample_config_has_retry_count(absent), 0);
+    assert_eq!(smp_sample_config_has_retry_count(present_zero), 1);
+    assert_eq!(smp_sample_config_has_max_bytes(absent), 0);
+    assert_eq!(smp_sample_config_has_max_bytes(present_zero), 1);
+    assert_eq!(smp_sample_config_has_enabled(absent), 0);
+    assert_eq!(smp_sample_config_has_enabled(present_zero), 1);
+    assert_eq!(smp_sample_config_has_timeout(absent), 0);
+    assert_eq!(smp_sample_config_has_timeout(present_zero), 1);
+
+    // An invalid handle reports -1 on the presence channel too, distinct from both 0 and 1.
+    assert_eq!(smp_sample_config_has_margin_fraction(0), -1);
+  }}
+}}
+"#
+    );
+
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let source_path = directory.path().join("presence_companion.rs");
+    let binary_path = directory.path().join("presence-companion-test");
+    std::fs::write(&source_path, &source).expect("write compile harness");
+    let compile = std::process::Command::new("rustc")
+        .current_dir(directory.path())
+        .args(["--edition=2024", "-o"])
+        .arg(&binary_path)
+        .arg(&source_path)
+        .output()
+        .expect("run rustc");
+    assert!(
+        compile.status.success(),
+        "{}\n---source---\n{source}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&binary_path)
+        .current_dir(directory.path())
+        .output()
+        .expect("run compiled harness");
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }

@@ -27,6 +27,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "field_accessor_header.jinja",
         include_str!("templates/field_accessor_header.jinja"),
     ),
+    (
+        "field_presence_accessor.jinja",
+        include_str!("templates/field_presence_accessor.jinja"),
+    ),
     ("enum_from_i32.jinja", include_str!("templates/enum_from_i32.jinja")),
     ("enum_to_i32.jinja", include_str!("templates/enum_to_i32.jinja")),
     ("enum_free.jinja", include_str!("templates/enum_free.jinja")),

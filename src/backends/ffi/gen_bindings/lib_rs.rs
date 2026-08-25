@@ -13,8 +13,9 @@ use crate::backends::ffi::gen_bindings::lib_setup::{
 };
 use crate::backends::ffi::gen_bindings::types::{
     gen_enum_free, gen_enum_from_i32, gen_enum_from_i32_rs_helper, gen_enum_from_json, gen_enum_to_i32,
-    gen_enum_to_json, gen_enum_to_string, gen_field_accessor, gen_opaque_static_constructor, gen_type_free,
-    gen_type_from_json, gen_type_new, gen_type_to_json, is_static_constructor,
+    gen_enum_to_json, gen_enum_to_string, gen_field_accessor, gen_field_presence_accessor,
+    gen_opaque_static_constructor, gen_type_free, gen_type_from_json, gen_type_new, gen_type_to_json,
+    is_static_constructor, optional_field_needs_presence_accessor,
 };
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
@@ -266,6 +267,12 @@ pub(super) fn gen_lib_rs(api: &ApiSurface, prefix: &str, config: &ResolvedCrateC
                     clone_names,
                     fields_c_types,
                 )?);
+                // A `has_<field>` companion is required whenever the field's own getter has no
+                // null representation to signal `None` -- see
+                // `optional_field_needs_presence_accessor` for exactly which shapes collapse.
+                if field.optional && optional_field_needs_presence_accessor(&field.ty) {
+                    builder.add_item(&gen_field_presence_accessor(typ, field, prefix, &core_import));
+                }
             }
         }
 
