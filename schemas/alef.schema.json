@@ -2438,7 +2438,7 @@
         },
         "nif_features": {
           "default": null,
-          "description": "NIF crate `[features]` to forward to the core crate. If empty or not set,\ndefaults to [\"download\", \"serde\", \"config\"]. Set to an empty list to\ndisable default feature forwarding (e.g., when the core crate does not\nhave these features).",
+          "description": "NIF crate `[features]` to forward to the core crate. If not set, defaults to\nthe core crate's own declared `[features] default = [...]` list (read from its\n`Cargo.toml`), so a consumer whose core crate declares no defaults gets no\nimplicit forwarding. Set to an empty list to disable default feature forwarding\noutright regardless of what the core crate declares.",
           "items": {
             "type": "string"
           },
@@ -8216,7 +8216,7 @@
       "type": "object"
     }
   },
-  "$id": "https://github.com/xberg-io/alef/releases/download/v0.67.7/alef.schema.json",
+  "$id": "https://github.com/xberg-io/alef/releases/download/v0.68.0/alef.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "JSON Schema for the JSON representation of alef.toml.",
@@ -8336,6 +8336,6 @@
   ],
   "title": "Alef configuration",
   "type": "object",
-  "version": "0.67.7",
-  "x-alef-version": "0.67.7"
+  "version": "0.68.0",
+  "x-alef-version": "0.68.0"
 }
