@@ -124,5 +124,9 @@ fn test_cfg_disjoint_same_name_structs_are_not_collapsed_here() {
     assert!(surface.types.iter().all(|t| t.rust_path == "test_crate::Config"));
     assert!(surface.types.iter().all(|t| !t.binding_excluded));
     let cfgs: std::collections::BTreeSet<_> = surface.types.iter().map(|t| t.cfg.clone()).collect();
-    assert_eq!(cfgs.len(), 2, "the two entries must carry the two distinct cfg gates, not collapse to one");
+    assert_eq!(
+        cfgs.len(),
+        2,
+        "the two entries must carry the two distinct cfg gates, not collapse to one"
+    );
 }
