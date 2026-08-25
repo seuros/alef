@@ -103,6 +103,10 @@ public final class FixtureSink: SwiftDocumentSinkBridge {
     public func lastStats() -> String? { return nil }
 
     public func record(entries: [String]) {}
+
+    public func sinkTotals() -> String {
+        return "{}"
+    }
 }
 "#;
 
@@ -152,7 +156,14 @@ fn defaulted(mut m: MethodDef) -> MethodDef {
 /// `[String]` for them while the shim declares whatever the Rust extern block declares -- and the
 /// two only agree when the marshaller understands that a `Vec<Named>` is a `Vec<String>`. Before
 /// this fixture grew those methods the generator emitted `-> RustString { return
-/// bridge.statsHistory() }`, which is a `[String]` returned as a `RustString`. ~keep
+/// bridge.statsHistory() }`, which is a `[String]` returned as a `RustString`.
+///
+/// `sink_totals` is the `Map<_, Named>` counterpart (alef-tasks #309): a bridged `Named` value
+/// crosses as one JSON blob, and that rule does not change when the `Named` is a `Map` value --
+/// swift-bridge cannot bridge `HashMap<K, V>` at all, Named or not. The protocol must declare a
+/// plain `String`, not `[String: String]` (which would double-encode every value), and the box
+/// shim's return marshal must wrap the bridge call in `RustString(...)` to match the declared
+/// `RustString` FFI return type. ~keep
 fn fixture_api() -> (ApiSurface, ResolvedCrateConfig) {
     let trait_def = TypeDef {
         name: "DocumentSink".to_string(),
@@ -205,6 +216,15 @@ fn fixture_api() -> (ApiSurface, ResolvedCrateConfig) {
                 TypeRef::Unit,
                 None,
             ),
+            defaulted(method(
+                "sink_totals",
+                vec![],
+                TypeRef::Map(
+                    Box::new(TypeRef::String),
+                    Box::new(TypeRef::Named("SinkStats".to_string())),
+                ),
+                None,
+            )),
         ],
         ..Default::default()
     };
@@ -340,9 +360,16 @@ fn swift_driver() -> Option<PathBuf> {
 /// The gate: alef's generated trait-box output must build in the two-target layout it is
 /// generated for.
 ///
-/// Sabotage check for this test -- restoring the `has_default_impl` skip in
-/// `excluded_named_type_bridge_policy` reproduces the shipped 0.67.5 emission and this test must
-/// fail with `cannot find type 'PageLayout' in scope` from `Sources/RustBridge/`.
+/// Sabotage checks for this test:
+/// - restoring the `has_default_impl` skip in `excluded_named_type_bridge_policy` reproduces the
+///   shipped 0.67.5 emission and this test must fail with `cannot find type 'PageLayout' in
+///   scope` from `Sources/RustBridge/`.
+/// - reverting `swift_type_name`'s `Map` arm to recurse (alef-tasks #309) makes `sinkTotals()`
+///   declare `[String: String]`, which does not match `String` on `FixtureSink`, and this test
+///   must fail with a protocol-conformance error naming `sinkTotals`.
+/// - reverting the `swift_shim_return_marshal` catch-all wrap makes the box shim `return
+///   bridge.sinkTotals()` without `RustString(...)`, and this test must fail with a type
+///   mismatch naming `RustString` in `Swift{Trait}Box.swift`.
 #[test]
 fn generated_trait_box_package_compiles() {
     let Some(swift) = swift_driver() else { return };
