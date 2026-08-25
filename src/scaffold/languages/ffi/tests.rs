@@ -611,3 +611,111 @@ fn ffi_manifest_reconciliation_restores_the_clippy_workspace_lints_rationale_com
     );
     toml::from_str::<toml::Value>(&reconciled).expect("valid reconciled TOML");
 }
+
+/// Regression for the alef/poly generator-formatter oscillation described in task #373: poly's
+/// tree-sitter-based CMake formatter converges to this exact (visually uneven, but idempotent
+/// and deterministic) indentation as its fixed point for a `find_package` config module —
+/// verified empirically against `poly fmt --fix --fix-generated` and against the byte-identical
+/// shape already committed in real consumer repos' `*-ffi-config.cmake` files. A "cleaner"
+/// uniformly-indented version would get silently rewritten by poly on every regen. ~keep
+#[test]
+fn ffi_cmake_config_matches_polys_canonical_fixed_point() {
+    let files = scaffold_ffi(&crate::core::ir::ApiSurface::default(), &minimal_config()).expect("scaffold");
+    let cmake = files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("-ffi-config.cmake"))
+        .expect("cmake config module must be emitted");
+
+    const EXPECTED: &str = r#"# my-lib-ffi CMake config-mode find module
+#
+# Defines the imported target:
+#   my-lib-ffi::my-lib-ffi
+#
+# Usage:
+#   find_package(my-lib-ffi REQUIRED)
+#   target_link_libraries(myapp PRIVATE my-lib-ffi::my-lib-ffi)
+
+if(TARGET my-lib-ffi::my-lib-ffi)
+return()
+endif()
+
+get_filename_component(_FFI_CMAKE_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
+get_filename_component(_FFI_PREFIX "${_FFI_CMAKE_DIR}/.." ABSOLUTE)
+
+find_library(_FFI_LIBRARY
+  NAMES my_lib_ffi libmy_lib_ffi
+  PATHS "${_FFI_PREFIX}/lib"
+  NO_DEFAULT_PATH
+)
+if(NOT _FFI_LIBRARY)
+find_library(_FFI_LIBRARY NAMES my_lib_ffi libmy_lib_ffi)
+endif()
+
+find_path(_FFI_INCLUDE_DIR
+  NAMES my_lib.h
+  PATHS "${_FFI_PREFIX}/include"
+  NO_DEFAULT_PATH
+)
+if(NOT _FFI_INCLUDE_DIR)
+find_path(_FFI_INCLUDE_DIR NAMES my_lib.h)
+endif()
+
+include(FindPackageHandleStandardArgs)
+find_package_handle_standard_args(my-lib-ffi
+  REQUIRED_VARS _FFI_LIBRARY _FFI_INCLUDE_DIR
+)
+
+if(my_lib_ffi_FOUND)
+set(_FFI_LIB_TYPE UNKNOWN)
+if(_FFI_LIBRARY MATCHES "\\.(dylib|so)$" OR _FFI_LIBRARY MATCHES "\\.so\\.")
+    set(_FFI_LIB_TYPE SHARED)
+elseif(_FFI_LIBRARY MATCHES "\\.dll$")
+    set(_FFI_LIB_TYPE SHARED)
+elseif(_FFI_LIBRARY MATCHES "\\.(a|lib)$")
+    set(_FFI_LIB_TYPE STATIC)
+endif()
+
+add_library(my-lib-ffi::my-lib-ffi ${_FFI_LIB_TYPE} IMPORTED)
+    set_target_properties(my-lib-ffi::my-lib-ffi PROPERTIES
+    IMPORTED_LOCATION "${_FFI_LIBRARY}"
+    INTERFACE_INCLUDE_DIRECTORIES "${_FFI_INCLUDE_DIR}"
+    )
+
+if(WIN32 AND _FFI_LIB_TYPE STREQUAL "SHARED")
+        find_file(_FFI_DLL
+      NAMES my_lib_ffi.dll libmy_lib_ffi.dll
+      PATHS "${_FFI_PREFIX}/bin" "${_FFI_PREFIX}/lib"
+      NO_DEFAULT_PATH
+        )
+    if(_FFI_DLL)
+            set_target_properties(my-lib-ffi::my-lib-ffi PROPERTIES
+        IMPORTED_LOCATION "${_FFI_DLL}"
+        IMPORTED_IMPLIB "${_FFI_LIBRARY}"
+            )
+    endif()
+    unset(_FFI_DLL CACHE)
+endif()
+
+if(APPLE)
+        set_property(TARGET my-lib-ffi::my-lib-ffi APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES "-framework CoreFoundation" "-framework Security" pthread)
+elseif(UNIX)
+        set_property(TARGET my-lib-ffi::my-lib-ffi APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES pthread dl m)
+elseif(WIN32)
+        set_property(TARGET my-lib-ffi::my-lib-ffi APPEND PROPERTY
+        INTERFACE_LINK_LIBRARIES ws2_32 userenv bcrypt)
+endif()
+
+unset(_FFI_LIB_TYPE)
+endif()
+
+mark_as_advanced(_FFI_LIBRARY _FFI_INCLUDE_DIR)
+unset(_FFI_CMAKE_DIR)
+unset(_FFI_PREFIX)
+"#;
+    assert_eq!(
+        cmake.content, EXPECTED,
+        "cmake config content drifted from poly's verified canonical fixed point"
+    );
+}

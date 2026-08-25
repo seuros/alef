@@ -8,6 +8,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ),
     ("java_pom.xml.jinja", include_str!("templates/java_pom.xml.jinja")),
     (
+        "ffi_config.cmake.jinja",
+        include_str!("templates/ffi_config.cmake.jinja"),
+    ),
+    (
         "wasm_package_exports.json.jinja",
         include_str!("templates/wasm_package_exports.json.jinja"),
     ),

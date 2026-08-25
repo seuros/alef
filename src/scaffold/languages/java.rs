@@ -7,10 +7,10 @@ use anyhow::Context as _;
 use minijinja::context;
 use std::path::{Path, PathBuf};
 
-/// Render `<dependency>` blocks for host-native capsule (Language) passthrough.
+/// Build `<dependency>` template values for host-native capsule (Language) passthrough.
 /// Each `package` is a Maven `groupId:artifactId` coordinate (e.g.
 /// `io.github.tree-sitter:jtreesitter`); `package_version` is the `<version>`.
-fn java_capsule_dependencies(config: &ResolvedCrateConfig) -> String {
+fn java_capsule_dependencies(config: &ResolvedCrateConfig) -> Vec<minijinja::Value> {
     let mut deps: Vec<(String, String)> = config
         .java
         .as_ref()
@@ -27,10 +27,11 @@ fn java_capsule_dependencies(config: &ResolvedCrateConfig) -> String {
     deps.iter()
         .map(|(coord, ver)| {
             let (group_id, artifact_id) = coord.split_once(':').unwrap_or((coord.as_str(), ""));
-            format!(
-                "\n        <dependency>\n            <groupId>{group_id}</groupId>\n            \
-                 <artifactId>{artifact_id}</artifactId>\n            <version>{ver}</version>\n        </dependency>"
-            )
+            context! {
+                group_id => group_id,
+                artifact_id => artifact_id,
+                version => ver,
+            }
         })
         .collect()
 }
@@ -62,38 +63,23 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
     let group_id = config.java_group_id();
     let source_root = group_id.split('.').next().unwrap_or("dev");
 
-    let developers_xml = if meta.authors.is_empty() {
-        String::new()
-    } else {
-        let devs: Vec<String> = meta
-            .authors
-            .iter()
-            .map(|a| {
-                let (name, email) = parse_author(a);
-                let name_escaped = xml_escape(name);
-                let email_line = if email.is_empty() {
-                    String::new()
-                } else {
-                    format!("\n            <email>{}</email>", xml_escape(email))
-                };
-                format!(
-                    "        <developer>\n            <name>{name_escaped}</name>{email_line}\n        </developer>"
-                )
-            })
-            .collect();
-        format!("\n    <developers>\n{}\n    </developers>\n", devs.join("\n"))
-    };
+    let authors: Vec<minijinja::Value> = meta
+        .authors
+        .iter()
+        .map(|a| {
+            let (name, email) = parse_author(a);
+            context! {
+                name => xml_escape(name),
+                email => xml_escape(email),
+            }
+        })
+        .collect();
 
     let license_url = match license {
         "Elastic-2.0" => "https://www.elastic.co/licensing/elastic-license",
         "MIT" => "https://opensource.org/licenses/MIT",
         "Apache-2.0" => "https://www.apache.org/licenses/LICENSE-2.0",
         _ => "",
-    };
-    let license_url_xml = if license_url.is_empty() {
-        String::new()
-    } else {
-        format!("\n            <url>{license_url}</url>")
     };
 
     let content = crate::scaffold::template_env::render(
@@ -105,8 +91,8 @@ pub(crate) fn scaffold_java(api: &ApiSurface, config: &ResolvedCrateConfig) -> a
             description => meta.description,
             repository => repo_url,
             license => license,
-            license_url => license_url_xml,
-            developers => developers_xml,
+            license_url => license_url,
+            authors => authors,
             scm_connection => scm.connection,
             scm_developer_connection => scm.developer_connection,
             capsule_deps => java_capsule_dependencies(config),

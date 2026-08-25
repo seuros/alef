@@ -1,5 +1,66 @@
 use super::*;
 
+/// Regression for the alef/poly generator-formatter oscillation described in task #373:
+/// poly's canonical XML style for a Maven `pom.xml` uses 2-space indentation and wraps a
+/// multi-attribute root element one attribute per line with the closing `>` on its own line.
+/// Verified empirically against `poly fmt --fix --fix-generated` (matches consumer repos'
+/// already-canonical `pom.xml` files byte-for-byte). If alef emits 4-space indentation or the
+/// old single-line root tag, poly rewrites the file on every `alef generate` → `poly fmt` cycle. ~keep
+#[test]
+fn test_scaffold_java_pom_root_element_is_poly_canonical() {
+    let config = test_config();
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
+    let files = language_files(&all_files);
+    let pom = files.iter().find(|f| f.path.ends_with("pom.xml")).unwrap();
+
+    assert!(
+        pom.content.contains(
+            "<project\n  xmlns=\"http://maven.apache.org/POM/4.0.0\"\n  \
+             xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n  \
+             xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd\"\n>\n"
+        ),
+        "root <project> element must wrap each attribute on its own 2-space-indented line with \
+         a standalone closing '>', poly's canonical multi-attribute XML tag style; content:\n{}",
+        pom.content
+    );
+    assert!(
+        pom.content.contains("\n  <modelVersion>4.0.0</modelVersion>\n"),
+        "top-level children of <project> must be indented 2 spaces (poly's canonical XML \
+         indent width), not 4; content:\n{}",
+        pom.content
+    );
+}
+
+/// Regression: `<developers>` with more than one author, one of them without an email, must
+/// render each `<developer>` at poly's canonical 2-space step (4 for `<developer>`, 6 for
+/// `<name>`/`<email>`) and omit the `<email>` element entirely rather than emitting an empty
+/// one, matching the shape verified against real consumer `pom.xml` files. ~keep
+#[test]
+fn test_scaffold_java_pom_developers_use_poly_canonical_indentation() {
+    let config = test_config_from_toml(
+        r#"
+[crates.package_metadata]
+authors = ["Alice <alice@example.com>", "Bob"]
+"#,
+    );
+    let api = test_api();
+    let all_files = scaffold(&api, &config, &[Language::Java]).unwrap();
+    let files = language_files(&all_files);
+    let pom = files.iter().find(|f| f.path.ends_with("pom.xml")).unwrap();
+
+    assert!(
+        pom.content.contains(
+            "  <developers>\n    <developer>\n      <name>Alice</name>\n      \
+             <email>alice@example.com</email>\n    </developer>\n    <developer>\n      \
+             <name>Bob</name>\n    </developer>\n  </developers>\n"
+        ),
+        "developers block must use poly-canonical 2-space-step indentation and omit <email> \
+         for an author with none; content:\n{}",
+        pom.content
+    );
+}
+
 /// Extracts the `<plugin>` block for `artifact_id` out of a rendered pom.xml.
 fn plugin_section<'a>(pom_content: &'a str, artifact_id: &str) -> &'a str {
     pom_content

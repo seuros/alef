@@ -296,99 +296,21 @@ tempfile = "{tempfile}"
     let lib_name = config.ffi_lib_name();
     let ffi_name_under = ffi_name.replace('-', "_");
 
-    let cmake_content = format!(
-        r#"# {ffi_name} CMake config-mode find module
-#
-# Defines the imported target:
-#   {ffi_name}::{ffi_name}
-#
-# Usage:
-#   find_package({ffi_name} REQUIRED)
-#   target_link_libraries(myapp PRIVATE {ffi_name}::{ffi_name})
-
-if(TARGET {ffi_name}::{ffi_name})
-  return()
-endif()
-
-get_filename_component(_FFI_CMAKE_DIR "${{CMAKE_CURRENT_LIST_FILE}}" PATH)
-get_filename_component(_FFI_PREFIX "${{_FFI_CMAKE_DIR}}/.." ABSOLUTE)
-
-find_library(_FFI_LIBRARY
-  NAMES {lib_name} lib{lib_name}
-  PATHS "${{_FFI_PREFIX}}/lib"
-  NO_DEFAULT_PATH
-)
-if(NOT _FFI_LIBRARY)
-  find_library(_FFI_LIBRARY NAMES {lib_name} lib{lib_name})
-endif()
-
-find_path(_FFI_INCLUDE_DIR
-  NAMES {header_name}
-  PATHS "${{_FFI_PREFIX}}/include"
-  NO_DEFAULT_PATH
-)
-if(NOT _FFI_INCLUDE_DIR)
-  find_path(_FFI_INCLUDE_DIR NAMES {header_name})
-endif()
-
-include(FindPackageHandleStandardArgs)
-find_package_handle_standard_args({ffi_name}
-  REQUIRED_VARS _FFI_LIBRARY _FFI_INCLUDE_DIR
-)
-
-if({ffi_name_under}_FOUND)
-  set(_FFI_LIB_TYPE UNKNOWN)
-  if(_FFI_LIBRARY MATCHES "\\.(dylib|so)$" OR _FFI_LIBRARY MATCHES "\\.so\\.")
-    set(_FFI_LIB_TYPE SHARED)
-  elseif(_FFI_LIBRARY MATCHES "\\.dll$")
-    set(_FFI_LIB_TYPE SHARED)
-  elseif(_FFI_LIBRARY MATCHES "\\.(a|lib)$")
-    set(_FFI_LIB_TYPE STATIC)
-  endif()
-
-  add_library({ffi_name}::{ffi_name} ${{_FFI_LIB_TYPE}} IMPORTED)
-  set_target_properties({ffi_name}::{ffi_name} PROPERTIES
-    IMPORTED_LOCATION "${{_FFI_LIBRARY}}"
-    INTERFACE_INCLUDE_DIRECTORIES "${{_FFI_INCLUDE_DIR}}"
-  )
-
-  if(WIN32 AND _FFI_LIB_TYPE STREQUAL "SHARED")
-    find_file(_FFI_DLL
-      NAMES {lib_name}.dll lib{lib_name}.dll
-      PATHS "${{_FFI_PREFIX}}/bin" "${{_FFI_PREFIX}}/lib"
-      NO_DEFAULT_PATH
-    )
-    if(_FFI_DLL)
-      set_target_properties({ffi_name}::{ffi_name} PROPERTIES
-        IMPORTED_LOCATION "${{_FFI_DLL}}"
-        IMPORTED_IMPLIB "${{_FFI_LIBRARY}}"
-      )
-    endif()
-    unset(_FFI_DLL CACHE)
-  endif()
-
-  if(APPLE)
-    set_property(TARGET {ffi_name}::{ffi_name} APPEND PROPERTY
-      INTERFACE_LINK_LIBRARIES "-framework CoreFoundation" "-framework Security" pthread)
-  elseif(UNIX)
-    set_property(TARGET {ffi_name}::{ffi_name} APPEND PROPERTY
-      INTERFACE_LINK_LIBRARIES pthread dl m)
-  elseif(WIN32)
-    set_property(TARGET {ffi_name}::{ffi_name} APPEND PROPERTY
-      INTERFACE_LINK_LIBRARIES ws2_32 userenv bcrypt)
-  endif()
-
-  unset(_FFI_LIB_TYPE)
-endif()
-
-mark_as_advanced(_FFI_LIBRARY _FFI_INCLUDE_DIR)
-unset(_FFI_CMAKE_DIR)
-unset(_FFI_PREFIX)
-"#,
-        ffi_name = ffi_name,
-        ffi_name_under = ffi_name_under,
-        lib_name = lib_name,
-        header_name = header_name,
+    // The odd, non-uniform indentation below (top-level `if`/`endif` bodies flush left,
+    // nested blocks stepping by 4 spaces instead of consistently by 2) is not a style
+    // choice — it is poly's actual fixed point for `.cmake` files under its tree-sitter-based
+    // formatter (verified empirically: `poly fmt --fix --fix-generated` on a conventionally
+    // 2-space-indented equivalent converges to exactly this shape and is then stable under a
+    // repeated `--check`). Matching it here avoids the generate/format oscillation that a
+    // "cleaner" hand-indented version would trigger on every regen. ~keep
+    let cmake_content = crate::scaffold::template_env::render(
+        "ffi_config.cmake.jinja",
+        minijinja::context! {
+            ffi_name => ffi_name,
+            ffi_name_under => ffi_name_under,
+            lib_name => lib_name,
+            header_name => header_name,
+        },
     );
 
     Ok(vec![
