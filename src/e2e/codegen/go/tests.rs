@@ -106,6 +106,7 @@ fn test_go_method_name_uses_go_casing() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -159,6 +160,7 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
     let clean_len = out.len();
@@ -183,6 +185,7 @@ fn dropped_field_assertion_carries_the_marker_and_is_correctly_attributed_per_fi
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -237,6 +240,7 @@ fn declared_not_error_only_fixture_on_a_simple_errorless_call_still_gets_a_real_
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -285,6 +289,7 @@ fn zero_declared_assertions_on_a_simple_errorless_call_still_discards_the_result
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -411,6 +416,7 @@ fn test_streaming_fixture_emits_collect_snippet() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -493,6 +499,7 @@ fn test_streaming_with_client_factory_and_json_arg() {
             type_defs: &[],
             enums: &[],
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -583,6 +590,7 @@ fn test_indexed_element_prefix_guard_uses_array_not_element() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -679,6 +687,7 @@ fn test_result_is_simple_contains_binds_result_and_emits_imports() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -876,6 +885,7 @@ fn test_go_plain_optional_string_uses_string_deref_not_text_accessor() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
     // Plain optional string: must use `string(*field_expr)`, NOT `.Text()`.
@@ -959,6 +969,7 @@ fn test_go_display_as_text_optional_uses_text_accessor_not_string_deref() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
     // display_as_text field: must use `.Text()`, NOT `string(*field_expr)`.
@@ -1275,6 +1286,7 @@ fn render_indexed_assertion_function(assertions: Vec<Assertion>) -> String {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
     out
@@ -1457,6 +1469,7 @@ fn visitor_fixture_without_trait_bridge_options_type_fails_loudly_instead_of_emi
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 }
@@ -1506,6 +1519,7 @@ fn go_equals_on_an_error_field_is_named_instead_of_dropped() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 
@@ -1563,6 +1577,7 @@ fn go_a_lone_error_assertion_renders_no_marker() {
             type_defs: &type_defs,
             enums: &enums,
             errors: &[],
+            functions: &[],
         },
     );
 

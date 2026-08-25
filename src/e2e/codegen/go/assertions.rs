@@ -29,6 +29,13 @@ pub(super) fn render_assertion(
     if !result_is_simple && let Some(f) = &assertion.field {
         let embed_deref = format!("(*{result_var})");
         match f.as_str() {
+            "chunks_have_content" | "chunks_have_embeddings" | "chunks_have_heading_context"
+            | "first_chunk_starts_with_heading"
+                if !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver) =>
+            {
+                let _ = writeln!(out, "\t// skipped: {}", FieldSkip::NotAvailableOnResultType.message(f));
+                return;
+            }
             "chunks_have_content" => {
                 let pred = format!(
                     "func() bool {{ chunks := {result_var}.Chunks; if chunks == nil {{ return false }}; for _, c := range chunks {{ if c.Content == \"\" {{ return false }} }}; return true }}()"
