@@ -750,3 +750,61 @@ default_features = false
          works), just not defaulted:\n{cargo_toml}"
     );
 }
+
+/// Regression for alef-task #374: an `excluded_default_features` name that gates no item in the
+/// extracted API surface (e.g. a Cargo-only feature that only affects a dependency's `build.rs`
+/// linking, such as `libheif-sys` via `heic`) is never discovered by
+/// `crate::codegen::cfg::collect_cfg_features`, which walks `#[cfg(feature = "X")]` attributes on
+/// IR nodes. The `[features]` table was built exclusively from that discovery set, so a
+/// config-only name never got its promised opt-in forwarding entry at all -- breaking
+/// `cargo build -p <crate>-rb --features <name>` on desktop, exactly the escape hatch
+/// `excluded_default_features` documents as always available.
+/// `scaffold_ruby_cargo_excludes_named_feature_from_wrapper_default_but_keeps_others` above does
+/// not catch this: it excludes `native-http` from a cfg-gated `TypeDef`, so `native-http` IS
+/// discoverable there and only exercises the already-working half.
+#[test]
+fn scaffold_ruby_cargo_forwards_excluded_feature_not_referenced_by_any_cfg_attribute() {
+    let config = resolve_config(
+        r#"
+[workspace]
+languages = ["ruby"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.ruby]
+gem_name = "test_lib"
+excluded_default_features = ["heic"]
+"#,
+    );
+    let api = ApiSurface {
+        crate_name: "my-lib".to_string(),
+        version: "1.0.0".to_string(),
+        ..Default::default()
+    };
+
+    let files = scaffold_ruby_cargo(&api, &config).expect("scaffold_ruby_cargo ok");
+    let cargo_toml = &files
+        .iter()
+        .find(|f| f.path.to_string_lossy().ends_with("Cargo.toml"))
+        .expect("Cargo.toml emitted")
+        .content;
+
+    assert!(
+        cargo_toml.contains("[features]"),
+        "a config-only excluded_default_features name must still produce a [features] table:\n{cargo_toml}"
+    );
+    assert!(
+        cargo_toml.contains(r#"heic = ["my-lib/heic"]"#),
+        "a config-only excluded_default_features name (not referenced by any \
+         #[cfg(feature = ...)] in the API surface) must still get a forwarding entry so \
+         `cargo build --features heic` keeps working:\n{cargo_toml}"
+    );
+    let default_line = cargo_toml
+        .lines()
+        .find(|line| line.starts_with("default = ["))
+        .expect("default array present");
+    assert!(
+        !default_line.contains("heic"),
+        "default = [...] must NOT contain excluded `heic`; got: {default_line}"
+    );
+}

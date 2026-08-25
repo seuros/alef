@@ -152,7 +152,10 @@ pub(crate) fn scaffold_ruby_cargo(
     let machete_section = format!("[package.metadata.cargo-machete]\nignored = [{ignored_list}]\n\n");
 
     // core dep. Without this, `#[cfg(feature = "X")]` arms emitted by the
-    let cfg_features = crate::codegen::cfg::collect_cfg_features(api);
+    let mut cfg_features = crate::codegen::cfg::collect_cfg_features(api);
+    // A config-only `excluded_default_features` name (gates no `#[cfg(feature = ...)]`) must
+    // still get a forwarding entry below -- alef-task #374, regression in `ruby/tests.rs`. ~keep
+    cfg_features.extend(excluded_default_features.iter().map(|name| (*name).to_string()));
     let features_table = if cfg_features.is_empty() {
         String::new()
     } else {
