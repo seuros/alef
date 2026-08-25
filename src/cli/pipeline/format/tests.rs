@@ -365,6 +365,9 @@ fn write_unsorted_workspace(base: &Path, second_crate_suffix: &str) {
 
 #[test]
 fn run_workspace_cargo_sort_sorts_every_member_regardless_of_language() {
+    // Spawns a real `cargo sort`; see `test_support::REAL_CARGO_LOCK`'s doc for why this must
+    // be serialized against every other test in the crate that also spawns one. ~keep
+    let _cargo_lock = crate::test_support::RealCargoGuard::acquire();
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path();
     // "-py" simulates a crate suffix (python/pyo3) that has no entry at all in
@@ -416,6 +419,8 @@ fn run_workspace_cargo_sort_is_noop_without_root_cargo_toml() {
 
 #[test]
 fn run_cargo_fmt_formats_workspace_rust_files_when_available() {
+    // Spawns a real `cargo fmt`; see `test_support::REAL_CARGO_LOCK`'s doc. ~keep
+    let _cargo_lock = crate::test_support::RealCargoGuard::acquire();
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path();
     write_unsorted_workspace(base, "-node");
@@ -663,6 +668,8 @@ fn executable_mode_snapshot_skips_dependency_and_build_directories() {
 
 #[test]
 fn converge_full_regen_formatting_leaves_workspace_sorted_and_poly_fmt_check_clean() {
+    // Spawns real `cargo fmt`/`cargo sort`; see `test_support::REAL_CARGO_LOCK`'s doc. ~keep
+    let _cargo_lock = crate::test_support::RealCargoGuard::acquire();
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path();
     // "-swift" simulates another crate suffix with no per-language residual today.
@@ -699,6 +706,8 @@ fn converge_full_regen_formatting_leaves_workspace_sorted_and_poly_fmt_check_cle
 
 #[test]
 fn format_generated_full_regen_routes_through_convergence_loop() {
+    // Spawns real `cargo fmt`/`cargo sort`; see `test_support::REAL_CARGO_LOCK`'s doc. ~keep
+    let _cargo_lock = crate::test_support::RealCargoGuard::acquire();
     let dir = tempfile::tempdir().expect("tempdir");
     let base = dir.path();
     write_unsorted_workspace(base, "-py");
