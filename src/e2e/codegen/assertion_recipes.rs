@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 
 use crate::core::config::e2e::{CallConfig, E2eConfig};
+use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
 // Compatibility recipe names for fixture-declared opt-ins. Do not enable
@@ -17,6 +18,24 @@ pub(crate) const EMBEDDINGS_RECIPE: &str = "embeddings";
 pub(crate) const KEYWORDS_RECIPE: &str = "keywords";
 pub(crate) const STREAMING_RECIPE: &str = "streaming";
 pub(crate) const TREE_RECIPE: &str = "tree";
+
+/// Whether the call's own result type declares `chunks` — the field every `CHUNKS_RECIPE`
+/// synthetic handler (`chunks_have_content`, `chunks_have_embeddings`,
+/// `chunks_have_heading_context`, `first_chunk_starts_with_heading`) hardcodes as
+/// `{result_var}.chunks` before any generic field validation runs.
+///
+/// ~keep These handlers used to intercept unconditionally, ahead of `is_valid_for_result`, so a
+/// crate where `chunks` is declared on some OTHER type in the same IR (e.g. a nested
+/// `Document` reached through `Envelope.results`) but not on the call's own root type still got
+/// `result.chunks` emitted — code that does not compile. `result_field_oracle_knows` is the
+/// anchored, whole-path oracle `root_declares_path` already backs; asked with the literal name
+/// every one of these handlers accesses, it gives the same "refuse only when positively known
+/// absent" answer #291 already established for the derived-snippet path. `Some(true)` (the root
+/// declares it) and `None` (no anchor, or the call's root type isn't in this map — the
+/// pre-existing default) both keep rendering; only `Some(false)` refuses.
+pub(crate) fn chunks_field_declared_by_result(field_resolver: &FieldResolver) -> bool {
+    field_resolver.result_field_oracle_knows(CHUNKS_RECIPE) != Some(false)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MissingAssertionRecipe {

@@ -200,6 +200,17 @@ pub fn render_assertion_with_streaming(
     // the is_valid_for_result check so they are never treated as field accesses.
     if let Some(f) = &assertion.field {
         match f.as_str() {
+            "chunks_have_content" | "chunks_have_embeddings" | "chunks_have_heading_context"
+            | "first_chunk_starts_with_heading"
+                if !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver) =>
+            {
+                let _ = writeln!(
+                    out,
+                    "    // skipped: {}",
+                    FieldSkip::NotAvailableOnResultType.message(f)
+                );
+                return;
+            }
             "chunks_have_content" => {
                 render_chunks_have_content(out, result_var, assertion.assertion_type.as_str());
                 return;
