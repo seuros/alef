@@ -130,9 +130,16 @@ pub(crate) fn gen_php_lossy_binding_to_core_fields(
             let expr = if let Some(shape) = untagged_data_enum_shape(&field.ty, untagged_data_enum_names) {
                 untagged_data_enum_expr(name, shape, field.optional)
             } else if let Some(enum_name) = get_direct_enum_named(&field.ty, enum_names) {
-                gen_string_to_enum_expr(&format!("self.{name}"), &enum_name, field.optional, enums, core_import)
+                gen_string_to_enum_expr(
+                    &format!("self.{name}"),
+                    &enum_name,
+                    field.optional,
+                    enums,
+                    core_import,
+                    name,
+                )
             } else if let Some(enum_name) = get_vec_enum_named(&field.ty, enum_names) {
-                let elem_conv = gen_string_to_enum_expr("s", &enum_name, false, enums, core_import);
+                let elem_conv = gen_string_to_enum_expr("s", &enum_name, false, enums, core_import, name);
                 if field.optional {
                     format!("self.{name}.clone().map(|v| v.into_iter().map(|s| {elem_conv}).collect())")
                 } else {

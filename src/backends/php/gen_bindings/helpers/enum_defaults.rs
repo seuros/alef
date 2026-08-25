@@ -105,11 +105,17 @@ pub(crate) fn gen_enum_tainted_from_binding_to_core(
         } else if field.sanitized {
             fields.push((name.as_str(), "Default::default()".to_string()));
         } else if let Some(enum_name) = get_direct_enum_named(&field.ty, enum_names) {
-            let conversion =
-                gen_string_to_enum_expr(&format!("val.{name}"), &enum_name, field.optional, enums, core_import);
+            let conversion = gen_string_to_enum_expr(
+                &format!("val.{name}"),
+                &enum_name,
+                field.optional,
+                enums,
+                core_import,
+                name,
+            );
             fields.push((name.as_str(), conversion));
         } else if let Some(enum_name) = get_vec_enum_named(&field.ty, enum_names) {
-            let elem_conversion = gen_string_to_enum_expr("s", &enum_name, false, enums, core_import);
+            let elem_conversion = gen_string_to_enum_expr("s", &enum_name, false, enums, core_import, name);
             let conversion = if field.optional {
                 format!("val.{name}.map(|v| v.into_iter().map(|s| {elem_conversion}).collect())")
             } else {
@@ -260,7 +266,16 @@ pub(super) fn get_vec_enum_named(ty: &TypeRef, enum_names: &AHashSet<String>) ->
 }
 
 /// Generate an expression that converts a String to a core enum type via matching.
-/// Falls back to the first variant if no match found.
+///
+/// An unrecognised string throws a real PHP exception naming the offending value and the
+/// field, via `PhpException::throw()`, before still evaluating to the first-variant/Default
+/// fallback. `From::from` cannot return `Result` here without breaking every generated call
+/// site that isn't itself `Result`-returning (many aren't — see `enum_defaults.rs` module
+/// tests), so the fallback value keeps the surrounding `From` impl infallible and type-correct.
+/// `PhpException::throw()` sets the pending Zend exception directly; the PHP VM discards
+/// whatever the native call eventually returns and unwinds to PHP-land once the native
+/// function returns to it, so the fallback expression is never actually observed by PHP
+/// callers even though Rust must still produce a well-typed value here. ~keep
 /// Data variants (with fields) use `Default::default()` for each field.
 pub(super) fn gen_string_to_enum_expr(
     val_expr: &str,
@@ -268,6 +283,7 @@ pub(super) fn gen_string_to_enum_expr(
     optional: bool,
     enums: &[EnumDef],
     core_import: &str,
+    field_name: &str,
 ) -> String {
     let enum_def = match enums.iter().find(|e| e.name == enum_name) {
         Some(e) => e,
@@ -330,6 +346,7 @@ pub(super) fn gen_string_to_enum_expr(
         variant_expr(&core_enum_path, &enum_def.variants[0])
     };
     let mut match_arms = String::new();
+    let mut valid_variants: Vec<String> = Vec::new();
     for variant in &enum_def.variants {
         let expr = variant_expr(&core_enum_path, variant);
         // against `#[serde(rename)]` first, then `#[serde(rename_all = "...")]`, then
@@ -340,6 +357,7 @@ pub(super) fn gen_string_to_enum_expr(
         );
         // either convention without forcing the core to add `#[serde(rename_all)]`.
         let variant_lower = wire_name.to_lowercase();
+        valid_variants.push(wire_name.clone());
         match_arms.push_str(&crate::backends::php::template_env::render(
             "php_enum_string_match_arm.jinja",
             context! {
@@ -353,6 +371,9 @@ pub(super) fn gen_string_to_enum_expr(
         "php_enum_string_match_fallback_arm.jinja",
         context! {
             fallback_expr => &fallback_expr,
+            field_name => field_name,
+            enum_name => enum_name,
+            valid_variants => &valid_variants.join(", "),
         },
     ));
 
@@ -509,5 +530,228 @@ mod tests {
             "the spread trailer must not be emitted when the core type has no Default \
              impl — it would fail to compile (E0277); got:\n{out}"
         );
+    }
+
+    fn unit_variant(name: &str, is_default: bool) -> crate::core::ir::EnumVariant {
+        crate::core::ir::EnumVariant {
+            name: name.to_string(),
+            is_default,
+            ..Default::default()
+        }
+    }
+
+    fn redaction_strategy_enum() -> EnumDef {
+        EnumDef {
+            name: "RedactionStrategy".to_string(),
+            rust_path: "crate::RedactionStrategy".to_string(),
+            variants: vec![unit_variant("Mask", true), unit_variant("Hash", false)],
+            ..Default::default()
+        }
+    }
+
+    fn enum_field(name: &str, ty: TypeRef, optional: bool) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            optional,
+            ..Default::default()
+        }
+    }
+
+    /// Field evidence regression: a struct field naming a core enum by string must still map a
+    /// recognised wire value to the matching core variant — the fallback-arm rewrite below must
+    /// not disturb the happy path. Asserts on the rendered `impl From` text emitted for the
+    /// pipeline's real `gen_enum_tainted_from_binding_to_core` entry point, not on
+    /// `gen_string_to_enum_expr`'s return value in isolation. ~keep
+    #[test]
+    fn enum_tainted_string_field_valid_value_maps_to_correct_core_variant() {
+        let enums = vec![redaction_strategy_enum()];
+        let enum_names: AHashSet<String> = ["RedactionStrategy".to_string()].into_iter().collect();
+        let typ = typ(
+            "RedactionConfig",
+            false,
+            vec![enum_field(
+                "strategy",
+                TypeRef::Named("RedactionStrategy".to_string()),
+                false,
+            )],
+        );
+        let cfg = ConversionConfig::default();
+        let out = gen_enum_tainted_from_binding_to_core(
+            &typ,
+            "crate",
+            &enum_names,
+            &enum_names,
+            &cfg,
+            &enums,
+            &AHashSet::new(),
+        );
+
+        assert!(
+            out.contains(r#""Mask" | "mask" => crate::RedactionStrategy::Mask,"#),
+            "a recognised wire value must still map to its exact core variant; got:\n{out}"
+        );
+        assert!(
+            out.contains(r#""Hash" | "hash" => crate::RedactionStrategy::Hash,"#),
+            "a recognised wire value must still map to its exact core variant; got:\n{out}"
+        );
+    }
+
+    /// The core defect under test: an unrecognised wire value must never silently fall through
+    /// to a default core variant. It must throw a real PHP exception instead. Checks the
+    /// rendered fallback arm binds the offending string (`other`, not `_`) and calls
+    /// `PhpException::throw()` rather than only evaluating to a bare fallback expression.
+    #[test]
+    fn enum_tainted_string_field_unknown_value_throws_instead_of_silently_defaulting() {
+        let enums = vec![redaction_strategy_enum()];
+        let enum_names: AHashSet<String> = ["RedactionStrategy".to_string()].into_iter().collect();
+        let typ = typ(
+            "RedactionConfig",
+            false,
+            vec![enum_field(
+                "strategy",
+                TypeRef::Named("RedactionStrategy".to_string()),
+                false,
+            )],
+        );
+        let cfg = ConversionConfig::default();
+        let out = gen_enum_tainted_from_binding_to_core(
+            &typ,
+            "crate",
+            &enum_names,
+            &enum_names,
+            &cfg,
+            &enums,
+            &AHashSet::new(),
+        );
+
+        assert!(
+            out.contains("other =>"),
+            "the fallback arm must bind the offending string instead of discarding it with `_`; got:\n{out}"
+        );
+        assert!(
+            !out.contains("_ => crate::RedactionStrategy::Mask"),
+            "the old silent-default fallback arm shape must be gone; got:\n{out}"
+        );
+        assert!(
+            out.contains("ext_php_rs::exception::PhpException::default(format!("),
+            "an unrecognised value must construct a PhpException; got:\n{out}"
+        );
+        assert!(
+            out.contains(".throw()"),
+            "an unrecognised value must actually throw the PhpException, not just build it; got:\n{out}"
+        );
+    }
+
+    /// The error must name both the offending value AND the field, per the ticket's explicit
+    /// requirement — "Invalid enum value" with no value in it is barely better than silence.
+    /// `other` is a runtime binding (the interpolation happens when the generated crate
+    /// executes, not at alef codegen time), so this asserts the two static pieces that make the
+    /// runtime message correct: the field-name literal is baked into the format string, and the
+    /// runtime value is captured via `{other:?}` rather than discarded. See
+    /// `enum_tainted_string_field_thrown_message_is_executed_and_contains_value_and_field` below
+    /// for a test that actually compiles and runs this exact generated fragment.
+    #[test]
+    fn enum_tainted_string_field_error_message_names_field_and_captures_value() {
+        let enums = vec![redaction_strategy_enum()];
+        let expr = gen_string_to_enum_expr("val.strategy", "RedactionStrategy", false, &enums, "crate", "strategy");
+
+        assert!(
+            expr.contains("field 'strategy'"),
+            "the field name must be named in the thrown message; got:\n{expr}"
+        );
+        assert!(
+            expr.contains("{other:?}"),
+            "the offending runtime value must be captured into the thrown message; got:\n{expr}"
+        );
+        assert!(
+            expr.contains("RedactionStrategy"),
+            "the enum name must be named in the thrown message for context; got:\n{expr}"
+        );
+    }
+
+    /// Executes the exact generated match expression (not a hand-written stand-in) against a
+    /// stub `ext_php_rs::exception` module, proving — not inferring — that the thrown message
+    /// contains both the offending value and the field name at runtime. Prevents a codegen
+    /// change from silently reordering/renaming the captured identifiers in a way that string
+    /// assertions on the template text alone could miss. ~keep
+    #[test]
+    fn enum_tainted_string_field_thrown_message_is_executed_and_contains_value_and_field() {
+        let enums = vec![redaction_strategy_enum()];
+        let expr = gen_string_to_enum_expr("val.strategy", "RedactionStrategy", false, &enums, "crate", "strategy");
+
+        let harness = format!(
+            r#"
+mod ext_php_rs {{
+    pub mod exception {{
+        pub struct PhpException(String);
+        impl PhpException {{
+            pub fn default(message: String) -> Self {{ Self(message) }}
+            pub fn throw(self) -> Result<(), ()> {{
+                println!("THROWN:{{}}", self.0);
+                Ok(())
+            }}
+        }}
+    }}
+}}
+
+#[derive(Debug, Default)]
+enum RedactionStrategy {{ #[default] Mask, Hash }}
+
+struct Val {{ strategy: String }}
+
+fn main() {{
+    let val = Val {{ strategy: "bogus".to_string() }};
+    let _result: RedactionStrategy = {expr};
+}}
+"#
+        );
+
+        let dir = std::env::temp_dir().join(format!(
+            "alef_php_enum_throw_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before epoch")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir for harness");
+        let src_path = dir.join("harness.rs");
+        let bin_path = dir.join("harness_bin");
+        std::fs::write(&src_path, &harness).expect("write harness source");
+
+        let compile = std::process::Command::new("rustc")
+            .arg(&src_path)
+            .arg("-o")
+            .arg(&bin_path)
+            .arg("--edition=2021")
+            .output()
+            .expect("invoke rustc");
+        assert!(
+            compile.status.success(),
+            "harness failed to compile — the generated fragment is not valid Rust:\nstdout:\n{}\nstderr:\n{}\nfragment:\n{expr}",
+            String::from_utf8_lossy(&compile.stdout),
+            String::from_utf8_lossy(&compile.stderr),
+        );
+
+        let run = std::process::Command::new(&bin_path)
+            .output()
+            .expect("run harness binary");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+
+        assert!(
+            stdout.contains("THROWN:"),
+            "the harness must actually reach PhpException::throw(); stdout:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("bogus"),
+            "the thrown message must contain the offending runtime value; stdout:\n{stdout}"
+        );
+        assert!(
+            stdout.contains("strategy"),
+            "the thrown message must contain the field name; stdout:\n{stdout}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
