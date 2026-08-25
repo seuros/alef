@@ -149,6 +149,36 @@ mod tests {
         );
     }
 
+    /// The headline regression at the `--strict` boundary: `before = ["true"]` is a session that
+    /// exists and has a non-empty `before` list, so it must not be able to buy its way past this
+    /// gate. `true` always exits 0 and builds nothing -- a run that lets this pass under
+    /// `--strict` reads as clean while having validated zero real artifacts for the language,
+    /// exactly the alef #256 shape this gate exists to catch.
+    #[test]
+    fn strict_bails_when_the_only_before_command_is_a_no_op() {
+        let sessions = HashMap::from([(
+            "kotlin".to_string(),
+            SessionSpec {
+                language: Language::Kotlin,
+                working_directory: PathBuf::from("/crate"),
+                manifest: None,
+                before: vec!["true".to_string()],
+                env: Default::default(),
+                include_paths: Vec::new(),
+                rust_features: Vec::new(),
+                rust_dependencies: Default::default(),
+            },
+        )]);
+        let snippets = vec![snippet(Language::Kotlin)];
+
+        let error = enforce_build_dependency("fixture", true, &snippets, &sessions, ValidationLevel::Compile)
+            .expect_err("before = [\"true\"] must not satisfy strict mode");
+
+        let message = error.to_string();
+        assert!(message.contains("ordering gap"), "{message}");
+        assert!(message.contains("kotlin 1"), "{message}");
+    }
+
     /// Negative control: `Syntax`-level validation needs no artifact at all, so a crate with no
     /// sessions configured at all must never bail on this gate.
     #[test]

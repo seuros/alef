@@ -99,6 +99,88 @@ fn a_session_with_a_before_build_step_is_not_reported() {
     assert!(missing.is_empty(), "a real before hook must clear the gap: {missing:?}");
 }
 
+/// The headline regression: `before = ["true"]` is non-empty, so the naive "is the list empty"
+/// check this function used to run treated it exactly like a real build step. `true` is a shell
+/// idiom that always exits 0 and produces nothing -- a session configured with only that command
+/// has done nothing whatsoever toward building this language's artifact, and must be reported
+/// exactly like an empty `before` list is on the line above.
+#[test]
+fn a_session_whose_only_before_command_is_a_no_op_is_missing_a_build_dependency() {
+    use crate::snippets::types::Language;
+
+    let sessions = HashMap::from([(
+        "wasm".to_string(),
+        session_with_before(Language::TypeScript, vec!["true"]),
+    )]);
+    let snippets = vec![snippet(Language::TypeScript)];
+
+    let missing = missing_build_dependency(&snippets, &sessions, ValidationLevel::TypeCheck);
+
+    assert_eq!(
+        missing.get(&Language::TypeScript),
+        Some(&1),
+        "before = [\"true\"] must not satisfy the build guarantee: {missing:?}"
+    );
+}
+
+/// `:` is the same no-op idiom as `true` under a different spelling, and must be caught the same
+/// way.
+#[test]
+fn a_session_whose_only_before_command_is_a_colon_no_op_is_missing_a_build_dependency() {
+    use crate::snippets::types::Language;
+
+    let sessions = HashMap::from([("wasm".to_string(), session_with_before(Language::TypeScript, vec![":"]))]);
+    let snippets = vec![snippet(Language::TypeScript)];
+
+    let missing = missing_build_dependency(&snippets, &sessions, ValidationLevel::TypeCheck);
+
+    assert_eq!(missing.get(&Language::TypeScript), Some(&1));
+}
+
+/// A `before` list can mix a no-op with a real build step (e.g. an author temporarily stubbing
+/// one command while debugging another) -- as long as at least one configured command is not a
+/// no-op, the session still has a real mechanism to have produced the artifact.
+#[test]
+fn a_session_with_a_real_command_alongside_a_no_op_is_not_reported() {
+    use crate::snippets::types::Language;
+
+    let sessions = HashMap::from([(
+        "go".to_string(),
+        session_with_before(Language::Go, vec!["true", "go build ./..."]),
+    )]);
+    let snippets = vec![snippet(Language::Go)];
+
+    let missing = missing_build_dependency(&snippets, &sessions, ValidationLevel::Compile);
+
+    assert!(
+        missing.is_empty(),
+        "a real command in the list must still count: {missing:?}"
+    );
+}
+
+/// A real-world staging script is not a no-op: it is a single non-trivial shell invocation
+/// (`bash scripts/stage_wasm_types.sh`), not one of the literal no-op idioms this function
+/// recognizes syntactically. This function cannot verify the script actually builds anything --
+/// only that the configured command is not the specific degenerate bypass `before = ["true"]`
+/// demonstrated -- so a staging script must still satisfy the gate.
+#[test]
+fn a_staging_script_command_is_not_reported() {
+    use crate::snippets::types::Language;
+
+    let sessions = HashMap::from([(
+        "wasm".to_string(),
+        session_with_before(Language::TypeScript, vec!["bash ../../scripts/stage_wasm_types.sh"]),
+    )]);
+    let snippets = vec![snippet(Language::TypeScript)];
+
+    let missing = missing_build_dependency(&snippets, &sessions, ValidationLevel::TypeCheck);
+
+    assert!(
+        missing.is_empty(),
+        "a real script invocation must satisfy the gate: {missing:?}"
+    );
+}
+
 /// `Syntax` never needs a compiled artifact -- a language with no session at all must not be
 /// reported at that level, matching `snippet_validation_needs_build_artifacts`'s own
 /// compile/typecheck/run boundary.
