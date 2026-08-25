@@ -584,9 +584,8 @@ fn a_configured_gap_check_still_detects_a_real_missing_language_variant() {
 
 /// `alef snippets gaps` used to fail unconditionally on ANY finding, including an
 /// unreferenced-only one -- the exact finding `alef snippets check` already gated on `strict`
-/// (`report_gaps`'s `has_unreferenced` half, combined via `inputs.strict` in
-/// `run_configured_audit_and_gaps`). This is that same finding driven through the standalone
-/// `gaps` command instead, proving both commands now reach the same verdict from it. ~keep
+/// via `GapReport::is_failure`. This is that same finding driven through the standalone `gaps`
+/// command instead, proving both commands now reach the same verdict from it. ~keep
 #[test]
 fn gaps_command_only_fails_on_an_unreferenced_only_finding_under_strict() {
     let directory = tempfile::tempdir().expect("temporary directory");
