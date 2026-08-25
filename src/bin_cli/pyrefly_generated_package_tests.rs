@@ -27,7 +27,22 @@ const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"test-lib\"\nversion = \"0.
 /// on a bare `Named` return) exactly as much as it exercises the pyo3 codegen that reads that
 /// flag. `ResultData` has no other use in this fixture, so if the flag were wrong `options.py`
 /// would emit it as an input dataclass while `api.py` actually returns/receives the native
-/// pyclass -- the mismatch pyrefly's `bad-return` catches. ~keep
+/// pyclass -- the mismatch pyrefly's `bad-return` catches.
+///
+/// The remaining constructs below (`Point`, `list_points`, `Shape`, `ValidationError`) exist to
+/// audit the three still-suppressed pyrefly codes (`bad-argument-count`, `not-iterable`,
+/// `missing-attribute`; task alef-334) against real generated output rather than leaving them
+/// suppressed on faith:
+///
+/// - `Point::new`/`Point::translate` take several parameters including an `Option<...>` one, the
+///   shape most likely to desync the wrapper `def`'s parameter count from the native pyclass
+///   constructor/method it calls (`bad-argument-count`).
+/// - `list_points` returns `Vec<Point>`, the shape most likely to produce generated code that
+///   iterates, indexes, or unpacks a collection pyrefly cannot prove is iterable
+///   (`not-iterable`).
+/// - `Shape` is a data-carrying enum and `ValidationError` is a field-carrying error type, both
+///   shapes most likely to produce generated attribute access across the wrapper/native boundary
+///   that pyrefly cannot prove exists (`missing-attribute`). ~keep
 const FIXTURE_SOURCE: &str = r#"
 #[derive(Default)]
 pub struct ResultData {
@@ -39,6 +54,69 @@ pub fn maybe_result(flag: bool) -> Option<ResultData> {
         Some(ResultData { label: "found".to_string() })
     } else {
         None
+    }
+}
+
+#[derive(Default, Clone)]
+pub struct Point {
+    pub x: i64,
+    pub y: i64,
+    pub label: Option<String>,
+}
+
+impl Point {
+    pub fn new(x: i64, y: i64, label: Option<String>) -> Self {
+        Point { x, y, label }
+    }
+
+    pub fn translate(&self, dx: i64, dy: i64, scale: Option<i64>) -> Point {
+        let factor = scale.unwrap_or(1);
+        Point {
+            x: self.x + dx * factor,
+            y: self.y + dy * factor,
+            label: self.label.clone(),
+        }
+    }
+}
+
+pub fn list_points(count: i64) -> Vec<Point> {
+    (0..count).map(|i| Point::new(i, i, None)).collect()
+}
+
+pub enum Shape {
+    Circle { radius: f64 },
+    Rectangle { width: f64, height: f64 },
+}
+
+pub fn describe_shape(shape: Shape) -> String {
+    match shape {
+        Shape::Circle { radius } => format!("circle r={radius}"),
+        Shape::Rectangle { width, height } => format!("rect {width}x{height}"),
+    }
+}
+
+#[derive(Debug)]
+pub struct ValidationError {
+    pub field: String,
+    pub message: String,
+}
+
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.field, self.message)
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+pub fn validate(value: i64) -> Result<i64, ValidationError> {
+    if value < 0 {
+        Err(ValidationError {
+            field: "value".to_string(),
+            message: "must be non-negative".to_string(),
+        })
+    } else {
+        Ok(value)
     }
 }
 "#;
