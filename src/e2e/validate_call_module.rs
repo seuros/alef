@@ -34,11 +34,27 @@
 //!
 //! ## Severity
 //!
-//! Both checks land as [`Severity::Warning`], not [`Severity::Error`]: the structural
-//! rules below (uppercase last segment, no `.`/`/`) are heuristics, not IR-verified
-//! facts the way `validate_call_class` and `validate_call_result_type` are, and a
-//! rule that only ever fires on real consumer fleets can be promoted later once it is
-//! shown to have zero false positives against every consumer's current, working config.
+//! The two checks split (`alef-tasks#335`), because the evidence for each differs:
+//!
+//! - The go check ([`check_go_module`]) is [`Severity::Error`]. A Go import path that is a
+//!   bare word (no `.`, no `/`) is not a style guess — Go's own module resolution can never
+//!   treat it as anything but a standard-library package, and this field never names one.
+//!   The fleet survey backing the promotion found 42 live `overrides.go.module`/`module`
+//!   resolutions across every consumer repo pinning the next alef release, every one a real
+//!   `github.com/...` path, zero of which this check would have flagged.
+//! - The java check ([`check_java_module`]) stays [`Severity::Warning`]. "Last segment is
+//!   uppercase" is a strong Java convention, not something javac enforces — an uppercase
+//!   package segment compiles fine, just against convention — so it remains a heuristic.
+//!   More importantly, the same fleet survey found **zero** consumers currently setting
+//!   `overrides.java.module` at all (every one uses `overrides.<lang>.class` instead, which
+//!   `validate_call_class` already checks). "Zero false positives out of zero exercised
+//!   values" is not evidence the rule is safe to hard-error on — it is exactly the vacuous-
+//!   survey shape this promotion decision was supposed to rule out, so this check waits for
+//!   a live positive data point before promotion, per the original bar below.
+//!
+//! (Original bar, still governing the java check: a rule that only ever fires on real
+//! consumer fleets can be promoted once it is shown to have zero false positives against
+//! every consumer's current, working config — not zero opportunities to fire at all.)
 
 use super::validate::{Severity, ValidationError};
 use crate::core::config::ResolvedCrateConfig;
@@ -46,15 +62,13 @@ use crate::core::config::e2e::{CallConfig, E2eConfig};
 
 const CONFIG_FILE_LABEL: &str = "alef.toml";
 
-/// Run [`validate_call_module_overrides`] and log every diagnostic.
+/// Run [`validate_call_module_overrides`] and log every diagnostic, then bail with every
+/// [`Severity::Error`] diagnostic's message when any fired.
 ///
-/// Unlike [`crate::e2e::validate_call_class::enforce_call_class_overrides`], this never
-/// turns a diagnostic into a generation-aborting error: every diagnostic
-/// [`validate_call_module_overrides`] produces is [`Severity::Warning`] today (see the
-/// module doc comment's "Severity" section), so there is nothing to bail on. Kept as an
-/// `enforce_*` function with the same shape as its two siblings anyway, so promoting this
-/// check to hard-error status later (once a consumer-fleet measurement shows zero false
-/// positives) is a one-line severity change here, not a call-site rewrite.
+/// A genuinely broken go `module` now aborts generation ([`check_go_module`] is `Error`);
+/// a suspicious java `module` still only logs ([`check_java_module`] stays `Warning`) — see
+/// the module doc comment's "Severity" section for why the two checks carry different
+/// severities today.
 pub fn enforce_call_module_overrides(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
@@ -247,7 +261,7 @@ fn check_go_module(
              path; set `[go] module = \"github.com/<org>/<repo>\"` or `overrides.go.module` to a real \
              import path"
         ),
-        severity: Severity::Warning,
+        severity: Severity::Error,
     });
 }
 
@@ -404,7 +418,7 @@ mod tests {
         let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
 
         assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
-        assert_eq!(errors[0].severity, Severity::Warning);
+        assert_eq!(errors[0].severity, Severity::Error);
         assert!(
             errors[0]
                 .message
@@ -619,5 +633,62 @@ module = "{go_module}"
         let errors = validate_call_module_overrides(&e2e_config, &config, &["java".to_string(), "go".to_string()]);
 
         assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// `alef-tasks#335`: [`check_go_module`] is now `Severity::Error`, so a bare-word go
+    /// import path must abort generation through [`enforce_call_module_overrides`], not
+    /// merely log. Sabotage coverage for the promotion: revert `check_go_module`'s severity
+    /// literal to `Warning` and this is the test that stops failing.
+    #[test]
+    fn enforce_bails_on_a_bare_word_go_module() {
+        let config = make_config("sample-widget-rs");
+        let e2e_config = E2eConfig {
+            call: call_with_go_override("widget"),
+            ..E2eConfig::default()
+        };
+
+        let result = enforce_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+
+        let err = result.expect_err("a bare-word go module must abort generation");
+        assert!(
+            err.to_string().contains("not a resolvable Go import path"),
+            "got: {err}"
+        );
+    }
+
+    /// The positive twin, built from the exact shape the `alef-tasks#335` consumer-fleet
+    /// survey found live across every repo pinning the next alef release: a real
+    /// `github.com/...` go import path. This may not abort generation.
+    #[test]
+    fn enforce_does_not_bail_on_a_real_go_import_path() {
+        let config = make_config("sample-widget-rs");
+        let e2e_config = E2eConfig {
+            call: call_with_go_override("github.com/example/sample-widget"),
+            ..E2eConfig::default()
+        };
+
+        let result = enforce_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+
+        assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
+    }
+
+    /// The java check stays `Warning`: even a value [`check_java_module`] flags must not
+    /// abort generation, since the fleet survey backing this promotion found no live
+    /// `overrides.java.module` value to validate the heuristic against (see the module doc
+    /// comment's "Severity" section).
+    #[test]
+    fn enforce_does_not_bail_on_a_flagged_java_module() {
+        let config = make_config("sample_crate");
+        let e2e_config = E2eConfig {
+            call: call_with_java_override("io.xberg.Xberg"),
+            ..E2eConfig::default()
+        };
+
+        let result = enforce_call_module_overrides(&e2e_config, &config, &["java".to_string()]);
+
+        assert!(
+            result.is_ok(),
+            "a flagged java module is still only a warning: {result:?}"
+        );
     }
 }

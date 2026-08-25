@@ -47,9 +47,19 @@
 //!
 //! ## Severity
 //!
-//! Lands as [`Severity::Warning`]. See `crate::e2e::validate_call_module`'s "Severity"
-//! section for the same rationale: promotion to `Error` is a decision for once a
-//! consumer-fleet measurement shows the rule's finding rate is real bugs, not noise.
+//! Lands as [`Severity::Error`] (`alef-tasks#335`): unlike `validate_call_module`'s two
+//! checks, both rules here derive from an IR-verified fact -- the exact `ParamDef` list
+//! `CallIr::signature` resolves for the call, the same lookup every backend's own
+//! argument-type resolution consults -- not a naming-convention heuristic. A finding is
+//! never a guess about what the generator *might* do; it is the same answer the
+//! generator itself is about to act on. Promotion followed a fleet survey across every
+//! consumer repo pinning the next alef release: 88 real `[e2e.call]`/`[e2e.calls.*]`
+//! call sites, zero of which this check would have flagged, plus a live sabotage
+//! check -- deliberately breaking `check_unknown_args`/`check_missing_required_params`
+//! and confirming the regression tests below fail -- to rule out the check being
+//! vacuous (see `alef-tasks#350`, which fixed the two vacuity defects this rule
+//! previously had: a `binding_excluded` skip that hid a call the generator still
+//! emits, and an `.all()` over zero languages that returned `true` by construction).
 
 use super::validate::{Severity, ValidationError};
 use crate::core::config::e2e::{ArgMapping, CallConfig, E2eConfig};
@@ -57,9 +67,9 @@ use crate::core::ir::{FunctionDef, ParamDef, TypeDef};
 use crate::e2e::codegen::call_ir::{CallIr, binding_excluded_for_language};
 use crate::e2e::fixture::Fixture;
 
-/// Run [`validate_call_arg_signatures`] and log every diagnostic. See
-/// `crate::e2e::validate_call_module::enforce_call_module_overrides`'s doc comment for
-/// why this never bails today: every diagnostic here is [`Severity::Warning`].
+/// Run [`validate_call_arg_signatures`] and log every diagnostic, then bail with every
+/// [`Severity::Error`] diagnostic's message when any fired -- see this module's doc
+/// comment's "Severity" section for why every diagnostic here is `Error`.
 pub fn enforce_call_arg_signatures(
     fixtures: &[Fixture],
     e2e_config: &E2eConfig,
@@ -165,7 +175,7 @@ fn check_unknown_args(
                  function/method '{lookup_name}')",
                 fixture.id, arg.name, lookup_name
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
         });
     }
 }
@@ -191,7 +201,7 @@ fn check_missing_required_params(
                  parameter has no default)",
                 fixture.id, param.name
             ),
-            severity: Severity::Warning,
+            severity: Severity::Error,
         });
     }
 }
@@ -282,7 +292,7 @@ mod tests {
         let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
 
         assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
-        assert_eq!(errors[0].severity, Severity::Warning);
+        assert_eq!(errors[0].severity, Severity::Error);
         assert!(
             errors[0].message.contains("fixture 'basic' arg 'concurrency'"),
             "got: {}",
@@ -491,5 +501,60 @@ mod tests {
             "got: {}",
             errors[0].message
         );
+    }
+
+    /// `alef-tasks#335`: this check is now `Severity::Error`, so a genuinely broken fixture
+    /// must abort generation through [`enforce_call_arg_signatures`], not merely log. Sabotage
+    /// coverage for the promotion: revert the severity literals to `Warning` and this test is
+    /// the one that stops failing, proving it is load-bearing rather than vacuous.
+    #[test]
+    fn enforce_bails_when_an_arg_names_a_removed_parameter() {
+        let functions = vec![function("complete", vec![param("prompt")])];
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false), arg("concurrency", true)]),
+            ..E2eConfig::default()
+        };
+        let fixtures = vec![fixture_with_call("basic", None)];
+
+        let result = enforce_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
+
+        let err = result.expect_err("a removed-parameter arg must abort generation");
+        assert!(
+            err.to_string().contains("fixture 'basic' arg 'concurrency'"),
+            "got: {err}"
+        );
+    }
+
+    /// The positive twin, built from the exact shapes the `alef-tasks#335` consumer-fleet
+    /// survey found live across every repo pinning the next alef release: a required
+    /// parameter supplied, an optional one omitted, and a `binding_excluded` call resolved
+    /// only for a non-rust language. None of these may abort generation.
+    #[test]
+    fn enforce_does_not_bail_on_the_legitimate_patterns_the_fleet_survey_found() {
+        let functions = vec![
+            function("complete", vec![param("prompt"), optional_param("model")]),
+            FunctionDef {
+                binding_excluded: true,
+                ..function("chat", vec![param("request")])
+            },
+        ];
+        let e2e_config = {
+            let mut config = E2eConfig {
+                call: call_named("complete", vec![arg("prompt", false)]),
+                ..E2eConfig::default()
+            };
+            config
+                .calls
+                .insert("chat".to_string(), call_named("chat", vec![arg("request", false)]));
+            config
+        };
+        let fixtures = vec![
+            fixture_with_call("basic", None),
+            fixture_with_call("chat_basic", Some("chat")),
+        ];
+
+        let result = enforce_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["python".to_string()]);
+
+        assert!(result.is_ok(), "expected Ok(()), got: {result:?}");
     }
 }
