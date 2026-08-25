@@ -90,7 +90,7 @@ fn test_c_signature_and_example_agree_on_named_return_handle_type() {
         None,
     );
     let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
-    let example = crate::docs::examples::render_function_example(&func, Language::C, TEST_PREFIX);
+    let example = crate::docs::examples::render_function_example(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
 
     assert_eq!(signature, "HTMAlefHandle htm_parse_document(const char* input);");
     assert!(
@@ -179,7 +179,7 @@ fn test_c_signature_and_example_agree_on_named_param_handle_type() {
         None,
     );
     let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
-    let example = crate::docs::examples::render_function_example(&func, Language::C, TEST_PREFIX);
+    let example = crate::docs::examples::render_function_example(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
 
     assert_eq!(signature, "void htm_attach(HTMAlefHandle config);");
     assert!(

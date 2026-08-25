@@ -12,11 +12,16 @@ use heck::ToSnakeCase;
 /// hand if the ffi backend ever renames the handle type.
 const FFI_HANDLE_TYPE_NAME: &str = "AlefHandle";
 
-pub(crate) fn render_function_example(func: &FunctionDef, lang: Language, ffi_prefix: &str) -> String {
+pub(crate) fn render_function_example(
+    func: &FunctionDef,
+    lang: Language,
+    ffi_prefix: &str,
+    crate_name: &str,
+) -> String {
     if let Some(example) = authored_example_block(&func.doc, lang) {
         return example;
     }
-    let call = function_call_expression(func, lang, ffi_prefix);
+    let call = function_call_expression(func, lang, ffi_prefix, crate_name);
     render_example_block(
         lang,
         render_call_statement(
@@ -141,18 +146,35 @@ fn render_example_block(lang: Language, body: String) -> String {
     out
 }
 
-fn function_call_expression(func: &FunctionDef, lang: Language, ffi_prefix: &str) -> String {
+fn function_call_expression(func: &FunctionDef, lang: Language, ffi_prefix: &str, crate_name: &str) -> String {
     let name = func_name(&func.name, lang, ffi_prefix);
     let args = render_args(&func.params, lang, ffi_prefix);
-    match lang {
-        Language::Elixir => format!("{name}({args})"),
-        Language::Php => format!("{name}({args})"),
-        _ => format!("{name}({args})"),
+    // ~keep Every alef free function becomes a `public static` member of one wrapper class in
+    // the emitted C# (`gen_wrapper_class` in backends/csharp/gen_bindings/mod.rs), never a
+    // bare top-level function -- C# has no free functions. `csharp_wrapper_class_name` is the
+    // same helper the C# backend and `readme::generate_readme` use to name that class, so the
+    // example call site cannot spell a class the binding does not actually emit. The async
+    // suffix must be applied to `name` before qualifying it, matching
+    // `render_csharp_fn_sig`'s naming.
+    if lang == Language::Csharp {
+        let class_name = crate::codegen::naming::csharp_wrapper_class_name(crate_name, "");
+        let member_name = crate::docs::naming::csharp_async_member_name(&name, func.is_async);
+        return format!("{class_name}.{member_name}({args})");
     }
+    format!("{name}({args})")
 }
 
 fn method_call_expression(method: &MethodDef, owner_type: &str, lang: Language, ffi_prefix: &str) -> String {
     let name = method_name(owner_type, &method.name, lang, ffi_prefix);
+    // ~keep Same rule as `function_call_expression` and `render_method_signature`'s C# arm: an
+    // async opaque method's C# name always carries the `Async` suffix, whether it is an
+    // instance method or a static factory (`gen_opaque_method` in
+    // backends/csharp/gen_bindings/types/opaque.rs applies it to both).
+    let name = if lang == Language::Csharp {
+        crate::docs::naming::csharp_async_member_name(&name, method.is_async)
+    } else {
+        name
+    };
     let args = render_args(&method.params, lang, ffi_prefix);
     if method.is_static {
         return static_method_call(method, owner_type, &name, &args, lang, ffi_prefix);
@@ -670,26 +692,26 @@ mod tests {
 
     #[test]
     fn function_example_uses_async_typescript_await() {
-        let rendered = render_function_example(&function(), Language::Node, "Demo");
+        let rendered = render_function_example(&function(), Language::Node, "Demo", "Demo");
         assert!(rendered.contains("const result = await parseDocument(\"value\");"));
     }
 
     #[test]
     fn function_example_uses_rust_try_and_await() {
-        let rendered = render_function_example(&function(), Language::Rust, "Demo");
+        let rendered = render_function_example(&function(), Language::Rust, "Demo", "Demo");
         assert!(rendered.contains("let result = parse_document(\"value\").await?;"));
     }
 
     #[test]
     fn function_example_uses_go_error_handling() {
-        let rendered = render_function_example(&function(), Language::Go, "Demo");
+        let rendered = render_function_example(&function(), Language::Go, "Demo", "Demo");
         assert!(rendered.contains("result, err := ParseDocument(\"value\")"));
         assert!(rendered.contains("if err != nil"));
     }
 
     #[test]
     fn function_example_uses_c_return_type() {
-        let rendered = render_function_example(&function(), Language::C, "Demo");
+        let rendered = render_function_example(&function(), Language::C, "Demo", "Demo");
         assert!(rendered.contains("const char *result = demo_parse_document(\"value\");"));
         assert!(!rendered.contains("void *result"));
     }
@@ -699,7 +721,7 @@ mod tests {
         let mut function = function();
         function.params = vec![param("config", TypeRef::Named("ClientConfig".to_string()))];
         function.return_type = TypeRef::Unit;
-        let rendered = render_function_example(&function, Language::C, "Demo");
+        let rendered = render_function_example(&function, Language::C, "Demo", "Demo");
         assert!(rendered.contains("demo_parse_document(0);"));
         assert!(!rendered.contains("demo_parse_document(NULL);"));
         assert!(!rendered.contains("(DEMOClientConfig){0}"));
@@ -712,7 +734,7 @@ mod tests {
         config_param.optional = true;
         function.params = vec![config_param];
         function.return_type = TypeRef::Unit;
-        let rendered = render_function_example(&function, Language::C, "Demo");
+        let rendered = render_function_example(&function, Language::C, "Demo", "Demo");
         assert!(rendered.contains("demo_parse_document(0);"));
         assert!(!rendered.contains("demo_parse_document(NULL);"));
     }
@@ -721,7 +743,7 @@ mod tests {
     fn function_example_uses_c_alef_handle_type_for_named_return() {
         let mut function = function();
         function.return_type = TypeRef::Named("ConversionResult".to_string());
-        let rendered = render_function_example(&function, Language::C, "Demo");
+        let rendered = render_function_example(&function, Language::C, "Demo", "Demo");
         assert!(rendered.contains("DEMOAlefHandle result = demo_parse_document(\"value\");"));
         assert!(!rendered.contains("DEMOConversionResult *result"));
     }
@@ -730,7 +752,7 @@ mod tests {
     fn function_example_c_optional_string_param_still_uses_null() {
         let mut function = function();
         function.params = vec![param("note", TypeRef::Optional(Box::new(TypeRef::String)))];
-        let rendered = render_function_example(&function, Language::C, "Demo");
+        let rendered = render_function_example(&function, Language::C, "Demo", "Demo");
         assert!(rendered.contains("demo_parse_document(NULL)"));
     }
 
@@ -739,7 +761,7 @@ mod tests {
         let mut function = function();
         function.doc =
             "Parse a document.\n\n# Examples\n\n```python\nresult = parse_document(\"file.pdf\")\n```".to_string();
-        let rendered = render_function_example(&function, Language::Python, "Demo");
+        let rendered = render_function_example(&function, Language::Python, "Demo", "Demo");
         assert!(rendered.contains("result = parse_document(\"file.pdf\")"));
         assert!(!rendered.contains("parse_document(\"value\")"));
     }
@@ -749,8 +771,96 @@ mod tests {
         let mut function = function();
         function.doc =
             "Parse a document.\n\n# Examples\n\n```python\nresult = parse_document(\"file.pdf\")\n```".to_string();
-        let rendered = render_function_example(&function, Language::Node, "Demo");
+        let rendered = render_function_example(&function, Language::Node, "Demo", "Demo");
         assert!(rendered.contains("const result = await parseDocument(\"value\");"));
         assert!(!rendered.contains("file.pdf"));
+    }
+
+    fn method(name: &str, is_async: bool, is_static: bool) -> MethodDef {
+        MethodDef {
+            name: name.to_string(),
+            params: vec![],
+            return_type: TypeRef::String,
+            is_async,
+            is_static,
+            error_type: None,
+            doc: String::new(),
+            receiver: None,
+            cfg: None,
+            sanitized: false,
+            trait_source: None,
+            returns_ref: false,
+            returns_cow: false,
+            return_newtype_wrapper: None,
+            has_default_impl: false,
+            binding_excluded: false,
+            binding_exclusion_reason: None,
+            version: Default::default(),
+        }
+    }
+
+    /// ~keep Reproduces a real-consumer symptom: the C# binding wraps every free function as a
+    /// `public static` member of one wrapper class (`gen_wrapper_class` in
+    /// backends/csharp/gen_bindings/mod.rs) and appends `Async` to every async member
+    /// (`gen_bindings/methods/wrappers.rs`) -- C# has no free functions at all. The docs example
+    /// for a free function used to call the bare, un-suffixed name with no receiver, which is
+    /// not code the binding this page documents can even compile.
+    #[test]
+    fn function_example_csharp_uses_wrapper_class_and_async_suffix() {
+        let rendered = render_function_example(&function(), Language::Csharp, "Demo", "sample-parser-rs");
+        assert!(
+            rendered.contains("var result = await SampleParserConverter.ParseDocumentAsync(\"value\");"),
+            "{rendered}"
+        );
+    }
+
+    /// ~keep Control: a sync C# free function must NOT gain the `Async` suffix or an `await` --
+    /// guards against an over-eager fix that suffixes every C# call regardless of `is_async`.
+    #[test]
+    fn function_example_csharp_sync_function_omits_async_suffix_and_await() {
+        let mut sync_function = function();
+        sync_function.is_async = false;
+        let rendered = render_function_example(&sync_function, Language::Csharp, "Demo", "sample-parser-rs");
+        assert!(
+            rendered.contains("var result = SampleParserConverter.ParseDocument(\"value\");"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("Async"), "{rendered}");
+        assert!(!rendered.contains("await"), "{rendered}");
+    }
+
+    #[test]
+    fn method_example_csharp_instance_method_uses_async_suffix() {
+        let async_method = method("process_document", true, false);
+        let rendered = render_method_example(&async_method, "DocumentProcessor", Language::Csharp, "Demo");
+        assert!(
+            rendered.contains("var result = await instance.ProcessDocumentAsync();"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn method_example_csharp_static_method_uses_async_suffix() {
+        let async_method = method("from_bytes", true, true);
+        let rendered = render_method_example(&async_method, "DocumentProcessor", Language::Csharp, "Demo");
+        assert!(
+            rendered.contains("var result = await DocumentProcessor.FromBytesAsync();"),
+            "{rendered}"
+        );
+    }
+
+    /// ~keep The dominant defect shape in this pipeline is two independent renderers deriving
+    /// the same fact differently -- here, the C# member name for an async function. Pins the
+    /// example call site and the signature line to name the SAME emitted member for the SAME
+    /// `FunctionDef`, rather than asserting each against a literal that could drift
+    /// independently the way they already had.
+    #[test]
+    fn function_example_csharp_agrees_with_signature_on_async_member_name() {
+        let func = function();
+        let signature =
+            crate::docs::signatures::render_function_signature(&func, Language::Csharp, "Demo", "sample-parser-rs");
+        let example = render_function_example(&func, Language::Csharp, "Demo", "sample-parser-rs");
+        assert!(signature.contains("ParseDocumentAsync"), "{signature}");
+        assert!(example.contains("ParseDocumentAsync"), "{example}");
     }
 }

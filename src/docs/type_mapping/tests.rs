@@ -28,6 +28,38 @@ fn test_doc_type_vec() {
     assert_eq!(doc_type(&ty, Language::Java, TEST_PREFIX), "List<String>");
 }
 
+/// ~keep A `Vec<Named>` (e.g. a batch-extraction parameter taking several handles) must
+/// document the same JSON `const char*` the C ABI actually declares, not a real array of the
+/// element type. `FfiParamMapper::vec`/`FfiReturnMapper::vec` (backends/ffi/type_map.rs)
+/// return `*const`/`*mut std::ffi::c_char` for a `Vec` regardless of its element type -- there
+/// is no per-element branch in either mapper. Reproduces a real-consumer symptom: the docs
+/// showed `AlefHandle*` (a real handle array) for a batch parameter the emitted header takes
+/// as one JSON string.
+#[test]
+fn test_doc_type_vec_of_named_ffi_is_json_string_not_a_handle_array() {
+    let ty = TypeRef::Vec(Box::new(TypeRef::Named("DocumentHandle".to_string())));
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "const char*");
+    assert_eq!(doc_type(&ty, Language::C, TEST_PREFIX), "const char*");
+}
+
+/// ~keep Control: a `Vec<Primitive>` must ALSO document as the JSON `const char*` the ABI
+/// declares -- guards against a fix that special-cased only the `Named`-element case and left
+/// every other element type still rendering the old `{inner_ty}*` array shape.
+#[test]
+fn test_doc_type_vec_of_primitive_ffi_is_also_json_string() {
+    let ty = TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U32)));
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "const char*");
+}
+
+/// ~keep Same JSON-string authority as the `Vec` case: `FfiParamMapper::map`/
+/// `FfiReturnMapper::map` return `*const`/`*mut std::ffi::c_char`, not the `void*` this page
+/// used to document.
+#[test]
+fn test_doc_type_map_ffi_is_json_string_not_void_pointer() {
+    let ty = TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::String));
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "const char*");
+}
+
 #[test]
 fn test_doc_type_primitives() {
     assert_eq!(
@@ -173,7 +205,7 @@ fn test_doc_type_json_all_languages() {
         doc_type(&TypeRef::Json, Language::Rust, TEST_PREFIX),
         "serde_json::Value"
     );
-    assert_eq!(doc_type(&TypeRef::Json, Language::Ffi, TEST_PREFIX), "void*");
+    assert_eq!(doc_type(&TypeRef::Json, Language::Ffi, TEST_PREFIX), "const char*");
     assert_eq!(doc_type(&TypeRef::Json, Language::Kotlin, TEST_PREFIX), "Any");
     assert_eq!(doc_type(&TypeRef::Json, Language::Swift, TEST_PREFIX), "String");
     assert_eq!(doc_type(&TypeRef::Json, Language::Dart, TEST_PREFIX), "String");
@@ -304,7 +336,7 @@ fn test_doc_type_map_string_to_string_all_languages() {
     assert_eq!(doc_type(&ty, Language::Elixir, TEST_PREFIX), "map()");
     assert_eq!(doc_type(&ty, Language::R, TEST_PREFIX), "list");
     assert_eq!(doc_type(&ty, Language::Rust, TEST_PREFIX), "HashMap<String, String>");
-    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "void*");
+    assert_eq!(doc_type(&ty, Language::Ffi, TEST_PREFIX), "const char*");
 }
 
 #[test]

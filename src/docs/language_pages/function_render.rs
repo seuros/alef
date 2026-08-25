@@ -78,7 +78,7 @@ pub(super) fn render_function(
     ));
     out.push('\n');
 
-    out.push_str(&render_function_example(func, lang, ffi_prefix));
+    out.push_str(&render_function_example(func, lang, ffi_prefix, &api.crate_name));
 
     push_parameters_table(&mut out, &func.params, &param_docs, lang, ffi_prefix);
 
@@ -256,7 +256,7 @@ This function is intentionally excluded from language bindings."#
             let doc = clean_doc(&func.doc, Language::Rust);
             demote_headings_to_start_at(&doc, 5)
         };
-        let example = render_function_example(&func, Language::Rust, TEST_PREFIX);
+        let example = render_function_example(&func, Language::Rust, TEST_PREFIX, TEST_CRATE_NAME);
         let rendered = format!("{doc_body}\n\n{example}");
 
         assert_eq!(

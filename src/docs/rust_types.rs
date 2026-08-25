@@ -31,11 +31,20 @@ pub(crate) fn rust_param_type(param: &ParamDef, ffi_prefix: &str) -> String {
 ///
 /// A field whose named type is not part of the binding surface reaches codegen as `String`; the
 /// sanitizer records what it was in `FieldDef::original_type`, which is what makes the real name
-/// recoverable here. ~keep
+/// recoverable here.
+///
+/// Trusts `original_type` whenever it is set, not only when `sanitized` is also `true`. The
+/// sanitizer sets `original_type` in exactly two places (`sanitize_field`'s lossy-rewrite branch,
+/// which also sets `sanitized`, and a lossless rewrite such as a known-typed fixed-size array
+/// (`[Point; 4]`) collapsing to `Vec<Point>`, which does not) -- both exist for the same reason:
+/// recovering what the crate actually declared once `field.ty` has been normalized away from it.
+/// Gating on `sanitized` hid the second population, so a lossless array lowering rendered the Rust
+/// reference page as `Vec<Point>` instead of `[Point; 4]`, the same "shows the binding shape, not
+/// canonical Rust" defect this module exists to avoid everywhere else. ~keep
 pub(crate) fn rust_field_type(field: &FieldDef, ffi_prefix: &str) -> String {
     let inner = match field.original_type.as_deref() {
-        Some(original) if field.sanitized => original.to_string(),
-        _ => doc_type(&field.ty, Language::Rust, ffi_prefix),
+        Some(original) => original.to_string(),
+        None => doc_type(&field.ty, Language::Rust, ffi_prefix),
     };
     if field.optional && !inner.starts_with("Option<") {
         format!("Option<{inner}>")
@@ -136,5 +145,38 @@ mod tests {
             rust_param_type(&make_param("data", TypeRef::Bytes, false), TEST_PREFIX),
             "Vec<u8>"
         );
+    }
+
+    /// ~keep Reproduces the lossless fixed-size-array lowering the extract sanitizer performs
+    /// for a field declared `[Point; 4]`: `field.ty` becomes `Vec<Point>` (a lossless
+    /// representation -- only the fixed length is not itself tracked in the IR) and
+    /// `field.original_type` records what the crate actually declared, but `field.sanitized`
+    /// stays `false` because nothing was lost. `"[Point ; 4]"` (space before the semicolon) is
+    /// asserted verbatim, not the prettier `"[Point; 4]"`, because `TypeRef::Named`'s payload is
+    /// exactly what `type_resolver::normalize_type_string` produces: it strips the cosmetic
+    /// spaces `quote` inserts around `< > [ ] ( ) , * & :`, and `;` is not in that set.
+    #[test]
+    fn rust_field_type_prefers_original_type_for_a_lossless_array_lowering() {
+        let field = FieldDef {
+            ty: TypeRef::Vec(Box::new(TypeRef::Named("Point".to_string()))),
+            original_type: Some("[Point ; 4]".to_string()),
+            sanitized: false,
+            ..crate::docs::test_helpers::make_field(
+                "points",
+                TypeRef::Vec(Box::new(TypeRef::Named("Point".to_string()))),
+                false,
+                None,
+            )
+        };
+        assert_eq!(rust_field_type(&field, TEST_PREFIX), "[Point ; 4]");
+    }
+
+    /// ~keep Control: an ordinary field with no `original_type` at all must keep rendering from
+    /// `field.ty` through `doc_type` -- guards against a fix that trusts `original_type`
+    /// unconditionally instead of falling back when it is genuinely absent.
+    #[test]
+    fn rust_field_type_falls_back_to_doc_type_when_original_type_is_absent() {
+        let field = crate::docs::test_helpers::make_field("name", TypeRef::String, false, None);
+        assert_eq!(rust_field_type(&field, TEST_PREFIX), "String");
     }
 }

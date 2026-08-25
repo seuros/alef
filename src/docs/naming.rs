@@ -228,6 +228,23 @@ pub(crate) fn method_name(owner_type: &str, name: &str, lang: Language, ffi_pref
     }
 }
 
+/// Suffix a C# member name with `Async`, the same rule the C# backend applies to every emitted
+/// async free function, bridge-field wrapper, and opaque method (`gen_bindings/methods/
+/// wrappers.rs`, `gen_bindings/methods/bridge_fields.rs`, `gen_bindings/types/opaque.rs`: each
+/// independently does `if is_async && !name.ends_with("Async") { name.push_str("Async") }`).
+/// `signatures.rs`'s C# function/method signature renderers and `examples.rs`'s C# call-site
+/// renderer both name the same emitted member and must not re-derive this rule separately --
+/// that duplication is exactly how a real consumer ended up with example code calling
+/// `Extract`/`ExtractBatch` against a binding that only exports `ExtractAsync`/
+/// `ExtractBatchAsync`. ~keep
+pub(crate) fn csharp_async_member_name(name: &str, is_async: bool) -> String {
+    if is_async && !name.ends_with("Async") {
+        format!("{name}Async")
+    } else {
+        name.to_string()
+    }
+}
+
 /// Convert a Rust field name to the idiomatic name for the target language.
 pub(crate) fn field_name(name: &str, lang: Language) -> String {
     match lang {
@@ -413,6 +430,13 @@ mod tests {
                 "{lang} must delegate to func_name unchanged"
             );
         }
+    }
+
+    #[test]
+    fn test_csharp_async_member_name_appends_async_suffix() {
+        assert_eq!(csharp_async_member_name("ParseDocument", true), "ParseDocumentAsync");
+        assert_eq!(csharp_async_member_name("ParseDocument", false), "ParseDocument");
+        assert_eq!(csharp_async_member_name("ExtractAsync", true), "ExtractAsync");
     }
 
     #[test]

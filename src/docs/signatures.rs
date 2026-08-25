@@ -315,11 +315,7 @@ pub(crate) fn render_csharp_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> Stri
         })
         .collect();
     if func.is_async {
-        let async_name = if name.ends_with("Async") {
-            name.clone()
-        } else {
-            format!("{name}Async")
-        };
+        let async_name = crate::docs::naming::csharp_async_member_name(&name, true);
         let task_ret = if ret == "void" {
             "Task".to_string()
         } else {
@@ -807,11 +803,7 @@ pub(crate) fn render_method_signature_with_override(
                 // `async` in that template, not the other way round.
                 let static_kw = if method.is_static { "static " } else { "" };
                 if method.is_async {
-                    let async_name = if name.ends_with("Async") {
-                        name.clone()
-                    } else {
-                        format!("{name}Async")
-                    };
+                    let async_name = crate::docs::naming::csharp_async_member_name(&name, true);
                     let task_ret = if ret == "void" {
                         "Task".to_string()
                     } else {

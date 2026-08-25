@@ -110,7 +110,18 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                     Language::Elixir => format!("list({inner_ty})"),
                     Language::R => "list".to_string(),
                     Language::Rust => format!("Vec<{inner_ty}>"),
-                    Language::Ffi | Language::C | Language::Jni => format!("{inner_ty}*"),
+                    // ~keep A `Vec<T>` crosses the C ABI as one JSON-encoded string, never an
+                    // array of `T` -- `FfiParamMapper::vec`/`FfiReturnMapper::vec`
+                    // (backends/ffi/type_map.rs) return `*const`/`*mut std::ffi::c_char` for
+                    // every element type, including `Vec<Named>`, with no per-element
+                    // branching at all. `{inner_ty}*` was doubly wrong for a batch-of-handles
+                    // parameter: it named a real C array of `AlefHandle` values that the
+                    // header never declares, and for any other element type it also missed
+                    // that a Vec is JSON regardless of what it holds. Jni is grouped in here
+                    // for the same reason the Optional/String/Path/Json arms already are --
+                    // still the wrong ABI for it, tracked separately (see the note in
+                    // `docs::examples::sample_param_value`), but no more wrong than before.
+                    Language::Ffi | Language::C | Language::Jni => "const char*".to_string(),
                     Language::Java | Language::Csharp => unreachable!(),
                     Language::Kotlin | Language::KotlinAndroid | Language::Dart => format!("List<{inner_ty}>"),
                     Language::Swift => format!("[{inner_ty}]"),
@@ -138,7 +149,11 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
                 Language::Elixir => "map()".to_string(),
                 Language::R => "list".to_string(),
                 Language::Rust => format!("HashMap<{kty}, {vty}>"),
-                Language::Ffi | Language::C | Language::Jni => "void*".to_string(),
+                // ~keep Same JSON-string authority as the `Vec` arm above:
+                // `FfiParamMapper::map`/`FfiReturnMapper::map` (backends/ffi/type_map.rs)
+                // return `*const`/`*mut std::ffi::c_char` unconditionally, never a `void*` to
+                // some C map structure the header does not declare.
+                Language::Ffi | Language::C | Language::Jni => "const char*".to_string(),
                 Language::Kotlin | Language::KotlinAndroid => format!("Map<{kty}, {vty}>"),
                 Language::Swift => format!("[{kty}: {vty}]"),
                 Language::Dart => format!("Map<{kty}, {vty}>"),
@@ -317,7 +332,10 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
             Language::Elixir => "term()".to_string(),
             Language::R => "list".to_string(),
             Language::Rust => "serde_json::Value".to_string(),
-            Language::Ffi | Language::C | Language::Jni => "void*".to_string(),
+            // ~keep Same JSON-string authority as the `Vec`/`Map` arms above:
+            // `FfiParamMapper::json`/`FfiReturnMapper::json` (backends/ffi/type_map.rs) return
+            // `*const`/`*mut std::ffi::c_char`, not a `void*` to some opaque C value.
+            Language::Ffi | Language::C | Language::Jni => "const char*".to_string(),
             Language::Kotlin | Language::KotlinAndroid => "Any".to_string(),
             Language::Swift => "String".to_string(),
             Language::Dart => "String".to_string(),
