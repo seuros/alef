@@ -59,6 +59,7 @@ fn render_fixture(e2e_config: &E2eConfig, assertions: Vec<Assertion>) -> String 
             type_defs: &type_defs,
             enums: &enums,
             errors: &errors,
+            functions: &[],
         },
     )
 }

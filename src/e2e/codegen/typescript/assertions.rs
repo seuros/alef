@@ -100,10 +100,22 @@ pub(super) fn render_assertion(
 
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct property accesses on the result.
-    if let Some(f) = &assertion.field
-        && render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming)
-    {
-        return;
+    if let Some(f) = &assertion.field {
+        if matches!(
+            f.as_str(),
+            "chunks_have_content" | "chunks_have_embeddings" | "chunks_have_heading_context"
+                | "first_chunk_starts_with_heading"
+        ) && !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver)
+        {
+            out.push_str(&format!(
+                "    // skipped: {}\n",
+                FieldSkip::NotAvailableOnResultType.message(f)
+            ));
+            return;
+        }
+        if render_synthetic_field_assertion(out, assertion, result_var, f, is_streaming) {
+            return;
+        }
     }
 
     // Skip assertions on fields that don't exist on the result type.
