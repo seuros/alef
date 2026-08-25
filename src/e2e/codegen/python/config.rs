@@ -346,7 +346,27 @@ pub(super) fn render_conftest(e2e_config: &E2eConfig, groups: &[FixtureGroup]) -
     // by a consumer extension (Extension::emit_e2e "python" arm).
     // alef falls through to the client/mock-server or minimal conftest below.
     if has_mock_server_fixtures {
-        // Mock-server pattern (non-HTTP fixtures)
+        // Mock-server pattern (non-HTTP fixtures). A fixture set can need the mock
+        // server AND read a file by path in the same run, so the chdir below is
+        // additive to this branch rather than exclusive to the has_file_fixtures
+        // branch further down -- an if/else here would silently drop the chdir
+        // whenever both kinds of fixture coexist, leaving file_path/bytes args
+        // unresolved against pytest's actual invocation cwd. ~keep
+        let file_fixtures_chdir = if has_file_fixtures {
+            let test_documents_dir = &e2e_config.test_documents_dir;
+            format!(
+                r#"
+# Change to the configured test-documents directory so that fixture file
+# paths like "pdf/fake_memo.pdf" resolve correctly when running pytest
+# from e2e/python/.
+_TEST_DOCUMENTS = _E2E_DIR.parent / "{test_documents_dir}"
+if _TEST_DOCUMENTS.is_dir():
+    os.chdir(_TEST_DOCUMENTS)
+"#
+            )
+        } else {
+            String::new()
+        };
         format!(
             r#"{header}"""Pytest configuration for e2e tests."""
 from __future__ import annotations
@@ -366,6 +386,7 @@ _HERE = Path(__file__).parent
 _E2E_DIR = _HERE.parent
 _MOCK_SERVER_BIN = _E2E_DIR / "rust" / "target" / "release" / "mock-server"
 _FIXTURES_DIR = _E2E_DIR.parent / "fixtures"
+{file_fixtures_chdir}
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -556,6 +577,59 @@ mod tests {
         assert!(
             !out.contains("_SUITE_ENV"),
             "empty env should emit no block; got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_conftest_chdirs_into_test_documents_when_mock_server_also_needed() {
+        // A fixture set can need the mock server (e.g. a `mock_response`) AND read a
+        // file by path in the same run. The mock-server branch must not silently
+        // drop the test_documents chdir just because it also handles mock-server
+        // wiring -- regression for the if/else that made them mutually exclusive.
+        use crate::core::config::e2e::{ArgMapping, CallConfig};
+        use crate::e2e::fixture::{Fixture, FixtureGroup, MockResponse};
+
+        let e2e_config = crate::e2e::config::E2eConfig {
+            call: CallConfig {
+                function: "detect_mime_type_from_bytes".to_string(),
+                args: vec![ArgMapping {
+                    name: "content".to_string(),
+                    field: "input.data".to_string(),
+                    arg_type: "file_path".to_string(),
+                    optional: false,
+                    owned: false,
+                    element_type: None,
+                    go_type: None,
+                    vec_inner_is_ref: false,
+                    trait_name: None,
+                }],
+                ..CallConfig::default()
+            },
+            ..crate::e2e::config::E2eConfig::default()
+        };
+        let fixture = Fixture {
+            id: "mime_detect_from_path".to_string(),
+            description: "Detect MIME type from a file path".to_string(),
+            input: serde_json::json!({"data": "pdf/fake_memo.pdf"}),
+            mock_response: Some(MockResponse {
+                status: 200,
+                body: Some(serde_json::json!({"mime": "application/pdf"})),
+                stream_chunks: None,
+                headers: Default::default(),
+            }),
+            ..Fixture::default()
+        };
+        let groups = [FixtureGroup {
+            category: "mime".to_string(),
+            fixtures: vec![fixture],
+        }];
+
+        let out = render_conftest(&e2e_config, &groups);
+        assert!(out.contains("mock_server"), "expected mock-server branch; got: {out}");
+        assert!(
+            out.contains("os.chdir(_TEST_DOCUMENTS)"),
+            "mock-server branch must still chdir into test_documents when file fixtures \
+             also exist; got: {out}"
         );
     }
 

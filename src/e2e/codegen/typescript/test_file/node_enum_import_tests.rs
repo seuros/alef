@@ -53,6 +53,7 @@ fn node_imports_enum_values_referenced_by_typed_inputs() {
         &e2e_config,
         &[input_type],
         &enums,
+        &[],
         "",
         &Default::default(),
         &[],

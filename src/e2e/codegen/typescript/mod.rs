@@ -264,6 +264,7 @@ impl E2eCodegen for TypeScriptCodegen {
                 e2e_config,
                 type_defs,
                 enums,
+                functions,
                 "",
                 config,
                 errors,

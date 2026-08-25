@@ -393,6 +393,7 @@ impl E2eCodegen for WasmCodegen {
                 e2e_config,
                 type_defs,
                 enums,
+                functions,
                 &wasm_type_prefix,
                 config,
                 &[],

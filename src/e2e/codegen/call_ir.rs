@@ -53,6 +53,7 @@ impl<'a> CallIr<'a> {
                 params: &function.params,
                 return_type: &function.return_type,
                 error_type: function.error_type.as_deref(),
+                is_async: function.is_async,
             });
         }
         let mut methods = self
@@ -68,6 +69,7 @@ impl<'a> CallIr<'a> {
             params: &first.params,
             return_type: &first.return_type,
             error_type: first.error_type.as_deref(),
+            is_async: first.is_async,
         })
     }
 }
@@ -84,6 +86,12 @@ pub(crate) struct IrSignature<'a> {
     /// `backends::ffi::orchestration` is exactly this condition, and the two must agree on
     /// what "fallible" means for the same function. ~keep
     pub error_type: Option<&'a str>,
+    /// Whether the declared Rust function/method is `async fn`. Read by backends whose
+    /// runtime distinguishes an awaited call from a synchronous one (e.g. TypeScript's
+    /// `await` before the call expression) so that decision comes from the IR's actual
+    /// signature rather than solely a hand-authored `alef.toml` `async` flag, which can
+    /// drift out of sync with the Rust source after the function's signature changes. ~keep
+    pub is_async: bool,
 }
 
 /// Whether two same-named methods declare the same thing, for the purposes of the three
