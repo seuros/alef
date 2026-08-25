@@ -434,8 +434,8 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 if any_output_changed || pipeline::generated_tree_needs_formatting(&base_dir) {
                     tracing::info!("Formatting generated files...");
                     // Load-bearing, not defence in depth: removing the per-phase
-                    // `finalize_hashes` checkpoints above stops a FRESH run from mis-stamping,
-                    // but a tree an EARLIER, pre-fix run already stamped-and-never-formatted
+                    // `finalize_hashes` checkpoints above stops a FRESH run from stamping too
+                    // early, but a tree an EARLIER, pre-fix run already stamped-and-never-formatted
                     // needs this too -- `write_files_report` compares hash-stripped bodies, so an
                     // unchanged file is never rewritten and keeps the stamp it was given,
                     // forever. Scope-symmetric by construction: the final `finalize_hashes`
