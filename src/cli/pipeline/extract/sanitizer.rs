@@ -94,6 +94,7 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
 /// population stays inert for them. ~keep
 fn sanitize_field(field: &mut FieldDef, known_types: &AHashSet<String>, known_enums: &AHashSet<String>) {
     let tuple_original = extract_tuple_vec_original_type(&field.ty);
+    let lowered_fixed_array = lowers_a_fixed_array(&field.ty, known_types, known_enums);
     let pre_sanitization = field.ty.rust_source_display();
     if sanitize_type_ref(&mut field.ty, known_types, known_enums).is_lossy() {
         field.sanitized = true;
@@ -102,6 +103,11 @@ fn sanitize_field(field: &mut FieldDef, known_types: &AHashSet<String>, known_en
         } else if field.original_type.is_none() {
             field.original_type = Some(pre_sanitization);
         }
+    } else if lowered_fixed_array && field.original_type.is_none() {
+        // The declared length is the one fact `Vec<T>` cannot carry. Recording it costs nothing --
+        // every backend reader of a *field*'s `original_type` also requires `field.sanitized`,
+        // which a lossless lowering never sets. ~keep
+        field.original_type = Some(pre_sanitization);
     }
 }
 
@@ -325,6 +331,46 @@ fn extract_tuple_vec_original_type(ty: &TypeRef) -> Option<String> {
     }
 }
 
+/// The element name of a fixed-size array whose element type the binding surface already carries,
+/// e.g. `"[Point ; 4]"` → `Some("Point")`. `None` for every other string.
+///
+/// `resolve_type` has no IR variant for `syn::Type::Array`, so the extractor stringifies the whole
+/// array into a `TypeRef::Named` that no `known_types` lookup can ever match, and the field is
+/// rewritten to a JSON `String`. Recovering the element here rather than in the resolver is what
+/// keeps the `[(K, V); N]` shape on its existing JSON path: a tuple is never a known type name, so
+/// it can never match this. `quote` leaves a space before the `;`, hence the trimming. ~keep
+fn fixed_array_element_of_known_type(
+    name: &str,
+    known_types: &AHashSet<String>,
+    known_enums: &AHashSet<String>,
+) -> Option<String> {
+    let inner = name.trim().strip_prefix('[')?.strip_suffix(']')?;
+    let (element, length) = inner.rsplit_once(';')?;
+    let element = element.trim();
+    if length.trim().is_empty() {
+        return None;
+    }
+    if !known_types.contains(element) && !known_enums.contains(element) {
+        return None;
+    }
+    Some(element.to_string())
+}
+
+/// Whether `ty` contains a fixed-size array that [`fixed_array_element_of_known_type`] will lower.
+///
+/// Mirrors the shapes [`sanitize_type_ref`] recurses through, so the caller can tell a lowered
+/// array apart from an unchanged type without re-deriving the pre-sanitization shape. ~keep
+fn lowers_a_fixed_array(ty: &TypeRef, known_types: &AHashSet<String>, known_enums: &AHashSet<String>) -> bool {
+    match ty {
+        TypeRef::Named(name) => fixed_array_element_of_known_type(name, known_types, known_enums).is_some(),
+        TypeRef::Optional(inner) | TypeRef::Vec(inner) => lowers_a_fixed_array(inner, known_types, known_enums),
+        TypeRef::Map(key, value) => {
+            lowers_a_fixed_array(key, known_types, known_enums) || lowers_a_fixed_array(value, known_types, known_enums)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TypeSanitization {
     Unchanged,
@@ -356,6 +402,10 @@ pub(super) fn sanitize_type_ref(
         TypeRef::Named(name) if !known_types.contains(name.as_str()) && !known_enums.contains(name.as_str()) => {
             if name == "Value" || name == "JsonValue" {
                 return TypeSanitization::Unchanged;
+            }
+            if let Some(element) = fixed_array_element_of_known_type(name, known_types, known_enums) {
+                *ty = TypeRef::Vec(Box::new(TypeRef::Named(element)));
+                return TypeSanitization::Lossless;
             }
             if let Some(elem_ty) = parse_homogeneous_tuple(name) {
                 *ty = TypeRef::Vec(Box::new(elem_ty));

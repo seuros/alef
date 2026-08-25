@@ -2,7 +2,7 @@
 
 pub mod default_value_for_enum;
 pub mod extractor;
-mod type_resolver;
+pub(crate) mod type_resolver;
 pub mod validation;
 
 use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
