@@ -151,7 +151,8 @@ pub(super) fn render_test_method(
     // ir_collection_fields`'s doc): without this, `is_collection_root` can only see the
     // hand-maintained `fields_array`/`fields_optional` config, so a collection field nothing
     // ever indexes into (no per-element fixture path) has no IR-backed signal at all.
-    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
+    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
+    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let effective_enum_fields = e2e_config.effective_fields_enum(call_config);
