@@ -14,11 +14,17 @@
 //!   names a *class* instead of a *package* (e.g. `"io.xberg.Xberg"`, copied from a
 //!   `class` override one line up) produces `import io.xberg.Xberg.*;`, which does not
 //!   compile — every emitted snippet, not the config.
-//! - `src/e2e/codegen/go.rs` / `src/e2e/codegen/go/snippet.rs` resolve, in order,
-//!   `overrides.go.module`, then `[go].module`, then the base `module` field, and splice
-//!   the winner verbatim into a Go `import` path. A bare word (no `.`, no `/`) is never a
-//!   real import path for a project's own generated package — only the standard library
-//!   spells import paths that way, and this field never names the standard library.
+//! - `src/e2e/codegen/go/snippet.rs` (per-fixture snippets, which may resolve to any named
+//!   `[e2e.calls.*]` call) resolves, in order: the resolved call's own `overrides.go.module`,
+//!   then the *base* `[e2e.call]`'s `overrides.go.module` (a named call with no go override of
+//!   its own still inherits the base call's), then `[go].module`, then the resolved call's own
+//!   base `module` field. `src/e2e/codegen/go.rs` (the package-level `go.mod` resolution)
+//!   follows the same order but only ever resolves against the base call, so its first two
+//!   rungs collapse into one. Either way the winner is spliced verbatim into a Go `import`
+//!   path. A bare word (no `.`, no `/`) is never a real import path for a project's own
+//!   generated package — only the standard library spells import paths that way, and this
+//!   field never names the standard library. See [`effective_go_module`]'s doc comment for why
+//!   this check must consult the base call's override too, not just the call being validated.
 //!
 //! Both failure modes were reported together from one consumer: `module` set to a Java
 //! class instead of a package, and to a bare word for Go, producing ~38 broken generated
@@ -78,6 +84,13 @@ pub fn enforce_call_module_overrides(
 /// Validate every `module` value in `e2e_config` (the default `[e2e.call]` and every
 /// named `[e2e.calls.*]`) that java or go codegen will actually consume, given the
 /// resolved `languages` for this run.
+///
+/// Deliberately a no-op when neither `"java"` nor `"go"` is in `languages`: this check exists
+/// to catch a value that will not compile in *generated* java/go code, and a run that resolves
+/// neither language generates none of it -- the value licenses no claim about correctness the
+/// same way an absent/ambiguous IR licenses none in `validate_call_args`. Silence here means
+/// "nothing to check this run," not "checked and clean" -- a consumer relying on this check
+/// still needs at least one java or go run (e.g. in CI) to ever see the diagnostic at all.
 pub fn validate_call_module_overrides(
     e2e_config: &E2eConfig,
     config: &ResolvedCrateConfig,
@@ -102,18 +115,18 @@ pub fn validate_call_module_overrides(
             check_java_module(config_key, call, &mut errors);
         }
         if go_active {
-            check_go_module(config_key, call, config, &mut errors);
+            check_go_module(config_key, call, &e2e_config.call, config, &mut errors);
         }
     }
     errors
 }
 
 /// The java e2e generator only ever reads `overrides.java.module`
-/// (`src/e2e/codegen/java/snippet.rs`'s `package_name`) — the base `module` field is
-/// computed in `src/e2e/codegen/java.rs` but never used (bound to `_module_path`), so a
-/// base value licenses no claim about what java actually emits. An absent override falls
-/// back to `config.java_package()`, which is always a config-derived, well-formed
-/// package name, never free text this check needs to validate.
+/// (`src/e2e/codegen/java/snippet.rs`'s `package_name`) — `src/e2e/codegen/java.rs` (the
+/// package-level generator) never reads the base `module` field for java at all, so a base
+/// value licenses no claim about what java actually emits. An absent override falls back to
+/// `config.java_package()`, which is always a config-derived, well-formed package name, never
+/// free text this check needs to validate.
 fn check_java_module(config_key: &str, call: &CallConfig, errors: &mut Vec<ValidationError>) {
     let Some(value) = call.overrides.get("java").and_then(|o| o.module.as_deref()) else {
         return;
@@ -146,19 +159,39 @@ fn java_module_looks_like_a_class(value: &str) -> bool {
     last_segment.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
-/// The go e2e generator's own resolution order for the module/import path
-/// (`src/e2e/codegen/go.rs`, `src/e2e/codegen/go/snippet.rs`): `overrides.go.module`
-/// first, then `[go].module`, then the base `module` field.
+/// The go e2e generator's own resolution order for the module/import path, which differs by
+/// which generator layer resolves it:
 ///
-/// `[go].module` is itself a distinct, already-validated field (a real go.mod module
-/// path, not e2e config) — when it is set, it always wins over the base `module` field,
-/// so the base value never reaches the go backend and licenses no claim regardless of
-/// what it looks like. Returns the winning value together with the config key it lives
-/// under, for the diagnostic message; `None` when nothing go actually consumes was
-/// configured.
-fn effective_go_module(call: &CallConfig, config: &ResolvedCrateConfig) -> Option<(String, &'static str)> {
+/// - `src/e2e/codegen/go/snippet.rs` (per-fixture snippets, which may resolve to any named
+///   `[e2e.calls.*]` call): the resolved call's own `overrides.go.module`, then the *base*
+///   `[e2e.call]`'s `overrides.go.module` (a named call with no go override of its own still
+///   inherits the base call's — see `render_snippet_body`'s `module` binding), then
+///   `[go].module`, then the resolved call's own base `module` field.
+/// - `src/e2e/codegen/go.rs` (the package-level `go.mod`/import-path resolution): the same
+///   order, but it only ever resolves against the base call (`e2e_config.call`) — there is no
+///   "resolved call" at that layer, so the first two rungs collapse into one.
+///
+/// This function always takes both `call` (the source being validated) and `base_call`
+/// (`e2e_config.call`) so it can reproduce the snippet generator's four-rung order exactly for
+/// every named call. For the `[e2e.call]` source itself, `call` and `base_call` are the same
+/// reference, which collapses the second rung for free and reproduces `go.rs`'s three-rung
+/// order without a second code path.
+///
+/// `[go].module` is itself a distinct, already-validated field (a real go.mod module path, not
+/// e2e config) — when it is set, it always wins over either call's base `module` field, so
+/// neither licenses a claim once it is set. Returns the winning value together with a
+/// description of where it lives, for the diagnostic message; `None` when nothing go actually
+/// consumes was configured.
+fn effective_go_module(
+    call: &CallConfig,
+    base_call: &CallConfig,
+    config: &ResolvedCrateConfig,
+) -> Option<(String, GoModuleSource)> {
     if let Some(value) = call.overrides.get("go").and_then(|o| o.module.clone()) {
-        return Some((value, ".overrides.go.module"));
+        return Some((value, GoModuleSource::OwnOverride));
+    }
+    if let Some(value) = base_call.overrides.get("go").and_then(|o| o.module.clone()) {
+        return Some((value, GoModuleSource::BaseOverride));
     }
     if config.go.as_ref().and_then(|go| go.module.as_ref()).is_some() {
         return None;
@@ -167,26 +200,49 @@ fn effective_go_module(call: &CallConfig, config: &ResolvedCrateConfig) -> Optio
     if base.is_empty() {
         None
     } else {
-        Some((base.to_string(), ".module"))
+        Some((base.to_string(), GoModuleSource::OwnModuleField))
     }
+}
+
+/// Where [`effective_go_module`]'s winning value actually lives in `alef.toml`, so
+/// [`check_go_module`] can name it accurately — the winning rung is not always a field on the
+/// call being validated (see [`GoModuleSource::BaseOverride`]).
+enum GoModuleSource {
+    /// `<config_key>.overrides.go.module`, on the call being validated itself.
+    OwnOverride,
+    /// `[e2e.call].overrides.go.module` — the *base* call's override, inherited because the
+    /// call being validated declares no go override of its own.
+    BaseOverride,
+    /// `<config_key>.module`, on the call being validated itself.
+    OwnModuleField,
 }
 
 fn check_go_module(
     config_key: &str,
     call: &CallConfig,
+    base_call: &CallConfig,
     config: &ResolvedCrateConfig,
     errors: &mut Vec<ValidationError>,
 ) {
-    let Some((value, field)) = effective_go_module(call, config) else {
+    let Some((value, source)) = effective_go_module(call, base_call, config) else {
         return;
     };
     if !go_module_is_a_bare_word(&value) {
         return;
     }
+    let location = match source {
+        GoModuleSource::OwnOverride => format!("{config_key}.overrides.go.module"),
+        GoModuleSource::BaseOverride => {
+            format!(
+                "[e2e.call].overrides.go.module (inherited by {config_key}, which declares no go override of its own)"
+            )
+        }
+        GoModuleSource::OwnModuleField => format!("{config_key}.module"),
+    };
     errors.push(ValidationError {
         file: CONFIG_FILE_LABEL.to_string(),
         message: format!(
-            "{config_key}{field} = \"{value}\" is a bare word, not a resolvable Go import path (no \".\" \
+            "{location} = \"{value}\" is a bare word, not a resolvable Go import path (no \".\" \
              or \"/\") — the go e2e generator imports this value verbatim as the crate's own package \
              path; set `[go] module = \"github.com/<org>/<repo>\"` or `overrides.go.module` to a real \
              import path"
@@ -453,6 +509,103 @@ module = "{go_module}"
             errors[0]
                 .message
                 .starts_with("[e2e.calls.summarize].overrides.java.module"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    /// Regression coverage for the precedence bug: `src/e2e/codegen/go/snippet.rs` falls back
+    /// to the *base* `[e2e.call]`'s go override for a named call that declares none of its
+    /// own -- the resolved snippet for `summarize` really does import a bare word here. The
+    /// check must catch it even though the bad value lives on a different config key than the
+    /// one being reported for.
+    #[test]
+    fn a_named_call_with_no_go_override_inherits_the_bad_base_override() {
+        let config = make_config("sample-widget-rs");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.overrides.insert(
+            "go".to_string(),
+            CallOverride {
+                module: Some("widget".to_string()),
+                ..CallOverride::default()
+            },
+        );
+        e2e_config.calls.insert("summarize".to_string(), CallConfig::default());
+
+        let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+
+        assert_eq!(
+            errors.len(),
+            2,
+            "expected the base call and its inheritor both flagged: {errors:?}"
+        );
+        let summarize_error = errors
+            .iter()
+            .find(|e| e.message.contains("inherited by [e2e.calls.summarize]"))
+            .unwrap_or_else(|| panic!("no error named the inherited base override: {errors:?}"));
+        assert!(
+            summarize_error
+                .message
+                .starts_with("[e2e.call].overrides.go.module (inherited by [e2e.calls.summarize]"),
+            "got: {}",
+            summarize_error.message
+        );
+        assert!(
+            summarize_error.message.contains("= \"widget\""),
+            "got: {}",
+            summarize_error.message
+        );
+    }
+
+    /// The positive twin: a named call inheriting a *valid* base go override must not be
+    /// flagged, proving the inheritance rung itself (not just "any base value") is what the
+    /// generator consults.
+    #[test]
+    fn a_named_call_inheriting_a_valid_base_go_override_passes() {
+        let config = make_config("sample-widget-rs");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.overrides.insert(
+            "go".to_string(),
+            CallOverride {
+                module: Some("github.com/example/sample-widget".to_string()),
+                ..CallOverride::default()
+            },
+        );
+        e2e_config.calls.insert("summarize".to_string(), CallConfig::default());
+
+        let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+
+        assert_eq!(errors.len(), 0, "expected no errors, got: {errors:?}");
+    }
+
+    /// A named call's *own* go override always wins over the base call's, matching the
+    /// generator's first rung -- inheriting the base value is strictly a fallback for when the
+    /// named call declares nothing itself.
+    #[test]
+    fn a_named_calls_own_go_override_wins_over_the_base_calls() {
+        let config = make_config("sample-widget-rs");
+        let mut e2e_config = E2eConfig::default();
+        e2e_config.call.overrides.insert(
+            "go".to_string(),
+            CallOverride {
+                module: Some("widget".to_string()),
+                ..CallOverride::default()
+            },
+        );
+        e2e_config.calls.insert(
+            "summarize".to_string(),
+            call_with_go_override("github.com/example/sample-widget"),
+        );
+
+        let errors = validate_call_module_overrides(&e2e_config, &config, &["go".to_string()]);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "only the base call's own bad override should be flagged: {errors:?}"
+        );
+        assert!(
+            errors[0].message.starts_with("[e2e.call].overrides.go.module"),
             "got: {}",
             errors[0].message
         );

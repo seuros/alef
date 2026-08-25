@@ -108,6 +108,47 @@ fn same_signature(left: &crate::core::ir::MethodDef, right: &crate::core::ir::Me
             .all(|(left, right)| left.name == right.name && left.ty == right.ty)
 }
 
+/// Whether the flag `#[alef::skip]`/`#[doc(hidden)]` sets at extraction time
+/// (`FunctionDef::binding_excluded` / `MethodDef::binding_excluded`) applies to the call target
+/// named `name`, for the generator emitting `language`.
+///
+/// Resolution mirrors [`CallIr::signature`]: a free function of `name` answers directly (a crate
+/// has at most one `pub fn` of a given path); a method resolves only when every same-named method
+/// across every type agrees on the flag, and disagreement — or no match at all — answers `false`
+/// rather than guessing a cell is excluded when it is still fully bindable through at least one of
+/// the disagreeing types (or not a method call at all).
+///
+/// `"rust"` is carved out unconditionally: `binding_excluded` marks a symbol hidden from
+/// *other-language bindings* emitted from IR, not from the Rust source itself, and the Rust e2e
+/// suite (`src/e2e/codegen/rust/`) calls the real Rust function or method directly regardless of
+/// what other backends expose. This is the exact carve-out
+/// `docs::language_pages::mod::generate_lang_doc` and
+/// `e2e::snippets::exclusions::function_binding_excluded_for_language` already apply — every
+/// caller asking this question must ask it here rather than re-derive its own copy, which is how a
+/// validator and its generator drifted apart before this function existed: a `binding_excluded`
+/// client method still received a real, positionally-bound Rust e2e call, while a validator that
+/// treated the flag as language-blind skipped checking that call's argument names entirely. ~keep
+pub(crate) fn binding_excluded_for_language(name: &str, language: &str, ir: CallIr<'_>) -> bool {
+    if language == "rust" {
+        return false;
+    }
+    if let Some(function) = ir.functions.iter().find(|function| function.name == name) {
+        return function.binding_excluded;
+    }
+    let mut methods = ir
+        .type_defs
+        .iter()
+        .flat_map(|type_def| type_def.methods.iter())
+        .filter(|method| method.name == name);
+    let Some(first) = methods.next() else {
+        return false;
+    };
+    if !methods.all(|other| other.binding_excluded == first.binding_excluded) {
+        return false;
+    }
+    first.binding_excluded
+}
+
 /// The named type reached through any number of `Option`/`Vec` wrappers, or `None` for a type
 /// that names nothing (a primitive, a tuple, a map).
 pub(crate) fn named_type(type_ref: &crate::core::ir::TypeRef) -> Option<&str> {

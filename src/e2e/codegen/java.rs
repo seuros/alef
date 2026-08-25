@@ -63,12 +63,15 @@ impl E2eCodegen for JavaCodegen {
         let mut files = Vec::new();
 
         // Resolve call config with overrides.
+        //
+        // The base `module` field is deliberately not read here: `src/e2e/codegen/java/snippet.rs`
+        // (the actual per-fixture snippet emitter) resolves the java package from the resolved
+        // call's own `overrides.java.module`, falling back to `config.java_package()` -- a
+        // config-derived, always-well-formed value -- never the free-text base `module` field.
+        // See `crate::e2e::validate_call_module`'s `check_java_module` doc comment for the same
+        // fact from the validator side; the two must agree on what java actually consumes. ~keep
         let call = &e2e_config.call;
         let overrides = call.overrides.get(lang);
-        let _module_path = overrides
-            .and_then(|o| o.module.as_ref())
-            .cloned()
-            .unwrap_or_else(|| call.module.clone());
         let function_name = overrides
             .and_then(|o| o.function.as_ref())
             .cloned()
