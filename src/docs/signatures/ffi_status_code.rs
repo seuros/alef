@@ -125,8 +125,7 @@ fn test_c_signature_and_error_phrase_agree_on_fallible_void_status_value() {
         false,
         Some("InitError"),
     );
-    let signature =
-        render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME, &ApiSurface::default());
+    let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME, &ApiSurface::default());
     let error_phrase = crate::docs::formatting::format_error_phrase(
         func.error_type.as_deref().expect("fallible"),
         &func.return_type,
@@ -149,8 +148,7 @@ fn test_c_signature_and_error_phrase_agree_named_return_uses_integer_not_null() 
         false,
         Some("ParseError"),
     );
-    let signature =
-        render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME, &ApiSurface::default());
+    let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME, &ApiSurface::default());
     let error_phrase = crate::docs::formatting::format_error_phrase(
         func.error_type.as_deref().expect("fallible"),
         &func.return_type,
