@@ -6,6 +6,35 @@ use anyhow::bail;
 const SUGGESTED_FIX: &str = "Expose a binding-safe DTO/newtype for this Rust type, include the referenced type in \
 the binding surface, or mark the item with #[cfg_attr(alef, alef(skip))] or #[doc(hidden)].";
 
+/// A public-API item whose declared type the sanitizer may have rewritten to a lossy placeholder
+/// (most commonly `TypeRef::String`).
+///
+/// A rewritten item and one genuinely declared as the placeholder type can resolve to the exact
+/// same `TypeRef`, so nothing downstream can tell them apart by inspecting the type alone --
+/// pattern-matching the placeholder after the fact is exactly the trap this trait exists to
+/// avoid. The sanitizer sets `sanitized` only when it performs a *lossy* rewrite: a lossless
+/// lowering (e.g. a fixed-size array of a known type collapsing to `Vec<T>`) records
+/// `original_type` too but leaves `sanitized` false, so `original_type.is_some()` alone is not a
+/// safe substitute for this query. `sanitized` is the one fact the sanitizer records exactly
+/// when, and only when, it rewrote the declared type, which makes it the correct answer to "was
+/// this rewritten?" without widening `TypeRef` with a dedicated placeholder variant. ~keep
+trait TypeWasRewritten {
+    /// Whether the sanitizer rewrote this item's declared type to a lossy placeholder.
+    fn type_was_rewritten(&self) -> bool;
+}
+
+impl TypeWasRewritten for FieldDef {
+    fn type_was_rewritten(&self) -> bool {
+        self.sanitized
+    }
+}
+
+impl TypeWasRewritten for ParamDef {
+    fn type_was_rewritten(&self) -> bool {
+        self.sanitized
+    }
+}
+
 /// A lossy public API item that would otherwise be passed to binding generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SanitizedPublicApiDiagnostic {
@@ -137,7 +166,7 @@ fn collect_method_diagnostics(path: &str, method: &MethodDef, diagnostics: &mut 
 }
 
 fn collect_field_diagnostic(path: &str, field: &FieldDef, diagnostics: &mut Vec<SanitizedPublicApiDiagnostic>) {
-    if field.sanitized {
+    if field.type_was_rewritten() {
         diagnostics.push(diagnostic(
             format!("field {path}"),
             sanitized_type_reason("field type", field.original_type.as_deref(), &field.ty),
@@ -146,7 +175,7 @@ fn collect_field_diagnostic(path: &str, field: &FieldDef, diagnostics: &mut Vec<
 }
 
 fn collect_param_diagnostic(path: &str, param: &ParamDef, diagnostics: &mut Vec<SanitizedPublicApiDiagnostic>) {
-    if param.sanitized {
+    if param.type_was_rewritten() {
         diagnostics.push(diagnostic(
             path.to_string(),
             sanitized_type_reason("parameter type", param.original_type.as_deref(), &param.ty),
@@ -229,6 +258,70 @@ mod tests {
             original_type: Some(original_type.to_string()),
             version: Default::default(),
         }
+    }
+
+    // Regression coverage for #396: `String` is a valid placeholder the sanitizer rewrites unknown
+    // types to, which means a field the source genuinely declared `String` and a field the
+    // sanitizer rewrote to `String` resolve to the exact same `TypeRef`. The lossy-gate diagnostic
+    // must tell them apart from the recorded rewrite (`sanitized` / `original_type`), not by
+    // pattern-matching the resulting placeholder type.
+
+    #[test]
+    fn genuinely_declared_string_field_was_not_rewritten() {
+        let field = FieldDef {
+            name: "label".to_string(),
+            ty: TypeRef::String,
+            ..FieldDef::default()
+        };
+
+        assert!(
+            !field.type_was_rewritten(),
+            "a field genuinely declared String in the source must not be reported as rewritten"
+        );
+    }
+
+    #[test]
+    fn rewritten_string_field_is_detected_as_rewritten() {
+        let field = sanitized_field("timeout", "Duration");
+
+        assert!(
+            field.type_was_rewritten(),
+            "a field the sanitizer rewrote to String must be detectable as rewritten"
+        );
+    }
+
+    #[test]
+    fn distinguishes_a_genuinely_declared_string_field_from_one_rewritten_to_string() {
+        let genuine_field = FieldDef {
+            name: "label".to_string(),
+            ty: TypeRef::String,
+            ..FieldDef::default()
+        };
+        let rewritten_field = sanitized_field("timeout", "Duration");
+
+        let api = ApiSurface {
+            types: vec![crate::core::ir::TypeDef {
+                name: "Config".to_string(),
+                rust_path: "sample::Config".to_string(),
+                fields: vec![genuine_field, rewritten_field],
+                ..crate::core::ir::TypeDef::default()
+            }],
+            ..ApiSurface::default()
+        };
+
+        let diagnostics = sanitized_public_api_diagnostics(&api);
+
+        assert_eq!(
+            diagnostics.len(),
+            1,
+            "only the rewritten field should be reported, not the genuinely-declared String field: {diagnostics:?}"
+        );
+        assert_eq!(diagnostics[0].item_path, "field Config.timeout");
+        assert!(
+            diagnostics[0].reason.contains("Duration"),
+            "the diagnostic must name the recorded original Rust type, not just the placeholder: {}",
+            diagnostics[0].reason
+        );
     }
 
     #[test]

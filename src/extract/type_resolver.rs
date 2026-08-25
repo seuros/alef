@@ -161,6 +161,7 @@ pub fn resolve_type(ty: &syn::Type) -> TypeRef {
             }
         }
         syn::Type::Slice(slice) => resolve_slice_type(&slice.elem),
+        syn::Type::Array(array) => resolve_array_type(array, ty),
         syn::Type::TraitObject(trait_obj) => {
             if let Some(syn::TypeParamBound::Trait(trait_bound)) = trait_obj.bounds.first()
                 && let Some(seg) = trait_bound.path.segments.last()
@@ -373,6 +374,26 @@ fn resolve_slice_type(elem: &syn::Type) -> TypeRef {
     }
 }
 
+/// Resolve a fixed-size array type `[T; N]`.
+///
+/// `[u8; N]` mirrors the existing `Vec<u8>` / `&[u8]` special case in [`resolve_slice_type`]: a
+/// fixed-length byte buffer is exactly what `Bytes` represents, and the declared length is not
+/// information the binding layer needs to keep. Other primitive element types (`[f64; 3]`,
+/// `[u32; 4]`, ...) have no fixed-length list counterpart in the binding layer either, so they
+/// lower losslessly to `Vec<T>` -- the declared length is the one fact this drops, the same
+/// trade-off `sanitize_unknown_types` already makes for a fixed-size array of a known struct or
+/// enum type. A non-primitive element (a named struct/enum, tuple, or unsupported shape) still
+/// falls back to the stringified whole-array `TypeRef::Named`, so the sanitizer can recognize a
+/// known type name and lower it there, or fall back to a lossy placeholder for anything it
+/// cannot. ~keep
+fn resolve_array_type(array: &syn::TypeArray, whole: &syn::Type) -> TypeRef {
+    match resolve_type(&array.elem) {
+        TypeRef::Primitive(PrimitiveType::U8) => TypeRef::Bytes,
+        element @ TypeRef::Primitive(_) => TypeRef::Vec(Box::new(element)),
+        _ => TypeRef::Named(type_to_string(whole)),
+    }
+}
+
 /// Extract the first generic type argument from a path segment, e.g., `Vec<T>` → T.
 /// Extract the raw syn::Type of the first generic argument (unresolved).
 pub fn extract_single_generic_arg_syn(segment: &syn::PathSegment) -> Option<Box<syn::Type>> {
@@ -556,6 +577,46 @@ mod tests {
         assert_eq!(resolve_type(&parse_type("Vec<u8>")), TypeRef::Bytes);
         assert_eq!(resolve_type(&parse_type("&[u8]")), TypeRef::Bytes);
         assert_eq!(resolve_type(&parse_type("Bytes")), TypeRef::Bytes);
+    }
+
+    // Regression coverage for #395: fixed-size arrays of primitives have a lossless lowering
+    // (`Vec<T>`, or `Bytes` for `u8`) and must not fall through to the sanitizer's lossy
+    // `TypeRef::String` placeholder path. Before this fix `resolve_type` had no arm for
+    // `syn::Type::Array` at all, so every one of these stringified to `TypeRef::Named("[u8 ; 32]")`
+    // / `TypeRef::Named("[f64 ; 3]")` / `TypeRef::Named("[u32 ; 4]")` -- an unknown-type-shaped
+    // string the sanitizer cannot lower, since `u8`/`f64`/`u32` are never in `known_types` or
+    // `known_enums`.
+
+    #[test]
+    fn test_fixed_size_array_of_u8_resolves_to_bytes() {
+        assert_eq!(resolve_type(&parse_type("[u8; 32]")), TypeRef::Bytes);
+    }
+
+    #[test]
+    fn test_fixed_size_array_of_f64_resolves_to_vec() {
+        assert_eq!(
+            resolve_type(&parse_type("[f64; 3]")),
+            TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::F64)))
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_array_of_u32_resolves_to_vec() {
+        assert_eq!(
+            resolve_type(&parse_type("[u32; 4]")),
+            TypeRef::Vec(Box::new(TypeRef::Primitive(PrimitiveType::U32)))
+        );
+    }
+
+    #[test]
+    fn test_fixed_size_array_of_a_named_type_still_stringifies_for_the_sanitizer() {
+        // Unaffected by the primitive-array fix: a fixed-size array of a type this module cannot
+        // recognize (a user-defined struct/enum) must keep stringifying to `TypeRef::Named` so
+        // `sanitize_unknown_types` can still look it up against `known_types`/`known_enums`.
+        assert_eq!(
+            resolve_type(&parse_type("[Point; 4]")),
+            TypeRef::Named("[Point ; 4]".to_string())
+        );
     }
 
     #[test]
