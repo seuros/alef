@@ -1,0 +1,5 @@
+        let __strings = {{ call_expr }};
+        __strings
+            .into_iter()
+            .map(|s| ::serde_json::from_str::<{{ elem_native_ty }}>(&s).expect("swift {{ trait_snake }}.{{ method_snake }} returned invalid JSON"))
+            .collect::<{{ native_ty }}>()

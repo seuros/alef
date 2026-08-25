@@ -155,7 +155,10 @@ mod tests {
     /// `needs_inbound_json_bridge` already decides for every `Map(_, _)`.
     #[test]
     fn test_inbound_bridge_type_map_named_value_is_one_blob() {
-        let ty = TypeRef::Map(Box::new(TypeRef::String), Box::new(TypeRef::Named("SinkStats".to_string())));
+        let ty = TypeRef::Map(
+            Box::new(TypeRef::String),
+            Box::new(TypeRef::Named("SinkStats".to_string())),
+        );
 
         let result = inbound_bridge_type(&ty);
         assert_eq!(
@@ -174,7 +177,10 @@ mod tests {
         );
 
         let result = inbound_bridge_type(&ty);
-        assert_eq!(result, "String", "Map<_, primitive> must also become one JSON String blob");
+        assert_eq!(
+            result, "String",
+            "Map<_, primitive> must also become one JSON String blob"
+        );
     }
 
     #[test]
