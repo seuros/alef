@@ -37,19 +37,42 @@ pub(crate) fn source_crate_has_feature(config: &ResolvedCrateConfig, core_crate_
 /// Widen `config`'s configured Swift feature list with any sibling feature the source crate
 /// itself pairs with an already-active one.
 ///
-/// A source crate may gate one capability behind either of two sibling Cargo features (see
-/// [`collect_cfg_feature_alternatives`]) rather than nesting one feature inside another's own
+/// A source crate may gate one capability behind either of two (or more) sibling Cargo features
+/// (see [`collect_cfg_feature_alternatives`]) rather than nesting one feature inside another's own
 /// feature list — for example, a full-dependency feature and a narrower one that swaps in a
 /// substitute dependency compatible with cross-compiled targets. When the configured feature list
 /// activates one side of such a pairing (directly, or via the `full` umbrella), the other side is
 /// included too, but only when the source crate's on-disk `Cargo.toml` actually declares it — so a
 /// crate that does not use this pattern for a given feature never has an unknown name injected.
+///
+/// A companion named in [`SwiftConfig::excluded_default_features`][excl] is never widened in, even
+/// when its sibling in the `any(...)` group is active. This return value feeds straight into the
+/// core dependency's own `features = [...]` line in the generated `Cargo.toml` (see
+/// `cargo::emit_cargo_toml`'s `features` parameter) on a dependency edge that does **not** set
+/// `default-features = false` — unlike [`effective_swift_codegen_features`], whose
+/// `excluded_default_features` check only trims the wrapper crate's *own* `default = [...]` array.
+/// Without this check, a group such as `any(feature = "ocr", feature = "heic")` (a shared gate
+/// with no real alternation relationship — both are simply required by one item, not substitutes
+/// for each other) would explicitly request `core/heic` the moment `ocr` is configured, activating
+/// a pkg-config-only native dependency `excluded_default_features = ["heic"]` was written
+/// specifically to keep off cross-compiled targets. Measured against a synthetic fixture workspace
+/// (`cargo tree -e features`): a dependency line that lists an opt-in sibling feature explicitly
+/// activates that feature's own optional dependency even though `default-features` is left on,
+/// because Cargo does not otherwise turn on an opt-in feature nobody asked for — the widening loop
+/// is a genuine new activation, not something feature unification would have done anyway. ~keep
+///
+/// [excl]: crate::core::config::languages::SwiftConfig::excluded_default_features
 pub(crate) fn configured_swift_features(
     config: &ResolvedCrateConfig,
     core_crate_dir: &str,
     api: &ApiSurface,
 ) -> Vec<String> {
     let base_features = config.features_for_language(Language::Swift);
+    let excluded: BTreeSet<&str> = config
+        .swift
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     let mut features: BTreeSet<String> = base_features.iter().cloned().collect();
     let full_active = features.contains("full");
     for group in collect_cfg_feature_alternatives(api) {
@@ -57,6 +80,9 @@ pub(crate) fn configured_swift_features(
             continue;
         }
         for companion in &group {
+            if excluded.contains(companion.as_str()) {
+                continue;
+            }
             if !features.contains(companion) && source_crate_has_feature(config, core_crate_dir, companion) {
                 features.insert(companion.clone());
             }
