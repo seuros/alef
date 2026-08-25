@@ -82,10 +82,10 @@ fn test_only_files(files: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
                 }
                 saw_cfg_test = false;
                 if let Some(name) = trimmed.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';')) {
-                    if let Some(relative) = explicit_path.take() {
-                        if let Some(parent) = path.parent() {
-                            declared.insert(parent.join(relative));
-                        }
+                    if let Some(relative) = explicit_path.take()
+                        && let Some(parent) = path.parent()
+                    {
+                        declared.insert(parent.join(relative));
                     }
                     declared.insert(directory.join(format!("{name}.rs")));
                     declared.insert(directory.join(name).join("mod.rs"));
