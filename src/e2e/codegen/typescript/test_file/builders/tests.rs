@@ -338,6 +338,117 @@ fn wasm_untagged_data_enum_field_emits_raw_value_not_enum_member() {
     assert!(!expression.contains("WasmEmbeddingInput."), "{expression}");
 }
 
+/// The filter site directly: a fixture key `SampleOptions` doesn't declare must refuse
+/// generation rather than silently reach the emitted literal. See the `~keep` comment at the
+/// filter in `mod.rs` for why this is a refusal and not a drop, and
+/// `json_object_field_agreement_tests.rs` for the snippet/e2e cross-generator coverage this
+/// unit test underpins.
+#[test]
+fn undeclared_key_panics_instead_of_reaching_the_literal() {
+    let type_defs = [TypeDef {
+        name: "SampleOptions".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "content".into(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ts_builder_expression(
+            serde_json::json!({"content": "hello", "bogus": "oops"})
+                .as_object()
+                .expect("object"),
+            "SampleOptions",
+            &Default::default(),
+            "node",
+            &Default::default(),
+            &Default::default(),
+            &type_defs,
+            &[],
+            "",
+            &[],
+            &mut Default::default(),
+        )
+    }));
+    let error = result.expect_err("an undeclared key must panic generation, not render silently");
+    let message = error
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| error.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default();
+    assert!(
+        message.contains("bogus"),
+        "panic message must name the offending key: {message}"
+    );
+    assert!(
+        message.contains("SampleOptions"),
+        "panic message must name the type: {message}"
+    );
+}
+
+/// Negative control: a fully declared object must render exactly as before — the filter must
+/// not reject or alter a fixture that only uses real fields.
+#[test]
+fn fully_declared_object_is_unaffected_by_the_filter() {
+    let type_defs = [TypeDef {
+        name: "SampleOptions".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "content".into(),
+            ty: TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"content": "hello"}).as_object().expect("object"),
+        "SampleOptions",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "",
+        &[],
+        &mut Default::default(),
+    );
+    assert_eq!(expression, "{ content: \"hello\" } as SampleOptions");
+}
+
+/// A `#[serde(flatten)]` field makes the owning struct's accepted key set open-ended — the
+/// filter must not refuse a key that only the flattened target (not `SampleOptions` itself)
+/// would recognise.
+#[test]
+fn flattened_struct_is_exempt_from_the_filter() {
+    let type_defs = [TypeDef {
+        name: "SampleOptions".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "extra".into(),
+            ty: TypeRef::String,
+            serde_flatten: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"totally_unknown_key": "hello"})
+            .as_object()
+            .expect("object"),
+        "SampleOptions",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "",
+        &[],
+        &mut Default::default(),
+    );
+    assert_eq!(expression, "{ totallyUnknownKey: \"hello\" } as SampleOptions");
+}
+
 #[test]
 fn node_and_wasm_typed_objects_read_documented_files() {
     let object = serde_json::json!({"bytes": "document.pdf"});

@@ -1,4 +1,4 @@
-use super::renderers::kotlin_getter;
+use super::renderers::{kotlin_getter, quoted_key_literal};
 use super::types::{PathSegment, PhpGetterMap};
 use heck::{ToLowerCamelCase, ToPascalCase, ToSnakeCase};
 use std::collections::HashSet;
@@ -176,7 +176,7 @@ pub(super) fn render_java_with_optionals(
                 if is_numeric {
                     out.push_str(&format!("().get({key})"));
                 } else {
-                    out.push_str(&format!("().get(\"{key}\")"));
+                    out.push_str(&format!("().get({})", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -261,9 +261,9 @@ pub(super) fn render_kotlin_with_optionals(
                         out.push_str(&format!("().get({key})"));
                     }
                 } else if prev_was_nullable || is_optional {
-                    out.push_str(&format!("()?.get(\"{key}\")"));
+                    out.push_str(&format!("()?.get({})", quoted_key_literal(key)));
                 } else {
-                    out.push_str(&format!("().get(\"{key}\")"));
+                    out.push_str(&format!("().get({})", quoted_key_literal(key)));
                 }
                 push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || is_optional;
@@ -338,9 +338,9 @@ pub(super) fn render_kotlin_android_with_optionals(
                         out.push_str(&format!(".get({key})"));
                     }
                 } else if prev_was_nullable || is_optional {
-                    out.push_str(&format!("?.get(\"{key}\")"));
+                    out.push_str(&format!("?.get({})", quoted_key_literal(key)));
                 } else {
-                    out.push_str(&format!(".get(\"{key}\")"));
+                    out.push_str(&format!(".get({})", quoted_key_literal(key)));
                 }
                 push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || is_optional;
@@ -383,7 +383,7 @@ pub(super) fn render_kotlin_android(segments: &[PathSegment], result_var: &str) 
                 if is_numeric {
                     out.push_str(&format!(".get({key})"));
                 } else {
-                    out.push_str(&format!(".get(\"{key}\")"));
+                    out.push_str(&format!(".get({})", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -465,7 +465,7 @@ pub(super) fn render_rust_with_optionals(
                     }
                     push_key_index_suffix(&mut path_so_far, seg);
                 } else {
-                    out.push_str(&format!(".get(\"{key}\").map(|s| s.as_str())"));
+                    out.push_str(&format!(".get({}).map(|s| s.as_str())", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -528,7 +528,7 @@ pub(super) fn render_zig_with_optionals(
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!(".get(\"{key}\")"));
+                    out.push_str(&format!(".get({})", quoted_key_literal(key)));
                 }
                 push_key_index_suffix(&mut path_so_far, seg);
             }
@@ -581,7 +581,7 @@ pub(super) fn render_pascal_dot(segments: &[PathSegment], result_var: &str) -> S
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -636,7 +636,7 @@ pub(super) fn render_csharp_with_optionals(
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 }
                 push_key_index_suffix(&mut path_so_far, seg);
             }
@@ -666,7 +666,7 @@ pub(super) fn render_php(segments: &[PathSegment], result_var: &str) -> String {
             PathSegment::MapAccess { field, key } => {
                 out.push_str("->");
                 out.push_str(&field.to_lower_camel_case());
-                out.push_str(&format!("[\"{key}\"]"));
+                out.push_str(&format!("[{}]", quoted_key_literal(key)));
             }
             PathSegment::Length => {
                 let current = std::mem::take(&mut out);
@@ -757,7 +757,7 @@ pub(super) fn render_php_with_getters(
                     out.push_str(arrow);
                     out.push_str(&camel);
                 }
-                out.push_str(&format!("[\"{key}\"]"));
+                out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 current_type = getter_map.advance(current_type.as_deref(), field.as_str());
                 push_key_index_suffix(&mut path_so_far, seg);
                 prev_was_nullable = prev_was_nullable || optional_fields.contains(&path_so_far);
@@ -788,7 +788,7 @@ pub(super) fn render_r(segments: &[PathSegment], result_var: &str) -> String {
             PathSegment::MapAccess { field, key } => {
                 out.push('$');
                 out.push_str(field);
-                out.push_str(&format!("[[\"{key}\"]]"));
+                out.push_str(&format!("[[{}]]", quoted_key_literal(key)));
             }
             PathSegment::Length => {
                 let current = std::mem::take(&mut out);
@@ -817,7 +817,7 @@ pub(super) fn render_c(segments: &[PathSegment], result_var: &str) -> String {
             PathSegment::MapAccess { field, key } => {
                 let snake = field.to_snake_case();
                 let current = std::mem::take(&mut out);
-                out = format!("result_{snake}({current})[\"{key}\"]");
+                out = format!("result_{snake}({current})[{}]", quoted_key_literal(key));
             }
             PathSegment::Length => {
                 let current = std::mem::take(&mut out);
@@ -853,7 +853,7 @@ pub(super) fn render_dart(segments: &[PathSegment], result_var: &str) -> String 
                 if key.chars().all(|c| c.is_ascii_digit()) {
                     out.push_str(&format!("[{key}]"));
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                 }
             }
             PathSegment::Length => {
@@ -928,7 +928,7 @@ pub(super) fn render_dart_with_optionals(
                     out.push_str(&format!("[{key}]"));
                     push_key_index_suffix(&mut path_with_indices, seg);
                 } else {
-                    out.push_str(&format!("[\"{key}\"]"));
+                    out.push_str(&format!("[{}]", quoted_key_literal(key)));
                     path_with_indices.push_str(&format!("[\"{key}\"]"));
                 }
                 prev_was_nullable = optional;
