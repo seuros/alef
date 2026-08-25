@@ -19,8 +19,13 @@ use std::path::Path;
 /// every hand-authored file reports as `no_generated_equivalent`, so a project with hundreds
 /// of intentionally curated snippets cannot tell a declared file from a real migration gap.
 ///
-/// `project_root` is the directory holding `alef.toml` -- the base both `snippet_config.output`
-/// and the curated globs are written in.
+/// `project_root` is the process working directory -- the base both `snippet_config.output` and
+/// the curated globs are written in, matching how `e2e::snippets::generate_snippet_report`
+/// resolves the same globs at generation time. Callers must NOT pass `--config`'s own directory:
+/// that only coincides with the working directory when `--config` is left at its default
+/// (`alef.toml`, itself resolved relative to the working directory), and a `--config` pointed at
+/// a file outside the project made every project-root-relative `curated_snippets` glob resolve
+/// against the wrong directory and match nothing.
 ///
 /// # Errors
 ///
