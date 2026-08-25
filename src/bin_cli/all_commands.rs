@@ -1015,3 +1015,7 @@ mod refusal_tests;
 #[cfg(test)]
 #[path = "all_commands_defer_tests.rs"]
 mod defer_tests;
+
+#[cfg(test)]
+#[path = "pyrefly_generated_package_tests.rs"]
+mod pyrefly_generated_package_tests;

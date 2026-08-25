@@ -284,8 +284,15 @@ keywords = ["zebra", "apple", "banana"]
         "should emit a pyrefly sub-config matching the api.py wrapper. got:\n{content}"
     );
     assert!(
-        content.contains("[tool.pyrefly.sub-config.errors]") && content.contains("bad-argument-type = false"),
-        "should suppress the api.py wrapper errors via sub-config.errors. got:\n{content}"
+        content.contains("[tool.pyrefly.sub-config.errors]") && content.contains("bad-argument-count = false"),
+        "should suppress the api.py wrapper's still-unaddressed errors via sub-config.errors. got:\n{content}"
+    );
+    // `bad-return` and `bad-argument-type` were the public-dataclass-vs-native-pyclass boundary
+    // mismatch alef-310 fixed in codegen; they must stay off this list, or a codegen regression
+    // on that boundary would go undetected by pyrefly again. ~keep
+    assert!(
+        !content.contains("bad-return = false") && !content.contains("bad-argument-type = false"),
+        "the fixed boundary-mismatch codes must not be suppressed again. got:\n{content}"
     );
 }
 

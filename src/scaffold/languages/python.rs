@@ -352,19 +352,18 @@ python-packages = [ "{python_package}" ]
 [tool.pyrefly]
 python-version = "3.10"
 preset = "strict"
-# The alef-emitted `api.py` wrapper has a structural mismatch between its
-# `options.*` dataclass signatures and the `_internal_bindings.*` pyclass types
-# pyo3 accepts/returns at runtime. pyo3 reconciles them dynamically via
-# FromPyObject — the Python e2e suite exercises the runtime path — but a static
-# checker sees only the discrepancy. Suppress the errors it raises on the
-# wrapper until the codegen emits matching `_to_rust_*` calls and casts the
-# return values.
+# `bad-return` and `bad-argument-type` used to be suppressed here for every generated
+# `api.py`: the wrapper's declared type (an `options.*` dataclass) and the value pyo3
+# actually returned/accepted (the native `_internal_bindings.*` pyclass) disagreed on
+# every boundary crossing, and pyrefly correctly rejected all of them. The codegen now
+# emits the `_to_rust_*` / `_from_native_*` conversions those boundaries need (alef-310),
+# so both codes are gone from this list. The three below remain suppressed because they
+# were never diagnosed as part of that fix and may still have genuine unaddressed causes;
+# do not fold them back in without re-auditing each one against a lifted suppression.
 [[tool.pyrefly.sub-config]]
 matches = "**/api.py"
 [tool.pyrefly.sub-config.errors]
-bad-argument-type = false
 bad-argument-count = false
-bad-return = false
 not-iterable = false
 missing-attribute = false
 {pyrefly_extra}"#,

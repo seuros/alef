@@ -104,6 +104,68 @@ pub fn send(req: Request) -> Response {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+/// A type returned only wrapped (`Option<T>`, `Vec<T>`, as a `Map` value) must still be marked
+/// `is_return_type`, not just a type returned bare. Backends (pyo3's Python DTO style in
+/// particular) decide whether a type is emitted as a public input dataclass or treated as the
+/// native/output shape from this flag alone; missing a wrapped return silently reclassifies an
+/// output-only type as an input type. ~keep
+#[test]
+fn test_is_return_type_marked_through_optional_vec_and_map_wrappers() {
+    let tmp = std::env::temp_dir().join("alef_test_is_return_type_wrapped");
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+
+    std::fs::write(
+        tmp.join("src/lib.rs"),
+        r#"
+use std::collections::HashMap;
+
+pub struct OptionalResult {
+    pub label: String,
+}
+
+pub struct ListedResult {
+    pub label: String,
+}
+
+pub struct MappedResult {
+    pub label: String,
+}
+
+pub fn maybe_result() -> Option<OptionalResult> {
+    unimplemented!()
+}
+
+pub fn list_results() -> Vec<ListedResult> {
+    unimplemented!()
+}
+
+pub fn mapped_results() -> HashMap<String, MappedResult> {
+    unimplemented!()
+}
+"#,
+    )
+    .unwrap();
+
+    let lib_rs = tmp.join("src/lib.rs");
+    let sources: Vec<&std::path::Path> = vec![lib_rs.as_path()];
+    let surface = super::extract(&sources, "my_crate", "0.1.0", None).unwrap();
+
+    for name in ["OptionalResult", "ListedResult", "MappedResult"] {
+        let typ = surface
+            .types
+            .iter()
+            .find(|t| t.name == name)
+            .unwrap_or_else(|| panic!("{name} not found"));
+        assert!(
+            typ.is_return_type,
+            "{name} is only ever returned wrapped, but must still be is_return_type=true"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
 #[test]
 fn test_extract_cfg_gated_generic_async_fn_is_recorded_as_unsupported() {
     let source = r#"
