@@ -148,7 +148,7 @@ fn test_doc_type_bytes_all_languages() {
 fn test_doc_type_string_kotlin_gleam_zig() {
     assert_eq!(doc_type(&TypeRef::String, Language::Kotlin, TEST_PREFIX), "String");
     assert_eq!(doc_type(&TypeRef::String, Language::Gleam, TEST_PREFIX), "String");
-    assert_eq!(doc_type(&TypeRef::String, Language::Zig, TEST_PREFIX), "[:0]const u8");
+    assert_eq!(doc_type(&TypeRef::String, Language::Zig, TEST_PREFIX), "[]const u8");
 }
 
 #[test]
@@ -184,7 +184,7 @@ fn test_doc_type_path_all_languages() {
     assert_eq!(doc_type(&TypeRef::Path, Language::Ffi, TEST_PREFIX), "const char*");
     assert_eq!(doc_type(&TypeRef::Path, Language::Kotlin, TEST_PREFIX), "Path");
     assert_eq!(doc_type(&TypeRef::Path, Language::Gleam, TEST_PREFIX), "String");
-    assert_eq!(doc_type(&TypeRef::Path, Language::Zig, TEST_PREFIX), "[:0]const u8");
+    assert_eq!(doc_type(&TypeRef::Path, Language::Zig, TEST_PREFIX), "[]const u8");
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn test_doc_type_json_all_languages() {
     assert_eq!(doc_type(&TypeRef::Json, Language::Swift, TEST_PREFIX), "String");
     assert_eq!(doc_type(&TypeRef::Json, Language::Dart, TEST_PREFIX), "String");
     assert_eq!(doc_type(&TypeRef::Json, Language::Gleam, TEST_PREFIX), "String");
-    assert_eq!(doc_type(&TypeRef::Json, Language::Zig, TEST_PREFIX), "[:0]const u8");
+    assert_eq!(doc_type(&TypeRef::Json, Language::Zig, TEST_PREFIX), "[]const u8");
 }
 
 #[test]

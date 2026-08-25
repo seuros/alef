@@ -26,7 +26,7 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
             Language::Ffi | Language::C | Language::Jni => "const char*".to_string(),
             Language::Kotlin | Language::KotlinAndroid | Language::Swift | Language::Dart => "String".to_string(),
             Language::Gleam => "String".to_string(),
-            Language::Zig => "[:0]const u8".to_string(),
+            Language::Zig => "[]const u8".to_string(),
         },
         TypeRef::Bytes => match lang {
             Language::Python => "bytes".to_string(),
@@ -301,7 +301,7 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
             Language::Swift => "URL".to_string(),
             Language::Dart => "String".to_string(),
             Language::Gleam => "String".to_string(),
-            Language::Zig => "[:0]const u8".to_string(),
+            Language::Zig => "[]const u8".to_string(),
         },
         TypeRef::Unit => match lang {
             Language::Python => "None".to_string(),
@@ -340,7 +340,7 @@ pub fn doc_type(ty: &TypeRef, lang: Language, ffi_prefix: &str) -> String {
             Language::Swift => "String".to_string(),
             Language::Dart => "String".to_string(),
             Language::Gleam => "String".to_string(),
-            Language::Zig => "[:0]const u8".to_string(),
+            Language::Zig => "[]const u8".to_string(),
         },
         TypeRef::Duration => match lang {
             Language::Python => "float".to_string(),

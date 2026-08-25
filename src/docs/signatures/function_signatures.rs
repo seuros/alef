@@ -563,7 +563,7 @@ fn test_render_zig_fn_sig_no_error() {
         None,
     );
     let sig = render_zig_fn_sig(&func, TEST_PREFIX, &ApiSurface::default());
-    assert_eq!(sig, "pub fn search(query: [:0]const u8) u32");
+    assert_eq!(sig, "pub fn search(query: []const u8) u32");
 }
 
 #[test]
@@ -576,7 +576,7 @@ fn test_render_zig_fn_sig_with_error_emits_error_union() {
         Some("ConversionError"),
     );
     let sig = render_zig_fn_sig(&func, TEST_PREFIX, &ApiSurface::default());
-    assert_eq!(sig, "pub fn convert(html: [:0]const u8) ConversionError![:0]const u8");
+    assert_eq!(sig, "pub fn convert(html: []const u8) ConversionError![]u8");
 }
 
 #[test]
@@ -729,7 +729,7 @@ fn test_render_method_signature_zig_instance_includes_self_receiver() {
         None,
     );
     let sig = render_method_signature(&method, "ParseOutput", Language::Zig, TEST_PREFIX);
-    assert_eq!(sig, "pub fn warnings(self: *const ParseOutput) []const [:0]const u8");
+    assert_eq!(sig, "pub fn warnings(self: *const ParseOutput) []u8");
 }
 
 /// ~keep Omitting `self` was only half of it. The Zig backend emits a static method as a

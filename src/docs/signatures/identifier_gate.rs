@@ -265,10 +265,7 @@ fn test_zig_constructor_named_new_renders_as_a_type_suffixed_free_function() {
         Language::Zig,
         TEST_PREFIX,
     );
-    assert_eq!(
-        sig,
-        "pub fn new_download_manager(version: [:0]const u8) DownloadManager"
-    );
+    assert_eq!(sig, "pub fn new_download_manager(version: []const u8) DownloadManager");
 }
 
 /// ~keep Elixir is tslp's free positive control: the one language whose real idiom
