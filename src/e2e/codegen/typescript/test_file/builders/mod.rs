@@ -305,6 +305,37 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
 
         let mut fields = Vec::new();
         let owner_type = type_defs.iter().find(|definition| definition.name == type_name);
+        // The fixture's JSON object is the source of truth for VALUES, but not for which KEYS
+        // belong on `type_name` — refuse any key `owner_type` doesn't declare as a field before
+        // building the literal. Without this, the snippet path (which binds the literal to a
+        // typed `const`, see `typed_binding.jinja`, and so IS excess-property-checked by `tsc`)
+        // and the e2e test path (which only ever `as`-casts the same literal, and so is NOT
+        // excess-property-checked) silently disagreed about the same fixture: an undeclared key
+        // was a compile error (TS2353) in one and invisible in the other. Both callers build
+        // through this one function, so filtering here is the one place that makes them agree.
+        // A `serde_flatten` field makes the owning struct's accepted key set open-ended (it
+        // legitimately re-exports its own inner field names, or an arbitrary string-keyed bag,
+        // at this JSON level), so those types are exempted rather than filtered.
+        //
+        // ~keep An undeclared key is REFUSED (panics generation), not silently dropped: this
+        // runs at generation time over a fixture the maintainer wrote, so the only plausible
+        // causes are a fixture typo/stale field name or a genuinely missing IR field — both are
+        // bugs to fix, not values to discard. A silent drop would still produce a compiling
+        // snippet/test that LOOKS like it exercises the field the fixture named, which is the
+        // same "check that cannot fail" shape as every other vacuous-assertion fix in this
+        // generator (see `apply_vacuous_assertion_fallback`, `inert_example`) — the bug would
+        // hide instead of surfacing.
+        if let Some(definition) = owner_type
+            && !definition.fields.iter().any(|field| field.serde_flatten)
+        {
+            let declared: std::collections::HashSet<&str> =
+                definition.fields.iter().map(|field| field.name.as_str()).collect();
+            if let Some(undeclared) = obj.keys().find(|key| !declared.contains(key.as_str())) {
+                panic!(
+                    "typescript e2e generator: fixture input for `{type_name}` includes key `{undeclared}`, which `{type_name}` does not declare as a field. Fix the fixture (remove or rename the key) or the Rust struct (add the missing field)."
+                );
+            }
+        }
         for (key, val) in obj {
             let field_pointer = json_pointer_child(pointer, key);
             // Rename serde_tag key → "kind" for node-bound tagged-data enum objects.
