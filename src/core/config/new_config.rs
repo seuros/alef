@@ -362,6 +362,7 @@ impl NewAlefConfig {
             extra_clippy_allows: ws.extra_clippy_allows.clone(),
             crate_attributes,
             cargo_lints: krate.cargo_lints.clone(),
+            verify: krate.verify.clone(),
         })
     }
 }

@@ -22,7 +22,7 @@ fn managed_paths_split_into_verified_present_and_absent() {
     let managed = paths(directory.path(), &["stamped.toml", "unmarked.json", "never_written.rs"]);
     let marked = paths(directory.path(), &["stamped.toml"]);
 
-    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0);
+    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0, 0);
     assert_eq!(coverage.managed_total, 3);
     assert_eq!(coverage.managed_content_verified, 1);
     assert_eq!(coverage.managed_present_only, 1);
@@ -43,7 +43,7 @@ fn marked_files_outside_the_surface_are_counted_separately() {
     let managed = paths(directory.path(), &["a.rs"]);
     let marked = paths(directory.path(), &["a.rs", "legacy_visitor.py"]);
 
-    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0);
+    let coverage = VerifyCoverage::measure(&managed, &marked, ScanCoverage::default(), 0, 0);
     assert_eq!(coverage.marked_outside_surface, 1);
     assert_eq!(coverage.managed_total, 1);
 }
@@ -64,6 +64,7 @@ fn report_states_that_presence_only_paths_are_not_content_checked() {
         files_opened: 40,
         files_unexamined: 900,
         create_once_unmarked: 0,
+        ephemeral_excluded: 0,
     };
     let report = coverage.report_lines().join("\n");
 
