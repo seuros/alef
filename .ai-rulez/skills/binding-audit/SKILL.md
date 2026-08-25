@@ -25,7 +25,7 @@ Verify that every public Rust item has a corresponding binding in all target lan
 
 ## Hard rules
 
-1. **No guessing about intentional removals.** Config (`alef.toml`) and attributes (`#[alef::skip]`, `#[alef::exclude]`, `#[alef::opaque]`) are canonical. Only flag items not covered by them.
+1. **No guessing about intentional removals.** The real surfaces: `[crates.exclude]` (`types`/`functions`/`methods`/`fields`) inside a `[[crates]]` entry, crate-wide and unioned across every language; per-language `exclude_types` / `exclude_functions` directly on each `[crates.<lang>]` table; `[workspace.opaque_types]`, workspace-level only, which **remaps** a type rather than excluding it. At the attribute level, only `#[alef::skip]` and `#[doc(hidden)]` exist — `#[alef::exclude]` and `#[alef::opaque]` do not. Only flag items not covered by these.
 2. **Every gap is triaged.** Never report a missing binding without identifying the root cause (alef codegen bug, action script error, or config oversight).
 3. **All findings update `CHANGELOG.md`** — each upstream fix gets an `[Unreleased]` entry.
 4. **Commit SHAs and workflow URLs** are recorded so consumer repos can pin the exact fix.
@@ -40,13 +40,23 @@ From the **source repo** (the Rust library being bound, not alef itself):
 # Open alef.toml and record:
 # - [languages] enabled backends
 # - [e2e] enabled language suites
-# - [crates.exclude] items (global exclusions)
-# - [crates.<lang>.exclude] items (per-language exclusions)
-# - [workspace.exclude_types]
-# - [crates.opaque_types], [workspace.opaque_types]
-# - Any per-crate overrides under [workspace.crates."<name>"]
+# - [crates.exclude] items (types/functions/methods/fields) inside a [[crates]]
+#   entry — crate-wide, unioned across every language
+# - Per-language exclude_types / exclude_functions directly on each
+#   [crates.<lang>] table (e.g. [crates.python].exclude_types,
+#   [crates.ffi].exclude_functions) — unioned with the crate-wide list for
+#   that language only
+# - [workspace.opaque_types] — workspace-level only, no per-crate override.
+#   This is a type-REMAPPING declaration (Rust type name -> external path
+#   alef can't extract), not an exclusion list.
 grep -E '^\[' alef.toml | head -20
 ```
+
+There is **no** `[crates.skipped]`, no bare `exclude_types` key, and no per-crate override under
+`[workspace.crates."<name>"]` — `[[crates]]` is a plain array (`WorkspaceConfig` has no `crates`
+field; `RawCrateConfig` has no `skipped` field), so there is no name-keyed map to override into.
+`src/docs/language_pages/excludes.rs::language_excludes` is the canonical per-language union of
+the config surfaces above.
 
 Record intentional removals. Anything listed here is not a gap.
 
@@ -56,17 +66,29 @@ Gleam when generated. Do not invent an expected package for a language that is n
 
 ### 1. Scan source for attributes
 
-Grep the **source Rust crate** for intentional skip/exclude/opaque markers:
+Grep the **source Rust crate** for intentional removal markers. Only two exist —
+`#[alef::skip]` and `#[doc(hidden)]` (`src/extract/extractor/helpers/attributes.rs::extract_binding_exclusion_reason`).
+**`#[alef::exclude]` and `#[alef::opaque]` do not exist in alef** — do not grep for or expect them.
 
 ```bash
-# Find all #[alef::skip], #[alef::exclude], #[alef::opaque]
-find . -name "*.rs" -type f -exec grep -l "#\[alef::" {} \;
+# Find all #[alef::skip] and #[doc(hidden)]
+find . -name "*.rs" -type f -exec grep -l "#\[alef::skip\]\|#\[doc(hidden)\]" {} \;
 
 # For each file found, inspect the context:
-grep -B2 -A2 "#\[alef::" <file.rs>
+grep -B2 -A2 "#\[alef::skip\]\|#\[doc(hidden)\]" <file.rs>
 ```
 
 Record the annotated items — these are intentional and do **not** flag as gaps.
+
+Both attributes set the `binding_excluded` flag on the item's IR node at extraction time. That
+flag is honored **independently by every downstream consumer** — each backend, `src/core/jni.rs`,
+`src/core/validation/readiness.rs`, docs generation, etc. all filter on it separately; there is no
+single central enforcement point. Critically, `language_excludes` (step 0) **never consults
+`binding_excluded`**; it only reads the config surfaces. So a `#[alef::skip]`'d (or
+`#[doc(hidden)]`) item is correctly invisible in every generated binding, but tooling that treats
+`language_excludes`'s answer as the *complete* set of intentional removals will misclassify that
+skipped item as a real gap, because it never shows up in `language_excludes`'s output at all
+(live defect: alef-task #329).
 
 ### 2. Enumerate public items
 
@@ -173,7 +195,7 @@ For each non-intentional gap:
 
 - **Codegen issue:** Does the item appear in the source Rust but fail to generate in all backends? Root cause likely in `src/codegen/` or a specific `src/backends/<lang>/`. Fix in `../alef` repo.
 - **Alef-owned workflow/action issue:** Does an Alef-maintained scaffold or publish workflow have a bug that skips a language? Fix the owning workflow/action repository and retag only the documented action tags for that repository.
-- **Consumer config issue:** Is the gap listed in the **consuming repo's** `alef.toml` under `[crates.exclude]` or `[crates.<lang>.exclude]`? That's intentional — no action needed upstream.
+- **Consumer config issue:** Is the gap listed in the **consuming repo's** `alef.toml` under `[crates.exclude]` or a per-language `exclude_types` / `exclude_functions` on `[crates.<lang>]`? That's intentional — no action needed upstream.
 - **Package layout issue:** Does generated code exist but not in the expected package path? Fix the backend output path or package manifest wiring, not the Rust source item.
 - **Unsupported type issue:** Does the Rust item use a type the backend cannot express? Add explicit conversion, an opaque wrapper, or an intentional exclusion in config.
 
@@ -189,7 +211,7 @@ For each upstream fix:
 
 ## Anti-patterns
 
-- Reporting a gap without checking `alef.toml` and `#[alef::*]` attributes first.
+- Reporting a gap without checking `alef.toml` and `#[alef::skip]` / `#[doc(hidden)]` attributes first.
 - Assuming a missing binding is a codegen bug without checking the consuming repo's config.
 - Closing an audit issue without confirming every gap is triaged and documented.
 - Fixing a codegen bug without adding a test under `tests/` or a fixture under `src/e2e/` to prevent regression.
@@ -198,8 +220,8 @@ For each upstream fix:
 
 | Step | Command | Output |
 |------|---------|--------|
-| Config | `grep -E '^\[' alef.toml` | Intentional exclusions |
-| Attributes | `find . -name "*.rs" -exec grep -l "#\[alef::" {} \;` | Annotated items |
+| Config | `grep -E '^\[' alef.toml` | Intentional exclusions (`[crates.exclude]`, per-language `exclude_types`/`exclude_functions`, `[workspace.opaque_types]`) |
+| Attributes | `find . -name "*.rs" -exec grep -l "#\[alef::skip\]\|#\[doc(hidden)\]" {} \;` | Annotated items |
 | Public items | `grep -rE "^pub fn\|^pub struct" src` | Reference set |
 | Bindings | `grep -R -E "export\|def\|func\|public\|fun " packages crates` | Per-language sets |
 | Gaps | Diff reference set vs per-language sets | Gap report |
