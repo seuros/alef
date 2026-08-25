@@ -341,6 +341,21 @@ fn swift_type_name_native(ty: &TypeRef, _exclude_types: &HashSet<String>) -> Str
 /// `Map<_, Named>`, whose values are themselves JSON-encoded -- double-encoding the payload and
 /// disagreeing with `plugin_marshal::swift_shim_param_ffi_type`/`swift_shim_param_decode`, which
 /// already always treat `Map` as one `RustString` blob at the FFI-shim layer (alef-tasks #309).
+///
+/// `Optional<Vec<Named>>` (Named excluded, i.e. JSON-bridged) declares plain `String?` -- one
+/// JSON blob, `nil` for `None` -- rather than recursing to `[String]?` (alef-tasks #333). This is
+/// the OUTBOUND counterpart of `gen_rust_crate::plugin_inbound::inbound_bridge_type`'s `~keep`
+/// rule, and it reaches the opposite conclusion from the inbound side on purpose: the inbound
+/// (`extern "Swift"`) boundary can extend `Vec<Named>`'s per-element exception through `Option`
+/// because that boundary already accepts a plain `Option<Vec<String>>`, but this outbound
+/// direction backs the `{Trait}Box` FFI trampolines declared via `extern "Rust"`
+/// (`gen_rust_crate::trait_bridge::emit_extern_block_for_trait_bridge`), and that boundary does
+/// not support `Option<Vec<T>>` for any element type -- proven by the DTO-getter fix "bridge
+/// optional vectors through JSON", which collapsed the identical `Optional<Vec<T>>` shape to one
+/// JSON blob for the same `extern "Rust"` limitation. Recursing here would declare `[String]?`
+/// on the protocol while `plugin_marshal::swift_shim_return_ffi_type` (which cannot produce an
+/// `Option`-wrapped `RustVec` FFI type either) still declares `RustString`, and the shim's
+/// `return RustString(...)` would not compile against a `[String]?` bridge-call expression.
 /// ~keep
 fn swift_type_name(ty: &TypeRef, exclude_types: &HashSet<String>) -> String {
     match ty {
@@ -372,6 +387,9 @@ fn swift_type_name(ty: &TypeRef, exclude_types: &HashSet<String>) -> String {
         }
         TypeRef::Vec(inner) => format!("[{}]", swift_type_name(inner, exclude_types)),
         TypeRef::Map(_, _) => "String".to_string(),
+        TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Vec(elem) if matches!(elem.as_ref(), TypeRef::Named(name) if exclude_types.contains(name))) => {
+            "String?".to_string()
+        }
         TypeRef::Optional(inner) => format!("{}?", swift_type_name(inner, exclude_types)),
         TypeRef::Unit => "Void".to_string(),
         TypeRef::Json => "String".to_string(),
@@ -620,6 +638,44 @@ mod tests {
         );
 
         assert_eq!(swift_type_name(&ty, &HashSet::new()), "String");
+    }
+
+    /// alef-tasks #333: recursing normally would declare `[String]?` for `Optional<Vec<Named>>`,
+    /// matching the inbound (`extern "Swift"`) rule's per-element decision -- but this function
+    /// backs the *outbound* `{Trait}Box` FFI trampolines (`extern "Rust"`), and that boundary
+    /// cannot bridge `Option<Vec<T>>` at all (see the DTO-getter fix "bridge optional vectors
+    /// through JSON" for the identical limitation). The protocol must declare one blob, `String?`,
+    /// matching what `plugin_marshal::swift_shim_return_ffi_type` already declares (`RustString`)
+    /// and what `plugin_marshal::swift_shim_return_marshal` must now also produce.
+    #[test]
+    fn test_swift_type_name_optional_vec_named_is_one_blob() {
+        let mut exclude_types = HashSet::new();
+        exclude_types.insert("SinkStats".to_string());
+        let ty = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named(
+            "SinkStats".to_string(),
+        )))));
+
+        assert_eq!(
+            swift_type_name(&ty, &exclude_types),
+            "String?",
+            "Optional<Vec<Named>> must declare a single nilable JSON String blob, not [String]?"
+        );
+    }
+
+    /// The one-blob rule for `Optional<Vec<Named>>` depends on the element actually needing JSON
+    /// bridging (i.e. being excluded). An `Optional<Vec<Named>>` whose element is NOT excluded
+    /// keeps recursing normally, matching `Vec<Named>`'s own visible-type recursion.
+    #[test]
+    fn test_swift_type_name_optional_vec_visible_named_still_recurses() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named(
+            "SinkStats".to_string(),
+        )))));
+
+        assert_eq!(
+            swift_type_name(&ty, &HashSet::new()),
+            "[SinkStats]?",
+            "a Vec<Named> element not in exclude_types keeps its native array recursion"
+        );
     }
 
     #[test]
