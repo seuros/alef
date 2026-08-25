@@ -778,3 +778,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "wasm_optional_chain_tsc_tests.rs"]
+mod wasm_optional_chain_tsc_tests;
