@@ -67,6 +67,7 @@ fn render_void_call(is_async: bool, assertions: Vec<Assertion>) -> String {
         &std::collections::HashMap::new(),
         &type_defs,
         &enums,
+        &[],
         "",
         &config,
         &mut referenced_enums,

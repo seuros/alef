@@ -38,7 +38,7 @@ impl E2eCodegen for WasmCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         _errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -393,6 +393,7 @@ impl E2eCodegen for WasmCodegen {
                 e2e_config,
                 type_defs,
                 enums,
+                functions,
                 &wasm_type_prefix,
                 config,
                 &[],
