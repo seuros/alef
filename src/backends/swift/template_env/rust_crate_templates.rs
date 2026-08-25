@@ -154,6 +154,10 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         include_str!("../templates/inbound_method_json_vec_return.rs.jinja"),
     ),
     (
+        "inbound_method_json_optional_vec_return.rs.jinja",
+        include_str!("../templates/inbound_method_json_optional_vec_return.rs.jinja"),
+    ),
+    (
         "inbound_method_unit_call.rs.jinja",
         include_str!("../templates/inbound_method_unit_call.rs.jinja"),
     ),

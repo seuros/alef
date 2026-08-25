@@ -2,7 +2,7 @@ use crate::backends::swift::gen_rust_crate::type_bridge::swift_bridge_rust_type;
 use crate::core::ir::{ApiSurface, MethodDef, ParamDef, TypeRef};
 use heck::ToSnakeCase;
 
-use super::{inbound_bridge_type, is_vec_of_named, needs_inbound_json_bridge};
+use super::{inbound_bridge_type, is_optional_vec_of_named, is_vec_of_named, needs_inbound_json_bridge};
 
 /// Returns true if `ty` references a `Named(name)` at any depth where `name` resolves
 /// to a trait — either present in `api.types` or stripped from the binding surface
@@ -154,6 +154,34 @@ pub(super) fn emit_inbound_method_impl(
                 call_expr => &call_expr,
                 elem_native_ty => &elem_native_ty,
                 native_ty => &native_ty,
+                trait_snake => trait_snake,
+                method_snake => &method_snake,
+            },
+        ));
+    } else if is_optional_vec_of_named(&method.return_type) {
+        // alef-tasks #333: `Optional<Vec<Named>>` extends the #308 per-element rule through the
+        // `Option` wrapper -- `inbound_bridge_type` declares `Option<Vec<String>>` for the extern
+        // block, so `call_expr` really returns that shape here. `needs_inbound_json_bridge`
+        // deliberately excludes this shape too (its blanket `Optional(_) => true` would otherwise
+        // route it into the single-blob branch below, which expects `call_expr` to be a bare
+        // `String` and would not compile against an `Option<Vec<String>>` value). `None` passes
+        // through unchanged; each `Some` element is decoded on its own. See the rule in
+        // `plugin_inbound::inbound_bridge_type`. ~keep
+        let inner_vec = match &method.return_type {
+            TypeRef::Optional(inner) => inner.as_ref(),
+            _ => unreachable!("is_optional_vec_of_named guarantees an Optional"),
+        };
+        let elem_native_ty = match inner_vec {
+            TypeRef::Vec(inner) => inbound_native_return_ty(inner, source_crate, type_paths),
+            _ => unreachable!("is_optional_vec_of_named guarantees an inner Vec"),
+        };
+        let vec_native_ty = format!("Vec<{elem_native_ty}>");
+        out.push_str(&crate::backends::swift::template_env::render(
+            "inbound_method_json_optional_vec_return.rs.jinja",
+            minijinja::context! {
+                call_expr => &call_expr,
+                elem_native_ty => &elem_native_ty,
+                vec_native_ty => &vec_native_ty,
                 trait_snake => trait_snake,
                 method_snake => &method_snake,
             },
@@ -545,6 +573,65 @@ mod tests {
         assert!(
             !out.contains("let json = self.inner.alef_stats_history();"),
             "must not treat Vec<String> as a single JSON blob, got:\n{out}"
+        );
+    }
+
+    fn optional_stats_history_method() -> MethodDef {
+        MethodDef {
+            name: "stats_history".to_string(),
+            return_type: TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named(
+                "SinkStats".to_string(),
+            ))))),
+            ..Default::default()
+        }
+    }
+
+    /// alef-tasks #333: before the fix, `is_vec_of_named(Optional<Vec<Named>>)` was `false` (it
+    /// only matches a bare `Vec<Named>`), so the method fell through to
+    /// `needs_inbound_json_bridge` -- `true` for any `Optional(_)` -- and rendered
+    /// `inbound_method_json_return.rs.jinja`, which binds `call_expr` to a `let json: String`
+    /// and calls `serde_json::from_str` on it. The extern block declares
+    /// `Option<Vec<String>>` for this shape (`inbound_bridge_type`), not `String`, so `let json
+    /// = self.inner.alef_stats_history();` would not type-check. This is exactly the kind of
+    /// generator-output type mismatch the SwiftPM compile gate cannot see, since that gate never
+    /// compiles this generator's Rust output -- only these string assertions catch it.
+    #[test]
+    fn test_emit_inbound_method_impl_optional_vec_named_return_decodes_per_element() {
+        let method = optional_stats_history_method();
+        let api = ApiSurface::default();
+        let mut out = String::new();
+
+        emit_inbound_method_impl(
+            &mut out,
+            &method,
+            "document_sink",
+            "fixture_core",
+            &std::collections::HashMap::new(),
+            "SinkError",
+            false,
+            &std::collections::HashSet::new(),
+            &api,
+        );
+
+        assert!(
+            out.contains("__strings"),
+            "expected the per-element decode helper, got:\n{out}"
+        );
+        assert!(
+            out.contains(".map(|v| {"),
+            "expected the Option::map wrapper around the per-element decode, got:\n{out}"
+        );
+        assert!(
+            out.contains("::serde_json::from_str::<fixture_core::SinkStats>(&s)"),
+            "expected each present element decoded on its own, got:\n{out}"
+        );
+        assert!(
+            out.contains(".collect::<Vec<fixture_core::SinkStats>>()"),
+            "expected the collected native Vec<T> inside the Option, got:\n{out}"
+        );
+        assert!(
+            !out.contains("let json = self.inner.alef_stats_history();"),
+            "must not treat Option<Vec<String>> as a single JSON blob, got:\n{out}"
         );
     }
 }
