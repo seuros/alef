@@ -7,7 +7,7 @@ use crate::core::config::{Language, OutputLayout, ResolvedCrateConfig};
 use crate::e2e::format::DeferredFormatting;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
 use tracing::{debug, warn};
 
 /// Reason recorded when a formatting step could not run because its executable is not
@@ -953,45 +953,9 @@ fn is_tool_available_on(tool: &str, path_var: Option<std::ffi::OsString>) -> boo
     which::which_in(tool, path_var, std::env::current_dir().unwrap_or_default()).is_ok()
 }
 
-/// Run a formatter command with arguments in a specific directory.
-fn run_formatter(command: &str, args: &[&str], work_dir: &Path) -> anyhow::Result<()> {
-    let output = Command::new(command).args(args).current_dir(work_dir).output()?;
-
-    if !output.status.success() {
-        return Err(formatter_failure(&output));
-    }
-
-    Ok(())
-}
-
-fn formatter_failure(output: &Output) -> anyhow::Error {
-    anyhow::anyhow!(
-        "formatter exited with code {:?}: {}",
-        output.status.code(),
-        format_command_output(output)
-    )
-}
-
-fn format_command_output(output: &Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = stdout.trim();
-    let stderr = stderr.trim();
-
-    match (stdout.is_empty(), stderr.is_empty()) {
-        (false, false) => format!("stdout:\n{stdout}\nstderr:\n{stderr}"),
-        (false, true) => format!("stdout:\n{stdout}"),
-        (true, false) => format!("stderr:\n{stderr}"),
-        (true, true) => "<no output>".to_string(),
-    }
-}
-
-fn resolve_crate_dir(output_path: &Path) -> PathBuf {
-    output_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| output_path.to_path_buf())
-}
+#[path = "format/external_formatter.rs"]
+mod external_formatter;
+use external_formatter::{formatter_failure, resolve_crate_dir, run_formatter};
 
 #[cfg(test)]
 mod scope_tests;
