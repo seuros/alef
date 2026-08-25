@@ -81,6 +81,7 @@ pub(crate) fn default_build_config(
             before: None,
             build: Some(StringOrVec::Single("cargo build --workspace".to_string())),
             build_release: Some(StringOrVec::Single("cargo build --release --workspace".to_string())),
+            timeout_seconds: None,
         },
         Language::Python => BuildCommandConfig {
             precondition: Some(require_tool("maturin")),
@@ -93,6 +94,7 @@ pub(crate) fn default_build_config(
             build_release: Some(StringOrVec::Single(format!(
                 "maturin develop --manifest-path crates/{crate_name}-py/Cargo.toml --release"
             ))),
+            timeout_seconds: None,
         },
         Language::Node => BuildCommandConfig {
             precondition: Some(require_tool("npm")),
@@ -107,6 +109,7 @@ pub(crate) fn default_build_config(
                 "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --dts {} --release",
                 tv::npm::NAPI_AUTO_DTS_FILENAME
             ))),
+            timeout_seconds: None,
         },
         Language::Wasm => BuildCommandConfig {
             precondition: Some(require_tool("wasm-pack")),
@@ -119,6 +122,7 @@ pub(crate) fn default_build_config(
             build_release: Some(StringOrVec::Single(format!(
                 "wasm-pack build crates/{crate_name}-wasm --release"
             ))),
+            timeout_seconds: None,
         },
         Language::Go => {
             let cmd = format!("cd {output_dir} && go build ./...");
@@ -129,6 +133,7 @@ pub(crate) fn default_build_config(
                 before: None,
                 build: Some(StringOrVec::Single(wrap(cmd.clone(), ctx.run_wrapper))),
                 build_release: Some(StringOrVec::Single(wrap(cmd, ctx.run_wrapper))),
+                timeout_seconds: None,
             }
         }
         Language::Ruby => BuildCommandConfig {
@@ -138,6 +143,7 @@ pub(crate) fn default_build_config(
             before: None,
             build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-rb"))),
             build_release: Some(StringOrVec::Single(format!("cargo build --release -p {crate_name}-rb"))),
+            timeout_seconds: None,
         },
         Language::Php => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
@@ -148,6 +154,7 @@ pub(crate) fn default_build_config(
             build_release: Some(StringOrVec::Single(format!(
                 "cargo build --release -p {crate_name}-php"
             ))),
+            timeout_seconds: None,
         },
         Language::Ffi => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
@@ -160,6 +167,7 @@ pub(crate) fn default_build_config(
             build_release: Some(StringOrVec::Single(format!(
                 "cargo build --release --manifest-path {output_dir}/Cargo.toml"
             ))),
+            timeout_seconds: None,
         },
         Language::Java => {
             let (build_path, release_path) = if let Some(proj) = ctx.project_file {
@@ -180,6 +188,7 @@ pub(crate) fn default_build_config(
                 before: None,
                 build: Some(StringOrVec::Single(wrap(build_path, ctx.run_wrapper))),
                 build_release: Some(StringOrVec::Single(wrap(release_path, ctx.run_wrapper))),
+                timeout_seconds: None,
             }
         }
         Language::Csharp => {
@@ -201,6 +210,7 @@ pub(crate) fn default_build_config(
                 before: None,
                 build: Some(StringOrVec::Single(wrap(build_path, ctx.run_wrapper))),
                 build_release: Some(StringOrVec::Single(wrap(release_path, ctx.run_wrapper))),
+                timeout_seconds: None,
             }
         }
         Language::Elixir => BuildCommandConfig {
@@ -210,6 +220,7 @@ pub(crate) fn default_build_config(
             before: None,
             build: Some(StringOrVec::Single(format!("cd {output_dir} && mix compile"))),
             build_release: Some(StringOrVec::Single(format!("cd {output_dir} && mix compile"))),
+            timeout_seconds: None,
         },
         Language::R => BuildCommandConfig {
             precondition: Some(require_tool("cargo")),
@@ -218,6 +229,7 @@ pub(crate) fn default_build_config(
             before: None,
             build: Some(StringOrVec::Single(format!("cargo build -p {crate_name}-r"))),
             build_release: Some(StringOrVec::Single(format!("cargo build --release -p {crate_name}-r"))),
+            timeout_seconds: None,
         },
         Language::Kotlin => BuildCommandConfig {
             precondition: Some(require_tool("gradle")),
@@ -232,6 +244,7 @@ pub(crate) fn default_build_config(
                 format!("cd {output_dir} && gradle {}", gradle_build_task(lang, true)),
                 ctx.run_wrapper,
             ))),
+            timeout_seconds: None,
         },
         Language::KotlinAndroid => BuildCommandConfig {
             precondition: Some(require_tool("gradle")),
@@ -246,6 +259,7 @@ pub(crate) fn default_build_config(
                 format!("cd {output_dir} && gradle {}", gradle_build_task(lang, true)),
                 ctx.run_wrapper,
             ))),
+            timeout_seconds: None,
         },
         Language::Swift => BuildCommandConfig {
             precondition: Some(require_tool("swift")),
@@ -260,6 +274,7 @@ pub(crate) fn default_build_config(
                 format!("swift build --package-path {output_dir} --configuration release"),
                 ctx.run_wrapper,
             ))),
+            timeout_seconds: None,
         },
         Language::Dart => BuildCommandConfig {
             precondition: Some(require_tool("dart")),
@@ -274,6 +289,7 @@ pub(crate) fn default_build_config(
                 format!("cd {output_dir} && dart pub get"),
                 ctx.run_wrapper,
             ))),
+            timeout_seconds: None,
         },
         Language::Zig => BuildCommandConfig {
             precondition: Some(require_tool("zig")),
@@ -288,6 +304,7 @@ pub(crate) fn default_build_config(
                 format!("cd {output_dir} && zig build --release=fast"),
                 ctx.run_wrapper,
             ))),
+            timeout_seconds: None,
         },
         Language::Gleam => BuildCommandConfig {
             precondition: Some(require_tool("gleam")),
@@ -302,6 +319,7 @@ pub(crate) fn default_build_config(
                 format!("cd {output_dir} && gleam build"),
                 ctx.run_wrapper,
             ))),
+            timeout_seconds: None,
         },
         Language::C => BuildCommandConfig {
             precondition: None,
@@ -310,6 +328,7 @@ pub(crate) fn default_build_config(
             before: None,
             build: None,
             build_release: None,
+            timeout_seconds: None,
         },
         Language::Jni => BuildCommandConfig {
             precondition: None,
@@ -318,6 +337,7 @@ pub(crate) fn default_build_config(
             before: None,
             build: None,
             build_release: None,
+            timeout_seconds: None,
         },
     }
 }

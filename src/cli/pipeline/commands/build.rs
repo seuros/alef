@@ -577,7 +577,17 @@ pub fn run_post_build(
             }
             PostBuildStep::RunCommand { cmd, args } => {
                 let work_dir = base_dir.join(crate_dir);
-                let ran = run_run_command(cmd, args, &work_dir, &config.name)
+                // `[build_commands.<lang>].timeout_seconds` (alef.toml) overrides the built-in
+                // `RUN_COMMAND_TIMEOUT` ceiling for exactly this step -- see that config field's
+                // doc comment for why a language-scoped override exists (alef #364: a cold
+                // Swift `cargo build --release` in a large workspace legitimately exceeds 30
+                // minutes while still making progress). ~keep
+                let timeout = config
+                    .build_command_config_for_language(lang)
+                    .timeout_seconds
+                    .map(std::time::Duration::from_secs)
+                    .unwrap_or(RUN_COMMAND_TIMEOUT);
+                let ran = run_run_command(cmd, args, &work_dir, &config.name, timeout)
                     .with_context(|| format!("post-build RunCommand '{cmd}' failed"))?;
                 if !ran {
                     skipped_missing_tools.push((*cmd).to_string());
@@ -737,12 +747,17 @@ fn rewrite_wasm_package_json_name(path: &Path, new_name: &str) -> anyhow::Result
     Ok(())
 }
 
-/// Hard upper bound on how long a post-build `RunCommand` may run before alef
+/// Default hard upper bound on how long a post-build `RunCommand` may run before alef
 /// considers it hung and kills it. Cold-cache `cargo build --release` for the
 /// swift binding crate against a polyglot project's full feature set
 /// legitimately takes 10-20 minutes; FRB codegen on a warm cache finishes in
 /// under a minute. 30 minutes accommodates both without false-positiving
 /// slow first-runs on cold CI caches.
+///
+/// A consumer whose cold Swift release build genuinely exceeds this (a large workspace can run
+/// well past 30 minutes while still making progress -- alef #364) overrides it per language via
+/// `[build_commands.<lang>].timeout_seconds` in `alef.toml`; see that field's doc comment. This
+/// constant remains the ceiling whenever that field is unset. ~keep
 const RUN_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1800);
 
 /// Interval between `try_wait()` polls. Short enough to react promptly to a
@@ -752,9 +767,9 @@ const RUN_COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from
 /// Execute a `RunCommand` post-build step.
 ///
 /// Spawns `cmd` with `args` in `base_dir`, streaming stdout/stderr through
-/// alef's own stdio so interactive subprocess progress is visible. Enforces a
-/// `RUN_COMMAND_TIMEOUT` ceiling; on timeout the child is SIGKILL'd and the
-/// call returns an error. Returns an error on non-zero exit status.
+/// alef's own stdio so interactive subprocess progress is visible. Enforces `timeout` as a
+/// ceiling; on timeout the child is SIGKILL'd and the call returns an error. Returns an error
+/// on non-zero exit status.
 ///
 /// Returns `Ok(true)` when `cmd` actually ran (and exited zero), `Ok(false)` when it was
 /// skipped -- either via the `ALEF_SKIP_COMMANDS` escape hatch below or because `cmd` isn't
@@ -767,7 +782,13 @@ const RUN_COMMAND_POLL_INTERVAL: std::time::Duration = std::time::Duration::from
 /// a post-build tool is unavailable, hangs (e.g. `flutter_rust_bridge_codegen`
 /// installing Flutter via FVM under CI), or simply isn't desired this run.
 /// Each skipped command logs a `warn!` so the omission is visible.
-fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str) -> anyhow::Result<bool> {
+fn run_run_command(
+    cmd: &str,
+    args: &[&str],
+    base_dir: &Path,
+    cache_scope: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<bool> {
     if let Ok(skip_list) = std::env::var("ALEF_SKIP_COMMANDS")
         && skip_list.split(',').any(|s| s.trim() == cmd)
     {
@@ -798,10 +819,10 @@ fn run_run_command(cmd: &str, args: &[&str], base_dir: &Path, cache_scope: &str)
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if started_at.elapsed() > RUN_COMMAND_TIMEOUT {
+                if started_at.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    anyhow::bail!("'{cmd}' exceeded {}s timeout; killed", RUN_COMMAND_TIMEOUT.as_secs());
+                    anyhow::bail!("'{cmd}' exceeded {}s timeout; killed", timeout.as_secs());
                 }
                 std::thread::sleep(RUN_COMMAND_POLL_INTERVAL);
             }

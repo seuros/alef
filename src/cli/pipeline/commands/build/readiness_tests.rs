@@ -10,6 +10,7 @@ fn cfg(precondition: &str, dependency_precondition: Option<&str>) -> BuildComman
         before: None,
         build: None,
         build_release: None,
+        timeout_seconds: None,
     }
 }
 
