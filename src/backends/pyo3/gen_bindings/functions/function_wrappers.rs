@@ -8,6 +8,7 @@ use super::helper_type_mapping::classify_param_type;
 use super::return_error::emit_function_return_call;
 use super::signature_params::emit_param_conversion;
 use crate::backends::pyo3::gen_bindings::enums::{Wrapping, sanitize_python_doc};
+use crate::backends::pyo3::py_signature::{leaf_named_type, python_signature_params};
 
 type OptionsFieldBridges<'a> = AHashMap<&'a str, (&'a str, &'a str, Option<&'a str>)>;
 
@@ -29,63 +30,28 @@ pub(super) fn emit_function_wrappers(
         if exclude_functions.contains(&func.name) {
             continue;
         }
-        let mut seen_optional_so_far = false;
-        let mut promoted_params: ahash::AHashSet<String> = ahash::AHashSet::new();
-        for param in &func.params {
-            if param.optional {
-                seen_optional_so_far = true;
-            } else if seen_optional_so_far {
-                promoted_params.insert(param.name.clone());
-            }
-        }
-        for param in &func.params {
-            if !param.optional
-                && !promoted_params.contains(&param.name)
-                && !bridge_param_names.contains(param.name.as_str())
-            {
-                let leaf_name = match &param.ty {
-                    crate::core::ir::TypeRef::Named(n) => Some(n.as_str()),
-                    crate::core::ir::TypeRef::Optional(inner) => {
-                        if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                            Some(n.as_str())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                if leaf_name.is_some_and(|n| default_types.contains_key(n)) {
-                    promoted_params.insert(param.name.clone());
-                }
-            }
-        }
+        // The facade can construct a `Default` for a param the caller omits, so unlike the `.pyi`
+        // stub it grants those params a `= None`. Both go through the shared decision so the two
+        // artifacts can never disagree about which params exist or in what order. ~keep
+        let signature = python_signature_params(&func.params, |param| {
+            !bridge_param_names.contains(param.name.as_str())
+                && leaf_named_type(param).is_some_and(|name| default_types.contains_key(name))
+        });
+        let promoted_params: ahash::AHashSet<&str> = signature
+            .iter()
+            .filter(|entry| entry.defaulted && !entry.param.optional)
+            .map(|entry| entry.param.name.as_str())
+            .collect();
 
         let mut sig_parts = Vec::new();
-        let is_with_default = |p: &&crate::core::ir::ParamDef| p.optional || promoted_params.contains(&p.name);
-        let (required, optional): (Vec<_>, Vec<_>) = func.params.iter().partition(|p| !is_with_default(p));
-        for param in required.iter().chain(optional.iter()) {
+        for entry in &signature {
+            let param = entry.param;
             let base_type = if bridge_param_names.contains(param.name.as_str()) {
                 "object".to_string()
             } else {
                 crate::backends::pyo3::type_map::python_type(&param.ty)
             };
-            let needs_default = param.optional || promoted_params.contains(&param.name);
-            // calls `.expect("'param' is required")`.
-            let is_has_default_param = !bridge_param_names.contains(param.name.as_str()) && {
-                let leaf_name = match &param.ty {
-                    crate::core::ir::TypeRef::Named(n) => Some(n.as_str()),
-                    crate::core::ir::TypeRef::Optional(inner) => {
-                        if let crate::core::ir::TypeRef::Named(n) = inner.as_ref() {
-                            Some(n.as_str())
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                leaf_name.is_some_and(|n| default_types.contains_key(n))
-            };
-            let py_type = if needs_default || is_has_default_param {
+            let py_type = if entry.defaulted {
                 if base_type.ends_with("| None") {
                     format!("{} = None", base_type)
                 } else {
@@ -209,8 +175,8 @@ pub(super) fn emit_function_wrappers(
         }
 
         let mut call_args: Vec<(String, String)> = Vec::new();
-        let (req_params, opt_params): (Vec<_>, Vec<_>) = func.params.iter().partition(|p| !is_with_default(p));
-        for param in req_params.iter().chain(opt_params.iter()) {
+        for entry in &signature {
+            let param = entry.param;
             let class = classify_param_type(&param.ty);
 
             if let Some((name, wrapping)) = class {

@@ -9,13 +9,13 @@ pub(super) fn gen_function_stub(
     options_field_bridges: &OptionsFieldBridges<'_>,
     streaming_return_types: &std::collections::HashMap<(Option<String>, String), String>,
 ) -> String {
-    // `#[pyo3(signature = ...)]` (and the api.py wrapper) use: once any param is optional, every
-    let mut params: Vec<String> = func
-        .params
-        .iter()
-        .enumerate()
-        .map(|(idx, p)| {
-            let optional = p.optional || crate::codegen::shared::is_promoted_optional(&func.params, idx);
+    // The native module has no way to synthesize a `Default`, so the stub grants no extra
+    // defaults; parameter existence and order still come from the shared decision so this stub
+    // and the `api.py` facade cannot drift apart. ~keep
+    let mut params: Vec<String> = crate::backends::pyo3::py_signature::python_signature_params(&func.params, |_| false)
+        .into_iter()
+        .map(|entry| {
+            let (p, optional) = (entry.param, entry.defaulted);
             let type_str = if bridge_param_names.contains(p.name.as_str()) {
                 "object".to_string()
             } else {

@@ -4,6 +4,9 @@
 // from_json eligibility gate. ~keep
 pub(crate) mod gen_bindings;
 mod gen_stubs;
+mod py_signature;
+#[cfg(test)]
+mod signature_agreement_tests;
 mod template_env;
 pub mod trait_bridge;
 mod type_map;
