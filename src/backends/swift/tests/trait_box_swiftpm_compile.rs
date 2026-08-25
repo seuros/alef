@@ -102,6 +102,8 @@ public final class FixtureSink: SwiftDocumentSinkBridge {
 
     public func lastStats() -> String? { return nil }
 
+    public func latestBatch() -> String? { return nil }
+
     public func record(entries: [String]) {}
 
     public func sinkTotals() -> String {
@@ -163,7 +165,15 @@ fn defaulted(mut m: MethodDef) -> MethodDef {
 /// swift-bridge cannot bridge `HashMap<K, V>` at all, Named or not. The protocol must declare a
 /// plain `String`, not `[String: String]` (which would double-encode every value), and the box
 /// shim's return marshal must wrap the bridge call in `RustString(...)` to match the declared
-/// `RustString` FFI return type. ~keep
+/// `RustString` FFI return type.
+///
+/// `latest_batch` is the `Optional<Vec<Named>>` counterpart (alef-tasks #333): unlike bare
+/// `Vec<Named>` (which crosses per-element as `[String]`/`RustVec<RustString>`), wrapping it in
+/// `Optional` loses the native `RustVec` path this `extern "Rust"` boundary needs -- the same
+/// limitation the DTO-getter fix "bridge optional vectors through JSON" proved for plain
+/// `Optional<Vec<T>>` fields. The protocol must declare one nilable JSON blob, `String?`, not
+/// `[String]?`, and the shim's return marshal must collapse `nil` to the JSON literal `"null"`
+/// the same way `last_stats` (`Optional<Named>`) already does. ~keep
 fn fixture_api() -> (ApiSurface, ResolvedCrateConfig) {
     let trait_def = TypeDef {
         name: "DocumentSink".to_string(),
@@ -205,6 +215,14 @@ fn fixture_api() -> (ApiSurface, ResolvedCrateConfig) {
                 "last_stats",
                 vec![],
                 TypeRef::Optional(Box::new(TypeRef::Named("SinkStats".to_string()))),
+                None,
+            )),
+            defaulted(method(
+                "latest_batch",
+                vec![],
+                TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named(
+                    "SinkStats".to_string(),
+                ))))),
                 None,
             )),
             method(
@@ -370,6 +388,13 @@ fn swift_driver() -> Option<PathBuf> {
 /// - reverting the `swift_shim_return_marshal` catch-all wrap makes the box shim `return
 ///   bridge.sinkTotals()` without `RustString(...)`, and this test must fail with a type
 ///   mismatch naming `RustString` in `Swift{Trait}Box.swift`.
+/// - reverting `swift_type_name`'s new `Optional<Vec<Named>>` arm (alef-tasks #333) makes
+///   `latestBatch()` declare `[String]?`, which does not match `String?` on `FixtureSink`, and
+///   this test must fail with a protocol-conformance error naming `latestBatch`.
+/// - reverting `swift_shim_return_marshal`'s new `Optional<Vec<Named>>` arm makes the box shim
+///   `return RustString(bridge.latestBatch())` without the `?? "null"` fallback, and this test
+///   must fail with a type mismatch feeding a `String?` into the non-optional `RustString(_:)`
+///   initializer in `Swift{Trait}Box.swift`.
 #[test]
 fn generated_trait_box_package_compiles() {
     let Some(swift) = swift_driver() else { return };
