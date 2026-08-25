@@ -468,6 +468,62 @@ mod curated_snippet_tests {
         assert!(error.to_string().contains("alef itself generates"), "{error}");
     }
 
+    /// The `glob` crate's default `MatchOptions` leave `require_literal_separator: false`, so
+    /// a single `*` component crosses `/` exactly like `**` would -- `*/getting-started/x.md`
+    /// matches `generated/rust/getting-started/x.md` just as readily as `python/getting-started/x.md`,
+    /// because the `*` alone can consume the whole `generated/rust` remainder as one match.
+    /// Measured in crawlberg: `docs-site/src/snippets/*/getting-started/basic_usage.md` matched
+    /// files inside `output`'s own `generated/<lang>/` subtree, not just the intended per-language
+    /// top-level directories. `resolve_curated_snippet_paths` must find these crossing matches (so
+    /// `reject_generated_curated_paths` below has something to refuse), and the refusal must name
+    /// the offending path rather than silently annexing alef's own output -- both are pinned here so
+    /// a future glob-matching change (an explicit `MatchOptions`, a different pattern library) cannot
+    /// silently let a curated declaration claim generated output again. ~keep
+    #[test]
+    fn a_single_star_crossing_a_directory_separator_still_trips_the_generated_output_refusal() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        write(
+            directory.path(),
+            "docs-site/src/snippets/generated/rust/getting-started/basic_usage.md",
+            "alef wrote this",
+        );
+
+        let curated = resolve_curated_snippet_paths(
+            directory.path(),
+            &["docs-site/src/snippets/*/getting-started/basic_usage.md".to_string()],
+        )
+        .expect("a bare `*` must cross `/` under the glob crate's default match options");
+
+        assert_eq!(
+            curated,
+            vec![PathBuf::from(
+                "docs-site/src/snippets/generated/rust/getting-started/basic_usage.md"
+            )],
+            "the `*` component must consume `generated/rust` as a single match, not stop at the first `/`"
+        );
+
+        let error = reject_generated_curated_paths(
+            &curated,
+            &[PathBuf::from(
+                "docs-site/src/snippets/generated/rust/getting-started/basic_usage.md",
+            )],
+        )
+        .expect_err("a curated glob that crosses into alef's own generated subtree must be refused");
+
+        assert!(
+            error
+                .to_string()
+                .contains("docs-site/src/snippets/generated/rust/getting-started/basic_usage.md"),
+            "{error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("a curated declaration must never claim a path alef writes"),
+            "{error}"
+        );
+    }
+
     #[test]
     fn no_configured_globs_yields_no_curated_paths_without_touching_disk() {
         // A directory that does not exist must not error when there are no patterns to

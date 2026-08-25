@@ -434,13 +434,20 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         &api.enums,
                         &api.functions,
                     )?;
-                    let project_root = config_path.parent().unwrap_or(std::path::Path::new(""));
-                    let entries = crate::bin_cli::snippet_migration::compare(
-                        project_root,
-                        &existing_root,
-                        snippet_config,
-                        &generated,
-                    )?;
+                    // The project root is the process working directory, matching how
+                    // `snippets.output` and `curated_snippets` are already resolved at
+                    // generation time (`e2e::snippets::generate_snippet_report_with_extensions`
+                    // resolves curated globs against `Path::new(".")` for the same reason -- see
+                    // its own comment). `config_path.parent()` used to stand in for this, which
+                    // is only equivalent when `--config` is left at its default (`alef.toml`,
+                    // relative to the working directory): passing `--config` pointed at a file
+                    // OUTSIDE the project (a staging copy, a config kept in a scripts directory)
+                    // made every `curated_snippets` glob -- written project-root-relative --
+                    // resolve against that unrelated directory instead, and fail to match
+                    // anything the project actually generates. ~keep
+                    let cwd = std::env::current_dir().context("failed to read the current working directory")?;
+                    let entries =
+                        crate::bin_cli::snippet_migration::compare(&cwd, &existing_root, snippet_config, &generated)?;
                     crate::bin_cli::snippet_migration::write_report(&entries, json)?;
                     Ok(None)
                 }
