@@ -90,20 +90,15 @@ pub(super) fn render_assertion(
     // so they are never treated as struct property accesses on the result.
     if let Some(f) = &assertion.field {
         match f.as_str() {
-            "chunks_have_content"
-            | "chunks_have_embeddings"
-            | "chunks_have_heading_context"
-            | "first_chunk_starts_with_heading"
-                if !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver) =>
+            _ if crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver)
+                .is_some_and(|skipped_reason| {
+                    out.push_str(&crate::e2e::template_env::render(
+                        "csharp/assertion.jinja",
+                        minijinja::context! { skipped_reason => skipped_reason },
+                    ));
+                    true
+                }) =>
             {
-                let skipped_reason = FieldSkip::NotAvailableOnResultType.message(f);
-                let rendered = crate::e2e::template_env::render(
-                    "csharp/assertion.jinja",
-                    minijinja::context! {
-                        skipped_reason => skipped_reason,
-                    },
-                );
-                out.push_str(&rendered);
                 return;
             }
             "chunks_have_content" => {

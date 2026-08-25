@@ -405,7 +405,6 @@ fn wasm_imports_nested_types_from_json_object_element_types() {
         "Wasm",
         &config,
         &[],
-        &[],
     );
 
     assert!(
@@ -687,7 +686,6 @@ fn http_only_test_file_with_json_body_emits_decompress_helper() {
         &[],
         "",
         &config,
-        &[],
         &[],
     );
 
@@ -977,7 +975,6 @@ fn render_error_fixture_with_errors(fixture: &Fixture, errors: &[crate::core::ir
         "",
         &config,
         errors,
-        &[],
     )
 }
 
@@ -1137,7 +1134,6 @@ fn dropped_field_assertion_carries_the_marker_that_arms_the_strict_mode() {
         "",
         &config,
         &[],
-        &[],
     );
 
     assert!(
@@ -1200,7 +1196,6 @@ fn dropped_field_assertion_is_refused_with_an_expectation_that_fails() {
         "",
         &config,
         &[],
-        &[],
     );
 
     assert!(
@@ -1262,7 +1257,6 @@ fn zero_declared_assertions_are_left_untouched() {
         &[],
         "",
         &config,
-        &[],
         &[],
     );
 
@@ -1429,7 +1423,6 @@ fn a_resolvable_field_assertion_is_published_unchanged_and_never_refused() {
         "",
         &config,
         &[],
-        &[],
     );
 
     assert!(
@@ -1490,7 +1483,6 @@ fn a_streaming_example_whose_every_assertion_skips_is_refused_as_a_skipped_test(
         &[],
         "",
         &config,
-        &[],
         &[],
     );
 
@@ -1558,7 +1550,6 @@ fn acknowledged_debt_on_a_non_streaming_call_keeps_its_failable_fallback() {
         &[],
         "",
         &config,
-        &[],
         &[],
     );
 

@@ -37,6 +37,25 @@ pub(crate) fn chunks_field_declared_by_result(field_resolver: &FieldResolver) ->
     field_resolver.result_field_oracle_knows(CHUNKS_RECIPE) != Some(false)
 }
 
+/// The four synthetic handlers that hardcode `result.chunks`.
+const CHUNKS_SYNTHETIC_FIELDS: [&str; 4] = [
+    "chunks_have_content",
+    "chunks_have_embeddings",
+    "chunks_have_heading_context",
+    "first_chunk_starts_with_heading",
+];
+
+/// Why `field`'s synthetic handler must be skipped for this call, or `None` to render it.
+///
+/// Every backend asks this one question and then spells the answer in its own comment syntax, so
+/// only the spelling stays local. Seven copies of the same match arm was how the hardcoded
+/// `result.chunks` reached seven languages in the first place; a shared predicate is what keeps a
+/// future eighth backend from re-deriving it differently. ~keep
+pub(crate) fn chunks_synthetic_skip_reason(field: &str, field_resolver: &FieldResolver) -> Option<String> {
+    (CHUNKS_SYNTHETIC_FIELDS.contains(&field) && !chunks_field_declared_by_result(field_resolver))
+        .then(|| crate::e2e::codegen::field_skip::FieldSkip::NotAvailableOnResultType.message(field))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MissingAssertionRecipe {
     pub field: String,

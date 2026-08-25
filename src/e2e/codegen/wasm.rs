@@ -397,7 +397,6 @@ impl E2eCodegen for WasmCodegen {
                 &wasm_type_prefix,
                 config,
                 &[],
-                functions,
             );
 
             // A category can survive the `active.is_empty()` guard above yet still render

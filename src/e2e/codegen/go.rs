@@ -925,3 +925,7 @@ use test_function::fixture_has_go_callable;
 mod import_pruning_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "go/tests/import_set_tests.rs"]
+mod import_set_tests;

@@ -45,7 +45,6 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     config: &crate::core::config::ResolvedCrateConfig,
     referenced_enums: &mut std::collections::BTreeSet<String>,
     errors: &[crate::core::ir::ErrorDef],
-    functions: &[crate::core::ir::FunctionDef],
 ) {
     let mut call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -93,7 +92,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // cover) keeps behaving exactly as configured. ~keep
     let call_is_async = match call_config.overrides.get(lang).and_then(|o| o.r#async) {
         Some(explicit) => explicit,
-        None => call_config.r#async || recipe.ir_is_async().unwrap_or(false),
+        None => call_config.r#async || recipe.ir_is_async(lang).unwrap_or(false),
     };
     let args = recipe.args;
     let result_is_simple =
@@ -638,7 +637,6 @@ mod void_not_error_tests {
             &config,
             &mut referenced_enums,
             &errors,
-            &[],
         );
         out
     }

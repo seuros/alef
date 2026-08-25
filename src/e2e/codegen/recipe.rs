@@ -176,13 +176,17 @@ impl<'a> ResolvedE2eCallRecipe<'a> {
     /// config flag that only ever says "async", never "definitely not async" (see
     /// `crate::core::config::e2e::call::CallConfig::r#async`, a plain `bool` defaulting to
     /// `false`, so `false` cannot be told apart from "never configured"). ~keep
-    pub(crate) fn ir_is_async(&self) -> Option<bool> {
+    pub(crate) fn ir_is_async(&self, language: &str) -> Option<bool> {
         let functions = self.functions?;
         crate::e2e::codegen::call_ir::CallIr {
             functions,
             type_defs: self.type_defs,
         }
-        .signature(&self.call_config.function)
+        // ~keep `core_lookup_name`, not the raw base `function`: the base is legitimately empty
+        // when a call names itself only per language, and an IR lookup on `""` silently answers
+        // "no such function" -- which here reads as "not async" and drops the `await`. The guard
+        // in `core::config::e2e::raw_function_reads` exists for exactly this mistake.
+        .signature(self.call_config.core_lookup_name(language)?.as_ref())
         .map(|signature| signature.is_async)
     }
 

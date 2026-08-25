@@ -268,7 +268,6 @@ impl E2eCodegen for TypeScriptCodegen {
                 "",
                 config,
                 errors,
-                functions,
             );
             files.push(GeneratedFile {
                 path: tests_base.join(filename),

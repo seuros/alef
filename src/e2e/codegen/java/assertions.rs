@@ -149,16 +149,10 @@ pub(super) fn render_assertion(
     if let Some(f) = &assertion.field {
         match f.as_str() {
             // ---- ProcessingResult chunk-level computed predicates ----
-            "chunks_have_content"
-            | "chunks_have_embeddings"
-            | "chunks_have_heading_context"
-            | "first_chunk_starts_with_heading"
-                if !crate::e2e::codegen::assertion_recipes::chunks_field_declared_by_result(field_resolver) =>
+            _ if let Some(reason) =
+                crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) =>
             {
-                out.push_str(&format!(
-                    "        // skipped: {}\n",
-                    crate::e2e::codegen::field_skip::FieldSkip::NotAvailableOnResultType.message(f)
-                ));
+                out.push_str(&format!("        // skipped: {reason}\n"));
                 return;
             }
             "chunks_have_content" => {
