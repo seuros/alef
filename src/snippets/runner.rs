@@ -12,11 +12,17 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 mod batch;
+mod dependency_reclassification;
 mod session_prep;
 mod session_resolution;
 
 use batch::validate_batches;
 use session_prep::{session_preparation_error, session_preparation_result};
+
+// Re-exported so `output::unresolved_dependency_rollup` can split its two remediation lines
+// without a new serialized `ValidationResult` field, and so its tests can build a realistic
+// fixture message -- see `dependency_reclassification`'s module doc. ~keep
+pub(crate) use dependency_reclassification::{NO_SESSION_CONFIGURED_PHRASE, unresolved_dependency_message};
 
 pub struct RunnerConfig {
     pub level: ValidationLevel,
@@ -789,8 +795,10 @@ fn finalize_result(
     // `is_dependency_error` implementation recognizes. Below `Compile` (i.e. `Syntax`), that is
     // expected: syntax checking was never supposed to resolve anything, so it stays a `Pass`. At
     // `Compile`/`TypeCheck`/`Run`, it means this run's environment could not back the validation
-    // it just attempted — most commonly because `alef build` never produced the artifact the
-    // snippet links or imports against (see `bin_cli::all_commands::warn_if_snippet_validation_needs_build`).
+    // it just attempted — either because `alef build` never produced the artifact the snippet
+    // links or imports against (see `bin_cli::all_commands::warn_if_snippet_validation_needs_build`),
+    // or because no session is configured for this language at all, so it never had a manifest to
+    // resolve against in the first place -- see `dependency_reclassification` for that split.
     // Reported as `Unavailable` with `unresolved_dependency` set, not `Fail`: a `Fail` here would
     // be indistinguishable from a genuine emitter bug, which is exactly the defect this
     // reclassification exists to close. ~keep
@@ -806,6 +814,13 @@ fn finalize_result(
             unresolved_dependency = true;
         }
     }
+    // See `dependency_reclassification`'s module doc: by the time this runs, `session` is `None`
+    // only when no configured `docs.snippets.sessions` target claims this snippet's language --
+    // every claimed session that failed to prepare already short-circuited through
+    // `session_prep::session_preparation_result` before a validator ever ran. That makes this an
+    // unambiguous signal that `alef build` cannot fix the result, unlike the `Some(session)` case
+    // where a session exists and the artifact is simply not built yet. ~keep
+    let no_session_configured = unresolved_dependency && session.is_none();
 
     let classification = classify_result(snippet, validator, config, effective_level, status);
     let status = classification.status;
@@ -827,11 +842,11 @@ fn finalize_result(
             config.level, effective_level, snippet.language, effective_level
         ))
     } else if unresolved_dependency {
-        Some(format!(
-            "could not validate at {effective_level}: {} toolchain ran but reported a missing dependency or build \
-             artifact -- run `alef build` first if this crate validates snippets against built artifacts: {}",
+        Some(unresolved_dependency_message(
+            no_session_configured,
             snippet.language,
-            message.as_deref().unwrap_or("<no validator output>")
+            effective_level,
+            message.as_deref().unwrap_or("<no validator output>"),
         ))
     } else {
         message

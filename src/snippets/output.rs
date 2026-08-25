@@ -98,7 +98,7 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
     println!();
 }
 
-/// One line naming the languages whose results were reclassified as `unresolved_dependency`, or
+/// Lines naming the languages whose results were reclassified as `unresolved_dependency`, or
 /// `None` when there were none.
 ///
 /// The per-row reclassification landed in `ValidationResult::unresolved_dependency`, but the
@@ -107,24 +107,70 @@ pub fn print_summary(summary: &RunSummary, show_code: bool) {
 /// upstream cause and no statement of that cause anywhere. Rolling them up per language is what
 /// turns "376 typescript results" into "the typescript package was not built": the count is
 /// evidence of one environmental fact, not of 376 problems. ~keep
+///
+/// Two upstream causes reach `unresolved_dependency`, and only one of them is fixed by `alef
+/// build`: see `runner::dependency_reclassification`'s module doc. Every reclassified message
+/// this run wrote carries [`crate::snippets::runner::NO_SESSION_CONFIGURED_PHRASE`] when the
+/// cause was "no session configured" -- matching it here is what keeps this report from repeating
+/// the "run `alef build`" advice for a language `alef build` can never fix. Before this split, a
+/// consumer running `alef build` then `alef snippets check` back to back saw byte-identical
+/// counts for exactly these languages and had no way to tell that from a real ordering gap. ~keep
 fn unresolved_dependency_rollup(summary: &RunSummary) -> Option<String> {
     if summary.unresolved_dependency == 0 {
         return None;
     }
-    let mut per_language: BTreeMap<String, usize> = BTreeMap::new();
+    let mut no_session: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unbuilt: BTreeMap<String, usize> = BTreeMap::new();
     for result in summary.results.iter().filter(|result| result.unresolved_dependency) {
-        *per_language.entry(display_language(&result.snippet)).or_default() += 1;
+        let bucket = if result
+            .message
+            .as_deref()
+            .is_some_and(|message| message.contains(crate::snippets::runner::NO_SESSION_CONFIGURED_PHRASE))
+        {
+            &mut no_session
+        } else {
+            &mut unbuilt
+        };
+        *bucket.entry(display_language(&result.snippet)).or_default() += 1;
     }
+    let lines: Vec<String> = [
+        rollup_line(
+            "No session configured",
+            &no_session,
+            summary.total,
+            "no `[workspace.docs.snippets.sessions.<target>]` is configured for these languages, so their \
+             snippets validated in an isolated scratch directory with no access to the built package. Running \
+             `alef build` cannot fix this -- configure a session for each language before validating.",
+        ),
+        rollup_line(
+            "Unresolved dependencies",
+            &unbuilt,
+            summary.total,
+            "these languages' packages were not built, so their snippets were never really validated. Run \
+             `alef build` before validating; the counts above measure the environment, not the snippets.",
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// One rollup line for one `unresolved_dependency` bucket, or `None` when that bucket is empty.
+/// `total` is the run's overall snippet count (`RunSummary::total`), not this bucket's own count,
+/// so a reader can see what fraction of the *whole run* this bucket's cause explains. ~keep
+fn rollup_line(label: &str, per_language: &BTreeMap<String, usize>, total: usize, remediation: &str) -> Option<String> {
+    if per_language.is_empty() {
+        return None;
+    }
+    let bucket_total: usize = per_language.values().sum();
     let breakdown = per_language
         .iter()
         .map(|(language, count)| format!("{language} {count}"))
         .collect::<Vec<_>>()
         .join(", ");
     Some(format!(
-        "Unresolved dependencies: {} of {} ({breakdown}) -- these languages' packages were not built, so their \
-         snippets were never really validated. Run `alef build` before validating; the counts above measure the \
-         environment, not the snippets.",
-        summary.unresolved_dependency, summary.total
+        "{label}: {bucket_total} of {total} ({breakdown}) -- {remediation}"
     ))
 }
 
@@ -337,5 +383,60 @@ mod tests {
         let summary = RunSummary::from_results(vec![sample_result(SnippetStatus::Pass, None, None)]);
 
         assert_eq!(unresolved_dependency_rollup(&summary), None);
+    }
+
+    /// Builds a fixture message the same way `runner::finalize_result` builds a real one for a
+    /// session-less reclassification, so this test exercises the exact text the rollup has to
+    /// parse rather than a hand-duplicated approximation of it. ~keep
+    fn unresolved_with_no_session(language: Language) -> ValidationResult {
+        let message = crate::snippets::runner::unresolved_dependency_message(
+            true,
+            language,
+            ValidationLevel::Compile,
+            "cannot find package",
+        );
+        let mut result = sample_result(SnippetStatus::Unavailable, None, Some(&message));
+        result.snippet.language = language;
+        result.unresolved_dependency = true;
+        result
+    }
+
+    /// The regression this pins: a language with no configured session must never be told to run
+    /// `alef build` -- that advice is what made a consumer see byte-identical unresolved-dependency
+    /// counts before and after building, for languages `alef build` could never fix. ~keep
+    #[test]
+    fn no_session_configured_results_get_their_own_line_without_the_alef_build_remediation() {
+        let summary = RunSummary::from_results(vec![
+            unresolved_with_no_session(Language::Go),
+            unresolved_with_no_session(Language::Go),
+        ]);
+
+        let line = unresolved_dependency_rollup(&summary).expect("rollup for reclassified results");
+
+        assert!(line.contains("No session configured: 2 of 2"), "{line}");
+        assert!(line.contains("go 2"), "{line}");
+        assert!(
+            !line.contains("Run `alef build` before validating"),
+            "a no-session result must not repeat the build remediation: {line}"
+        );
+        assert!(line.contains("configure a session"), "{line}");
+    }
+
+    /// Both causes can coexist in one run (some languages have a session and are simply unbuilt,
+    /// others have none configured at all) -- each must keep its own line and its own count,
+    /// never merged into one total that hides which remediation applies to which language. ~keep
+    #[test]
+    fn a_run_with_both_causes_reports_two_separate_lines() {
+        let summary = RunSummary::from_results(vec![
+            unresolved_with_no_session(Language::Go),
+            unresolved_in(Language::TypeScript),
+        ]);
+
+        let line = unresolved_dependency_rollup(&summary).expect("rollup for reclassified results");
+
+        assert!(line.contains("No session configured: 1 of 2"), "{line}");
+        assert!(line.contains("Unresolved dependencies: 1 of 2"), "{line}");
+        assert!(line.contains("go 1"), "{line}");
+        assert!(line.contains("typescript 1"), "{line}");
     }
 }

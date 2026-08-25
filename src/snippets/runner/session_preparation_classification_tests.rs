@@ -356,6 +356,92 @@ fn finalize_result_still_flags_a_real_missing_module_as_unresolved_dependency() 
     );
 }
 
+/// The regression this pins: `finalize_result`'s own reclassification, not just the message
+/// builder it calls, must actually route a session-less snippet to the no-session wording. A
+/// consumer with no `[workspace.docs.snippets.sessions.<target>]` entry for a language sees
+/// exactly this shape -- `session: None` reaching `finalize_result` -- and running `alef build`
+/// cannot fix it, so the message must not tell them to. ~keep
+#[test]
+fn finalize_result_with_no_session_names_the_no_session_cause_not_alef_build() {
+    let validator = crate::snippets::validators::typescript::TypeScriptValidator;
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        ..RunnerConfig::default()
+    };
+    let outcome = ValidationOutcome {
+        status: SnippetStatus::Fail,
+        message: Some("snippet.ts(1,1): error TS2307: Cannot find module 'widgets'.".to_string()),
+        duration_ms: 5,
+    };
+
+    let result = finalize_result(
+        &typescript_snippet(),
+        &validator,
+        &config,
+        None,
+        ValidationLevel::Compile,
+        outcome,
+    );
+
+    let message = result.message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains(super::dependency_reclassification::NO_SESSION_CONFIGURED_PHRASE),
+        "a session-less reclassification must name the real cause: {message}"
+    );
+    assert!(
+        !message.contains("run `alef build` first"),
+        "a session-less reclassification must not send the reader to rebuild artifacts a \
+         session-less run could never see: {message}"
+    );
+}
+
+/// The complementary case: with a real, prepared session, the reclassification keeps the ordering
+/// wording -- the artifact genuinely might just not be built yet, and `alef build` can fix that.
+#[test]
+fn finalize_result_with_a_configured_session_keeps_the_ordering_message() {
+    let validator = crate::snippets::validators::typescript::TypeScriptValidator;
+    let config = RunnerConfig {
+        level: ValidationLevel::Compile,
+        cache_dir: None,
+        ..RunnerConfig::default()
+    };
+    let outcome = ValidationOutcome {
+        status: SnippetStatus::Fail,
+        message: Some("snippet.ts(1,1): error TS2307: Cannot find module 'widgets'.".to_string()),
+        duration_ms: 5,
+    };
+    let session = crate::snippets::session::ValidationSession {
+        language: crate::snippets::types::Language::TypeScript,
+        working_directory: std::path::PathBuf::from("."),
+        manifest: None,
+        fingerprint: "fixture".into(),
+        env: Default::default(),
+        include_paths: Vec::new(),
+        rust_features: Vec::new(),
+        rust_dependencies: Default::default(),
+    };
+
+    let result = finalize_result(
+        &typescript_snippet(),
+        &validator,
+        &config,
+        Some(&session),
+        ValidationLevel::Compile,
+        outcome,
+    );
+
+    let message = result.message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains("run `alef build` first"),
+        "a session-backed reclassification must still point at the real remedy: {message}"
+    );
+    assert!(
+        !message.contains(super::dependency_reclassification::NO_SESSION_CONFIGURED_PHRASE),
+        "a configured session must never be reported as missing: {message}"
+    );
+}
+
 /// Alef defect #127: two configured sessions target the same language (a consumer's real
 /// `[docs.snippets.sessions.typescript]` + `[docs.snippets.sessions.wasm]`, both TypeScript) and
 /// a hand-written snippet carries no explicit `target:` to break the tie. Before this fix, the
