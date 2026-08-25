@@ -951,10 +951,7 @@ mod tests {
             rust_output.contains("println!(\"{:?}\", result.data);"),
             "{rust_output}"
         );
-        assert!(
-            rust_output.contains("println!(\"{}\", result.text);"),
-            "{rust_output}"
-        );
+        assert!(rust_output.contains("println!(\"{}\", result.text);"), "{rust_output}");
     }
 
     /// The shape every fixture-driven (non-hand-authored) docs fixture takes: `docs` is
