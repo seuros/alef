@@ -80,7 +80,6 @@ src/e2e/codegen/zig/assertions.rs 1483
 src/e2e/field_access/tests.rs 1352
 src/e2e/fixture.rs 1759
 src/e2e/validate.rs 1440
-src/extract/extractor/defaults.rs 2190
 src/readme/tests/template.rs 1371
 src/scaffold/languages/dart.rs 1358
 src/scaffold/languages/swift.rs 1841

@@ -392,7 +392,15 @@ fn extract_trait_impl_methods(
         // default` could not prove a genuine agreement and would warn a false positive purely
         // from `mod` declaration order. `postprocess::warn_on_default_disagreements` runs the
         // same check once, after every source file has been extracted. ~keep
-        extract_default_values(item, &self_type, &mut type_def.fields, literal_consts, constructors);
+        let binding_excluded = type_def.binding_excluded;
+        extract_default_values(
+            item,
+            &self_type,
+            &mut type_def.fields,
+            literal_consts,
+            constructors,
+            binding_excluded,
+        );
     }
 
     let is_conversion_trait = item.trait_.as_ref().is_some_and(|(path, _)| {
