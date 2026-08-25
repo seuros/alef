@@ -18,9 +18,6 @@ public protocol SwiftImageProcessorBridge: SwiftPluginBridge {
     func supportsLanguage(lang: String) -> Bool
 }
 
-public extension SwiftImageProcessorBridge {
-}
-
 /// Internal adapter wrapping a `SwiftImageProcessorBridge` conformer.
 /// Wraps a user-supplied bridge and forwards calls through marshalling entry points.
 final class SwiftImageProcessorAdapter {
