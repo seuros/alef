@@ -2,6 +2,18 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
+/// True for a lowercased fence-info token drawn from rustdoc's documented doctest
+/// attribute vocabulary (<https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html#attributes>).
+/// None of these is ever a language tag on its own. `edition2015`/`2018`/`2021`/`2024`
+/// are recognized by prefix rather than an exact list so a future edition needs no
+/// change here.
+fn is_rustdoc_test_attribute(token: &str) -> bool {
+    matches!(token, "no_run" | "ignore" | "should_panic" | "compile_fail")
+        || token
+            .strip_prefix("edition")
+            .is_some_and(|year| !year.is_empty() && year.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
@@ -60,6 +72,38 @@ impl Language {
             "xml" => Self::Xml,
             "yaml" | "yml" => Self::Yaml,
             "zig" => Self::Zig,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Parse a fenced code block's full info string -- everything after the opening
+    /// backticks, e.g. `rust,no_run,should_panic` -- into the language it represents.
+    ///
+    /// Rustdoc's own doctest attributes (`no_run`, `ignore`, `should_panic`,
+    /// `compile_fail`, `editionNNNN`) are meaningful only to rustdoc's harness and never
+    /// denote a language by themselves: a fence carrying just one, several, or none of
+    /// them alongside an explicit or implicit `rust` is still Rust. `from_fence_tag`
+    /// alone cannot express this -- it treats the whole comma-joined string as one
+    /// opaque tag, so `rust,no_run` and a bare `no_run` both miss every arm and resolve
+    /// to `Unknown`. This is the single place that knows the rustdoc attribute
+    /// vocabulary; callers that see a raw fence info string (docs generation's
+    /// Rust-code-block detection, the snippet audit's fence check) must go through this
+    /// rather than growing their own attribute list. ~keep
+    #[must_use]
+    pub fn from_fence_info(info: &str) -> Self {
+        let tokens: Vec<&str> = info
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+            .collect();
+        let language_tokens: Vec<&str> = tokens
+            .into_iter()
+            .filter(|token| !is_rustdoc_test_attribute(&token.to_lowercase()))
+            .collect();
+        match language_tokens.as_slice() {
+            [] => Self::Rust,
+            [only] if only.eq_ignore_ascii_case("rust") => Self::Rust,
+            [only] => Self::from_fence_tag(only),
             _ => Self::Unknown,
         }
     }
@@ -507,6 +551,34 @@ mod tests {
                 + summary.unavailable
         );
         assert!(summary.has_failures());
+    }
+
+    /// Table-driven coverage for every rustdoc fence-info shape task #370 named, plus a
+    /// genuinely unknown language that must still be rejected -- accepting everything
+    /// would fix the false positive by making the check vacuous in the other direction.
+    #[test]
+    fn from_fence_info_parses_rustdoc_attribute_combinations() {
+        let cases = [
+            ("rust", Language::Rust),
+            ("", Language::Rust),
+            ("no_run", Language::Rust),
+            ("ignore", Language::Rust),
+            ("should_panic", Language::Rust),
+            ("compile_fail", Language::Rust),
+            ("rust,no_run", Language::Rust),
+            ("rust,ignore", Language::Rust),
+            ("rust,no_run,should_panic", Language::Rust),
+            ("rust,edition2021", Language::Rust),
+            ("python", Language::Python),
+            ("some_unknown_language", Language::Unknown),
+        ];
+        for (fence_info, expected) in cases {
+            assert_eq!(
+                Language::from_fence_info(fence_info),
+                expected,
+                "fence info `{fence_info}` should resolve to {expected:?}"
+            );
+        }
     }
 
     #[test]
