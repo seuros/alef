@@ -134,4 +134,19 @@ pub struct NodeConfig {
     /// generated `Cargo.toml`. See [`super::FfiConfig::target_dep_overrides`].
     #[serde(default)]
     pub target_dep_overrides: Vec<FfiTargetDepOverride>,
+    /// Feature names that should be declared as opt-in flags in the generated wrapper
+    /// crate's `[features]` table but excluded from its `default = [...]` array and
+    /// from the core-crate dependency's own explicit `features = [...]` list.
+    ///
+    /// `scaffold_node_cargo` otherwise puts every name `collect_cfg_features` finds
+    /// straight into the wrapper's unconditional `default = [...]` list, which
+    /// forwards `<name> = ["<core-crate>/<name>"]` on every platform. Cargo unions
+    /// feature sets across every dependency edge to the same resolved package, so
+    /// that unconditional forwarding re-enables a feature a [`Self::target_dep_overrides`]
+    /// entry excluded for a specific `cfg` target -- defeating the override. Listing
+    /// the name here keeps it declared (so `cargo build --features <name>` still
+    /// works) without auto-enabling it, the same tradeoff
+    /// `RubyConfig::excluded_default_features` makes for the Magnus crate. ~keep
+    #[serde(default)]
+    pub excluded_default_features: Vec<String>,
 }
