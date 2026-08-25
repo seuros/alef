@@ -43,6 +43,25 @@ pub fn php_psr4_target(config: &ResolvedCrateConfig) -> String {
     format!("{}/", php_class_output_dir(config).trim_end_matches('/'))
 }
 
+/// The PSR-4 target a package-local `{pkg_dir}/composer.json` should declare, spelled relative
+/// to `pkg_dir` itself -- Composer resolves a manifest's `autoload` paths against the directory
+/// the manifest lives in, not the repository root, so this is not [`php_psr4_target`] with a
+/// prefix stripped by convention; it is [`php_class_output_dir`] relativized against wherever the
+/// manifest actually sits.
+///
+/// Returns `None` when the class directory is not a strict subdirectory of `pkg_dir`: the
+/// co-located default writes classes directly into `pkg_dir` with no package-local manifest at
+/// all, and an explicit `[crates.php.stubs] output` can point anywhere, including outside
+/// `pkg_dir` entirely. Neither case has a value this function can derive without guessing, so
+/// callers must treat `None` as "nothing to check here" rather than invent a fallback literal. ~keep
+pub fn php_package_psr4_target(config: &ResolvedCrateConfig, pkg_dir: &str) -> Option<String> {
+    let class_dir = php_class_output_dir(config);
+    let class_dir = class_dir.trim_end_matches('/');
+    let pkg_dir = pkg_dir.trim_end_matches('/');
+    let relative = class_dir.strip_prefix(pkg_dir)?.strip_prefix('/')?;
+    Some(format!("{relative}/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +149,56 @@ php = "crates/my-lib-php/src/"
 "#,
         );
         assert_eq!(php_psr4_target(&config), "crates/my-lib-php/src/");
+    }
+
+    #[test]
+    fn package_psr4_target_is_the_class_dir_relative_to_pkg_dir() {
+        let config = resolve(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.output]
+php = "packages/php"
+[crates.php.stubs]
+output = "packages/php/generated"
+"#,
+        );
+        assert_eq!(
+            php_package_psr4_target(&config, "packages/php"),
+            Some("generated/".to_string())
+        );
+    }
+
+    #[test]
+    fn package_psr4_target_is_none_when_class_dir_equals_pkg_dir() {
+        let config = resolve(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.output]
+php = "packages/php"
+"#,
+        );
+        assert_eq!(php_package_psr4_target(&config, "packages/php"), None);
+    }
+
+    #[test]
+    fn package_psr4_target_is_none_when_class_dir_is_outside_pkg_dir() {
+        let config = resolve(
+            r#"
+[workspace]
+languages = ["php"]
+[[crates]]
+name = "my-lib"
+sources = []
+"#,
+        );
+        assert_eq!(php_package_psr4_target(&config, "packages/php"), None);
     }
 }

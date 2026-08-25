@@ -265,15 +265,119 @@ fn validate_php_reports_root_psr4_mismatch() {
     // nested under `pkg_dir`, distinct from the root one), so the package directory is
     // forced to `packages/php` here via an explicit `[crates.output]` entry rather than
     // relying on the default -- which, since this crate targets php, resolves to the
-    // co-located `crates/my-lib-php/src`. ~keep
+    // co-located `crates/my-lib-php/src`. An explicit `[crates.output] php = "packages/php"`
+    // with no `[crates.php.stubs] output` names the class directory verbatim (`packages/php`,
+    // no appended `/src`), so `packages/php/` -- not `packages/php/src/` -- is what
+    // `php_psr4_target` actually derives for it. ~keep
     let config = validate_config_for(root, "php", "[crates.output]\nphp = \"packages/php\"\n");
     let issues = validate(&config, &[Language::Php]).unwrap();
 
     assert!(
         issues
             .iter()
-            .any(|issue| issue.contains("PSR-4 path must be packages/php/src/")),
+            .any(|issue| issue.contains("PSR-4 path must be packages/php/")
+                && !issue.contains("PSR-4 path must be packages/php/src/")),
         "root PSR-4 mismatch must be reported; got: {issues:?}"
+    );
+}
+
+/// Regression: `validate_php_manifests` used to hardcode `"src/"` and `"packages/php/src/"` as
+/// the only correct PSR-4 targets, so any project whose PHP class output directory was
+/// configured somewhere else -- via `[crates.php.stubs] output`, which `php_class_output_dir`
+/// prioritizes over `[crates.output] php` -- would fail validation even though its manifests
+/// were exactly what `scaffold_php` would have written. This pins both the failure (stale
+/// manifests still declaring the old default) and the success (manifests matching the
+/// configured, non-default output) against the same authority `php_class_output_dir` /
+/// `php_psr4_target` use, so the two can no longer disagree. ~keep
+#[test]
+fn validate_php_derives_psr4_targets_from_the_configured_class_output_dir() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"my-lib\"\nversion = \"1.2.3\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("packages/php")).unwrap();
+
+    let extra = "[crates.output]\nphp = \"packages/php\"\n[crates.php.stubs]\noutput = \"packages/php/generated\"\n";
+    let config = validate_config_for(root, "php", extra);
+
+    let stale_composer = r#"{
+  "name": "acme/my-lib",
+  "autoload": {"psr-4": {"Acme\\MyLib\\": "src/"}}
+}
+"#;
+    std::fs::write(root.join("packages/php/composer.json"), stale_composer).unwrap();
+    std::fs::write(root.join("composer.json"), stale_composer).unwrap();
+
+    let stale_issues = validate(&config, &[Language::Php]).unwrap();
+    assert!(
+        stale_issues
+            .iter()
+            .any(|issue| issue == "php: packages/php/composer.json PSR-4 path must be generated/"),
+        "package-local manifest must be checked against the configured stubs output, not a \
+         hardcoded src/; got: {stale_issues:?}"
+    );
+    assert!(
+        stale_issues
+            .iter()
+            .any(|issue| issue == "php: root composer.json PSR-4 path must be packages/php/generated/"),
+        "root manifest must be checked against the configured stubs output, not a hardcoded \
+         packages/php/src/; got: {stale_issues:?}"
+    );
+
+    let correct_composer = r#"{
+  "name": "acme/my-lib",
+  "autoload": {"psr-4": {"Acme\\MyLib\\": "generated/"}}
+}
+"#;
+    std::fs::write(root.join("packages/php/composer.json"), correct_composer).unwrap();
+    let correct_root_composer = r#"{
+  "name": "acme/my-lib",
+  "autoload": {"psr-4": {"Acme\\MyLib\\": "packages/php/generated/"}}
+}
+"#;
+    std::fs::write(root.join("composer.json"), correct_root_composer).unwrap();
+
+    let clean_issues = validate(&config, &[Language::Php]).unwrap();
+    assert!(
+        clean_issues.iter().all(|issue| !issue.contains("PSR-4")),
+        "manifests matching the configured non-default output must not be flagged; got: {clean_issues:?}"
+    );
+}
+
+/// Regression: the co-located layout (the default whenever no split-layout `[crates.output]
+/// php` is configured) never has a package-local `composer.json` -- the root manifest already
+/// autoloads the class directory directly. `validate_php_manifests` must keep silently skipping
+/// the package-local PSR-4 check in that shape rather than newly report a missing file, since
+/// `validate()`'s generic `expected_files` check already owns reporting an actually-missing
+/// manifest. ~keep
+#[test]
+fn validate_php_co_located_layout_has_no_package_local_manifest_to_check() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"my-lib\"\nversion = \"1.2.3\"\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("crates/my-lib-php/src")).unwrap();
+
+    let root_composer = r#"{
+  "name": "acme/my-lib",
+  "autoload": {"psr-4": {"Acme\\MyLib\\": "crates/my-lib-php/src/"}}
+}
+"#;
+    std::fs::write(root.join("composer.json"), root_composer).unwrap();
+
+    let config = validate_config_for(root, "php", "");
+    let issues = validate(&config, &[Language::Php]).unwrap();
+
+    assert!(
+        issues.iter().all(|issue| !issue.contains("PSR-4")),
+        "co-located layout has no package-local manifest and a correct root manifest, so no \
+         PSR-4 issue should be reported; got: {issues:?}"
     );
 }
 

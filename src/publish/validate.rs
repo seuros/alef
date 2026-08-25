@@ -1,4 +1,5 @@
 use super::resolve_workspace_root;
+use crate::backends::php::layout::{php_package_psr4_target, php_psr4_target};
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::extras::Language;
 use anyhow::{Context, Result};
@@ -76,7 +77,7 @@ fn validate_language_manifest(
 ) {
     match lang {
         Language::Elixir => validate_elixir_manifest(config, pkg_dir, pkg_path, issues),
-        Language::Php => validate_php_manifests(pkg_dir, pkg_path, workspace_root, issues),
+        Language::Php => validate_php_manifests(config, pkg_dir, pkg_path, workspace_root, issues),
         Language::Csharp => validate_csharp_project(config, workspace_root, pkg_dir, issues),
         Language::Go => validate_go_module(config, pkg_dir, pkg_path, issues),
         Language::Java => validate_java_manifest(config, pkg_dir, pkg_path, issues),
@@ -100,9 +101,19 @@ fn validate_elixir_manifest(config: &ResolvedCrateConfig, pkg_dir: &str, pkg_pat
     }
 }
 
-fn validate_php_manifests(pkg_dir: &str, pkg_path: &Path, workspace_root: &Path, issues: &mut Vec<String>) {
+fn validate_php_manifests(
+    config: &ResolvedCrateConfig,
+    pkg_dir: &str,
+    pkg_path: &Path,
+    workspace_root: &Path,
+    issues: &mut Vec<String>,
+) {
     let package_manifest = pkg_path.join("composer.json");
     let root_manifest = workspace_root.join("composer.json");
+    // A missing package-local manifest is not an error to report here: the co-located default
+    // (the common case, since `pkg_dir` resolves to the class output directory whenever no split
+    // layout is configured) never has one, and `validate()`'s generic `expected_files` check
+    // already reports a genuinely missing manifest when `pkg_dir` exists without one. ~keep
     let Ok(package_json) = read_json(&package_manifest) else {
         return;
     };
@@ -111,11 +122,18 @@ fn validate_php_manifests(pkg_dir: &str, pkg_path: &Path, workspace_root: &Path,
         return;
     };
 
-    if psr4_path(&package_json) != Some("src/") {
-        issues.push(format!("php: {pkg_dir}/composer.json PSR-4 path must be src/"));
+    if let Some(expected_package_psr4) = php_package_psr4_target(config, pkg_dir)
+        && psr4_path(&package_json) != Some(expected_package_psr4.as_str())
+    {
+        issues.push(format!(
+            "php: {pkg_dir}/composer.json PSR-4 path must be {expected_package_psr4}"
+        ));
     }
-    if psr4_path(&root_json) != Some("packages/php/src/") {
-        issues.push("php: root composer.json PSR-4 path must be packages/php/src/".to_string());
+    let expected_root_psr4 = php_psr4_target(config);
+    if psr4_path(&root_json) != Some(expected_root_psr4.as_str()) {
+        issues.push(format!(
+            "php: root composer.json PSR-4 path must be {expected_root_psr4}"
+        ));
     }
 
     let mut package_without_autoload = package_json.clone();
