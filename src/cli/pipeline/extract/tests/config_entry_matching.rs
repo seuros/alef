@@ -219,3 +219,78 @@ fn unmatched_exclude_entries_stays_silent_when_every_entry_matches() {
         "matched exclude entries must not be reported"
     );
 }
+
+/// `ErrorDef` has no `Default`, and adding one to production IR types for a test's convenience
+/// would be the wrong trade. Build the two fields these tests care about explicitly. ~keep
+fn make_errordef(name: &str, rust_path: &str) -> crate::core::ir::ErrorDef {
+    crate::core::ir::ErrorDef {
+        name: name.to_string(),
+        rust_path: rust_path.to_string(),
+        original_rust_path: String::new(),
+        variants: Vec::new(),
+        doc: String::new(),
+        methods: Vec::new(),
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }
+}
+
+/// An error enum lives in `ApiSurface::errors`, which `include` never filters — errors are
+/// always kept. Naming the crate's own public error enum in `include.types` is therefore a
+/// legitimate config, and it must not be reported as an unmatched entry.
+///
+/// Regression (shipped fatal in 0.67.6, commit `0209dde46`): `resolve_include_types` searched
+/// `api.types`, `api.enums`, `opaque_types` and `unsupported_public_items` but never
+/// `api.errors`, while the exclude side already consulted `api.errors`. The two disagreed about
+/// whether an error enum is a type, so a valid config naming it aborted every alef command with
+/// "matched no type or enum" — for a `pub enum` that is genuinely public and genuinely exported.
+#[test]
+fn apply_filters_include_types_accepts_the_crates_error_enum() {
+    let mut surface = surface_with(vec![make_typedef("Kept")], vec![]);
+    surface.errors.push(make_errordef("Error", "my_crate::error::Error"));
+    let mut config = ResolvedCrateConfig::default();
+    config.include.types = vec!["Kept".to_string(), "Error".to_string()];
+
+    let result = apply_filters(surface, &config).expect("the crate's error enum is a valid include entry");
+
+    let names: Vec<&str> = result.types.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["Kept"], "the named type must still be the one retained");
+    assert_eq!(
+        result.errors.len(),
+        1,
+        "errors are never include-filtered and must survive"
+    );
+}
+
+/// The qualified `crate::path::Error` spelling resolves for an error enum too, matching what
+/// `include.types` already accepts for types and enums.
+#[test]
+fn apply_filters_include_types_accepts_qualified_error_enum_path() {
+    let mut surface = surface_with(vec![make_typedef("Kept")], vec![]);
+    surface.errors.push(make_errordef("Error", "my_crate::error::Error"));
+    let mut config = ResolvedCrateConfig::default();
+    config.include.types = vec!["Kept".to_string(), "my_crate::error::Error".to_string()];
+
+    apply_filters(surface, &config).expect("a qualified error-enum entry must resolve");
+}
+
+/// Accepting error enums must not reopen the hole the unmatched-entry check was written to
+/// close. An `include.types` list whose entries ALL resolve to things `include` does not filter
+/// seeds nothing, so every type and enum would be dropped and the binding emptied — with a
+/// zero exit. That must fail loudly, not silently.
+#[test]
+fn apply_filters_rejects_include_types_that_would_empty_the_surface() {
+    let mut surface = surface_with(vec![make_typedef("Kept")], vec![]);
+    surface.errors.push(make_errordef("Error", "my_crate::error::Error"));
+    let mut config = ResolvedCrateConfig::default();
+    config.include.types = vec!["Error".to_string()];
+
+    let err = apply_filters(surface, &config)
+        .expect_err("an include list that seeds no type or enum must abort, not empty the binding");
+    let message = err.to_string();
+    assert!(
+        message.contains("every binding would be emptied"),
+        "the error must name the consequence; got: {message}"
+    );
+}
