@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `alef docs` parsed `docs.snippets.required_languages` through a fence-tag-only parser while `alef snippets gaps` parsed the same key through a session-target-aware one. An entry of `node`, `wasm` or `kotlin_android` was therefore accepted by one command and rejected by the other, so `alef all` aborted with `unknown language: node` on a config its own sibling command had already validated. The resolver is now a single authority in `snippets::types` that both call sites use. The abort also short-circuited docs/snippet validation, so it was masking every finding behind it.
+
 ## [0.68.0] - 2026-08-25
 
 ### Changed (BREAKING)
