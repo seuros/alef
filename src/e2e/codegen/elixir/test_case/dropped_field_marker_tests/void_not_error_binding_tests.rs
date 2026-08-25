@@ -1,0 +1,94 @@
+//! Regression coverage for a void `not_error` fixture: the unused `{:ok, result}` binding
+//! must be underscore-prefixed rather than asserted `refute is_nil`, since rustler encodes
+//! a Rust `()` success payload as `nil`.
+//!
+//! Split out of `test_case.rs`, which is over the 1000-line cap and may not grow.
+
+use super::render_test_case;
+use crate::e2e::config::{CallConfig, E2eConfig};
+use crate::e2e::fixture::{Assertion, Fixture};
+use std::collections::{HashMap, HashSet};
+
+/// Regression test for the void `not_error` defect: before this fix, a `returns_void`
+/// fixture whose only assertion was `not_error` still bound `{:ok, result} = call(...)` and
+/// then asserted `refute is_nil(result)` — but rustler encodes a Rust `()` success payload
+/// as `nil`, so that assertion FAILED every successful call, not just an unsuccessful one.
+/// The `{:ok, result} = call(...)` match itself is already the real check (an `{:error, _}`
+/// return raises `MatchError`), so the fix underscore-prefixes the unused binding and emits
+/// no `refute is_nil` line.
+#[test]
+fn void_not_error_fixture_binds_underscored_and_emits_no_failing_assertion() {
+    let fixture = Fixture {
+        docs: None,
+        requirements: Vec::new(),
+        id: "prefetch_languages".to_string(),
+        category: None,
+        description: "test".to_string(),
+        tags: vec![],
+        skip: None,
+        env: None,
+        setup: Vec::new(),
+        call: None,
+        input: serde_json::Value::Null,
+        mock_response: None,
+        source: String::new(),
+        http: None,
+        asyncapi: None,
+        websocket: None,
+        preserve_input_urls: false,
+        assertions: vec![Assertion {
+            assertion_type: "not_error".to_string(),
+            ..Default::default()
+        }],
+        visitor: None,
+        args: vec![],
+        assertion_recipes: vec![],
+    };
+    let call = CallConfig {
+        function: "prefetch_languages".to_string(),
+        module: "MyLib".to_string(),
+        result_var: "result".to_string(),
+        returns_result: true,
+        returns_void: true,
+        ..Default::default()
+    };
+    let e2e_config = E2eConfig {
+        call,
+        ..Default::default()
+    };
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+    let mut out = String::new();
+    render_test_case(
+        &mut out,
+        &fixture,
+        &e2e_config,
+        "",
+        "",
+        "",
+        &[],
+        None,
+        None,
+        &HashMap::new(),
+        None,
+        &HashSet::new(),
+        &[],
+        &[],
+        &config,
+        &type_defs,
+        &[],
+        &[],
+    );
+
+    assert!(
+        !out.contains("refute is_nil"),
+        "a void call's result is always nil; asserting non-nil would fail every successful \
+         call, got:\n{out}"
+    );
+    assert!(
+        out.contains("{:ok, _result} ="),
+        "the unused binding must be underscore-prefixed to avoid an unused-variable warning, \
+         got:\n{out}"
+    );
+}
