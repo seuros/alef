@@ -27,6 +27,7 @@ sources = ["src/lib.rs"]
         &[Language::Ffi],
         false,
         &[("ALEF_EXPORT_GENERATED_HEADERS", "1")],
+        false,
     )
     .expect("the explicit header-export environment must reach Cargo's build process");
 }
@@ -93,6 +94,7 @@ sources = ["src/lib.rs"]
         &config,
         &[Language::Php, Language::Node, Language::Ffi, Language::Go],
         false,
+        false,
     );
 
     assert!(result.is_err(), "php's failure must surface in the aggregate result");
@@ -110,5 +112,85 @@ sources = ["src/lib.rs"]
         marker_go.exists(),
         "go (ffi_dependent) must still be attempted and succeed even though the independent \
          stage had a failure — that's the class of language that used to be silently dropped"
+    );
+}
+
+/// End-to-end regression for the "never examined" gap `--strict` closes: a language whose
+/// toolchain precondition fails (simulated with a `false` precondition, same as a `command -v`
+/// check finding nothing on `PATH`) is skipped, not built, and by default that skip does not fail
+/// the run at all -- the exit code cannot distinguish "built and passed" from "never attempted".
+/// `strict = true` must turn that specific skip into a failing run, while a language that really
+/// did build must still be attempted and still succeed regardless of `strict`. ~keep
+#[test]
+fn strict_fails_the_run_when_a_language_is_skipped_for_a_missing_toolchain() {
+    let marker_dir = tempfile::tempdir().expect("tempdir");
+    let node_marker = marker_dir.path().join("node.built");
+
+    let config = hermetic_config(&format!(
+        r#"
+[workspace]
+languages = ["node", "go"]
+
+[workspace.build_commands.node]
+precondition = "true"
+build = "touch {node_marker}"
+
+[workspace.build_commands.go]
+precondition = "false"
+build = "true"
+
+[[crates]]
+name = "strict-toolchain-test-lib"
+sources = ["src/lib.rs"]
+"#,
+        node_marker = node_marker.display(),
+    ));
+
+    let lenient = build(&config, &[Language::Node, Language::Go], false, false);
+    assert!(
+        lenient.is_ok(),
+        "without --strict, a toolchain-missing skip must not fail the run: {lenient:?}"
+    );
+    assert!(
+        node_marker.exists(),
+        "node has no toolchain problem and must still be built"
+    );
+
+    // A fresh marker path: the first build already ran and would otherwise make this
+    // assertion trivially pass regardless of whether the second build actually re-ran node.
+    let node_marker_strict = marker_dir.path().join("node.built.strict");
+    let config = hermetic_config(&format!(
+        r#"
+[workspace]
+languages = ["node", "go"]
+
+[workspace.build_commands.node]
+precondition = "true"
+build = "touch {node_marker}"
+
+[workspace.build_commands.go]
+precondition = "false"
+build = "true"
+
+[[crates]]
+name = "strict-toolchain-test-lib"
+sources = ["src/lib.rs"]
+"#,
+        node_marker = node_marker_strict.display(),
+    ));
+
+    let strict = build(&config, &[Language::Node, Language::Go], false, true);
+    let message = strict
+        .map(|()| String::new())
+        .unwrap_or_else(|error| format!("{error:#}"));
+    assert!(
+        !message.is_empty(),
+        "--strict must fail the run when a language was skipped for a missing toolchain"
+    );
+    assert!(message.contains("--strict is set"), "{message}");
+    assert!(message.contains("go"), "{message}");
+    assert!(
+        node_marker_strict.exists(),
+        "go's toolchain skip must not stop an unrelated, ready language from being attempted"
     );
 }

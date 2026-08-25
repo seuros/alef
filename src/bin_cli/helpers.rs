@@ -28,6 +28,7 @@ pub(crate) fn complete_generated_artifacts(
             &[crate::core::config::Language::Ffi],
             false,
             &[("ALEF_EXPORT_GENERATED_HEADERS", "1")],
+            false,
         )
     })
 }

@@ -536,7 +536,9 @@ sources = ["src/lib.rs"]
 fn c_language_is_skipped_gracefully_instead_of_panicking() {
     let config = ResolvedCrateConfig::default();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build(&config, &[Language::C], false)));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        build(&config, &[Language::C], false, false)
+    }));
 
     match result {
         Ok(build_result) => assert!(

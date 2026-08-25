@@ -238,6 +238,14 @@ pub(crate) enum Commands {
         /// Build with release optimizations.
         #[arg(long, short)]
         release: bool,
+        /// Fail the run when a language was skipped because its toolchain is not on PATH.
+        ///
+        /// Off by default: a developer without e.g. `gradle` installed must still be able to
+        /// build the languages they do have. In CI, a skipped language means its bindings were
+        /// never built and never validated -- pass this flag there so that gap surfaces as a
+        /// non-zero exit instead of a log line nobody read.
+        #[arg(long)]
+        strict: bool,
     },
     /// Run all: generate + stubs + scaffold + readme + docs + sync + e2e + test-apps.
     ///

@@ -43,7 +43,8 @@ fn should_stay_ready_when_every_precondition_passes_so_a_real_compile_failure_st
         BackendReadiness::Ready
     );
 
-    let error = build_outcome(&["go: undefined: Foo".to_string()], &[]).expect_err("compile failure is fatal");
+    let error =
+        build_outcome(&["go: undefined: Foo".to_string()], &[], &[], false).expect_err("compile failure is fatal");
     let message = error.to_string();
     assert!(message.contains("backend build failed for 1 language(s)"), "{message}");
     assert!(!message.contains("preconditions are unmet"), "{message}");
@@ -53,14 +54,41 @@ fn should_stay_ready_when_every_precondition_passes_so_a_real_compile_failure_st
 fn should_report_a_missing_tool_as_a_toolchain_skip_not_as_unfetched_dependencies() {
     let readiness = backend_readiness(Language::Elixir, &cfg("false", Some("false")));
 
-    assert_eq!(readiness, BackendReadiness::ToolchainMissing);
+    assert_eq!(
+        readiness,
+        BackendReadiness::ToolchainMissing {
+            precondition: "false".to_string(),
+        }
+    );
 }
 
 /// A machine without a language's toolchain must still be able to build the rest, so this
-/// bucket alone leaves the exit status clean. ~keep
+/// bucket alone leaves the exit status clean by default. ~keep
 #[test]
 fn should_exit_clean_when_the_only_thing_that_happened_was_a_toolchain_skip() {
-    assert!(build_outcome(&[], &[]).is_ok());
+    assert!(build_outcome(&[], &[], &["elixir".to_string()], false).is_ok());
+}
+
+/// The gap `--strict` exists to close: a toolchain skip is otherwise invisible in the exit
+/// code, so a CI run that never built (or validated) a language still reports success. ~keep
+#[test]
+fn should_fail_the_run_under_strict_when_a_language_was_skipped_for_a_missing_toolchain() {
+    let error = build_outcome(&[], &[], &["elixir".to_string(), "kotlin".to_string()], true)
+        .expect_err("--strict must not exit clean over an unexamined language");
+    let message = error.to_string();
+
+    assert!(message.contains("--strict is set"), "{message}");
+    assert!(message.contains("2 language(s)"), "{message}");
+    assert!(message.contains("elixir"), "{message}");
+    assert!(message.contains("kotlin"), "{message}");
+}
+
+/// The same skip, without `--strict`, must not gain a fatal side effect just because the
+/// bucket is now threaded through `build_outcome` -- the flag is what turns it on, not its
+/// mere presence. ~keep
+#[test]
+fn should_stay_clean_without_strict_even_when_toolchain_missing_is_non_empty() {
+    assert!(build_outcome(&[], &[], &["swift".to_string()], false).is_ok());
 }
 
 /// Non-zero, but never described as a build failure: nothing was compiled, so the message
@@ -68,8 +96,13 @@ fn should_exit_clean_when_the_only_thing_that_happened_was_a_toolchain_skip() {
 /// would let a downstream consumer treat a missing artifact as a built one. ~keep
 #[test]
 fn should_fail_the_run_for_unmet_preconditions_while_naming_them_separately_from_failures() {
-    let error = build_outcome(&[], &["elixir (run `cd packages/elixir && mix deps.get`)".to_string()])
-        .expect_err("unmet preconditions must not exit clean");
+    let error = build_outcome(
+        &[],
+        &["elixir (run `cd packages/elixir && mix deps.get`)".to_string()],
+        &[],
+        false,
+    )
+    .expect_err("unmet preconditions must not exit clean");
     let message = error.to_string();
 
     assert!(message.contains("1 language(s) were not built"), "{message}");
@@ -85,6 +118,8 @@ fn should_keep_failure_and_unmet_counts_separate_when_both_occur() {
     let error = build_outcome(
         &["go: undefined: Foo".to_string()],
         &["elixir (run `mix deps.get`)".to_string()],
+        &[],
+        false,
     )
     .expect_err("either bucket is fatal");
     let message = error.to_string();
