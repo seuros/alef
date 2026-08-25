@@ -361,6 +361,7 @@ mod config_entry_matching;
 mod external_type_roots;
 mod fixed_size_arrays;
 mod ir_cache_version_salt;
+mod param_provenance;
 
 fn make_unsupported_method(type_name: &str, method_name: &str) -> crate::core::ir::UnsupportedPublicItem {
     crate::core::ir::UnsupportedPublicItem {

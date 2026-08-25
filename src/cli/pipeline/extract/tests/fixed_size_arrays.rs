@@ -142,6 +142,11 @@ fn a_fixed_size_array_of_a_known_type_lowers_in_a_method_signature() {
     assert_eq!(method.return_type, expected);
     assert!(!method.params[0].sanitized);
     assert!(!method.sanitized);
+    assert_eq!(
+        method.params[0].original_type.as_deref(),
+        Some(RESOLVED_POINT_ARRAY),
+        "a param's declared length is erased by Vec<Point> exactly like a field's, so it must be recorded too"
+    );
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use crate::core::ir::{ApiSurface, FieldDef, TypeRef};
+use crate::core::ir::{ApiSurface, FieldDef, ParamDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use tracing::info;
 
@@ -35,8 +35,7 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
             }
             let mut method_sanitized = false;
             for param in &mut method.params {
-                if sanitize_type_ref(&mut param.ty, &known_types, &known_enums).is_lossy() {
-                    param.sanitized = true;
+                if sanitize_param(param, &known_types, &known_enums) {
                     method_sanitized = true;
                 }
             }
@@ -52,8 +51,7 @@ pub(super) fn sanitize_unknown_types(api: &mut ApiSurface) {
     for func in &mut api.functions {
         let mut func_sanitized = false;
         for param in &mut func.params {
-            if sanitize_type_ref(&mut param.ty, &known_types, &known_enums).is_lossy() {
-                param.sanitized = true;
+            if sanitize_param(param, &known_types, &known_enums) {
                 func_sanitized = true;
             }
         }
@@ -109,6 +107,36 @@ fn sanitize_field(field: &mut FieldDef, known_types: &AHashSet<String>, known_en
         // which a lossless lowering never sets. ~keep
         field.original_type = Some(pre_sanitization);
     }
+}
+
+/// Sanitize `param.ty` in place, keeping a record of the Rust type it had beforehand.
+///
+/// Mirrors [`sanitize_field`]: many backends (`dart`, `wasm`, `magnus`, `php`, `ffi`, `swift`,
+/// and the shared `codegen::generators::binding_helpers` call-site builders) already gate
+/// reconstruction logic on `param.original_type.is_some()` combined with `param.sanitized`,
+/// expecting it to be populated the same way a field's is. Nothing wrote to `ParamDef::original_type`
+/// before this fix, so every one of those call sites was silently inert for parameters. Returns
+/// whether the rewrite was lossy, so callers can fold it into their own `*_sanitized` flag exactly
+/// like the removed inline `sanitize_type_ref(..).is_lossy()` call did. ~keep
+fn sanitize_param(param: &mut ParamDef, known_types: &AHashSet<String>, known_enums: &AHashSet<String>) -> bool {
+    let tuple_original = extract_tuple_vec_original_type(&param.ty);
+    let lowered_fixed_array = lowers_a_fixed_array(&param.ty, known_types, known_enums);
+    let pre_sanitization = param.ty.rust_source_display();
+    let is_lossy = sanitize_type_ref(&mut param.ty, known_types, known_enums).is_lossy();
+    if is_lossy {
+        param.sanitized = true;
+        if let Some(orig) = tuple_original {
+            param.original_type = Some(orig);
+        } else if param.original_type.is_none() {
+            param.original_type = Some(pre_sanitization);
+        }
+    } else if lowered_fixed_array && param.original_type.is_none() {
+        // Same rationale as the field path: a lossless fixed-array lowering still erases the
+        // declared length, so it is recorded here too -- without setting `sanitized`, which
+        // stays reserved for lossy rewrites. ~keep
+        param.original_type = Some(pre_sanitization);
+    }
+    is_lossy
 }
 
 /// Record `field`'s current type as its pre-sanitization type for a caller that is about to
