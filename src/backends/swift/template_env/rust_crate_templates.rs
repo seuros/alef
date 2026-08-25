@@ -249,4 +249,8 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         "ffi_keep_alive_shim.rs.jinja",
         include_str!("../templates/ffi_keep_alive_shim.rs.jinja"),
     ),
+    (
+        "rust_writeback_body.rs.jinja",
+        include_str!("../templates/rust_writeback_body.rs.jinja"),
+    ),
 ];

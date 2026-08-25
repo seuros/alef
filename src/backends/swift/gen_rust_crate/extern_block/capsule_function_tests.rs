@@ -35,13 +35,16 @@ fn capsule_function_returns_usize() {
     let enum_names = HashSet::new();
     let deferred_empty = HashSet::new();
 
+    let opaque_types = ahash::AHashSet::default();
     let block = emit_extern_block_for_functions(
         &functions,
         &handle_returned,
         &enum_names,
         &deferred_empty,
         &capsule_types,
-    );
+        &opaque_types,
+    )
+    .expect("emit_extern_block_for_functions");
 
     assert!(
         block.contains("fn get_language() -> usize"),
@@ -74,13 +77,16 @@ fn fallible_capsule_function_returns_usize() {
     let enum_names = HashSet::new();
     let deferred_empty = HashSet::new();
 
+    let opaque_types = ahash::AHashSet::default();
     let block = emit_extern_block_for_functions(
         &functions,
         &handle_returned,
         &enum_names,
         &deferred_empty,
         &capsule_types,
-    );
+        &opaque_types,
+    )
+    .expect("emit_extern_block_for_functions");
 
     assert!(
         block.contains("fn get_language() -> usize"),
@@ -105,13 +111,16 @@ fn non_capsule_function_unaffected() {
     let enum_names = HashSet::new();
     let deferred_empty = HashSet::new();
 
+    let opaque_types = ahash::AHashSet::default();
     let block = emit_extern_block_for_functions(
         &functions,
         &handle_returned,
         &enum_names,
         &deferred_empty,
         &capsule_types,
-    );
+        &opaque_types,
+    )
+    .expect("emit_extern_block_for_functions");
 
     assert!(
         block.contains("fn get_metadata() -> Metadata"),

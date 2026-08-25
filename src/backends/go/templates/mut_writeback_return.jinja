@@ -1,0 +1,10 @@
+	jsonPtr := C.{{ ffi_prefix }}_{{ type_snake }}_to_json({{ handle }})
+	if jsonPtr == nil {
+		return nil, fmt.Errorf("failed to convert to JSON")
+	}
+	defer C.{{ ffi_prefix }}_free_string(jsonPtr)
+	var result {{ type_name }}
+	if err := json.Unmarshal([]byte(C.GoString(jsonPtr)), &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal: %w", err)
+	}
+	return &result, nil

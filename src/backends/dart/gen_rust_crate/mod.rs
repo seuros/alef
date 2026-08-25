@@ -88,17 +88,19 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         .unwrap_or_default();
     let stub_methods: Vec<String> = config.dart.as_ref().map(|c| c.stub_methods.clone()).unwrap_or_default();
 
+    let lib_rs = emit_lib_rs(
+        &rust_dir,
+        api,
+        config,
+        &source_crate_name,
+        &exclude_functions,
+        &exclude_types,
+        &stub_methods,
+    )?;
+
     Ok(vec![
         emit_cargo_toml(&rust_dir, api, config, &source_crate_name),
-        emit_lib_rs(
-            &rust_dir,
-            api,
-            config,
-            &source_crate_name,
-            &exclude_functions,
-            &exclude_types,
-            &stub_methods,
-        ),
+        lib_rs,
         // ~keep The stem is the emitted bridge crate's cdylib name (`<source>_dart`), not the
         // source crate's. `frb_rewrite` reads the real stem out of the FRB source; this path has
         // to derive it, and passing `source_crate_name` made build.rs's embedded loader search for
@@ -129,7 +131,7 @@ fn emit_lib_rs(
     exclude_functions: &std::collections::HashSet<String>,
     exclude_types: &std::collections::HashSet<String>,
     stub_methods: &[String],
-) -> GeneratedFile {
+) -> anyhow::Result<GeneratedFile> {
     let mut content = String::new();
     // BEFORE the #![allow] attrs (which would make those attrs invalid per E0753).
     content.push_str(crate::core::hash::SELF_MARKING_HEADER_LINE);
@@ -523,7 +525,7 @@ fn emit_lib_rs(
             &types_needing_from_conversion,
             &opaque_type_names,
             stub_methods,
-        );
+        )?;
     }
 
     // helper automatically from the `#[frb]`-annotated Rust function.
@@ -567,11 +569,11 @@ fn emit_lib_rs(
         content.push_str("\nmod service_api;\npub use service_api::*;\n");
     }
 
-    GeneratedFile {
+    Ok(GeneratedFile {
         path: std::path::PathBuf::from(format!("{rust_dir}/src/lib.rs")),
         content,
         generated_header: false,
-    }
+    })
 }
 
 fn dart_module_name(crate_name: &str) -> String {

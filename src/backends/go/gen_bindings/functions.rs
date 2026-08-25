@@ -1,6 +1,7 @@
 use super::methods::gen_param_to_c;
 use super::types::{emit_type_doc, go_return_expr};
 use crate::backends::go::type_map::{alef_handle_c_type, go_optional_type, go_type};
+use crate::codegen::mut_writeback;
 use crate::codegen::naming::{go_free_function_name, go_param_name, pascal_to_snake, to_go_name};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::ir::{FunctionDef, MethodDef, ParamDef, TypeRef};
@@ -102,9 +103,20 @@ pub(super) fn gen_function_wrapper(
         .cloned()
         .collect();
     let marshals_params = params_require_marshal(&non_bridge_params, opaque_names);
-    let can_return_error = func.error_type.is_some() || marshals_params;
 
-    let return_type = if is_bytes_result {
+    // A `&mut T` DTO parameter on a unit-returning function cannot be bound as an owned
+    // by-value parameter: the C call mutates a temporary handle built from JSON and the
+    // handle is then freed unread, so the caller's value is silently untouched. When this
+    // narrow shape applies, the binding returns the updated `T` instead of `error` alone.
+    // `reject_unsupported_writeback` (called by the caller loop before this function runs)
+    // has already ruled out every `&mut` DTO shape this can't express. ~keep
+    let opaque_names_ahash: ahash::AHashSet<String> = opaque_names.iter().map(|s| s.to_string()).collect();
+    let writeback = mut_writeback::writeback_param(&func.params, &func.return_type, &opaque_names_ahash);
+    let can_return_error = func.error_type.is_some() || marshals_params || writeback.is_some();
+
+    let return_type = if let Some(wb) = writeback {
+        format!("({}, error)", go_optional_type(&wb.ty))
+    } else if is_bytes_result {
         "([]byte, error)".to_string()
     } else if can_return_error {
         if matches!(func.return_type, TypeRef::Unit) {
@@ -165,7 +177,8 @@ pub(super) fn gen_function_wrapper(
         },
     ));
 
-    let returns_value_and_error = can_return_error && !matches!(func.return_type, TypeRef::Unit);
+    let returns_value_and_error =
+        can_return_error && (writeback.is_some() || !matches!(func.return_type, TypeRef::Unit));
     let param_err_return_prefix: String = if returns_value_and_error {
         format!("{}, ", crate::backends::go::type_map::go_zero_value(&func.return_type))
     } else {
@@ -212,6 +225,32 @@ pub(super) fn gen_function_wrapper(
     } else {
         format!("{}({})", ffi_name, c_params.join(", "))
     };
+
+    if let Some(wb) = writeback {
+        let wb_type_name = mut_writeback::writeback_type_name(wb).unwrap_or_default();
+        let wb_type_snake = wb_type_name.to_snake_case();
+        let wb_handle = go_param_name(&format!("c_{}", wb.name));
+        out.push_str(&crate::backends::go::template_env::render(
+            "c_call_simple.jinja",
+            minijinja::context! {
+                c_call => &c_call,
+            },
+        ));
+        out.push_str(&crate::backends::go::template_env::render(
+            "mut_writeback_return.jinja",
+            minijinja::context! {
+                ffi_prefix => ffi_prefix,
+                type_snake => &wb_type_snake,
+                type_name => wb_type_name,
+                handle => &wb_handle,
+            },
+        ));
+        out.push_str(&crate::backends::go::template_env::render(
+            "function_body_end.jinja",
+            minijinja::Value::default(),
+        ));
+        return out;
+    }
 
     if is_bytes_result {
         out.push_str(&crate::backends::go::template_env::render(

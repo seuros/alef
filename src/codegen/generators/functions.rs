@@ -4,6 +4,7 @@ use crate::codegen::generators::binding_helpers::{
     has_named_params,
 };
 use crate::codegen::generators::{AdapterBodies, AsyncPattern, RustBindingConfig};
+use crate::codegen::mut_writeback;
 use crate::codegen::shared::function_sig_defaults;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
@@ -180,7 +181,28 @@ pub fn gen_function_with_mutex(
         crate::codegen::shared::function_params_vec(&func.params, &map_fn)
     };
     let params = param_strings.join(", ");
-    let return_type = mapper.map_type(&func.return_type);
+
+    // A `&mut T` DTO parameter on a unit-returning function cannot write back through the
+    // mutated intermediate (the host DTO is by-value/frozen), so the binding must return the
+    // updated value instead. Scoped to owned-param backends (pyo3/napi), sync and async alike:
+    // the async `Pyo3FutureIntoPy` branch below special-cases the write-back body directly rather
+    // than routing through `gen_async_body`'s unit-return handling, whose hardcoded `Ok(())` tail
+    // would no longer match this declared return type. `named_non_opaque_params_by_ref` backends
+    // (extendr) pass params by reference under a different, untouched code path. See
+    // `mut_writeback` for the policy; `reject_unsupported_writeback` is called by each backend's
+    // `generate_bindings` before this function runs, so any shape this module cannot express has
+    // already been rejected. ~keep
+    let writeback_param = if !cfg.named_non_opaque_params_by_ref {
+        mut_writeback::writeback_param(&func.params, &func.return_type, opaque_types)
+    } else {
+        None
+    };
+    let writeback_var = writeback_param.map(|p| format!("{}_core", p.name));
+
+    let return_type = match writeback_param {
+        Some(p) => mapper.map_type(&p.ty),
+        None => mapper.map_type(&func.return_type),
+    };
     let ret = mapper.wrap_return(&return_type, func.error_type.is_some());
 
     let effective_params: std::borrow::Cow<[crate::core::ir::ParamDef]> = std::borrow::Cow::Borrowed(&func.params);
@@ -422,32 +444,51 @@ pub fn gen_function_with_mutex(
         };
 
         if cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy && !let_bindings.is_empty() {
-            let is_unit = matches!(func.return_type, TypeRef::Unit);
-            let result_handling = if func.error_type.is_some() {
-                format!(
-                    "let result = {core_call}.await\n            \
-                     .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;"
-                )
-            } else if is_unit {
-                format!("{core_call}.await;")
-            } else {
-                format!("let result = {core_call}.await;")
-            };
-            let (ok_expr, extra_binding) = if is_unit && func.error_type.is_none() {
-                ("()".to_string(), String::new())
-            } else if return_wrap.contains(".into()") || return_wrap.contains("::from(") {
-                let wrapped_var = "wrapped_result";
-                let binding = if let Some(ret_type) = Some(&return_type) {
-                    format!("let {wrapped_var}: {ret_type} = {return_wrap};\n            ")
+            if let Some(var) = &writeback_var {
+                // Async `&mut` DTO write-back: the awaited core call resolves to `()` (or
+                // `Result<(), E>` on success), which the ordinary unit-return handling below
+                // would fold into a hardcoded `Ok(())` -- no longer valid once the declared
+                // return type is the mutated DTO. Resolve to the mutated intermediate instead,
+                // mirroring the sync write-back branch further down with an `.await` ahead of
+                // the discard. ~keep
+                let inner_body = if func.error_type.is_some() {
+                    format!(
+                        "{let_bindings}{core_call}.await\n            \
+                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;\n            \
+                         Ok({var}.into())"
+                    )
                 } else {
-                    format!("let {wrapped_var} = {return_wrap};\n            ")
+                    format!("{let_bindings}{core_call}.await;\n            Ok({var}.into())")
                 };
-                (wrapped_var.to_string(), binding)
+                format!("pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n{inner_body}\n        }})")
             } else {
-                (return_wrap.to_string(), String::new())
-            };
-            let inner_body = format!("{let_bindings}{result_handling}\n            {extra_binding}Ok({ok_expr})");
-            format!("pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n{inner_body}\n        }})")
+                let is_unit = matches!(func.return_type, TypeRef::Unit);
+                let result_handling = if func.error_type.is_some() {
+                    format!(
+                        "let result = {core_call}.await\n            \
+                         .map_err(|e| PyErr::new::<PyRuntimeError, _>(e.to_string()))?;"
+                    )
+                } else if is_unit {
+                    format!("{core_call}.await;")
+                } else {
+                    format!("let result = {core_call}.await;")
+                };
+                let (ok_expr, extra_binding) = if is_unit && func.error_type.is_none() {
+                    ("()".to_string(), String::new())
+                } else if return_wrap.contains(".into()") || return_wrap.contains("::from(") {
+                    let wrapped_var = "wrapped_result";
+                    let binding = if let Some(ret_type) = Some(&return_type) {
+                        format!("let {wrapped_var}: {ret_type} = {return_wrap};\n            ")
+                    } else {
+                        format!("let {wrapped_var} = {return_wrap};\n            ")
+                    };
+                    (wrapped_var.to_string(), binding)
+                } else {
+                    (return_wrap.to_string(), String::new())
+                };
+                let inner_body = format!("{let_bindings}{result_handling}\n            {extra_binding}Ok({ok_expr})");
+                format!("pyo3_async_runtimes::tokio::future_into_py(py, async move {{\n{inner_body}\n        }})")
+            }
         } else {
             let async_body = gen_async_body(
                 &core_call,
@@ -590,20 +631,26 @@ pub fn gen_function_with_mutex(
             }
         };
 
-        if func.error_type.is_some() {
-            let err_conv = match cfg.async_pattern {
-                AsyncPattern::Pyo3FutureIntoPy => {
-                    ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))"
-                }
-                AsyncPattern::NapiNativeAsync => {
-                    ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"
-                }
-                AsyncPattern::WasmNativeAsync => ".map_err(|e| JsValue::from_str(&e.to_string()))",
-                AsyncPattern::TokioBlockOn => {
-                    ".map_err(|e| extendr_api::Error::Other(e.to_string().replace(\":\", \"_\").replace(\"/\", \"_\").replace(\"-\", \"_\").chars().take(255).collect::<String>()))"
-                }
-                _ => ".map_err(|e| e.to_string())",
-            };
+        let err_conv = func.error_type.is_some().then(|| match cfg.async_pattern {
+            AsyncPattern::Pyo3FutureIntoPy => ".map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))",
+            AsyncPattern::NapiNativeAsync => {
+                ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))"
+            }
+            AsyncPattern::WasmNativeAsync => ".map_err(|e| JsValue::from_str(&e.to_string()))",
+            AsyncPattern::TokioBlockOn => {
+                ".map_err(|e| extendr_api::Error::Other(e.to_string().replace(\":\", \"_\").replace(\"/\", \"_\").replace(\"-\", \"_\").chars().take(255).collect::<String>()))"
+            }
+            _ => ".map_err(|e| e.to_string())",
+        });
+
+        if let Some(var) = &writeback_var {
+            // The core call mutates `{var}` and returns `()`; the binding hands back the
+            // mutated intermediate instead of the (discarded) unit value. ~keep
+            match err_conv {
+                Some(conv) => format!("{core_call}.map(|_| {var}.into()){conv}"),
+                None => format!("{core_call};\n    {var}.into()"),
+            }
+        } else if let Some(err_conv) = err_conv {
             let wrapped = wrap_return("val");
             let cast_val = cast_value("val");
             if wrapped == "val" {

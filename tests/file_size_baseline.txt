@@ -41,7 +41,6 @@ src/backends/kotlin/gen_bindings/object_wrapper/tests.rs 1142
 src/backends/napi/gen_bindings/enums.rs 1075
 src/backends/php/gen_bindings/type_stubs/type_stubs_tests.rs 1093
 src/backends/swift/gen_bindings/dto.rs 1207
-src/backends/swift/gen_bindings/forwarders.rs 1023
 src/backends/wasm/gen_bindings/mod.rs 1137
 src/backends/wasm/gen_bindings/tests.rs 1114
 src/backends/wasm/trait_bridge.rs 1187

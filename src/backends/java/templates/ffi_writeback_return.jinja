@@ -1,0 +1,8 @@
+            var jsonPtr = (MemorySegment) {{ to_json_handle }}.invoke({{ handle_var }});
+            if (jsonPtr.equals(MemorySegment.NULL)) {
+                checkLastError();
+                throw new {{ exception_class }}("{{ method_name }}: failed to serialize response", null);
+            }
+            nativeResources.register(jsonPtr, handle -> {{ free_string_handle }}.invoke(handle));
+            String json = jsonPtr.reinterpret(Long.MAX_VALUE).getString(0);
+            return MAPPER.readValue(json, {{ class_name }}.class);

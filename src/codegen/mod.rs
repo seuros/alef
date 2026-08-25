@@ -15,6 +15,7 @@ pub mod error_gen;
 pub mod fn_dedup;
 pub mod generators;
 pub mod keywords;
+pub mod mut_writeback;
 pub mod naming;
 pub mod serde_enum_repr;
 pub mod shared;

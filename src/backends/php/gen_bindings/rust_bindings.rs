@@ -431,6 +431,12 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
             if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&func.name, &config.trait_bridges) {
                 continue;
             }
+            crate::codegen::mut_writeback::reject_unsupported_writeback(
+                &func.name,
+                &func.params,
+                &func.return_type,
+                &opaque_types,
+            )?;
             let bridge_param = crate::backends::php::trait_bridge::find_bridge_param(func, &config.trait_bridges);
             if let Some((param_idx, bridge_cfg)) = bridge_param {
                 let bridge_handle_path =

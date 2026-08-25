@@ -172,10 +172,23 @@ pub(super) fn emit_function(
     };
 
     {
-        let return_ty = if matches!(f.return_type, TypeRef::Unit) {
+        // A `&mut T` DTO writeback function's IR `return_type` still records the original
+        // `Unit` -- extraction is unchanged -- but the FRB bridge fn this facade method
+        // delegates to now returns `T` (see `gen_rust_crate::bridge_fn`). The facade must
+        // declare the same `Future<T>`, not `Future<void>`, or it would discard the value
+        // the bridge call actually produces. ~keep
+        let opaque_types: ahash::AHashSet<String> = type_defs
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+        let effective_return_type =
+            crate::codegen::mut_writeback::effective_return_type(&f.params, &f.return_type, &opaque_types)
+                .unwrap_or_else(|| f.return_type.clone());
+        let return_ty = if matches!(effective_return_type, TypeRef::Unit) {
             "Future<void>".to_string()
         } else {
-            format!("Future<{}>", render_type(&f.return_type, imports))
+            format!("Future<{}>", render_type(&effective_return_type, imports))
         };
         out.push_str(&template_env::render(
             "function_signature_async.jinja",

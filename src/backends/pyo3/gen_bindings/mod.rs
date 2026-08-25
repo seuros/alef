@@ -558,6 +558,12 @@ impl Backend for Pyo3Backend {
             if bridge_duck_register_fns.contains(f.name.as_str()) {
                 continue;
             }
+            crate::codegen::mut_writeback::reject_unsupported_writeback(
+                &f.name,
+                &f.params,
+                &f.return_type,
+                &opaque_types,
+            )?;
             let bridge_param = crate::backends::pyo3::trait_bridge::find_bridge_param(f, &config.trait_bridges);
             let bridge_field =
                 crate::codegen::generators::trait_bridge::find_bridge_field(f, &api.types, &config.trait_bridges);

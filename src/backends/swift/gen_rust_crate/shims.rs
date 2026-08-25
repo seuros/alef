@@ -24,6 +24,7 @@ pub(crate) struct FunctionShimContext<'a> {
     pub(crate) no_serde_names: &'a HashSet<&'a str>,
     pub(crate) handle_returned_types: &'a HashSet<String>,
     pub(crate) capsule_types: &'a HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
+    pub(crate) opaque_types: &'a ahash::AHashSet<String>,
 }
 
 /// Returns true when a function can be fully bridged.
@@ -310,7 +311,7 @@ pub(crate) fn swift_call_arg(
     }
 }
 
-pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<'_>) -> String {
+pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<'_>) -> anyhow::Result<String> {
     let source_crate = context.source_crate;
     let type_paths = context.type_paths;
     let unit_enum_names = context.unit_enum_names;
@@ -318,6 +319,19 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
     let no_serde_names = context.no_serde_names;
     let handle_returned_types = context.handle_returned_types;
     let capsule_types = context.capsule_types;
+    let opaque_types = context.opaque_types;
+
+    crate::codegen::mut_writeback::reject_unsupported_writeback(&f.name, &f.params, &f.return_type, opaque_types)?;
+    // Only a unit-returning function with exactly one `&mut` DTO param qualifies; the
+    // rejection above already ruled out every other `&mut` DTO shape. The swift-bridge
+    // wrapper newtype's Swift-side identifier is the same `swift_ident(snake_case(name))`
+    // used to declare and reference the parameter everywhere else in this function. ~keep
+    let writeback_return_expr: Option<String> =
+        crate::codegen::mut_writeback::writeback_param(&f.params, &f.return_type, opaque_types)
+            .map(|p| swift_ident(&p.name.to_snake_case()));
+    let effective_return_type: TypeRef =
+        crate::codegen::mut_writeback::effective_return_type(&f.params, &f.return_type, opaque_types)
+            .unwrap_or_else(|| f.return_type.clone());
 
     let fn_name = swift_ident(&f.name.to_snake_case());
 
@@ -351,21 +365,25 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
         .collect();
     let params_str = params.join(", ");
 
-    let is_capsule_return = matches!(&f.return_type, TypeRef::Named(n) if capsule_types.contains_key(n.as_str()));
+    let is_capsule_return =
+        matches!(&effective_return_type, TypeRef::Named(n) if capsule_types.contains_key(n.as_str()));
 
     let (return_ty, has_explicit_return) = if is_capsule_return {
         ("usize".to_string(), true)
     } else if f.error_type.is_some() {
-        let ok_ty = bridge_type_with_handles(&f.return_type, handle_returned_types);
-        if matches!(f.return_type, TypeRef::Unit) {
+        let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
+        if matches!(effective_return_type, TypeRef::Unit) {
             ("Result<(), String>".to_string(), true)
         } else {
             (format!("Result<{ok_ty}, String>"), true)
         }
-    } else if matches!(f.return_type, TypeRef::Unit) {
+    } else if matches!(effective_return_type, TypeRef::Unit) {
         (String::new(), false)
     } else {
-        (bridge_type_with_handles(&f.return_type, handle_returned_types), true)
+        (
+            bridge_type_with_handles(&effective_return_type, handle_returned_types),
+            true,
+        )
     };
 
     let mut pre_call_bindings: Vec<String> = Vec::new();
@@ -406,12 +424,12 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
         && (!type_paths.contains_key(inner_name) || no_serde_names.contains(inner_name))
     {
         let fn_name_snake = swift_ident(&f.name.to_snake_case());
-        return format!(
+        return Ok(format!(
             "// alef: skipped — return type `{inner_name}` is excluded from codegen (no serde derive)\n\
                      pub fn {fn_name_snake}({params_str}) -> {return_ty} {{\n    \
                      compile_error!(\"alef cannot bridge Swift return type {inner_name}; configure swift.exclude_functions for {fn_name_snake} or expose serde for the type\")\n\
                      }}\n"
-        );
+        ));
     }
 
     let json_wrap_ok = needs_json_bridge_with_handles(&f.return_type, handle_returned_types);
@@ -508,7 +526,19 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
             }
         }
     };
-    let body = if is_capsule_return {
+    let body = if let Some(return_expr) = &writeback_return_expr {
+        crate::backends::swift::template_env::render(
+            "rust_writeback_body.rs.jinja",
+            minijinja::context! {
+                call => &source_call,
+                is_async => f.is_async,
+                has_error => f.error_type.is_some(),
+                return_expr => return_expr,
+            },
+        )
+        .trim_end()
+        .to_string()
+    } else if is_capsule_return {
         if f.is_async {
             format!("{source_call}.await.map(|__cap| __cap.into_raw() as usize).unwrap_or(0)")
         } else if f.error_type.is_some() {
@@ -549,12 +579,14 @@ pub(crate) fn emit_function_shim(f: &FunctionDef, context: &FunctionShimContext<
     };
 
     if f.is_async {
-        format!(
+        Ok(format!(
             "{cfg_prefix}pub fn {fn_name}({params_str}){return_annotation} {{\n    \
             {bindings_str}{ALEF_TOKIO_RUNTIME_ACCESSOR}.block_on(async {{ {body} }})\n}}\n"
-        )
+        ))
     } else {
-        format!("{cfg_prefix}pub fn {fn_name}({params_str}){return_annotation} {{\n    {bindings_str}{body}\n}}\n")
+        Ok(format!(
+            "{cfg_prefix}pub fn {fn_name}({params_str}){return_annotation} {{\n    {bindings_str}{body}\n}}\n"
+        ))
     }
 }
 
@@ -583,208 +615,4 @@ fn __alef_tokio_runtime() -> &'static ::tokio::runtime::Runtime {
 "#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::ir::{ParamDef, TypeRef};
-
-    fn param(name: &str, ty: TypeRef) -> ParamDef {
-        ParamDef {
-            name: name.to_string(),
-            ty,
-            optional: false,
-            default: None,
-            sanitized: false,
-            typed_default: None,
-            is_ref: false,
-            is_mut: false,
-            newtype_wrapper: None,
-            original_type: None,
-            map_is_ahash: false,
-            map_key_is_cow: false,
-            vec_inner_is_ref: false,
-            map_is_btree: false,
-            core_wrapper: crate::core::ir::CoreWrapper::None,
-        }
-    }
-
-    fn function(params: Vec<ParamDef>) -> FunctionDef {
-        FunctionDef {
-            name: "interact".to_string(),
-            rust_path: "sample_crawler::interact".to_string(),
-            original_rust_path: String::new(),
-            params,
-            return_type: TypeRef::Named("InteractionResult".to_string()),
-            is_async: true,
-            error_type: Some("CrawlError".to_string()),
-            doc: String::new(),
-            cfg: None,
-            sanitized: false,
-            return_sanitized: false,
-            returns_ref: false,
-            returns_cow: false,
-            return_newtype_wrapper: None,
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            version: Default::default(),
-        }
-    }
-
-    #[test]
-    fn vec_enum_params_bridge_as_json_strings() {
-        let f = function(vec![param(
-            "actions",
-            TypeRef::Vec(Box::new(TypeRef::Named("PageAction".to_string()))),
-        )]);
-        let enum_names = HashSet::from(["PageAction"]);
-        let type_paths = HashMap::from([("PageAction".to_string(), "sample_crawler::PageAction".to_string())]);
-        let no_serde_names = HashSet::new();
-        let handle_returned_types = HashSet::new();
-
-        assert!(is_bridgeable_fn(
-            &f,
-            &enum_names,
-            &type_paths,
-            &no_serde_names,
-            &HashSet::new(),
-            &handle_returned_types
-        ));
-
-        let capsule_types = std::collections::HashMap::new();
-        let tagged_enum_names = HashSet::new();
-        let context = FunctionShimContext {
-            source_crate: "sample_crawler",
-            type_paths: &type_paths,
-            unit_enum_names: &enum_names,
-            tagged_enum_names: &tagged_enum_names,
-            no_serde_names: &no_serde_names,
-            handle_returned_types: &handle_returned_types,
-            capsule_types: &capsule_types,
-        };
-        let shim = emit_function_shim(&f, &context);
-        assert!(shim.contains("actions: Vec<String>"));
-        assert!(
-            shim.contains(&enum_from_string_fn_name("PageAction")),
-            "expected a call into the reverse-conversion helper, not a From<String> impl (which \
-             would be an orphan impl on the consumer's own enum type), got:\n{shim}"
-        );
-        assert!(!shim.contains("From<String>"));
-        assert!(!shim.contains(".0"));
-    }
-
-    #[test]
-    fn direct_enum_params_bridge_as_from_string() {
-        let f = function(vec![param("action", TypeRef::Named("PageAction".to_string()))]);
-        let enum_names = HashSet::from(["PageAction"]);
-        let type_paths = HashMap::from([("PageAction".to_string(), "sample_crawler::PageAction".to_string())]);
-        let no_serde_names = HashSet::new();
-        let handle_returned_types = HashSet::new();
-
-        let capsule_types = std::collections::HashMap::new();
-        let tagged_enum_names = HashSet::new();
-        let context = FunctionShimContext {
-            source_crate: "sample_crawler",
-            type_paths: &type_paths,
-            unit_enum_names: &enum_names,
-            tagged_enum_names: &tagged_enum_names,
-            no_serde_names: &no_serde_names,
-            handle_returned_types: &handle_returned_types,
-            capsule_types: &capsule_types,
-        };
-        let shim = emit_function_shim(&f, &context);
-        assert!(shim.contains("action: String"));
-        assert!(
-            shim.contains(&enum_from_string_fn_name("PageAction")),
-            "expected a call into the reverse-conversion helper, not a From<String> impl (which \
-             would be an orphan impl on the consumer's own enum type), got:\n{shim}"
-        );
-        assert!(!shim.contains("From<String>"));
-        assert!(!shim.contains("unimplemented!"));
-    }
-
-    /// Data-carrying enums cross swift-bridge as JSON strings. A referenced enum parameter
-    /// therefore must be deserialized before it is borrowed for the source call; treating the
-    /// bridge `String` as an opaque wrapper emits `&param.0` and fails with E0609.
-    #[test]
-    fn referenced_tagged_enum_param_is_deserialized_before_source_call() {
-        let mut output_format = param("output_format", TypeRef::Named("OutputFormat".to_string()));
-        output_format.is_ref = true;
-        let f = function(vec![
-            param(
-                "layout_enabled",
-                TypeRef::Primitive(crate::core::ir::PrimitiveType::Bool),
-            ),
-            output_format,
-        ]);
-        let unit_enum_names = HashSet::new();
-        let tagged_enum_names = HashSet::from(["OutputFormat"]);
-        let type_paths = HashMap::from([("OutputFormat".to_string(), "sample_crawler::OutputFormat".to_string())]);
-        let no_serde_names = HashSet::new();
-        let handle_returned_types = HashSet::new();
-        let capsule_types = HashMap::new();
-        let context = FunctionShimContext {
-            source_crate: "sample_crawler",
-            type_paths: &type_paths,
-            unit_enum_names: &unit_enum_names,
-            tagged_enum_names: &tagged_enum_names,
-            no_serde_names: &no_serde_names,
-            handle_returned_types: &handle_returned_types,
-            capsule_types: &capsule_types,
-        };
-
-        let shim = emit_function_shim(&f, &context);
-
-        assert!(
-            shim.contains("output_format: String"),
-            "tagged enums use the String bridge type:\n{shim}"
-        );
-        assert!(
-            shim.contains(
-                "&::serde_json::from_str::<sample_crawler::OutputFormat>(&output_format)\
-                 .expect(\"valid JSON for output_format\")"
-            ),
-            "the bridge string must be deserialized into the source enum before borrowing:\n{shim}"
-        );
-        assert!(
-            !shim.contains("output_format.0"),
-            "a bridge String has no opaque-wrapper field:\n{shim}"
-        );
-    }
-
-    #[test]
-    fn vec_string_with_ref_inner_converts_to_slice_of_strs() {
-        let mut param = param("names", TypeRef::Vec(Box::new(TypeRef::String)));
-        param.is_ref = true;
-        param.vec_inner_is_ref = true;
-
-        let f = function(vec![param]);
-        let type_paths = HashMap::new();
-        let unit_enum_names = HashSet::new();
-        let tagged_enum_names = HashSet::new();
-        let no_serde_names = HashSet::new();
-        let handle_returned_types = HashSet::new();
-
-        assert!(is_bridgeable_fn(
-            &f,
-            &unit_enum_names,
-            &type_paths,
-            &no_serde_names,
-            &tagged_enum_names,
-            &handle_returned_types
-        ));
-
-        let capsule_types = std::collections::HashMap::new();
-        let context = FunctionShimContext {
-            source_crate: "sample_crawler",
-            type_paths: &type_paths,
-            unit_enum_names: &unit_enum_names,
-            tagged_enum_names: &tagged_enum_names,
-            no_serde_names: &no_serde_names,
-            handle_returned_types: &handle_returned_types,
-            capsule_types: &capsule_types,
-        };
-        let shim = emit_function_shim(&f, &context);
-        assert!(shim.contains("names: Vec<String>"));
-        assert!(shim.contains("&names.iter().map(|s| s.as_str()).collect::<Vec<_>>()"));
-        assert!(shim.contains("sample_crawler::interact"));
-    }
-}
+mod tests;

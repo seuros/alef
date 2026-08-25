@@ -49,6 +49,18 @@ pub(super) fn emit_json_string_overloads(
         return;
     }
 
+    // A `&mut T` DTO writeback function's IR `return_type` still records the original
+    // `Unit` -- extraction is unchanged -- but the free-function forwarder this overload
+    // delegates to now returns `T` (see `forwarders::writeback`). The JSON-string overload
+    // must declare the same return type or it would claim `Void` while its body's `return`
+    // statement hands back a value. ~keep
+    let opaque_types: ahash::AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+
     out.push_str("// MARK: - JSON-String Convenience Overloads\n");
     out.push_str("// These overloads accept JSON-encoded config parameters and decode them automatically.\n");
     out.push_str("// Enables e2e tests to pass JSON strings directly without typed config construction.\n\n");
@@ -113,7 +125,10 @@ pub(super) fn emit_json_string_overloads(
         }
 
         let params_sig = param_strs.join(", ");
-        let return_ty = swift_return_type(&func.return_type);
+        let effective_return_type =
+            crate::codegen::mut_writeback::effective_return_type(&func.params, &func.return_type, &opaque_types)
+                .unwrap_or_else(|| func.return_type.clone());
+        let return_ty = swift_return_type(&effective_return_type);
         let async_clause = if func.is_async { " async" } else { "" };
         let throws_clause = " throws";
         let return_suffix = "";

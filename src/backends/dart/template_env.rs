@@ -294,6 +294,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "rust_bridge_stub_body.rs.jinja",
         include_str!("templates/rust_bridge_stub_body.rs.jinja"),
     ),
+    (
+        "rust_bridge_writeback_body.rs.jinja",
+        include_str!("templates/rust_bridge_writeback_body.rs.jinja"),
+    ),
     ("rust_pub_use.rs.jinja", include_str!("templates/rust_pub_use.rs.jinja")),
     ("rust_use.rs.jinja", include_str!("templates/rust_use.rs.jinja")),
     (

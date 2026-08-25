@@ -298,7 +298,8 @@ fn emit(f: &FunctionDef) -> String {
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
         &[],
-    );
+    )
+    .expect("emit_bridge_fn");
     out
 }
 
@@ -486,7 +487,8 @@ fn emit_bridge_fn_configured_stub_method_still_emits_unimplemented() {
         &std::collections::HashSet::new(),
         &std::collections::HashSet::new(),
         &["analyze_document".to_string()],
-    );
+    )
+    .expect("emit_bridge_fn");
 
     assert!(
         out.contains("unimplemented!"),
@@ -513,5 +515,220 @@ fn non_matching_primitive_cast_preserved() {
     assert_eq!(
         cast_f64, "",
         "f64->f64 cast must be empty (redundant), got: '{cast_f64}'"
+    );
+}
+
+// --- `&mut T` DTO writeback coverage (alef issue #380) -------------------------------------
+//
+// `fn tag_record(record: &mut Record)` used to render as
+// `pub fn tag_record(record: Record) { probe_lib::tag_record(&mut probe_lib::Record::from(record)); }`
+// -- mutating a temporary rvalue that is dropped, so the caller's value never changes and
+// nothing signals the failure. See `crate::codegen::mut_writeback`.
+
+fn function_named(name: &str, params: Vec<ParamDef>, return_type: TypeRef) -> FunctionDef {
+    FunctionDef {
+        name: name.to_string(),
+        rust_path: format!("sample_crate::{name}"),
+        params,
+        return_type,
+        ..FunctionDef::default()
+    }
+}
+
+fn mut_record_param() -> ParamDef {
+    make_param("record", TypeRef::Named("Record".to_string()), true, true, false)
+}
+
+#[test]
+fn mut_dto_param_binds_a_core_intermediate_mutates_it_and_returns_the_mirror() {
+    let f = function_named("tag_record", vec![mut_record_param()], TypeRef::Unit);
+    let rendered = emit(&f);
+
+    assert!(
+        rendered.contains("pub fn tag_record(record: Record) -> Record {"),
+        "writeback fn must return the mirror type instead of (), got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("let mut record_core"),
+        "writeback fn must bind a core-typed intermediate before mutating it, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("&mut record_core"),
+        "writeback fn must pass the bound intermediate by &mut to the core call, got:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Record::from(record_core)") || rendered.contains("record_core"),
+        "writeback fn must hand the mutated intermediate back as the mirror type, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("&mut probe_lib::Record::from(record)")
+            && !rendered.contains("&mut sample_crate::Record::from(record)"),
+        "the old rvalue-mutating form (mutates a temporary and drops it) must be gone, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("pub fn tag_record(record: Record) {\n    sample_crate::tag_record(&mut"),
+        "must not still call the core fn with an inline &mut rvalue in a void-returning wrapper, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn mut_dto_param_via_from_conversion_round_trips_through_the_core_type() {
+    // Force the `types_needing_from_conversion` path (Dart's "sanitized field" conversion
+    // branch) rather than the transmute path, matching a mirror type whose field types
+    // differ from the core (e.g. u32 -> i64), which is the shape that actually reproduced
+    // the original bug (the emitted rvalue-mutation form only appears on this path).
+    let f = function_named("tag_record", vec![mut_record_param()], TypeRef::Unit);
+    let mut out = String::new();
+    let mut needs_from: std::collections::HashSet<String> = std::collections::HashSet::new();
+    needs_from.insert("Record".to_string());
+    emit_bridge_fn(
+        &mut out,
+        &f,
+        "sample_crate",
+        &std::collections::HashMap::new(),
+        &needs_from,
+        &std::collections::HashSet::new(),
+        &[],
+    )
+    .expect("emit_bridge_fn");
+
+    assert!(
+        out.contains("let mut record_core = sample_crate::Record::from(record);"),
+        "From-path writeback must bind the core value via the mirror's From impl, got:\n{out}"
+    );
+    assert!(
+        out.contains("sample_crate::tag_record(&mut record_core);"),
+        "From-path writeback must call the core fn with &mut on the bound intermediate, got:\n{out}"
+    );
+    assert!(
+        out.contains("Record::from(record_core)"),
+        "From-path writeback must hand back Record::from(record_core), got:\n{out}"
+    );
+}
+
+#[test]
+fn immutable_borrow_dto_param_is_not_rewritten_as_writeback() {
+    let p = make_param("record", TypeRef::Named("Record".to_string()), true, false, false);
+    let f = function_named(
+        "read_record",
+        vec![p],
+        TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
+    );
+    let rendered = emit(&f);
+
+    assert!(
+        !rendered.contains("-> Record"),
+        "an immutable-borrow param must not gain a mirror-type return, got:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("record_core"),
+        "an immutable-borrow param must not get a writeback core intermediate, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn owned_dto_param_is_byte_for_byte_unchanged() {
+    let p = make_param("record", TypeRef::Named("Record".to_string()), false, false, false);
+    let f = function_named(
+        "consume_record",
+        vec![p],
+        TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
+    );
+    let rendered = emit(&f);
+
+    let expected = "pub fn consume_record(record: Record) -> i64 {\n    sample_crate::consume_record(unsafe { std::mem::transmute::<Record, sample_crate::Record>(record) }) as i64\n}\n";
+    assert_eq!(
+        rendered, expected,
+        "an owned (by-value) DTO param must render exactly as before, got:\n{rendered}"
+    );
+}
+
+#[test]
+fn two_mut_dto_params_are_rejected_at_generation_time_naming_the_function() {
+    let f = function_named(
+        "tag_pair",
+        vec![
+            make_param("first", TypeRef::Named("Record".to_string()), true, true, false),
+            make_param("second", TypeRef::Named("Record".to_string()), true, true, false),
+        ],
+        TypeRef::Unit,
+    );
+    let mut out = String::new();
+    let error = emit_bridge_fn(
+        &mut out,
+        &f,
+        "sample_crate",
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    )
+    .expect_err("two `&mut` DTO params must be rejected at generation time");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("tag_pair"),
+        "diagnostic must name the function: {message}"
+    );
+    assert!(
+        out.is_empty(),
+        "no partial output should be written on rejection, got:\n{out}"
+    );
+}
+
+#[test]
+fn mut_dto_param_plus_a_return_value_is_rejected_naming_the_function() {
+    let f = function_named(
+        "tag_and_count",
+        vec![mut_record_param()],
+        TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
+    );
+    let mut out = String::new();
+    let error = emit_bridge_fn(
+        &mut out,
+        &f,
+        "sample_crate",
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &std::collections::HashSet::new(),
+        &[],
+    )
+    .expect_err("a `&mut` DTO param on a function that also returns a value must be rejected");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("tag_and_count"),
+        "diagnostic must name the function: {message}"
+    );
+}
+
+#[test]
+fn mut_opaque_param_is_not_treated_as_writeback() {
+    // Opaque types are excluded by `mut_writeback::is_writeback_param` -- the host holds a
+    // live handle for those, so mutating through it (the pre-existing `&mut engine.inner`
+    // behavior) is already correct and must be left alone.
+    let p = make_param("engine", TypeRef::Named("Engine".to_string()), true, true, false);
+    let f = function_named("bump_engine", vec![p], TypeRef::Unit);
+    let mut out = String::new();
+    let mut opaque: std::collections::HashSet<String> = std::collections::HashSet::new();
+    opaque.insert("Engine".to_string());
+    emit_bridge_fn(
+        &mut out,
+        &f,
+        "sample_crate",
+        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
+        &opaque,
+        &[],
+    )
+    .expect("emit_bridge_fn");
+
+    assert!(
+        !out.contains("-> Engine"),
+        "an opaque &mut param must not gain a writeback return, got:\n{out}"
+    );
+    assert!(
+        out.contains("&mut engine.inner"),
+        "an opaque &mut param must keep mutating through its live handle, got:\n{out}"
     );
 }

@@ -37,6 +37,25 @@ pub(super) fn push_version_annotation(out: &mut String, version: &VersionAnnotat
     }
 }
 
+/// The function as the backends bind it: identical to `func` unless a `&mut T` DTO parameter
+/// turns the unit return into `T`.
+fn mut_writeback_return<'a>(func: &'a FunctionDef, api: &ApiSurface) -> std::borrow::Cow<'a, FunctionDef> {
+    let opaque_types: ahash::AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+    match crate::codegen::mut_writeback::effective_return_type(&func.params, &func.return_type, &opaque_types) {
+        Some(return_type) => {
+            let mut bound = func.clone();
+            bound.return_type = return_type;
+            std::borrow::Cow::Owned(bound)
+        }
+        None => std::borrow::Cow::Borrowed(func),
+    }
+}
+
 pub(super) fn render_function(
     func: &FunctionDef,
     lang: Language,
@@ -44,6 +63,12 @@ pub(super) fn render_function(
     api: &ApiSurface,
     ffi_prefix: &str,
 ) -> String {
+    // A `&mut T` DTO parameter makes the binding return the updated `T` in place of `()`
+    // (see `codegen::mut_writeback`). Docs must document the signature the backends emit, not
+    // the core Rust one, or the page tells the reader to drop a value the binding hands back. ~keep
+    let with_writeback = mut_writeback_return(func, api);
+    let func = with_writeback.as_ref();
+
     let mut out = String::new();
     let fn_name = func_name(&func.name, lang, ffi_prefix);
 

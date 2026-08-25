@@ -195,7 +195,7 @@ impl Backend for GoBackend {
             .map(|t| t.name.clone())
             .collect();
 
-        let content = format_go_code(&strip_trailing_whitespace(&gen_go_file(
+        let go_file = gen_go_file(
             api,
             config,
             &ffi_prefix,
@@ -212,7 +212,8 @@ impl Backend for GoBackend {
             &value_only_types,
             visitor_bridge_cfg,
             &feature_cflags,
-        )));
+        )?;
+        let content = format_go_code(&strip_trailing_whitespace(&go_file));
 
         let _adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::Go)?;
 

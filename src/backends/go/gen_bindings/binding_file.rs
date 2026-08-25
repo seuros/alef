@@ -205,7 +205,7 @@ pub(super) fn gen_go_file(
     value_only_types: &HashSet<String>,
     visitor_bridge_cfg: Option<&TraitBridgeConfig>,
     feature_cflags: &str,
-) -> String {
+) -> anyhow::Result<String> {
     let mut header = String::with_capacity(2048);
 
     header.push_str(&hash::header(CommentStyle::DoubleSlash));
@@ -320,6 +320,8 @@ pub(super) fn gen_go_file(
         .map(|t| t.name.as_str())
         .collect();
 
+    let opaque_names_ahash: ahash::AHashSet<String> = opaque_names.iter().map(|s| s.to_string()).collect();
+
     let ffi_enum_names: HashSet<String> = api.enums.iter().map(|e| e.name.clone()).collect();
 
     let ffi_param_enum_names: HashSet<String> = api
@@ -413,6 +415,12 @@ pub(super) fn gen_go_file(
             )
             && !crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&f.name, &config.trait_bridges)
     }) {
+        crate::codegen::mut_writeback::reject_unsupported_writeback(
+            &func.name,
+            &func.params,
+            &func.return_type,
+            &opaque_names_ahash,
+        )?;
         if let Some(capsule_cfg) = go_capsule_return_config(func, &go_capsule_types) {
             body.push_str(&gen_capsule_function_wrapper(
                 func,
@@ -601,5 +609,5 @@ pub(super) fn gen_go_file(
     out.push_str(&imports_str);
     out.push_str(&body);
 
-    out
+    Ok(out)
 }

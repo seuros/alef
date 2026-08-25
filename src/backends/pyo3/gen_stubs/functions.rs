@@ -2,12 +2,14 @@ use super::{OptionsFieldBridges, is_python_builtin_name, python_safe_name, subst
 use crate::backends::pyo3::type_map::python_type;
 use crate::core::ir::{FunctionDef, TypeRef};
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn gen_function_stub(
     func: &FunctionDef,
     bridge_param_names: &std::collections::HashSet<&str>,
     capsule_names: &std::collections::HashSet<&str>,
     options_field_bridges: &OptionsFieldBridges<'_>,
     streaming_return_types: &std::collections::HashMap<(Option<String>, String), String>,
+    opaque_types: &ahash::AHashSet<String>,
 ) -> String {
     // The native module has no way to synthesize a `Default`, so the stub grants no extra
     // defaults; parameter existence and order still come from the shared decision so this stub
@@ -53,10 +55,19 @@ pub(super) fn gen_function_stub(
 
     let streaming_key = (None::<String>, func.name.clone());
     let is_streaming = streaming_return_types.contains_key(&streaming_key);
+    // The stub must document the signature the binding actually emits: a `&mut T` DTO parameter
+    // on a unit-returning sync function makes the binding return the updated `T` instead of
+    // `None` (see `codegen::mut_writeback` and `codegen::generators::functions::gen_function`). ~keep
+    let writeback_return_type = if !func.is_async {
+        crate::codegen::mut_writeback::effective_return_type(&func.params, &func.return_type, opaque_types)
+    } else {
+        None
+    };
+    let stub_return_type = writeback_return_type.as_ref().unwrap_or(&func.return_type);
     let return_type = if let Some(item_type) = streaming_return_types.get(&streaming_key) {
         format!("AsyncIterator[{item_type}]")
     } else {
-        substitute_capsule_type(&python_type(&func.return_type), capsule_names)
+        substitute_capsule_type(&python_type(stub_return_type), capsule_names)
     };
     let safe_name = python_safe_name(&func.name);
     // See the identical fix/comment in `gen_stubs/classes.rs::gen_method_stub`: a streaming
@@ -131,6 +142,7 @@ mod tests {
             &std::collections::HashSet::new(),
             &OptionsFieldBridges::default(),
             &streaming_return_types,
+            &ahash::AHashSet::new(),
         );
 
         assert!(
@@ -160,11 +172,81 @@ mod tests {
             &std::collections::HashSet::new(),
             &OptionsFieldBridges::default(),
             &std::collections::HashMap::new(),
+            &ahash::AHashSet::new(),
         );
 
         assert!(
             stub.trim_start().starts_with("async def fetch_status("),
             "a non-streaming async function must keep `async def`, got:\n{stub}"
+        );
+    }
+
+    /// Regression test for issue #380: the `.pyi` stub must document the signature the binding
+    /// actually emits. A `&mut T` DTO parameter on a unit-returning sync function makes the
+    /// binding return the updated `T`, so the stub must say `-> Record`, not `-> None`.
+    #[test]
+    fn mut_dto_param_stub_returns_the_updated_dto_type() {
+        use crate::core::ir::ParamDef;
+
+        let func = FunctionDef {
+            name: "tag_record".to_string(),
+            params: vec![ParamDef {
+                name: "record".to_string(),
+                ty: TypeRef::Named("Record".to_string()),
+                is_ref: true,
+                is_mut: true,
+                ..ParamDef::default()
+            }],
+            return_type: TypeRef::Unit,
+            ..FunctionDef::default()
+        };
+
+        let stub = gen_function_stub(
+            &func,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &OptionsFieldBridges::default(),
+            &std::collections::HashMap::new(),
+            &ahash::AHashSet::new(),
+        );
+
+        assert_eq!(
+            stub, "def tag_record(record: Record) -> Record: ...",
+            "the stub must return the mutated DTO type instead of `None`, got:\n{stub}"
+        );
+    }
+
+    /// Negative control for issue #380: an immutable `&T` DTO param must not gain write-back
+    /// semantics in the stub -- the return stays `None`.
+    #[test]
+    fn immutable_dto_param_stub_keeps_none_return() {
+        use crate::core::ir::ParamDef;
+
+        let func = FunctionDef {
+            name: "read_record".to_string(),
+            params: vec![ParamDef {
+                name: "record".to_string(),
+                ty: TypeRef::Named("Record".to_string()),
+                is_ref: true,
+                is_mut: false,
+                ..ParamDef::default()
+            }],
+            return_type: TypeRef::Unit,
+            ..FunctionDef::default()
+        };
+
+        let stub = gen_function_stub(
+            &func,
+            &std::collections::HashSet::new(),
+            &std::collections::HashSet::new(),
+            &OptionsFieldBridges::default(),
+            &std::collections::HashMap::new(),
+            &ahash::AHashSet::new(),
+        );
+
+        assert_eq!(
+            stub, "def read_record(record: Record) -> None: ...",
+            "immutable borrow must keep a `None` return, got:\n{stub}"
         );
     }
 }

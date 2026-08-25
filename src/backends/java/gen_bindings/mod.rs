@@ -223,6 +223,29 @@ impl Backend for JavaBackend {
             &java_filtered_api
         };
         let api = &api.with_deduped_functions();
+
+        // A `&mut T` DTO parameter on a unit-returning function cannot be bound as an owned
+        // by-value parameter that returns void: the FFI call mutates a temporary handle built
+        // from JSON, and the pre-fix generated Java freed that handle unread, so the caller's
+        // record was silently untouched (issue #380). `gen_main_class` now rewrites the
+        // supported shape (exactly one `&mut` DTO param, unit return) to return the updated
+        // value; every other `&mut` DTO shape is rejected here, before any file is generated,
+        // rather than emitted as a binding that silently discards the mutation. ~keep
+        let writeback_opaque_types: AHashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.is_opaque)
+            .map(|t| t.name.clone())
+            .collect();
+        for func in &api.functions {
+            crate::codegen::mut_writeback::reject_unsupported_writeback(
+                &func.name,
+                &func.params,
+                &func.return_type,
+                &writeback_opaque_types,
+            )?;
+        }
+
         let package = config.java_package();
         let prefix = config.ffi_prefix();
         let main_class = Self::resolve_main_class(api);

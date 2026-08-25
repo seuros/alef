@@ -808,6 +808,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     ("c_json_to_json.jinja", include_str!("templates/c_json_to_json.jinja")),
     ("var_decl_type.jinja", include_str!("templates/var_decl_type.jinja")),
     (
+        "mut_writeback_return.jinja",
+        include_str!("templates/mut_writeback_return.jinja"),
+    ),
+    (
         "json_unmarshal_error.jinja",
         include_str!("templates/json_unmarshal_error.jinja"),
     ),

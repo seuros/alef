@@ -387,8 +387,23 @@ pub(super) fn generate_type_stubs(
             context! { class_name => &class_name },
         ));
         for func in api.functions.iter().filter(|f| !exclude_functions.contains(&f.name)) {
-            let return_type = php_type_fq(&func.return_type, &namespace);
-            let return_phpdoc = php_phpdoc_type_fq(&func.return_type, &namespace);
+            // The stub must document the signature the binding actually emits: a `&mut T` DTO
+            // parameter on a unit-returning sync function makes the binding return the updated
+            // `T` instead of `void` (see `codegen::mut_writeback` and `gen_function_as_static_method`). ~keep
+            let stub_return_type: std::borrow::Cow<'_, TypeRef> = if !func.is_async {
+                match crate::codegen::mut_writeback::effective_return_type(
+                    &func.params,
+                    &func.return_type,
+                    &opaque_types,
+                ) {
+                    Some(ty) => std::borrow::Cow::Owned(ty),
+                    None => std::borrow::Cow::Borrowed(&func.return_type),
+                }
+            } else {
+                std::borrow::Cow::Borrowed(&func.return_type)
+            };
+            let return_type = php_type_fq(&stub_return_type, &namespace);
+            let return_phpdoc = php_phpdoc_type_fq(&stub_return_type, &namespace);
             let visible_params: Vec<_> = func
                 .params
                 .iter()

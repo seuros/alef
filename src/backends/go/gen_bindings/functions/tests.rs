@@ -635,3 +635,232 @@ fn async_free_function_returning_vec_of_named_over_config_struct_emits_wrapper()
         "Vec<Named> return must unmarshal into a Go slice, got:\n{out}"
     );
 }
+
+// --- issue #380: `&mut T` DTO write-back --------------------------------------------------
+
+fn make_mut_param(name: &str, type_name: &str) -> ParamDef {
+    ParamDef {
+        is_ref: true,
+        is_mut: true,
+        ..make_param(name, TypeRef::Named(type_name.to_string()))
+    }
+}
+
+/// `fn tag_record(record: &mut Record)` must not silently drop the mutation: the generated
+/// wrapper builds a temporary handle from JSON, calls the FFI mutator, reads the handle back
+/// out via `_to_json`, and returns the decoded value. Asserting only that the signature grew
+/// an `error` return proves nothing — the load-bearing check is the full round trip in the
+/// rendered body, in the right order: call, then read-back, then decode, then return.
+#[test]
+fn test_gen_function_wrapper_mut_dto_param_writes_back_the_mutated_value() {
+    let func = FunctionDef {
+        name: "tag_record".to_string(),
+        params: vec![make_mut_param("record", "Record")],
+        return_type: TypeRef::Unit,
+        error_type: None,
+        ..Default::default()
+    };
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_strings = HashSet::new();
+
+    let out = gen_function_wrapper(
+        &func,
+        "krz",
+        &opaque,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(
+        out.contains("func TagRecord(record Record) (*Record, error) {"),
+        "expected the write-back signature (record by value in, *Record + error out), got:\n{out}"
+    );
+    assert!(
+        out.contains("cRecord := C.krz_record_from_json(tmpStrcRecord)"),
+        "must still build the temporary handle from the caller's value, got:\n{out}"
+    );
+    assert!(
+        out.contains("defer C.krz_record_free(cRecord)"),
+        "must still free the temporary handle, got:\n{out}"
+    );
+    assert!(
+        out.contains("C.krz_tag_record(cRecord)"),
+        "must still call the FFI mutator, got:\n{out}"
+    );
+    assert!(
+        out.contains("jsonPtr := C.krz_record_to_json(cRecord)"),
+        "must read the mutated handle back out via the FFI's _to_json helper, got:\n{out}"
+    );
+    assert!(
+        out.contains("var result Record")
+            && out.contains("json.Unmarshal([]byte(C.GoString(jsonPtr)), &result)")
+            && out.contains("return &result, nil"),
+        "must decode the read-back JSON into a fresh Record and return it, got:\n{out}"
+    );
+
+    // Ordering: mutate, then read back, then free (defer fires at return regardless of
+    // where in the body it is registered, so it is correct for the `defer` line to appear
+    // earlier in source than the read-back -- what must not happen is the read-back being
+    // itself deferred, or the mutating call appearing after the read-back).
+    let call_pos = out.find("C.krz_tag_record(cRecord)").expect("call site");
+    let readback_pos = out
+        .find("jsonPtr := C.krz_record_to_json(cRecord)")
+        .expect("read-back site");
+    assert!(
+        call_pos < readback_pos,
+        "the mutating call must run before the read-back, got:\n{out}"
+    );
+    assert!(
+        !out.contains("defer C.krz_record_to_json") && !out.contains("defer jsonPtr"),
+        "the read-back must run as a plain statement, not be deferred, got:\n{out}"
+    );
+
+    // The pre-fix shape emitted the call and returned immediately, discarding the mutation.
+    assert!(
+        !out.contains("C.krz_tag_record(cRecord)\n\treturn nil\n}"),
+        "must not regress to the lossy call-then-return-nil shape, got:\n{out}"
+    );
+}
+
+/// Negative control: an immutable `&Record` DTO parameter must NOT gain a read-back. The host
+/// already never mutates through it, so the pre-existing "call then return" shape is correct.
+#[test]
+fn test_gen_function_wrapper_immutable_dto_param_gets_no_writeback() {
+    let func = FunctionDef {
+        name: "read_record".to_string(),
+        params: vec![ParamDef {
+            is_ref: true,
+            is_mut: false,
+            ..make_param("record", TypeRef::Named("Record".to_string()))
+        }],
+        return_type: TypeRef::Unit,
+        error_type: None,
+        ..Default::default()
+    };
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_strings = HashSet::new();
+
+    let out = gen_function_wrapper(
+        &func,
+        "krz",
+        &opaque,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(
+        out.contains("func ReadRecord(record Record) error {"),
+        "an immutable DTO param must keep the plain error-only signature, got:\n{out}"
+    );
+    assert!(
+        !out.contains("_to_json"),
+        "an immutable DTO param must not read anything back, got:\n{out}"
+    );
+    assert!(
+        out.contains("C.krz_read_record(cRecord)\n\treturn nil\n}"),
+        "must keep the original call-then-return-nil shape, got:\n{out}"
+    );
+}
+
+/// Negative control: an owned (by-value) DTO parameter must render byte-for-byte the same as
+/// before this fix -- the write-back path must never trigger for a parameter that was never a
+/// reference in the first place.
+#[test]
+fn test_gen_function_wrapper_owned_dto_param_is_unchanged() {
+    let func = FunctionDef {
+        name: "consume_and_tag_record".to_string(),
+        params: vec![make_param("record", TypeRef::Named("Record".to_string()))],
+        return_type: TypeRef::Unit,
+        error_type: None,
+        ..Default::default()
+    };
+    let opaque: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_strings = HashSet::new();
+
+    let out = gen_function_wrapper(
+        &func,
+        "krz",
+        &opaque,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+        &empty_strings,
+    );
+
+    assert!(
+        out.contains("func ConsumeAndTagRecord(record Record) error {"),
+        "an owned DTO param must keep the plain error-only signature, got:\n{out}"
+    );
+    assert!(
+        !out.contains("_to_json"),
+        "an owned DTO param must not read anything back, got:\n{out}"
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "// ConsumeAndTagRecord calls the FFI function.\n",
+            "func ConsumeAndTagRecord(record Record) error {\n",
+            "\tjsonBytescRecord, err := json.Marshal(record)\n",
+            "\tif err != nil {\n",
+            "\t\treturn fmt.Errorf(\"failed to marshal: %w\", err)\n",
+            "\t}\n",
+            "\t// When the parameter is a nil pointer (Option<&T> on the Rust side), json.Marshal\n",
+            "\t// emits \"null\" which the FFI's _from_json rejects. Substitute \"{}\" so a default\n",
+            "\t// instance is constructed instead \u{2014} semantically equivalent to None for query types\n",
+            "\t// whose fields are all optional with serde(default).\n",
+            "\tif string(jsonBytescRecord) == \"null\" {\n",
+            "\t\tjsonBytescRecord = []byte(\"{}\")\n",
+            "\t}\n",
+            "\ttmpStrcRecord := C.CString(string(jsonBytescRecord))\n",
+            "\tcRecord := C.krz_record_from_json(tmpStrcRecord)\n",
+            "\tC.free(unsafe.Pointer(tmpStrcRecord))\n",
+            "\tif cRecord == 0 {\n",
+            "\t\treturn fmt.Errorf(\"failed to create record: %s\", C.GoString(C.krz_last_error_context()))\n",
+            "\t}\n",
+            "\tdefer C.krz_record_free(cRecord)\n",
+            "\n",
+            "\n",
+            "\tC.krz_consume_and_tag_record(cRecord)\n",
+            "\treturn nil\n",
+            "}\n",
+        ),
+        "owned DTO param rendering must be byte-for-byte unchanged by the write-back fix, got:\n{out}"
+    );
+}
+
+/// `reject_unsupported_writeback` must fire through the real backend path (not just the
+/// codegen/mut_writeback unit tests) for a `&mut` DTO param combined with a non-unit return --
+/// that shape has nowhere to put the return value once the write-back slot is taken.
+#[test]
+fn test_reject_unsupported_writeback_fires_for_mut_param_with_non_unit_return() {
+    let func = FunctionDef {
+        name: "tag_and_count".to_string(),
+        params: vec![make_mut_param("record", "Record")],
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        error_type: None,
+        ..Default::default()
+    };
+    let opaque: ahash::AHashSet<String> = ahash::AHashSet::default();
+    let result = crate::codegen::mut_writeback::reject_unsupported_writeback(
+        &func.name,
+        &func.params,
+        &func.return_type,
+        &opaque,
+    );
+    let err = result.expect_err("a &mut DTO param with a non-unit return must be rejected");
+    let message = err.to_string();
+    assert!(
+        message.contains("tag_and_count"),
+        "the diagnostic must name the offending function, got: {message}"
+    );
+}

@@ -406,7 +406,8 @@ pub(crate) fn emit_extern_block_for_functions(
     enum_names: &HashSet<String>,
     deferred_empty_handle_types: &HashSet<String>,
     capsule_types: &std::collections::HashMap<String, crate::core::config::HostCapsuleTypeConfig>,
-) -> String {
+    opaque_types: &ahash::AHashSet<String>,
+) -> anyhow::Result<String> {
     let mut block = String::new();
     block.push_str("    extern \"Rust\" {\n");
 
@@ -449,19 +450,25 @@ pub(crate) fn emit_extern_block_for_functions(
             .collect();
         let params_str = params.join(", ");
 
-        let is_capsule_return = matches!(&f.return_type, TypeRef::Named(n) if capsule_types.contains_key(n.as_str()));
+        crate::codegen::mut_writeback::reject_unsupported_writeback(&f.name, &f.params, &f.return_type, opaque_types)?;
+        let effective_return_type =
+            crate::codegen::mut_writeback::effective_return_type(&f.params, &f.return_type, opaque_types)
+                .unwrap_or_else(|| f.return_type.clone());
+
+        let is_capsule_return =
+            matches!(&effective_return_type, TypeRef::Named(n) if capsule_types.contains_key(n.as_str()));
 
         let return_ty = if is_capsule_return {
             "usize".to_string()
         } else if f.error_type.is_some() {
-            let ok_ty = bridge_type_with_handles(&f.return_type, handle_returned_types);
-            if matches!(f.return_type, TypeRef::Unit) {
+            let ok_ty = bridge_type_with_handles(&effective_return_type, handle_returned_types);
+            if matches!(effective_return_type, TypeRef::Unit) {
                 "Result<(), String>".to_string()
             } else {
                 format!("Result<{ok_ty}, String>")
             }
         } else {
-            bridge_type_with_handles(&f.return_type, handle_returned_types)
+            bridge_type_with_handles(&effective_return_type, handle_returned_types)
         };
 
         // swift-bridge 0.1.59 does not support the `#[swift_bridge(async)]`
@@ -485,7 +492,7 @@ pub(crate) fn emit_extern_block_for_functions(
     }
 
     block.push_str("    }\n\n");
-    block
+    Ok(block)
 }
 
 /// Emit phantom extern "Rust" declarations for Vec<T> for all opaque types so that
@@ -691,6 +698,8 @@ pub(crate) fn emit_extern_block_for_streaming_adapters(
 
 #[cfg(test)]
 mod cfg_filtered_fields_tests;
+#[cfg(test)]
+mod writeback_tests;
 
 #[cfg(test)]
 mod streaming_extern_tests;

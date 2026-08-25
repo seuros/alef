@@ -158,3 +158,167 @@ fn capsule_method_errors_when_construct_expr_empty() {
         "error must mention the missing field. Got:\n{out}"
     );
 }
+
+// --- issue #380: `&mut T` DTO write-back --------------------------------------------------
+
+fn mut_dto_param(name: &str, type_name: &str) -> ParamDef {
+    ParamDef {
+        name: name.to_string(),
+        ty: TypeRef::Named(type_name.to_string()),
+        is_ref: true,
+        is_mut: true,
+        ..Default::default()
+    }
+}
+
+fn tag_record_fn(return_type: TypeRef) -> FunctionDef {
+    FunctionDef {
+        name: "tag_record".to_string(),
+        params: vec![mut_dto_param("record", "Record")],
+        return_type,
+        error_type: None,
+        ..Default::default()
+    }
+}
+
+/// `fn tag_record(record: &mut Record)` must not silently drop the mutation: the generated
+/// method invokes the FFI mutator, reads the already-marshaled `crecord` handle back out via
+/// `_to_json` (without re-registering it for free -- it is already registered during parameter
+/// marshalling), decodes it, and returns the decoded value. Asserting only that the signature
+/// grew a `Record` return proves nothing -- the load-bearing check is the full round trip, in
+/// order: marshal (which already registers the free), invoke, read back, decode, return.
+#[test]
+fn mut_dto_param_writes_back_the_mutated_value() {
+    let func = tag_record_fn(TypeRef::Unit);
+    let mut out = String::new();
+    gen_sync_function_method(
+        &mut out,
+        &func,
+        "krz",
+        "SampleClient",
+        &AHashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        false,
+        &AHashMap::new(),
+        &HashMap::new(),
+    );
+
+    assert!(
+        out.contains("public static Record tagRecord(final Record record) throws SampleClientException {"),
+        "expected the write-back signature (Record in, Record out), got:\n{out}"
+    );
+    assert!(
+        out.contains("nativeResources.register(crecord, handle -> NativeLib.KRZ_RECORD_FREE.invoke(handle));"),
+        "must still marshal and register the free for the parameter handle, got:\n{out}"
+    );
+    assert!(
+        out.contains("NativeLib.KRZ_TAG_RECORD.invoke(crecord);"),
+        "must still call the FFI mutator, got:\n{out}"
+    );
+    assert!(
+        out.contains("var jsonPtr = (MemorySegment) NativeLib.KRZ_RECORD_TO_JSON.invoke(crecord);"),
+        "must read the mutated handle back out via the FFI's _to_json helper, got:\n{out}"
+    );
+    assert!(
+        out.contains("return MAPPER.readValue(json, Record.class);"),
+        "must decode the read-back JSON into a fresh Record and return it, got:\n{out}"
+    );
+    // Exactly one registration for crecord: the marshalling registration, never a second one
+    // from the write-back read (that would be a double free).
+    assert_eq!(
+        out.matches("nativeResources.register(crecord,").count(),
+        1,
+        "crecord must be registered for free exactly once, got:\n{out}"
+    );
+
+    let marshal_pos = out
+        .find("nativeResources.register(crecord,")
+        .expect("marshal registration");
+    let invoke_pos = out
+        .find("NativeLib.KRZ_TAG_RECORD.invoke(crecord);")
+        .expect("mutator call");
+    let readback_pos = out
+        .find("NativeLib.KRZ_RECORD_TO_JSON.invoke(crecord);")
+        .expect("read-back call");
+    assert!(
+        marshal_pos < invoke_pos && invoke_pos < readback_pos,
+        "must marshal, then mutate, then read back, in that order, got:\n{out}"
+    );
+
+    // The pre-fix shape emitted the call and returned nothing, discarding the mutation.
+    assert!(
+        !out.contains("static void tagRecord"),
+        "must not regress to a void return, got:\n{out}"
+    );
+}
+
+/// Negative control: an immutable `&Record` DTO parameter must NOT gain a read-back.
+#[test]
+fn immutable_dto_param_gets_no_writeback() {
+    let func = FunctionDef {
+        params: vec![ParamDef {
+            is_ref: true,
+            is_mut: false,
+            ..mut_dto_param("record", "Record")
+        }],
+        ..tag_record_fn(TypeRef::Unit)
+    };
+    let mut out = String::new();
+    gen_sync_function_method(
+        &mut out,
+        &func,
+        "krz",
+        "SampleClient",
+        &AHashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        false,
+        &AHashMap::new(),
+        &HashMap::new(),
+    );
+
+    assert!(
+        out.contains("public static void tagRecord(final Record record) throws SampleClientException {"),
+        "an immutable DTO param must keep the plain void signature, got:\n{out}"
+    );
+    assert!(
+        !out.contains("_TO_JSON"),
+        "an immutable DTO param must not read anything back, got:\n{out}"
+    );
+}
+
+/// Negative control: an owned (by-value) DTO parameter must render the same as before this fix.
+#[test]
+fn owned_dto_param_is_unchanged() {
+    let func = FunctionDef {
+        params: vec![ParamDef {
+            is_ref: false,
+            is_mut: false,
+            ..mut_dto_param("record", "Record")
+        }],
+        ..tag_record_fn(TypeRef::Unit)
+    };
+    let mut out = String::new();
+    gen_sync_function_method(
+        &mut out,
+        &func,
+        "krz",
+        "SampleClient",
+        &AHashSet::new(),
+        &HashSet::new(),
+        &HashSet::new(),
+        false,
+        &AHashMap::new(),
+        &HashMap::new(),
+    );
+
+    assert!(
+        out.contains("public static void tagRecord(final Record record) throws SampleClientException {"),
+        "an owned DTO param must keep the plain void signature, got:\n{out}"
+    );
+    assert!(
+        !out.contains("_TO_JSON"),
+        "an owned DTO param must not read anything back, got:\n{out}"
+    );
+}

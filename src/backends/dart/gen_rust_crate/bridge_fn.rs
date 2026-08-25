@@ -1,7 +1,19 @@
+use crate::codegen::mut_writeback;
 use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
 
 use super::conversions::{dart_call_arg, frb_rust_type_inner, primitive_name};
 use super::helpers::emit_cleaned_dartdoc;
+
+/// Plan for the single `&mut T` DTO parameter a writeback binding must hand back to its caller.
+///
+/// Built once per function so both the call-argument closure and the final body construction
+/// agree on the same core-typed intermediate variable. ~keep
+struct WritebackPlan {
+    param_name: String,
+    core_var: String,
+    mirror_name: String,
+    init_expr: String,
+}
 
 pub(crate) fn emit_bridge_fn(
     out: &mut String,
@@ -11,7 +23,33 @@ pub(crate) fn emit_bridge_fn(
     types_needing_from_conversion: &std::collections::HashSet<String>,
     opaque_type_names: &std::collections::HashSet<String>,
     stub_methods: &[String],
-) {
+) -> anyhow::Result<()> {
+    let opaque_ahash: ahash::AHashSet<String> = opaque_type_names.iter().cloned().collect();
+    mut_writeback::reject_unsupported_writeback(&f.name, &f.params, &f.return_type, &opaque_ahash)?;
+    let writeback_plan: Option<WritebackPlan> =
+        mut_writeback::writeback_param(&f.params, &f.return_type, &opaque_ahash).map(|p| {
+            let mirror_name = mut_writeback::writeback_type_name(p)
+                .expect("writeback param is Named")
+                .to_string();
+            let core_ty = resolve_core_type(&mirror_name, source_crate_name, type_paths);
+            let init_expr = if types_needing_from_conversion.contains(mirror_name.as_str()) {
+                format!("{core_ty}::from({})", p.name)
+            } else {
+                format!(
+                    "unsafe {{ std::mem::transmute::<{mirror_name}, {core_ty}>({}) }}",
+                    p.name
+                )
+            };
+            WritebackPlan {
+                param_name: p.name.clone(),
+                core_var: format!("{}_core", p.name),
+                mirror_name,
+                init_expr,
+            }
+        });
+    let effective_return_type: TypeRef = mut_writeback::effective_return_type(&f.params, &f.return_type, &opaque_ahash)
+        .unwrap_or_else(|| f.return_type.clone());
+
     emit_cleaned_dartdoc(out, &f.doc, "");
 
     let fn_name = &f.name;
@@ -36,13 +74,16 @@ pub(crate) fn emit_bridge_fn(
     let has_error = f.error_type.is_some();
     let (return_ty, has_explicit_return) = if has_error {
         (
-            format!("Result<{}, String>", frb_rust_type_mirror(&f.return_type, false)),
+            format!(
+                "Result<{}, String>",
+                frb_rust_type_mirror(&effective_return_type, false)
+            ),
             true,
         )
-    } else if matches!(f.return_type, TypeRef::Unit) {
+    } else if matches!(effective_return_type, TypeRef::Unit) {
         (String::new(), false)
     } else {
-        (frb_rust_type_mirror(&f.return_type, false), true)
+        (frb_rust_type_mirror(&effective_return_type, false), true)
     };
 
     out.push_str(&crate::backends::dart::template_env::render(
@@ -64,7 +105,7 @@ pub(crate) fn emit_bridge_fn(
                 fn_name => fn_name.as_str(),
             },
         ));
-        return;
+        return Ok(());
     }
 
     let resolved_path = if f.rust_path.is_empty() {
@@ -76,7 +117,7 @@ pub(crate) fn emit_bridge_fn(
     if f.return_sanitized {
         out.push_str(&sanitized_return_body(&f.return_type, fn_name, has_error, &f.params));
         out.push_str("}\n");
-        return;
+        return Ok(());
     }
 
     let mut pre_call_bindings: Vec<String> = Vec::new();
@@ -86,6 +127,11 @@ pub(crate) fn emit_bridge_fn(
         .params
         .iter()
         .map(|p| {
+            if let Some(plan) = &writeback_plan
+                && plan.param_name == p.name
+            {
+                return format!("&mut {}", plan.core_var);
+            }
             if let TypeRef::Map(_, _) = &p.ty {
                 if p.map_is_ahash && p.map_key_is_cow {
                     let bound_name = format!("__{}_ahash", p.name);
@@ -137,28 +183,42 @@ pub(crate) fn emit_bridge_fn(
 
     let call = format!("{resolved_path}({})", call_args.join(", "));
 
-    let ret_transform = return_transform(
-        &f.return_type,
-        source_crate_name,
-        type_paths,
-        opaque_type_names,
-        f.returns_ref,
-    );
-
-    let result_cast = if matches!(ret_transform, RetTransform::None) {
-        build_primitive_result_cast(&f.return_type, f.returns_ref)
+    let body = if let Some(plan) = &writeback_plan {
+        crate::backends::dart::template_env::render(
+            "rust_bridge_writeback_body.rs.jinja",
+            minijinja::context! {
+                core_var => &plan.core_var,
+                init_expr => &plan.init_expr,
+                call => &call,
+                is_async => f.is_async,
+                has_error => has_error,
+                return_expr => format!("{}::from({})", plan.mirror_name, plan.core_var),
+            },
+        )
     } else {
-        String::new()
-    };
+        let ret_transform = return_transform(
+            &f.return_type,
+            source_crate_name,
+            type_paths,
+            opaque_type_names,
+            f.returns_ref,
+        );
 
-    let body = build_body(
-        &call,
-        &result_cast,
-        &ret_transform,
-        has_error,
-        f.is_async,
-        matches!(f.return_type, TypeRef::Unit),
-    );
+        let result_cast = if matches!(ret_transform, RetTransform::None) {
+            build_primitive_result_cast(&f.return_type, f.returns_ref)
+        } else {
+            String::new()
+        };
+
+        build_body(
+            &call,
+            &result_cast,
+            &ret_transform,
+            has_error,
+            f.is_async,
+            matches!(f.return_type, TypeRef::Unit),
+        )
+    };
 
     if !pre_call_bindings.is_empty() {
         for binding in &pre_call_bindings {
@@ -168,6 +228,7 @@ pub(crate) fn emit_bridge_fn(
     }
     out.push_str(&body);
     out.push_str("}\n");
+    Ok(())
 }
 
 /// Build the FRB-friendly parameter type using **local mirror names** (no source-crate prefix).

@@ -165,7 +165,7 @@ fn capsule_forwarder_emits_opaque_pointer_reconstruction() {
         ..Default::default()
     };
     let mut out = String::new();
-    emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
+    capsule::emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
     assert!(
         out.contains("OpaquePointer(bitPattern:"),
         "capsule forwarder must reconstruct OpaquePointer via bitPattern. Got:\n{out}"
@@ -187,7 +187,7 @@ fn capsule_forwarder_errors_when_construct_expr_empty() {
         ..Default::default()
     };
     let mut out = String::new();
-    emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
+    capsule::emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
     assert!(
         out.contains("ALEF ERROR"),
         "empty construct_expr must produce ALEF ERROR. Got:\n{out}"
@@ -420,7 +420,7 @@ fn capsule_forwarder_errors_when_host_type_empty() {
         ..Default::default()
     };
     let mut out = String::new();
-    emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
+    capsule::emit_capsule_free_function_forwarder(&func, "GetLanguage", &cfg, &mut out);
     assert!(
         out.contains("ALEF ERROR"),
         "empty host_type must produce ALEF ERROR. Got:\n{out}"

@@ -638,3 +638,216 @@ fn opaque_class_stub_types_unit_enum_method_param_and_return_as_string_not_enum_
          (uninstantiable) class name, got:\n{content}"
     );
 }
+
+fn record_param(is_ref: bool, is_mut: bool) -> crate::core::ir::ParamDef {
+    crate::core::ir::ParamDef {
+        name: "record".to_string(),
+        ty: crate::core::ir::TypeRef::Named("Record".to_string()),
+        is_ref,
+        is_mut,
+        ..crate::core::ir::ParamDef::default()
+    }
+}
+
+/// Regression test for issue #380: a `&mut T` DTO parameter on a unit-returning sync function
+/// previously rendered as `pub fn tag_record(record: &Record) { .. }` -- mutating a dropped
+/// `record_core` intermediate and leaving the caller's PHP object untouched with no diagnostic.
+/// The binding must instead return the mutated intermediate.
+///
+/// PHP's free-function param style always passes non-opaque Named DTOs by reference
+/// (`&Record`), which makes `can_auto_delegate_function` false for every such function (see
+/// `shared::is_named_ref_param`), so this exercises `gen_function_body`'s non-`can_delegate`
+/// branch -- the only branch PHP free functions with a DTO param actually take.
+#[test]
+fn php_mut_dto_param_returns_the_updated_value() {
+    use super::super::type_map::PhpMapper;
+    use crate::backends::php::gen_bindings::functions::{PhpParamTypeSets, gen_function_as_static_method};
+    use crate::core::ir::{FunctionDef, TypeRef};
+    use ahash::AHashSet;
+
+    let func = FunctionDef {
+        name: "tag_record".to_string(),
+        rust_path: "sample_crate::tag_record".to_string(),
+        params: vec![record_param(true, true)],
+        return_type: TypeRef::Unit,
+        error_type: None,
+        ..FunctionDef::default()
+    };
+    let mapper = PhpMapper {
+        enum_names: AHashSet::new(),
+        data_enum_names: AHashSet::new(),
+        untagged_data_enum_names: AHashSet::new(),
+        json_string_enum_names: AHashSet::new(),
+    };
+    let empty = AHashSet::new();
+    let type_sets = PhpParamTypeSets {
+        opaque: &empty,
+        default: &empty,
+        enums: &empty,
+    };
+
+    let generated = gen_function_as_static_method(&func, &mapper, type_sets, "sample_crate", &[], false, &empty);
+
+    // `return_type_sig` (params.rs) renders the Rust facade's return arrow: `" -> {ty}"` for a
+    // real type, or nothing at all for `()`. So a write-back must add `-> Record`, and the
+    // pre-fix unit shape (`tag_record(record: &Record) {`, no arrow) must be gone.
+    assert!(
+        generated.contains("-> Record"),
+        "expected the binding to return the mutated DTO type instead of `()`:\n{generated}"
+    );
+    assert!(
+        !generated.contains("tag_record(record: &Record) {"),
+        "must not still advertise a unit return with no arrow:\n{generated}"
+    );
+    // Load-bearing round-trip: the core call must still pass `&mut record_core` AND the tail
+    // must hand back `record_core.into()`.
+    assert!(
+        generated.contains("sample_crate::tag_record(&mut record_core)"),
+        "expected the core call to still pass `&mut record_core`:\n{generated}"
+    );
+    assert!(
+        generated.contains("record_core.into()"),
+        "expected the mutated intermediate to be returned:\n{generated}"
+    );
+}
+
+/// Negative control for issue #380: an immutable `&T` DTO param must not gain write-back
+/// semantics -- the return stays unit (no `-> Type` arrow at all; see `return_type_sig`).
+#[test]
+fn php_immutable_dto_param_keeps_void_return() {
+    use super::super::type_map::PhpMapper;
+    use crate::backends::php::gen_bindings::functions::{PhpParamTypeSets, gen_function_as_static_method};
+    use crate::core::ir::{FunctionDef, TypeRef};
+    use ahash::AHashSet;
+
+    let func = FunctionDef {
+        name: "read_record".to_string(),
+        rust_path: "sample_crate::read_record".to_string(),
+        params: vec![record_param(true, false)],
+        return_type: TypeRef::Unit,
+        error_type: None,
+        ..FunctionDef::default()
+    };
+    let mapper = PhpMapper {
+        enum_names: AHashSet::new(),
+        data_enum_names: AHashSet::new(),
+        untagged_data_enum_names: AHashSet::new(),
+        json_string_enum_names: AHashSet::new(),
+    };
+    let empty = AHashSet::new();
+    let type_sets = PhpParamTypeSets {
+        opaque: &empty,
+        default: &empty,
+        enums: &empty,
+    };
+
+    let generated = gen_function_as_static_method(&func, &mapper, type_sets, "sample_crate", &[], false, &empty);
+
+    assert!(
+        generated.contains("read_record(record: &Record) {"),
+        "immutable borrow must keep the unit signature (no `-> Type` arrow):\n{generated}"
+    );
+    assert!(
+        !generated.contains("-> Record"),
+        "immutable borrow must not gain a return type:\n{generated}"
+    );
+    assert!(
+        !generated.contains("record_core.into()"),
+        "immutable borrow must not gain a write-back tail:\n{generated}"
+    );
+}
+
+/// `reject_unsupported_writeback` must fire through the real PHP `generate_bindings` path: a
+/// `&mut T` DTO param on a function that ALSO returns a value has no free return slot for the
+/// write-back value, so generation must fail loudly (naming the function) instead of silently
+/// emitting a binding that drops the mutation.
+#[test]
+fn php_generate_bindings_rejects_mut_dto_param_with_non_unit_return() {
+    use crate::core::config::resolved::ResolvedCrateConfig;
+    use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
+
+    let record_type = TypeDef {
+        name: "Record".to_string(),
+        rust_path: "test_lib::Record".to_string(),
+        fields: vec![FieldDef {
+            name: "score".to_string(),
+            ty: TypeRef::Primitive(PrimitiveType::U32),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let func = FunctionDef {
+        name: "tag_and_count".to_string(),
+        rust_path: "test_lib::tag_and_count".to_string(),
+        params: vec![record_param(true, true)],
+        return_type: TypeRef::Primitive(PrimitiveType::U32),
+        ..FunctionDef::default()
+    };
+    let api = ApiSurface {
+        crate_name: "my-crate".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![record_type],
+        functions: vec![func],
+        ..Default::default()
+    };
+    let config = ResolvedCrateConfig {
+        name: "my-crate".to_string(),
+        ..ResolvedCrateConfig::default()
+    };
+
+    let error = super::rust_bindings::generate_bindings(&api, &config)
+        .expect_err("a `&mut` DTO param plus a non-unit return must be rejected at generation time");
+    let message = error.to_string();
+    assert!(
+        message.contains("tag_and_count"),
+        "diagnostic must name the offending function:\n{message}"
+    );
+}
+
+/// The `.phpstub` surface (`PhpBackend::generate_type_stubs`) must document the signature the
+/// binding actually emits: a `&mut T` DTO parameter on a unit-returning sync function makes the
+/// binding return the updated `T` instead of `void` (see `codegen::mut_writeback`).
+#[test]
+fn generate_type_stubs_documents_writeback_return_type() {
+    use crate::core::backend::Backend;
+    use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
+
+    let api = ApiSurface {
+        crate_name: "my-crate".to_string(),
+        version: "1.0.0".to_string(),
+        types: vec![TypeDef {
+            name: "Record".to_string(),
+            rust_path: "test_lib::Record".to_string(),
+            fields: vec![FieldDef {
+                name: "score".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        functions: vec![FunctionDef {
+            name: "tag_record".to_string(),
+            rust_path: "test_lib::tag_record".to_string(),
+            params: vec![record_param(true, true)],
+            return_type: TypeRef::Unit,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let config = crate::core::config::resolved::ResolvedCrateConfig {
+        name: "my-crate".to_string(),
+        ..crate::core::config::resolved::ResolvedCrateConfig::default()
+    };
+
+    let files = super::PhpBackend.generate_type_stubs(&api, &config).unwrap();
+    let stub = &files[0].content;
+
+    assert!(
+        stub.contains("public static function tagRecord(\\My\\Crate\\Record $record): \\My\\Crate\\Record"),
+        "expected the stub to return the mutated DTO type instead of `void`:\n{stub}"
+    );
+    assert!(
+        !stub.contains("public static function tagRecord(\\My\\Crate\\Record $record): void"),
+        "must not still advertise a void return:\n{stub}"
+    );
+}

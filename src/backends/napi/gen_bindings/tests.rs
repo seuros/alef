@@ -480,3 +480,112 @@ fn core_to_binding_keeps_expr_form_when_conversion_is_required() {
         "Vec<Named> optional field must keep its real conversion expression:\n{core_to_binding}"
     );
 }
+
+fn node_config() -> crate::core::config::ResolvedCrateConfig {
+    let cfg: crate::core::config::new_config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    cfg.resolve().unwrap().remove(0)
+}
+
+/// Regression test for issue #380, exercised through the real `NapiBackend::generate_bindings`
+/// path (not just the `gen_function` unit): a `&mut T` DTO parameter on a unit-returning free
+/// function must render as a binding that returns the mutated intermediate.
+#[test]
+fn generate_bindings_writeback_free_function_returns_mutated_dto() {
+    use crate::core::ir::{ApiSurface, FunctionDef, ParamDef, PrimitiveType, TypeDef};
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Record".to_string(),
+            rust_path: "test_lib::Record".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "score".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        functions: vec![FunctionDef {
+            name: "tag_record".to_string(),
+            rust_path: "test_lib::tag_record".to_string(),
+            params: vec![ParamDef {
+                name: "record".to_string(),
+                ty: TypeRef::Named("Record".to_string()),
+                is_ref: true,
+                is_mut: true,
+                ..Default::default()
+            }],
+            return_type: TypeRef::Unit,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let files = NapiBackend.generate_bindings(&api, &node_config()).unwrap();
+    let lib = files.iter().find(|f| f.path.ends_with("lib.rs")).unwrap();
+
+    assert!(
+        lib.content.contains("record_core.into()"),
+        "expected the write-back tail through the real generate_bindings path:\n{}",
+        lib.content
+    );
+}
+
+/// `reject_unsupported_writeback` must fire through the real `NapiBackend::generate_bindings`
+/// path: a `&mut T` DTO param on a function that ALSO returns a value has no free return slot
+/// for the write-back value, so generation must fail loudly (naming the function).
+#[test]
+fn generate_bindings_rejects_mut_dto_param_with_non_unit_return() {
+    use crate::core::ir::{ApiSurface, FunctionDef, ParamDef, PrimitiveType, TypeDef};
+
+    let api = ApiSurface {
+        crate_name: "test-lib".to_string(),
+        version: "0.1.0".to_string(),
+        types: vec![TypeDef {
+            name: "Record".to_string(),
+            rust_path: "test_lib::Record".to_string(),
+            has_serde: true,
+            fields: vec![FieldDef {
+                name: "score".to_string(),
+                ty: TypeRef::Primitive(PrimitiveType::U32),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        functions: vec![FunctionDef {
+            name: "tag_and_count".to_string(),
+            rust_path: "test_lib::tag_and_count".to_string(),
+            params: vec![ParamDef {
+                name: "record".to_string(),
+                ty: TypeRef::Named("Record".to_string()),
+                is_ref: true,
+                is_mut: true,
+                ..Default::default()
+            }],
+            return_type: TypeRef::Primitive(PrimitiveType::U32),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let error = NapiBackend
+        .generate_bindings(&api, &node_config())
+        .expect_err("a `&mut` DTO param plus a non-unit return must be rejected at generation time");
+    let message = error.to_string();
+    assert!(
+        message.contains("tag_and_count"),
+        "diagnostic must name the offending function:\n{message}"
+    );
+}

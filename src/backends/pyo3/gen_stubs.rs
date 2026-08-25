@@ -180,6 +180,16 @@ pub fn gen_stubs(
     let bridge_param_names: std::collections::HashSet<&str> =
         trait_bridges.iter().filter_map(|b| b.param_name.as_deref()).collect();
 
+    // Mirrors the opaque-type set `gen_bindings/mod.rs` computes for the same purpose: the write-
+    // back rewrite (`mut_writeback`) must never fire for an opaque type, whose host handle is
+    // already a live reference. ~keep
+    let opaque_types: ahash::AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+
     let options_field_bridges: OptionsFieldBridges<'_> = trait_bridges
         .iter()
         .filter(|b| b.bind_via == crate::core::config::BridgeBinding::OptionsField)
@@ -309,6 +319,7 @@ pub fn gen_stubs(
             &capsule_names,
             &options_field_bridges,
             &streaming_return_types,
+            &opaque_types,
         ));
     }
 

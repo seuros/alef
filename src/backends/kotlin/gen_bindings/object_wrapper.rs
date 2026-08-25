@@ -11,6 +11,12 @@ mod methods;
 mod tests;
 mod types;
 
+// `tests.rs` above is already at this repo's 1,000-line file-size cap (grandfathered), so new
+// coverage for the `&mut` DTO write-back fix (issue #380) lives in its own module instead of
+// growing that file.
+#[cfg(test)]
+mod mut_writeback_tests;
+
 pub(crate) use dto::emit_type_with_imports;
 pub(crate) use enums::emit_enum;
 pub(crate) use errors::emit_error_type_with_imports;

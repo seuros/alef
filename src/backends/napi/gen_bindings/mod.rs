@@ -377,6 +377,12 @@ impl Backend for NapiBackend {
             if crate::codegen::generators::trait_bridge::is_trait_bridge_managed_fn(&func.name, &config.trait_bridges) {
                 continue;
             }
+            crate::codegen::mut_writeback::reject_unsupported_writeback(
+                &func.name,
+                &func.params,
+                &func.return_type,
+                &opaque_types,
+            )?;
             let bridge_param = crate::backends::napi::trait_bridge::find_bridge_param(func, &config.trait_bridges);
             let options_field_bridge = crate::backends::napi::trait_bridge::find_options_field_binding(func, &config.trait_bridges)
                 // into the binding struct. If the core field is `#[cfg(...)]`-gated, the

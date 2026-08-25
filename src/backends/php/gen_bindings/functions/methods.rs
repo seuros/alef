@@ -521,7 +521,14 @@ pub(crate) fn gen_function_as_static_method(
         .collect();
     let visible_params = promote_default_params(&visible_params, type_sets.default, type_sets.opaque);
     let params = gen_php_function_params(&visible_params, mapper, type_sets.opaque, &AHashSet::new());
-    let return_type = mapper.map_type(&func.return_type);
+    // Mirrors the `writeback_param` gating in `gen_function_body`: a `&mut T` DTO parameter on a
+    // unit-returning sync function makes the binding return the updated `T`. ~keep
+    let writeback_return_type = if !func.is_async {
+        crate::codegen::mut_writeback::effective_return_type(&func.params, &func.return_type, type_sets.opaque)
+    } else {
+        None
+    };
+    let return_type = mapper.map_type(writeback_return_type.as_ref().unwrap_or(&func.return_type));
     let has_fallible_param = func
         .params
         .iter()
@@ -577,6 +584,17 @@ fn gen_function_body(
             .params
             .iter()
             .any(|p| param_conversion_is_fallible(p, type_sets.opaque, type_sets.enums));
+    // A `&mut T` DTO parameter on a unit-returning sync function cannot write back through the
+    // mutated intermediate (the PHP object handed to the binding is a `&T` reference, converted
+    // to an owned clone), so the binding returns the updated `T` instead. Scoped to sync
+    // functions; `generate_bindings` calls `reject_unsupported_writeback` before this runs, so
+    // any shape this module cannot express has already been rejected. ~keep
+    let writeback_param = if !func.is_async {
+        crate::codegen::mut_writeback::writeback_param(&func.params, &func.return_type, type_sets.opaque)
+    } else {
+        None
+    };
+    let writeback_var = writeback_param.map(|p| format!("{}_core", p.name));
     if can_delegate {
         let promoted_params = promote_default_params(&func.params, type_sets.default, type_sets.opaque);
         let promoted_names = promoted_default_param_names(&func.params, type_sets.default, type_sets.opaque);
@@ -595,6 +613,12 @@ fn gen_function_body(
         let core_call = format!("{core_fn_path}({call_args})");
         let is_enum_return =
             matches!(&func.return_type, TypeRef::Named(n) if enum_returns.string_enum_names.contains(n.as_str()));
+        // Note: `can_delegate` (this branch's guard) is never true when `writeback_var` is
+        // `Some` -- `writeback_param` only selects `is_ref && is_mut` Named DTO params, and any
+        // `is_ref` Named DTO param already makes `can_auto_delegate_function` return false (see
+        // `shared::is_named_ref_param`). The write-back rewrite for PHP free functions lives in
+        // `gen_function_body`'s final (non-`can_delegate`) branch below, which is what PHP's
+        // by-reference `&Record`-style params actually take. ~keep
         if func.error_type.is_some() {
             if is_enum_return {
                 crate::backends::php::template_env::render(
@@ -687,7 +711,33 @@ fn gen_function_body(
             }
         };
         let core_call = format!("{core_fn_path}({call_args})");
-        if func.error_type.is_some() {
+        if let Some(var) = &writeback_var {
+            // The core call mutates `{var}` and returns `()`; the binding hands back the
+            // mutated intermediate instead of the (discarded) unit value. This is the branch
+            // PHP's free functions actually take for a `&mut T` DTO param: `can_delegate`
+            // (above) is always false for a by-reference Named DTO param, so `writeback_var`
+            // is only ever consulted here. ~keep
+            let wrap_expr = format!("{var}.into()");
+            if func.error_type.is_some() {
+                crate::backends::php::template_env::render(
+                    "php_result_wrapped_body_with_let_bindings.jinja",
+                    context! {
+                        let_bindings => &let_bindings,
+                        core_call => &core_call,
+                        wrap => &wrap_expr,
+                    },
+                )
+            } else {
+                let wrapped_call = format!("{core_call};\n    {wrap_expr}");
+                crate::backends::php::template_env::render(
+                    "php_wrapped_body_with_let_bindings.jinja",
+                    context! {
+                        let_bindings => &let_bindings,
+                        wrapped_call => &wrapped_call,
+                    },
+                )
+            }
+        } else if func.error_type.is_some() {
             let wrap = php_wrap_return(
                 "result",
                 &func.return_type,

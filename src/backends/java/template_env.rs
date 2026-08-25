@@ -216,6 +216,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/ffi_invoke_json_ptr.jinja"),
     ),
     (
+        "ffi_writeback_return.jinja",
+        include_str!("templates/ffi_writeback_return.jinja"),
+    ),
+    (
         "ffi_return_read_json_list_optional.jinja",
         include_str!("templates/ffi_return_read_json_list_optional.jinja"),
     ),

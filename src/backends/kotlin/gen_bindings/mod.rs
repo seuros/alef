@@ -207,7 +207,14 @@ pub fn kotlin_type_str_pub(ty: &TypeRef, optional: bool, imports: &mut BTreeSet<
 /// client type from a flat function in those targets requires a backend-
 /// specific surface that hasn't been wired up.
 pub fn emit_function_jvm(f: &FunctionDef, out: &mut String, imports: &mut BTreeSet<String>, java_package: &str) {
-    object_wrapper::emit_function(f, out, imports, java_package, &std::collections::HashSet::new())
+    object_wrapper::emit_function(
+        f,
+        out,
+        imports,
+        java_package,
+        &std::collections::HashSet::new(),
+        &ahash::AHashSet::new(),
+    )
 }
 
 /// Emit one Kotlin coroutine-wrapper file per opaque client type.
@@ -768,6 +775,27 @@ fn generate_jvm(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Resul
         })
         .collect();
 
+    // A `&mut T` DTO parameter on a unit-returning function cannot be bound as an owned
+    // by-value parameter returning nothing: see `object_wrapper::emit_function`'s doc comment
+    // (issue #380). Every `&mut` DTO shape the rewrite can't express is rejected here, before
+    // any file is generated, rather than emitted as a binding that silently discards the
+    // mutation. Uses the true opaque-type set (`is_opaque`), not `client_type_names`/
+    // `exclude_type_names` below -- those mix in configured exclusions unrelated to opacity. ~keep
+    let opaque_type_names: ahash::AHashSet<String> = api
+        .types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
+        .collect();
+    for f in &visible_functions {
+        crate::codegen::mut_writeback::reject_unsupported_writeback(
+            &f.name,
+            &f.params,
+            &f.return_type,
+            &opaque_type_names,
+        )?;
+    }
+
     if !visible_functions.is_empty() {
         imports.insert(format!("import {java_package}.{module_name} as {BRIDGE_ALIAS}"));
         if visible_functions.iter().any(|f| f.is_async) {
@@ -783,7 +811,14 @@ fn generate_jvm(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Resul
         ));
         body.push('\n');
         for f in &visible_functions {
-            object_wrapper::emit_function(f, &mut body, &mut imports, &java_package, &exclude_type_names);
+            object_wrapper::emit_function(
+                f,
+                &mut body,
+                &mut imports,
+                &java_package,
+                &exclude_type_names,
+                &opaque_type_names,
+            );
             body.push('\n');
         }
         body.push_str("}\n");

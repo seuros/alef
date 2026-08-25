@@ -1,4 +1,5 @@
 use crate::backends::java::type_map::{java_boxed_type, java_return_type, java_type};
+use crate::codegen::mut_writeback;
 use crate::codegen::naming::to_java_name;
 use crate::core::config::HostCapsuleTypeConfig;
 use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
@@ -277,11 +278,21 @@ fn emit_regular_sync_method(
     clear_fn_handles: &AHashMap<String, String>,
     visitor_bridge: Option<&VisitorFunctionBridge>,
 ) {
+    // A `&mut T` DTO parameter on a unit-returning function cannot be bound as an owned
+    // by-value parameter returning void: see `emit_writeback_return`'s doc comment (issue
+    // #380). When this narrow shape applies, the method returns the updated `T` instead.
+    // `reject_unsupported_writeback` (called by `generate_bindings` before any file is
+    // emitted) has already ruled out every `&mut` DTO shape this can't express. ~keep
+    let writeback = mut_writeback::writeback_param(&func.params, &func.return_type, opaque_types);
+    let return_type_str = match writeback {
+        Some(wb) => java_return_type(&wb.ty).into_owned(),
+        None => java_return_type(&func.return_type).into_owned(),
+    };
     emit_method_header(
         out,
         func,
         class_name,
-        &java_return_type(&func.return_type),
+        &return_type_str,
         &public_params(func, bridge_param_names, bridge_type_aliases),
     );
     if has_visitor_bridge {
@@ -297,7 +308,13 @@ fn emit_regular_sync_method(
         bridge_type_aliases,
         clear_fn_handles,
     );
-    returns::emit_sync_return(out, &invocation);
+    if let Some(wb) = writeback {
+        let handle_var = format!("c{}", to_java_name(&wb.name));
+        let return_type_name = mut_writeback::writeback_type_name(wb).unwrap_or_default();
+        returns::emit_writeback_return(out, &invocation, &handle_var, return_type_name);
+    } else {
+        returns::emit_sync_return(out, &invocation);
+    }
     out.push_str("    }\n");
 }
 

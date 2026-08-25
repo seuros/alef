@@ -218,6 +218,50 @@ fn emit_primitive_return(out: &mut String, invocation: &SyncInvocation<'_>) {
     emit_catch(out, invocation.class_name);
 }
 
+/// Emits the write-back return for a `&mut T` DTO parameter on a unit-returning function
+/// (issue #380): the FFI mutator is invoked for effect, then the already-marshaled parameter
+/// handle -- registered for free during parameter marshalling, so it must NOT be registered
+/// again here -- is read back out via `_to_json` and decoded into a fresh `T`, which becomes
+/// the method's return value. Without this, the temporary handle the host built from the
+/// caller's JSON is mutated and then freed unread, so the caller's value is silently untouched.
+pub(super) fn emit_writeback_return(
+    out: &mut String,
+    invocation: &SyncInvocation<'_>,
+    handle_var: &str,
+    return_type_name: &str,
+) {
+    out.push_str(&crate::backends::java::template_env::render(
+        "ffi_invoke_void.jinja",
+        minijinja::context! {
+            ffi_handle => &invocation.ffi_handle,
+            args => invocation.call_args.join(", "),
+        },
+    ));
+    if invocation.func.error_type.is_some() {
+        out.push_str("            checkLastError();\n");
+    }
+    let type_snake = return_type_name.to_snake_case();
+    let to_json_handle = format!(
+        "NativeLib.{}_{}_TO_JSON",
+        invocation.prefix.to_uppercase(),
+        type_snake.to_uppercase()
+    );
+    let free_string_handle = format!("NativeLib.{}_FREE_STRING", invocation.prefix.to_uppercase());
+    let exception_class = format!("{}Exception", invocation.class_name);
+    out.push_str(&crate::backends::java::template_env::render(
+        "ffi_writeback_return.jinja",
+        minijinja::context! {
+            to_json_handle,
+            handle_var,
+            free_string_handle,
+            exception_class,
+            method_name => to_java_name(&invocation.func.name),
+            class_name => return_type_name,
+        },
+    ));
+    emit_catch(out, invocation.class_name);
+}
+
 fn emit_result_pointer_call(out: &mut String, invocation: &SyncInvocation<'_>) {
     out.push_str(&crate::backends::java::template_env::render(
         "ffi_result_ptr_call.jinja",

@@ -27,8 +27,9 @@ pub(crate) fn gen_async_wrapper_method(
     func: &FunctionDef,
     bridge_param_names: &HashSet<String>,
     bridge_type_aliases: &HashSet<String>,
+    opaque_types: &AHashSet<String>,
 ) {
-    async_wrappers::gen_async_wrapper_method(out, func, bridge_param_names, bridge_type_aliases);
+    async_wrappers::gen_async_wrapper_method(out, func, bridge_param_names, bridge_type_aliases, opaque_types);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -117,7 +118,7 @@ pub(crate) fn gen_main_class(
 
         let generate_config = config.generate_overrides.get("java").unwrap_or(&config.generate);
         if func.is_async && generate_config.async_wrappers {
-            gen_async_wrapper_method(&mut body, func, bridge_param_names, bridge_type_aliases);
+            gen_async_wrapper_method(&mut body, func, bridge_param_names, bridge_type_aliases, &opaque_types);
             body.push('\n');
         }
     }

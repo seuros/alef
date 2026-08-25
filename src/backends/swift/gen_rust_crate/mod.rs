@@ -165,7 +165,7 @@ pub fn emit(api: &ApiSurface, config: &ResolvedCrateConfig) -> anyhow::Result<Ve
         &exclude_types,
         &exclude_fields,
         &configured_features,
-    );
+    )?;
     let build_rs = cargo::emit_build_rs();
 
     let mut files = vec![
@@ -199,7 +199,7 @@ fn emit_lib_rs(
     exclude_types: &HashSet<String>,
     exclude_fields: &HashSet<String>,
     configured_features: &HashSet<&str>,
-) -> String {
+) -> anyhow::Result<String> {
     let source_crate = crate_name.replace('-', "_");
 
     let type_paths = build_type_path_lookup(api);
@@ -248,6 +248,15 @@ fn emit_lib_rs(
         .iter()
         .filter(|t| !exclude_types.contains(&t.name) && !t.is_trait)
         .filter(|t| feature_gate::cfg_satisfied(t.cfg.as_deref(), configured_features))
+        .collect();
+
+    // `&mut T` DTO parameters can only hand the caller their update back through a
+    // returned value, never through the opaque handle mutation an opaque type gets — see
+    // `mut_writeback`. ~keep
+    let opaque_type_names_ahash: ahash::AHashSet<String> = visible_types
+        .iter()
+        .filter(|t| t.is_opaque)
+        .map(|t| t.name.clone())
         .collect();
     let visible_enums: Vec<&EnumDef> = api
         .enums
@@ -418,7 +427,8 @@ fn emit_lib_rs(
                 &enum_names_owned,
                 &deferred_empty_handle_types,
                 &swift_capsule_types,
-            ));
+                &opaque_type_names_ahash,
+            )?);
         }
         // `#[cfg(...)] extern "Rust" { }` block per distinct condition.
         let mut cfg_groups: std::collections::BTreeMap<String, Vec<FunctionDef>> = std::collections::BTreeMap::new();
@@ -433,7 +443,8 @@ fn emit_lib_rs(
                 &enum_names_owned,
                 &empty_set,
                 &swift_capsule_types,
-            );
+                &opaque_type_names_ahash,
+            )?;
             extern_blocks.push(format!("    #[cfg({cfg_cond})]\n{block}"));
         }
     }
@@ -662,9 +673,10 @@ fn emit_lib_rs(
         no_serde_names: &no_serde_names,
         handle_returned_types: &handle_returned_types,
         capsule_types: &swift_capsule_types,
+        opaque_types: &opaque_type_names_ahash,
     };
     for f in &visible_functions {
-        out.push_str(&shims::emit_function_shim(f, &function_shim_context));
+        out.push_str(&shims::emit_function_shim(f, &function_shim_context)?);
         out.push('\n');
     }
     for (_bridge_cfg, trait_def) in &active_bridges {
@@ -779,5 +791,5 @@ fn emit_lib_rs(
         json_bridge::emit_from_json_shim(&mut out, &enum_snake, enum_name, &source_path, &map_expr);
     }
 
-    out
+    Ok(out)
 }
