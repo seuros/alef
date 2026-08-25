@@ -143,7 +143,7 @@ fn java_module_looks_like_a_class(value: &str) -> bool {
         return false;
     }
     let last_segment = trimmed.rsplit('.').next().unwrap_or(trimmed);
-    last_segment.chars().next().is_some_and(char::is_ascii_uppercase)
+    last_segment.chars().next().is_some_and(|c| c.is_ascii_uppercase())
 }
 
 /// The go e2e generator's own resolution order for the module/import path
@@ -208,13 +208,20 @@ fn go_module_is_a_bare_word(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::config::e2e::CallOverride;
-    use crate::core::config::languages::go::GoConfig;
 
     fn make_config(crate_name: &str) -> ResolvedCrateConfig {
         ResolvedCrateConfig {
             name: crate_name.to_string(),
             ..ResolvedCrateConfig::default()
         }
+    }
+
+    /// Resolve a crate config from a literal `alef.toml` snippet — used for cases that
+    /// need `[go] module` set, since `GoConfig` has no `Default` impl.
+    fn resolved_one(toml: &str) -> ResolvedCrateConfig {
+        use crate::core::config::new_config::NewAlefConfig;
+        let cfg: NewAlefConfig = toml::from_str(toml).unwrap();
+        cfg.resolve().unwrap().remove(0)
     }
 
     fn call_with_java_override(module: &str) -> CallConfig {
@@ -360,13 +367,25 @@ mod tests {
         );
     }
 
+    fn config_with_go_module(crate_name: &str, go_module: &str) -> ResolvedCrateConfig {
+        resolved_one(&format!(
+            r#"
+[workspace]
+languages = ["go"]
+
+[[crates]]
+name = "{crate_name}"
+sources = ["src/lib.rs"]
+
+[crates.go]
+module = "{go_module}"
+"#
+        ))
+    }
+
     #[test]
     fn a_bare_word_base_module_is_a_no_op_when_go_module_config_is_set() {
-        let mut config = make_config("sample-widget-rs");
-        config.go = Some(GoConfig {
-            module: Some("github.com/example/sample-widget".to_string()),
-            ..GoConfig::default()
-        });
+        let config = config_with_go_module("sample-widget-rs", "github.com/example/sample-widget");
         let mut e2e_config = E2eConfig::default();
         e2e_config.call.module = "widget".to_string();
 
@@ -381,11 +400,7 @@ mod tests {
 
     #[test]
     fn a_bare_word_go_override_still_fails_even_when_go_module_config_is_set() {
-        let mut config = make_config("sample-widget-rs");
-        config.go = Some(GoConfig {
-            module: Some("github.com/example/sample-widget".to_string()),
-            ..GoConfig::default()
-        });
+        let config = config_with_go_module("sample-widget-rs", "github.com/example/sample-widget");
         let mut e2e_config = E2eConfig::default();
         e2e_config.call = call_with_go_override("widget");
 
