@@ -1936,7 +1936,7 @@
         },
         "deny_unclassified": {
           "default": false,
-          "description": "Reject snippets whose side-effect classification is missing.",
+          "description": "Reject snippets whose side-effect classification is missing.\n\nAlways enabled while [`Self::strict`] is set (or `--strict` is passed), the same as\nevery other strict-gated check in this command. Set this independently of `strict` for a\nnarrower opt-in: denying unclassified snippets without also failing on coverage gaps or\nunavailable/downgraded checks.",
           "type": "boolean"
         },
         "dirs": {
@@ -2015,7 +2015,7 @@
         },
         "strict": {
           "default": false,
-          "description": "Treat coverage gaps and unavailable or downgraded checks as errors.",
+          "description": "Treat coverage gaps and unavailable or downgraded checks as errors.\n\nEquivalent to always passing `--strict` to `alef snippets check`: this and the CLI flag\nare unioned (either one enables strict behavior), and both enable the identical set of\nchecks, including [`Self::deny_unclassified`] -- setting this alone is enough to reject\nunclassified snippets, without also passing `--strict` on every invocation.",
           "type": "boolean"
         },
         "timeout_secs": {

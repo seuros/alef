@@ -452,9 +452,19 @@ pub struct DocsSnippetsConfig {
     #[serde(default)]
     pub fail_fast: bool,
     /// Treat coverage gaps and unavailable or downgraded checks as errors.
+    ///
+    /// Equivalent to always passing `--strict` to `alef snippets check`: this and the CLI flag
+    /// are unioned (either one enables strict behavior), and both enable the identical set of
+    /// checks, including [`Self::deny_unclassified`] -- setting this alone is enough to reject
+    /// unclassified snippets, without also passing `--strict` on every invocation.
     #[serde(default)]
     pub strict: bool,
     /// Reject snippets whose side-effect classification is missing.
+    ///
+    /// Always enabled while [`Self::strict`] is set (or `--strict` is passed), the same as
+    /// every other strict-gated check in this command. Set this independently of `strict` for a
+    /// narrower opt-in: denying unclassified snippets without also failing on coverage gaps or
+    /// unavailable/downgraded checks.
     #[serde(default)]
     pub deny_unclassified: bool,
     /// Permitted side-effect classes. Empty permits only `safe` snippets.

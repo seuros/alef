@@ -28,6 +28,10 @@ pub enum SnippetsAction {
     Check {
         #[arg(short, long, default_value = "alef.toml")]
         config: PathBuf,
+        /// Union'd with `[crates.docs.snippets].strict` (either one is enough): treats coverage
+        /// gaps, unavailable/downgraded checks, unreferenced snippets, and unclassified
+        /// side-effect snippets as failures. Equivalent to setting `strict = true` in config —
+        /// use the flag for one-off CI runs, the config field to make it the project default.
         #[arg(long)]
         strict: bool,
         #[arg(long, default_value = "on", value_parser = ["on", "off"])]
