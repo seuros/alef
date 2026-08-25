@@ -56,12 +56,6 @@ poly.local.toml
 **/.alef-cache/
 **/.alef/
 
-# BEGIN ai-rulez (DO NOT EDIT - managed by ai-rulez)
-.claude/
-.codex/
-AGENTS.md
-CLAUDE.md
-# END ai-rulez
 
 # insta writes these beside the committed baselines when a snapshot changes. They are
 # a review artifact awaiting `cargo insta accept`, never a baseline, and committing one
@@ -71,3 +65,10 @@ CLAUDE.md
 # Sibling-session agent worktrees; never part of the repo. ~keep
 .worktrees/
 erl_crash.dump
+
+# BEGIN ai-rulez (DO NOT EDIT - managed by ai-rulez)
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
+# END ai-rulez
