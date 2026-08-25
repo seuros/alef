@@ -69,12 +69,8 @@ pub(super) fn build_args_and_setup(
             }
             if let Some(req_type) = adapter_request_type {
                 let req_var = format!("{}_req", arg.name);
-                // Derive the module qualifier from module_name (e.g. "DemoCrawler")
-                let mod_qualifier = super::values::ruby_module_name(module_name);
-                setup_lines.push(format!(
-                    "{req_var} = {mod_qualifier}::{req_type}.new(url: {})",
-                    arg.name
-                ));
+                let qualified_req_type = super::values::qualify_ruby_type(module_name, req_type);
+                setup_lines.push(format!("{req_var} = {qualified_req_type}.new(url: {})", arg.name));
                 parts.push(req_var);
             } else {
                 parts.push(arg.name.clone());
@@ -360,13 +356,15 @@ pub(super) fn build_args_and_setup(
                         if result_is_simple {
                             parts.push(format!("{{{}}}", kwargs.join(", ")));
                         } else {
-                            // `opts_type` is the bare Rust struct name (e.g. "ExtractInput");
-                            // the generated Ruby DTO class lives under the crate's module, same
-                            // as `req_type` above -- an unqualified `.new` here resolves against
-                            // top-level Ruby (or whatever the spec file happens to have required),
-                            // not the namespaced binding. ~keep
-                            let mod_qualifier = super::values::ruby_module_name(module_name);
-                            parts.push(format!("{mod_qualifier}::{opts_type}.new({})", kwargs.join(", ")));
+                            // `opts_type` is normally the bare Rust struct name (e.g.
+                            // "ExtractInput"); the generated Ruby DTO class lives under the
+                            // crate's module, same as `req_type` above -- an unqualified `.new`
+                            // here resolves against top-level Ruby (or whatever the spec file
+                            // happens to have required), not the namespaced binding. It can also
+                            // already name a module (its own, or a deliberately different one),
+                            // which `qualify_ruby_type` must not re-qualify. ~keep
+                            let qualified_type = super::values::qualify_ruby_type(module_name, opts_type);
+                            parts.push(format!("{qualified_type}.new({})", kwargs.join(", ")));
                         }
                         continue;
                     }

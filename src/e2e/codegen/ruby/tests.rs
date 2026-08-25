@@ -648,3 +648,145 @@ mod error_path_marker_tests {
         assert!(!out.contains("has no accessor for error field"), "got:\n{out}");
     }
 }
+
+/// The snippet generator (`render_snippet_body`, used for docs-site examples) and the spec
+/// generator (`render_spec_file`, used for `e2e/ruby/spec/*.rb` and `test_apps/ruby/spec/*.rb`)
+/// both build a `json_object` argument's constructor through the single shared
+/// `args::build_args_and_setup` -> `values::qualify_ruby_type` choke point. Before that helper
+/// existed, both call sites unconditionally prepended the call's module onto `options_type`
+/// (`format!("{mod_qualifier}::{opts_type}")`), so an `options_type` that already named a module
+/// -- the gem's own, or a deliberately different one -- was re-qualified and doubled
+/// (`Sample::Sample::DocumentRequest`) identically in both generators. These tests pin the
+/// contract (`options_type` is a bare class name; a value that already contains `::` is used
+/// verbatim) and assert the two generators render the exact same constructor expression for
+/// every shape, so a future change to one call site cannot silently drift from the other. ~keep
+#[cfg(test)]
+mod options_type_qualification_tests {
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::core::config::e2e::{ArgMapping, CallOverride};
+    use crate::e2e::config::E2eConfig;
+    use crate::e2e::fixture::Fixture;
+    use std::collections::HashMap;
+
+    fn build_e2e(options_type: &str) -> E2eConfig {
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "process".into();
+        e2e.call.module = "sample".into();
+        e2e.call.args = vec![ArgMapping {
+            name: "request".into(),
+            field: "request".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: false,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        e2e.call.overrides.insert(
+            "ruby".into(),
+            CallOverride {
+                options_type: Some(options_type.into()),
+                ..CallOverride::default()
+            },
+        );
+        e2e
+    }
+
+    fn fixture() -> Fixture {
+        serde_json::from_value(serde_json::json!({
+            "id": "document_input", "description": "Read a document",
+            "input": {"request": {"content": "hello"}},
+            "assertions": [{"type": "not_error"}]
+        }))
+        .expect("fixture")
+    }
+
+    /// Render both generators for `options_type_value` and return
+    /// `(snippet constructor line, spec constructor line)`, each trimmed of surrounding
+    /// whitespace so only indentation differences are ignored.
+    fn render_both(options_type_value: &str) -> (String, String) {
+        let e2e = build_e2e(options_type_value);
+
+        let snippet_body =
+            super::super::snippet::render_snippet_body(&fixture(), &e2e, &ResolvedCrateConfig::default(), &[], &[])
+                .expect("snippet");
+        let snippet_line = snippet_body
+            .lines()
+            .find(|line| line.contains(".new("))
+            .unwrap_or_else(|| panic!("snippet has no constructor line:\n{snippet_body}"))
+            .trim()
+            .to_string();
+
+        let empty_enum: HashMap<String, String> = HashMap::new();
+        let spec_body = super::super::spec_file::render_spec_file(
+            "docs",
+            &[&fixture()],
+            "sample",
+            None,
+            "sample",
+            Some(options_type_value),
+            &empty_enum,
+            false,
+            &e2e,
+            false,
+            false,
+            &[],
+            &ResolvedCrateConfig::default(),
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        let spec_line = spec_body
+            .lines()
+            .find(|line| line.contains(".new("))
+            .unwrap_or_else(|| panic!("spec has no constructor line:\n{spec_body}"))
+            .trim()
+            .to_string();
+
+        (snippet_line, spec_line)
+    }
+
+    #[test]
+    fn bare_options_type_is_qualified_under_the_call_module_in_both_generators() {
+        let (snippet_line, spec_line) = render_both("DocumentRequest");
+
+        assert_eq!(
+            snippet_line, "result = Sample.process(Sample::DocumentRequest.new(content: 'hello'))",
+            "snippet: {snippet_line}"
+        );
+        assert_eq!(
+            snippet_line, spec_line,
+            "snippet and spec must render the same constructor"
+        );
+    }
+
+    #[test]
+    fn already_qualified_options_type_is_not_double_prefixed_in_either_generator() {
+        let (snippet_line, spec_line) = render_both("Sample::DocumentRequest");
+
+        assert_eq!(
+            snippet_line, "result = Sample.process(Sample::DocumentRequest.new(content: 'hello'))",
+            "snippet: {snippet_line}"
+        );
+        assert_eq!(
+            snippet_line, spec_line,
+            "snippet and spec must render the same constructor"
+        );
+    }
+
+    #[test]
+    fn foreign_module_options_type_is_preserved_verbatim_in_both_generators() {
+        let (snippet_line, spec_line) = render_both("Zzz::DocumentRequest");
+
+        assert_eq!(
+            snippet_line, "result = Sample.process(Zzz::DocumentRequest.new(content: 'hello'))",
+            "snippet: {snippet_line}"
+        );
+        assert_eq!(
+            snippet_line, spec_line,
+            "snippet and spec must render the same constructor"
+        );
+    }
+}

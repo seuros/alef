@@ -8,6 +8,52 @@ pub(super) fn ruby_module_name(module_path: &str) -> String {
     module_path.to_upper_camel_case()
 }
 
+/// Qualify a config-supplied Ruby class name (`options_type`, an adapter's `request_type`, ...)
+/// under the call's module, unless the name already names a module.
+///
+/// `options_type` is contractually a bare class name -- `csharp` and `go` use the configured
+/// name verbatim with no module/package concatenation at all, and every language that *does*
+/// concatenate a qualifier (PHP prepends its namespace the same way) must not re-qualify a name
+/// that already carries one. Without this guard, a value naming its own gem's module
+/// (`"Sample::DocumentRequest"`) or a deliberately different one (`"Zzz::DocumentRequest"`) gets
+/// prefixed again into `"Sample::Sample::DocumentRequest"`, which does not resolve. ~keep
+pub(super) fn qualify_ruby_type(module_name: &str, type_name: &str) -> String {
+    if type_name.contains("::") {
+        type_name.to_string()
+    } else {
+        format!("{}::{type_name}", ruby_module_name(module_name))
+    }
+}
+
+#[cfg(test)]
+mod qualify_ruby_type_tests {
+    use super::qualify_ruby_type;
+
+    #[test]
+    fn bare_name_is_qualified_under_the_module() {
+        assert_eq!(
+            qualify_ruby_type("sample", "DocumentRequest"),
+            "Sample::DocumentRequest"
+        );
+    }
+
+    #[test]
+    fn name_already_qualified_under_the_same_module_is_not_doubled() {
+        assert_eq!(
+            qualify_ruby_type("sample", "Sample::DocumentRequest"),
+            "Sample::DocumentRequest"
+        );
+    }
+
+    #[test]
+    fn name_qualified_under_a_foreign_module_is_preserved_verbatim() {
+        assert_eq!(
+            qualify_ruby_type("sample", "Zzz::DocumentRequest"),
+            "Zzz::DocumentRequest"
+        );
+    }
+}
+
 /// Convert a `serde_json::Value` to a Ruby literal string, preferring single quotes.
 pub(super) fn json_to_ruby(value: &serde_json::Value) -> String {
     match value {
