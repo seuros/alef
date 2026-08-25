@@ -285,6 +285,43 @@ fn manual_default_unit_variant(item: &syn::ItemImpl) -> Option<String> {
 
 /// Extract methods from a trait impl and attach them to an existing type in the surface.
 #[allow(clippy::too_many_arguments)]
+/// Whether a trait impl names a trait declared OUTSIDE the crates being extracted.
+///
+/// The trait filter here is otherwise a denylist (`STD_TRAITS`), so any trait not on that list
+/// contributes its methods to the public binding surface. That is wrong for a framework trait a
+/// consumer implements to serve some other tool: `impl utoipa::ToSchema for Config { fn schema() }`
+/// exists for OpenAPI generation, and `schema`/`schemas` are not API a binding caller should ever
+/// see — they surface as lossy sanitized methods and abort generation.
+///
+/// Only a fully-qualified path can be judged reliably. A root of `crate`/`self`/`super`, the crate
+/// being extracted, or any crate already contributing a type to this surface is local. Anything
+/// else is a foreign crate's trait. A single-segment path (`impl ToSchema for X` after a `use`)
+/// is deliberately NOT treated as external: resolving it means asking whether a local trait of
+/// that name exists, and during a per-file walk a trait declared in a not-yet-visited module is
+/// legitimately absent, so that check would drop real methods depending on `mod` order. ~keep
+fn trait_impl_is_external(path: &syn::Path, crate_name: &str, surface: &ApiSurface) -> bool {
+    let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    if segments.len() < 2 {
+        return false;
+    }
+    let root = segments[0].replace('-', "_");
+    if matches!(root.as_str(), "crate" | "self" | "super") {
+        return false;
+    }
+    if root == crate_name.replace('-', "_") {
+        return false;
+    }
+    let local_root = |rust_path: &str| {
+        rust_path
+            .split("::")
+            .next()
+            .is_some_and(|r| r.replace('-', "_") == root)
+    };
+    !surface.types.iter().any(|t| local_root(&t.rust_path))
+        && !surface.enums.iter().any(|e| local_root(&e.rust_path))
+        && !surface.functions.iter().any(|f| local_root(&f.rust_path))
+}
+
 fn extract_trait_impl_methods(
     item: &syn::ItemImpl,
     crate_name: &str,
@@ -375,6 +412,11 @@ fn extract_trait_impl_methods(
         }
     });
 
+    let trait_is_external = item
+        .trait_
+        .as_ref()
+        .is_some_and(|(path, _)| trait_impl_is_external(path, crate_name, surface));
+
     let type_def = &mut surface.types[idx];
 
     let is_default_trait_impl = item
@@ -419,6 +461,10 @@ fn extract_trait_impl_methods(
             .is_some_and(|s| STD_TRAITS.contains(&s.ident.to_string().as_str()))
     });
     if is_std_trait_impl && !is_default_trait_impl {
+        return;
+    }
+
+    if trait_is_external {
         return;
     }
 

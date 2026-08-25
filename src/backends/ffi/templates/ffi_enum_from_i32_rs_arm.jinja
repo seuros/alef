@@ -1,1 +1,2 @@
-        {{ index }} => Some({{ qualified }}::{{ variant_name }}),
+{% if cfg %}        #[cfg({{ cfg }})]
+{% endif %}        {{ index }} => Some({{ qualified }}::{{ variant_name }}),

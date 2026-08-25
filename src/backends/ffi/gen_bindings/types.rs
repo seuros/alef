@@ -483,6 +483,11 @@ pub(super) fn gen_enum_from_i32_rs_helper(enum_def: &EnumDef, core_import: &str)
                 index => i,
                 qualified => qualified.clone(),
                 variant_name => variant.name.clone(),
+                // A variant behind `#[cfg(feature = "...")]` does not exist in a build without
+                // that feature; an ungated arm naming it is a hard compile error in the
+                // consumer's crate. The discriminant is still reserved, so numbering stays
+                // stable across feature subsets. ~keep
+                cfg => variant.cfg.clone(),
             },
         ));
     }
