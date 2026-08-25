@@ -231,3 +231,78 @@ fn all_gates_e2e_stage_hash_and_orphan_sweep_on_a_deferred_generator_failure() {
          the previous failed attempt would silently cache the failure away",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task #362: a HARD abort in e2e generation must not leave already-written,
+// already-formatted binding output unstamped.
+// ---------------------------------------------------------------------------
+//
+// Every test above this point pins the SOFT `generator_error` case, which `all_commands.rs`
+// already caught and deferred before this fix (a single backend's codegen failed but
+// `generate_e2e` itself still returned `Ok`). This section drives the other half: a fatal
+// error out of `crate::e2e::generate_e2e(..)?`'s own outer `Result` -- e.g. a malformed
+// fixtures directory -- which used to `?`/`bail!` straight out of `handle`, skipping this
+// crate's terminal `format_generated_reporting` + `finalize_hashes_sweeping` pass entirely
+// and leaving every binding/stub/public-API/scaffold file this run had already written with
+// no `alef:hash:` line at all. A unit test on `finalize_hashes` in isolation cannot see this:
+// the bug is that the call is never reached, not that it stamps incorrectly. ~keep
+
+/// Two fixture files sharing the same `id` -- `load_fixtures` (`src/e2e/fixture.rs`) rejects
+/// this with a hard `bail!` *before* any backend codegen or write starts. That failure
+/// surfaces through the outer `Result` on `crate::e2e::generate_e2e(..)?`, not through the
+/// softer `generator_error` the tests above already cover. ~keep
+fn write_e2e_defer_duplicate_id_fixture_workspace(root: &std::path::Path) {
+    std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
+    std::fs::create_dir_all(root.join("fixtures")).expect("create fixture fixtures directory");
+    std::fs::write(root.join("src/lib.rs"), E2E_DEFER_FIXTURE_SOURCE).expect("write fixture source");
+    std::fs::write(root.join("Cargo.toml"), E2E_DEFER_FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
+    let fixture_json = e2e_defer_fixture_json("metadata.document_title");
+    std::fs::write(root.join("fixtures/a.json"), &fixture_json).expect("write first fixture json");
+    std::fs::write(root.join("fixtures/b.json"), &fixture_json).expect("write duplicate-id fixture json");
+    std::fs::write(root.join("alef.toml"), E2E_DEFER_FIXTURE_ALEF_TOML).expect("write fixture alef.toml");
+}
+
+/// Regression for task #362: a fatal (non-`generator_error`) e2e codegen failure must still
+/// defer through `e2e_stage_error` -- exactly like the softer failure above -- so this crate's
+/// python binding, written earlier in the same `alef all` run, still reaches the terminal
+/// format+stamp pass and carries a well-formed `alef:hash:` line. Before the fix, the
+/// duplicate-fixture-ID `bail!` propagated out of `handle` via `?` before
+/// `finalize_hashes_sweeping` ever ran for this crate, so the binding was written and
+/// formatted but never stamped -- present on disk, invisible to `alef verify`. ~keep
+#[test]
+fn all_stamps_bindings_written_before_a_hard_e2e_abort() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().unwrap_or_else(|_| temp.path().to_path_buf());
+    write_e2e_defer_duplicate_id_fixture_workspace(&root);
+    let _cwd = E2eDeferCwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    let error = expect_e2e_defer_err(
+        handle(e2e_defer_all_command(), &context),
+        "a duplicate fixture ID must still fail the run",
+    );
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("duplicate fixture ID"),
+        "the propagated error must be the `load_fixtures` duplicate-ID failure, not something \
+         else: {message}"
+    );
+
+    let binding_source = root.join("crates/deferlib-py/src/lib.rs");
+    assert!(
+        binding_source.is_file(),
+        "the python binding this run wrote before the e2e stage's hard abort must exist on disk: {}",
+        binding_source.display()
+    );
+    let content = std::fs::read_to_string(&binding_source).expect("read the written binding");
+    assert!(
+        crate::core::hash::extract_hash(&content).is_some(),
+        "a fatal error in e2e generation must not leave already-written, already-formatted \
+         binding output with no `alef:hash:` line -- `alef verify` cannot then distinguish this \
+         alef-generated file from a hand-authored one. Binding content was:\n{content}"
+    );
+}
