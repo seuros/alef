@@ -11,10 +11,11 @@ pub struct ElixirConfig {
     pub app_name: Option<String>,
     #[serde(default)]
     pub features: Option<Vec<String>>,
-    /// NIF crate `[features]` to forward to the core crate. If empty or not set,
-    /// defaults to ["download", "serde", "config"]. Set to an empty list to
-    /// disable default feature forwarding (e.g., when the core crate does not
-    /// have these features).
+    /// NIF crate `[features]` to forward to the core crate. If not set, defaults to
+    /// the core crate's own declared `[features] default = [...]` list (read from its
+    /// `Cargo.toml`), so a consumer whose core crate declares no defaults gets no
+    /// implicit forwarding. Set to an empty list to disable default feature forwarding
+    /// outright regardless of what the core crate declares.
     #[serde(default)]
     pub nif_features: Option<Vec<String>>,
     /// Override the serde rename_all strategy for JSON field names (e.g. "camelCase", "snake_case").

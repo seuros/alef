@@ -573,9 +573,12 @@ elixir = '{explicit_path}'
     );
 }
 
-/// When a core crate has no config/download/serde features, the derived default
-/// [features] block must not list them, avoiding Cargo "does not have that
-/// feature" errors.
+/// The derived default `[features]` block must mirror the core crate's own declared
+/// `[features] default = [...]` list -- not a fixed alef-side name list. This fixture's core
+/// crate declares defaults (`turbo-cache`) that share no name with any historical alef default
+/// (`download`/`serde`/`config`); a hardcoded name list would produce `default = []` here even
+/// though the core crate itself opts `turbo-cache` in by default, silently changing what the
+/// generated NIF builds with by default.
 #[test]
 fn test_scaffold_elixir_cargo_derives_features_from_core_crate() {
     let tmp = tempfile::tempdir().expect("tempdir must be created");
@@ -590,8 +593,8 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["native-http"]
-native-http = []
+default = ["turbo-cache"]
+turbo-cache = []
 opendal-cache = []
 wasm-http = []
 "#;
@@ -621,20 +624,137 @@ wasm-http = []
     let features_block = &cargo_toml.content[features_start..deps_start];
 
     assert!(
-        !features_block.contains("config = [\"my-lib/config\"]"),
-        "Elixir Cargo.toml must not forward non-existent 'config' feature in [features]; content:\n{}",
+        !features_block.contains("opendal-cache = [\"my-lib/opendal-cache\"]"),
+        "Elixir Cargo.toml must not forward a core feature the core crate does not list under \
+         its own default; content:\n{}",
         features_block
     );
     assert!(
-        !features_block.contains("download = [\"my-lib/download\"]"),
-        "Elixir Cargo.toml must not forward non-existent 'download' feature in [features]; content:\n{}",
+        !features_block.contains("wasm-http = [\"my-lib/wasm-http\"]"),
+        "Elixir Cargo.toml must not forward a core feature the core crate does not list under \
+         its own default; content:\n{}",
         features_block
     );
 
     assert!(
-        features_block.contains("default = []"),
-        "Elixir Cargo.toml must not enable missing legacy defaults; content:\n{}",
+        features_block.contains("default = [\"turbo-cache\"]"),
+        "Elixir Cargo.toml default array must mirror the core crate's own declared \
+         [features] default list, not a fixed alef-side name list; content:\n{}",
         features_block
+    );
+    assert!(
+        features_block.contains("turbo-cache = [\"my-lib/turbo-cache\"]"),
+        "the core crate's declared default feature must be forwarded to the core dependency; \
+         content:\n{}",
+        features_block
+    );
+}
+
+/// Regression for alef-task #375: the "no explicit `nif_features`" fallback must derive
+/// defaults from the core crate the same way whether or not `[crates.elixir]` is present at
+/// all -- the two prior branches (config present without `nif_features`, and config absent
+/// entirely) computed the identical fallback and must keep doing so now that they are one
+/// expression.
+#[test]
+fn test_scaffold_elixir_cargo_derives_features_from_core_crate_when_elixir_config_present() {
+    let tmp = tempfile::tempdir().expect("tempdir must be created");
+    let ws_root = tmp.path();
+    let core_dir = ws_root.join("crates").join("my-lib");
+    std::fs::create_dir_all(&core_dir).expect("create core dir");
+
+    let cargo_toml_content = r#"
+[package]
+name = "my-lib"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["turbo-cache"]
+turbo-cache = []
+"#;
+    std::fs::write(core_dir.join("Cargo.toml"), cargo_toml_content).expect("write Cargo.toml");
+
+    let mut config = test_config_from_toml(
+        r#"
+[crates.elixir]
+cpu_bound_functions = ["parse"]
+"#,
+    );
+    config.workspace_root = Some(ws_root.to_path_buf());
+    config.name = "my-lib".to_string();
+    config.sources = vec![std::path::PathBuf::from("crates/my-lib/src/lib.rs")];
+    let api = test_api();
+
+    let all_files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
+    let files = language_files(&all_files);
+    let cargo_toml = files
+        .iter()
+        .find(|f| f.path.ends_with("Cargo.toml"))
+        .expect("Cargo.toml must be generated");
+
+    let default_line = cargo_toml
+        .content
+        .lines()
+        .find(|line| line.starts_with("default = ["))
+        .expect("default array present");
+    assert_eq!(
+        default_line, "default = [\"turbo-cache\"]",
+        "a present [crates.elixir] table without nif_features must still derive defaults from \
+         the core crate; content:\n{}",
+        cargo_toml.content
+    );
+}
+
+/// An explicit `nif_features` override must win over the core crate's own declared defaults,
+/// even when they disagree.
+#[test]
+fn test_scaffold_elixir_cargo_explicit_nif_features_overrides_core_default() {
+    let tmp = tempfile::tempdir().expect("tempdir must be created");
+    let ws_root = tmp.path();
+    let core_dir = ws_root.join("crates").join("my-lib");
+    std::fs::create_dir_all(&core_dir).expect("create core dir");
+
+    let cargo_toml_content = r#"
+[package]
+name = "my-lib"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["turbo-cache"]
+turbo-cache = []
+zen-mode = []
+"#;
+    std::fs::write(core_dir.join("Cargo.toml"), cargo_toml_content).expect("write Cargo.toml");
+
+    let mut config = test_config_from_toml(
+        r#"
+[crates.elixir]
+nif_features = ["zen-mode"]
+"#,
+    );
+    config.workspace_root = Some(ws_root.to_path_buf());
+    config.name = "my-lib".to_string();
+    config.sources = vec![std::path::PathBuf::from("crates/my-lib/src/lib.rs")];
+    let api = test_api();
+
+    let all_files = scaffold(&api, &config, &[Language::Elixir]).unwrap();
+    let files = language_files(&all_files);
+    let cargo_toml = files
+        .iter()
+        .find(|f| f.path.ends_with("Cargo.toml"))
+        .expect("Cargo.toml must be generated");
+
+    let default_line = cargo_toml
+        .content
+        .lines()
+        .find(|line| line.starts_with("default = ["))
+        .expect("default array present");
+    assert_eq!(
+        default_line, "default = [\"zen-mode\"]",
+        "an explicit nif_features override must win over the core crate's own default list; \
+         content:\n{}",
+        cargo_toml.content
     );
 }
 
