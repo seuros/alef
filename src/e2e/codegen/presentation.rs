@@ -884,3 +884,7 @@ mod anchored_result_facts_tests;
 #[cfg(test)]
 #[path = "presentation/deep_result_path_tests.rs"]
 mod deep_result_path_tests;
+
+#[cfg(test)]
+#[path = "presentation/wasm_optional_leaf_field_tests.rs"]
+mod wasm_optional_leaf_field_tests;
