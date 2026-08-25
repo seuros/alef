@@ -238,10 +238,33 @@ pub(super) fn render_assertion(
         let container = field_resolver.accessor(format_path, "kotlin_android", result_var);
         let _ = writeln!(out, "        when (val {variant_var} = {container}) {{");
         let _ = writeln!(out, "            is FormatMetadata.{variant_pascal} -> {{");
-        super::discriminated::render_discriminated_union_assertion(out, assertion, &variant_var, &inner_field);
+        super::discriminated::render_discriminated_union_assertion(
+            out,
+            assertion,
+            &variant_var,
+            "metadata",
+            &inner_field,
+        );
         let _ = writeln!(out, "            }}");
         let _ = writeln!(out, "            else -> {{}}");
         let _ = writeln!(out, "        }}");
+        return;
+    }
+
+    // IR-general fallback for any OTHER tagged-union traversal `parse_discriminated_union_access`
+    // does not recognize (a different union entirely, or the same union reached from a config
+    // that never declared it under `metadata.format`), plus the loud named skip for a boundary
+    // it detects but cannot lower. See `discriminated::try_render_generic_union_assertion`. ~keep
+    if let Some(f) = assertion.field.as_deref().filter(|f| !f.is_empty())
+        && super::discriminated::try_render_generic_union_assertion(
+            out,
+            assertion,
+            field_resolver,
+            result_var,
+            kotlin_android_style,
+            f,
+        )
+    {
         return;
     }
 

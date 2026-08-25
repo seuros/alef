@@ -160,6 +160,178 @@ mod is_true_optional_field_tests {
     }
 }
 
+/// Task #367: a fixture field path that traverses a tagged-union variant boundary
+/// (`<union>.<variant>.<field>`, e.g. `shape.circle.radius`) is not a flat member chain in
+/// Kotlin — `ShapeKind` is a sealed class and `radius` only exists on the `Circle` variant's
+/// payload. These tests exercise the IR-general narrowing path added alongside the existing
+/// hand-maintained `metadata.format.<variant>` parser
+/// (`FieldResolver::tagged_union_split` + `FieldResolver::union_variant_payload`, driven by
+/// `discriminated::try_render_generic_union_assertion`), using neutral fixture names rather
+/// than any consumer's real domain types.
+#[cfg(test)]
+mod union_traversal_tests {
+    use super::render_assertion;
+    use crate::core::ir::{EnumDef, EnumVariant, FieldDef, PrimitiveType, TypeDef, TypeRef};
+    use crate::e2e::field_access::FieldResolver;
+    use crate::e2e::fixture::Assertion;
+    use std::collections::{HashMap, HashSet};
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    fn variant(name: &str, fields: Vec<FieldDef>) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            fields,
+            is_tuple: true,
+            ..EnumVariant::default()
+        }
+    }
+
+    /// `Report { shape: ShapeKind }`, `ShapeKind::Circle(CircleData)` (single payload, the
+    /// `metadata.format.excel.sheet_count` shape), `ShapeKind::Square(width, height)` (two
+    /// payload fields — no single type to narrow into), `CircleData { radius: u32 }`.
+    fn shape_resolver(method_calls: &HashSet<String>, kotlin_android_style: bool) -> FieldResolver {
+        let type_defs = vec![
+            TypeDef {
+                name: "Report".to_string(),
+                fields: vec![field("shape", TypeRef::Named("ShapeKind".to_string()))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "CircleData".to_string(),
+                fields: vec![field("radius", TypeRef::Primitive(PrimitiveType::U32))],
+                ..TypeDef::default()
+            },
+        ];
+        let enums = vec![EnumDef {
+            name: "ShapeKind".to_string(),
+            variants: vec![
+                variant("Circle", vec![field("_0", TypeRef::Named("CircleData".to_string()))]),
+                variant(
+                    "Square",
+                    vec![
+                        field("width", TypeRef::Primitive(PrimitiveType::U32)),
+                        field("height", TypeRef::Primitive(PrimitiveType::U32)),
+                    ],
+                ),
+            ],
+            ..EnumDef::default()
+        }];
+        let _ = kotlin_android_style;
+        FieldResolver::new(
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            method_calls,
+        )
+        .with_ir_enum_map(
+            FieldResolver::ir_enum_fields(&type_defs, &enums),
+            Some("Report".to_string()),
+        )
+    }
+
+    fn render(field_path: &str, resolver: &FieldResolver, kotlin_android_style: bool) -> String {
+        let assertion = Assertion {
+            assertion_type: "equals".to_string(),
+            field: Some(field_path.to_string()),
+            value: Some(serde_json::json!(5)),
+            ..Assertion::default()
+        };
+        let mut out = String::new();
+        render_assertion(
+            &mut out,
+            &assertion,
+            "result",
+            "SampleClient",
+            resolver,
+            false,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            false,
+            kotlin_android_style,
+            true,
+        );
+        out
+    }
+
+    /// A single-payload variant narrows correctly on the plain (JVM, non-android) Kotlin
+    /// target: `when (val union<Variant> = result.<field>()) { is <Union>.<Variant> -> { ... } }`,
+    /// with the payload property name (`data`) computed from the IR the same way
+    /// `kotlin_field_name_with_type` names it in the real generated binding — not hardcoded.
+    #[test]
+    fn single_payload_variant_narrows_on_plain_kotlin() {
+        let method_calls: HashSet<String> = ["shape.circle".to_string()].into_iter().collect();
+        let resolver = shape_resolver(&method_calls, false);
+        let out = render("shape.circle.radius", &resolver, false);
+        assert_eq!(
+            out,
+            "        when (val unionCircle = result.shape()) {\n\
+             \x20           is ShapeKind.Circle -> {\n\
+             \x20               assertEquals(5, unionCircle.data.radius!!, \"expected: 5\")\n\
+             \x20           }\n\
+             \x20           else -> {}\n\
+             \x20       }\n",
+            "got: {out}"
+        );
+    }
+
+    /// Same union, kotlin_android style: the accessor for the union field itself switches to
+    /// property syntax (`result.shape`, no parens) while the narrowing shape is unchanged.
+    #[test]
+    fn single_payload_variant_narrows_on_kotlin_android() {
+        let method_calls: HashSet<String> = ["shape.circle".to_string()].into_iter().collect();
+        let resolver = shape_resolver(&method_calls, true);
+        let out = render("shape.circle.radius", &resolver, true);
+        assert!(out.contains("when (val unionCircle = result.shape) {"), "got: {out}");
+        assert!(out.contains("is ShapeKind.Circle -> {"), "got: {out}");
+        assert!(
+            out.contains("assertEquals(5, unionCircle.data.radius!!, \"expected: 5\")"),
+            "got: {out}"
+        );
+    }
+
+    /// A variant with two payload fields has no single type to narrow into
+    /// (`union_variant_payload` returns `None`), so this must render the loud, named
+    /// `UnionTraversalNotImplementedForKotlin` skip — never fall through to a flat accessor
+    /// chain like `.square().width()` against a sealed class, which would not compile.
+    #[test]
+    fn multi_field_variant_emits_the_named_gap_marker_instead_of_a_broken_accessor() {
+        let method_calls: HashSet<String> = ["shape.square".to_string()].into_iter().collect();
+        let resolver = shape_resolver(&method_calls, false);
+        let out = render("shape.square.width", &resolver, false);
+        assert_eq!(
+            out,
+            "        // skipped: field 'shape.square.width' crosses a tagged-union variant \
+             boundary alef does not yet lower for this variant shape in Kotlin\n",
+            "got: {out}"
+        );
+        assert!(
+            !out.contains(".square()"),
+            "must not emit a flat accessor into the sealed class: {out}"
+        );
+    }
+
+    /// Sabotage-adjacent control: a plain non-union path through the SAME resolver must be
+    /// completely unaffected — `tagged_union_split` only fires when `method_calls` names the
+    /// exact traversed prefix, so an unrelated field never routes through this new code.
+    #[test]
+    fn unrelated_field_is_unaffected_by_the_union_detector() {
+        let method_calls: HashSet<String> = ["shape.circle".to_string()].into_iter().collect();
+        let resolver = shape_resolver(&method_calls, false);
+        let out = render("shape", &resolver, false);
+        assert!(out.contains("assertEquals(5, result.shape())"), "got: {out}");
+    }
+}
+
 #[cfg(test)]
 mod wildcard_tests {
     use super::render_assertion;

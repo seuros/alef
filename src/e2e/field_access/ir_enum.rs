@@ -71,8 +71,34 @@ pub(super) fn build_ir_enum_map(type_defs: &[TypeDef], enums: &[EnumDef]) -> IrE
         field_types,
         enum_fields,
         enum_field_types,
+        variant_payload_types: build_variant_payload_types(enums),
         root_type: None,
     }
+}
+
+/// `variant_payload_types[enum][variant] -> (field_name, payload_type_name)` for every
+/// tagged-union variant that carries exactly one field whose type resolves to a `Named` IR
+/// type (through `Option`/`Vec` unwrapping, via [`named_type`]). A variant with zero or
+/// several fields has no single payload type to record, so it is left out — callers asking
+/// for it get `None` and must fall back to their own unimplemented-shape handling rather than
+/// receive a misleading answer for one of several fields.
+fn build_variant_payload_types(enums: &[EnumDef]) -> HashMap<String, HashMap<String, (String, String)>> {
+    let mut variant_payload_types: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
+    for enum_def in enums {
+        for variant in &enum_def.variants {
+            let [only_field] = variant.fields.as_slice() else {
+                continue;
+            };
+            let Some(named) = named_type(&only_field.ty) else {
+                continue;
+            };
+            variant_payload_types
+                .entry(enum_def.name.clone())
+                .or_default()
+                .insert(variant.name.clone(), (only_field.name.clone(), named.to_string()));
+        }
+    }
+    variant_payload_types
 }
 
 /// Walk `map.field_types` from `root` through `prefix`, returning the owner type the path's

@@ -145,6 +145,15 @@ field_skip_variants! {
         "field ",
         " crosses a tagged-union variant boundary (not expressible in Swift)",
     ),
+    /// ~keep Unlike Dart/Swift's boundary, Kotlin sealed classes ARE narrowable by pattern
+    /// matching — `kotlin/assertions.rs` renders real `is <Union>.<Variant> ->` narrowing for
+    /// every single-payload variant `FieldResolver::union_variant_payload` resolves. This fires
+    /// only for what that lowering cannot yet handle (a multi-field variant, or a union type the
+    /// IR never anchored), so it is alef's own gap, not a property of Kotlin's type system.
+    UnionTraversalNotImplementedForKotlin: GeneratorGap => (
+        "field ",
+        " crosses a tagged-union variant boundary alef does not yet lower for this variant shape in Kotlin",
+    ),
     /// ~keep The field or its type is excluded from the binding by explicit config. The exclusion
     /// is already a visible, deliberate decision, so the skip is its honest consequence.
     ExcludedFromSwiftBinding: LanguageLimitation => (

@@ -178,6 +178,15 @@ pub struct IrEnumMap {
     /// specific enum is a plain `enum` (`getValue()` accessor) or a tagged/untagged-union
     /// wrapper class, per `backends::java::gen_bindings::emits_get_value`.
     pub enum_field_types: HashMap<String, HashMap<String, String>>,
+    /// `variant_payload_types[enum_name][variant_name] -> (raw_field_name, payload_type_name)`
+    /// for a tagged-union variant that carries exactly one field (`Variant(Payload)` or
+    /// `Variant { field: Payload }`). Lets a caller resolve the concrete type a variant wraps
+    /// once a path has been split at the union boundary (see
+    /// `FieldResolver::tagged_union_split`), so it can keep walking the path's suffix through
+    /// that payload type's own fields instead of stopping at the variant name. Multi-field
+    /// variants are deliberately not recorded here: there is no single payload type to advance
+    /// into, and a caller must fall back to its own "not implemented" handling for that shape.
+    pub variant_payload_types: HashMap<String, HashMap<String, (String, String)>>,
     pub root_type: Option<String>,
 }
 

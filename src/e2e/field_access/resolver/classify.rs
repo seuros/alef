@@ -653,6 +653,25 @@ impl FieldResolver {
         enum_type_at_path(&self.ir_enum_map, resolved)
     }
 
+    /// The single field a tagged-union variant carries, as `(field_name, payload_type_name)`,
+    /// per [`super::super::ir_enum::build_ir_enum_map`]'s `variant_payload_types`.
+    ///
+    /// Meant to be called with the union type name [`Self::ir_enum_type_name`] resolves for a
+    /// [`Self::tagged_union_split`] prefix, and the variant segment that split returned, so a
+    /// caller can keep walking a fixture path's suffix through the variant's own payload type
+    /// once it has narrowed to that variant — the same shape `metadata.format.excel.sheet_count`
+    /// needs after splitting into `("metadata.format", "excel", "sheet_count")`: this answers
+    /// which type `sheet_count` continues into. Returns `None` for a variant with zero fields
+    /// (nothing to narrow into) or more than one (no single payload type), or when the IR never
+    /// described the union type at all.
+    pub fn union_variant_payload(&self, union_type: &str, variant: &str) -> Option<(&str, &str)> {
+        self.ir_enum_map
+            .variant_payload_types
+            .get(union_type)?
+            .get(variant)
+            .map(|(field_name, type_name)| (field_name.as_str(), type_name.as_str()))
+    }
+
     /// Whether the Java binding backend emits a `getValue()` accessor for the enum type
     /// backing `field`, per `backends::java::gen_bindings::emits_get_value`. `None` when the
     /// IR does not positively resolve `field` to a concrete enum type (unresolved root type,
