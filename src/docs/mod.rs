@@ -555,7 +555,7 @@ fn validate_snippets(
     let required_languages = snippet_cfg
         .required_languages
         .iter()
-        .map(|lang| lang.parse::<crate::snippets::types::Language>())
+        .map(|lang| crate::snippets::types::resolve_required_language(lang))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| anyhow::anyhow!("invalid docs.snippets.required_languages entry: {err}"))?;
 

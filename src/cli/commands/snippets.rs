@@ -173,28 +173,6 @@ fn parse_language_filter(languages: Option<&[String]>) -> Option<LanguageFilter>
     })
 }
 
-/// Resolve one `required_languages` entry (config key or `--required-languages` value) to a
-/// [`Language`].
-///
-/// Accepts both a snippet fence tag (`python`, `kotlin`) and a session target name
-/// (`kotlin_android`, `kotlin-android`, `node`, `wasm`) -- the vocabulary a consumer's
-/// `alef.toml` already uses for every other per-language surface, and the name a user reaches
-/// for first because it is the directory/target name everywhere else in the file.
-/// `Language::from_fence_tag` alone rejected `kotlin_android`/`kotlin-android` outright with no
-/// hint that a *different* vocabulary was expected. Mirrors [`parse_language_filter`], which
-/// already accepts both forms for `--lang`. ~keep
-fn resolve_required_language(value: &str) -> Result<Language, String> {
-    let language = Language::from_session_target(value);
-    if language == Language::Unknown {
-        Err(format!(
-            "unknown language `{value}` (expected a snippet fence tag such as `python`/`go`/`kotlin`, or a \
-             session target name such as `kotlin_android`/`node`/`wasm`)"
-        ))
-    } else {
-        Ok(language)
-    }
-}
-
 /// Report `--lang` values that named nothing, so a typo cannot silently widen or empty the run.
 fn reject_unrecognised_languages(filter: Option<&LanguageFilter>) -> Result<(), ExitCode> {
     let Some(filter) = filter else { return Ok(()) };
@@ -261,7 +239,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
     let required_languages = match config
         .required_languages
         .iter()
-        .map(|language| resolve_required_language(language))
+        .map(|language| crate::snippets::types::resolve_required_language(language))
         .collect::<Result<Vec<Language>, String>>()
     {
         Ok(languages) => languages,
@@ -855,7 +833,7 @@ fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
         .map(|languages| {
             languages
                 .iter()
-                .map(|language| resolve_required_language(language))
+                .map(|language| crate::snippets::types::resolve_required_language(language))
                 .collect::<Result<Vec<Language>, String>>()
         })
         .transpose()

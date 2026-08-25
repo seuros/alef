@@ -209,6 +209,30 @@ impl fmt::Display for Language {
     }
 }
 
+/// Resolve one `required_languages` entry (the `[docs.snippets]`/`[crates.e2e.snippets]` config
+/// key, or `alef snippets gaps --required-languages`) to a [`Language`].
+///
+/// Accepts a snippet fence tag (`python`, `kotlin`) OR a session target name (`node`, `wasm`,
+/// `kotlin_android`, `kotlin-android`) -- the vocabulary a consumer's `alef.toml` already uses for
+/// every other per-language surface.
+///
+/// ~keep This lives here, not beside either caller, because it previously existed only in
+/// `cli::commands::snippets` while `docs::mod` parsed the SAME config key through `FromStr`
+/// (fence tags only). One key, two vocabularies: `required_languages = ["node"]` was accepted by
+/// `alef snippets gaps` and rejected by `alef docs`, so `alef all` failed on a config its own
+/// sibling command had validated. Both callers must use this.
+pub fn resolve_required_language(value: &str) -> Result<Language, String> {
+    let language = Language::from_session_target(value);
+    if language == Language::Unknown {
+        Err(format!(
+            "unknown language `{value}` (expected a snippet fence tag such as `python`/`go`/`kotlin`, or a \
+             session target name such as `kotlin_android`/`node`/`wasm`)"
+        ))
+    } else {
+        Ok(language)
+    }
+}
+
 impl std::str::FromStr for Language {
     type Err = String;
 

@@ -4,6 +4,7 @@
 //! for CLI sources; the module keeps `use super::*` and is otherwise unchanged. ~keep
 
 use super::*;
+use crate::snippets::types::resolve_required_language;
 use tracing_test::traced_test;
 
 /// `--lang` narrows a run to one backend's snippets, so an unrecognised value has to be
