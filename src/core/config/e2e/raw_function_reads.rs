@@ -41,8 +41,8 @@ const KNOWN_RAW_FUNCTION_READS: &[&str] = &[
     // Pre-generation export validation. Widening it to a resolved name risks a hard `bail!` on
     // overrides that name a binding symbol rather than a Rust one (C exports carry a prefix),
     // so an empty base currently costs a diagnostic rather than producing wrong output.
-    "src/bin_cli/all_commands.rs\tif call_config.function.is_empty() || call_config.module.is_empty() {",
-    "src/bin_cli/all_commands.rs\tlet function_name = &call_config.function;",
+    "src/bin_cli/all_commands/e2e_stage.rs\tif call_config.function.is_empty() || call_config.module.is_empty() {",
+    "src/bin_cli/all_commands/e2e_stage.rs\tlet function_name = &call_config.function;",
     // The resolver itself.
     "src/core/config/e2e/call.rs\tlet base = self.function.trim();",
     // Reads on `CallOverride::function` (an `Option<String>`, never the empty-base hazard) and
