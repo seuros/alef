@@ -148,18 +148,23 @@ fn normalize(path: PathBuf) -> PathBuf {
 /// `file_dir` is the directory of the file that *contains* the `mod` item — the anchor for
 /// `#[path]`. `children_dir` is that file's own submodule directory — `foo/` for both `foo.rs`
 /// and `foo/mod.rs`, and `foo/tests/` for a `mod x;` written inside an inline
-/// `mod tests { .. }` block in `foo.rs`. Ordinary (non-`#[path]`) resolution uses `children_dir`;
-/// `#[path]` always uses `file_dir`, per `rustc`'s rule that the attribute is anchored to the
-/// containing file, not to the declaring module's implied directory.
+/// `mod tests { .. }` block in `foo.rs`. Ordinary (non-`#[path]`) resolution uses `children_dir`.
+///
+/// `path_anchor` is where a `#[path]` value is resolved from, and it is NOT simply the containing
+/// file's directory. Per `rustc`, in a non-`mod-rs` file the attribute anchors to that file's
+/// directory only at the file's top level; inside an inline `mod name { .. }` the inline segments
+/// count as directories, so `#[path = "x.rs"]` written in `mod tests` inside `foo.rs` resolves to
+/// `foo/tests/x.rs`. Anchoring unconditionally to the file's directory made this gate report
+/// three genuinely-compiled test files as dead. ~keep
 fn resolve_external_mod(
     repo_root: &Path,
-    file_dir: &Path,
+    path_anchor: &Path,
     children_dir: &Path,
     ident: &str,
     explicit_path: Option<String>,
 ) -> Option<PathBuf> {
     if let Some(explicit) = explicit_path {
-        let candidate = normalize(file_dir.join(explicit));
+        let candidate = normalize(path_anchor.join(explicit));
         return repo_root.join(&candidate).is_file().then_some(candidate);
     }
     let as_file = normalize(children_dir.join(format!("{ident}.rs")));
@@ -185,13 +190,15 @@ fn include_target(mac: &syn::Macro, file_dir: &Path) -> Option<PathBuf> {
 /// Walk one parsed file's items, recording every file `mod` declaration reaches (directly or
 /// through further nested modules) into `reachable`.
 ///
-/// `file_dir` is fixed for the whole file (used only to anchor `#[path]`). `children_dir` starts
+/// `file_dir` is fixed for the whole file (used only to anchor `include!`). `path_anchor` starts
+/// as `file_dir` and switches to the inline module's directory once inside one. `children_dir` starts
 /// as the file's own submodule directory and descends one segment per inline `mod name { .. }`
 /// nesting level, mirroring where `rustc` would look for `mod x;` written inside that block.
 fn walk_items(
     repo_root: &Path,
     items: &[syn::Item],
     file_dir: &Path,
+    path_anchor: &Path,
     children_dir: &Path,
     reachable: &mut BTreeSet<PathBuf>,
 ) {
@@ -210,7 +217,7 @@ fn walk_items(
                 && reachable.insert(included.clone())
             {
                 let file = parse(repo_root, &included);
-                walk_items(repo_root, &file.items, file_dir, children_dir, reachable);
+                walk_items(repo_root, &file.items, file_dir, path_anchor, children_dir, reachable);
             }
             continue;
         }
@@ -222,11 +229,18 @@ fn walk_items(
                 // An inline body has no file of its own; its submodules resolve one directory
                 // segment deeper than the enclosing file's own submodule directory.
                 let inline_children_dir = children_dir.join(&ident);
-                walk_items(repo_root, inline_items, file_dir, &inline_children_dir, reachable);
+                walk_items(
+                    repo_root,
+                    inline_items,
+                    file_dir,
+                    &inline_children_dir,
+                    &inline_children_dir,
+                    reachable,
+                );
             }
             None => {
                 let used_explicit_path = explicit_path.is_some();
-                let Some(resolved) = resolve_external_mod(repo_root, file_dir, children_dir, &ident, explicit_path)
+                let Some(resolved) = resolve_external_mod(repo_root, path_anchor, children_dir, &ident, explicit_path)
                 else {
                     // Unresolvable mod declaration is a different bug (a broken build), not this
                     // gate's concern; rustc itself will refuse to compile it.
@@ -250,7 +264,14 @@ fn walk_items(
                         } else {
                             resolved.with_extension("")
                         };
-                    walk_items(repo_root, &file.items, &new_file_dir, &new_children_dir, reachable);
+                    walk_items(
+                        repo_root,
+                        &file.items,
+                        &new_file_dir,
+                        &new_file_dir,
+                        &new_children_dir,
+                        reachable,
+                    );
                 }
             }
         }
@@ -273,6 +294,7 @@ fn reachable_src_files(repo_root: &Path) -> BTreeSet<PathBuf> {
         walk_items(
             repo_root,
             &file.items,
+            Path::new("src"),
             Path::new("src"),
             Path::new("src"),
             &mut reachable,
