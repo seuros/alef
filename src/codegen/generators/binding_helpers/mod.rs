@@ -6,7 +6,7 @@ mod lossy_fields;
 mod returns;
 mod unimplemented;
 
-pub use analysis::{has_named_params, is_simple_non_opaque_param};
+pub use analysis::{can_auto_delegate_function_with_named_let_bindings, has_named_params, is_simple_non_opaque_param};
 pub use async_body::gen_async_body;
 pub use call_args::{
     gen_call_args, gen_call_args_cfg, gen_call_args_vec, gen_call_args_with_let_bindings,

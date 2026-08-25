@@ -44,7 +44,12 @@ pub(in crate::backends::wasm::gen_bindings) fn gen_function_with_emitted_dtos(
         }
     }
 
-    let can_delegate = crate::codegen::shared::can_auto_delegate_function(func, opaque_types);
+    // The `can_delegate` body below drives `gen_named_let_bindings_no_promote` +
+    // `gen_call_args_with_let_bindings`, so it already converts non-opaque `&Named` / `&[Named]`
+    // params that the base gate rejects. Recognizing them here is what keeps such functions from
+    // falling through to `gen_wasm_unimplemented_body`, which for a non-fallible return emits
+    // `compile_error!` into the consumer's crate. The relaxed predicate subsumes the base one. ~keep
+    let can_delegate = generators::can_auto_delegate_function_with_named_let_bindings(func, opaque_types);
 
     let params: Vec<String> = func
         .params

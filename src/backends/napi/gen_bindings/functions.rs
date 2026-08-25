@@ -113,8 +113,7 @@ pub(super) fn gen_function(
         napi_gen_call_args(&func.params, opaque_types)
     };
 
-    let can_delegate_fn = crate::codegen::shared::can_auto_delegate_function(func, opaque_types)
-        || can_delegate_with_named_let_bindings(func, opaque_types);
+    let can_delegate_fn = generators::can_auto_delegate_function_with_named_let_bindings(func, opaque_types);
 
     let err_conv = ".map_err(|e| napi::Error::new(napi::Status::GenericFailure, e.to_string()))";
 
@@ -267,15 +266,6 @@ pub(super) fn gen_function(
             body => body,
         },
     )
-}
-
-fn can_delegate_with_named_let_bindings(func: &FunctionDef, opaque_types: &AHashSet<String>) -> bool {
-    !func.sanitized
-        && func
-            .params
-            .iter()
-            .all(|p| !p.sanitized && crate::codegen::shared::is_delegatable_param(&p.ty, opaque_types))
-        && crate::codegen::shared::is_delegatable_return(&func.return_type)
 }
 
 #[cfg(test)]

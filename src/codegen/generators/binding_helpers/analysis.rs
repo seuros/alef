@@ -1,5 +1,25 @@
-use crate::core::ir::{ParamDef, TypeRef};
+use crate::core::ir::{FunctionDef, ParamDef, TypeRef};
 use ahash::AHashSet;
+
+/// Free-function analogue of [`crate::codegen::shared::can_auto_delegate_with_named_let_bindings`].
+///
+/// [`crate::codegen::shared::can_auto_delegate_function`] additionally rejects every non-opaque
+/// `&Named`, `&[Named]` and `&[&str]` param, because most backends' call-arg builders only know
+/// how to `.into()` an *owned* value. That restriction does not apply to a generator whose
+/// delegation body pairs [`super::gen_named_let_bindings_no_promote`] (or
+/// [`super::gen_named_let_bindings_pub`]) with [`super::gen_call_args_with_let_bindings`]: those
+/// two emit an owned `{name}_core` binding and pass `&{name}_core`, which is exactly the borrow
+/// the core signature wants. Without this relaxation such functions fall through to the backend's
+/// unimplemented body, which for a non-fallible return emits `compile_error!` into the consumer's
+/// default build path. Only generators wiring up that let-binding pair may use this. ~keep
+pub fn can_auto_delegate_function_with_named_let_bindings(func: &FunctionDef, opaque_types: &AHashSet<String>) -> bool {
+    !func.sanitized
+        && func
+            .params
+            .iter()
+            .all(|p| !p.sanitized && crate::codegen::shared::is_delegatable_param(&p.ty, opaque_types))
+        && crate::codegen::shared::is_delegatable_return(&func.return_type)
+}
 
 /// Check if params contain any non-opaque Named types that need let bindings.
 /// This includes direct Named types, `Vec<Named>` types, `Vec<String>` params

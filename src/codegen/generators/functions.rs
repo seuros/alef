@@ -223,8 +223,8 @@ pub fn gen_function_with_mutex(
         }
     };
 
-    let can_delegate = crate::codegen::shared::can_auto_delegate_function(func, opaque_types)
-        || can_delegate_with_named_let_bindings(func, opaque_types);
+    let can_delegate =
+        crate::codegen::generators::can_auto_delegate_function_with_named_let_bindings(func, opaque_types);
 
     let pyo3_sync = !func.is_async && cfg.async_pattern == AsyncPattern::Pyo3FutureIntoPy;
     let detach_core_call = |core_call: &str| -> String {
@@ -731,15 +731,6 @@ pub fn gen_function_with_mutex(
             body => body,
         },
     )
-}
-
-fn can_delegate_with_named_let_bindings(func: &FunctionDef, opaque_types: &AHashSet<String>) -> bool {
-    !func.sanitized
-        && func
-            .params
-            .iter()
-            .all(|p| !p.sanitized && crate::codegen::shared::is_delegatable_param(&p.ty, opaque_types))
-        && crate::codegen::shared::is_delegatable_return(&func.return_type)
 }
 
 /// Collect all unique trait import paths from types' methods.

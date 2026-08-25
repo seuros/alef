@@ -23,3 +23,7 @@ use returns::{to_turbofish_from, type_has_default};
 #[cfg(test)]
 #[path = "functions/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "functions/named_ref_delegation_tests.rs"]
+mod named_ref_delegation_tests;
