@@ -332,6 +332,16 @@ fn swift_type_name_native(ty: &TypeRef, _exclude_types: &HashSet<String>) -> Str
 /// Get the Swift type name for a TypeRef.
 ///
 /// Adapter methods marshal excluded/internal types (not in the visible binding surface) as JSON strings.
+///
+/// `Map` always declares plain `String` -- one JSON blob -- regardless of its key/value types.
+/// This is the same "container has no native swift-bridge representation, so the whole value is
+/// one blob" rule `gen_rust_crate::plugin_inbound::inbound_bridge_type` applies on the Rust side
+/// (see the `~keep` rule there for the full contract and the `Vec<Named>` per-element
+/// counterpart). Recursing through `Map` here previously declared `[String: String]` for a
+/// `Map<_, Named>`, whose values are themselves JSON-encoded -- double-encoding the payload and
+/// disagreeing with `plugin_marshal::swift_shim_param_ffi_type`/`swift_shim_param_decode`, which
+/// already always treat `Map` as one `RustString` blob at the FFI-shim layer (alef-tasks #309).
+/// ~keep
 fn swift_type_name(ty: &TypeRef, exclude_types: &HashSet<String>) -> String {
     match ty {
         TypeRef::Primitive(p) => match p {
@@ -361,11 +371,7 @@ fn swift_type_name(ty: &TypeRef, exclude_types: &HashSet<String>) -> String {
             }
         }
         TypeRef::Vec(inner) => format!("[{}]", swift_type_name(inner, exclude_types)),
-        TypeRef::Map(k, v) => format!(
-            "[{}: {}]",
-            swift_type_name(k, exclude_types),
-            swift_type_name(v, exclude_types)
-        ),
+        TypeRef::Map(_, _) => "String".to_string(),
         TypeRef::Optional(inner) => format!("{}?", swift_type_name(inner, exclude_types)),
         TypeRef::Unit => "Void".to_string(),
         TypeRef::Json => "String".to_string(),
@@ -581,6 +587,39 @@ mod tests {
             "VisibleResult",
             "Non-excluded types should keep their original names"
         );
+    }
+
+    /// alef-tasks #309: a `Map<_, Named>` protocol method previously declared `[String: String]`
+    /// whose values were themselves JSON payloads produced by `swift_shim_param_decode` /
+    /// `vec_element_crosses_as_string`'s sibling logic in `plugin_marshal.rs` -- JSON-encoding
+    /// that dictionary double-encodes every value. The whole `Map` must be one blob instead.
+    #[test]
+    fn test_swift_type_name_map_named_value_is_one_blob() {
+        let mut exclude_types = HashSet::new();
+        exclude_types.insert("SinkStats".to_string());
+        let ty = TypeRef::Map(
+            Box::new(TypeRef::String),
+            Box::new(TypeRef::Named("SinkStats".to_string())),
+        );
+
+        assert_eq!(
+            swift_type_name(&ty, &exclude_types),
+            "String",
+            "Map<_, Named> must declare a single JSON String blob, not [String: String]"
+        );
+    }
+
+    /// The one-blob rule for `Map` does not depend on the value being `Named`: swift-bridge has
+    /// no `Map`/`HashMap` bridging at all, so every `Map` is a blob, matching
+    /// `plugin_marshal::swift_shim_param_ffi_type`'s unconditional `Map(_, _) => "RustString"`.
+    #[test]
+    fn test_swift_type_name_map_primitive_value_is_also_one_blob() {
+        let ty = TypeRef::Map(
+            Box::new(TypeRef::String),
+            Box::new(TypeRef::Primitive(crate::core::ir::PrimitiveType::U32)),
+        );
+
+        assert_eq!(swift_type_name(&ty, &HashSet::new()), "String");
     }
 
     #[test]

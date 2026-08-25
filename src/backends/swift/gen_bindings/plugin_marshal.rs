@@ -338,6 +338,17 @@ pub fn swift_shim_return_marshal(method: &MethodDef, bridge_call_expr: &str) -> 
             TypeRef::Primitive(PrimitiveType::Usize) | TypeRef::Primitive(PrimitiveType::Isize) => {
                 vec![format!("return UInt({})", bridge_call_expr)]
             }
+            // `Map` (alef-tasks #309) and every other shape that falls through to
+            // `swift_shim_return_ffi_type`'s own catch-all declare the shim's return type as
+            // `RustString`. A bare `return {bridge_call_expr}` type-checks only when the bridge
+            // call's own Swift return type (`swift_type_name`) already happens to be
+            // `RustString`, which it never is -- `swift_type_name` never produces the FFI
+            // wrapper type, only plain `String`. Checking the FFI type here keeps this
+            // catch-all honest for whichever shape lands in it, without hand-enumerating every
+            // one of them the way the explicit arms above do. ~keep
+            _ if swift_shim_return_ffi_type(method) == "RustString" => {
+                vec![format!("return RustString({})", bridge_call_expr)]
+            }
             _ => vec![format!("return {}", bridge_call_expr)],
         }
     }
@@ -779,5 +790,36 @@ mod tests {
         );
         let lines = swift_shim_return_marshal(&method, "try inner.embed(texts)");
         assert!(lines.join("\n").contains("encodeOkEnvelope"));
+    }
+
+    /// alef-tasks #309: `swift_shim_return_ffi_type` declares `Map` returns as `RustString`, so
+    /// the marshal must wrap the bridge call in `RustString(...)` -- a bare `return
+    /// bridge.sinkTotals()` would return the bridge's own `String` where the shim's declared
+    /// `RustString` return type is expected, and would not compile.
+    #[test]
+    fn test_return_marshal_map_named_value_wraps_rust_string() {
+        let method = make_method(
+            "sink_totals",
+            vec![],
+            TypeRef::Map(
+                Box::new(TypeRef::String),
+                Box::new(TypeRef::Named("SinkStats".to_string())),
+            ),
+            None,
+        );
+        assert_eq!(swift_shim_return_ffi_type(&method), "RustString");
+        let lines = swift_shim_return_marshal(&method, "bridge.sinkTotals()");
+        assert_eq!(lines, vec!["return RustString(bridge.sinkTotals())".to_string()]);
+    }
+
+    /// The bool/u32/... primitive catch-all shapes must keep passing through unwrapped: their
+    /// FFI return type is the primitive itself, not `RustString`, so wrapping them would break
+    /// compilation the same way the missing wrap broke `Map`.
+    #[test]
+    fn test_return_marshal_bool_catch_all_stays_unwrapped() {
+        let method = make_method("supports_lang", vec![], TypeRef::Primitive(PrimitiveType::Bool), None);
+        assert_eq!(swift_shim_return_ffi_type(&method), "Bool");
+        let lines = swift_shim_return_marshal(&method, "bridge.supportsLang()");
+        assert_eq!(lines, vec!["return bridge.supportsLang()".to_string()]);
     }
 }
