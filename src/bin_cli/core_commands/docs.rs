@@ -37,7 +37,13 @@ pub(crate) fn handle(
         let ir_json = serde_json::to_string(&api)?;
         let stage_hash = cache::compute_stage_hash(&ir_json, &docs_stage_key, &config_toml, &[]);
         let use_stage_cache = resolved_cfg.docs.is_none();
-        if use_stage_cache && cache::is_stage_cached(&resolved_cfg.name, &docs_stage_key, &stage_hash) {
+        // Computed before the cache check -- `is_stage_cached` needs the same `inputs_hash`
+        // every stamped doc page was stamped under to tell a hand-edited page from an
+        // untouched one, not just whether the file still exists. ~keep
+        let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
+        let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
+        let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
+        if use_stage_cache && cache::is_stage_cached(&resolved_cfg.name, &docs_stage_key, &stage_hash, &inputs_hash) {
             if multi {
                 tracing::info!("[{}] Docs up to date (cached)", resolved_cfg.name);
             } else {
@@ -69,8 +75,6 @@ pub(crate) fn handle(
         } else {
             crate::docs::generate_docs_stage(&api, resolved_cfg, &languages, output.as_deref(), &base_dir)
         };
-        let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
-        let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
         pipeline::report_refused_writes(&report);
         docs_result?;

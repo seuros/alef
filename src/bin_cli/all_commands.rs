@@ -247,6 +247,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
+                // The fingerprint every stamped stage output (e2e, test-apps) was stamped under --
+                // `is_stage_cached` needs it to tell a hand-edited stage output from an untouched
+                // one, not just whether the file still exists. ~keep
+                let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
 
                 // Accumulated across every phase below and stamped exactly ONCE, by the
                 // `finalize_hashes_sweeping` call after the format pass at the end of this loop
@@ -349,6 +353,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         previous_binding_ownership.get(language).cloned().unwrap_or_default(),
                     );
                 }
+                // `binding_ownership`'s cache-hit entries just above exist to answer exactly the
+                // question the sweep below asks, but the sweep's `keep` set is `current_gen_paths`,
+                // not `binding_ownership` -- and `current_gen_paths` is populated only from what
+                // `bindings`/`stubs`/`public_api_files` actually returned this run, so a language
+                // `pipeline::generate` skipped as cache-hit counted as having emitted nothing. The
+                // manifest-based route in `sweep_manifest_orphans` (unlike its disk-scan route) has
+                // no per-root "nothing recorded here" guard, so it deleted that language's still-valid
+                // binding output on every cache hit -- `<lang>.manifest` stayed intact and non-empty,
+                // but a file it named was gone, so the next run's `outputs_exist` read that as a miss,
+                // regenerated, and the following hit deleted it again: an unbroken hit/miss/hit/miss
+                // cycle (alef-tasks#303). Folding `binding_ownership` in here closes that gap. ~keep
+                current_gen_paths.extend(binding_ownership.values().flatten().cloned());
 
                 let mut binding_count: usize = 0;
                 for (lang, lang_files) in &bindings {
@@ -588,7 +604,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let fixture_hash = cache::hash_directory(fixtures_dir).unwrap_or_default();
                     let ir_json = serde_json::to_string(&api)?;
                     let e2e_stage_hash = cache::compute_stage_hash(&ir_json, "e2e", &config_toml, &fixture_hash);
-                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
+                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash, &inputs_hash) {
                         tracing::info!("  [e2e] up to date (skipping)");
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
                         deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
@@ -662,7 +678,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let test_apps_stage_hash =
                         cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
-                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash) {
+                    if !clean
+                        && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash, &inputs_hash)
+                    {
                         tracing::info!("  [test-apps] up to date (skipping)");
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
                         let mut registry_e2e_config = e2e_config.clone();

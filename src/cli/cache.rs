@@ -997,9 +997,17 @@ pub fn write_toml_merge_provenance(
 }
 
 /// Check if a stage's output is cached for the given crate.
-/// Returns false if the hash doesn't match OR if any previously-generated
-/// output files are missing from disk.
-pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey) -> bool {
+///
+/// A hit requires the key to match, every manifested output to still be on disk, AND every
+/// manifested output that carries an `alef:hash:` stamp to still agree with that stamp under
+/// `inputs_hash` -- the same three-part check [`is_lang_cached`] runs, for the same reason: the
+/// manifest-existence check alone cannot tell a hand-edited stage output (e2e suite, scaffold
+/// file, README, docs page) from an untouched one, so a consumer's edit to e.g. a generated e2e
+/// test survived a stage-cache hit silently. See [`is_lang_cached`]'s doc for the full incident
+/// and [`stamped_outputs_agree_with_disk`]'s doc for why an unstamped output (`generated_header:
+/// false`, create-once seeds) keeps the existence-only rule instead of forcing a permanent miss.
+/// ~keep
+pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey, inputs_hash: &str) -> bool {
     let dir = hashes_dir(crate_name);
     let hash_path = dir.join(format!("{stage}.hash"));
     let manifest_path = dir.join(format!("{stage}.manifest"));
@@ -1008,7 +1016,7 @@ pub fn is_stage_cached(crate_name: &str, stage: &str, stage_hash: &CacheKey) -> 
             if cached.trim() != stage_hash.as_str() {
                 return false;
             }
-            outputs_exist(&manifest_path)
+            outputs_exist(&manifest_path) && stamped_outputs_agree_with_disk(&manifest_path, inputs_hash)
         }
         Err(_) => false,
     }
@@ -1386,7 +1394,12 @@ mod tests {
             }
 
             assert_eq!(
-                is_stage_cached("sample-crate", scenario.stage, &test_key(scenario.query_hash)),
+                is_stage_cached(
+                    "sample-crate",
+                    scenario.stage,
+                    &test_key(scenario.query_hash),
+                    "inputs-hash"
+                ),
                 scenario.expect_hit,
                 "scenario `{}` expected hit={}",
                 scenario.name,
