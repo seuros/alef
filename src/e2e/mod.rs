@@ -16,7 +16,9 @@ pub mod scaffold;
 pub mod snippets;
 pub mod template_env;
 pub mod validate;
+pub mod validate_call_args;
 pub mod validate_call_class;
+pub mod validate_call_module;
 pub mod validate_call_result_type;
 
 use crate::core::backend::GeneratedFile;
@@ -234,6 +236,8 @@ fn generate_e2e_with_extensions(
     // config time. See each function's own doc comment for the failure it replaces.
     validate_call_class::enforce_call_class_overrides(e2e_config, config, type_defs, enums, &resolved_languages)?;
     validate_call_result_type::enforce_call_result_type_overrides(e2e_config, type_defs, enums, &resolved_languages)?;
+    validate_call_module::enforce_call_module_overrides(e2e_config, config, &resolved_languages)?;
+    validate_call_args::enforce_call_arg_signatures(&fixtures, e2e_config, functions, type_defs, &resolved_languages)?;
 
     let all_groups = group_fixtures(&fixtures);
 
