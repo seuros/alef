@@ -76,13 +76,23 @@ impl FieldResolver {
         self.swift_json_bridged_prefix(field, true)
     }
 
+    /// ~keep Resolves the alias BEFORE walking segments, and only that -- not `field` itself as
+    /// a fallback. `field` is a virtual/authored label (e.g. `metadata.open_graph.title`); its
+    /// dot-segments do not correspond to real struct hops, so walking it directly can find an
+    /// incidental bare-name match at the WRONG depth. `metadata.open_graph.title`'s own bare
+    /// segment `open_graph` happens to equal the real bridged field's name, so walking the raw
+    /// label returned the prefix `metadata.open_graph` -- two hops -- when the real struct path
+    /// is `metadata.document.open_graph[title]` -- three hops through an intermediate `document`
+    /// struct the alias never mentions. That wrong, shorter prefix was then handed to
+    /// `resolver.accessor()` as a real path by `presentation::clamp_swift_json_bridged_paths`,
+    /// which has no alias entry for the truncated form, so it rendered `.metadata().openGraph()`
+    /// -- a non-compiling accessor -- in the Swift snippet. The e2e generator's own use of this
+    /// same wrong prefix (naming the field in a skip COMMENT, never as a real path) hid the bug:
+    /// wrong text in a comment is silently wrong, not a compiler error. `resolve()` is an
+    /// identity function whenever `field` names no alias, so unconditionally resolving first
+    /// changes nothing for every caller that was already passing a real (unaliased) struct path.
     fn swift_json_bridged_prefix(&self, field: &str, steps_past_leaf: bool) -> Option<String> {
-        for candidate in [field, self.resolve(field)] {
-            if let Some(prefix) = self.swift_json_bridged_prefix_direct(candidate, steps_past_leaf) {
-                return Some(prefix);
-            }
-        }
-        None
+        self.swift_json_bridged_prefix_direct(self.resolve(field), steps_past_leaf)
     }
 
     fn swift_json_bridged_prefix_direct(&self, field: &str, steps_past_leaf: bool) -> Option<String> {

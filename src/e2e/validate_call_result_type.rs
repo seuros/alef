@@ -126,10 +126,20 @@ pub fn validate_call_result_type_overrides(
             if !result_type_override_is_active(lang, languages) {
                 continue;
             }
-            let Some(result_type_value) = call.overrides.get(lang).and_then(|o| o.result_type.as_ref()) else {
+            let Some(override_config) = call.overrides.get(lang) else {
                 continue;
             };
-            check_result_type_override(&config_key, lang, result_type_value, &candidates, &mut errors);
+            let Some(result_type_value) = override_config.result_type.as_ref() else {
+                continue;
+            };
+            check_result_type_override(
+                &config_key,
+                lang,
+                result_type_value,
+                &candidates,
+                override_config.raw_c_result_type.as_deref(),
+                &mut errors,
+            );
         }
     }
     errors
@@ -160,6 +170,7 @@ fn check_result_type_override(
     lang: &str,
     result_type_value: &str,
     candidates: &[String],
+    raw_c_result_type: Option<&str>,
     errors: &mut Vec<ValidationError>,
 ) {
     if candidates.iter().any(|candidate| candidate == result_type_value) {
@@ -174,6 +185,30 @@ fn check_result_type_override(
     // a warning rather than a hard error: the call may still render correctly when
     // `raw_c_result_type` is also set, unlike a genuinely unresolvable type name.
     if is_primitive_or_pointer_c_spelling(result_type_value) {
+        // Only `raw_c_result_type` on the SAME `c` override actually changes what the C
+        // generator does with a primitive/pointer `result_type`: `resolve_call_info` in
+        // `src/e2e/codegen/c.rs` reads `raw_c_result_type` and, when it is set, takes the
+        // dedicated "Raw C result type path" in `src/e2e/codegen/c/test_function.rs` --
+        // which returns before ever reaching the legacy path that resolves
+        // `result_type_name` against the IR (`result_type_name.require()` /
+        // `ensure_leaf_field_exists`). So once `raw_c_result_type` is set, the primitive
+        // `result_type` spelling is never dereferenced as an IR type name at all.
+        //
+        // `result_is_bytes` / `result_is_simple` do NOT license this the same way: the C
+        // generator only ever reads them from `call_declares_non_struct_result`, which is
+        // reached solely through `unresolved_result_type_name` -- the path taken when NO
+        // `result_type` override is set. An explicit `result_type` override short-circuits
+        // `resolve_call_info`'s `.or_else()` chain before either flag is ever consulted, so
+        // setting them alongside a primitive `result_type` changes nothing about how that
+        // primitive spelling is used.
+        //
+        // `raw_c_result_type` is also only ever read from the `c` override section itself
+        // (`resolve_call_info` is always called with `lang == "c"`), so it licenses the
+        // override only when it is set on that same `c` override, not on some other
+        // language's override section that happens to also carry a `result_type` value.
+        if lang == "c" && raw_c_result_type.is_some() {
+            return;
+        }
         errors.push(ValidationError {
             file: CONFIG_FILE_LABEL.to_string(),
             message: format!(
@@ -361,6 +396,114 @@ mod tests {
             "got: {}",
             errors[0].message
         );
+    }
+
+    /// The documented remedy for a primitive/pointer `result_type` spelling: `resolve_call_info`
+    /// in `src/e2e/codegen/c.rs` reads `raw_c_result_type` off the SAME `c` override and, when
+    /// set, takes the dedicated raw-result-type path in
+    /// `src/e2e/codegen/c/test_function.rs` that returns before `result_type_name` is ever
+    /// resolved against the IR. A call that already sets both `result_type` and
+    /// `raw_c_result_type` to the same C spelling has applied the fix -- this must produce no
+    /// diagnostic at all, not merely a downgraded one.
+    #[test]
+    fn a_primitive_result_type_with_a_matching_raw_c_result_type_produces_no_diagnostic() {
+        let type_defs = vec![make_type("ChatCompletionResponse")];
+        let mut call = CallConfig::default();
+        let override_config = CallOverride {
+            result_type: Some("char*".to_string()),
+            raw_c_result_type: Some("char*".to_string()),
+            ..CallOverride::default()
+        };
+        call.overrides.insert("c".to_string(), override_config);
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+
+        let errors = validate_call_result_type_overrides(&e2e_config, &type_defs, &[], &["c".to_string()]);
+
+        assert_eq!(
+            errors.len(),
+            0,
+            "raw_c_result_type is the documented remedy and must fully suppress the warning: {errors:?}"
+        );
+    }
+
+    /// The same primitive `result_type` spelling WITHOUT `raw_c_result_type` set must still
+    /// warn -- proves the suppression above is conditioned on the remedy actually being present,
+    /// not on the primitive spelling alone.
+    #[test]
+    fn a_primitive_result_type_without_raw_c_result_type_still_warns() {
+        let type_defs = vec![make_type("ChatCompletionResponse")];
+        let e2e_config = make_e2e_config("char*", "c");
+
+        let errors = validate_call_result_type_overrides(&e2e_config, &type_defs, &[], &["c".to_string()]);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "without raw_c_result_type the primitive spelling must still be reported: {errors:?}"
+        );
+        assert_eq!(errors[0].severity, Severity::Warning);
+    }
+
+    /// `result_is_bytes` / `result_is_simple` are the remedy for a call that names NO
+    /// `result_type` at all (`unresolved_result_type_name` / `call_declares_non_struct_result`).
+    /// They are never consulted once `result_type` is explicitly set -- `resolve_call_info`'s
+    /// `.or_else()` chain short-circuits before either flag is read -- so setting them alongside
+    /// a primitive `result_type` must NOT suppress the diagnostic.
+    #[test]
+    fn result_is_bytes_does_not_license_a_primitive_result_type_override() {
+        let type_defs = vec![make_type("ChatCompletionResponse")];
+        let mut call = CallConfig::default();
+        call.result_is_bytes = true;
+        let override_config = CallOverride {
+            result_type: Some("char*".to_string()),
+            ..CallOverride::default()
+        };
+        call.overrides.insert("c".to_string(), override_config);
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+
+        let errors = validate_call_result_type_overrides(&e2e_config, &type_defs, &[], &["c".to_string()]);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "result_is_bytes is not read once result_type is set, so it must not suppress: {errors:?}"
+        );
+        assert_eq!(errors[0].severity, Severity::Warning);
+    }
+
+    /// `raw_c_result_type` only takes effect on the `c` override section -- the C generator
+    /// always reads `call.overrides.get("c")`. Setting it on a different language's override
+    /// section must not license a primitive `result_type` value authored under that same
+    /// (non-`c`) section.
+    #[test]
+    fn raw_c_result_type_on_a_different_language_override_does_not_license_it() {
+        let type_defs = vec![make_type("ChatCompletionResponse")];
+        let mut call = CallConfig::default();
+        let override_config = CallOverride {
+            result_type: Some("char*".to_string()),
+            raw_c_result_type: Some("char*".to_string()),
+            ..CallOverride::default()
+        };
+        call.overrides.insert("csharp".to_string(), override_config);
+        let e2e_config = E2eConfig {
+            call,
+            ..E2eConfig::default()
+        };
+
+        let errors = validate_call_result_type_overrides(&e2e_config, &type_defs, &[], &["csharp".to_string()]);
+
+        assert_eq!(
+            errors.len(),
+            1,
+            "raw_c_result_type is only read from the c override section: {errors:?}"
+        );
+        assert_eq!(errors[0].severity, Severity::Warning);
     }
 
     #[test]
