@@ -220,9 +220,27 @@ pub fn validate_api_surface(api: &ApiSurface) -> ValidationReport {
 
 /// Validate the extracted public API surface before backend generation, allowing
 /// excluded-type substitution only for traits with explicit bridge config.
+///
+/// Diagnostics whose relevance depends on which languages this run resolves (see
+/// [`ValidationCode::SerdeContainerConversionUnsupported`]) fire unconditionally through this
+/// entry point, matching prior behavior for the many callers (mostly tests) that do not know
+/// the resolved language set. Callers that do know it should call
+/// [`validate_api_surface_for_resolved_languages`] instead, so such diagnostics can be scoped
+/// to the languages they actually affect. ~keep
 pub fn validate_api_surface_with_bridged_traits(
     api: &ApiSurface,
     bridged_trait_names: &AHashSet<&str>,
+) -> ValidationReport {
+    validate_api_surface_for_resolved_languages(api, bridged_trait_names, None)
+}
+
+/// Same as [`validate_api_surface_with_bridged_traits`], additionally scoping any diagnostic
+/// whose relevance depends on which languages this run resolves. Pass `None` for
+/// `resolved_languages` to get that function's unscoped (always-fire) behavior.
+pub fn validate_api_surface_for_resolved_languages(
+    api: &ApiSurface,
+    bridged_trait_names: &AHashSet<&str>,
+    resolved_languages: Option<&[Language]>,
 ) -> ValidationReport {
     let mut report = ValidationReport::new();
     report.extend(sanitized_public_api_diagnostics(api).into_iter().map(|diagnostic| {
@@ -246,7 +264,11 @@ pub fn validate_api_surface_with_bridged_traits(
             item.suggested_fix.clone(),
         )
     }));
-    report.extend(backend_readiness_diagnostics(api, bridged_trait_names));
+    report.extend(backend_readiness_diagnostics(
+        api,
+        bridged_trait_names,
+        resolved_languages,
+    ));
     report
 }
 

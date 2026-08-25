@@ -9,7 +9,9 @@ pub(crate) use items::ADAPTER_HANDLED_REASON_PREFIX;
 pub use items::{
     EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef,
 };
-pub use metadata::{CoreWrapper, DefaultValue, DeprecationInfo, ErrorTaxonomy, VersionAnnotation};
+pub use metadata::{
+    CoreWrapper, DefaultValue, DeprecationInfo, ErrorTaxonomy, SerdeContainerConversion, VersionAnnotation,
+};
 pub use service::{
     EntrypointDef, EntrypointKind, HandlerContractDef, HandlerShape, ParameterConstraint, RegistrationDef,
     RegistrationVariant, RegistrationVariantLanguageOverride, RegistrationVariantOverride, RegistrationVariantStyle,

@@ -1,4 +1,5 @@
 use super::fields::has_dyn_trait_object;
+use crate::core::ir::SerdeContainerConversion;
 
 /// Check if a visibility is bare `pub` (not `pub(crate)` or other restricted variants).
 pub(crate) fn is_pub(vis: &syn::Visibility) -> bool {
@@ -504,7 +505,7 @@ pub(crate) fn has_container_serde_default(attrs: &[syn::Attribute]) -> bool {
 /// The boundary check rejects a match immediately preceded by an identifier character, so a
 /// lookup for `from` never matches inside `try_from = "..."` — the same technique
 /// [`extract_serde_rename`] uses to keep `rename` out of `rename_all`. ~keep
-fn extract_serde_container_conversion(attrs: &[syn::Attribute], key: &str) -> Option<String> {
+fn extract_serde_container_conversion_key(attrs: &[syn::Attribute], key: &str) -> Option<String> {
     let with_space = format!("{key} =");
     let without_space = format!("{key}=");
     attrs.iter().find_map(|attr| {
@@ -537,24 +538,24 @@ fn extract_serde_container_conversion(attrs: &[syn::Attribute], key: &str) -> Op
 /// hand-written `From<Named> for T`. Alef cannot see that impl's logic, so it cannot know the
 /// resulting shape — this is recorded so validation can flag the type instead of the
 /// generator silently emitting an object-shaped DTO that does not match the wire. ~keep
-pub(crate) fn extract_serde_container_from(attrs: &[syn::Attribute]) -> Option<String> {
-    extract_serde_container_conversion(attrs, "from")
+fn extract_serde_container_from(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_container_conversion_key(attrs, "from")
 }
 
 /// Extract the type path from `#[serde(into = "...")]` on a struct/enum container (also
 /// matching `#[cfg_attr(..., serde(into = "..."))]`). See [`extract_serde_container_from`] —
 /// `into` is `from`'s serialize-side counterpart and is independent of it: a type may declare
 /// one without the other.
-pub(crate) fn extract_serde_container_into(attrs: &[syn::Attribute]) -> Option<String> {
-    extract_serde_container_conversion(attrs, "into")
+fn extract_serde_container_into(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_container_conversion_key(attrs, "into")
 }
 
 /// Extract the type path from `#[serde(try_from = "...")]` on a struct/enum container (also
 /// matching `#[cfg_attr(..., serde(try_from = "..."))]`). See [`extract_serde_container_from`]
 /// — `try_from` is the fallible counterpart of `from` and is mutually exclusive with it in
 /// valid serde usage, but alef does not need to enforce that; it only records what is present.
-pub(crate) fn extract_serde_container_try_from(attrs: &[syn::Attribute]) -> Option<String> {
-    extract_serde_container_conversion(attrs, "try_from")
+fn extract_serde_container_try_from(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_container_conversion_key(attrs, "try_from")
 }
 
 /// True when a container carries `#[serde(transparent)]` (also matching
@@ -565,7 +566,7 @@ pub(crate) fn extract_serde_container_try_from(attrs: &[syn::Attribute]) -> Opti
 /// field's own serialized shape, with no wrapping object. Still tracked as a shape alef cannot
 /// yet mirror, since the generated DTO still emits an object with that one field as a named
 /// property rather than the bare unwrapped value.
-pub(crate) fn has_serde_transparent(attrs: &[syn::Attribute]) -> bool {
+fn has_serde_transparent(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|attr| {
         let attr_str = quote::quote!(#attr).to_string();
         if !attr_str.contains("serde") {
@@ -577,6 +578,18 @@ pub(crate) fn has_serde_transparent(attrs: &[syn::Attribute]) -> bool {
             || attr_str.contains("transparent)")
             || attr_str.ends_with("transparent")
     })
+}
+
+/// Extract a struct's container-level `#[serde(from/into/try_from/transparent)]` into one
+/// [`SerdeContainerConversion`], the sole entry point extraction calls for this concept -- see
+/// that struct's doc for why it replaced four separate `TypeDef` fields.
+pub(crate) fn extract_serde_container_conversion(attrs: &[syn::Attribute]) -> SerdeContainerConversion {
+    SerdeContainerConversion {
+        from: extract_serde_container_from(attrs),
+        into: extract_serde_container_into(attrs),
+        try_from: extract_serde_container_try_from(attrs),
+        transparent: has_serde_transparent(attrs),
+    }
 }
 
 /// Check if a `#[derive(...)]` attribute contains a specific multi-segment derive path.

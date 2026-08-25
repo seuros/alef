@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::metadata::{CoreWrapper, DefaultValue, ErrorTaxonomy, VersionAnnotation};
+use super::metadata::{CoreWrapper, DefaultValue, ErrorTaxonomy, SerdeContainerConversion, VersionAnnotation};
 use super::type_ref::TypeRef;
 
 /// A public struct exposed to bindings.
@@ -60,27 +60,15 @@ pub struct TypeDef {
     /// this flag and never substitute `has_default` for it. ~keep
     #[serde(default)]
     pub serde_container_default: bool,
-    /// Type path from a container-level `#[serde(from = "...")]`. Marks a struct whose wire
-    /// shape is NOT the derived, field-by-field object serde would otherwise produce -- it
-    /// instead reads a value of the named type and converts via a hand-written `From`, whose
-    /// logic (and thus the real shape) alef cannot see. Must gate validation instead of letting
-    /// codegen silently emit an object DTO that won't parse the real payload. ~keep
+    /// Container-level `#[serde(from/into/try_from/transparent)]`, when present. Marks a
+    /// struct whose wire shape is NOT the derived, field-by-field object serde would otherwise
+    /// produce -- e.g. `from`/`into` route it through a hand-written `From` whose logic (and
+    /// thus the real shape) alef cannot see; `transparent` collapses it to the struct's single
+    /// field with no wrapping object. Must gate validation instead of letting codegen silently
+    /// emit an object DTO that disagrees with the real payload. See
+    /// [`crate::core::ir::SerdeContainerConversion`] for why this is one field, not four. ~keep
     #[serde(default)]
-    pub serde_container_from: Option<String>,
-    /// Type path from `#[serde(into = "...")]`. Serialize-side counterpart of
-    /// [`TypeDef::serde_container_from`]; independent of it -- see that field's doc.
-    #[serde(default)]
-    pub serde_container_into: Option<String>,
-    /// Type path from `#[serde(try_from = "...")]`. Fallible counterpart of
-    /// [`TypeDef::serde_container_from`]; same "unknown wire shape" concern.
-    #[serde(default)]
-    pub serde_container_try_from: Option<String>,
-    /// True when the struct carries `#[serde(transparent)]`: the wire shape is exactly the
-    /// struct's one non-skipped field, unwrapped, with no companion type needed -- but alef's
-    /// generated DTO still emits an object, so this must gate the same diagnostic as the
-    /// conversion-path fields above.
-    #[serde(default)]
-    pub serde_transparent: bool,
+    pub serde_container_conversion: SerdeContainerConversion,
     /// Super-traits of this trait (e.g., `["Plugin"]` for `WorkerBackend: Plugin`).
     /// Only populated when `is_trait` is true. Used by trait bridge codegen
     /// to determine which super-trait impls to generate.
@@ -727,34 +715,31 @@ mod tests {
     #[allow(dead_code)]
     fn type_def_field_coverage_witness(value: TypeDef) {
         let TypeDef {
-            name: _,                     // identifier; every backend reads it directly
-            rust_path: _,                // import / qualified-path emission ~keep
-            original_rust_path: _,       // From-impl target when core_import re-exports
-            fields: _,                   // drives the whole struct-field codegen loop
-            methods: _,                  // drives the whole method codegen loop
-            is_opaque: _,                // opaque-handle vs. value-type binding strategy ~keep
-            is_clone: _,                 // gates `.clone()` emission ~keep
-            is_copy: _,                  // gates Copy-vs-clone (avoids clippy::clone_on_copy)
-            doc: _,                      // doc-comment emission
-            cfg: _,                      // conditional `#[cfg]` propagation
-            is_trait: _,                 // `dyn` keyword for opaque inner types
-            has_default: _,              // NAPI-style all-fields-optional-with-defaults
-            has_stripped_cfg_fields: _,  // `..Default::default()` in struct literals ~keep
-            is_return_type: _,           // output DTO style (e.g. Python TypedDict)
-            serde_rename_all: _,         // Go/Java/C# JSON tag casing
-            has_serde: _,                // gates FFI from_json/to_json generation
-            serde_container_default: _,  // per-field wire-optionality (Go omitempty pointers) ~keep
-            serde_container_from: _,     // flags an unmirrorable wire shape for validation ~keep
-            serde_container_into: _,     // flags an unmirrorable wire shape for validation ~keep
-            serde_container_try_from: _, // flags an unmirrorable wire shape for validation ~keep
-            serde_transparent: _,        // flags an unmirrorable wire shape for validation ~keep
-            super_traits: _,             // trait bridge super-trait impl selection ~keep
-            binding_excluded: _,         // excludes the type from generated surfaces
-            binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input
-            is_variant_wrapper: _,       // opts static `new` into host constructor emission
-            has_lifetime_params: _,      // From<T<'_>> vs From<T> / opaque wrapper choice
-            has_private_fields: _,       // non-literal construction strategy in conversions
-            version: _,                  // since/deprecated annotation emission
+            name: _,                       // identifier; every backend reads it directly
+            rust_path: _,                  // import / qualified-path emission ~keep
+            original_rust_path: _,         // From-impl target when core_import re-exports
+            fields: _,                     // drives the whole struct-field codegen loop
+            methods: _,                    // drives the whole method codegen loop
+            is_opaque: _,                  // opaque-handle vs. value-type binding strategy ~keep
+            is_clone: _,                   // gates `.clone()` emission ~keep
+            is_copy: _,                    // gates Copy-vs-clone (avoids clippy::clone_on_copy)
+            doc: _,                        // doc-comment emission
+            cfg: _,                        // conditional `#[cfg]` propagation
+            is_trait: _,                   // `dyn` keyword for opaque inner types
+            has_default: _,                // NAPI-style all-fields-optional-with-defaults
+            has_stripped_cfg_fields: _,    // `..Default::default()` in struct literals ~keep
+            is_return_type: _,             // output DTO style (e.g. Python TypedDict)
+            serde_rename_all: _,           // Go/Java/C# JSON tag casing
+            has_serde: _,                  // gates FFI from_json/to_json generation
+            serde_container_default: _,    // per-field wire-optionality (Go omitempty pointers) ~keep
+            serde_container_conversion: _, // flags an unmirrorable wire shape for validation ~keep
+            super_traits: _,               // trait bridge super-trait impl selection ~keep
+            binding_excluded: _,           // excludes the type from generated surfaces
+            binding_exclusion_reason: _,   // diagnostics only; deliberately not codegen input
+            is_variant_wrapper: _,         // opts static `new` into host constructor emission
+            has_lifetime_params: _,        // From<T<'_>> vs From<T> / opaque wrapper choice
+            has_private_fields: _,         // non-literal construction strategy in conversions
+            version: _,                    // since/deprecated annotation emission
         } = value;
     }
 

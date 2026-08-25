@@ -783,31 +783,64 @@ fn api_surface_validation_checks_handler_contract_ir_types() {
     }
 }
 
+fn range_wire_type() -> TypeDef {
+    TypeDef {
+        name: "Range".to_string(),
+        serde_container_conversion: crate::core::ir::SerdeContainerConversion {
+            from: Some("RangeWire".to_string()),
+            into: Some("RangeWire".to_string()),
+            ..Default::default()
+        },
+        has_serde: true,
+        ..TypeDef::default()
+    }
+}
+
 #[test]
-fn api_surface_validation_flags_a_struct_with_container_from_into() {
+fn api_surface_validation_flags_a_struct_with_container_from_into_as_a_warning() {
+    // Warning, not Error: this diagnostic must never abort a consumer's build on its own --
+    // see the doc comment on ValidationCode::SerdeContainerConversionUnsupported's emitter.
     let api = ApiSurface {
         crate_name: "sample-lib".to_string(),
-        types: vec![TypeDef {
-            name: "Range".to_string(),
-            serde_container_from: Some("RangeWire".to_string()),
-            serde_container_into: Some("RangeWire".to_string()),
-            has_serde: true,
-            ..TypeDef::default()
-        }],
+        types: vec![range_wire_type()],
         ..ApiSurface::default()
     };
 
     let report = validate_api_surface(&api);
 
-    assert!(report.has_errors());
+    assert!(!report.has_errors(), "must never be fatal on its own: {report:?}");
     let diagnostic = report
         .diagnostics
         .iter()
         .find(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported)
         .expect("serde_container_conversion_unsupported diagnostic present");
+    assert_eq!(diagnostic.severity, ValidationSeverity::Warning);
     assert_eq!(diagnostic.item_path.as_deref(), Some("type Range"));
-    assert!(diagnostic.reason.contains("from = \"RangeWire\""), "{}", diagnostic.reason);
-    assert!(diagnostic.reason.contains("into = \"RangeWire\""), "{}", diagnostic.reason);
+    assert!(
+        diagnostic.reason.contains("from = \"RangeWire\""),
+        "{}",
+        diagnostic.reason
+    );
+    assert!(
+        diagnostic.reason.contains("into = \"RangeWire\""),
+        "{}",
+        diagnostic.reason
+    );
+    assert!(
+        diagnostic.reason.contains("pyo3")
+            && diagnostic.reason.contains("napi")
+            && diagnostic.reason.contains("magnus")
+            && diagnostic.reason.contains("wasm")
+            && diagnostic.reason.contains("rustler")
+            && diagnostic.reason.contains("extendr"),
+        "message must name every backend that re-derives its own binding struct: {}",
+        diagnostic.reason
+    );
+    assert!(
+        diagnostic.reason.contains("unaffected"),
+        "message must tell an FFI-only consumer their output has no defect: {}",
+        diagnostic.reason
+    );
 }
 
 #[test]
@@ -816,7 +849,10 @@ fn api_surface_validation_flags_a_transparent_struct() {
         crate_name: "sample-lib".to_string(),
         types: vec![TypeDef {
             name: "Pixels".to_string(),
-            serde_transparent: true,
+            serde_container_conversion: crate::core::ir::SerdeContainerConversion {
+                transparent: true,
+                ..Default::default()
+            },
             has_serde: true,
             ..TypeDef::default()
         }],
@@ -830,6 +866,7 @@ fn api_surface_validation_flags_a_transparent_struct() {
         .iter()
         .find(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported)
         .expect("serde_container_conversion_unsupported diagnostic present for transparent struct");
+    assert_eq!(diagnostic.severity, ValidationSeverity::Warning);
     assert_eq!(diagnostic.item_path.as_deref(), Some("type Pixels"));
     assert!(diagnostic.reason.contains("transparent"), "{}", diagnostic.reason);
 }
@@ -854,5 +891,71 @@ fn api_surface_validation_does_not_flag_a_plain_struct() {
             .iter()
             .any(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported),
         "a struct with no container conversion attrs must not be flagged: {report:?}"
+    );
+}
+
+#[test]
+fn api_surface_validation_fires_unscoped_when_languages_are_unknown() {
+    // validate_api_surface (and validate_api_surface_with_bridged_traits) never learn the
+    // resolved language set -- most callers are tests, or a phase run before language
+    // resolution -- so they must keep firing unconditionally rather than risk silently
+    // hiding a real gap.
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        types: vec![range_wire_type()],
+        ..ApiSurface::default()
+    };
+
+    let report = validate_api_surface(&api);
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported)
+    );
+}
+
+#[test]
+fn api_surface_validation_scoped_to_ffi_only_languages_does_not_flag() {
+    // The whole point of the Warning-severity rework: a consumer targeting only FFI-derived
+    // backends has no actual defect (they round-trip through the core type's own serde impl
+    // directly), so scoping to their resolved languages must not fire this diagnostic at all.
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        types: vec![range_wire_type()],
+        ..ApiSurface::default()
+    };
+    let ffi_only = [Language::Go, Language::Java, Language::Csharp];
+
+    let report = validate_api_surface_for_resolved_languages(&api, &AHashSet::new(), Some(&ffi_only));
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported),
+        "FFI-derived-only languages have no defect for this diagnostic to name: {report:?}"
+    );
+}
+
+#[test]
+fn api_surface_validation_scoped_to_a_mixed_language_set_still_flags() {
+    // One affected language (Python, i.e. pyo3) alongside FFI-derived ones must still fire --
+    // scoping is "any resolved language is affected", not "every resolved language is affected".
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        types: vec![range_wire_type()],
+        ..ApiSurface::default()
+    };
+    let mixed = [Language::Go, Language::Python];
+
+    let report = validate_api_surface_for_resolved_languages(&api, &AHashSet::new(), Some(&mixed));
+
+    assert!(
+        report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported)
     );
 }

@@ -13,14 +13,39 @@ pub(super) fn validate_generation_api<'a>(
         .iter()
         .map(|bridge| bridge.trait_name.as_str())
         .collect();
-    let validation_report =
-        crate::core::validation::validate_api_surface_with_bridged_traits(api, &bridged_trait_names);
+    let validation_report = crate::core::validation::validate_api_surface_for_resolved_languages(
+        api,
+        &bridged_trait_names,
+        Some(languages),
+    );
     let language_diagnostics = language_backend_readiness_diagnostics(api, config, languages);
     for diagnostic in language_diagnostics
         .iter()
         .filter(|diagnostic| diagnostic.severity == ValidationSeverity::Warning)
     {
         tracing::warn!("{diagnostic}");
+    }
+    // `validation_report`'s own warnings (e.g. SerdeContainerConversionUnsupported) previously
+    // had no print path at all here -- only its Errors were ever consulted (for the fatal/
+    // suppressed handling below), so a Warning-severity diagnostic from
+    // `backend_readiness_diagnostics` was silently dropped before reaching the user. Mirrors
+    // the language_diagnostics loop above, and the same suppression precedent as the
+    // fatal-error handling below: a consumer's own `suppress_validation_codes` entry still
+    // demotes this to `debug!` rather than reprinting what they explicitly opted out of. ~keep
+    for diagnostic in validation_report
+        .diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == ValidationSeverity::Warning)
+    {
+        if config
+            .suppress_validation_codes
+            .iter()
+            .any(|code| code == &diagnostic.code.to_string())
+        {
+            tracing::debug!("[suppressed] {diagnostic}");
+        } else {
+            tracing::warn!("{diagnostic}");
+        }
     }
     let fatal: Vec<_> = validation_report
         .errors()

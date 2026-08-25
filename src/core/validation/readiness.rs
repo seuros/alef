@@ -1,10 +1,12 @@
 use super::{ValidationCode, ValidationDiagnostic};
+use crate::core::config::Language;
 use crate::core::ir::{ApiSurface, FunctionDef, HandlerContractDef, MethodDef, ReceiverKind, ServiceDef, TypeRef};
 use ahash::AHashSet;
 
 pub(super) fn backend_readiness_diagnostics(
     api: &ApiSurface,
     bridged_trait_names: &AHashSet<&str>,
+    resolved_languages: Option<&[Language]>,
 ) -> Vec<ValidationDiagnostic> {
     let known_names = known_type_names(api);
     let mut trait_known_names = known_names.clone();
@@ -24,7 +26,7 @@ pub(super) fn backend_readiness_diagnostics(
         if typ.binding_excluded {
             continue;
         }
-        collect_serde_container_conversion_diagnostics(api, typ, &mut diagnostics);
+        collect_serde_container_conversion_diagnostics(api, typ, resolved_languages, &mut diagnostics);
         let method_known_names = if typ.is_trait && bridged_trait_names.contains(typ.name.as_str()) {
             &trait_known_names
         } else {
@@ -155,47 +157,81 @@ fn opaque_type_names(api: &ApiSurface) -> AHashSet<&str> {
         .collect()
 }
 
-/// Flag a struct whose serde container attributes give it a wire shape the generated Rust
-/// DTO cannot reproduce.
+/// Languages whose backend re-derives its own local Rust binding struct (via
+/// `codegen::generators::structs.rs`'s `#[derive(serde::Serialize, serde::Deserialize)]`)
+/// rather than round-tripping the core type's own `Serialize`/`Deserialize` directly.
 ///
-/// `structs.rs` always derives a plain, field-by-field `serde::Serialize`/`serde::Deserialize`
-/// on the generated binding struct. A container-level `#[serde(from/into/try_from = "...")]`
-/// routes the *real* wire shape through a hand-written `From`/`TryFrom` impl alef cannot see
-/// (commonly a tuple/array for a value type, not an object); `#[serde(transparent)]` collapses
-/// the wire shape to the struct's single field with no wrapping object at all. Either way the
-/// derived DTO shape silently disagrees with the real one — this must be loud instead. ~keep
+/// `SerdeContainerConversionUnsupported` only affects these six: the FFI-derived backends
+/// (Go/Java/C#/Dart/Swift/Kotlin/Zig/Jni) call `serde_json::from_str::<CoreType>` /
+/// `serde_json::to_string(&CoreType)` against the real core type in
+/// `backends/ffi/templates/type_{from,to}_json.jinja` -- confirmed by reading those templates
+/// -- whose `Serialize`/`Deserialize` already honours the container conversion because it is
+/// genuine compiled code in the consumer's own crate, not something alef re-derives. ~keep
+const LANGUAGES_WITH_LOCAL_SERDE_DTO: [Language; 6] = [
+    Language::Python,
+    Language::Node,
+    Language::Ruby,
+    Language::Wasm,
+    Language::Elixir,
+    Language::R,
+];
+
+/// Flag a struct whose serde container attributes give it a wire shape at least one
+/// in-scope backend's re-derived binding DTO cannot reproduce.
+///
+/// A container-level `#[serde(from/into/try_from = "...")]` routes the *real* wire shape
+/// through a hand-written `From`/`TryFrom` impl alef cannot see (commonly a tuple/array for a
+/// value type, not an object); `#[serde(transparent)]` collapses the wire shape to the
+/// struct's single field with no wrapping object at all. `resolved_languages` scopes this to
+/// a `Warning`, not an `Error`: a consumer targeting only FFI-derived backends has no actual
+/// defect, and aborting their build on a diagnostic that names no real problem for their
+/// output is worse than the silent bug it replaces. `None` means the caller does not yet know
+/// the resolved language set (e.g. a test, or a validation pass run before language
+/// resolution) -- fire unconditionally rather than risk silently hiding a real gap. ~keep
 fn collect_serde_container_conversion_diagnostics(
     api: &ApiSurface,
     typ: &crate::core::ir::TypeDef,
+    resolved_languages: Option<&[Language]>,
     diagnostics: &mut Vec<ValidationDiagnostic>,
 ) {
-    let mut attrs = Vec::new();
-    if let Some(path) = &typ.serde_container_from {
-        attrs.push(format!("from = \"{path}\""));
-    }
-    if let Some(path) = &typ.serde_container_into {
-        attrs.push(format!("into = \"{path}\""));
-    }
-    if let Some(path) = &typ.serde_container_try_from {
-        attrs.push(format!("try_from = \"{path}\""));
-    }
-    if typ.serde_transparent {
-        attrs.push("transparent".to_string());
-    }
-    if attrs.is_empty() {
+    let conversion = &typ.serde_container_conversion;
+    if !conversion.is_present() {
         return;
     }
-    diagnostics.push(ValidationDiagnostic::error(
+    let mut attrs = Vec::new();
+    if let Some(path) = &conversion.from {
+        attrs.push(format!("from = \"{path}\""));
+    }
+    if let Some(path) = &conversion.into {
+        attrs.push(format!("into = \"{path}\""));
+    }
+    if let Some(path) = &conversion.try_from {
+        attrs.push(format!("try_from = \"{path}\""));
+    }
+    if conversion.transparent {
+        attrs.push("transparent".to_string());
+    }
+    let affected =
+        resolved_languages.is_none_or(|langs| langs.iter().any(|lang| LANGUAGES_WITH_LOCAL_SERDE_DTO.contains(lang)));
+    if !affected {
+        return;
+    }
+    diagnostics.push(ValidationDiagnostic::warning(
         ValidationCode::SerdeContainerConversionUnsupported,
         api.crate_name.clone(),
+        None,
         Some(format!("type {}", typ.name)),
         format!(
-            "struct carries #[serde({})], so its real wire shape is not the object shape the \
-             generated binding DTO derives; JSON encode/decode for this type will not round-trip",
+            "struct carries #[serde({})]; its real wire shape disagrees with the plain object \
+             shape backends that re-derive their own binding struct emit (pyo3, napi, magnus, \
+             wasm, rustler, extendr) -- JSON encode/decode for this type will not round-trip on \
+             those targets. FFI-derived backends (Go, Java, C#, Dart, Swift, Kotlin, Zig) are \
+             unaffected: they serialize the core type directly, so its real serde impl already \
+             honours this attribute",
             attrs.join(", ")
         ),
-        "exclude the type from generated bindings, or hand-write the JSON bridge for it until \
-         alef mirrors the container conversion",
+        "for the affected backends only, exclude the type from generated bindings or \
+         hand-write its JSON bridge until alef mirrors the container conversion there",
     ));
 }
 

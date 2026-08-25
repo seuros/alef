@@ -122,6 +122,39 @@ pub struct VersionAnnotation {
     pub deprecated: Option<DeprecationInfo>,
 }
 
+/// A struct's container-level `#[serde(from/into/try_from/transparent)]`, when present.
+///
+/// One cohesive fact -- "how does this container convert for serde" -- kept as one `TypeDef`
+/// field instead of four, so every exhaustive `TypeDef` literal in the tree pays one line of
+/// churn per addition to this concept instead of four. `from`/`into`/`try_from` carry the type
+/// path serde converts through and are independent of each other (a type may declare `into`
+/// without `from`); `transparent` is a bare flag needing no companion type. All four are
+/// `false`/`None` by default, matching every other TypeDef field this struct replaces. ~keep
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SerdeContainerConversion {
+    /// Type path from `#[serde(from = "...")]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
+    /// Type path from `#[serde(into = "...")]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub into: Option<String>,
+    /// Type path from `#[serde(try_from = "...")]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub try_from: Option<String>,
+    /// True when the struct carries `#[serde(transparent)]`.
+    #[serde(default)]
+    pub transparent: bool,
+}
+
+impl SerdeContainerConversion {
+    /// True when any of the four attributes are present -- the condition every caller actually
+    /// wants, so `TypeDef::default()`'s all-absent `SerdeContainerConversion` reads the same as
+    /// "no container conversion" without each caller re-deriving that from four field checks.
+    pub fn is_present(&self) -> bool {
+        self.from.is_some() || self.into.is_some() || self.try_from.is_some() || self.transparent
+    }
+}
+
 #[cfg(test)]
 mod error_taxonomy_tests {
     use super::ErrorTaxonomy;

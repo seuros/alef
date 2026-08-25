@@ -304,10 +304,10 @@ fn test_struct_serde_from_into_are_extracted_and_independent() {
     let surface = extract_from_source(source);
     assert_eq!(surface.types.len(), 1);
     let point = &surface.types[0];
-    assert_eq!(point.serde_container_into.as_deref(), Some("(i32, i32)"));
-    assert_eq!(point.serde_container_from, None);
-    assert_eq!(point.serde_container_try_from, None);
-    assert!(!point.serde_transparent);
+    assert_eq!(point.serde_container_conversion.into.as_deref(), Some("(i32, i32)"));
+    assert_eq!(point.serde_container_conversion.from, None);
+    assert_eq!(point.serde_container_conversion.try_from, None);
+    assert!(!point.serde_container_conversion.transparent);
 }
 
 #[test]
@@ -326,9 +326,9 @@ fn test_struct_serde_from_and_try_from_are_extracted_and_distinguished() {
     let surface = extract_from_source(source);
     assert_eq!(surface.types.len(), 1);
     let range = &surface.types[0];
-    assert_eq!(range.serde_container_from.as_deref(), Some("RangeWire"));
-    assert_eq!(range.serde_container_try_from.as_deref(), Some("RangeWire"));
-    assert_eq!(range.serde_container_into, None);
+    assert_eq!(range.serde_container_conversion.from.as_deref(), Some("RangeWire"));
+    assert_eq!(range.serde_container_conversion.try_from.as_deref(), Some("RangeWire"));
+    assert_eq!(range.serde_container_conversion.into, None);
 }
 
 #[test]
@@ -343,8 +343,8 @@ fn test_struct_serde_transparent_is_extracted() {
 
     let surface = extract_from_source(source);
     assert_eq!(surface.types.len(), 1);
-    assert!(surface.types[0].serde_transparent);
-    assert_eq!(surface.types[0].serde_container_from, None);
+    assert!(surface.types[0].serde_container_conversion.transparent);
+    assert_eq!(surface.types[0].serde_container_conversion.from, None);
 }
 
 #[test]
@@ -361,10 +361,10 @@ fn test_struct_serde_container_conversion_attrs_default_absent() {
     let surface = extract_from_source(source);
     assert_eq!(surface.types.len(), 1);
     let plain = &surface.types[0];
-    assert_eq!(plain.serde_container_from, None);
-    assert_eq!(plain.serde_container_into, None);
-    assert_eq!(plain.serde_container_try_from, None);
-    assert!(!plain.serde_transparent);
+    assert_eq!(plain.serde_container_conversion.from, None);
+    assert_eq!(plain.serde_container_conversion.into, None);
+    assert_eq!(plain.serde_container_conversion.try_from, None);
+    assert!(!plain.serde_container_conversion.transparent);
 }
 
 #[test]
@@ -386,6 +386,6 @@ fn test_struct_serde_from_under_cfg_attr_is_extracted() {
     let surface = extract_from_source(source);
     assert_eq!(surface.types.len(), 1);
     let bbox = &surface.types[0];
-    assert_eq!(bbox.serde_container_from.as_deref(), Some("(f64, f64)"));
-    assert_eq!(bbox.serde_container_into.as_deref(), Some("(f64, f64)"));
+    assert_eq!(bbox.serde_container_conversion.from.as_deref(), Some("(f64, f64)"));
+    assert_eq!(bbox.serde_container_conversion.into.as_deref(), Some("(f64, f64)"));
 }

@@ -8,10 +8,9 @@ use crate::extract::type_resolver;
 use super::helpers::{
     build_rust_path, extract_alef_error_code, extract_cfg_condition, extract_doc_comments, extract_enum_variant,
     extract_error_message_template, extract_field, extract_field_binding_exclusion_reason,
-    extract_field_type_rust_path, extract_serde_container_from, extract_serde_container_into,
-    extract_serde_container_try_from, extract_serde_rename_all, extract_serde_skip_serializing_if,
-    extract_version_annotation, has_cfg_attribute, has_container_serde_default, has_derive, has_field_attr,
-    has_serde_transparent, is_pub, syn_type_is_boxed,
+    extract_field_type_rust_path, extract_serde_container_conversion, extract_serde_rename_all,
+    extract_serde_skip_serializing_if, extract_version_annotation, has_cfg_attribute, has_container_serde_default,
+    has_derive, has_field_attr, is_pub, syn_type_is_boxed,
 };
 
 /// Return true when the enum has `#[serde(untagged)]`.
@@ -141,10 +140,7 @@ pub(crate) fn extract_struct(
     let has_default = has_derive(item.attrs.as_slice(), "Default");
     let has_serde = has_derive(item.attrs.as_slice(), "Serialize") && has_derive(item.attrs.as_slice(), "Deserialize");
     let serde_container_default = has_container_serde_default(&item.attrs);
-    let serde_container_from = extract_serde_container_from(&item.attrs);
-    let serde_container_into = extract_serde_container_into(&item.attrs);
-    let serde_container_try_from = extract_serde_container_try_from(&item.attrs);
-    let serde_transparent = has_serde_transparent(&item.attrs);
+    let serde_container_conversion = extract_serde_container_conversion(&item.attrs);
     let serde_rename_all = extract_serde_rename_all(&item.attrs);
     let doc = extract_doc_comments(&item.attrs);
     let is_opaque = fields.is_empty() && !(has_default && has_serde);
@@ -183,10 +179,7 @@ pub(crate) fn extract_struct(
         serde_rename_all,
         has_serde,
         serde_container_default,
-        serde_container_from,
-        serde_container_into,
-        serde_container_try_from,
-        serde_transparent,
+        serde_container_conversion,
         super_traits: vec![],
         binding_excluded,
         binding_exclusion_reason,
