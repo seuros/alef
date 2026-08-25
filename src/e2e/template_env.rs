@@ -308,6 +308,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/csharp/snippet_body.jinja"),
     ),
     (
+        "csharp/wrapped_collection_literal.jinja",
+        include_str!("templates/csharp/wrapped_collection_literal.jinja"),
+    ),
+    (
         "kotlin/snippet_body.jinja",
         include_str!("templates/kotlin/snippet_body.jinja"),
     ),

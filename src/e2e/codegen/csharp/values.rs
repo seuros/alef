@@ -119,6 +119,31 @@ pub(super) fn effective_csharp_enum_fields(
     effective_enum_fields
 }
 
+/// Above this many elements, a C# collection literal (`new[] { ... }`, `new List<T>() { ... }`)
+/// is wrapped one element per line instead of emitted inline. Fixture-driven catalogs can carry
+/// hundreds or thousands of elements; inlining those onto one line produces a single unwrapped
+/// line tens of thousands of characters long that the formatter must reflow from scratch (#365).
+/// No inline literal in the current test suite exceeds 2 elements, so this stays well clear of
+/// every existing exact-output assertion. ~keep
+pub(super) const CSHARP_COLLECTION_INLINE_LIMIT: usize = 8;
+
+/// Render a C# collection literal (`new[] { .. }`, `new List<T>() { .. }`, ...) from a
+/// constructor `prefix` and already-rendered element expressions. Stays on one line for small
+/// literals; above [`CSHARP_COLLECTION_INLINE_LIMIT`] elements, wraps one element per line via
+/// `csharp/wrapped_collection_literal.jinja` so the formatter receives output that is already
+/// close to its final shape rather than one enormous line to reflow.
+pub(super) fn render_collection_literal(prefix: &str, items: Vec<String>) -> String {
+    if items.len() <= CSHARP_COLLECTION_INLINE_LIMIT {
+        return format!("{prefix} {{ {} }}", items.join(", "));
+    }
+    crate::e2e::template_env::render(
+        "csharp/wrapped_collection_literal.jinja",
+        minijinja::context! { prefix => prefix, items => items },
+    )
+    .trim_end_matches('\n')
+    .to_string()
+}
+
 /// Convert a `serde_json::Value` to a C# literal string.
 pub(super) fn json_to_csharp(value: &serde_json::Value) -> String {
     match value {
@@ -135,7 +160,7 @@ pub(super) fn json_to_csharp(value: &serde_json::Value) -> String {
         serde_json::Value::Null => "null".to_string(),
         serde_json::Value::Array(arr) => {
             let items: Vec<String> = arr.iter().map(json_to_csharp).collect();
-            format!("new[] {{ {} }}", items.join(", "))
+            render_collection_literal("new[]", items)
         }
         serde_json::Value::Object(_) => {
             let json_str = serde_json::to_string(value).unwrap_or_default();

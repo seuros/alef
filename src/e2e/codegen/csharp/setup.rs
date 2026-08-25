@@ -9,7 +9,7 @@ use heck::{ToLowerCamelCase, ToUpperCamelCase};
 use std::collections::HashMap;
 
 use super::stubs::emit_test_backend_with_class_name;
-use super::{classify_bytes_value_csharp, json_to_csharp, resolve_handle_config_type};
+use super::{classify_bytes_value_csharp, json_to_csharp, render_collection_literal, resolve_handle_config_type};
 
 fn json_object_csharp_type<'a>(
     arg: &'a crate::e2e::config::ArgMapping,
@@ -597,7 +597,7 @@ fn json_array_to_csharp_list(arr: &[serde_json::Value], element_type: Option<&st
     match element_type {
         Some("f32") => {
             let items: Vec<String> = arr.iter().map(|v| format!("(float){}", json_to_csharp(v))).collect();
-            format!("new List<float>() {{ {} }}", items.join(", "))
+            render_collection_literal("new List<float>()", items)
         }
         Some("(String, String)") => {
             let items: Vec<String> = arr
@@ -606,10 +606,10 @@ fn json_array_to_csharp_list(arr: &[serde_json::Value], element_type: Option<&st
                     let strs: Vec<String> = v
                         .as_array()
                         .map_or_else(Vec::new, |a| a.iter().map(json_to_csharp).collect());
-                    format!("new List<string>() {{ {} }}", strs.join(", "))
+                    render_collection_literal("new List<string>()", strs)
                 })
                 .collect();
-            format!("new List<List<string>>() {{ {} }}", items.join(", "))
+            render_collection_literal("new List<List<string>>()", items)
         }
         Some(et) if et != "f32" && et != "(String, String)" && et != "string" => {
             // Class/record types: deserialize each element from JSON
@@ -621,11 +621,11 @@ fn json_array_to_csharp_list(arr: &[serde_json::Value], element_type: Option<&st
                     format!("JsonSerializer.Deserialize<{et}>(\"{escaped}\", ConfigOptions)!")
                 })
                 .collect();
-            format!("new List<{et}>() {{ {} }}", items.join(", "))
+            render_collection_literal(&format!("new List<{et}>()"), items)
         }
         _ => {
             let items: Vec<String> = arr.iter().map(json_to_csharp).collect();
-            format!("new List<string>() {{ {} }}", items.join(", "))
+            render_collection_literal("new List<string>()", items)
         }
     }
 }
