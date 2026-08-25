@@ -71,6 +71,7 @@ fn render_void_call(is_async: bool, assertions: Vec<Assertion>) -> String {
         &config,
         &mut referenced_enums,
         &errors,
+        &[],
     );
     out
 }

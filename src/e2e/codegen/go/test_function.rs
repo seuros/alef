@@ -130,6 +130,7 @@ pub(super) struct GoTestFunctionContext<'a> {
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
     pub(super) errors: &'a [crate::core::ir::ErrorDef],
+    pub(super) functions: &'a [crate::core::ir::FunctionDef],
 }
 
 pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context: GoTestFunctionContext<'_>) {
@@ -142,6 +143,7 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         type_defs,
         enums,
         errors,
+        functions,
     } = context;
     let fn_name = fixture.id.to_upper_camel_case();
     let description = &fixture.description;
@@ -170,6 +172,16 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         &fixture.input,
     );
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    let lang = "go";
+    // Anchor the IR-derived result-field oracle (`with_ir_result_fields`) at the call's declared
+    // Rust return type, mirroring the rust/python/java/csharp/elixir e2e generators. Purely
+    // additive: `result_field_oracle_knows` only ever REFUSES what it positively knows the root
+    // type lacks; an unresolved root leaves every anchored answer disabled. ~keep
+    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call_config,
+        lang,
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -178,9 +190,9 @@ pub(super) fn render_test_function(out: &mut String, fixture: &Fixture, context:
         &std::collections::HashSet::new(),
     )
     .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
+    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
-    let lang = "go";
     let overrides = call_config.overrides.get(lang);
     let base_function_name = overrides
         .and_then(|o| o.function.as_deref())

@@ -18,6 +18,7 @@ pub(super) struct GoTestFileContext<'a> {
     pub(super) type_defs: &'a [crate::core::ir::TypeDef],
     pub(super) enums: &'a [crate::core::ir::EnumDef],
     pub(super) errors: &'a [crate::core::ir::ErrorDef],
+    pub(super) functions: &'a [crate::core::ir::FunctionDef],
 }
 
 /// Whether a fixture's `error` assertion declares a value THAT WILL RENDER AS AN ASSERTION,
@@ -46,6 +47,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
         type_defs,
         enums,
         errors,
+        functions,
     } = context;
     let mut out = String::new();
     let emits_executable_test =
@@ -219,6 +221,7 @@ pub(super) fn render_test_file(category: &str, fixtures: &[&Fixture], context: G
                 type_defs,
                 enums,
                 errors,
+                functions,
             },
         );
         if i + 1 < fixtures.len() {

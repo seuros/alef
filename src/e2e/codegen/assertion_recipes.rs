@@ -8,6 +8,7 @@
 use std::collections::HashSet;
 
 use crate::core::config::e2e::{CallConfig, E2eConfig};
+use crate::e2e::field_access::FieldResolver;
 use crate::e2e::fixture::{Assertion, Fixture};
 
 // Compatibility recipe names for fixture-declared opt-ins. Do not enable
@@ -17,6 +18,24 @@ pub(crate) const EMBEDDINGS_RECIPE: &str = "embeddings";
 pub(crate) const KEYWORDS_RECIPE: &str = "keywords";
 pub(crate) const STREAMING_RECIPE: &str = "streaming";
 pub(crate) const TREE_RECIPE: &str = "tree";
+
+/// Whether the call's own result type declares `chunks` — the field every `CHUNKS_RECIPE`
+/// synthetic handler (`chunks_have_content`, `chunks_have_embeddings`,
+/// `chunks_have_heading_context`, `first_chunk_starts_with_heading`) hardcodes as
+/// `{result_var}.chunks` before any generic field validation runs.
+///
+/// ~keep These handlers used to intercept unconditionally, ahead of `is_valid_for_result`, so a
+/// crate where `chunks` is declared on some OTHER type in the same IR (e.g. a nested
+/// `Document` reached through `Envelope.results`) but not on the call's own root type still got
+/// `result.chunks` emitted — code that does not compile. `result_field_oracle_knows` is the
+/// anchored, whole-path oracle `root_declares_path` already backs; asked with the literal name
+/// every one of these handlers accesses, it gives the same "refuse only when positively known
+/// absent" answer #291 already established for the derived-snippet path. `Some(true)` (the root
+/// declares it) and `None` (no anchor, or the call's root type isn't in this map — the
+/// pre-existing default) both keep rendering; only `Some(false)` refuses.
+pub(crate) fn chunks_field_declared_by_result(field_resolver: &FieldResolver) -> bool {
+    field_resolver.result_field_oracle_knows(CHUNKS_RECIPE) != Some(false)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MissingAssertionRecipe {
@@ -344,5 +363,98 @@ mod tests {
         // When streaming is enabled on the call, the streaming recipe should be
         // implicitly available without being listed in assertion_recipes.
         assert!(missing_recipe_for_language(&fixture, &call_config, "rust", &e2e_config).is_none());
+    }
+
+    /// The regression shape: `Envelope { results: Vec<Document> }`, and `Document` (reached only
+    /// through `results`, never through `Envelope` directly) declares `chunks`. Flat, any-type
+    /// name reachability cannot tell `Envelope` and `Document` apart, so it would wave a bare
+    /// `chunks` through for a call whose OWN root type is `Envelope` — the shape every
+    /// `CHUNKS_RECIPE` synthetic handler hardcodes as `{result_var}.chunks`. Anchoring at the
+    /// call's declared root, per-path, is what tells them apart. ~keep
+    mod chunks_synthetic_root_anchoring {
+        use super::*;
+        use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+        use std::collections::{HashMap, HashSet};
+
+        fn envelope_and_document_type_defs() -> Vec<TypeDef> {
+            vec![
+                TypeDef {
+                    name: "Envelope".to_string(),
+                    fields: vec![FieldDef {
+                        name: "results".to_string(),
+                        ty: TypeRef::Vec(Box::new(TypeRef::Named("Document".to_string()))),
+                        ..FieldDef::default()
+                    }],
+                    ..TypeDef::default()
+                },
+                TypeDef {
+                    name: "Document".to_string(),
+                    fields: vec![FieldDef {
+                        name: "chunks".to_string(),
+                        ty: TypeRef::Vec(Box::new(TypeRef::Named("Chunk".to_string()))),
+                        ..FieldDef::default()
+                    }],
+                    ..TypeDef::default()
+                },
+            ]
+        }
+
+        fn resolver_anchored_at(root_type: &str) -> FieldResolver {
+            let type_defs = envelope_and_document_type_defs();
+            let map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
+            let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
+            FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .with_ir_result_fields(map, Some(root_type.to_string()))
+            .with_ir_fields(reachable, excluded, optional)
+        }
+
+        /// The defect: a call whose own root type (`Envelope`) never declares `chunks` — it is
+        /// only reachable through the nested `Document` — must not have its `CHUNKS_RECIPE`
+        /// synthetic handlers hardcode `result.chunks` against it.
+        #[test]
+        fn chunks_only_reachable_via_another_ir_type_is_refused() {
+            let resolver = resolver_anchored_at("Envelope");
+            assert!(
+                !chunks_field_declared_by_result(&resolver),
+                "`chunks` belongs to `Document`, not the call's own root `Envelope`"
+            );
+        }
+
+        /// The control: a call whose root type genuinely declares `chunks` must keep resolving —
+        /// the fix must not turn into "refuse every chunks fixture."
+        #[test]
+        fn chunks_the_call_root_genuinely_declares_still_resolves() {
+            let resolver = resolver_anchored_at("Document");
+            assert!(
+                chunks_field_declared_by_result(&resolver),
+                "`Document` declares `chunks` directly"
+            );
+        }
+
+        /// No anchor at all (no resolved root type — the pre-existing state for every call site
+        /// before this fix) must keep the permissive default: `None` from the oracle is "no
+        /// answer", not "refuse."
+        #[test]
+        fn no_anchored_root_type_keeps_the_permissive_default() {
+            let type_defs = envelope_and_document_type_defs();
+            let map = FieldResolver::ir_result_field_facts(&type_defs, "rust");
+            let (reachable, excluded, optional) = FieldResolver::ir_field_sets(&type_defs);
+            let resolver = FieldResolver::new(
+                &HashMap::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+                &HashSet::new(),
+            )
+            .with_ir_result_fields(map, None)
+            .with_ir_fields(reachable, excluded, optional);
+            assert!(chunks_field_declared_by_result(&resolver));
+        }
     }
 }

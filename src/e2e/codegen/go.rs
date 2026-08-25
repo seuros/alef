@@ -41,7 +41,7 @@ impl E2eCodegen for GoCodegen {
         config: &ResolvedCrateConfig,
         type_defs: &[crate::core::ir::TypeDef],
         enums: &[crate::core::ir::EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
+        functions: &[crate::core::ir::FunctionDef],
         errors: &[crate::core::ir::ErrorDef],
     ) -> Result<Vec<GeneratedFile>> {
         let lang = self.language_name();
@@ -304,6 +304,7 @@ impl E2eCodegen for GoCodegen {
                     type_defs,
                     enums,
                     errors,
+                    functions,
                 },
             );
             files.push(GeneratedFile {

@@ -44,6 +44,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     config: &crate::core::config::ResolvedCrateConfig,
     referenced_enums: &mut std::collections::BTreeSet<String>,
     errors: &[crate::core::ir::ErrorDef],
+    functions: &[crate::core::ir::FunctionDef],
 ) {
     let mut call_config = e2e_config.resolve_call_for_fixture(
         fixture.call.as_deref(),
@@ -56,6 +57,16 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
     // try to find a better-matching call from the named calls.
     call_config = crate::e2e::codegen::select_best_matching_call(call_config, e2e_config, fixture);
     let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
+    // Anchor the IR-derived result-field oracle (`with_ir_result_fields`) at the call's declared
+    // Rust return type, mirroring the rust/python/java/csharp/elixir/go e2e generators. Purely
+    // additive: `result_field_oracle_knows` only ever REFUSES what it positively knows the root
+    // type lacks; an unresolved root (e.g. no `functions` in scope, as in the WASM caller today)
+    // leaves every anchored answer disabled and the pre-existing behaviour unchanged. ~keep
+    let call_root_type = crate::e2e::codegen::call_ir::resolve_declared_result_type(
+        call_config,
+        lang,
+        crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
+    );
     let call_field_resolver = FieldResolver::new(
         e2e_config.effective_fields(call_config),
         e2e_config.effective_fields_optional(call_config),
@@ -63,6 +74,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         e2e_config.effective_fields_array(call_config),
         &std::collections::HashSet::new(),
     )
+    .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
     .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
     let field_resolver = &call_field_resolver;
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs);
@@ -615,6 +627,7 @@ mod void_not_error_tests {
             &config,
             &mut referenced_enums,
             &errors,
+            &[],
         );
         out
     }
