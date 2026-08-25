@@ -206,7 +206,12 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
     // feature at all without this: a name listed there stays a *declared* opt-in flag, just
     // never defaulted, the same tradeoff `extra_features` makes above. ~keep
     for feat in &excluded_default_features {
-        if passthrough_feature_names.contains(feat) || default_feature_names.contains(feat) {
+        // Deliberately checked against `default_feature_names` alone, not
+        // `passthrough_feature_names`: a name in `excluded_default_features` is stripped out of
+        // `default_feature_names` by `effective_ffi_default_features` even when it IS present in
+        // `passthrough_feature_names` (i.e. explicitly configured), so that unfiltered list can
+        // no longer prove a declare-only row already exists for it. ~keep
+        if default_feature_names.contains(feat) {
             continue;
         }
         let line = format!("{feat} = [\"{}/{feat}\"]", config.name);
