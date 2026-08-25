@@ -12,7 +12,6 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 mod batch;
-mod build_dependency;
 mod session_prep;
 mod session_resolution;
 
@@ -567,8 +566,6 @@ fn sessions_needed_for_preparation(
         .map(|(key, spec)| (key.clone(), spec.clone()))
         .collect()
 }
-
-pub(crate) use build_dependency::missing_build_dependency;
 
 /// The single resolution `fail_fast_results`, `parallel_results` and
 /// `batch::group_batchable_snippets` all share for "which configured session does this snippet

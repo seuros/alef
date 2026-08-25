@@ -48,6 +48,7 @@ mod language_pages;
 mod markdown_quality;
 mod rustdoc_fence_attributes;
 mod shared_docs;
+mod snippet_build_dependency_removed;
 mod strict_attribution;
 mod strict_bail_order;
 mod unknown_headings;

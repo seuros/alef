@@ -10,7 +10,6 @@ use heck::ToPascalCase;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-mod build_dependency;
 mod context;
 mod descriptions;
 pub mod doc_cleaning;
@@ -651,17 +650,6 @@ fn validate_snippets(
         if let Some(timeout_secs) = snippet_cfg.timeout_secs {
             runner_cfg.timeout_secs = timeout_secs;
         }
-        // Checked before a single toolchain runs: a language with no configured way to have
-        // produced its artifact is a doomed run, not a validation outcome. See
-        // `build_dependency`'s module doc for how this differs from -- and does not replace --
-        // the `unresolved_dependency` handling below. ~keep
-        build_dependency::enforce_build_dependency(
-            &config.name,
-            snippet_cfg.strict,
-            snippets,
-            &runner_cfg.sessions,
-            level,
-        )?;
         let registry = crate::snippets::validators::ValidatorRegistry::default();
         let summary = crate::snippets::runner::run_validation(snippets, &registry, &runner_cfg)?;
         // Write the report before any strict bail. A run that fails strict mode is precisely the
