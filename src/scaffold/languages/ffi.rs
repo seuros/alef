@@ -697,6 +697,74 @@ extra_features = ["wasm-http"]
         );
     }
 
+    /// Regression for alef-task #320: `effective_ffi_default_features` unconditionally forwarded
+    /// `[crates.ffi].features` into the FFI crate's own `default = [...]` array, which re-enables
+    /// a feature a `target_dep_overrides` entry excluded for one cfg target -- the same defect
+    /// `RubyConfig::excluded_default_features` fixed for the Magnus crate, generalized here.
+    /// Asserts both directions: the excluded name is never defaulted, and a name nobody excluded
+    /// still is.
+    #[test]
+    fn ffi_cargo_toml_excludes_named_feature_from_default_but_keeps_others() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["ffi"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.ffi]
+features = ["native-http", "wasm-http"]
+excluded_default_features = ["native-http"]
+[[crates.ffi.target_dep_overrides]]
+cfg = 'target_os = "windows"'
+features = ["wasm-http"]
+default_features = false
+"#,
+        );
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+        let files = scaffold_ffi(&api, &config).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        let features = features_section(cargo);
+        let default_line = features
+            .lines()
+            .find(|line| line.starts_with("default = ["))
+            .expect("default line emitted");
+        assert!(
+            !default_line.contains("native-http"),
+            "excluded_default_features must drop the name from the FFI crate's own default array:\n{default_line}"
+        );
+        assert!(
+            default_line.contains("wasm-http"),
+            "a feature nobody excluded must still be forwarded into default:\n{default_line}"
+        );
+        assert!(
+            features.contains(r#"native-http = ["my-lib/native-http"]"#),
+            "the excluded feature stays declared (so `cargo build --features native-http` still \
+             works), just not defaulted:\n{features}"
+        );
+        let core_dep_line = cargo
+            .lines()
+            .find(|line| line.trim_start().starts_with("my-lib = { path ="))
+            .expect("core dependency line emitted");
+        assert!(
+            !core_dep_line.contains("native-http"),
+            "excluded_default_features must also drop the name from the core dependency's own \
+             explicit features = [...] line, not just the wrapper's default array:\n{core_dep_line}"
+        );
+        assert!(
+            core_dep_line.contains("wasm-http"),
+            "a feature nobody excluded must still reach the core dependency line:\n{core_dep_line}"
+        );
+    }
+
     /// Parity invariant, stated without reference to any consumer: every feature named by a
     /// `#[cfg(feature = ...)]` in the emitted surface appears in this crate's `[features]`.
     #[test]
