@@ -122,11 +122,24 @@ fn php_function_referenced_feature_names(api: &ApiSurface) -> BTreeSet<String> {
 }
 
 /// Render the core dependency's `, features = [...]` clause, unioning the user-configured
-/// per-language feature list with `extra` (features PHP must always request because it can't
-/// safely gate them — see [`php_function_gated_core_features_to_add`]). Returns an empty string
-/// when there is nothing to request, matching `crate::scaffold::core_dep_features`'s empty case.
-fn merged_core_dep_features(config: &ResolvedCrateConfig, extra: &BTreeSet<String>) -> String {
-    let mut features: Vec<String> = config.features_for_language(Language::Php).to_vec();
+/// per-language feature list (minus any name in `excluded_default_features` — see
+/// `PhpConfig::excluded_default_features`) with `extra` (features PHP must always request
+/// because it can't safely gate them — see [`php_function_gated_core_features_to_add`]). `extra`
+/// is deliberately NOT filtered against `excluded_default_features`: those names are hard
+/// compile-time requirements of an unconditionally-emitted function, not a default-features
+/// convenience the exclusion knob is meant to suppress. Returns an empty string when there is
+/// nothing to request, matching `crate::scaffold::core_dep_features`'s empty case.
+fn merged_core_dep_features(
+    config: &ResolvedCrateConfig,
+    extra: &BTreeSet<String>,
+    excluded_default_features: &std::collections::HashSet<&str>,
+) -> String {
+    let mut features: Vec<String> = config
+        .features_for_language(Language::Php)
+        .iter()
+        .filter(|f| !excluded_default_features.contains(f.as_str()))
+        .cloned()
+        .collect();
     for name in extra {
         if !features.iter().any(|f| f == name) {
             features.push(name.clone());
@@ -218,11 +231,16 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let excluded_default_features: std::collections::HashSet<&str> = config
+        .php
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep_php, core_target_blocks) = crate::scaffold::render_core_dep_with_overrides(
         &config.name,
         &core_dep_path,
-        &merged_core_dep_features(config, &core_features_to_add),
+        &merged_core_dep_features(config, &core_features_to_add, &excluded_default_features),
         version,
         core_overrides,
     );
@@ -268,7 +286,14 @@ pub(crate) fn scaffold_php_cargo(api: &ApiSurface, config: &ResolvedCrateConfig)
             String::new()
         } else {
             let mut lines: Vec<String> = Vec::with_capacity(features.len() + 1);
-            let default_list: Vec<String> = features.iter().map(|name| format!("\"{name}\"")).collect();
+            // A name in `excluded_default_features` is still declared below (so
+            // `cargo build --features <name>` keeps working) but dropped from `default`,
+            // matching `RubyConfig::excluded_default_features`. ~keep
+            let default_list: Vec<String> = features
+                .iter()
+                .filter(|name| !excluded_default_features.contains(name.as_str()))
+                .map(|name| format!("\"{name}\""))
+                .collect();
             lines.push(format!("default = [{}]", default_list.join(", ")));
             for name in &features {
                 lines.push(format!(r#"{name} = ["{core_dep_name}/{name}"]"#));
