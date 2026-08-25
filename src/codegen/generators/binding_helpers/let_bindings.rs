@@ -104,7 +104,9 @@ pub(in crate::codegen::generators) fn gen_named_let_bindings_by_ref(
                 bindings.push_str(&binding);
                 bindings.push_str("\n    ");
             }
-            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref => {
+            TypeRef::Vec(inner)
+                if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref && p.vec_inner_is_ref =>
+            {
                 let binding = if p.optional {
                     crate::codegen::template_env::render(
                         "binding_helpers/vec_string_refs_binding_optional.jinja",
@@ -215,7 +217,9 @@ fn gen_named_let_bindings_inner(
                 bindings.push_str(&binding);
                 bindings.push_str("\n    ");
             }
-            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref => {
+            TypeRef::Vec(inner)
+                if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref && p.vec_inner_is_ref =>
+            {
                 let binding = if p.optional {
                     crate::codegen::template_env::render(
                         "binding_helpers/vec_string_refs_binding_optional.jinja",
@@ -353,7 +357,9 @@ fn gen_named_let_bindings_inner_augmented(
                 bindings.push_str(&binding);
                 bindings.push_str("\n    ");
             }
-            TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref => {
+            TypeRef::Vec(inner)
+                if matches!(inner.as_ref(), TypeRef::String | TypeRef::Char) && p.is_ref && p.vec_inner_is_ref =>
+            {
                 let binding = if p.optional {
                     crate::codegen::template_env::render(
                         "binding_helpers/vec_string_refs_binding_optional.jinja",

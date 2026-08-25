@@ -2109,7 +2109,7 @@ fn test_generate_bindings_cargo_toml_js_sys_with_trait_bridge() {
 }
 
 #[test]
-fn test_vec_string_is_ref_serde_path_emits_refs_binding() {
+fn test_vec_string_is_ref_without_inner_ref_passes_the_vec_directly() {
     let backend = WasmBackend;
 
     let api = ApiSurface {
@@ -2170,16 +2170,21 @@ fn test_vec_string_is_ref_serde_path_emits_refs_binding() {
         .find(|f| f.path.to_string_lossy().ends_with("lib.rs"))
         .expect("generate_bindings must include lib.rs");
 
+    // `vec_inner_is_ref` is false here, so the core parameter is `&Vec<String>` and the binding
+    // must pass `&names` directly. A `names_refs: Vec<&str>` intermediate would be both unused and
+    // the wrong type to pass; it is only correct when the core takes `&[&str]`. The let-binding
+    // generator used to create it on `is_ref` alone while the call-arg generator required
+    // `vec_inner_is_ref` too, so the two disagreed and emitted an unused binding. ~keep
     assert!(
-        lib_file.content.contains("let names_refs: Vec<&str>"),
-        "generated lib.rs must create names_refs intermediate binding for Vec<String> is_ref=true;\n\
+        !lib_file.content.contains("names_refs"),
+        "no names_refs intermediate may be emitted when vec_inner_is_ref is false;\n\
          actual content:\n{}",
         &lib_file.content[lib_file.content.find("fn download").unwrap_or(0)
             ..(lib_file.content.find("fn download").unwrap_or(0) + 300).min(lib_file.content.len())]
     );
     assert!(
-        lib_file.content.contains("&names_refs"),
-        "generated lib.rs must pass &names_refs to core function"
+        lib_file.content.contains("&names"),
+        "generated lib.rs must pass &names to the core function"
     );
 }
 
