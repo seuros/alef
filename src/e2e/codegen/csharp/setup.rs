@@ -666,7 +666,15 @@ fn sort_discriminator_first(value: serde_json::Value) -> serde_json::Value {
 /// - Field types resolved from struct definitions → `JsonSerializer.Deserialize<ActualFieldType>(...)`
 /// - Arrays → `new List<string> { ... }`
 /// - Primitives → C# literals via `json_to_csharp`
-fn csharp_object_initializer(
+///
+/// `type_name` and the field type resolved by [`resolve_csharp_field_type_from_struct`] are IR
+/// names straight off the Rust source, not C# identifiers — every real
+/// `backends::csharp::gen_bindings` emitter runs a type name through
+/// [`crate::codegen::naming::csharp_type_name`] before writing it out, and this snippet path must
+/// resolve to the identical identifier or the generated C# does not reference a type the binding
+/// declares. `csharp_type_name` is idempotent on a name that is already correctly cased, so
+/// applying it unconditionally at each splice point below is safe. ~keep
+pub(super) fn csharp_object_initializer(
     obj: &serde_json::Map<String, serde_json::Value>,
     type_name: &str,
     enum_fields: &HashMap<String, String>,
@@ -676,7 +684,7 @@ fn csharp_object_initializer(
     pointer: &str,
 ) -> String {
     if obj.is_empty() {
-        return format!("new {type_name}()");
+        return format!("new {}()", csharp_type_name(type_name));
     }
 
     // Snake_case fixture keys for fields that are real C# enums in the binding.
@@ -737,6 +745,7 @@ fn csharp_object_initializer(
                     let normalized = normalize_csharp_enum_values(val, enum_fields);
                     let json_str = serde_json::to_string(&normalized).unwrap_or_default();
                     let escaped = escape_csharp(&json_str);
+                    let field_type = csharp_type_name(&field_type);
                     format!("JsonSerializer.Deserialize<{field_type}>(\"{escaped}\", ConfigOptions)!")
                 }
             } else if let Some(nested_type) = nested_types
@@ -765,7 +774,7 @@ fn csharp_object_initializer(
             format!("{pascal_key} = {cs_val}")
         })
         .collect();
-    format!("new {} {{ {} }}", type_name, props.join(", "))
+    format!("new {} {{ {} }}", csharp_type_name(type_name), props.join(", "))
 }
 
 /// Resolve the actual C# field type from a struct definition in type_defs.
