@@ -45,6 +45,30 @@
 //! [`crate::e2e::codegen::call_ir::binding_excluded_for_language`] the same question the
 //! generator side already answers, instead of re-deriving a language-blind copy of it.
 //!
+//! ### Adapter-handled methods (`alef-tasks#361`)
+//!
+//! One more resolution the `binding_excluded_for_language` skip does not cover: `CallIr::signature`
+//! prefers a visible free function unconditionally over a same-named method, but a free function
+//! can itself be excluded from `ApiSurface.functions` on its own account (its own `#[alef::skip]`,
+//! or a crate-wide `exclude.functions` entry matching its bare name) -- invisible to that lookup,
+//! not merely deprioritized. When the only thing left to resolve against is a method every
+//! `[[crates.adapters]]` entry has already claimed (`MethodDef::binding_exclusion_reason` starting
+//! with [`crate::core::ir::ADAPTER_HANDLED_REASON_PREFIX`]), that method's own raw signature is not
+//! trustworthy as the call's shape: an adapter reroutes the call for every binding, Rust's own e2e
+//! suite included, and the shape actually configured under `[e2e.calls.*]` is frequently a
+//! differently-parametered sibling free function written specifically to give that config a
+//! Rust-side calling convention -- exactly the free function this validator can no longer see once
+//! it has been excluded. Measured on a real consumer: a genuine `Handle::stream(&self, req)` /
+//! `stream(handle, url)` name collision resolved to the method and hard-failed generation on
+//! unmodified, previously-generating source, even though the configured `args` matched the (now
+//! invisible) free function the real generator has always called. This is the same "ambiguous
+//! name -> skip" convention `CallIr::signature` already applies when several same-named methods
+//! disagree, extended to the one collision shape a functions-first priority rule cannot detect on
+//! its own -- see [`crate::e2e::codegen::call_ir::resolves_only_via_adapter_handled_method`]'s doc
+//! comment for why this reads the extractor's own marker rather than re-deriving the answer, and
+//! why it does not weaken the ordinary (non-adapter) `binding_excluded` case `alef-tasks#350`
+//! fixed.
+//!
 //! ## Severity
 //!
 //! Lands as [`Severity::Error`] (`alef-tasks#335`): unlike `validate_call_module`'s two
@@ -64,7 +88,7 @@
 use super::validate::{Severity, ValidationError};
 use crate::core::config::e2e::{ArgMapping, CallConfig, E2eConfig};
 use crate::core::ir::{FunctionDef, ParamDef, TypeDef};
-use crate::e2e::codegen::call_ir::{CallIr, binding_excluded_for_language};
+use crate::e2e::codegen::call_ir::{CallIr, binding_excluded_for_language, resolves_only_via_adapter_handled_method};
 use crate::e2e::fixture::Fixture;
 
 /// Run [`validate_call_arg_signatures`] and log every diagnostic, then bail with every
@@ -134,6 +158,9 @@ pub fn validate_call_arg_signatures(
         let Some(signature) = ir.signature(&lookup_name) else {
             continue;
         };
+        if resolves_only_via_adapter_handled_method(&lookup_name, ir) {
+            continue;
+        }
         if languages
             .iter()
             .all(|language| binding_excluded_for_language(&lookup_name, language, ir))
@@ -481,6 +508,134 @@ mod tests {
 
         assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
         assert!(errors[0].message.contains("'chat'"), "got: {}", errors[0].message);
+    }
+
+    /// Builds a `Handle::stream` method flagged the way `pipeline::extract`'s
+    /// `mark_adapter_handled_methods` flags a real `[[crates.adapters]]` target.
+    fn adapter_handled_method(name: &str, params: Vec<ParamDef>) -> MethodDef {
+        MethodDef {
+            name: name.to_string(),
+            params,
+            return_type: TypeRef::String,
+            binding_excluded: true,
+            binding_exclusion_reason: Some(format!(
+                "{} entry `{name}`",
+                crate::core::ir::ADAPTER_HANDLED_REASON_PREFIX
+            )),
+            ..MethodDef::default()
+        }
+    }
+
+    /// `alef-tasks#361`: reproduces the release-blocking regression measured on a real consumer.
+    /// A method (`Handle::stream(&self, req)`) is bound via `[[crates.adapters]]`, so
+    /// `pipeline::extract` flags it adapter-handled; the sibling free function
+    /// (`stream(handle, url)`) written to mirror that call's convention for the polyglot e2e
+    /// surface has, independently, been excluded from `ApiSurface.functions` (its own
+    /// `#[alef::skip]`, or a bare-name `exclude.functions` entry) -- so `functions` is empty of
+    /// "stream" here, exactly as it would be by the time this validator runs. Before this fix,
+    /// `CallIr::signature`'s method fallback resolved with full confidence to the method's
+    /// `req` parameter, and the free-function-shaped `args` this config declares (matching what
+    /// the real generator has always emitted) hard-failed with "does not supply required
+    /// parameter 'req'" on unmodified, previously-generating source.
+    #[test]
+    fn an_adapter_handled_method_with_no_visible_free_function_licenses_no_claim() {
+        let type_defs = vec![TypeDef {
+            name: "Handle".to_string(),
+            methods: vec![adapter_handled_method("stream", vec![param("req")])],
+            ..TypeDef::default()
+        }];
+        let e2e_config = E2eConfig {
+            call: call_named("stream", vec![arg("handle", false), arg("url", false)]),
+            ..E2eConfig::default()
+        };
+        let fixtures = vec![fixture_with_call("basic", None)];
+
+        // "rust" is deliberately included: `binding_excluded_for_language` always answers `false`
+        // for "rust" (it carves Rust out unconditionally), so if "rust" is in the resolved set,
+        // that pre-existing skip alone can never fire here -- only
+        // `resolves_only_via_adapter_handled_method` can produce zero errors below. Asserting
+        // against "python" alone would let the older, unrelated skip mask this fix's absence.
+        let errors = validate_call_arg_signatures(
+            &fixtures,
+            &e2e_config,
+            &[],
+            &type_defs,
+            &["python".to_string(), "rust".to_string()],
+        );
+
+        assert_eq!(
+            errors.len(),
+            0,
+            "an adapter-handled method's own signature must not be asserted against a call whose \
+             free-function sibling is invisible here: {errors:?}"
+        );
+    }
+
+    /// The positive twin: when the free function IS visible in `functions` (unexcluded), it still
+    /// wins per `CallIr::signature`'s own priority, and a genuinely wrong arg list against *that*
+    /// signature must still be caught -- the adapter-handled method sharing its name must not make
+    /// this check vacuous once the collision is resolvable.
+    #[test]
+    fn a_visible_free_function_still_validates_even_with_an_adapter_handled_namesake_method() {
+        let functions = vec![function("stream", vec![param("handle"), param("url")])];
+        let type_defs = vec![TypeDef {
+            name: "Handle".to_string(),
+            methods: vec![adapter_handled_method("stream", vec![param("req")])],
+            ..TypeDef::default()
+        }];
+        let e2e_config = E2eConfig {
+            call: call_named(
+                "stream",
+                vec![arg("handle", false), arg("url", false), arg("wrong_name", false)],
+            ),
+            ..E2eConfig::default()
+        };
+        let fixtures = vec![fixture_with_call("basic", None)];
+
+        let errors =
+            validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &type_defs, &["python".to_string()]);
+
+        assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
+        assert!(
+            errors[0].message.contains("arg 'wrong_name'"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    /// `alef-tasks#350`'s fix must not regress: an *ordinary* `binding_excluded` method (no
+    /// `[[crates.adapters]]` marker in its exclusion reason -- e.g. a plain `#[alef::skip]` for a
+    /// cross-language reason) still gets a real, positionally-bound call from
+    /// `src/e2e/codegen/rust/`, so a wrong arg name on it must still be caught when "rust" is
+    /// resolved. Only the adapter-marked reason licenses skipping.
+    #[test]
+    fn a_plain_binding_excluded_method_without_an_adapter_reason_still_validates_for_rust() {
+        let type_defs = vec![TypeDef {
+            name: "Handle".to_string(),
+            methods: vec![MethodDef {
+                name: "stream".to_string(),
+                params: vec![param("req")],
+                return_type: TypeRef::String,
+                binding_excluded: true,
+                binding_exclusion_reason: Some("source binding exclusion".to_string()),
+                ..MethodDef::default()
+            }],
+            ..TypeDef::default()
+        }];
+        let e2e_config = E2eConfig {
+            call: call_named("stream", vec![arg("req", false), arg("wrong_name", false)]),
+            ..E2eConfig::default()
+        };
+        let fixtures = vec![fixture_with_call("basic", None)];
+
+        let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &[], &type_defs, &["rust".to_string()]);
+
+        assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
+        assert!(
+            errors[0].message.contains("arg 'wrong_name'"),
+            "got: {}",
+            errors[0].message
+        );
     }
 
     #[test]

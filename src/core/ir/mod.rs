@@ -5,6 +5,7 @@ mod service;
 mod surface;
 mod type_ref;
 
+pub(crate) use items::ADAPTER_HANDLED_REASON_PREFIX;
 pub use items::{
     EnumDef, EnumVariant, ErrorDef, ErrorVariant, FieldDef, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef,
 };

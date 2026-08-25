@@ -35,8 +35,11 @@ pub(super) fn mark_adapter_handled_methods(api: &mut ApiSurface, config: &Resolv
             if adapter_handled.contains(&(typ.name.clone(), method.name.clone())) && !method.binding_excluded {
                 method.binding_excluded = true;
                 if method.binding_exclusion_reason.is_none() {
-                    method.binding_exclusion_reason =
-                        Some(format!("handled by [[crates.adapters]] entry `{}`", method.name));
+                    method.binding_exclusion_reason = Some(format!(
+                        "{} entry `{}`",
+                        crate::core::ir::ADAPTER_HANDLED_REASON_PREFIX,
+                        method.name
+                    ));
                 }
             }
         }
