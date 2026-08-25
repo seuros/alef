@@ -60,17 +60,41 @@ fn test_only_files(files: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
         };
         let Some(directory) = directory else { continue };
         let mut saw_cfg_test = false;
+        let mut explicit_path: Option<String> = None;
         for line in source.lines() {
             let trimmed = line.trim();
             if saw_cfg_test {
+                // ~keep `#[cfg(test)]` and the `mod` it gates are not always adjacent: a split test
+                // module is normally registered as `#[cfg(test)] #[path = "..."] mod name;`, three
+                // lines. Treating any attribute line as a reset made every `#[path]`-registered test
+                // file read as production, and the whole point of this guard is that a test file's
+                // calls must not count. Carry the `#[path]` through, because it — not
+                // `<dir>/<name>.rs` — is where the module actually lives.
+                if let Some(rest) = trimmed
+                    .strip_prefix("#[path = \"")
+                    .and_then(|rest| rest.strip_suffix("\"]"))
+                {
+                    explicit_path = Some(rest.to_string());
+                    continue;
+                }
+                if trimmed.starts_with("#[") {
+                    continue;
+                }
                 saw_cfg_test = false;
                 if let Some(name) = trimmed.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';')) {
+                    if let Some(relative) = explicit_path.take() {
+                        if let Some(parent) = path.parent() {
+                            declared.insert(parent.join(relative));
+                        }
+                    }
                     declared.insert(directory.join(format!("{name}.rs")));
                     declared.insert(directory.join(name).join("mod.rs"));
                 }
+                explicit_path = None;
             }
             if trimmed == "#[cfg(test)]" {
                 saw_cfg_test = true;
+                explicit_path = None;
             }
         }
     }
