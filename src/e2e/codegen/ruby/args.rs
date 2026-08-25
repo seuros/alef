@@ -360,7 +360,13 @@ pub(super) fn build_args_and_setup(
                         if result_is_simple {
                             parts.push(format!("{{{}}}", kwargs.join(", ")));
                         } else {
-                            parts.push(format!("{opts_type}.new({})", kwargs.join(", ")));
+                            // `opts_type` is the bare Rust struct name (e.g. "ExtractInput");
+                            // the generated Ruby DTO class lives under the crate's module, same
+                            // as `req_type` above -- an unqualified `.new` here resolves against
+                            // top-level Ruby (or whatever the spec file happens to have required),
+                            // not the namespaced binding. ~keep
+                            let mod_qualifier = super::values::ruby_module_name(module_name);
+                            parts.push(format!("{mod_qualifier}::{opts_type}.new({})", kwargs.join(", ")));
                         }
                         continue;
                     }
@@ -399,5 +405,64 @@ pub(super) fn emit_ruby_object_array_with_mock_base(arr: &serde_json::Value, moc
         format!("[{}]", item_strs.join(", "))
     } else {
         "[]".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::ResolvedCrateConfig;
+    use crate::e2e::config::ArgMapping;
+    use crate::e2e::fixture::Fixture;
+
+    /// Regression test: a typed `json_object` argument constructs the generated Ruby DTO
+    /// class the same way `mock_url`'s `adapter_request_type` already does (namespaced under
+    /// the crate's module) rather than as a bare, unqualified `ClassName.new(...)`, which
+    /// resolves against whatever happens to be in top-level Ruby scope instead of the
+    /// generated binding.
+    #[test]
+    fn typed_json_object_arg_qualifies_its_constructor_under_the_module() {
+        let args = vec![ArgMapping {
+            name: "options".to_string(),
+            field: "input.options".to_string(),
+            arg_type: "json_object".to_string(),
+            optional: false,
+            owned: false,
+            element_type: Some("ExtractInput".to_string()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let input = serde_json::json!({"options": {"url": "https://example.com"}});
+        let fixture = Fixture {
+            id: "extract_with_options".to_string(),
+            input: input.clone(),
+            ..Fixture::default()
+        };
+        let config = ResolvedCrateConfig::default();
+        let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
+
+        let (_setup, args_str, _teardown) = build_args_and_setup(
+            &input,
+            &args,
+            "sample_crate",
+            "DemoCrawler",
+            None,
+            &HashMap::new(),
+            false,
+            &fixture,
+            None,
+            &config,
+            &type_defs,
+        );
+
+        assert!(
+            args_str.contains("DemoCrawler::ExtractInput.new("),
+            "expected the DTO constructor to be namespaced under the module; got: {args_str}"
+        );
+        assert!(
+            !args_str.contains("ExtractInput.new(") || args_str.contains("DemoCrawler::ExtractInput.new("),
+            "must not fall back to a bare, unqualified ExtractInput.new(...); got: {args_str}"
+        );
     }
 }
