@@ -14,7 +14,14 @@ The entire pipeline lives in a single root-flat crate named `alef` (binary `alef
 - `core/` — IR types (`ApiSurface`), config schema (`AlefConfig`), `Backend` trait, `AlefError`
 - `codegen/` — shared generation utilities: type mapping, naming, struct/enum/function generators, Jinja templates
 - `backends/<lang>/` — one module per target language; each implements `Backend` trait
-- `cli/` — command dispatch for `alef build`, `alef scaffold`, `alef readme`
+- `bin_cli/` — the `alef` binary's actual command dispatch: arg parsing (`args.rs`), the
+  top-level `run(cli: Cli)` entry point (`dispatch.rs`), and per-command handlers
+  (`core_commands/`, `publish_commands.rs`, `release_commands.rs`, `verify_*`)
+- `cli/` — library-side support the binary calls into: build cache (`cache.rs`,
+  `cache_identity.rs`, `cache_outputs.rs`), crate-filter resolution (`dispatch.rs::select_crates`
+  — not the top-level command dispatcher, despite the filename), git helpers, breaking-change
+  detection, version pinning, and the `commands/`/`pipeline/` submodules
+- `extensions/` — dylib/template extension loading (`dylib.rs`, `template.rs`)
 - `adapters/` — framework-specific adapters (e.g., PyO3 async, NAPI async)
 - `docs/` — generates language-native doc comments from Rust rustdoc
 - `e2e/` — end-to-end fixture/test generation
@@ -22,6 +29,10 @@ The entire pipeline lives in a single root-flat crate named `alef` (binary `alef
 - `scaffold/` — project scaffolding
 - `snippets/` — doc snippet extraction and validation
 - `publish/` — release/publish orchestration
+
+**`src/cli/dispatch.rs` and `src/bin_cli/dispatch.rs` are two different files with overlapping
+names.** The actual CLI command dispatch (`alef build`, `alef scaffold`, `alef readme`, etc.) is
+`bin_cli::dispatch::run`. `cli::dispatch` only resolves the `--crate` filter list.
 
 `src/main.rs` is the binary entry point; `src/lib.rs` re-exports library surface.
 
@@ -46,6 +57,17 @@ All command configs (`LintConfig`, `TestConfig`, `SetupConfig`, `UpdateConfig`, 
 Execution order per language: precondition → before → main command(s).
 
 Rust is a first-class language in all pipelines. In `build()`, Rust is handled via configurable `[build_commands.rust]` (not the backend registry, which panics for `Language::Rust`).
+
+## Standard Backend Module Layout
+
+Standard module structure for `src/backends/<lang>/` (see `file-modularization` rule for the
+1,000-line cap this layout is meant to keep files under):
+
+- `mod.rs` — module entry, backend struct, `Backend` trait impl
+- `gen_bindings/` — type and function binding generation, one file per concern (`types.rs`, `methods.rs`, `functions.rs`, `enums.rs`, `errors.rs`, `helpers.rs`)
+- `trait_bridge.rs` or `trait_bridge/` — trait vtable/bridge generation
+- `gen_visitor.rs` or `gen_visitor/` — visitor pattern generation
+- `template_env.rs` — minijinja environment setup and template registration
 
 ## Generated vs User-Maintained Boundary
 

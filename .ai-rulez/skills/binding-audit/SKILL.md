@@ -25,7 +25,7 @@ Verify that every public Rust item has a corresponding binding in all target lan
 
 ## Hard rules
 
-1. **No guessing about intentional removals.** The real surfaces: `[crates.exclude]` (`types`/`functions`/`methods`/`fields`) inside a `[[crates]]` entry, crate-wide and unioned across every language; per-language `exclude_types` / `exclude_functions` directly on each `[crates.<lang>]` table; `[workspace.opaque_types]`, workspace-level only, which **remaps** a type rather than excluding it. At the attribute level, only `#[alef::skip]` and `#[doc(hidden)]` exist — `#[alef::exclude]` and `#[alef::opaque]` do not. Only flag items not covered by these.
+1. **No guessing about intentional removals.** The real surfaces: `[crates.exclude]` (`types`/`functions`/`methods`/`fields`) inside a `[[crates]]` entry, crate-wide and unioned across every language; per-language `exclude_types` / `exclude_functions` directly on each `[crates.<lang>]` table; `[workspace.opaque_types]`, workspace-level only, which **remaps** a type rather than excluding it. At the attribute level, the extractor accepts three spellings — `#[alef::skip]`, `#[alef(skip)]`, and either nested in `#[cfg_attr(...)]` (the form in common use) — plus `#[doc(hidden)]`; `#[alef::exclude]` and `#[alef::opaque]` do not exist. Only flag items not covered by these.
 2. **Every gap is triaged.** Never report a missing binding without identifying the root cause (alef codegen bug, action script error, or config oversight).
 3. **All findings update `CHANGELOG.md`** — each upstream fix gets an `[Unreleased]` entry.
 4. **Commit SHAs and workflow URLs** are recorded so consumer repos can pin the exact fix.
@@ -66,16 +66,21 @@ Gleam when generated. Do not invent an expected package for a language that is n
 
 ### 1. Scan source for attributes
 
-Grep the **source Rust crate** for intentional removal markers. Only two exist —
-`#[alef::skip]` and `#[doc(hidden)]` (`src/extract/extractor/helpers/attributes.rs::extract_binding_exclusion_reason`).
+Grep the **source Rust crate** for intentional removal markers. The extractor accepts three
+spellings of the skip attribute, plus `#[doc(hidden)]`
+(`src/extract/extractor/helpers/attributes.rs::extract_binding_exclusion_reason`, lines 304-333):
+`#[alef::skip]`, the list form `#[alef(skip)]`, and either of those nested in `#[cfg_attr(...)]`
+(e.g. `#[cfg_attr(alef, alef(skip))]` — **the form in common use**; the extractor's own reason
+string for it is literally `"alef(skip)"`, not `"alef::skip"`). A grep for only `#[alef::skip]`
+misses the `cfg_attr` form and will manufacture false gaps.
 **`#[alef::exclude]` and `#[alef::opaque]` do not exist in alef** — do not grep for or expect them.
 
 ```bash
-# Find all #[alef::skip] and #[doc(hidden)]
-find . -name "*.rs" -type f -exec grep -l "#\[alef::skip\]\|#\[doc(hidden)\]" {} \;
+# Find all skip-attribute spellings (bare, list-form, cfg_attr-nested) and #[doc(hidden)]
+grep -rEln '#\[(cfg_attr\([^)]*,\s*)?(alef::skip|alef\(skip\))\]?|#\[doc\(hidden\)\]' --include='*.rs' .
 
 # For each file found, inspect the context:
-grep -B2 -A2 "#\[alef::skip\]\|#\[doc(hidden)\]" <file.rs>
+grep -B2 -A2 -E '#\[(cfg_attr\([^)]*,\s*)?(alef::skip|alef\(skip\))\]?|#\[doc\(hidden\)\]' <file.rs>
 ```
 
 Record the annotated items — these are intentional and do **not** flag as gaps.
@@ -211,7 +216,7 @@ For each upstream fix:
 
 ## Anti-patterns
 
-- Reporting a gap without checking `alef.toml` and `#[alef::skip]` / `#[doc(hidden)]` attributes first.
+- Reporting a gap without checking `alef.toml` and all three skip-attribute spellings (including the `cfg_attr`-nested form) / `#[doc(hidden)]` first.
 - Assuming a missing binding is a codegen bug without checking the consuming repo's config.
 - Closing an audit issue without confirming every gap is triaged and documented.
 - Fixing a codegen bug without adding a test under `tests/` or a fixture under `src/e2e/` to prevent regression.
@@ -221,7 +226,7 @@ For each upstream fix:
 | Step | Command | Output |
 |------|---------|--------|
 | Config | `grep -E '^\[' alef.toml` | Intentional exclusions (`[crates.exclude]`, per-language `exclude_types`/`exclude_functions`, `[workspace.opaque_types]`) |
-| Attributes | `find . -name "*.rs" -exec grep -l "#\[alef::skip\]\|#\[doc(hidden)\]" {} \;` | Annotated items |
+| Attributes | `grep -rEln '#\[(cfg_attr\([^)]*,\s*)?(alef::skip\|alef\(skip\))\]?\|#\[doc\(hidden\)\]' --include='*.rs' .` | Annotated items |
 | Public items | `grep -rE "^pub fn\|^pub struct" src` | Reference set |
 | Bindings | `grep -R -E "export\|def\|func\|public\|fun " packages crates` | Per-language sets |
 | Gaps | Diff reference set vs per-language sets | Gap report |

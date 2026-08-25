@@ -32,7 +32,7 @@ remove_todos = false
 remove_fixme = false
 remove_docs = false
 use_default_ignores = true
-preserve_patterns = ["SAFETY", "HACK", "WORKAROUND", "NOTE"]
+preserve_patterns = ["SAFETY", "HACK", "WORKAROUND", "NOTE", "~keep"]
 # MD025 stays enabled for lint but disabled for fmt: rumdl's autofix for a second
 # level-1 heading demotes every heading that follows it, which silently reparents a
 # whole CHANGELOG under [Unreleased] and breaks release-note extraction. ~keep

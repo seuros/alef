@@ -10,13 +10,13 @@ Existing files over 1,000 lines are remediation targets and must not grow except
 purpose is splitting them. When touching an over-limit file, either split the touched concern
 into a smaller module/test file or explicitly keep the change no-growth and preparatory.
 
-Standard module structure for `src/backends/<lang>/`:
+115 files were already over the cap when `tests/file_size_ratchet.rs` landed and are grandfathered
+in its baseline (`tests/file_size_baseline.txt`, `MAX_LINES = 1_000`) — the cap is not universally
+met today. The ratchet is the enforcement: it fails on any new file over the cap and on any
+baseline file that grows past its recorded ceiling, not on the grandfathered files simply existing.
 
-- `mod.rs` — module entry, backend struct, `Backend` trait impl
-- `gen_bindings/` — type and function binding generation, one file per concern (`types.rs`, `methods.rs`, `functions.rs`, `enums.rs`, `errors.rs`, `helpers.rs`)
-- `trait_bridge.rs` or `trait_bridge/` — trait vtable/bridge generation
-- `gen_visitor.rs` or `gen_visitor/` — visitor pattern generation
-- `template_env.rs` — minijinja environment setup and template registration
+Standard module structure for `src/backends/<lang>/` is documented in the `architecture` context
+entry — split new backend code along that layout.
 
 Functions exceeding 50 lines should be extracted into named helpers. Deeply nested conditional
 blocks (>3 levels) should be extracted. When a file handles multiple distinct concepts, split it

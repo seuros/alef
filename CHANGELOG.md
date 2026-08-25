@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `.ai-rulez/skills/binding-audit/SKILL.md` and the (now-removed, folded into that skill) `binding-audit-pattern` rule documented a grep for intentional binding-removal attributes that matched only `#[alef::skip]` and `#[doc(hidden)]`. The extractor (`src/extract/extractor/helpers/attributes.rs:304-333`) accepts three spellings — `#[alef::skip]`, the list form `#[alef(skip)]`, and either nested in `#[cfg_attr(...)]` (the form in common use, e.g. `#[cfg_attr(alef, alef(skip))]`) — so the documented grep missed the dominant real-world spelling and would misclassify a correctly-excluded item as a binding gap. The grep now matches all three spellings.
 - Ruby e2e snippet and spec generation no longer double-prefixes an `options_type` (or adapter `request_type`) that already names a module. Both generators share one constructor builder (`ruby/args.rs::build_args_and_setup`), which unconditionally prepended the call's module regardless of whether the configured name already carried one, turning e.g. `"Sample::DocumentRequest"` into `Sample::Sample::DocumentRequest.new(...)` in both outputs identically. `values::qualify_ruby_type` now prepends the module only when the name has no `::` already, matching how `csharp`/`go` take `options_type` verbatim.
 
 ## [0.67.6] - 2026-08-25
