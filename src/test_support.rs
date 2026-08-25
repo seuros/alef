@@ -96,6 +96,51 @@ impl Drop for SkipCommandsGuard {
     }
 }
 
+/// The single lock serializing every test in this crate that spawns a REAL `cargo` subprocess
+/// (`cargo fmt --all`, `cargo sort -n -w`, `cargo sort --check`, ...) outside of alef's own
+/// `ALEF_SKIP_COMMANDS` skip mechanism.
+///
+/// `ALEF_SKIP_COMMANDS`/[`SkipCommandsGuard`] only gates `PostBuildStep::RunCommand` --
+/// `cli::pipeline::format::run_cargo_fmt`/`run_workspace_cargo_sort` (the residual passes
+/// `converge_full_regen` folds into every full-regen `alef all`/`alef fmt` pass) run
+/// unconditionally whenever a root `Cargo.toml` exists, so they are the one place a genuinely
+/// real `cargo` process launches during this crate's own test suite -- and [`CWD_LOCK`] does not
+/// reach them: several tests call `run_cargo_fmt`/`run_workspace_cargo_sort`/
+/// `converge_full_regen_formatting` directly with an explicit `.current_dir(..)`-equivalent
+/// `base` argument and never touch the process cwd at all, so they never take `CWD_LOCK` in the
+/// first place.
+///
+/// Measured under load: `bin_cli::core_commands::post_build_format_order_tests`'s two `alef
+/// all`-driving tests failed a full `cargo test --lib` run with `Blocking waiting for file lock
+/// on package cache`, both passing in isolation and on re-run -- the signature of real, external
+/// contention on cargo's own machine-wide package-cache lock file, not a defect in the code under
+/// test. `cli::pipeline::format::tests` has four such unguarded direct-call tests
+/// (`run_workspace_cargo_sort_sorts_every_member_regardless_of_language`,
+/// `run_cargo_fmt_formats_workspace_rust_files_when_available`,
+/// `converge_full_regen_formatting_leaves_workspace_sorted_and_poly_fmt_check_clean`,
+/// `format_generated_full_regen_routes_through_convergence_loop`) that can and do run
+/// concurrently with `alef all`'s own real cargo invocations under `cargo test`'s default
+/// parallel scheduling -- the same shape [`CWD_LOCK`] and [`SKIP_COMMANDS_LOCK`] already closed
+/// for their own process-global resources, applied to this one. ~keep
+pub(crate) static REAL_CARGO_LOCK: Mutex<()> = Mutex::new(());
+
+/// RAII guard that holds [`REAL_CARGO_LOCK`] for its lifetime. Every test that spawns a real
+/// `cargo` subprocess -- directly, or indirectly through `alef all`/`alef fmt`/a full-regen
+/// `format_generated(.., None)` -- must acquire this for the whole span during which that
+/// subprocess might run. See [`REAL_CARGO_LOCK`]'s doc for why a dedicated lock is required
+/// rather than reusing [`CWD_LOCK`].
+pub(crate) struct RealCargoGuard {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl RealCargoGuard {
+    /// Locks [`REAL_CARGO_LOCK`] for the caller's scope.
+    pub(crate) fn acquire() -> Self {
+        let lock = REAL_CARGO_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        Self { _lock: lock }
+    }
+}
+
 /// Build a [`std::process::Command`] for `program`, pre-pinned to [`std::env::temp_dir`].
 ///
 /// `cargo test` runs every test as a thread in one process (see the module docs), so a spawn

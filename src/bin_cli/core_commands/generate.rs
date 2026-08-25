@@ -308,6 +308,20 @@ pub(crate) fn handle_generate(
         let report = pipeline::reconcile_managed_scaffold_manifests(&scaffold_files, &base_dir)?;
         if report.changed_count() > 0 {
             any_written = true;
+            // A scaffold-managed manifest (`packages/java/pom.xml`,
+            // `crates/<name>-ffi/cmake/*.cmake`, `packages/python/pyproject.toml`) can change with
+            // no corresponding bindings/service-api/public-api/stubs write -- e.g. a
+            // `package_metadata.license` edit. Those phases are the only other place this loop
+            // inserts into `changed_languages`, so without this a scaffold-only write left its
+            // language out of `format_scope` below and the freshly written manifest shipped
+            // unformatted. `alef all` never showed the defect because its whole-tree pass
+            // reformats everything regardless of which phase wrote it. ~keep
+            changed_languages.extend(pipeline::languages_owning_changed_paths(
+                resolved_cfg,
+                &base_dir,
+                &languages,
+                &report.changed_paths,
+            ));
         }
         // `reconcile_managed_scaffold_manifests` silently drops a manifest it cannot
         // prove alef owns; this repair runs regardless, since a missing forwarded feature

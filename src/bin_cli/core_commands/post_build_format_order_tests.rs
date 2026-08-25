@@ -303,7 +303,15 @@ fn write_all_fixture_workspace(root: &Path) {
 
 /// Run `alef all` against `root`. `ALEF_SKIP_COMMANDS=cargo` for the same reason as
 /// [`run_generate`]: no real toolchain build is available or wanted here.
+///
+/// `ALEF_SKIP_COMMANDS` does not reach `alef all`'s own full-regen `converge_full_regen`
+/// residuals (`cargo fmt --all`, `cargo sort -n -w`), which run for real whenever `root` has a
+/// Cargo.toml -- this fixture does. `RealCargoGuard` serializes that against every other test in
+/// the crate that also spawns a real `cargo` subprocess, closing the `Blocking waiting for file
+/// lock on package cache` flake this fixture measured under parallel load. See
+/// `test_support::REAL_CARGO_LOCK`'s doc. ~keep
 fn run_all(root: &Path) {
+    let _cargo_lock = crate::test_support::RealCargoGuard::acquire();
     let _skip_guard = SkipCommandsGuard::set("cargo");
     let _cwd = crate::test_support::CwdGuard::enter(root);
     let context = DispatchContext {
