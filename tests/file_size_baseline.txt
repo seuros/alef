@@ -54,7 +54,6 @@ src/codegen/config_gen/tests/defaults.rs 1224
 src/codegen/conversions/tests.rs 1142
 src/core/hash/tests.rs 1067
 src/docs/formatting.rs 2268
-src/docs/signatures.rs 1080
 src/e2e/codegen/c.rs 2308
 src/e2e/codegen/c/assertions.rs 3393
 src/e2e/codegen/c/snippet_regressions.rs 1110
