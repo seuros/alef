@@ -107,3 +107,127 @@ fn generate_formats_the_rust_glue_crate_it_stamps() {
          hash over it -- and the next whole-tree format pass makes every one of those stamps stale"
     );
 }
+
+/// A crate targeting Java plus Node, with the `package_metadata` a Java scaffold requires
+/// (`repository`, `authors`, `license`) so `scaffold_java` succeeds without an FFI target.
+///
+/// Node is included deliberately, not incidentally: napi's `PostBuildStep::PatchFile` runs
+/// unconditionally on every `alef generate` (see `napi::gen_bindings::build_config`), so
+/// `languages_with_post_build_steps` always folds `node` into `changed_languages`, making
+/// `any_output_changed` true even on a run where nothing in `files`/`stub_files` changed. That
+/// is what actually exercises the defect: with `any_output_changed` true, `format_scope` is
+/// `changed_languages` verbatim (not the "format every requested language" fallback a
+/// single-language fixture would hit instead), so `java`'s absence from that set -- because a
+/// scaffold-only pom.xml write never added it -- narrows `poly_paths` to exclude
+/// `packages/java` entirely. A java-only fixture does not reproduce this: with one requested
+/// language, the fallback scope and the correct scope are the same set by coincidence. ~keep
+const JAVA_FIXTURE_ALEF_TOML: &str = r#"
+[workspace]
+languages = ["java", "node"]
+
+[workspace.package_metadata]
+repository = "https://github.com/example/test-lib"
+authors = ["Test Author <test@example.com>"]
+license = "MIT"
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+version_from = "Cargo.toml"
+
+[crates.java]
+package = "com.example.testlib"
+
+[crates.node]
+package_name = "test-lib"
+"#;
+
+fn write_java_fixture_workspace(root: &Path, alef_toml: &str) {
+    std::fs::create_dir_all(root.join("src")).expect("create fixture src directory");
+    std::fs::write(root.join("src/lib.rs"), FIXTURE_SOURCE).expect("write fixture source");
+    std::fs::write(root.join("Cargo.toml"), FIXTURE_CARGO_TOML).expect("write fixture Cargo.toml");
+    std::fs::write(root.join("alef.toml"), alef_toml).expect("write fixture alef.toml");
+}
+
+fn run_java_generate(root: &Path) {
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+    super::handle(
+        Commands::Generate {
+            lang: None,
+            clean: false,
+            skip_frb: false,
+            strict: false,
+        },
+        &context,
+    )
+    .expect("alef generate must succeed against the fixture");
+}
+
+/// A regen whose ONLY change is a scaffold-managed manifest -- `package_metadata.license`
+/// rewrites `packages/java/pom.xml`'s `<licenses>` block but touches no `.java` binding
+/// source at all -- must still leave `pom.xml` poly-canonical.
+///
+/// Before the fix, `reconcile_managed_scaffold_manifests`'s write report fed `any_written`
+/// but never `changed_languages` (unlike the bindings/service-api/public-api/stubs phases,
+/// which all insert their own language on a real change). On a regen where Java's bindings
+/// were cache-hit (the license edit does not touch generated `.java` source), `java` never
+/// entered `format_scope`, so `poly_paths` never named `packages/java` and the freshly
+/// rewritten `pom.xml` shipped exactly as `reconcile_managed_scaffold_manifests` wrote it --
+/// unformatted. `alef all`'s whole-tree convergence pass (`only_languages = None`) never
+/// showed this, because it reformats every byte under the repo root regardless of which
+/// phase wrote it. ~keep
+#[test]
+fn generate_formats_a_scaffold_manifest_changed_by_a_config_only_edit() {
+    if !crate::cli::pipeline::is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_java_fixture_workspace(&root, JAVA_FIXTURE_ALEF_TOML);
+
+    let _cwd = crate::test_support::CwdGuard::enter(&root);
+
+    run_java_generate(&root);
+    let pom_path = root.join("packages/java/pom.xml");
+    let baseline = std::fs::read_to_string(&pom_path).expect("sanity: pom.xml must exist after the first run");
+    assert!(
+        baseline.contains("<name>MIT</name>"),
+        "sanity: the baseline pom.xml must carry the configured license, or the edit below \
+         proves nothing: {baseline}"
+    );
+
+    // The only change between the two runs: `license` in `alef.toml`. No Rust source, no
+    // binding content, changed at all.
+    let updated_alef_toml = JAVA_FIXTURE_ALEF_TOML.replace("license = \"MIT\"", "license = \"Apache-2.0\"");
+    std::fs::write(root.join("alef.toml"), &updated_alef_toml).expect("rewrite alef.toml with the new license");
+
+    run_java_generate(&root);
+
+    let updated = std::fs::read_to_string(&pom_path).expect("pom.xml must still exist after the second run");
+    assert!(
+        updated.contains("<name>Apache-2.0</name>"),
+        "sanity: the second run must actually have rewritten pom.xml's license, or the \
+         canonical-form assertion below proves nothing: {updated}"
+    );
+
+    let check = std::process::Command::new("poly")
+        .args(["fmt", "--check", "--fix-generated", "packages/java/pom.xml"])
+        .current_dir(&root)
+        .output()
+        .expect("run poly fmt --check");
+    let check_output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(
+        check.status.success(),
+        "`poly fmt --check --fix-generated packages/java/pom.xml` must report the file clean \
+         after a regen whose only change was a scaffold-managed manifest -- `java` must be \
+         folded into `changed_languages` even when no binding-phase write touched it. \
+         Output:\n{check_output}"
+    );
+}
