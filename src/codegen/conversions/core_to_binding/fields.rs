@@ -350,17 +350,23 @@ pub fn field_conversion_from_core_cfg(
         if optional_named {
             return format!("{name}: val.{name}.as_ref().and_then(|v| serde_json::to_value(v).ok())");
         }
+        // `.map(...).collect()`, not `.filter_map(...).collect()`: a serialize failure on one
+        // Vec element must not silently shrink the Vec (that shifts every later index).
+        // `unwrap_or(serde_json::Value::Null)` mirrors `direct_named`/`optional_named` above,
+        // which already fall back to `serde_json::Value::Null` on failure. ~keep
         if vec_named {
             if optional {
                 return format!(
-                    "{name}: val.{name}.as_ref().map(|v| v.iter().filter_map(|x| serde_json::to_value(x).ok()).collect())"
+                    "{name}: val.{name}.as_ref().map(|v| v.iter().map(|x| serde_json::to_value(x).unwrap_or(serde_json::Value::Null)).collect())"
                 );
             }
-            return format!("{name}: val.{name}.iter().filter_map(|x| serde_json::to_value(x).ok()).collect()");
+            return format!(
+                "{name}: val.{name}.iter().map(|x| serde_json::to_value(x).unwrap_or(serde_json::Value::Null)).collect()"
+            );
         }
         if optional_vec_named {
             return format!(
-                "{name}: val.{name}.as_ref().map(|v| v.iter().filter_map(|x| serde_json::to_value(x).ok()).collect())"
+                "{name}: val.{name}.as_ref().map(|v| v.iter().map(|x| serde_json::to_value(x).unwrap_or(serde_json::Value::Null)).collect())"
             );
         }
     }

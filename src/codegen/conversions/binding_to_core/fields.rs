@@ -101,12 +101,19 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
         },
         TypeRef::Vec(inner) => match inner.as_ref() {
             TypeRef::Json => {
+                // `.map(...).collect()`, not `.filter_map(...).collect()`: filter_map would
+                // silently shrink the Vec on any element that fails to parse, shifting every
+                // later element's index. `unwrap_or_default()` keeps the element count aligned
+                // with the source, matching the scalar `TypeRef::Json` conversion above, which
+                // already assumes `T: Default`. ~keep
                 if optional {
                     format!(
-                        "{name}: val.{name}.map(|v| v.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect())"
+                        "{name}: val.{name}.map(|v| v.into_iter().map(|s| serde_json::from_str(&s).unwrap_or_default()).collect())"
                     )
                 } else {
-                    format!("{name}: val.{name}.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()")
+                    format!(
+                        "{name}: val.{name}.into_iter().map(|s| serde_json::from_str(&s).unwrap_or_default()).collect()"
+                    )
                 }
             }
             TypeRef::Named(type_name) if is_tuple_type_name(type_name) => {
@@ -147,7 +154,10 @@ pub fn field_conversion_to_core(name: &str, ty: &TypeRef, optional: bool) -> Str
                 } else if has_vec_named_val {
                     "v.into_iter().map(Into::into).collect()"
                 } else if has_vec_json_val {
-                    "v.into_iter().filter_map(|s| serde_json::from_str(&s).ok()).collect()"
+                    // Preserve element count on parse failure (see the TypeRef::Vec(Json) arm
+                    // above for rationale); the map value type is assumed `Default` already, as
+                    // the scalar map-value conversions in this match rely on it too. ~keep
+                    "v.into_iter().map(|s| serde_json::from_str(&s).unwrap_or_default()).collect()"
                 } else {
                     "v"
                 };
@@ -311,17 +321,22 @@ pub fn field_conversion_to_core_cfg(name: &str, ty: &TypeRef, optional: bool, co
         if optional_named {
             return format!("{name}: val.{name}.and_then(|v| serde_json::from_value(v).ok())");
         }
+        // `.map(...).collect()`, not `.filter_map(...).collect()`: a deserialize failure on one
+        // Vec element must not silently shrink the Vec (that shifts every later index). This
+        // mirrors `direct_named`/`optional_named` above, which already assume `T: Default`. ~keep
         if vec_named {
             if optional {
                 return format!(
-                    "{name}: val.{name}.map(|v| v.into_iter().filter_map(|x| serde_json::from_value(x).ok()).collect())"
+                    "{name}: val.{name}.map(|v| v.into_iter().map(|x| serde_json::from_value(x).unwrap_or_default()).collect())"
                 );
             }
-            return format!("{name}: val.{name}.into_iter().filter_map(|x| serde_json::from_value(x).ok()).collect()");
+            return format!(
+                "{name}: val.{name}.into_iter().map(|x| serde_json::from_value(x).unwrap_or_default()).collect()"
+            );
         }
         if optional_vec_named {
             return format!(
-                "{name}: val.{name}.map(|v| v.into_iter().filter_map(|x| serde_json::from_value(x).ok()).collect())"
+                "{name}: val.{name}.map(|v| v.into_iter().map(|x| serde_json::from_value(x).unwrap_or_default()).collect())"
             );
         }
     }

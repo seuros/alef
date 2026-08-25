@@ -16,7 +16,11 @@ pub(crate) fn sanitized_vec_field_to_core_expr(name: &str, ty: &TypeRef) -> Stri
             "{name}.iter().filter_map(|inner| {{ let mut it = inner.iter().cloned(); Some((it.next()?, it.next()?)) }}).collect()"
         );
     }
-    format!("{name}.iter().filter_map(|s| serde_json::from_str(s).ok()).collect()")
+    // `.map(...).collect()`, not `.filter_map(...).collect()`: a parse failure on one element
+    // must not silently shrink the Vec, which would shift every later element's index.
+    // `unwrap_or_default()` keeps the count aligned with the source, on the same `T: Default`
+    // assumption the sibling scalar sanitized-field fallbacks already rely on. ~keep
+    format!("{name}.iter().map(|s| serde_json::from_str(s).unwrap_or_default()).collect()")
 }
 
 /// Binding→core inverse for a sanitized `Map<String, String>` field: given an access
@@ -63,4 +67,40 @@ pub(crate) fn sanitized_field_to_binding_expr(access: &str, ty: &TypeRef) -> Opt
         ));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Regression coverage for task #405: `sanitized_vec_field_to_core_expr`'s default
+    // (`Vec<Json>`) fallback used to `.filter_map(...).ok())`, which silently drops any element
+    // that fails to deserialize instead of keeping the Vec's length aligned with the source.
+    #[test]
+    fn default_fallback_preserves_count_on_parse_failure() {
+        let ty = TypeRef::Vec(Box::new(TypeRef::Named("Thing".to_string())));
+
+        let result = sanitized_vec_field_to_core_expr("items", &ty);
+
+        assert_eq!(
+            result,
+            "items.iter().map(|s| serde_json::from_str(s).unwrap_or_default()).collect()"
+        );
+        assert!(
+            !result.contains("filter_map"),
+            "must not drop elements that fail to deserialize, got: {result}"
+        );
+    }
+
+    #[test]
+    fn vec_vec_string_special_case_is_unaffected() {
+        let ty = TypeRef::Vec(Box::new(TypeRef::Vec(Box::new(TypeRef::String))));
+
+        let result = sanitized_vec_field_to_core_expr("pairs", &ty);
+
+        assert_eq!(
+            result,
+            "pairs.iter().filter_map(|inner| { let mut it = inner.iter().cloned(); Some((it.next()?, it.next()?)) }).collect()"
+        );
+    }
 }
