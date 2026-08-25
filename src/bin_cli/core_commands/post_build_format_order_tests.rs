@@ -183,8 +183,18 @@ fn generate_formats_post_build_output_before_stamping_it() {
     // fix this failed here -- the shipped header still carried the RAW 2-space body under a
     // hash that matched it (self-consistent, but never canonical), and poly does not
     // distinguish "correctly stamped" from "stamped over non-canonical bytes".
+    //
+    // `--fix-generated` is load-bearing, not decoration: the sanity assertion above proves the
+    // header is stamped, and poly refuses to even inspect a hash-stamped file under a plain
+    // `--check` -- measured directly against the `poly` binary this suite runs against, a
+    // stamped file with deliberately non-canonical bytes still reports `--check` clean and exits
+    // 0. Without the flag this call would tell us nothing about `RustBridgeC.h` at all; the
+    // `content.contains(...)` assertion above would be the ONLY thing standing between this test
+    // and a silent pass on the pre-fix ordering. With the flag, poly inspects the stamped body
+    // regardless of the hash line, so this assertion is a genuine second check on the same
+    // property, not a check that cannot fail. ~keep
     let check = std::process::Command::new("poly")
-        .args(["fmt", "--check", "."])
+        .args(["fmt", "--check", "--fix-generated", "."])
         .current_dir(&root)
         .output()
         .expect("run poly fmt --check");
@@ -195,8 +205,9 @@ fn generate_formats_post_build_output_before_stamping_it() {
     );
     assert!(
         check.status.success(),
-        "`poly fmt --check .` must report the tree clean immediately after `alef generate` -- a \
-         post-build-owned file was formatted after being stamped, not before. Output:\n{check_output}"
+        "`poly fmt --check --fix-generated .` must report the tree clean immediately after `alef \
+         generate` -- a post-build-owned file was formatted after being stamped, not before. \
+         Output:\n{check_output}"
     );
 }
 
@@ -446,6 +457,127 @@ fn all_reformats_a_scaffold_file_left_stamped_and_uncanonical_by_an_earlier_run(
         "`alef all` left a stamped, non-canonical scaffold file exactly as it found it -- poly \
          skipped it for the stamp it inherited, and nothing stripped that stamp before the format \
          pass. Content:\n{healed}"
+    );
+    assert_eq!(
+        crate::core::hash::strip_hash_line(&healed),
+        crate::core::hash::strip_hash_line(&canonical),
+        "the healed file's body must match what a from-scratch run produces, not merely be poly-clean"
+    );
+}
+
+/// Run `alef generate --lang python` against `root`, mirroring [`run_all`] but through
+/// `Commands::Generate` -- the path this module's fix (removing `Commands::Generate`'s own
+/// five per-phase `finalize_hashes` checkpoints, all ahead of its single format pass) landed
+/// in, and which `all_commands.rs`'s author could not touch.
+fn run_generate_python(root: &Path) {
+    let _skip_guard = SkipCommandsGuard::set("cargo");
+    let _cwd = crate::test_support::CwdGuard::enter(root);
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+    super::handle(
+        Commands::Generate {
+            lang: Some(vec!["python".to_owned()]),
+            clean: false,
+            skip_frb: true,
+            strict: false,
+        },
+        &context,
+    )
+    .expect("alef generate must succeed against the fixture");
+}
+
+/// `Commands::Generate`'s own version of [`all_formats_scaffold_output_before_stamping_it`]:
+/// before this module's fix, `Commands::Generate` stamped `current_gen_paths` immediately after
+/// the scaffold writer ran (`core_commands.rs`, then line 345) -- roughly 90 lines ahead of its
+/// only `format_generated_reporting` call -- and poly's hash-stamped-generated-file skip turned
+/// that format pass into a no-op for the file, which shipped with whatever the scaffold template
+/// emitted. Same defect shape as `alef all` had, in a command `all_commands.rs`'s fix could not
+/// reach. ~keep
+#[test]
+fn generate_formats_scaffold_output_before_stamping_it() {
+    if !crate::cli::pipeline::is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_all_fixture_workspace(&root);
+
+    let raw = raw_scaffold_content(&root, SCAFFOLD_TARGET);
+    assert!(
+        poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &raw),
+        "control failed: the scaffold generator now emits poly-canonical bytes for \
+         {SCAFFOLD_TARGET}, so this test can no longer tell a formatted pipeline from an \
+         unformatted one. Point it at a scaffold path poly still has an opinion about. Raw \
+         content was:\n{raw}"
+    );
+
+    run_generate_python(&root);
+
+    let shipped = std::fs::read_to_string(root.join(SCAFFOLD_TARGET))
+        .unwrap_or_else(|error| panic!("alef generate must emit {SCAFFOLD_TARGET}: {error}"));
+    assert!(
+        shipped.contains("alef:hash:"),
+        "sanity: the shipped scaffold file must actually be stamped, or the claim below is about \
+         a file alef does not own: {shipped}"
+    );
+    assert!(
+        !poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &shipped),
+        "`alef generate` shipped a scaffold-phase file poly would still rewrite -- it was stamped \
+         before the format pass, so poly skipped it. Content:\n{shipped}"
+    );
+}
+
+/// `Commands::Generate`'s own version of
+/// [`all_reformats_a_scaffold_file_left_stamped_and_uncanonical_by_an_earlier_run`]: the heal
+/// half, and the half a pure reordering does not deliver, for the `alef generate` path.
+///
+/// A repository generated by a pre-fix alef holds files that are stamped AND non-canonical. Their
+/// generated bodies have not changed, so `write_files_report` (which compares hash-stripped
+/// bodies) does not rewrite them, so they keep the stamp, so poly keeps skipping them. Nothing
+/// short of stripping the stamp before the format pass (`unstamp_before_formatting`) can reach
+/// them -- and, distinctly from the `alef all` case, `Commands::Generate` must also reformat
+/// something even when nothing changed this run: `changed_languages` is empty on a pure heal, so
+/// the gate must fall back to the run's full `languages` set rather than silently no-op via an
+/// empty `Some(&changed_languages)`. ~keep
+#[test]
+fn generate_reformats_a_scaffold_file_left_stamped_and_uncanonical_by_an_earlier_run() {
+    if !crate::cli::pipeline::is_tool_available("poly") {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().canonicalize().unwrap_or_else(|_| dir.path().to_path_buf());
+    write_all_fixture_workspace(&root);
+
+    run_generate_python(&root);
+    let target = root.join(SCAFFOLD_TARGET);
+    let canonical = std::fs::read_to_string(&target).expect("the first alef generate must emit the scaffold file");
+
+    // The hash value is a placeholder: the final `finalize_hashes` in `Commands::Generate`
+    // recomputes it at the end of the next run, and poly's skip only pattern-matches the line's
+    // shape, never its correctness.
+    let stale = crate::core::hash::inject_hash_line(&raw_scaffold_content(&root, SCAFFOLD_TARGET), &"a".repeat(64));
+    assert!(
+        crate::core::hash::content_has_alef_marker(&stale) && stale.contains("alef:hash:"),
+        "sanity: the reconstructed pre-fix file must carry both an alef marker and a hash line, \
+         or poly would never have skipped it: {stale}"
+    );
+    assert!(
+        poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &stale),
+        "control failed: the reconstructed pre-fix file is already poly-canonical, so the final \
+         assertion below cannot fail: {stale}"
+    );
+    std::fs::write(&target, &stale).expect("plant the pre-fix file state");
+
+    run_generate_python(&root);
+
+    let healed = std::fs::read_to_string(&target).expect("the scaffold file must survive the second run");
+    assert!(
+        !poly_would_reformat(SCAFFOLD_TARGET_FILE_NAME, &healed),
+        "`alef generate` left a stamped, non-canonical scaffold file exactly as it found it -- \
+         poly skipped it for the stamp it inherited, and nothing stripped that stamp before the \
+         format pass. Content:\n{healed}"
     );
     assert_eq!(
         crate::core::hash::strip_hash_line(&healed),

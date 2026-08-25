@@ -92,6 +92,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     files.iter().map(|(language, _)| *language).collect();
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
 
+                // Accumulated across every phase below and stamped exactly ONCE, by the
+                // `finalize_hashes` call after the format pass at the end of this loop body.
+                // Every phase used to stamp its own output as soon as it was written -- five
+                // `finalize_hashes(&current_gen_paths, ..)` checkpoints, all ahead of the only
+                // formatting pass this command runs -- and a stamped file is one poly refuses to
+                // format, so those checkpoints made the format pass a no-op for everything `alef
+                // generate` emitted. Exactly the shape `alef all` had (see
+                // `pipeline::format::stamp_gate`'s module doc for the mechanism and the
+                // measurements) before it was fixed in `all_commands.rs`; this mirrors that fix
+                // here. ~keep
                 let mut current_gen_paths = std::collections::HashSet::new();
                 let mut language_output_paths: std::collections::HashMap<_, std::collections::HashSet<_>> = files
                     .iter()
@@ -175,7 +185,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                     let _ = cache::write_generation_hashes(&cache_key, &hashes);
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if !api.services.is_empty() {
                     let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
@@ -213,7 +222,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 if resolved_cfg.generate.public_api {
                     let public_api_files = pipeline::generate_public_api(&api, resolved_cfg, &languages, config_path)?;
@@ -272,7 +280,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         }
                     }
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let stub_files = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
                 if !stub_files.is_empty() {
@@ -330,7 +337,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         tracing::info!("  [stubs] up to date (skipping)");
                     }
                 }
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
                 let report = pipeline::reconcile_managed_scaffold_manifests(&scaffold_files, &base_dir)?;
@@ -342,7 +348,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 // is additive-only and safe even without that proof (see `scaffold::repair`). ~keep
                 crate::scaffold::repair_missing_cfg_binding_features(&api, resolved_cfg, &languages);
                 current_gen_paths.extend(pipeline::stampable_output_paths(&scaffold_files, &base_dir));
-                pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
 
                 tracing::info!("Running post-build processing...");
                 // Post-build MUST run before the format pass below, not after: several
@@ -419,13 +424,43 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     changed_languages.extend(post_build_languages);
                 }
 
-                if any_written && !changed_languages.is_empty() {
+                let any_output_changed = any_written && !changed_languages.is_empty();
+                // `any_output_changed` alone is the wrong gate for a tree an EARLIER run (a
+                // pre-fix `alef generate`, or a standalone `alef scaffold`/`alef stubs` that
+                // stamps its own output) left stamped and never formatted: nothing was written
+                // THIS run, and the tree is still non-canonical. `generated_tree_needs_formatting`
+                // answers "no" on a settled tree, so the fast path (skip formatting entirely) is
+                // unchanged -- see `pipeline::format::stamp_gate`. ~keep
+                if any_output_changed || pipeline::generated_tree_needs_formatting(&base_dir) {
                     tracing::info!("Formatting generated files...");
+                    // Load-bearing, not defence in depth: removing the per-phase
+                    // `finalize_hashes` checkpoints above stops a FRESH run from stamping too
+                    // early, but a tree an EARLIER, pre-fix run already stamped-and-never-formatted
+                    // needs this too -- `write_files_report` compares hash-stripped bodies, so an
+                    // unchanged file is never rewritten and keeps the stamp it was given,
+                    // forever. Scope-symmetric by construction: the final `finalize_hashes`
+                    // call below re-stamps `current_gen_paths`, a superset of what is stripped
+                    // here, so no file is left carrying no hash line at all. ~keep
+                    let unstamped = pipeline::unstamp_before_formatting(&current_gen_paths);
+                    tracing::debug!("unstamped {unstamped} generated file(s) so the formatter can see them");
+                    // `changed_languages` is the right scope when something in THIS run's own
+                    // output actually changed -- narrower is faster and correct. It is the WRONG
+                    // scope when the gate fired only because `generated_tree_needs_formatting`
+                    // found a stale tree with nothing changed this run: `changed_languages` is
+                    // then empty, and an empty language set makes `format_generated_reporting` a
+                    // no-op (see `run_format_pass`), silently defeating the very pass this branch
+                    // exists to run. Fall back to every language this invocation resolved so the
+                    // healing case actually reformats something. ~keep
+                    let format_scope: std::collections::HashSet<_> = if any_output_changed {
+                        changed_languages.clone()
+                    } else {
+                        languages.iter().copied().collect()
+                    };
                     // `strict`, not `false`: this pass formats `packages/<lang>` -- the SHIPPED
                     // bindings -- and used to swallow every missing-formatter skip in a `warn!`
                     // the caller never saw, so `--strict` guarded only the e2e formatter while
                     // the more important surface went unguarded. ~keep
-                    pipeline::format_generated_reporting(resolved_cfg, &base_dir, Some(&changed_languages), strict)?;
+                    pipeline::format_generated_reporting(resolved_cfg, &base_dir, Some(&format_scope), strict)?;
                 }
                 // Final stamp, after post-build AND formatting have both settled every byte this
                 // run will ship -- see the ordering comment above `complete_generated_artifacts`
