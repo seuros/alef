@@ -10,7 +10,7 @@ mod types;
 
 use std::path::{Path, PathBuf};
 
-use crate::core::ir::{ApiSurface, DefaultValue, MethodDef, TypeDef, TypeRef, UnsupportedPublicItem};
+use crate::core::ir::{ApiSurface, DefaultValue, MethodDef, TypeDef, UnsupportedPublicItem};
 use ahash::AHashMap;
 use anyhow::{Context, Result};
 
@@ -146,16 +146,19 @@ pub fn extract(
 
     disambiguation::disambiguate_type_names(&mut surface);
 
-    let return_type_names: ahash::AHashSet<String> = surface
-        .functions
-        .iter()
-        .filter_map(|f| match &f.return_type {
-            TypeRef::Named(name) => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
+    // A type returned only wrapped (`Option<T>`, `Vec<T>`, or as a `Map` value) is just as much
+    // an output type as one returned bare — `TypeRef::references_named` already walks those
+    // wrappers, so reuse it instead of only matching the bare `TypeRef::Named` case. Backends
+    // (pyo3's public-dataclass-vs-native-pyclass split in particular) decide a type's DTO shape
+    // from this flag alone; missing a wrapped return silently reclassified an output-only type
+    // as an input type, so the wrapper's declared annotation and the value it actually produced
+    // named different classes. ~keep
     for typ in &mut surface.types {
-        if return_type_names.contains(&typ.name) {
+        if surface
+            .functions
+            .iter()
+            .any(|f| f.return_type.references_named(&typ.name))
+        {
             typ.is_return_type = true;
         }
     }
