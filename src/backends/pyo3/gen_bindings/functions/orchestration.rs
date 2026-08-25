@@ -29,6 +29,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     adapters: &[crate::core::config::AdapterConfig],
     reexported_types: &[String],
     exclude_functions: &AHashSet<String>,
+    config: &crate::core::config::ResolvedCrateConfig,
 ) -> String {
     use crate::core::ir::TypeRef;
 
@@ -356,6 +357,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         &data_enum_names,
         dto,
         reexported_types,
+        config,
     );
 
     emit_function_wrappers(

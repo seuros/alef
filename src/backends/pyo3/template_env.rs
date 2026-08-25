@@ -249,6 +249,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         "simple_enum_vec_coerce.jinja",
         include_str!("templates/simple_enum_vec_coerce.jinja"),
     ),
+    (
+        "struct_vec_coerce.jinja",
+        include_str!("templates/struct_vec_coerce.jinja"),
+    ),
     ("typing_import.jinja", include_str!("templates/typing_import.jinja")),
     (
         "import_from_module_header.jinja",
@@ -445,6 +449,10 @@ static TEMPLATES: &[(&str, &str)] = &[
     (
         "simple_enum_dict_coerce_optional_default.jinja",
         include_str!("templates/simple_enum_dict_coerce_optional_default.jinja"),
+    ),
+    (
+        "simple_enum_dict_coerce_guard.jinja",
+        include_str!("templates/simple_enum_dict_coerce_guard.jinja"),
     ),
     (
         "visitor_override_param.jinja",

@@ -63,6 +63,7 @@ fn render(api: &ApiSurface, adapter: &AdapterConfig) -> (String, String) {
         std::slice::from_ref(adapter),
         &[],
         &ahash::AHashSet::new(),
+        &crate::core::config::ResolvedCrateConfig::default(),
     );
     let options_py = crate::backends::pyo3::gen_bindings::types::gen_options_py(
         api,

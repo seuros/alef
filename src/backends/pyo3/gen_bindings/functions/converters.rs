@@ -60,6 +60,7 @@ pub(super) fn emit_converters(
     data_enum_names: &AHashSet<&str>,
     dto: &DtoConfig,
     reexported_types: &[String],
+    config: &crate::core::config::ResolvedCrateConfig,
 ) {
     let output_style = dto.python_output_style();
     let reexported_names: AHashSet<&str> = reexported_types.iter().map(|s| s.as_str()).collect();
@@ -79,6 +80,26 @@ pub(super) fn emit_converters(
             && typ.is_return_type
             && !reexported_names.contains(type_name.as_str());
         let is_reexported = reexported_names.contains(type_name.as_str());
+
+        // The same per-type `rename_fields` lookup `gen_stubs/classes.rs::gen_type_init_stub`
+        // builds before calling `resolve_param_ident` -- keeping both call sites' `config_renames`
+        // construction identical is what makes `resolve_param_ident` an actual single source of
+        // truth for the `#[new]` keyword name, rather than three independently-derived spellings
+        // that happen to agree on the common case. ~keep
+        let config_renames: std::collections::HashMap<String, String> = typ
+            .fields
+            .iter()
+            .filter_map(|f| {
+                config
+                    .resolve_field_name(crate::core::config::Language::Python, type_name, &f.name)
+                    .map(|renamed| (f.name.clone(), renamed))
+            })
+            .collect();
+        let config_renames_ref = if config_renames.is_empty() {
+            None
+        } else {
+            Some(&config_renames)
+        };
 
         // `name` is a raw Rust field name, but what is being read here is the *emitted* Python
         // attribute / TypedDict key, and both of those are already escaped (`types.rs` and
@@ -459,11 +480,35 @@ pub(super) fn emit_converters(
                     } else {
                         let accessor = field_access(&field.name);
 
-                        // If this enum field is optional (may be None) or has #[serde(default)]
+                        // Mirrors the data-enum branch above: a field that is already `Option<T>`
+                        // in the native constructor (`is_optional`) has a real `None` default at
+                        // that layer (see `constructors::replace_constructor_with_serde_rename`'s
+                        // `defaults` -- `f.optional` alone forces `{param}=None`), so passing
+                        // `None` straight through is exactly equivalent to omitting the kwarg and
+                        // needs no `**{...}` unpack at all. Only a field that is NOT optional at
+                        // that layer but still carries `#[serde(default)]` needs the omission
+                        // trick, because its real default there is a non-`None` Rust expression
+                        // (`Self::default().{field}`) that Python cannot represent inline; passing
+                        // `None` to a non-`Option` parameter would fail extraction. Collapsing
+                        // both cases into one `needs_none_guard` used to route the `is_optional`
+                        // case through the omission template too, which put an unnecessary
+                        // `**({...} if ... else {})` in the call -- and pyrefly's keyword-argument
+                        // inference cross-assigns argument types when two such unpacks appear in
+                        // the same call (alef bug: two `Option<Enum>` fields on one constructor
+                        // reproduced `[bad-argument-type]` with the errors swapped between the two
+                        // parameters). ~keep
                         let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
-                        let needs_none_guard = is_optional || defers_to_rust_default(field);
 
-                        if needs_none_guard {
+                        if is_optional || is_typeddict {
+                            out.push_str(&crate::backends::pyo3::template_env::render(
+                                "simple_enum_dict_coerce_guard.jinja",
+                                minijinja::context! {
+                                    name => &field.name,
+                                    enum_name => nested_name,
+                                    accessor => &accessor,
+                                },
+                            ));
+                        } else if defers_to_rust_default(field) {
                             out.push_str(&crate::backends::pyo3::template_env::render(
                                 "simple_enum_dict_coerce_optional_default.jinja",
                                 minijinja::context! {
@@ -523,6 +568,23 @@ pub(super) fn emit_converters(
                 }
                 continue;
             }
+            if let Some((inner, is_optional)) = vec_field
+                && let TypeRef::Named(struct_name) = inner.as_ref()
+                && default_types.contains_key(struct_name.as_str())
+            {
+                let accessor = field_access(&field.name);
+                let struct_snake = struct_name.to_snake_case();
+                out.push_str(&crate::backends::pyo3::template_env::render(
+                    "struct_vec_coerce.jinja",
+                    minijinja::context! {
+                        name => &field.name,
+                        struct_snake => &struct_snake,
+                        accessor => &accessor,
+                        optional => is_optional,
+                    },
+                ));
+                continue;
+            }
 
             if let Some((kwarg_name, field_name, _)) = bridge_visitor_field
                 && field.name == field_name
@@ -576,13 +638,31 @@ pub(super) fn emit_converters(
             };
 
             // This is the keyword-argument name in the emitted `_rust.{Type}(...)` call, so it must
-            // be exactly what the generated `#[new]` accepts. `constructors::resolve_param_ident`
-            // is that signature's single source of truth and applies `python_ident` to the same
-            // serde-rename-then-field-name resolution, so mirroring the escape here keeps the two
-            // in step; without it a field named `global` emits `_rust.T(global=...)`, which does
-            // not parse at all. ~keep
-            let pyo3_param_name =
-                crate::core::keywords::python_ident(field.serde_rename.as_deref().unwrap_or(&field.name));
+            // be exactly what the generated `#[new]` accepts. Calling `resolve_param_ident`
+            // directly -- the same function `gen_stubs/classes.rs` calls for the `.pyi` `__init__`
+            // stub, and the same function `constructors.rs` calls to build the real `#[new]`
+            // signature -- makes this an ASK of the single source of truth instead of a
+            // re-derivation that can silently drift from it. The re-derivation that used to live
+            // here (`python_ident` applied straight to the wire name) agreed with
+            // `resolve_param_ident` for a Python keyword that is not ALSO a Rust keyword (`global`
+            // -> `global_` either way), but diverged for a name that is a keyword in BOTH
+            // languages (`type`, a `#[serde(rename = "type")]` wire name): `resolve_param_ident`
+            // takes the Rust `r#type` escape (which PyO3 exposes to Python as bare `type`, not
+            // `type_`), so the two spellings disagreed exactly there -- `_rust.T(type_=...)` here
+            // vs `_rust.T(type=...)` (and the `.pyi` stub) is what pyrefly's
+            // `[unexpected-keyword]` was catching. `resolve_param_ident` can return an `r#`-escaped
+            // Rust identifier; PyO3 strips that prefix from the Python-visible name, so it must be
+            // stripped here too before use as a Python keyword argument (mirrors
+            // `gen_stubs/classes.rs`'s stub emission). ~keep
+            let pyo3_param_name = crate::backends::pyo3::gen_bindings::constructors::resolve_param_ident(
+                &field.name,
+                field.serde_rename.as_ref(),
+                config_renames_ref,
+            );
+            let pyo3_param_name = pyo3_param_name
+                .strip_prefix("r#")
+                .map(str::to_owned)
+                .unwrap_or(pyo3_param_name);
 
             // If this field has a #[serde(default)] and is non-optional in the binding,
             let is_optional = matches!(field.ty, TypeRef::Optional(_)) || field.optional;
