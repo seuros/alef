@@ -357,9 +357,26 @@ preset = "strict"
 # actually returned/accepted (the native `_internal_bindings.*` pyclass) disagreed on
 # every boundary crossing, and pyrefly correctly rejected all of them. The codegen now
 # emits the `_to_rust_*` / `_from_native_*` conversions those boundaries need (alef-310),
-# so both codes are gone from this list. The three below remain suppressed because they
-# were never diagnosed as part of that fix and may still have genuine unaddressed causes;
-# do not fold them back in without re-auditing each one against a lifted suppression.
+# so both codes are gone from this list.
+#
+# The three below were re-audited (alef-334) against
+# `bin_cli::all_commands::pyrefly_generated_package_tests`'s fixture, extended to cover
+# each code's most plausible generated shape: a multi-parameter native-constructor call in
+# `_to_rust_filter` (bad-argument-count), a `Vec<enum>` field routed through the
+# `[_coerce_enum(_rust.X, v) for v in value.field]` comprehension (not-iterable), and a
+# nested options-dataclass chain in `_to_rust_person` (missing-attribute). With this
+# suppression lifted, that fixture's real generated `api.py` type-checks clean under real
+# pyrefly 1.2.0. Hand-corrupting those exact call sites (an extra positional arg; an
+# iteration over a non-iterable; a typoed attribute) reliably reproduces, respectively:
+#   `Expected 3 positional arguments, got 4 in function `test_lib.test_lib.Filter.__init__`
+#   [bad-argument-count]`
+#   `Type `Literal[5]` is not iterable [not-iterable]`
+#   `Object of class `Person` has no attribute `addresss` [missing-attribute]`
+# proving the gate can and does catch each code -- a clean run is not vacuous. No defect
+# was found under the shapes that fixture covers, but the pyo3 backend's less-common
+# surfaces (service_api decorators, trait_bridge visitors, streaming adapters, capsule
+# types) were not exercised by this audit; do not fold these back in without extending
+# that fixture to cover whichever surface prompted the re-audit.
 [[tool.pyrefly.sub-config]]
 matches = "**/api.py"
 [tool.pyrefly.sub-config.errors]

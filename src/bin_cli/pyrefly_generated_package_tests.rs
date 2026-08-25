@@ -29,20 +29,30 @@ const FIXTURE_CARGO_TOML: &str = "[package]\nname = \"test-lib\"\nversion = \"0.
 /// would emit it as an input dataclass while `api.py` actually returns/receives the native
 /// pyclass -- the mismatch pyrefly's `bad-return` catches.
 ///
-/// The remaining constructs below (`Point`, `list_points`, `Shape`, `ValidationError`) exist to
-/// audit the three still-suppressed pyrefly codes (`bad-argument-count`, `not-iterable`,
-/// `missing-attribute`; task alef-334) against real generated output rather than leaving them
-/// suppressed on faith:
+/// The remaining constructs below exist to audit the three still-suppressed pyrefly codes
+/// (`bad-argument-count`, `not-iterable`, `missing-attribute`; task alef-334) against real
+/// generated output rather than leaving them suppressed on faith. Each targets the specific
+/// generated-code shape most likely to trip its code (see `src/backends/pyo3/gen_bindings/
+/// functions/converters.rs` for the `options`-dataclass-to-native-pyclass conversion path all
+/// three shapes exercise):
 ///
-/// - `Point::new`/`Point::translate` take several parameters including an `Option<...>` one, the
-///   shape most likely to desync the wrapper `def`'s parameter count from the native pyclass
-///   constructor/method it calls (`bad-argument-count`).
-/// - `list_points` returns `Vec<Point>`, the shape most likely to produce generated code that
-///   iterates, indexes, or unpacks a collection pyrefly cannot prove is iterable
-///   (`not-iterable`).
-/// - `Shape` is a data-carrying enum and `ValidationError` is a field-carrying error type, both
-///   shapes most likely to produce generated attribute access across the wrapper/native boundary
-///   that pyrefly cannot prove exists (`missing-attribute`). ~keep
+/// - `Filter` is used ONLY as a function argument (`apply_filter`), so it is emitted as an
+///   `options.py` dataclass whose `_to_rust_filter` conversion calls the native `Filter`
+///   pyclass constructor by keyword -- the exact call site where a wrapper/native argument-count
+///   desync would surface (`bad-argument-count`).
+/// - `Status` is a plain (data-less) enum and `BatchInput.statuses` is `Vec<Status>` used only as
+///   an argument, which routes through `simple_enum_vec_coerce.jinja`'s
+///   `[_coerce_enum(_rust.Status, v) for v in accessor]` list comprehension -- the exact
+///   generated shape that needs `accessor` to type as an iterable (`not-iterable`).
+/// - `Person`/`Address` is a nested options dataclass (a dataclass field that is itself another
+///   dataclass) used only as an argument, so the outer conversion function must chain into the
+///   inner one and read fields across that boundary -- the shape most likely to read a field
+///   that does not exist on the declared dataclass type (`missing-attribute`).
+/// - `ValidationError` is a `#[derive(thiserror::Error)]` enum with a field-carrying variant, the
+///   shape `src/extract/extractor/mod.rs`'s `is_thiserror_enum` routes to `surface.errors` (a
+///   plain struct implementing `Display`/`Error` by hand is NOT recognized as an error type and
+///   was NOT exercising this path before this fixture was written -- confirmed by inspecting the
+///   original fixture's generated `exceptions.py`, which was empty). ~keep
 const FIXTURE_SOURCE: &str = r#"
 #[derive(Default)]
 pub struct ResultData {
@@ -95,23 +105,58 @@ pub fn describe_shape(shape: Shape) -> String {
     }
 }
 
-#[derive(Debug)]
-pub struct ValidationError {
-    pub field: String,
-    pub message: String,
+#[derive(Default)]
+pub struct Filter {
+    pub min_value: i64,
+    pub max_value: i64,
+    pub label: Option<String>,
 }
 
-impl std::fmt::Display for ValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.field, self.message)
-    }
+pub fn apply_filter(data: Vec<i64>, filter: Filter) -> Vec<i64> {
+    data.into_iter()
+        .filter(|value| *value >= filter.min_value && *value <= filter.max_value)
+        .collect()
 }
 
-impl std::error::Error for ValidationError {}
+pub enum Status {
+    Active,
+    Inactive,
+}
+
+#[derive(Default)]
+pub struct BatchInput {
+    #[serde(default)]
+    pub statuses: Vec<Status>,
+}
+
+pub fn count_active(input: BatchInput) -> i64 {
+    input.statuses.iter().filter(|status| matches!(status, Status::Active)).count() as i64
+}
+
+#[derive(Default)]
+pub struct Address {
+    pub city: String,
+}
+
+#[derive(Default)]
+pub struct Person {
+    pub name: String,
+    pub address: Address,
+}
+
+pub fn greet(person: Person) -> String {
+    format!("hi {} from {}", person.name, person.address.city)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ValidationError {
+    #[error("{field}: {message}")]
+    InvalidField { field: String, message: String },
+}
 
 pub fn validate(value: i64) -> Result<i64, ValidationError> {
     if value < 0 {
-        Err(ValidationError {
+        Err(ValidationError::InvalidField {
             field: "value".to_string(),
             message: "must be non-negative".to_string(),
         })
@@ -185,6 +230,18 @@ fn walkdir_pyproject_tomls(root: &std::path::Path) -> Vec<std::path::PathBuf> {
 /// would see. Zero errors is the regression gate: a return-type or argument-type boundary
 /// mismatch reintroduced into the pyo3 backend surfaces here as a real `bad-return` or
 /// `bad-argument-type`, not just in a hand-run consumer audit.
+///
+/// The fixture also exercises the three codes `src/scaffold/languages/python.rs` still
+/// suppresses for every `**/api.py` (`bad-argument-count`, `not-iterable`, `missing-attribute`;
+/// task alef-334) through their most plausible generated shapes (see `FIXTURE_SOURCE`'s doc
+/// comment). Hand-corrupting the generated `_to_rust_filter`/`_to_rust_batch_input`/
+/// `_to_rust_person` call sites this fixture produces (an extra positional arg, an iteration
+/// over a non-iterable, a typoed attribute) reliably reproduces `[bad-argument-count]`,
+/// `[not-iterable]`, and `[missing-attribute]` respectively -- proof this gate can and does
+/// detect each code, not just a vacuous pass. With those codes left enabled and the fixture
+/// left uncorrupted, this test currently reports zero errors, i.e. none of the three codes is
+/// presently reproducible from real (uncorrupted) codegen output for the shapes this fixture
+/// covers.
 #[test]
 fn alef_all_generated_python_package_type_checks_clean_under_pyrefly() {
     if which::which("pyrefly").is_err() {
