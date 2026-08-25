@@ -137,3 +137,105 @@ fn an_undeclared_key_is_refused_identically_in_both_renderings() {
          #322 fixed"
     );
 }
+
+/// `SampleOptions.inner` is a SEPARATE struct type (`InnerOptions`, one declared field:
+/// `known`) reached one level deeper than the top-level `options` argument. Object literals at
+/// this depth are built by `node_value_expression`, not `ts_builder_expression_inner` — a
+/// distinct function from the one the tests above exercise. Both must apply the same
+/// undeclared-key guard (see `refuse_undeclared_json_keys` in `builders/mod.rs`), or the same
+/// snippet-vs-e2e asymmetry these top-level tests pin can still occur one level deeper.
+fn option_type_defs_with_nested() -> Vec<crate::core::ir::TypeDef> {
+    vec![
+        make_type(
+            "SampleOptions",
+            vec![
+                make_field("content", TypeRef::String),
+                make_field("inner", TypeRef::Named("InnerOptions".into())),
+            ],
+        ),
+        make_type("InnerOptions", vec![make_field("known", TypeRef::String)]),
+    ]
+}
+
+fn render_snippet_nested(fixture: &Fixture) -> String {
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    render_snippet_body(SnippetContext {
+        lang: "node",
+        fixture,
+        module: "@example/library",
+        client_factory: None,
+        e2e_config: &e2e_config(),
+        type_defs: &option_type_defs_with_nested(),
+        enums: &[],
+        functions: &[],
+        wasm_type_prefix: "",
+        config: &config,
+    })
+}
+
+fn render_e2e_nested(fixture: &Fixture) -> String {
+    let config = crate::core::config::ResolvedCrateConfig::default();
+    let type_defs = option_type_defs_with_nested();
+    let mut out = String::new();
+    let mut referenced_enums = std::collections::BTreeSet::new();
+    render_test_case(
+        &mut out,
+        fixture,
+        None,
+        None,
+        &e2e_config(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        &[],
+        "",
+        &config,
+        &mut referenced_enums,
+        &[],
+    );
+    out
+}
+
+#[test]
+fn a_nested_declared_key_survives_identically_in_both_renderings() {
+    let fixture = fixture_with(serde_json::json!({"options": {"content": "hello", "inner": {"known": "x"}}}));
+
+    let snippet = render_snippet_nested(&fixture);
+    assert!(
+        snippet.contains(r#"known: "x""#),
+        "snippet must build the declared nested field:\n{snippet}"
+    );
+
+    let e2e = render_e2e_nested(&fixture);
+    assert!(
+        e2e.contains(r#"known: "x""#),
+        "e2e test must build the declared nested field:\n{e2e}"
+    );
+}
+
+#[test]
+fn a_nested_undeclared_key_is_refused_identically_in_both_renderings() {
+    // `InnerOptions` (the type of `SampleOptions.inner`) never declares `bogus`. This key is
+    // nested one level deeper than the top-level `options` argument, so it reaches
+    // `node_value_expression`'s object-literal builder rather than
+    // `ts_builder_expression_inner`'s.
+    let fixture =
+        fixture_with(serde_json::json!({"options": {"content": "hello", "inner": {"known": "x", "bogus": "y"}}}));
+
+    let snippet_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_snippet_nested(&fixture)));
+    assert!(
+        snippet_result.is_err(),
+        "snippet rendering must refuse an undeclared nested field instead of silently emitting it"
+    );
+
+    let e2e_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render_e2e_nested(&fixture)));
+    assert!(
+        e2e_result.is_err(),
+        "e2e rendering must refuse the SAME undeclared nested field the snippet path refuses — a \
+         silent drop here (while the snippet still refuses) reproduces the two-generators-disagree \
+         shape one level deeper than the top-level fix covers"
+    );
+}
