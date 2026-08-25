@@ -98,7 +98,7 @@ pub(in crate::backends::magnus::gen_bindings::functions) fn magnus_serde_recover
 /// Returns true if any param's deserialization preamble uses the fallible `?` operator —
 /// i.e. a non-opaque Named param (serde JSON-roundtrip), a `Vec<Named>` batch param, or a
 /// sanitized `Vec<String>` param. Such functions MUST return `Result` even when the core fn
-/// is infallible (e.g. `max_sim_score -> f64`), otherwise the generated `?` fails to compile
+/// is infallible (e.g. `score_pair -> f64`), otherwise the generated `?` fails to compile
 /// (`E0277`). Callers OR this into `has_error` to force a `Result` return + `Ok(...)` wrap.
 pub(in crate::backends::magnus::gen_bindings::functions) fn params_need_fallible_deser(
     params: &[ParamDef],

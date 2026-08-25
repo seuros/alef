@@ -312,7 +312,7 @@ fn test_opaque_constructor_only_for_opaque_types() {
 
 /// Build an ApiSurface with an opaque type whose sole constructor is named
 /// `compile` (not `new`) and is fallible (`error_type` is set, representing
-/// `Result<Self, E>`).  This mirrors `kreuzberg::MetaSchema::compile`.
+/// `Result<Self, E>`).  This mirrors a real crate's `MetaSchema::compile`.
 fn opaque_with_named_constructor_api() -> ApiSurface {
     ApiSurface {
         crate_name: "my-lib".to_string(),
