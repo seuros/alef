@@ -164,6 +164,80 @@ pub fn validate(value: i64) -> Result<i64, ValidationError> {
         Ok(value)
     }
 }
+
+// The three constructs below target the three converter-generator defects found auditing
+// liter-llm and crawlberg against 0.67.6 (which removed `bad-argument-type`/`bad-return` from
+// the scaffolded pyrefly suppressions on the claim that codegen now emits correct
+// `_to_rust_*`/`_from_native_*` conversions for these boundaries -- this fixture proves that
+// claim against the specific shapes it did not originally cover). ~keep
+//
+// - `ResponseTool.tool_type` carries `#[serde(rename = "type")]`, a Python reserved word. The
+//   `_to_rust_response_tool` converter and the `.pyi` `__init__` stub must agree on the emitted
+//   keyword-argument spelling (`type`, not `type_`) or pyrefly reports `[unexpected-keyword]`.
+// - `Recipe.ingredients` is `Vec<Ingredient>` where `Ingredient` is itself a `has_default`
+//   struct, so `_to_rust_recipe` must convert each element with `_to_rust_ingredient`, not pass
+//   the raw `list[options.Ingredient]` straight through (pyrefly `[bad-argument-type]`).
+// - `Task` has two independent optional simple-enum fields (`priority`, `mode`) on one
+//   constructor call. Both are `Option<Enum>` in the native binding, so the emitted converter
+//   used to route them through a `**({...} if ... else {})` omission trick that isn't needed for
+//   an already-optional field -- and two such unpacks in one call is exactly the shape that made
+//   pyrefly cross-assign the two enum types between the two parameters.
+#[derive(Default)]
+pub struct ResponseTool {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub label: Option<String>,
+}
+
+pub fn describe_tool(tool: ResponseTool) -> String {
+    format!("{}: {}", tool.tool_type, tool.label.unwrap_or_default())
+}
+
+#[derive(Default, Clone)]
+pub struct Ingredient {
+    pub name: String,
+}
+
+#[derive(Default)]
+pub struct Recipe {
+    pub title: String,
+    pub ingredients: Vec<Ingredient>,
+}
+
+pub fn total_ingredients(recipe: Recipe) -> i64 {
+    recipe.ingredients.len() as i64
+}
+
+pub enum Priority {
+    Low,
+    High,
+}
+
+pub enum Mode {
+    Fast,
+    Slow,
+}
+
+#[derive(Default)]
+pub struct Task {
+    pub title: String,
+    pub priority: Option<Priority>,
+    pub mode: Option<Mode>,
+}
+
+pub fn describe_task(task: Task) -> String {
+    let priority = match task.priority {
+        Some(Priority::Low) => "low",
+        Some(Priority::High) => "high",
+        None => "unset",
+    };
+    let mode = match task.mode {
+        Some(Mode::Fast) => "fast",
+        Some(Mode::Slow) => "slow",
+        None => "unset",
+    };
+    format!("{}: {priority}/{mode}", task.title)
+}
 "#;
 
 const FIXTURE_ALEF_TOML: &str = r#"

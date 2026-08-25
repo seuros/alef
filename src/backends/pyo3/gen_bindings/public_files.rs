@@ -91,6 +91,7 @@ pub(super) fn generate_public_api(
         &config.adapters,
         &reexported_types,
         &exclude_functions,
+        config,
     );
     files.push(GeneratedFile {
         path: output_base.join("api.py"),
