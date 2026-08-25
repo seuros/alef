@@ -305,7 +305,7 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
         parallelism: std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get),
         timeout_secs: config.timeout_secs.unwrap_or(120),
         fail_fast: config.fail_fast,
-        deny_unclassified: config.deny_unclassified || force_strict,
+        deny_unclassified: resolved_deny_unclassified(config.deny_unclassified, strict),
         allowed_side_effects,
         cache_dir: use_cache.then(|| root.join(config.cache_dir())),
         changed_only: use_cache,
@@ -389,6 +389,20 @@ fn run_check(config_path: &Path, force_strict: bool, use_cache: bool, languages:
     } else {
         ExitCode::SUCCESS
     }
+}
+
+/// Whether the snippet runner should reject snippets with no side-effect classification.
+///
+/// `strict` here is already the union of `--strict` and `[crates.docs.snippets].strict` (see
+/// `run_check`'s `strict` binding) -- every other strict-gated behavior in this command (coverage
+/// completeness, missing generated snippets, gap findings) already reads that combined value.
+/// This used to read the raw `--strict` flag alone, so `[crates.docs.snippets].strict = true`
+/// left unclassified snippets free to reach real execution at `ValidationLevel::Run` instead of
+/// being pre-emptively skipped -- a config-only `strict` consumer had no way to get the same
+/// safety gate a flag-only `strict` consumer got for free. `config.deny_unclassified` remains a
+/// standalone opt-in on top, for a consumer who wants the gate without going fully strict. ~keep
+fn resolved_deny_unclassified(config_deny_unclassified: bool, strict: bool) -> bool {
+    config_deny_unclassified || strict
 }
 
 /// Resolve configured snippet roots against `root`, dropping any that fall
@@ -522,11 +536,8 @@ fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::
         configured_references,
         exclude: inputs.exclude.to_vec(),
     })?;
-    let (gap_structural_failure, gap_has_unreferenced) = report_gaps(&gap_report);
-    Ok((
-        audit_failure,
-        gap_structural_failure || (inputs.strict && gap_has_unreferenced),
-    ))
+    log_gaps(&gap_report);
+    Ok((audit_failure, gap_report.is_failure(inputs.strict)))
 }
 
 fn report_audit(report: &crate::snippets::audit::AuditReport) -> bool {
@@ -546,13 +557,12 @@ fn report_audit(report: &crate::snippets::audit::AuditReport) -> bool {
     report.has_errors()
 }
 
-/// Logs every gap finding and returns `(structural_failure, has_unreferenced_snippets)`.
+/// Logs every gap finding via `tracing`.
 ///
-/// `structural_failure` covers missing include targets, missing required
-/// language variants, undocumented skips, and unknown fence languages —
-/// findings that are never intentional. Unreferenced snippets are reported
-/// separately because they are only a failure under `strict`.
-fn report_gaps(report: &crate::snippets::gaps::GapReport) -> (bool, bool) {
+/// The pass/fail verdict is [`crate::snippets::gaps::GapReport::is_failure`] — this function is
+/// output only, so `check` and `gaps` (which prints the same findings through
+/// `crate::bin_cli::output::line` instead) cannot drift on which findings actually fail a run.
+fn log_gaps(report: &crate::snippets::gaps::GapReport) {
     for reference in &report.missing_references {
         tracing::error!(
             "snippet gap: missing include target {}:{} -> {}",
@@ -587,11 +597,6 @@ fn report_gaps(report: &crate::snippets::gaps::GapReport) -> (bool, bool) {
             unknown.tag
         );
     }
-    let structural_failure = !report.missing_references.is_empty()
-        || !report.missing_language_variants.is_empty()
-        || !report.skips_without_reason.is_empty()
-        || !report.unknown_languages.is_empty();
-    (structural_failure, !report.unreferenced_snippets.is_empty())
 }
 
 fn configured_sessions(
@@ -943,7 +948,16 @@ fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
             ));
         }
     }
-    ExitCode::FAILURE
+    // Mirrors `run_check`/`run_configured_audit_and_gaps`: structural findings (missing include
+    // targets, missing language variants, undocumented skips, unknown fence languages) always
+    // fail; an unreferenced-only finding fails only under `strict`, same as `check`. This used
+    // to fail unconditionally on ANY finding here, so `gaps` and `check` disagreed about the
+    // identical unreferenced-snippet-only case. ~keep
+    if report.is_failure(strict) || unconfigured_failure {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 mod accounting;

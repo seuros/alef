@@ -72,6 +72,33 @@ impl GapReport {
             || !self.skips_without_reason.is_empty()
             || !self.unknown_languages.is_empty()
     }
+
+    /// Findings that are never intentional: missing include targets, missing required language
+    /// variants, undocumented skips, and unknown fence languages.
+    ///
+    /// Deliberately excludes [`Self::unreferenced_snippets`] -- an extra hand-authored example
+    /// with no include target can be deliberate, so whether it counts as a failure is left to
+    /// [`Self::is_failure`]'s `strict` argument rather than folded in here unconditionally.
+    #[must_use]
+    pub fn has_structural_gaps(&self) -> bool {
+        !self.missing_references.is_empty()
+            || !self.missing_language_variants.is_empty()
+            || !self.skips_without_reason.is_empty()
+            || !self.unknown_languages.is_empty()
+    }
+
+    /// Whether this report should fail a run.
+    ///
+    /// Structural gaps ([`Self::has_structural_gaps`]) always fail. Unreferenced snippets only
+    /// fail when `strict` is set. `alef snippets check` and `alef snippets gaps` both report the
+    /// same [`GapReport`] shape and must reach the same verdict from it for the same `strict`
+    /// setting -- before this method existed each command re-derived its own combination, and
+    /// `gaps` failed unconditionally on ANY finding (including an unreferenced-only one) while
+    /// `check` already gated that one finding class on `strict`. ~keep
+    #[must_use]
+    pub fn is_failure(&self, strict: bool) -> bool {
+        self.has_structural_gaps() || (strict && !self.unreferenced_snippets.is_empty())
+    }
 }
 
 /// Build a report for common documentation snippet coverage gaps.
