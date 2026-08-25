@@ -394,6 +394,7 @@ fn has_default_struct_emits_delegating_impl_not_derived_default() {
         skip_methods_when_not_delegatable: false,
         source_crate_remaps: &[],
         emit_delegating_default_for_types: None,
+        delegate_deserialize_to_core_for_types: None,
     };
 
     let content = gen_struct_with_per_field_attrs(&typ, &mapper, &cfg, |_: &FieldDef| vec![]);
@@ -506,6 +507,7 @@ fn has_default_struct_keeps_derived_default_when_delegation_disabled() {
         skip_methods_when_not_delegatable: false,
         source_crate_remaps: &[],
         emit_delegating_default_for_types: None,
+        delegate_deserialize_to_core_for_types: None,
     };
 
     let content = gen_struct_with_per_field_attrs(&typ, &mapper, &cfg, |_: &FieldDef| vec![]);

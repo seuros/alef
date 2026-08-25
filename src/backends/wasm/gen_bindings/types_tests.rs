@@ -261,3 +261,47 @@ fn gen_setter_vec_enum_mapped_to_js_value_skips_from_api_str() {
         "wrapper-backed enum setter must keep parsing wire strings: {control}"
     );
 }
+
+#[test]
+fn gen_struct_never_derives_serde_even_with_container_conversion() {
+    // The wasm binding struct is bridged to JS via #[wasm_bindgen] getters/setters, not serde:
+    // every JSON/JsValue decode path (the serde_*.jinja parameter templates and the trait-bridge
+    // return path in gen_{a,}sync_method_body.jinja) targets the *core* type directly and only
+    // `.into()`s into this struct afterward, so it never needs (and must never gain) its own
+    // Deserialize. If a future edit to gen_struct.jinja adds a serde derive here, it must also
+    // wire `crate::codegen::generators::gen_delegating_deserialize_impl` the way pyo3/extendr do,
+    // or the same core->binding wire-shape defect that mechanism fixes elsewhere reappears here
+    // silently. ~keep
+    let typ = TypeDef {
+        name: "Point".to_string(),
+        rust_path: "sample_core::Point".to_string(),
+        fields: vec![
+            FieldDef {
+                name: "x".into(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::F64),
+                ..Default::default()
+            },
+            FieldDef {
+                name: "y".into(),
+                ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::F64),
+                ..Default::default()
+            },
+        ],
+        serde_container_conversion: crate::core::ir::SerdeContainerConversion {
+            from: Some("(f64, f64)".to_string()),
+            into: Some("(f64, f64)".to_string()),
+            ..Default::default()
+        },
+        has_serde: true,
+        ..Default::default()
+    };
+    let out = gen_struct(&typ, &mapper(), &[], "sample_core", "Wasm", &AHashSet::new(), &[], true);
+    assert!(
+        !out.contains("Serialize"),
+        "wasm binding struct must not derive Serialize: {out}"
+    );
+    assert!(
+        !out.contains("Deserialize"),
+        "wasm binding struct must not derive Deserialize: {out}"
+    );
+}

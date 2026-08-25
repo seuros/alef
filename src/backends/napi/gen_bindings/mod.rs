@@ -60,6 +60,7 @@ impl NapiBackend {
             skip_methods_when_not_delegatable: false,
             source_crate_remaps: &[],
             emit_delegating_default_for_types: None,
+            delegate_deserialize_to_core_for_types: None,
         }
     }
 }
@@ -187,6 +188,10 @@ impl Backend for NapiBackend {
         }
 
         let opaque_types = config_opaque::collect_opaque_types(api, config, &capsule_types);
+        // Same convertible set that gates `gen_from_core_to_binding_cfg` below (see
+        // `core_to_binding` further down) -- reusing it here guarantees the `From<core::Type>`
+        // a delegating `Deserialize` needs is always emitted for any type this set names. ~keep
+        let core_to_binding_for_deserialize = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
         let mutex_types: AHashSet<String> = api
             .types
             .iter()
@@ -340,6 +345,8 @@ impl Backend for NapiBackend {
                     &opaque_types,
                     &never_skip_cfg_field_names,
                     &api.enums,
+                    &core_import,
+                    &core_to_binding_for_deserialize,
                 ));
                 // Emit impl methods as standalone #[napi] free functions.
                 // #[napi(object)] structs cannot have impl blocks, so each method becomes a

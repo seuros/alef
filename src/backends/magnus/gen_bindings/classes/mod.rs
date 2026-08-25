@@ -395,13 +395,20 @@ fn gen_opaque_async_instance_method(
 }
 
 /// Generate a Magnus-wrapped struct definition using the shared TypeMapper.
+///
+/// `delegate_deserialize` must only be true when the caller has already confirmed (via the same
+/// "core→binding convertible" set that gates `gen_from_core_to_binding_filtered`) that
+/// `From<core::Type> for {{ struct_name }}` will also be emitted this run -- see
+/// `crate::codegen::generators::struct_wants_deserialize_delegation`'s doc comment for why this
+/// function cannot safely make that call on its own.
 pub(super) fn gen_struct(
     typ: &TypeDef,
     mapper: &MagnusMapper,
     module_name: &str,
-    _api: &crate::core::ir::ApiSurface,
+    core_import: &str,
     generates_default: bool,
     trait_bridges: &[TraitBridgeConfig],
+    delegate_deserialize: bool,
 ) -> String {
     let class_path = format!("{}::{}", module_name, typ.name);
 
@@ -434,7 +441,7 @@ pub(super) fn gen_struct(
         })
         .collect();
 
-    crate::backends::magnus::template_env::render(
+    let mut rendered = crate::backends::magnus::template_env::render(
         "struct_def.rs.jinja",
         minijinja::context! {
             struct_name => &typ.name,
@@ -442,8 +449,13 @@ pub(super) fn gen_struct(
             fields => &fields,
             has_default => typ.has_default,
             generates_default => generates_default,
+            delegate_deserialize => delegate_deserialize,
         },
-    )
+    );
+    if delegate_deserialize {
+        rendered.push_str(&generators::gen_delegating_deserialize_impl(typ, core_import, "", &[]));
+    }
+    rendered
 }
 
 /// Generate Magnus methods for a struct.

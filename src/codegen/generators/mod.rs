@@ -139,6 +139,18 @@ pub struct RustBindingConfig<'a> {
     /// will also be emitted. When `None`, all `has_default` types get the delegating impl
     /// (backward-compatible behaviour for backends that do not need the restriction).
     pub emit_delegating_default_for_types: Option<&'a ahash::AHashSet<String>>,
+    /// When `Some(set)`, a struct whose name is in this set gets a hand-written `Deserialize`
+    /// that delegates to the *core* type's own `Deserialize` -- honouring a real
+    /// `#[serde(from/into/try_from/transparent)]` wire shape alef cannot otherwise reproduce --
+    /// instead of the derived, field-by-field object `Deserialize`. Actually delegating still
+    /// requires `structs::struct_wants_deserialize_delegation` to independently confirm the
+    /// struct is field-sound for it (see that function); this set's only job is guaranteeing
+    /// that `From<core::Type> for BindingType` is emitted for every type it names, so the
+    /// delegating impl's `.into()` always compiles. Populate it with (a subset of) the same
+    /// "core→binding convertible" set that already gates the backend's own
+    /// `gen_from_core_to_binding_cfg` calls. `None` means the caller has not wired this, so no
+    /// struct in this run gets delegation. ~keep
+    pub delegate_deserialize_to_core_for_types: Option<&'a ahash::AHashSet<String>>,
 }
 
 /// Method names that conflict with standard trait methods.
@@ -175,7 +187,8 @@ pub use methods::{
     gen_opaque_constructor, gen_opaque_impl_block, gen_static_method, is_trait_method_name,
 };
 pub use structs::{
-    can_generate_default_impl, gen_delegating_default_impl, gen_opaque_struct, gen_opaque_struct_prefixed, gen_struct,
-    gen_struct_default_impl, gen_struct_with_per_field_attrs, gen_struct_with_rename, type_needs_mutex,
-    type_needs_tokio_mutex,
+    can_generate_default_impl, gen_delegating_default_impl, gen_delegating_deserialize_impl, gen_opaque_struct,
+    gen_opaque_struct_prefixed, gen_struct, gen_struct_default_impl, gen_struct_with_per_field_attrs,
+    gen_struct_with_rename, struct_deserialize_delegation_field_sound, struct_wants_deserialize_delegation,
+    type_needs_mutex, type_needs_tokio_mutex,
 };

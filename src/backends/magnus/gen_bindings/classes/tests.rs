@@ -306,22 +306,76 @@ fn adjacent_tuple_default_uses_tuple_constructor_syntax() {
 fn gen_struct_emits_magnus_wrap_attribute() {
     let typ = make_typedef("Config", vec![make_field("value", TypeRef::String, false)]);
     let mapper = crate::backends::magnus::type_map::MagnusMapper;
-    let api = crate::core::ir::ApiSurface {
-        crate_name: "test_lib".to_string(),
-        version: "0.1.0".to_string(),
-        types: vec![],
-        functions: vec![],
-        enums: vec![],
-        errors: vec![],
-        excluded_type_paths: ::std::collections::HashMap::new(),
-        excluded_trait_names: ::std::collections::HashSet::new(),
-        services: vec![],
-        handler_contracts: vec![],
-        unsupported_public_items: Vec::new(),
-    };
-    let code = gen_struct(&typ, &mapper, "TestLib", &api, false, &[]);
+    let code = gen_struct(&typ, &mapper, "TestLib", "test_lib", false, &[], false);
     assert!(code.contains("magnus::wrap"), "struct must have magnus::wrap");
     assert!(code.contains("struct Config"), "must emit struct Config");
+}
+
+fn container_conversion() -> crate::core::ir::SerdeContainerConversion {
+    crate::core::ir::SerdeContainerConversion {
+        from: Some("(f64, f64)".to_string()),
+        into: Some("(f64, f64)".to_string()),
+        try_from: None,
+        transparent: false,
+    }
+}
+
+/// Wire-shape class: a two-field primitive pair (e.g. `Point { x, y }` with a positional-array
+/// `#[serde(from/into)]`). Asserts on the actual rendered code, not an intermediate flag.
+#[test]
+fn gen_struct_delegates_deserialize_when_caller_confirms_eligibility() {
+    let mut typ = make_typedef(
+        "Point",
+        vec![
+            make_field("x", TypeRef::Primitive(crate::core::ir::PrimitiveType::F64), false),
+            make_field("y", TypeRef::Primitive(crate::core::ir::PrimitiveType::F64), false),
+        ],
+    );
+    typ.serde_container_conversion = container_conversion();
+    let mapper = crate::backends::magnus::type_map::MagnusMapper;
+    let code = gen_struct(&typ, &mapper, "TestLib", "test_lib", false, &[], true);
+
+    let derive_line = code.lines().find(|l| l.trim_start().starts_with("#[derive(")).unwrap();
+    assert!(
+        !derive_line.contains("serde::Deserialize"),
+        "derive must drop Deserialize when delegating: {derive_line}"
+    );
+    assert!(
+        derive_line.contains("serde::Serialize"),
+        "Serialize stays derived: {derive_line}"
+    );
+    assert!(
+        code.contains("impl<'de> serde::Deserialize<'de> for Point {"),
+        "expected a delegating Deserialize impl in: {code}"
+    );
+    assert!(
+        code.contains("<test_lib::Point as serde::Deserialize>::deserialize(deserializer).map(Into::into)"),
+        "delegating impl must read the core type: {code}"
+    );
+    // The pre-existing TryConvert bridge is untouched and picks up whichever Deserialize impl
+    // the type has -- verify it still calls through to `Self`, not a hand-picked shape.
+    assert!(code.contains("serde_json::from_str::<Point>(&json_str)"));
+}
+
+/// Caller did not confirm eligibility (e.g. no matching `From<core::Type>` this run) -- must
+/// keep the ordinary derived, field-by-field `Deserialize` so the existing
+/// `SerdeContainerConversionUnsupported` diagnostic keeps naming the real gap.
+#[test]
+fn gen_struct_keeps_derive_when_delegation_not_confirmed() {
+    let mut typ = make_typedef(
+        "Point",
+        vec![
+            make_field("x", TypeRef::Primitive(crate::core::ir::PrimitiveType::F64), false),
+            make_field("y", TypeRef::Primitive(crate::core::ir::PrimitiveType::F64), false),
+        ],
+    );
+    typ.serde_container_conversion = container_conversion();
+    let mapper = crate::backends::magnus::type_map::MagnusMapper;
+    let code = gen_struct(&typ, &mapper, "TestLib", "test_lib", false, &[], false);
+
+    let derive_line = code.lines().find(|l| l.trim_start().starts_with("#[derive(")).unwrap();
+    assert!(derive_line.contains("serde::Deserialize"), "{derive_line}");
+    assert!(!code.contains("impl<'de> serde::Deserialize<'de> for Point"));
 }
 
 #[test]

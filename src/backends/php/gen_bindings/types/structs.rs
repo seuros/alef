@@ -404,6 +404,7 @@ pub(crate) fn gen_php_struct(
             skip_methods_when_not_delegatable: cfg.skip_methods_when_not_delegatable,
             source_crate_remaps: cfg.source_crate_remaps,
             emit_delegating_default_for_types: cfg.emit_delegating_default_for_types,
+            delegate_deserialize_to_core_for_types: cfg.delegate_deserialize_to_core_for_types,
         };
         generators::gen_struct_with_per_field_attrs(typ, mapper, &modified_cfg, field_attrs_fn)
     } else {

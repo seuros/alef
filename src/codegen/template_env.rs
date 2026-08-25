@@ -214,6 +214,10 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/generators/structs/opaque_struct.jinja"),
     ),
     (
+        "structs/delegating_deserialize_impl.jinja",
+        include_str!("templates/generators/structs/delegating_deserialize_impl.jinja"),
+    ),
+    (
         "error_gen/pyo3_error_types.jinja",
         include_str!("templates/error_gen/pyo3_error_types.jinja"),
     ),

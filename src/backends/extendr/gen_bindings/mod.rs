@@ -68,7 +68,13 @@ impl Backend for ExtendrBackend {
             .map(|e| e.name.clone())
             .collect();
         json_passthrough_enum_names_vec.sort();
-        let cfg = Self::binding_config(&core_import, &flat_data_enum_names_vec);
+        let mut cfg = Self::binding_config(&core_import, &flat_data_enum_names_vec);
+        // Computed early (depends only on `api`) so the delegating-`Deserialize` decision below
+        // can reuse the exact set that later gates `gen_from_core_to_binding_cfg` (`core_to_binding`
+        // further down) -- guaranteeing the `From<core::Type>` a delegating `Deserialize` needs is
+        // always emitted for any type this set names. ~keep
+        let core_to_binding_for_deserialize = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+        cfg.delegate_deserialize_to_core_for_types = Some(&core_to_binding_for_deserialize);
 
         let adapter_bodies = crate::adapters::build_adapter_bodies(config, Language::R)?;
 

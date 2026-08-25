@@ -308,6 +308,11 @@ impl Backend for Pyo3Backend {
         let core_to_binding_for_default = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
         cfg.emit_delegating_default_for_types = Some(&core_to_binding_for_default);
         cfg_unsendable.emit_delegating_default_for_types = Some(&core_to_binding_for_default);
+        // Same convertible set already gates `gen_from_core_to_binding_cfg` below (see
+        // `core_to_binding` a few hundred lines down) -- reusing it here guarantees the
+        // `From<core::Type>` a delegating `Deserialize` needs is always emitted too. ~keep
+        cfg.delegate_deserialize_to_core_for_types = Some(&core_to_binding_for_default);
+        cfg_unsendable.delegate_deserialize_to_core_for_types = Some(&core_to_binding_for_default);
         for typ in api
             .types
             .iter()

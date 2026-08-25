@@ -542,3 +542,138 @@ fn test_field_type_for_rustler_primitives() {
     };
     assert_eq!(field_type_for_rustler(&opt_field), "Option<String>");
 }
+
+// --- gen_struct deserialize-delegation wiring -------------------------------------------------
+
+fn f64_field(name: &str) -> FieldDef {
+    FieldDef {
+        name: name.into(),
+        ty: TypeRef::Primitive(PrimitiveType::F64),
+        ..Default::default()
+    }
+}
+
+fn container_conversion() -> crate::core::ir::SerdeContainerConversion {
+    crate::core::ir::SerdeContainerConversion {
+        from: Some("WireShape".to_string()),
+        into: Some("WireShape".to_string()),
+        try_from: None,
+        transparent: false,
+    }
+}
+
+fn point_type(conversion: crate::core::ir::SerdeContainerConversion) -> TypeDef {
+    TypeDef {
+        name: "Point".to_string(),
+        rust_path: "my_crate::Point".to_string(),
+        fields: vec![f64_field("x"), f64_field("y")],
+        is_opaque: false,
+        has_serde: true,
+        serde_container_conversion: conversion,
+        ..Default::default()
+    }
+}
+
+/// Extracts the `#[derive(...)]` line so assertions can't be fooled by "serde::Deserialize"
+/// also appearing inside the delegating impl's body text.
+fn derive_line(rendered: &str) -> &str {
+    rendered
+        .lines()
+        .find(|line| line.trim_start().starts_with("#[derive("))
+        .expect("rendered struct has a derive line")
+}
+
+#[test]
+fn gen_struct_delegates_for_sound_two_field_pair() {
+    let typ = point_type(container_conversion());
+    let delegatable: AHashSet<String> = ["Point".to_string()].into_iter().collect();
+    let rendered = gen_struct(
+        &typ,
+        &crate::backends::rustler::type_map::RustlerMapper,
+        "MyApp.Native",
+        &AHashSet::new(),
+        "my_crate",
+        &[],
+        &delegatable,
+    );
+
+    assert!(
+        !derive_line(rendered.as_str()).contains("serde::Deserialize"),
+        "derive line must drop Deserialize when delegating: {rendered}"
+    );
+    assert!(
+        rendered.contains("impl<'de> serde::Deserialize<'de> for Point {"),
+        "expected a delegating Deserialize impl in: {rendered}"
+    );
+    assert!(
+        rendered.contains("<my_crate::Point as serde::Deserialize>::deserialize(deserializer).map(Into::into)"),
+        "delegating impl must read the core type: {rendered}"
+    );
+    assert!(
+        derive_line(rendered.as_str()).contains("rustler::NifStruct"),
+        "rustler's own term codec derive must be untouched: {rendered}"
+    );
+}
+
+#[test]
+fn gen_struct_keeps_derive_when_not_in_delegatable_set() {
+    // Sound fields and a real container conversion, but the caller never proved a matching
+    // `From<core::Type>` impl will exist for this run (empty delegation set) -- must NOT delegate.
+    let typ = point_type(container_conversion());
+    let rendered = gen_struct(
+        &typ,
+        &crate::backends::rustler::type_map::RustlerMapper,
+        "MyApp.Native",
+        &AHashSet::new(),
+        "my_crate",
+        &[],
+        &AHashSet::new(),
+    );
+
+    assert!(derive_line(rendered.as_str()).contains("serde::Deserialize"));
+    assert!(!rendered.contains("impl<'de> serde::Deserialize<'de> for Point"));
+}
+
+#[test]
+fn gen_struct_keeps_derive_when_unsound_opaque_field() {
+    let mut typ = point_type(container_conversion());
+    typ.fields = vec![FieldDef {
+        name: "handle".into(),
+        ty: TypeRef::Named("OpaqueHandle".to_string()),
+        ..Default::default()
+    }];
+    let delegatable: AHashSet<String> = ["Point".to_string()].into_iter().collect();
+    let opaque_names = ["OpaqueHandle".to_string()];
+    let rendered = gen_struct(
+        &typ,
+        &crate::backends::rustler::type_map::RustlerMapper,
+        "MyApp.Native",
+        &AHashSet::new(),
+        "my_crate",
+        &opaque_names,
+        &delegatable,
+    );
+
+    // Falls back to the derived, field-by-field Deserialize -- the existing
+    // SerdeContainerConversionUnsupported diagnostic keeps naming the real gap here.
+    assert!(derive_line(rendered.as_str()).contains("serde::Deserialize"));
+    assert!(!rendered.contains("impl<'de> serde::Deserialize<'de> for Point"));
+}
+
+#[test]
+fn gen_struct_never_delegates_without_container_conversion() {
+    let typ = point_type(Default::default());
+    let delegatable: AHashSet<String> = ["Point".to_string()].into_iter().collect();
+    let rendered = gen_struct(
+        &typ,
+        &crate::backends::rustler::type_map::RustlerMapper,
+        "MyApp.Native",
+        &AHashSet::new(),
+        "my_crate",
+        &[],
+        &delegatable,
+    );
+
+    assert!(derive_line(rendered.as_str()).contains("serde::Deserialize"));
+    assert!(!rendered.contains("impl<'de> serde::Deserialize<'de> for Point"));
+}

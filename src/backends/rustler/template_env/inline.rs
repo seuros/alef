@@ -186,6 +186,10 @@ pub(super) static TEMPLATES: &[(&str, &str)] = &[
         "rust_struct_derive.jinja",
         "pub struct {{ struct_name }} {\n{%- for field in fields %}\n    pub {{ field.name }}: {{ field.type }},\n{%- endfor %}\n}\n",
     ),
+    (
+        "rust_struct_derive_line.jinja",
+        "#[derive(Debug, Clone, Default, serde::Serialize{% if not delegate_deserialize %}, serde::Deserialize{% endif %}, {{ nif_derive }})]\n",
+    ),
     ("rust_struct_header.jinja", "pub struct {{ struct_name }} {\n"),
     ("rust_struct_field.jinja", "    pub {{ name }}: {{ type }},\n"),
     (

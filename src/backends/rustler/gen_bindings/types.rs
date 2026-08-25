@@ -25,17 +25,36 @@ pub(super) fn gen_opaque_resource(typ: &TypeDef, core_import: &str, _opaque_type
 /// Fields listed in `exclude_fields` are omitted from the generated struct —
 /// used to skip bridge fields (e.g. visitor) that are handled at the Elixir layer
 /// and cannot implement Rustler's Encoder/Decoder traits.
+///
+/// `delegatable_deserialize_types` is the "core→binding convertible" set already used to gate
+/// `gen_from_core_to_binding_cfg` in `native.rs` (`core_to_binding_for_deserialize`) -- reusing
+/// it here guarantees the `From<core::Type>` a delegating `Deserialize` needs is always emitted
+/// for any type it names. See `struct_wants_deserialize_delegation`'s doc comment. ~keep
 pub(super) fn gen_struct(
     typ: &TypeDef,
     mapper: &crate::backends::rustler::type_map::RustlerMapper,
     module_prefix: &str,
     exclude_fields: &AHashSet<String>,
+    core_import: &str,
+    opaque_type_names: &[String],
+    delegatable_deserialize_types: &AHashSet<String>,
 ) -> String {
     let mut out = String::with_capacity(512);
-    if typ.has_default {
-        out.push_str("#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, rustler::NifMap)]\n");
+    let delegate_deserialize = delegatable_deserialize_types.contains(&typ.name)
+        && crate::codegen::generators::struct_wants_deserialize_delegation(typ, opaque_type_names, &[]);
+    let nif_derive = if typ.has_default {
+        "rustler::NifMap"
     } else {
-        out.push_str("#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, rustler::NifStruct)]\n");
+        "rustler::NifStruct"
+    };
+    out.push_str(&template_env::render(
+        "rust_struct_derive_line.jinja",
+        minijinja::context! {
+            delegate_deserialize => delegate_deserialize,
+            nif_derive => nif_derive,
+        },
+    ));
+    if !typ.has_default {
         out.push_str(&template_env::render(
             "rust_module_attr.jinja",
             minijinja::context! {
@@ -70,6 +89,14 @@ pub(super) fn gen_struct(
     }
 
     out.push_str("}\n");
+    if delegate_deserialize {
+        out.push_str(&crate::codegen::generators::gen_delegating_deserialize_impl(
+            typ,
+            core_import,
+            "",
+            &[],
+        ));
+    }
     out
 }
 

@@ -1,0 +1,437 @@
+use super::{
+    gen_delegating_deserialize_impl, gen_struct, gen_struct_with_per_field_attrs, gen_struct_with_rename,
+    struct_deserialize_delegation_field_sound, struct_wants_deserialize_delegation, type_needs_mutex,
+    type_needs_tokio_mutex,
+};
+use crate::codegen::generators::{AsyncPattern, RustBindingConfig};
+use crate::codegen::type_mapper::IdentityMapper;
+use crate::core::ir::{CoreWrapper, FieldDef, MethodDef, PrimitiveType, ReceiverKind, SerdeContainerConversion, TypeDef, TypeRef};
+use ahash::AHashSet;
+
+fn method(name: &str, receiver: Option<ReceiverKind>, is_async: bool) -> MethodDef {
+    MethodDef {
+        name: name.into(),
+        params: vec![],
+        return_type: TypeRef::Unit,
+        is_async,
+        is_static: false,
+        error_type: None,
+        doc: String::new(),
+        receiver,
+        cfg: None,
+        sanitized: false,
+        trait_source: None,
+        returns_ref: false,
+        returns_cow: false,
+        return_newtype_wrapper: None,
+        has_default_impl: false,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        version: Default::default(),
+    }
+}
+
+fn type_with_methods(name: &str, methods: Vec<MethodDef>) -> TypeDef {
+    TypeDef {
+        name: name.into(),
+        rust_path: format!("my_crate::{name}"),
+        original_rust_path: String::new(),
+        fields: vec![],
+        methods,
+        is_opaque: true,
+        is_clone: false,
+        is_copy: false,
+        is_trait: false,
+        has_default: false,
+        has_stripped_cfg_fields: false,
+        is_return_type: false,
+        serde_rename_all: None,
+        has_serde: false,
+        serde_container_default: false,
+        serde_container_conversion: Default::default(),
+        super_traits: vec![],
+        doc: String::new(),
+        cfg: None,
+        binding_excluded: false,
+        binding_exclusion_reason: None,
+        is_variant_wrapper: false,
+        has_lifetime_params: false,
+        has_private_fields: false,
+        version: Default::default(),
+    }
+}
+
+#[test]
+fn tokio_mutex_when_all_refmut_methods_async() {
+    let typ = type_with_methods(
+        "WebSocketConnection",
+        vec![
+            method("send_text", Some(ReceiverKind::RefMut), true),
+            method("receive_text", Some(ReceiverKind::RefMut), true),
+            method("close", None, true),
+        ],
+    );
+    assert!(type_needs_mutex(&typ));
+    assert!(type_needs_tokio_mutex(&typ));
+}
+
+#[test]
+fn no_tokio_mutex_when_any_refmut_is_sync() {
+    let typ = type_with_methods(
+        "Mixed",
+        vec![
+            method("async_op", Some(ReceiverKind::RefMut), true),
+            method("sync_op", Some(ReceiverKind::RefMut), false),
+        ],
+    );
+    assert!(type_needs_mutex(&typ));
+    assert!(!type_needs_tokio_mutex(&typ));
+}
+
+#[test]
+fn no_tokio_mutex_when_no_refmut() {
+    let typ = type_with_methods("ReadOnly", vec![method("get", Some(ReceiverKind::Ref), true)]);
+    assert!(!type_needs_mutex(&typ));
+    assert!(!type_needs_tokio_mutex(&typ));
+}
+
+#[test]
+fn no_tokio_mutex_when_empty_methods() {
+    let typ = type_with_methods("Empty", vec![]);
+    assert!(!type_needs_mutex(&typ));
+    assert!(!type_needs_tokio_mutex(&typ));
+}
+
+// --- Deserialize-delegation eligibility and codegen -----------------------------------------
+
+fn plain_field(name: &str, ty: TypeRef) -> FieldDef {
+    FieldDef {
+        name: name.into(),
+        ty,
+        optional: false,
+        ..Default::default()
+    }
+}
+
+fn container_conversion() -> SerdeContainerConversion {
+    SerdeContainerConversion {
+        from: Some("WireShape".to_string()),
+        into: Some("WireShape".to_string()),
+        try_from: None,
+        transparent: false,
+    }
+}
+
+fn type_with_fields(name: &str, fields: Vec<FieldDef>, conversion: SerdeContainerConversion) -> TypeDef {
+    TypeDef {
+        fields,
+        is_opaque: false,
+        serde_container_conversion: conversion,
+        has_serde: true,
+        ..type_with_methods(name, vec![])
+    }
+}
+
+fn f64_field(name: &str) -> FieldDef {
+    plain_field(name, TypeRef::Primitive(PrimitiveType::F64))
+}
+
+// Soundness matrix -----------------------------------------------------------------------------
+
+#[test]
+fn field_sound_true_for_two_field_primitive_pair() {
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], Default::default());
+    assert!(struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_true_for_four_field_primitive_group() {
+    let typ = type_with_fields(
+        "Rect",
+        vec![f64_field("a"), f64_field("b"), f64_field("c"), f64_field("d")],
+        Default::default(),
+    );
+    assert!(struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_true_for_nested_struct_element() {
+    let typ = type_with_fields(
+        "Segment",
+        vec![
+            plain_field("start", TypeRef::Named("Point".to_string())),
+            plain_field("end", TypeRef::Named("Point".to_string())),
+        ],
+        Default::default(),
+    );
+    assert!(struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_true_for_optional_element_mid_tuple() {
+    let mut b = f64_field("b");
+    b.optional = true;
+    let typ = type_with_fields(
+        "OptMid",
+        vec![f64_field("a"), FieldDef { ty: TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::F64))), ..b }, f64_field("c")],
+        Default::default(),
+    );
+    assert!(struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_false_for_unwrapped_opaque_field() {
+    let typ = type_with_fields(
+        "Holder",
+        vec![plain_field("handle", TypeRef::Named("OpaqueHandle".to_string()))],
+        Default::default(),
+    );
+    let opaque = vec!["OpaqueHandle".to_string()];
+    assert!(!struct_deserialize_delegation_field_sound(&typ, &opaque, &[]));
+}
+
+#[test]
+fn field_sound_true_for_opaque_field_marked_serializable() {
+    let typ = type_with_fields(
+        "Holder",
+        vec![plain_field("handle", TypeRef::Named("OpaqueHandle".to_string()))],
+        Default::default(),
+    );
+    let opaque = vec!["OpaqueHandle".to_string()];
+    let serializable = vec!["OpaqueHandle".to_string()];
+    assert!(struct_deserialize_delegation_field_sound(&typ, &opaque, &serializable));
+}
+
+#[test]
+fn field_sound_false_for_sanitized_non_cow_field() {
+    let mut field = f64_field("weird");
+    field.sanitized = true;
+    field.core_wrapper = CoreWrapper::None;
+    let typ = type_with_fields("Sanitized", vec![field], Default::default());
+    assert!(!struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_true_for_sanitized_cow_field() {
+    let mut field = plain_field("label", TypeRef::String);
+    field.sanitized = true;
+    field.core_wrapper = CoreWrapper::Cow;
+    let typ = type_with_fields("CowField", vec![field], Default::default());
+    assert!(struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_false_for_cfg_gated_field() {
+    let mut field = f64_field("feature_only");
+    field.cfg = Some("feature = \"extra\"".to_string());
+    let typ = type_with_fields("CfgGated", vec![field], Default::default());
+    assert!(!struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn field_sound_false_when_type_has_stripped_cfg_fields() {
+    let mut typ = type_with_fields("Stripped", vec![f64_field("x")], Default::default());
+    typ.has_stripped_cfg_fields = true;
+    assert!(!struct_deserialize_delegation_field_sound(&typ, &[], &[]));
+}
+
+#[test]
+fn wants_delegation_false_without_container_conversion() {
+    let typ = type_with_fields("Plain", vec![f64_field("x")], Default::default());
+    assert!(!struct_wants_deserialize_delegation(&typ, &[], &[]));
+}
+
+#[test]
+fn wants_delegation_true_with_from_into_and_sound_fields() {
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    assert!(struct_wants_deserialize_delegation(&typ, &[], &[]));
+}
+
+#[test]
+fn wants_delegation_false_with_from_into_but_unsound_fields() {
+    let typ = type_with_fields(
+        "Holder",
+        vec![plain_field("handle", TypeRef::Named("OpaqueHandle".to_string()))],
+        container_conversion(),
+    );
+    let opaque = vec!["OpaqueHandle".to_string()];
+    assert!(!struct_wants_deserialize_delegation(&typ, &opaque, &[]));
+}
+
+// Rendered-code assertions ----------------------------------------------------------------------
+
+fn base_cfg<'a>() -> RustBindingConfig<'a> {
+    RustBindingConfig {
+        struct_attrs: &[],
+        field_attrs: &[],
+        struct_derives: &[],
+        method_block_attr: None,
+        constructor_attr: "",
+        static_attr: None,
+        function_attr: "",
+        enum_attrs: &[],
+        enum_derives: &[],
+        needs_signature: false,
+        signature_prefix: "",
+        signature_suffix: "",
+        core_import: "sample_core",
+        async_pattern: AsyncPattern::None,
+        has_serde: true,
+        type_name_prefix: "",
+        option_duration_on_defaults: false,
+        opaque_type_names: &[],
+        skip_impl_constructor: false,
+        cast_uints_to_i32: false,
+        cast_large_ints_to_f64: false,
+        named_non_opaque_params_by_ref: false,
+        lossy_skip_types: &[],
+        serializable_opaque_type_names: &[],
+        never_skip_cfg_field_names: &[],
+        emit_delegating_default_impl: false,
+        skip_methods_when_not_delegatable: false,
+        source_crate_remaps: &[],
+        emit_delegating_default_for_types: None,
+        delegate_deserialize_to_core_for_types: None,
+    }
+}
+
+/// Extracts the `#[derive(...)]` line so tests can assert on derive membership without being
+/// fooled by "serde::Deserialize" also appearing inside the delegating impl's body text.
+fn derive_line(rendered: &str) -> &str {
+    rendered
+        .lines()
+        .find(|line| line.trim_start().starts_with("#[derive("))
+        .expect("rendered struct has a derive line")
+}
+
+#[test]
+fn gen_struct_with_rename_delegates_for_sound_two_field_pair() {
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    let delegatable: AHashSet<String> = ["Point".to_string()].into_iter().collect();
+    let cfg = RustBindingConfig {
+        delegate_deserialize_to_core_for_types: Some(&delegatable),
+        ..base_cfg()
+    };
+    let mapper = IdentityMapper;
+    let rendered = gen_struct_with_rename(&typ, &mapper, &cfg, |_| vec![], |_| None);
+
+    assert!(
+        !derive_line(&rendered).contains("serde::Deserialize"),
+        "derive line must drop Deserialize when delegating: {rendered}"
+    );
+    assert!(
+        rendered.contains("impl<'de> serde::Deserialize<'de> for Point {"),
+        "expected a delegating Deserialize impl in: {rendered}"
+    );
+    assert!(
+        rendered.contains("<my_crate::Point as serde::Deserialize>::deserialize(deserializer).map(Into::into)"),
+        "delegating impl must read the core type: {rendered}"
+    );
+    assert!(
+        rendered.contains("#[derive(") && derive_line(&rendered).contains("serde::Serialize"),
+        "Serialize stays derived (out of scope for this fix): {rendered}"
+    );
+}
+
+#[test]
+fn gen_struct_with_rename_keeps_derive_when_no_delegation_set_provided() {
+    // Sound fields and a real container conversion, but the caller never proved a matching
+    // `From<core::Type>` impl will exist (no delegation set) -- must NOT delegate.
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    let cfg = base_cfg();
+    let mapper = IdentityMapper;
+    let rendered = gen_struct_with_rename(&typ, &mapper, &cfg, |_| vec![], |_| None);
+
+    assert!(derive_line(&rendered).contains("serde::Deserialize"));
+    assert!(!rendered.contains("impl<'de> serde::Deserialize<'de> for Point"));
+}
+
+#[test]
+fn gen_struct_with_rename_keeps_derive_when_unsound_opaque_field() {
+    let typ = type_with_fields(
+        "Wrapper",
+        vec![plain_field("handle", TypeRef::Named("OpaqueHandle".to_string()))],
+        container_conversion(),
+    );
+    let delegatable: AHashSet<String> = ["Wrapper".to_string()].into_iter().collect();
+    let opaque_names = ["OpaqueHandle".to_string()];
+    let cfg = RustBindingConfig {
+        delegate_deserialize_to_core_for_types: Some(&delegatable),
+        opaque_type_names: &opaque_names,
+        ..base_cfg()
+    };
+    let mapper = IdentityMapper;
+    let rendered = gen_struct_with_rename(&typ, &mapper, &cfg, |_| vec![], |_| None);
+
+    // Falls back to the derived, field-by-field Deserialize -- the existing
+    // SerdeContainerConversionUnsupported diagnostic keeps naming the real gap here.
+    assert!(derive_line(&rendered).contains("serde::Deserialize"));
+    assert!(!rendered.contains("impl<'de> serde::Deserialize<'de> for Wrapper"));
+}
+
+#[test]
+fn gen_struct_with_per_field_attrs_delegates_when_eligible() {
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    let delegatable: AHashSet<String> = ["Point".to_string()].into_iter().collect();
+    let cfg = RustBindingConfig {
+        delegate_deserialize_to_core_for_types: Some(&delegatable),
+        ..base_cfg()
+    };
+    let mapper = IdentityMapper;
+    let rendered = gen_struct_with_per_field_attrs(&typ, &mapper, &cfg, |_| vec![]);
+
+    assert!(!derive_line(&rendered).contains("serde::Deserialize"));
+    assert!(rendered.contains("impl<'de> serde::Deserialize<'de> for Point {"));
+}
+
+#[test]
+fn gen_struct_bare_delegates_when_eligible() {
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    let delegatable: AHashSet<String> = ["Point".to_string()].into_iter().collect();
+    let cfg = RustBindingConfig {
+        delegate_deserialize_to_core_for_types: Some(&delegatable),
+        ..base_cfg()
+    };
+    let mapper = IdentityMapper;
+    let rendered = gen_struct(&typ, &mapper, &cfg);
+
+    assert!(!derive_line(&rendered).contains("serde::Deserialize"));
+    assert!(rendered.contains("impl<'de> serde::Deserialize<'de> for Point {"));
+}
+
+#[test]
+fn gen_struct_bare_never_delegates_without_container_conversion() {
+    // Regression guard: a type without a container conversion must be entirely unaffected,
+    // even if it happens to be named in the delegation set (e.g. by an over-eager caller).
+    let typ = type_with_fields("Plain", vec![f64_field("x")], Default::default());
+    let delegatable: AHashSet<String> = ["Plain".to_string()].into_iter().collect();
+    let cfg = RustBindingConfig {
+        delegate_deserialize_to_core_for_types: Some(&delegatable),
+        ..base_cfg()
+    };
+    let mapper = IdentityMapper;
+    let rendered = gen_struct(&typ, &mapper, &cfg);
+
+    assert!(derive_line(&rendered).contains("serde::Deserialize"));
+    assert!(!rendered.contains("impl<'de> serde::Deserialize<'de> for Plain"));
+}
+
+#[test]
+fn gen_delegating_deserialize_impl_applies_crate_remap() {
+    let typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    let mut remapped = typ.clone();
+    remapped.rust_path = "sample_core::geometry::Point".to_string();
+    let rendered = gen_delegating_deserialize_impl(&remapped, "sample_core", "Js", &[("sample_core", "sample_wasm")]);
+
+    assert!(rendered.contains("impl<'de> serde::Deserialize<'de> for JsPoint {"));
+    assert!(rendered.contains("<sample_wasm::geometry::Point as serde::Deserialize>::deserialize"));
+}
+
+#[test]
+fn gen_delegating_deserialize_impl_falls_back_to_core_import_for_bare_path() {
+    let mut typ = type_with_fields("Point", vec![f64_field("x"), f64_field("y")], container_conversion());
+    typ.rust_path = "Point".to_string();
+    let rendered = gen_delegating_deserialize_impl(&typ, "sample_core", "", &[]);
+
+    assert!(rendered.contains("<sample_core::Point as serde::Deserialize>::deserialize"));
+}

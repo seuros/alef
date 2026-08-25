@@ -143,6 +143,12 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     if !opaque_types.is_empty() {
         builder.add_import("std::sync::Arc");
     }
+    let opaque_type_names_vec: Vec<String> = opaque_types.iter().cloned().collect();
+    // Computed early (depends only on `api`) so `gen_struct`'s delegating-`Deserialize` decision
+    // below can reuse the exact set that gates `gen_from_core_to_binding_cfg` further down (see
+    // `core_to_binding`) -- guaranteeing the `From<core::Type>` a delegating `Deserialize` needs
+    // is always emitted for any type this set names. ~keep
+    let core_to_binding_for_deserialize = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
 
     let mut types_to_emit = collect_types_for_nif_derives(api, &exclude_types);
 
@@ -174,7 +180,15 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
             }
         } else {
             let excl = bridge_excluded_fields.get(typ.name.as_str()).unwrap_or(&empty_set);
-            builder.add_item(&gen_struct(typ, &mapper, &module_prefix, excl));
+            builder.add_item(&gen_struct(
+                typ,
+                &mapper,
+                &module_prefix,
+                excl,
+                &core_import,
+                &opaque_type_names_vec,
+                &core_to_binding_for_deserialize,
+            ));
             if typ.has_default && !typ.fields.is_empty() {
                 let config_impl = gen_rustler_config_impl(typ, &mapper, excl);
                 builder.add_item(&config_impl);
@@ -422,7 +436,6 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     }
 
     let binding_to_core = crate::codegen::conversions::convertible_types(api);
-    let core_to_binding = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
     let input_types = crate::codegen::conversions::input_type_names(api);
     let flat_data_enum_names_vec: Vec<String> = api
         .enums
@@ -465,7 +478,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                 &rustler_struct_cfg,
             ));
         }
-        if crate::codegen::conversions::can_generate_conversion(typ, &core_to_binding) {
+        if crate::codegen::conversions::can_generate_conversion(typ, &core_to_binding_for_deserialize) {
             builder.add_item(&crate::codegen::conversions::gen_from_core_to_binding_cfg(
                 typ,
                 &core_import,

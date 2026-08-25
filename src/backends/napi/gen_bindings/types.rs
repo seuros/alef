@@ -2,7 +2,9 @@
 
 use crate::backends::napi::type_map::NapiMapper;
 use crate::codegen::builder::{ImplBuilder, StructBuilder};
-use crate::codegen::generators::{self, RustBindingConfig};
+use crate::codegen::generators::{
+    self, RustBindingConfig, gen_delegating_deserialize_impl, struct_wants_deserialize_delegation,
+};
 use crate::codegen::naming::to_node_name;
 use crate::codegen::shared::{binding_fields, can_auto_delegate, function_params, partition_methods};
 use crate::codegen::type_mapper::TypeMapper;
@@ -80,6 +82,7 @@ fn ts_type_for_string_enum_field(ty: &TypeRef, enums: &[EnumDef]) -> Option<Stri
     inner(ty, enums)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn gen_struct(
     typ: &TypeDef,
     mapper: &NapiMapper,
@@ -88,6 +91,8 @@ pub(super) fn gen_struct(
     opaque_types: &ahash::AHashSet<String>,
     never_skip_cfg_field_names: &[String],
     enums: &[EnumDef],
+    core_import: &str,
+    core_to_binding_convertible: &ahash::AHashSet<String>,
 ) -> String {
     let has_serde_with_field = has_serde
         && binding_fields(&typ.fields).any(|f| match &f.ty {
@@ -108,9 +113,17 @@ pub(super) fn gen_struct(
     }
     struct_builder.add_derive("Clone");
     struct_builder.add_derive("Default");
+    // napi has no per-language "serializable opaque" carve-out (unlike pyo3's
+    // `serializable_opaque_type_names`), so an opaque field always disqualifies delegation here.
+    let opaque_type_names: Vec<String> = opaque_types.iter().cloned().collect();
+    let delegate_deserialize = has_serde
+        && core_to_binding_convertible.contains(&typ.name)
+        && struct_wants_deserialize_delegation(typ, &opaque_type_names, &[]);
     if has_serde {
         struct_builder.add_derive("serde::Serialize");
-        struct_builder.add_derive("serde::Deserialize");
+        if !delegate_deserialize {
+            struct_builder.add_derive("serde::Deserialize");
+        }
     }
 
     let _ = never_skip_cfg_field_names;
@@ -247,6 +260,9 @@ pub(super) fn gen_struct(
         crate::codegen::doc_emission::sanitize_rust_idioms(&typ.doc, crate::codegen::doc_emission::DocTarget::TsDoc);
     crate::codegen::doc_emission::emit_rustdoc(&mut out, &sanitized_doc, "");
     out.push_str(&body);
+    if delegate_deserialize {
+        out.push_str(&gen_delegating_deserialize_impl(typ, core_import, prefix, &[]));
+    }
     out
 }
 
@@ -917,59 +933,4 @@ pub(super) fn gen_dto_method_fns(
 /// For tagged enums with data fields: generates a flattened `#[napi(object)]` struct
 /// with a discriminant field and all variant fields as optional.
 #[cfg(test)]
-mod tests {
-    use super::gen_struct;
-    use crate::backends::napi::type_map::NapiMapper;
-    use crate::core::ir::{FieldDef, TypeDef};
-
-    /// gen_struct (pub(super)) is accessible from mod.rs — smoke test via trait.
-    /// The actual output is tested via the integration test (gen_bindings_test.rs).
-    #[test]
-    fn struct_gen_function_exists() {}
-
-    /// A field's `#[napi(js_name = ...)]` must come from casing policy alone, never from
-    /// `#[serde(rename = ...)]` on the core struct -- the two are separate name surfaces (the
-    /// public JS identifier vs. the JSON wire key), and `gen_dts` (this backend's `.d.ts`
-    /// generator) already computes the JS-visible name from casing policy only. Before this
-    /// fix, a field with an explicit `serde_rename` made the *compiled* binding expose that
-    /// wire name in JS while the generated `.d.ts` kept the camelCase name for the same field
-    /// from the same IR -- the artifact and its own tracked declaration disagreed.
-    #[test]
-    fn js_name_ignores_serde_rename_but_wire_rename_is_preserved() {
-        let typ = TypeDef {
-            name: "ChunkerConfig".to_string(),
-            fields: vec![FieldDef {
-                name: "max_characters".to_string(),
-                serde_rename: Some("max_chars".to_string()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        let mapper = NapiMapper::new("Js".to_string());
-        let opaque_types = ahash::AHashSet::default();
-        let never_skip_cfg_field_names: Vec<String> = Vec::new();
-
-        let out = gen_struct(
-            &typ,
-            &mapper,
-            "Js",
-            true,
-            &opaque_types,
-            &never_skip_cfg_field_names,
-            &[],
-        );
-
-        assert!(
-            out.contains("js_name = \"maxCharacters\""),
-            "js_name must use casing policy (maxCharacters), matching gen_dts's .d.ts output:\n{out}"
-        );
-        assert!(
-            !out.contains("js_name = \"max_chars\""),
-            "js_name must not bleed the wire (serde) rename into the public JS identifier:\n{out}"
-        );
-        assert!(
-            out.contains("serde(rename = \"max_chars\")"),
-            "the field's own wire rename must still reach #[serde(rename = ...)] independently:\n{out}"
-        );
-    }
-}
+mod tests;

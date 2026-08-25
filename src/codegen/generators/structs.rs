@@ -5,6 +5,98 @@ use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
 use crate::core::ir::{CoreWrapper, TypeDef, TypeRef};
 
+/// Whether every binding-visible field of `typ` round-trips losslessly through
+/// `From<core::Type> for BindingType` (see `gen_from_core_to_binding_cfg`) -- the precondition
+/// for a delegating `Deserialize` (deserialize the *core* type, then `.into()`) to be sound.
+///
+/// `gen_from_core_to_binding_cfg` fills an opaque field (not covered by
+/// `serializable_opaque_type_names`) or a sanitized non-`Cow` field with `Default::default()`
+/// instead of the real value. Delegating through it for such a field would silently discard
+/// whatever the real core `Deserialize` produced there, which is exactly the "silently-wrong
+/// guess" this change must never introduce. A cfg-gated field is excluded for a different
+/// reason: alef cannot know at generation time whether the compiled core type carries it, so
+/// any delegation decision here would itself be unverifiable. `has_stripped_cfg_fields` is the
+/// same concern at the whole-type level. Both cases must keep falling back to the derived,
+/// field-by-field `Deserialize` (and the existing `SerdeContainerConversionUnsupported`
+/// diagnostic keeps naming the gap). ~keep
+pub fn struct_deserialize_delegation_field_sound(
+    typ: &TypeDef,
+    opaque_type_names: &[String],
+    serializable_opaque_type_names: &[String],
+) -> bool {
+    if typ.has_stripped_cfg_fields {
+        return false;
+    }
+    binding_fields(&typ.fields).all(|field| {
+        if field.cfg.is_some() {
+            return false;
+        }
+        let is_unwrapped_opaque = field_references_opaque_type(&field.ty, opaque_type_names)
+            && !field_references_opaque_type(&field.ty, serializable_opaque_type_names);
+        let is_skipped_sanitized = field.sanitized && field.core_wrapper != CoreWrapper::Cow;
+        !is_unwrapped_opaque && !is_skipped_sanitized
+    })
+}
+
+/// Whether `typ` should get a delegating `Deserialize` -- reads the *core* type (honouring its
+/// real `#[serde(from/into/try_from/transparent)]` wire shape) and converts via `Into` --
+/// instead of the derived, field-by-field object `Deserialize` that disagrees with it.
+///
+/// Requires BOTH: the struct actually carries a container conversion
+/// (`typ.serde_container_conversion.is_present()`), and delegation is field-sound (see
+/// [`struct_deserialize_delegation_field_sound`]). Callers must separately confirm that
+/// `From<core::Type> for BindingType` will actually be emitted for `typ` in this run --
+/// typically by intersecting with the same convertible-type set that already gates that
+/// backend's `gen_from_core_to_binding_cfg` call for the same type. This function only proves
+/// delegation would be *sound*; it says nothing about whether the `Into` it depends on exists. ~keep
+pub fn struct_wants_deserialize_delegation(
+    typ: &TypeDef,
+    opaque_type_names: &[String],
+    serializable_opaque_type_names: &[String],
+) -> bool {
+    typ.serde_container_conversion.is_present()
+        && struct_deserialize_delegation_field_sound(typ, opaque_type_names, serializable_opaque_type_names)
+}
+
+/// Compose the fully-qualified core type path for `typ`: applies crate remaps when
+/// `rust_path` already carries a module path, or falls back to `{core_import}::{name}` for a
+/// bare (unqualified) path. Shared by [`gen_delegating_default_impl`] and
+/// [`gen_delegating_deserialize_impl`] so the two delegating impls can never reference a
+/// different core type for the same `typ`. ~keep
+fn qualified_core_path(typ: &TypeDef, core_import: &str, source_crate_remaps: &[(&str, &str)]) -> String {
+    let core_path = typ.rust_path.replace('-', "_");
+    if core_path.contains("::") {
+        crate::codegen::conversions::apply_crate_remaps(&core_path, source_crate_remaps)
+    } else {
+        format!("{core_import}::{}", typ.name)
+    }
+}
+
+/// Generate a hand-written `impl<'de> serde::Deserialize<'de> for BindingType` that delegates
+/// to the *core* type's own `Deserialize` and converts via `Into`, instead of a derived
+/// field-by-field object `Deserialize`.
+///
+/// Only sound when [`struct_wants_deserialize_delegation`] is true for `typ` and the caller has
+/// confirmed `From<core::Type> for BindingType` is actually emitted for this run -- see that
+/// function's doc comment. Emitted in place of `#[derive(serde::Deserialize)]`; callers must
+/// omit that derive when they emit this impl (both derive the same trait for the same type).
+pub fn gen_delegating_deserialize_impl(
+    typ: &TypeDef,
+    core_import: &str,
+    type_name_prefix: &str,
+    source_crate_remaps: &[(&str, &str)],
+) -> String {
+    let binding_name = format!("{type_name_prefix}{}", typ.name);
+    let core_qualified = qualified_core_path(typ, core_import, source_crate_remaps);
+    crate::codegen::template_env::render(
+        "structs/delegating_deserialize_impl.jinja",
+        minijinja::context! {
+            binding_name => binding_name,
+            core_path => core_qualified,
+        },
+    )
+}
+
 /// Sanitize a struct-field docstring before propagating into a binding Rust
 /// crate so explicit-link targets `[`X`](crate::X)` collapse to `` `X` ``.
 /// The `crate::` path resolves in the originating crate but not here, and
@@ -88,6 +180,16 @@ pub fn field_references_opaque_type(ty: &TypeRef, opaque_names: &[String]) -> bo
     }
 }
 
+/// Whether `typ`'s binding struct should get a delegating `Deserialize` in this run: the
+/// caller-provided `delegate_deserialize_to_core_for_types` set names it (guaranteeing the
+/// `From<core::Type>` impl the delegation depends on will also be emitted) AND delegation is
+/// independently sound for its fields. See [`struct_wants_deserialize_delegation`].
+fn should_delegate_deserialize(typ: &TypeDef, cfg: &RustBindingConfig) -> bool {
+    cfg.delegate_deserialize_to_core_for_types
+        .is_some_and(|set| set.contains(&typ.name))
+        && struct_wants_deserialize_delegation(typ, cfg.opaque_type_names, cfg.serializable_opaque_type_names)
+}
+
 /// Generate a struct definition using the builder, with a per-field attribute callback.
 ///
 /// `extra_field_attrs` is called for each field and returns additional `#[...]` attributes to
@@ -137,7 +239,10 @@ pub fn gen_struct_with_per_field_attrs(
         sb.add_derive("Default");
     }
     sb.add_derive("serde::Serialize");
-    sb.add_derive("serde::Deserialize");
+    let delegate_deserialize = should_delegate_deserialize(typ, cfg);
+    if !delegate_deserialize {
+        sb.add_derive("serde::Deserialize");
+    }
     let has_serde = true;
     for field in binding_fields(&typ.fields) {
         let force_optional = cfg.option_duration_on_defaults
@@ -165,6 +270,14 @@ pub fn gen_struct_with_per_field_attrs(
     let mut result = sb.build();
     if delegating_eligible {
         result.push_str(&gen_delegating_default_impl(
+            typ,
+            cfg.core_import,
+            cfg.type_name_prefix,
+            cfg.source_crate_remaps,
+        ));
+    }
+    if delegate_deserialize {
+        result.push_str(&gen_delegating_deserialize_impl(
             typ,
             cfg.core_import,
             cfg.type_name_prefix,
@@ -234,7 +347,10 @@ pub fn gen_struct_with_rename(
         sb.add_derive("Default");
     }
     sb.add_derive("serde::Serialize");
-    sb.add_derive("serde::Deserialize");
+    let delegate_deserialize = should_delegate_deserialize(typ, cfg);
+    if !delegate_deserialize {
+        sb.add_derive("serde::Deserialize");
+    }
     let has_serde = true;
     for field in binding_fields(&typ.fields) {
         let force_optional = cfg.option_duration_on_defaults
@@ -284,6 +400,14 @@ pub fn gen_struct_with_rename(
             cfg.source_crate_remaps,
         ));
     }
+    if delegate_deserialize {
+        result.push_str(&gen_delegating_deserialize_impl(
+            typ,
+            cfg.core_import,
+            cfg.type_name_prefix,
+            cfg.source_crate_remaps,
+        ));
+    }
     result
 }
 
@@ -326,7 +450,10 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
         sb.add_derive("Default");
     }
     sb.add_derive("serde::Serialize");
-    sb.add_derive("serde::Deserialize");
+    let delegate_deserialize = should_delegate_deserialize(typ, cfg);
+    if !delegate_deserialize {
+        sb.add_derive("serde::Deserialize");
+    }
     let _has_serde = true;
     for field in binding_fields(&typ.fields) {
         if field.cfg.is_some() && !cfg.never_skip_cfg_field_names.contains(&field.name) {
@@ -363,6 +490,14 @@ pub fn gen_struct(typ: &TypeDef, mapper: &dyn TypeMapper, cfg: &RustBindingConfi
             cfg.source_crate_remaps,
         ));
     }
+    if delegate_deserialize {
+        result.push_str(&gen_delegating_deserialize_impl(
+            typ,
+            cfg.core_import,
+            cfg.type_name_prefix,
+            cfg.source_crate_remaps,
+        ));
+    }
     result
 }
 
@@ -384,12 +519,7 @@ pub fn gen_delegating_default_impl(
     source_crate_remaps: &[(&str, &str)],
 ) -> String {
     let binding_name = format!("{type_name_prefix}{}", typ.name);
-    let core_path = typ.rust_path.replace('-', "_");
-    let core_qualified = if core_path.contains("::") {
-        crate::codegen::conversions::apply_crate_remaps(&core_path, source_crate_remaps)
-    } else {
-        format!("{core_import}::{}", typ.name)
-    };
+    let core_qualified = qualified_core_path(typ, core_import, source_crate_remaps);
     format!(
         "\n\nimpl Default for {binding_name} {{\n    fn default() -> Self {{\n        <{core_qualified} as Default>::default().into()\n    }}\n}}\n"
     )
@@ -543,101 +673,4 @@ pub fn gen_opaque_struct_prefixed(typ: &TypeDef, cfg: &RustBindingConfig, prefix
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{type_needs_mutex, type_needs_tokio_mutex};
-    use crate::core::ir::{MethodDef, ReceiverKind, TypeDef, TypeRef};
-
-    fn method(name: &str, receiver: Option<ReceiverKind>, is_async: bool) -> MethodDef {
-        MethodDef {
-            name: name.into(),
-            params: vec![],
-            return_type: TypeRef::Unit,
-            is_async,
-            is_static: false,
-            error_type: None,
-            doc: String::new(),
-            receiver,
-            cfg: None,
-            sanitized: false,
-            trait_source: None,
-            returns_ref: false,
-            returns_cow: false,
-            return_newtype_wrapper: None,
-            has_default_impl: false,
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            version: Default::default(),
-        }
-    }
-
-    fn type_with_methods(name: &str, methods: Vec<MethodDef>) -> TypeDef {
-        TypeDef {
-            name: name.into(),
-            rust_path: format!("my_crate::{name}"),
-            original_rust_path: String::new(),
-            fields: vec![],
-            methods,
-            is_opaque: true,
-            is_clone: false,
-            is_copy: false,
-            is_trait: false,
-            has_default: false,
-            has_stripped_cfg_fields: false,
-            is_return_type: false,
-            serde_rename_all: None,
-            has_serde: false,
-            serde_container_default: false,
-            serde_container_conversion: Default::default(),
-            super_traits: vec![],
-            doc: String::new(),
-            cfg: None,
-            binding_excluded: false,
-            binding_exclusion_reason: None,
-            is_variant_wrapper: false,
-            has_lifetime_params: false,
-            has_private_fields: false,
-            version: Default::default(),
-        }
-    }
-
-    #[test]
-    fn tokio_mutex_when_all_refmut_methods_async() {
-        let typ = type_with_methods(
-            "WebSocketConnection",
-            vec![
-                method("send_text", Some(ReceiverKind::RefMut), true),
-                method("receive_text", Some(ReceiverKind::RefMut), true),
-                method("close", None, true),
-            ],
-        );
-        assert!(type_needs_mutex(&typ));
-        assert!(type_needs_tokio_mutex(&typ));
-    }
-
-    #[test]
-    fn no_tokio_mutex_when_any_refmut_is_sync() {
-        let typ = type_with_methods(
-            "Mixed",
-            vec![
-                method("async_op", Some(ReceiverKind::RefMut), true),
-                method("sync_op", Some(ReceiverKind::RefMut), false),
-            ],
-        );
-        assert!(type_needs_mutex(&typ));
-        assert!(!type_needs_tokio_mutex(&typ));
-    }
-
-    #[test]
-    fn no_tokio_mutex_when_no_refmut() {
-        let typ = type_with_methods("ReadOnly", vec![method("get", Some(ReceiverKind::Ref), true)]);
-        assert!(!type_needs_mutex(&typ));
-        assert!(!type_needs_tokio_mutex(&typ));
-    }
-
-    #[test]
-    fn no_tokio_mutex_when_empty_methods() {
-        let typ = type_with_methods("Empty", vec![]);
-        assert!(!type_needs_mutex(&typ));
-        assert!(!type_needs_tokio_mutex(&typ));
-    }
-}
+mod tests;

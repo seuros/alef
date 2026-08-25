@@ -282,6 +282,13 @@ impl Backend for MagnusBackend {
             builder.add_item("fn default_timeout() -> u64 {\n    30000\n}");
         }
 
+        // Computed early (depends only on `api`) so `classes::gen_struct` can decide whether a
+        // delegating `Deserialize` is safe using the exact same set that gates
+        // `gen_from_core_to_binding_filtered` further below -- guaranteeing the `From<core::Type>`
+        // a delegating `Deserialize` needs is always emitted for any type this set names. ~keep
+        let core_to_binding = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
+        let opaque_type_names_vec: Vec<String> = opaque_types.iter().cloned().collect();
+
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             if exclude_types.contains(typ.name.as_str()) {
                 continue;
@@ -320,13 +327,16 @@ impl Backend for MagnusBackend {
             } else {
                 let generates_default = typ.has_default;
                 let has_explicit_impl_default = !typ.fields.is_empty();
+                let delegate_deserialize = crate::codegen::conversions::can_generate_conversion(typ, &core_to_binding)
+                    && generators::struct_wants_deserialize_delegation(typ, &opaque_type_names_vec, &[]);
                 builder.add_item(&classes::gen_struct(
                     typ,
                     &mapper,
                     &module_name,
-                    api,
+                    &core_import,
                     has_explicit_impl_default,
                     &config.trait_bridges,
+                    delegate_deserialize,
                 ));
                 if generates_default {
                     builder.add_item(&classes::gen_magnus_default_impl(typ, &core_import));
@@ -463,7 +473,6 @@ impl Backend for MagnusBackend {
         }
 
         let binding_to_core = crate::codegen::conversions::convertible_types(api);
-        let core_to_binding = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
         let input_types = crate::codegen::conversions::input_type_names(api);
         for typ in api.types.iter().filter(|typ| !typ.is_trait) {
             if typ.is_opaque || exclude_types.contains(typ.name.as_str()) {

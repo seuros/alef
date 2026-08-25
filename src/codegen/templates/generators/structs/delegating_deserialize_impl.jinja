@@ -1,0 +1,8 @@
+impl<'de> serde::Deserialize<'de> for {{ binding_name }} {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        <{{ core_path }} as serde::Deserialize>::deserialize(deserializer).map(Into::into)
+    }
+}
