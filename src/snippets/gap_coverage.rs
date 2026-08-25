@@ -38,6 +38,11 @@ pub struct GapCoverage {
     /// References found by reading documentation pages (`--8<--` includes, MDX content
     /// imports).
     pub include_references: usize,
+    /// Of `include_references`, how many were specifically MkDocs `--8<--` targets, as opposed
+    /// to Astro/MDX content imports. Only this subset resolves through `include_base_paths` --
+    /// an MDX import always resolves relative to its own file. A docs tree that is entirely MDX
+    /// imports has `include_references > 0` and `mkdocs_include_references == 0`.
+    pub mkdocs_include_references: usize,
     /// References supplied by configuration rather than discovered: coverage ledgers,
     /// `[crates.readme]` snippet mappings, Astro content collections. These make a snippet
     /// count as referenced without any documentation page mentioning it, which is exactly how
@@ -120,11 +125,20 @@ pub struct UnsetGapInput {
 /// Takes the raw pre-fallback inputs, because unset-ness is only observable before the
 /// caller's defaulting runs: `alef snippets gaps` substitutes the docs roots for an empty
 /// `--include-base-path` list, after which the two cases are indistinguishable. ~keep
+///
+/// `mkdocs_include_references` is the count of MkDocs `--8<--` targets the run actually found
+/// (`GapCoverage::mkdocs_include_references`), not the combined include-reference total -- an
+/// Astro/MDX content import never resolves through `include_base_paths`, so a docs tree with
+/// MDX imports but zero `--8<--` targets must not be told its base paths are unconfigured. Pass
+/// `0` when the gap pass has not run yet (for example because neither `docs_dirs` nor
+/// `required_languages` is configured, so no documentation page could have been opened and no
+/// `--8<--` target could exist to begin with). ~keep
 #[must_use]
 pub fn unset_gap_inputs(
     docs_dirs: &[PathBuf],
     required_languages: &[Language],
     include_base_paths: &[PathBuf],
+    mkdocs_include_references: usize,
 ) -> Vec<UnsetGapInput> {
     let mut unset = Vec::new();
     if docs_dirs.is_empty() {
@@ -144,7 +158,7 @@ pub fn unset_gap_inputs(
             vacuous: true,
         });
     }
-    if include_base_paths.is_empty() {
+    if include_base_paths.is_empty() && mkdocs_include_references > 0 {
         unset.push(UnsetGapInput {
             key: "include_base_paths",
             flag: "--include-base-path",

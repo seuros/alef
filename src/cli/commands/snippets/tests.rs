@@ -4,6 +4,7 @@
 //! for CLI sources; the module keeps `use super::*` and is otherwise unchanged. ~keep
 
 use super::*;
+use tracing_test::traced_test;
 
 /// `--lang` narrows a run to one backend's snippets, so an unrecognised value has to be
 /// reported rather than dropped: dropping it leaves an empty-but-`Some` filter, which reads to
@@ -332,6 +333,93 @@ fn readme_snippet_mappings_count_as_references_for_the_strict_gate() {
         gap_failure_without_readme,
         "without the README source the same snippet reads as unreferenced, so this test would \
          pass vacuously if the reference sources were dropped"
+    );
+}
+
+/// The reported incident: an Astro Starlight docs site whose pages reference snippets only
+/// through MDX content imports, never MkDocs `--8<--` syntax. `alef snippets check` has no
+/// `--include-base-path` flag (that only exists on `alef snippets gaps`) and `include_base_paths`
+/// was previously warned about unconditionally whenever it was unset -- an unsilenceable warning
+/// on this command. It must stay quiet here because there is no `--8<--` target for a base-path
+/// list to affect. ~keep
+#[traced_test]
+#[test]
+fn check_does_not_warn_about_include_base_paths_for_an_astro_only_docs_tree() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let snippets = directory.path().join("snippets");
+    let docs = directory.path().join("docs");
+    std::fs::create_dir_all(&snippets).expect("snippet directory");
+    std::fs::create_dir_all(&docs).expect("docs directory");
+    std::fs::write(snippets.join("hello.md"), "```python\nvalue = 1\n```\n").expect("write snippet");
+    std::fs::write(
+        docs.join("guide.mdx"),
+        "import { Content as Snip_hello } from \"../snippets/hello.md\";\n",
+    )
+    .expect("write docs page");
+    let snippet_directories = [snippets];
+    let docs_directories = [docs];
+
+    let (_, gap_failure) = run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+        snippet_directories: &snippet_directories,
+        docs_directories: &docs_directories,
+        include_base_paths: &docs_directories,
+        configured_include_base_paths: &[],
+        required_languages: &[],
+        exclude: &[],
+        curated_paths: &[],
+        readme: None,
+        content_collections: &std::collections::BTreeMap::new(),
+        workspace_root: directory.path(),
+        require_frontmatter: false,
+        strict: false,
+    })
+    .expect("audit and gap pass");
+
+    assert!(
+        !gap_failure,
+        "the MDX import resolves to a real snippet; there is no gap"
+    );
+    assert!(
+        !logs_contain("include_base_paths unset"),
+        "an Astro-only docs tree found zero `--8<--` targets, so include_base_paths has nothing to act on"
+    );
+}
+
+/// Control for the fix above: a docs tree that really does use `--8<--` targets must still get
+/// the warning, or the fix could have been "delete the warning" instead of "scope it to when it
+/// is actionable". ~keep
+#[traced_test]
+#[test]
+fn check_still_warns_about_include_base_paths_when_mkdocs_includes_are_present() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let snippets = directory.path().join("snippets");
+    let docs = directory.path().join("docs");
+    std::fs::create_dir_all(&snippets).expect("snippet directory");
+    std::fs::create_dir_all(&docs).expect("docs directory");
+    std::fs::write(snippets.join("hello.md"), "```python\nvalue = 1\n```\n").expect("write snippet");
+    std::fs::write(docs.join("guide.md"), "--8<-- \"snippets/hello.md\"\n").expect("write docs page");
+    let snippet_directories = [snippets];
+    let docs_directories = [docs];
+
+    let _ = run_configured_audit_and_gaps(&ConfiguredCheckInputs {
+        snippet_directories: &snippet_directories,
+        docs_directories: &docs_directories,
+        include_base_paths: &docs_directories,
+        configured_include_base_paths: &[],
+        required_languages: &[],
+        exclude: &[],
+        curated_paths: &[],
+        readme: None,
+        content_collections: &std::collections::BTreeMap::new(),
+        workspace_root: directory.path(),
+        require_frontmatter: false,
+        strict: false,
+    })
+    .expect("audit and gap pass");
+
+    assert!(
+        logs_contain("include_base_paths unset"),
+        "a `--8<--` target was found, so the unset base-path list is actionable and must be warned about"
     );
 }
 

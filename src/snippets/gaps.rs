@@ -111,7 +111,8 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
         .into_iter()
         .filter(|snippet| !is_excluded(&snippet.path, &config.exclude))
         .collect();
-    let (discovered, docs_pages_scanned) = discover_includes_measured(&config.docs_dirs, &config.include_base_paths)?;
+    let (discovered, docs_pages_scanned, mkdocs_include_references) =
+        discover_includes_measured(&config.docs_dirs, &config.include_base_paths)?;
     let mut references: Vec<_> = discovered
         .into_iter()
         .filter(|reference| !is_excluded(&reference.source, &config.exclude))
@@ -142,6 +143,7 @@ pub fn detect_gaps(config: &GapConfig) -> Result<GapReport> {
             docs_roots: config.docs_dirs.len(),
             docs_pages_scanned,
             include_references,
+            mkdocs_include_references,
             configured_references: config.configured_references.len(),
             required_languages: config.required_languages.len(),
             language_groups,
@@ -494,29 +496,40 @@ pub fn discover_includes(docs_dirs: &[PathBuf], include_base_paths: &[PathBuf]) 
     Ok(discover_includes_measured(docs_dirs, include_base_paths)?.0)
 }
 
-/// [`discover_includes`], also reporting how many documentation pages were opened.
+/// [`discover_includes`], also reporting how many documentation pages were opened and how many
+/// of the references found were MkDocs `--8<--` targets specifically.
 ///
 /// The page count is the only honest answer to "did the include check look at anything?": a
 /// configured docs root holding no markdown, or holding markdown the walk filters out, yields
 /// zero references for the same reason an unconfigured root does, and the reference count
 /// alone cannot tell the two apart. Measured here rather than by a second walk so the number
 /// describes the walk the findings came from. ~keep
+///
+/// The `--8<--` count is split out from the combined reference total because only `--8<--`
+/// targets resolve through `include_base_paths` -- an Astro/MDX content import never does (see
+/// [`parse_mdx_content_imports`]). A docs tree that is all MDX imports and zero `--8<--` targets
+/// can have a large combined reference count while `include_base_paths` is entirely
+/// irrelevant to it; gating the unset-`include_base_paths` warning on this narrower count keeps
+/// that warning quiet for exactly that tree. ~keep
 fn discover_includes_measured(
     docs_dirs: &[PathBuf],
     include_base_paths: &[PathBuf],
-) -> Result<(Vec<SnippetReference>, usize)> {
+) -> Result<(Vec<SnippetReference>, usize, usize)> {
     let mut references = Vec::new();
     let mut pages_scanned = 0;
+    let mut mkdocs_include_references = 0;
     for docs_dir in docs_dirs {
         for path in markdown_files(docs_dir) {
             let content = std::fs::read_to_string(&path)?;
             pages_scanned += 1;
-            references.extend(parse_includes(&content, &path, docs_dir, include_base_paths));
+            let mkdocs_includes = parse_includes(&content, &path, docs_dir, include_base_paths);
+            mkdocs_include_references += mkdocs_includes.len();
+            references.extend(mkdocs_includes);
             references.extend(parse_mdx_content_imports(&content, &path));
         }
     }
     references.sort_by(|left, right| left.source.cmp(&right.source).then(left.line.cmp(&right.line)));
-    Ok((references, pages_scanned))
+    Ok((references, pages_scanned, mkdocs_include_references))
 }
 
 /// Resolve a single include `target` string against the provided base paths.

@@ -513,15 +513,19 @@ fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::
     // Naming the unset keys is the whole point: the skip below is deliberate, but it used to be
     // silent, so a consumer whose `alef.toml` omitted `docs_dirs` and `required_languages` read a
     // green `snippets check` for a gap pass that never ran. ~keep
-    let unset = crate::snippets::gap_coverage::unset_gap_inputs(
-        inputs.docs_directories,
-        inputs.required_languages,
-        inputs.configured_include_base_paths,
-    );
-    for line in crate::snippets::gap_coverage::unset_input_lines(&unset, inputs.strict) {
-        tracing::warn!("{line}");
-    }
     if inputs.docs_directories.is_empty() && inputs.required_languages.is_empty() {
+        // No documentation page could have been opened, so no `--8<--` target could exist either
+        // -- `mkdocs_include_references` is unconditionally 0 here, matching what a gap pass
+        // would have measured had it run. ~keep
+        let unset = crate::snippets::gap_coverage::unset_gap_inputs(
+            inputs.docs_directories,
+            inputs.required_languages,
+            inputs.configured_include_base_paths,
+            0,
+        );
+        for line in crate::snippets::gap_coverage::unset_input_lines(&unset, inputs.strict) {
+            tracing::warn!("{line}");
+        }
         let unconfigured_failure = inputs.strict && crate::snippets::gap_coverage::has_vacuous_input(&unset);
         if unconfigured_failure {
             tracing::error!(
@@ -540,6 +544,21 @@ fn run_configured_audit_and_gaps(inputs: &ConfiguredCheckInputs<'_>) -> anyhow::
         configured_references,
         exclude: inputs.exclude.to_vec(),
     })?;
+    // `include_base_paths` is only reported unset when the run actually found a `--8<--` target
+    // that would have used it -- an Astro/MDX-only docs tree never does, and warning about a
+    // base-path list it has no use for would be an unsilenceable, unactionable warning on
+    // `check` (there is no `--include-base-path` flag on this command; the config key is the
+    // only surface, and setting it configures nothing real when there is no `--8<--` syntax in
+    // use at all). ~keep
+    let unset = crate::snippets::gap_coverage::unset_gap_inputs(
+        inputs.docs_directories,
+        inputs.required_languages,
+        inputs.configured_include_base_paths,
+        gap_report.coverage.mkdocs_include_references,
+    );
+    for line in crate::snippets::gap_coverage::unset_input_lines(&unset, inputs.strict) {
+        tracing::warn!("{line}");
+    }
     log_gaps(&gap_report);
     Ok((audit_failure, gap_report.is_failure(inputs.strict)))
 }
@@ -847,7 +866,6 @@ fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let unset = crate::snippets::gap_coverage::unset_gap_inputs(docs_dirs, &required, include_base_paths);
     let resolved_base_paths: Vec<PathBuf> = if include_base_paths.is_empty() {
         docs_dirs.to_vec()
     } else {
@@ -875,6 +893,14 @@ fn run_gaps(invocation: &GapInvocation<'_>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // `include_base_paths` is only reported unset when the run actually found a `--8<--` target
+    // that would have used it -- an Astro/MDX-only docs tree never does. ~keep
+    let unset = crate::snippets::gap_coverage::unset_gap_inputs(
+        docs_dirs,
+        &config.required_languages,
+        include_base_paths,
+        report.coverage.mkdocs_include_references,
+    );
     // Printed on every run, gaps or none. A coverage report that appears only alongside
     // findings is absent from precisely the runs whose scope a reader needs to weigh. ~keep
     for line in report.coverage.report_lines() {
