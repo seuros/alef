@@ -340,11 +340,26 @@ fn run_all(root: &Path) {
 /// skip would answer "already canonical" for every stamped input regardless of its body, i.e. it
 /// would be a check that cannot fail -- which is the exact defect shape this module exists for.
 /// With the flag, poly inspects the bytes either way and the answer is about the content. ~keep
+///
+/// Spawned via [`crate::test_support::spawn_from_stable_dir`], not a bare `Command::new`, even
+/// though `path` is already absolute: `poly` resolves its own config/repo-root context from the
+/// process's ambient current directory, not from its argument paths (verified directly against
+/// the `poly` binary this suite runs against -- `poly doctor`'s reported cache path changes with
+/// cwd alone). `cargo test --lib` runs every test as a thread in one process sharing one cwd, and
+/// several tests in this crate (including this module's own [`run_generate`]/[`run_generate_python`])
+/// enter and restore that cwd via `CwdGuard` around a tempdir they then delete. An unpinned spawn
+/// here inherits whatever the shared cwd happens to be at that instant -- including another
+/// test's already-deleted tempdir -- so `poly` would resolve config/cache context against an
+/// unrelated (or gone) directory instead of behaving as a self-contained probe of `content`. That
+/// is exactly the failure `--test-threads`-parallel `cargo test --lib` runs reproduced: this probe
+/// answering "would reformat" for bytes that are canonical when checked from a stable cwd. Every
+/// other subprocess this module spawns already pins `.current_dir(&root)` explicitly; this one
+/// must pin it too. ~keep
 fn poly_would_reformat(file_name: &str, content: &str) -> bool {
     let probe = tempfile::tempdir().expect("probe tempdir");
     let path = probe.path().join(file_name);
     std::fs::write(&path, content).expect("write probe file");
-    let output = std::process::Command::new("poly")
+    let output = crate::test_support::spawn_from_stable_dir("poly")
         .args(["fmt", "--check", "--fix-generated", "--no-cache"])
         .arg(&path)
         .output()
