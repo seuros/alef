@@ -228,8 +228,16 @@ fn any_group_feature_names(cfg_str: &str) -> Option<BTreeSet<String>> {
 /// feature list (minus `serde`, which is a passthrough dependency, never a default) unioned with
 /// every feature name [`collect_cfg_features`] finds referenced by an emitted
 /// `#[cfg(feature = "X")]` gate in the FFI surface, excluding any name declared in
-/// `[crates.ffi].extra_features` -- those stay declare-only by design (mutually-exclusive
-/// alternatives such as a `wasm-http` backend forwarding feature).
+/// `[crates.ffi].extra_features` or `[crates.ffi].excluded_default_features` -- both stay
+/// declare-only by design: `extra_features` for a mutually-exclusive alternative (such as a
+/// `wasm-http` backend forwarding feature), `excluded_default_features` for a name a
+/// `[crates.ffi].target_dep_overrides` entry needs excluded from the FFI crate's own default
+/// forwarding everywhere, on every platform -- see `FfiConfig::excluded_default_features`'s doc
+/// comment. Both are filtered out of `passthrough` too, not just `emitted`: a name explicitly
+/// listed in `[crates.ffi].features` is exactly as capable of reactivating an excluded dependency
+/// through this crate's own unconditional `default = [...]` forwarding as a cfg-discovered one
+/// is, and `RubyConfig::excluded_default_features` established that both defaulting surfaces must
+/// honor the exclusion for it to hold. ~keep
 ///
 /// This is the ONE derivation of "what does the compiled FFI cdylib actually build with by
 /// default". `scaffold_ffi` must build its `[features] default = [...]` list from exactly this,
@@ -246,20 +254,25 @@ fn any_group_feature_names(cfg_str: &str) -> Option<BTreeSet<String>> {
 /// emitted the `default = [...]` list in.
 #[must_use]
 pub fn effective_ffi_default_features(api: &ApiSurface, config: &ResolvedCrateConfig) -> Vec<String> {
+    let extra_declared: &[String] = config.ffi.as_ref().map(|c| c.extra_features.as_slice()).unwrap_or(&[]);
+    let excluded_default: &[String] = config
+        .ffi
+        .as_ref()
+        .map(|c| c.excluded_default_features.as_slice())
+        .unwrap_or(&[]);
+    let never_default = |name: &str| -> bool {
+        extra_declared.iter().any(|declared| declared == name) || excluded_default.iter().any(|e| e == name)
+    };
     let passthrough: Vec<&str> = config
         .features_for_language(Language::Ffi)
         .iter()
         .map(String::as_str)
-        .filter(|f| *f != "serde")
+        .filter(|f| *f != "serde" && !never_default(f))
         .collect();
-    let extra_declared: &[String] = config.ffi.as_ref().map(|c| c.extra_features.as_slice()).unwrap_or(&[]);
     let emitted: Vec<String> = collect_cfg_features(api)
         .into_iter()
         .filter(|name| {
-            !name.is_empty()
-                && name != "serde"
-                && !passthrough.contains(&name.as_str())
-                && !extra_declared.iter().any(|declared| declared == name)
+            !name.is_empty() && name != "serde" && !passthrough.contains(&name.as_str()) && !never_default(name)
         })
         .collect();
     passthrough.into_iter().map(str::to_string).chain(emitted).collect()

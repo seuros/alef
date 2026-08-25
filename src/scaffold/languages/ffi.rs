@@ -3,8 +3,8 @@ use crate::core::config::{AdapterPattern, FfiTargetDepOverride, Language, Resolv
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance_for_crate,
-    scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::cargo_package_header, scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps,
+    scaffold::scaffold_meta,
 };
 use std::path::PathBuf;
 
@@ -129,12 +129,17 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let excluded_default_features: std::collections::HashSet<&str> = config
+        .ffi
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep_line, target_blocks) = render_core_dep(
         &config.name,
         &core_dep_path,
         version,
-        &core_dep_features(config, Language::Ffi),
+        &crate::scaffold::core_dep_features_excluding(config, Language::Ffi, &excluded_default_features),
         target_overrides,
     );
 
@@ -194,6 +199,22 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
                 core_features_passthrough_block.push('\n');
                 core_features_passthrough_block.push_str(&line);
             }
+        }
+    }
+    // `effective_ffi_default_features` already drops `excluded_default_features` names from
+    // `default_feature_names`, so `cargo build --features <name>` would fail to declare the
+    // feature at all without this: a name listed there stays a *declared* opt-in flag, just
+    // never defaulted, the same tradeoff `extra_features` makes above. ~keep
+    for feat in &excluded_default_features {
+        if passthrough_feature_names.contains(feat) || default_feature_names.contains(feat) {
+            continue;
+        }
+        let line = format!("{feat} = [\"{}/{feat}\"]", config.name);
+        if core_features_passthrough_block.is_empty() {
+            core_features_passthrough_block = line;
+        } else {
+            core_features_passthrough_block.push('\n');
+            core_features_passthrough_block.push_str(&line);
         }
     }
     let target_blocks_section = if target_blocks.is_empty() {
