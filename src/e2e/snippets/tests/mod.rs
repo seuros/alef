@@ -8,6 +8,7 @@
 use super::mock_harness_guard::reject_mock_harness_scaffolding;
 use super::*;
 
+mod adapter_handled;
 mod binding_excluded;
 mod coverage;
 mod curated;

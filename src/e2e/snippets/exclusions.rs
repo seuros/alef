@@ -6,7 +6,7 @@
 //! and [`super::DocumentationLanguage`], which they take as ordinary parameters.
 
 use super::{DocumentationLanguage, SnippetRenderContext, parse_language};
-use crate::core::config::Language;
+use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::e2e::fixture::Fixture;
 
 /// Whether the function a fixture's call resolves to for `language` is excluded for that
@@ -105,6 +105,10 @@ pub(super) fn visitor_excluded_for_language(
 /// least one of the disagreeing types, which is worse than occasionally letting a
 /// genuinely-excluded cell surface as a coverage gap a human can then triage with a
 /// `docs.coverage_exceptions` entry. ~keep
+///
+/// A method can land at `binding_excluded == true` for two structurally different reasons
+/// that this IR flag does not otherwise distinguish -- see [`adapter_binds_method_for_language`]
+/// for why an adapter-handled method must not be treated as excluded here. ~keep
 pub(super) fn function_binding_excluded_for_language(
     fixture: &Fixture,
     language: &str,
@@ -134,13 +138,55 @@ pub(super) fn function_binding_excluded_for_language(
     let mut methods = context
         .type_defs
         .iter()
-        .flat_map(|type_def| type_def.methods.iter())
-        .filter(|method| method.name == function_name);
-    let Some(first) = methods.next() else {
+        .flat_map(|type_def| {
+            type_def
+                .methods
+                .iter()
+                .map(move |method| (type_def.name.as_str(), method))
+        })
+        .filter(|(_, method)| method.name == function_name);
+    let Some((first_type, first)) = methods.next() else {
         return false;
     };
-    if !methods.all(|other| other.binding_excluded == first.binding_excluded) {
+    if !methods.all(|(_, other)| other.binding_excluded == first.binding_excluded) {
         return false;
     }
-    first.binding_excluded
+    if !first.binding_excluded {
+        return false;
+    }
+    !adapter_binds_method_for_language(context.crate_config, first_type, function_name.as_ref(), lang)
+}
+
+/// Whether `[[crates.adapters]]` gives `type_name.method_name` a real binding surface in
+/// `lang`, even though `MethodDef::binding_excluded` is `true` for it.
+///
+/// `mark_adapter_handled_methods` (`src/cli/pipeline/extract/services.rs`) sets
+/// `binding_excluded = true` on every method matched by an adapter's `owner_type` +
+/// `core_path`, with no per-language distinction at all -- it exists only to stop the
+/// *generic* method codegen path from double-emitting a method a backend's adapter
+/// machinery (async-method, streaming, callback-bridge) already handles through its own
+/// specialised template. It says nothing about whether that language actually binds the
+/// method: every backend that consumes `[[crates.adapters]]` (pyo3, napi, magnus, dart,
+/// swift, kotlin, java, php, wasm -- see the `skip_languages` call sites in each backend's
+/// `gen_bindings/mod.rs`) still emits the method for every language *except* the ones the
+/// adapter's own `skip_languages` names; languages outside that pattern's backend set fall
+/// through to the ordinary per-method codegen loop, which does not filter on
+/// `binding_excluded` at the method level either (only `TypeDef::binding_excluded` gates a
+/// whole type). So an adapter-handled method has a binding surface in `lang` unless this
+/// specific adapter entry explicitly names `lang` in `skip_languages` -- re-deriving that
+/// per-language answer from the same config `mark_adapter_handled_methods` read, rather
+/// than trusting the language-blind flag it wrote, is what keeps this in sync with what
+/// every backend's `skip_languages` filter already decides for real codegen. ~keep
+fn adapter_binds_method_for_language(
+    crate_config: &ResolvedCrateConfig,
+    type_name: &str,
+    method_name: &str,
+    lang: Language,
+) -> bool {
+    let lang_name = lang.to_string();
+    crate_config.adapters.iter().any(|adapter| {
+        adapter.owner_type.as_deref() == Some(type_name)
+            && adapter.core_path == method_name
+            && !adapter.skip_languages.contains(&lang_name)
+    })
 }
