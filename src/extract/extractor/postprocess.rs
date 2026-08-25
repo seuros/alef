@@ -1,6 +1,8 @@
 use crate::core::ir::{ApiSurface, DefaultValue, EnumDef, FieldDef, TypeRef};
 use ahash::AHashMap;
 
+use super::SerdeDefaultsByType;
+
 /// Build a lookup of enum name → the name of its `#[default]`-marked unit variant.
 ///
 /// Deliberately stricter than `default_value_for_enum::default_variant_name`: this lookup is
@@ -441,6 +443,36 @@ pub(crate) fn warn_on_default_disagreement(
                  other path is taken"
             );
         }
+    }
+}
+
+/// Run [`warn_on_default_disagreement`] for every struct with a recorded serde default, using
+/// the *complete*, final crate surface rather than whatever was extracted so far.
+///
+/// Must run once, after every source file in the crate has been parsed (see
+/// `extract::extractor::mod::extract`'s call site) — never inline while a single file is still
+/// being walked. [`agrees_via_enum_default`] can only prove an `Empty`/`EnumVariant` pair agrees
+/// when the field's enum type is already present in `enum_default_variants`; a struct whose
+/// manual `impl Default` sets an enum field directly (`ocr_strategy: OcrStrategy::Auto`) is
+/// resolved to a concrete `EnumVariant` the moment its own `impl Default` is read
+/// (`extract::extractor::defaults::extract_default_values`), well before every other source file
+/// — including the one declaring the enum itself — has necessarily been visited. Calling this
+/// warning inline from that same per-file pass (as `extract::extractor::functions::impl_blocks`
+/// used to) made the false-positive rate depend on `mod` declaration order: a crate that declares
+/// `pub mod extraction;` before `pub mod ocr;` warned on every genuinely agreeing enum field in
+/// `extraction`, purely because `ocr`'s enums were not yet in the map. Deferring to one pass over
+/// the finished `surface` removes that dependency entirely, the same way
+/// `resolve_enum_field_defaults` already defers its own enum-completeness requirement. ~keep
+pub(super) fn warn_on_default_disagreements(surface: &ApiSurface, pending_serde_defaults: &SerdeDefaultsByType) {
+    if pending_serde_defaults.is_empty() {
+        return;
+    }
+    let enum_default_variants = enum_default_variant_names(&surface.enums);
+    for typ in &surface.types {
+        let Some(serde_defaults) = pending_serde_defaults.get(&typ.rust_path) else {
+            continue;
+        };
+        warn_on_default_disagreement(&typ.rust_path, &typ.fields, serde_defaults, &enum_default_variants);
     }
 }
 

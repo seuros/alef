@@ -3,7 +3,6 @@ use ahash::AHashMap;
 use syn;
 
 use super::helpers::extract_binding_exclusion_reason;
-use super::postprocess::warn_on_default_disagreement;
 use crate::extract::type_resolver;
 
 use super::helpers::{
@@ -126,10 +125,10 @@ pub(crate) fn extract_struct(
     // The serde reader's own default for each field, captured here because
     // `#[derive(Default)]` below — or a manual `impl Default`, folded later by
     // `functions::impl_blocks` — unconditionally overwrites `FieldDef::typed_default` and would
-    // otherwise erase it. Compared against the final value by
-    // `postprocess::warn_on_default_disagreement`: immediately below for the derived case, and
-    // from `functions::impl_blocks` for the manual case via the `pending_serde_defaults` map
-    // threaded through `extract::extractor::mod::extract_items`. ~keep
+    // otherwise erase it. Compared against the final value by a single deferred pass,
+    // `postprocess::warn_on_default_disagreements`, run once the whole crate has been extracted
+    // (see `extract::extractor::mod::extract`) via the `pending_serde_defaults` map threaded
+    // through `extract::extractor::mod::extract_items`. ~keep
     let serde_defaults: AHashMap<String, DefaultValue> = extracted_fields
         .iter()
         .filter_map(|(field, serde_default)| serde_default.clone().map(|value| (field.name.clone(), value)))
@@ -157,11 +156,6 @@ pub(crate) fn extract_struct(
         for field in &mut fields {
             field.typed_default = Some(DefaultValue::Empty);
         }
-        // Every field's `typed_default` was just set to `Empty` above (the `#[derive(Default)]`
-        // path), so `warn_on_default_disagreement`'s enum-agreement check never applies here —
-        // it only fires for a manual `impl Default`'s `EnumVariant` value. An empty map is
-        // therefore exact, not a missed opportunity. ~keep
-        warn_on_default_disagreement(&rust_path, &fields, &serde_defaults, &AHashMap::new());
     }
 
     let has_stripped_cfg_fields = fields.iter().any(|f| f.cfg.is_some());

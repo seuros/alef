@@ -191,3 +191,45 @@ fn enum_field_default_stays_empty_when_the_enum_has_no_default_impl() {
         "a field whose enum type has no knowable default must stay `Empty`, not a guessed variant"
     );
 }
+
+/// (h) A bare field-level `#[serde(default)]` field whose declared enum type's real default is
+/// *not* its first-declared variant, alongside a manual `impl Default` that sets the field
+/// directly to a variant path (`OcrStrategy::Auto`, not `OcrStrategy::default()`). The field must
+/// resolve to that concrete variant — never fall back to the first-declared one, and never stay
+/// `Empty` — regardless of extra attributes (`deserialize_with`) riding alongside `default` on
+/// the same `#[serde(...)]` list.
+#[test]
+fn bare_serde_default_field_resolves_to_the_manual_impls_direct_variant_path() {
+    let source = r#"
+        #[derive(Clone, Copy)]
+        pub enum OcrStrategy {
+            Never,
+            Auto,
+            Always,
+        }
+
+        pub struct ExtractionConfig {
+            #[serde(default, deserialize_with = "deserialize_null_default")]
+            pub ocr_strategy: OcrStrategy,
+        }
+
+        impl Default for ExtractionConfig {
+            fn default() -> Self {
+                Self {
+                    ocr_strategy: OcrStrategy::Auto,
+                }
+            }
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    let config = surface.types.iter().find(|typ| typ.name == "ExtractionConfig").unwrap();
+    let ocr_strategy_field = config.fields.iter().find(|field| field.name == "ocr_strategy").unwrap();
+
+    assert_eq!(
+        ocr_strategy_field.typed_default,
+        Some(DefaultValue::EnumVariant("Auto".to_string())),
+        "a bare `#[serde(default)]` field must resolve to the manual impl's concrete variant, \
+         not stay `Empty` or default to the first-declared variant"
+    );
+}
