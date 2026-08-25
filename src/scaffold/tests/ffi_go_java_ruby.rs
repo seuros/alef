@@ -199,7 +199,7 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
 }
 
 /// Regression test for the dropped `[crates.ffi.target_dep_overrides].default_features`
-/// key: xberg's `windows-target` / `macos-intel-target` overrides set
+/// key: a real crate's `windows-target` / `macos-intel-target` overrides set
 /// `default_features = false` to drop the core crate's own `default = ["tokio-runtime",
 /// "simd-utf8"]` set on those targets, alongside swapping in the reduced feature list.
 /// Before `FfiTargetDepOverride` gained this field the key was silently discarded, so the
@@ -262,7 +262,7 @@ fn test_scaffold_ffi_target_dep_overrides_default_features_false_drops_defaults(
 /// predicate string (plain byte-wise comparison), NOT with the default
 /// `cfg(not(any(...)))` branch always first. With multiple overrides whose
 /// combined cfg is wrapped in `any(...)`, an `all(...)`-prefixed override (as
-/// xberg configures for its macOS-Intel target) must sort *before* the
+/// a real crate configures for its macOS-Intel target) must sort *before* the
 /// `not(any(...))` default branch — `'a'` < `'n'` — while a `target_os = ...`
 /// override sorts after it (`'n'` < `'t'`).
 #[test]
@@ -341,15 +341,15 @@ fn test_scaffold_ffi_emits_android_target_aggregate_feature() {
     let root = tmp.path();
     fs::write(
         root.join("Cargo.toml"),
-        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/kreuzberg\"]\n",
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/sample_crate\"]\n",
     )
     .unwrap();
-    fs::create_dir_all(root.join("crates/kreuzberg/src")).unwrap();
-    fs::write(root.join("crates/kreuzberg/src/lib.rs"), "pub fn f() {}").unwrap();
+    fs::create_dir_all(root.join("crates/sample_crate/src")).unwrap();
+    fs::write(root.join("crates/sample_crate/src/lib.rs"), "pub fn f() {}").unwrap();
     fs::write(
-        root.join("crates/kreuzberg/Cargo.toml"),
+        root.join("crates/sample_crate/Cargo.toml"),
         r#"[package]
-name = "kreuzberg"
+name = "sample_crate"
 version = "0.1.0"
 
 [features]
@@ -364,9 +364,9 @@ embeddings = []
     .unwrap();
 
     let mut config = test_config();
-    config.name = "kreuzberg".to_string();
+    config.name = "sample_crate".to_string();
     config.workspace_root = Some(root.to_path_buf());
-    config.sources = vec![PathBuf::from("crates/kreuzberg/src/lib.rs")];
+    config.sources = vec![PathBuf::from("crates/sample_crate/src/lib.rs")];
     config.features = vec![
         "full".to_string(),
         "pdf".to_string(),
@@ -381,7 +381,7 @@ embeddings = []
     let cargo_toml = &files[0].content;
 
     assert!(
-        cargo_toml.contains(r#"android-target = ["kreuzberg/android-target", "html", "ocr", "pdf"]"#),
+        cargo_toml.contains(r#"android-target = ["sample_crate/android-target", "html", "ocr", "pdf"]"#),
         "FFI manifest must emit the android-target aggregate feature; got:\n{cargo_toml}"
     );
     toml::from_str::<toml::Value>(cargo_toml).expect("generated Cargo.toml must be valid TOML");
@@ -396,21 +396,21 @@ fn test_scaffold_ffi_omits_android_target_when_core_lacks_it() {
     let root = tmp.path();
     fs::write(
         root.join("Cargo.toml"),
-        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/kreuzberg\"]\n",
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/sample_crate\"]\n",
     )
     .unwrap();
-    fs::create_dir_all(root.join("crates/kreuzberg/src")).unwrap();
-    fs::write(root.join("crates/kreuzberg/src/lib.rs"), "pub fn f() {}").unwrap();
+    fs::create_dir_all(root.join("crates/sample_crate/src")).unwrap();
+    fs::write(root.join("crates/sample_crate/src/lib.rs"), "pub fn f() {}").unwrap();
     fs::write(
-        root.join("crates/kreuzberg/Cargo.toml"),
-        "[package]\nname = \"kreuzberg\"\nversion = \"0.1.0\"\n\n[features]\npdf = []\nocr = []\n",
+        root.join("crates/sample_crate/Cargo.toml"),
+        "[package]\nname = \"sample_crate\"\nversion = \"0.1.0\"\n\n[features]\npdf = []\nocr = []\n",
     )
     .unwrap();
 
     let mut config = test_config();
-    config.name = "kreuzberg".to_string();
+    config.name = "sample_crate".to_string();
     config.workspace_root = Some(root.to_path_buf());
-    config.sources = vec![PathBuf::from("crates/kreuzberg/src/lib.rs")];
+    config.sources = vec![PathBuf::from("crates/sample_crate/src/lib.rs")];
     config.features = vec!["pdf".to_string(), "ocr".to_string()];
 
     let api = test_api();

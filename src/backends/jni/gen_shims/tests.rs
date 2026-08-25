@@ -284,12 +284,12 @@ features = ["mobile"]
     }
 
     /// Mirrors a real crate shape: a function defined inside a `pub mod` and ALSO re-exported
-    /// by name at the crate root (`pub use the_module::{max_sim_score, ...}`), e.g. xberg's
-    /// `late_interaction` module. The extractor preserves both `FunctionDef` entries — one with
+    /// by name at the crate root (`pub use the_module::{score_pair, ...}`), e.g. a real crate's
+    /// `scoring` module. The extractor preserves both `FunctionDef` entries — one with
     /// a module-nested `rust_path`, one with a crate-root `rust_path` — and since their raw
     /// `cfg` is identical (unconditional here), `dedup_same_name_functions`'s cfg-must-differ
     /// merge guard leaves both alone. With `[[crates.jni.target_dep_overrides]]` configured
-    /// (as xberg-jni's real alef.toml is), `emit_lib_rs` used to source `visible_functions`
+    /// (as a real jni consumer's alef.toml is), `emit_lib_rs` used to source `visible_functions`
     /// straight from the raw, un-deduped surface, so both entries resolved to the identical
     /// `#[cfg(not(any(target_os = "android")))]` gate and were emitted as two
     /// `#[unsafe(no_mangle)]` definitions of the same native symbol — E0428.
@@ -319,15 +319,15 @@ features = ["mobile"]
         let config = raw.resolve().expect("fixture config resolves").remove(0);
 
         let module_definition_entry = crate::core::ir::FunctionDef {
-            name: "max_sim_score".into(),
-            rust_path: "demo::late_interaction::max_sim_score".into(),
+            name: "score_pair".into(),
+            rust_path: "demo::scoring::score_pair".into(),
             return_type: TypeRef::String,
             cfg: None,
             ..Default::default()
         };
         let crate_root_reexport_entry = crate::core::ir::FunctionDef {
-            name: "max_sim_score".into(),
-            rust_path: "demo::max_sim_score".into(),
+            name: "score_pair".into(),
+            rust_path: "demo::score_pair".into(),
             return_type: TypeRef::String,
             cfg: None,
             ..Default::default()
@@ -338,7 +338,7 @@ features = ["mobile"]
             &config,
         );
 
-        let native_fn_count = content.matches("nativeMaxSimScore").count();
+        let native_fn_count = content.matches("nativeScorePair").count();
         assert_eq!(
             native_fn_count, 1,
             "the module-definition and crate-root-reexport entries must collapse to one native symbol: {content}"

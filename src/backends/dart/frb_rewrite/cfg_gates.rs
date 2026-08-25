@@ -200,16 +200,16 @@ mod tests {
     fn cfg_gated_free_functions_preserves_multiline_predicate() {
         let lib_rs = concat!(
             "#[cfg(any(\n",
-            "    any(feature = \"late-interaction-presets\", feature = \"late-interaction\"),\n",
-            "    feature = \"late-interaction-presets\"\n",
+            "    any(feature = \"scoring-presets\", feature = \"scoring\"),\n",
+            "    feature = \"scoring-presets\"\n",
             "))]\n",
-            "pub fn max_sim_score(a: i64, b: i64) -> f64 {\n",
+            "pub fn score_pair(a: i64, b: i64) -> f64 {\n",
             "    0.0\n",
             "}\n",
         );
         let found = cfg_gated_free_functions(lib_rs);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0, "max_sim_score");
+        assert_eq!(found[0].0, "score_pair");
         assert!(found[0].1.starts_with("#[cfg(any(\n"));
         assert!(found[0].1.ends_with("))]"));
     }
