@@ -151,7 +151,11 @@ fn clean_and_clobber_together_reproduce_the_pre_separation_clean_behaviour() {
 #[test]
 fn all_generates_snippets_before_readmes_consume_them() {
     let source = include_str!("all_commands.rs");
-    let e2e = source.find("Generating e2e test suites...").expect("e2e stage");
+    // The e2e stage itself now lives in `all_commands/e2e_stage.rs` (task #362 split it out
+    // to keep this file under the file-modularization cap), so the ordering this test pins
+    // is observed at the call site here, not at the log line the old, now-relocated, inline
+    // code used to carry. ~keep
+    let e2e = source.find("e2e_stage::run(").expect("e2e stage call site");
     let readmes = source.find("Generating READMEs...").expect("README stage");
 
     assert!(

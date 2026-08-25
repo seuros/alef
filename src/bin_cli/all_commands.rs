@@ -9,6 +9,7 @@ use super::helpers::*;
 #[path = "all_commands_run_setup.rs"]
 mod all_commands_run_setup;
 mod docs_stage;
+mod e2e_stage;
 mod preflight;
 mod stage_failures;
 use all_commands_run_setup::{
@@ -101,6 +102,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // is the prose header marker `write_files_report` writes, not the `alef:hash:` line, and
             // that false claim is what justified the per-phase checkpoints removed from this loop.) ~keep
             let mut e2e_stage_error: Option<anyhow::Error> = None;
+            // Bindings, stubs, public API and scaffold output are written early in this loop but
+            // are stamped exactly once, at the very end, by `finalize_hashes_sweeping` -- see that
+            // call's doc comment. Every stage between "written" and that final stamp (e2e/test-apps
+            // codegen above, and README generation below) therefore sits inside the stamp's blast
+            // radius: a bare `?`/`return Err` in any of them used to abort the whole crate before
+            // `finalize_hashes_sweeping` ever ran, leaving already-written, already-formatted
+            // binding/scaffold output on disk with no `alef:hash:` line at all -- invisible to
+            // `alef verify`, and indistinguishable from hand-authored content. README failures are
+            // deferred the same way `docs_stage_error` already defers docs failures, just above. ~keep
+            let mut readme_stage_error: Option<anyhow::Error> = None;
 
             for resolved_cfg in &crates_to_process {
                 let languages = resolve_languages(resolved_cfg, None)?;
@@ -461,212 +472,61 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     }
                 }
 
-                let mut e2e_count = 0;
-                if let Some(e2e_config) = &resolved_cfg.e2e {
-                    let all_calls = std::iter::once(("_default", &e2e_config.call))
-                        .chain(e2e_config.calls.iter().map(|(k, v)| (k.as_str(), v)));
-                    for (call_name, call_config) in all_calls {
-                        if call_config.function.is_empty() || call_config.module.is_empty() {
-                            continue;
-                        }
-                        let module_path = call_config.module.replace('-', "_");
-                        let function_name = &call_config.function;
-                        match crate::extract::validate_call_export(&api, &module_path, function_name) {
-                            crate::extract::ExportValidation::Ok => {}
-                            crate::extract::ExportValidation::NotFound { function } => {
-                                anyhow::bail!(
-                                    "e2e call '{call_name}': function '{function}' was not found in the extracted API surface. \
-                                 Check that it is declared `pub` and that its source file is listed in \
-                                 [[crate.sources]] or [[crate.source_crates]]."
-                                );
-                            }
-                            crate::extract::ExportValidation::WrongPath {
-                                function,
-                                declared_module,
-                                actual_paths,
-                            } => {
-                                let paths = actual_paths.join(", ");
-                                anyhow::bail!(
-                                    "e2e call '{call_name}': function '{function}' is not exported at module path \
-                                 '{declared_module}' -- the Rust codegen would emit `use {declared_module}::{function};`. \
-                                 Actual rust_path(s) found: {paths}. \
-                                 Fix: either add `pub use <path>::{function};` at the crate root, \
-                                 or update `module` in [e2e.calls.{call_name}] to the correct path."
-                                );
-                            }
-                        }
+                // See `e2e_stage::E2eStageOutcome::error`'s doc comment: every fatal error from
+                // either sub-stage is already deferred by the time it reaches here, so this is
+                // the same fold-in the run-wide `e2e_stage_error`/`docs_stage_error` pattern
+                // just above uses. ~keep
+                let e2e_outcome = e2e_stage::run(
+                    resolved_cfg,
+                    &api,
+                    &base_dir,
+                    &config_toml,
+                    &inputs_hash,
+                    &sources_hash,
+                    &alef_toml_bytes,
+                    clean,
+                    strict,
+                    &mut refusals,
+                    &mut current_gen_paths,
+                    &mut deferred_formatting,
+                );
+                let e2e_count = e2e_outcome.e2e_count;
+                if e2e_outcome.any_output_changed {
+                    any_output_changed = true;
+                }
+                if let Some(error) = e2e_outcome.error {
+                    if e2e_stage_error.is_some() {
+                        tracing::error!("[{}] e2e codegen failed: {error:#}", resolved_cfg.name);
                     }
-
-                    let fixtures_dir = std::path::Path::new(&e2e_config.fixtures);
-                    let fixture_hash = cache::hash_directory(fixtures_dir).unwrap_or_default();
-                    let ir_json = serde_json::to_string(&api)?;
-                    let e2e_stage_hash = cache::compute_stage_hash(&ir_json, "e2e", &config_toml, &fixture_hash);
-                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash, &inputs_hash) {
-                        tracing::info!("  [e2e] up to date (skipping)");
-                        let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
-                        deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
-                            &cached_paths,
-                            &base_dir,
-                            e2e_config,
-                            strict,
-                        )?);
-                        for path in cached_paths {
-                            current_gen_paths.insert(path);
-                        }
-                    } else {
-                        tracing::info!("Generating e2e test suites...");
-                        let previous_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
-                        let (files, generator_error) = crate::e2e::generate_e2e(
-                            resolved_cfg,
-                            e2e_config,
-                            None,
-                            &api.types,
-                            &api.enums,
-                            &api.functions,
-                            &api.errors,
-                        )?;
-                        let e2e_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
-                        refusals.absorb_refusals(&e2e_report);
-                        e2e_count = e2e_report.changed_count();
-                        if e2e_count > 0 {
-                            any_output_changed = true;
-                        }
-                        let managed_files: Vec<_> = files
-                            .iter()
-                            .filter(|file| file.carries_alef_marker())
-                            .cloned()
-                            .collect();
-                        deferred_formatting.extend(crate::e2e::format::run_formatters(
-                            &managed_files,
-                            e2e_config,
-                            strict,
-                        )?);
-
-                        let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
-                        let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
-
-                        // The one pre-`format_generated_reporting` stamp this loop keeps, and the
-                        // only one that is genuinely post-format: `run_formatters` immediately
-                        // above is this subtree's own formatting pass. ~keep
-                        pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
-
-                        // A generator failure here must not reach either line below -- see
-                        // `e2e_stage_error`'s doc comment above the loop for the two-part hazard
-                        // (cache poisoning that hides the failure next run, and orphan-sweeping the
-                        // last known-good backend output). Write, format and hash finalisation above
-                        // still ran unconditionally, so this run's partial output still carries a
-                        // provenance marker for the ownership guard. ~keep
-                        if let Some(error) = generator_error {
-                            if e2e_stage_error.is_some() {
-                                tracing::error!("[{}] e2e codegen failed: {error:#}", resolved_cfg.name);
-                            }
-                            e2e_stage_error.get_or_insert(error);
-                        } else {
-                            let e2e_output_root = base_dir.join(&e2e_config.output);
-                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[e2e_output_root], &[])?;
-
-                            cache::write_stage_hash(&resolved_cfg.name, "e2e", e2e_stage_hash.as_str(), &output_paths)?;
-                        }
-
-                        for path in output_paths {
-                            current_gen_paths.insert(path);
-                        }
-                    }
-
-                    let test_apps_stage_hash =
-                        cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
-                    if !clean
-                        && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash, &inputs_hash)
-                    {
-                        tracing::info!("  [test-apps] up to date (skipping)");
-                        let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
-                        let mut registry_e2e_config = e2e_config.clone();
-                        registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-                        deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
-                            &cached_paths,
-                            &base_dir,
-                            &registry_e2e_config,
-                            strict,
-                        )?);
-                        for path in cached_paths {
-                            current_gen_paths.insert(path);
-                        }
-                    } else {
-                        tracing::info!("Generating registry-mode test apps...");
-                        let previous_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
-                        let mut registry_e2e_config = e2e_config.clone();
-                        registry_e2e_config.dep_mode = crate::core::config::e2e::DependencyMode::Registry;
-                        let registry_e2e_ref = &registry_e2e_config;
-
-                        let (files, generator_error) = crate::e2e::generate_e2e(
-                            resolved_cfg,
-                            registry_e2e_ref,
-                            None,
-                            &api.types,
-                            &api.enums,
-                            &api.functions,
-                            &api.errors,
-                        )?;
-                        let test_apps_report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
-                        refusals.absorb_refusals(&test_apps_report);
-                        let test_apps_count = test_apps_report.changed_count();
-                        e2e_count += test_apps_count;
-                        if test_apps_count > 0 {
-                            any_output_changed = true;
-                        }
-                        let managed_files: Vec<_> = files
-                            .iter()
-                            .filter(|file| file.carries_alef_marker())
-                            .cloned()
-                            .collect();
-                        deferred_formatting.extend(crate::e2e::format::run_formatters(
-                            &managed_files,
-                            registry_e2e_ref,
-                            strict,
-                        )?);
-
-                        let output_paths: Vec<PathBuf> = managed_files.iter().map(|f| base_dir.join(&f.path)).collect();
-                        let path_set: std::collections::HashSet<PathBuf> = output_paths.iter().cloned().collect();
-
-                        // Kept for the same reason as the `e2e` stage's stamp above: it follows
-                        // that subtree's own native formatting pass, not precedes it. ~keep
-                        pipeline::finalize_hashes(&path_set, &sources_hash, &alef_toml_bytes)?;
-
-                        // Same hazard, same gate, as the `e2e` stage above -- see `e2e_stage_error`'s
-                        // doc comment above the loop. ~keep
-                        if let Some(error) = generator_error {
-                            if e2e_stage_error.is_some() {
-                                tracing::error!("[{}] test-apps codegen failed: {error:#}", resolved_cfg.name);
-                            }
-                            e2e_stage_error.get_or_insert(error);
-                        } else {
-                            let test_apps_root = base_dir.join(registry_e2e_ref.effective_output());
-                            pipeline::sweep_manifest_orphans(&previous_paths, &path_set, &[test_apps_root], &[])?;
-
-                            cache::write_stage_hash(
-                                &resolved_cfg.name,
-                                "test-apps",
-                                test_apps_stage_hash.as_str(),
-                                &output_paths,
-                            )?;
-                        }
-
-                        for path in output_paths {
-                            current_gen_paths.insert(path);
-                        }
-                    }
+                    e2e_stage_error.get_or_insert(error);
                 }
 
                 tracing::info!("Generating READMEs...");
-                let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
-                let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
-                let readme_report = pipeline::write_scaffold_files_report(&readme_files, &base_dir, true)?;
-                refusals.absorb_refusals(&readme_report);
-                let readme_count = readme_report.changed_count();
+                // Deferred into `readme_stage_error` rather than `?`, matching `docs_stage_error`
+                // just below: a README rendering or write failure must not skip this crate's
+                // terminal format+stamp pass and leave its already-written bindings unstamped --
+                // see `readme_stage_error`'s doc comment above the loop. ~keep
+                let readme_stage: anyhow::Result<usize> = (|| {
+                    let readme_languages = crate::readme::expand_configured_readme_languages(resolved_cfg, &languages);
+                    let readme_files = pipeline::readme(&api, resolved_cfg, &readme_languages)?;
+                    let readme_report = pipeline::write_scaffold_files_report(&readme_files, &base_dir, true)?;
+                    refusals.absorb_refusals(&readme_report);
+                    current_gen_paths.extend(pipeline::stampable_output_paths(&readme_files, &base_dir));
+                    Ok(readme_report.changed_count())
+                })();
+                let readme_count = match readme_stage {
+                    Ok(count) => count,
+                    Err(err) => {
+                        if readme_stage_error.is_some() {
+                            tracing::error!("[{}] README generation failed: {err:#}", resolved_cfg.name);
+                        }
+                        readme_stage_error.get_or_insert(err);
+                        0
+                    }
+                };
                 if readme_count > 0 {
                     any_output_changed = true;
                 }
-                current_gen_paths.extend(pipeline::stampable_output_paths(&readme_files, &base_dir));
 
                 tracing::info!("Generating docs...");
                 warn_if_snippet_validation_needs_build(resolved_cfg);
@@ -890,6 +750,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             // not just the first thing. ~keep
             if let Some(error) = e2e_stage_error {
                 stage_failures.record("e2e codegen", error);
+            }
+            if let Some(error) = readme_stage_error {
+                stage_failures.record("README generation", error);
             }
             if let Some(error) = docs_stage_error {
                 stage_failures.record("docs/snippet validation", error);
