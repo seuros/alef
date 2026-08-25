@@ -166,6 +166,26 @@ impl<'a> ResolvedE2eCallRecipe<'a> {
         )
     }
 
+    /// Whether the core IR declares this call's target function/method `async fn`.
+    ///
+    /// `None` when this recipe was never opted into IR-aware lowering via
+    /// [`Self::with_functions`], or when the IR has no signature for `call_config.function`
+    /// (an unresolvable or absent call name) -- both cases leave the caller's own
+    /// `alef.toml`-configured `async` flag as the only answer, exactly as before this
+    /// existed. `Some(is_async)` is the IR's own authoritative answer and should win over a
+    /// config flag that only ever says "async", never "definitely not async" (see
+    /// `crate::core::config::e2e::call::CallConfig::r#async`, a plain `bool` defaulting to
+    /// `false`, so `false` cannot be told apart from "never configured"). ~keep
+    pub(crate) fn ir_is_async(&self) -> Option<bool> {
+        let functions = self.functions?;
+        crate::e2e::codegen::call_ir::CallIr {
+            functions,
+            type_defs: self.type_defs,
+        }
+        .signature(&self.call_config.function)
+        .map(|signature| signature.is_async)
+    }
+
     pub fn compatible_options_type(&self, compatible_languages: &[&str]) -> Option<&'a str> {
         self.options_type.or_else(|| {
             compatible_languages.iter().find_map(|language| {
