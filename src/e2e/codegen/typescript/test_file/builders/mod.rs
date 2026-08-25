@@ -244,6 +244,61 @@ fn to_bigint_literal(value_expr: &str) -> String {
     format!("BigInt({trimmed})")
 }
 
+/// Panics if `obj` contains a key that `type_name`'s declared fields (in `type_defs`) don't
+/// cover — the single check shared by every node-lang JSON-object-literal builder in this
+/// module, so the snippet path (which binds the literal to a typed `const`, see
+/// `typed_binding.jinja`, and so IS excess-property-checked by `tsc`) and the e2e test path
+/// (which only ever `as`-casts the same literal, and so is NOT excess-property-checked) cannot
+/// silently disagree about the same fixture: an undeclared key would otherwise be a compile
+/// error (TS2353) in one and invisible in the other. This applies at every nesting depth —
+/// `ts_builder_expression_inner`'s own object literal and `node_value_expression`'s nested
+/// struct-field literals both call this, since both build a JSON-object-literal that ends up
+/// under the same typed-const-vs-`as`-cast split at the top of whichever call tree it's part of.
+/// A `serde_flatten` field makes the owning struct's accepted key set open-ended (it legitimately
+/// re-exports its own inner field names, or an arbitrary string-keyed bag, at this JSON level),
+/// so those types are exempted rather than filtered. A `type_name` absent from `type_defs`
+/// (an external/opaque type) is likewise skipped — there is no declared field set to check
+/// against.
+///
+/// ~keep An undeclared key is REFUSED (panics generation), not silently dropped: this runs at
+/// generation time over a fixture the maintainer wrote, so the only plausible causes are a
+/// fixture typo/stale field name or a genuinely missing IR field — both are bugs to fix, not
+/// values to discard. A silent drop would still produce a compiling snippet/test that LOOKS like
+/// it exercises the field the fixture named, which is the same "check that cannot fail" shape as
+/// every other vacuous-assertion fix in this generator (see `apply_vacuous_assertion_fallback`,
+/// `inert_example`) — the bug would hide instead of surfacing.
+fn refuse_undeclared_json_keys(
+    obj: &serde_json::Map<String, serde_json::Value>,
+    type_name: &str,
+    type_defs: &[TypeDef],
+) {
+    let Some(definition) = type_defs.iter().find(|definition| definition.name == type_name) else {
+        return;
+    };
+    if definition.fields.iter().any(|field| field.serde_flatten) {
+        return;
+    }
+    // ~keep Both spellings count as declared. A fixture may key a field by its Rust name or by
+    // its wire name (`#[serde(rename)]` / a container `rename_all`), and both reach here
+    // unchanged — the camelCase conversion happens per key, after this check, in each caller.
+    // Matching only `field.name` would abort generation on a correctly-authored fixture for any
+    // renamed field, turning this guard into a worse bug than the one it catches.
+    let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for field in &definition.fields {
+        declared.insert(field.name.clone());
+        declared.insert(crate::codegen::naming::wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            definition.serde_rename_all.as_deref(),
+        ));
+    }
+    if let Some(undeclared) = obj.keys().find(|key| !declared.contains(key.as_str())) {
+        panic!(
+            "typescript e2e generator: fixture input for `{type_name}` includes key `{undeclared}`, which `{type_name}` does not declare as a field. Fix the fixture (remove or rename the key) or the Rust struct (add the missing field)."
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inner(
     obj: &serde_json::Map<String, serde_json::Value>,
@@ -306,49 +361,10 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
         let mut fields = Vec::new();
         let owner_type = type_defs.iter().find(|definition| definition.name == type_name);
         // The fixture's JSON object is the source of truth for VALUES, but not for which KEYS
-        // belong on `type_name` — refuse any key `owner_type` doesn't declare as a field before
-        // building the literal. Without this, the snippet path (which binds the literal to a
-        // typed `const`, see `typed_binding.jinja`, and so IS excess-property-checked by `tsc`)
-        // and the e2e test path (which only ever `as`-casts the same literal, and so is NOT
-        // excess-property-checked) silently disagreed about the same fixture: an undeclared key
-        // was a compile error (TS2353) in one and invisible in the other. Both callers build
-        // through this one function, so filtering here is the one place that makes them agree.
-        // A `serde_flatten` field makes the owning struct's accepted key set open-ended (it
-        // legitimately re-exports its own inner field names, or an arbitrary string-keyed bag,
-        // at this JSON level), so those types are exempted rather than filtered.
-        //
-        // ~keep An undeclared key is REFUSED (panics generation), not silently dropped: this
-        // runs at generation time over a fixture the maintainer wrote, so the only plausible
-        // causes are a fixture typo/stale field name or a genuinely missing IR field — both are
-        // bugs to fix, not values to discard. A silent drop would still produce a compiling
-        // snippet/test that LOOKS like it exercises the field the fixture named, which is the
-        // same "check that cannot fail" shape as every other vacuous-assertion fix in this
-        // generator (see `apply_vacuous_assertion_fallback`, `inert_example`) — the bug would
-        // hide instead of surfacing.
-        if let Some(definition) = owner_type
-            && !definition.fields.iter().any(|field| field.serde_flatten)
-        {
-            // ~keep Both spellings count as declared. A fixture may key a field by its Rust
-            // name or by its wire name (`#[serde(rename)]` / a container `rename_all`), and both
-            // reach here unchanged — the camelCase conversion below happens per key, after this
-            // check. Matching only `field.name` would abort generation on a correctly-authored
-            // fixture for any renamed field, turning this guard into a worse bug than the one it
-            // catches.
-            let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
-            for field in &definition.fields {
-                declared.insert(field.name.clone());
-                declared.insert(crate::codegen::naming::wire_field_name(
-                    &field.name,
-                    field.serde_rename.as_deref(),
-                    definition.serde_rename_all.as_deref(),
-                ));
-            }
-            if let Some(undeclared) = obj.keys().find(|key| !declared.contains(key.as_str())) {
-                panic!(
-                    "typescript e2e generator: fixture input for `{type_name}` includes key `{undeclared}`, which `{type_name}` does not declare as a field. Fix the fixture (remove or rename the key) or the Rust struct (add the missing field)."
-                );
-            }
-        }
+        // belong on `type_name` — see `refuse_undeclared_json_keys` for why this is refused
+        // rather than silently dropped, and why both the snippet and e2e paths must share this
+        // one check.
+        refuse_undeclared_json_keys(obj, type_name, type_defs);
         for (key, val) in obj {
             let field_pointer = json_pointer_child(pointer, key);
             // Rename serde_tag key → "kind" for node-bound tagged-data enum objects.
@@ -614,6 +630,12 @@ fn node_value_expression(
                     _ => None,
                 })
                 .and_then(|type_name| type_defs.iter().find(|definition| definition.name == type_name));
+            // Nested struct-field object literals ("inner" fields reached via this function
+            // rather than through `ts_builder_expression_inner` directly) go through the same
+            // undeclared-key guard as the top-level object — see `refuse_undeclared_json_keys`.
+            if let Some(definition) = nested_type {
+                refuse_undeclared_json_keys(object, &definition.name, type_defs);
+            }
             let fields = object
                 .iter()
                 .map(|(name, value)| {
