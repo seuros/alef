@@ -4,8 +4,8 @@ use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, TypeRef};
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::ScaffoldMeta, scaffold::cargo_package_header, scaffold::core_dep_features,
-    scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::ScaffoldMeta, scaffold::cargo_package_header, scaffold::detect_workspace_inheritance_for_crate,
+    scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
 use anyhow::Context as _;
 use std::path::{Path, PathBuf};
@@ -231,11 +231,16 @@ pub(crate) fn scaffold_node_cargo(
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let excluded_default_features: std::collections::HashSet<&str> = config
+        .node
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep, core_target_blocks) = crate::scaffold::render_core_dep_with_overrides(
         &config.name,
         &core_dep_path,
-        &core_dep_features(config, Language::Node),
+        &crate::scaffold::core_dep_features_excluding(config, Language::Node, &excluded_default_features),
         version,
         core_overrides,
     );
@@ -273,7 +278,14 @@ pub(crate) fn scaffold_node_cargo(
         String::new()
     } else {
         let mut lines: Vec<String> = Vec::with_capacity(cfg_features.len() + 1);
-        let default_list: Vec<String> = cfg_features.iter().map(|name| format!("\"{name}\"")).collect();
+        // A name in `excluded_default_features` is still declared below (so
+        // `cargo build --features <name>` keeps working) but dropped from `default`,
+        // matching `RubyConfig::excluded_default_features`. ~keep
+        let default_list: Vec<String> = cfg_features
+            .iter()
+            .filter(|name| !excluded_default_features.contains(name.as_str()))
+            .map(|name| format!("\"{name}\""))
+            .collect();
         lines.push(format!("default = [{}]", default_list.join(", ")));
         for name in &cfg_features {
             lines.push(format!(r#"{name} = ["{}/{name}"]"#, config.name));
