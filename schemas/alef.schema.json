@@ -6138,6 +6138,14 @@
           },
           "type": "array"
         },
+        "excluded_default_features": {
+          "default": [],
+          "description": "Feature names that should be declared as opt-in flags in the generated wrapper\ncrate's `[features]` table but excluded from its `default = [...]` array and\nfrom the core-crate dependency's own explicit `features = [...]` list.\n\n`scaffold_ruby_cargo` otherwise puts every name `collect_cfg_features` finds\nstraight into the wrapper's unconditional `default = [...]` list, which\nforwards `<name> = [\"<core-crate>/<name>\"]` on every platform. Cargo unions\nfeature sets across every dependency edge to the same resolved package, so\nthat unconditional forwarding re-enables a feature a [`Self::target_dep_overrides`]\nentry excluded for a specific `cfg` target -- defeating the override. Listing\nthe name here keeps it declared (so `cargo build --features <name>` still\nworks) without auto-enabling it, the same tradeoff\n`SwiftConfig::excluded_default_features` makes for the swift-bridge crate. ~keep",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "extra_dependencies": {
           "additionalProperties": true,
           "default": {},

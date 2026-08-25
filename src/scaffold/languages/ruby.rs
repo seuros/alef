@@ -3,8 +3,8 @@ use crate::core::config::{Language, ResolvedCrateConfig};
 use crate::core::ir::{ApiSurface, FieldDef, FunctionDef, PrimitiveType, TypeDef, TypeRef};
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance_for_crate,
-    scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::cargo_package_header, scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps,
+    scaffold::scaffold_meta,
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -24,6 +24,31 @@ pub(crate) fn ruby_native_manifest_path(config: &ResolvedCrateConfig) -> PathBuf
         "{pkg_dir}/ext/{}_rb/native/Cargo.toml",
         core_crate_dir.replace('-', "_")
     ))
+}
+
+/// The core-crate dependency's `, features = [...]` suffix for the Ruby native crate, with any
+/// name in `excluded_default_features` dropped.
+///
+/// Mirrors [`crate::scaffold::core_dep_features`] but additionally filters `[crates.ruby].features`
+/// (or the crate-level `[crate] features` fallback) against `excluded_default_features` -- the
+/// consumer-facing exclusion is meant to keep a feature off this dependency edge entirely, not just
+/// out of the wrapper's own `default = [...]` array (see [`RubyConfig::excluded_default_features`]).
+/// A backend-local filter rather than a change to the shared helper: every other caller of
+/// `core_dep_features` has no exclusion knob to honour, so folding this in there would give it a
+/// second, Ruby-only reason to change. ~keep
+fn ruby_core_dep_features(config: &ResolvedCrateConfig, excluded: &HashSet<&str>) -> String {
+    let features: Vec<&str> = config
+        .features_for_language(Language::Ruby)
+        .iter()
+        .map(String::as_str)
+        .filter(|f| !excluded.contains(f))
+        .collect();
+    if features.is_empty() {
+        String::new()
+    } else {
+        let quoted: Vec<String> = features.iter().map(|f| format!("\"{f}\"")).collect();
+        format!(", features = [{}]", quoted.join(", "))
+    }
 }
 
 pub(crate) fn scaffold_ruby_cargo(
@@ -50,7 +75,12 @@ pub(crate) fn scaffold_ruby_cargo(
     let needs_ahash = api.functions.iter().any(|f| f.params.iter().any(|p| p.map_is_ahash));
     let lib_name = format!("{}_rb", core_crate_dir.replace('-', "_"));
 
-    let features_str = core_dep_features(config, Language::Ruby);
+    let excluded_default_features: HashSet<&str> = config
+        .ruby
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let features_str = ruby_core_dep_features(config, &excluded_default_features);
     let core_overrides = config
         .ruby
         .as_ref()
@@ -127,7 +157,14 @@ pub(crate) fn scaffold_ruby_cargo(
         String::new()
     } else {
         let mut lines: Vec<String> = Vec::with_capacity(cfg_features.len() + 1);
-        let default_list: Vec<String> = cfg_features.iter().map(|name| format!("\"{name}\"")).collect();
+        // A name in `excluded_default_features` is still declared below (so
+        // `cargo build --features <name>` keeps working) but dropped from `default`,
+        // matching `SwiftConfig::excluded_default_features`. ~keep
+        let default_list: Vec<String> = cfg_features
+            .iter()
+            .filter(|name| !excluded_default_features.contains(name.as_str()))
+            .map(|name| format!("\"{name}\""))
+            .collect();
         lines.push(format!("default = [{}]", default_list.join(", ")));
         for name in &cfg_features {
             lines.push(format!(
