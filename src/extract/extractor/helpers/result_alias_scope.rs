@@ -5,9 +5,72 @@
 //! `Result<T>` is decided by that module's `use` statements, so error-type resolution has to read
 //! them rather than assume a single crate-wide alias.
 
+use std::cell::RefCell;
+
 use ahash::AHashSet;
 
 use crate::extract::type_resolver::ResultAliasScope;
+
+thread_local! {
+    /// The module whose items are being extracted right now, as far as `Result` path resolution
+    /// is concerned. Needed to resolve `self::`/`super::` qualifications and Rust 2018 uniform
+    /// paths in a return type, neither of which can be read off the type alone. ~keep
+    static MODULE_CONTEXT: RefCell<Option<ModuleContext>> = const { RefCell::new(None) };
+}
+
+/// Where a module sits and which child modules it declares.
+#[derive(Debug, Clone, Default)]
+struct ModuleContext {
+    module_path: String,
+    local_modules: AHashSet<String>,
+}
+
+/// Installs the module context used to resolve qualified `Result` paths, restoring the enclosing
+/// module's context on drop.
+pub(crate) struct ResultModuleContextGuard(Option<ModuleContext>);
+
+impl ResultModuleContextGuard {
+    /// Enter the module at `module_path` whose items are `items`.
+    pub(crate) fn enter(items: &[syn::Item], module_path: &str) -> Self {
+        let context = ModuleContext {
+            module_path: module_path.to_string(),
+            local_modules: collect_local_module_names(items),
+        };
+        Self(MODULE_CONTEXT.with(|c| c.replace(Some(context))))
+    }
+}
+
+impl Drop for ResultModuleContextGuard {
+    fn drop(&mut self) {
+        MODULE_CONTEXT.with(|c| {
+            *c.borrow_mut() = self.0.take();
+        });
+    }
+}
+
+/// Which alias a *qualified* `Result` path in a return type names.
+///
+/// `crate::Result<T>` and `super::error::Result<T>` say outright which alias they mean, and that
+/// beats whatever the module's `use` statements bring into scope under the bare name — qualifying
+/// is usually done precisely because the bare name is already taken by another crate's `Result`.
+/// Returns `None` for an unqualified `Result<T>`, whose meaning the module's imports do decide.
+pub(crate) fn scope_for_result_type_path(path: &syn::Path) -> Option<ResultAliasScope> {
+    if path.segments.len() < 2 {
+        return None;
+    }
+    let mut prefix: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+    prefix.pop();
+    // A leading `::` always starts at a crate root, so it can never mean a local module. ~keep
+    if path.leading_colon.is_some() && prefix.first().map(String::as_str) != Some("crate") {
+        return Some(ResultAliasScope::Foreign);
+    }
+    MODULE_CONTEXT.with(|c| {
+        let borrowed = c.borrow();
+        let fallback = ModuleContext::default();
+        let context = borrowed.as_ref().unwrap_or(&fallback);
+        Some(scope_for_prefix(&prefix, &context.module_path, &context.local_modules))
+    })
+}
 
 /// Find which `Result` alias the module's `use` statements bring into scope.
 ///

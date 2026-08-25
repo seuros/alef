@@ -3,7 +3,7 @@ mod enum_variants;
 mod field_types;
 mod fields;
 mod reexport_map;
-mod result_alias_scope;
+pub(crate) mod result_alias_scope;
 mod rustdoc;
 
 #[cfg(test)]
@@ -21,7 +21,7 @@ pub(crate) use field_types::detect_core_wrapper;
 pub(crate) use field_types::{build_rust_path, extract_field_type_rust_path, syn_type_is_boxed, unwrap_optional};
 pub(crate) use fields::extract_field;
 pub(crate) use reexport_map::{ReexportKind, collect_reexport_map};
-pub(crate) use result_alias_scope::resolve_result_alias_scope;
+pub(crate) use result_alias_scope::{ResultModuleContextGuard, resolve_result_alias_scope};
 pub(crate) use rustdoc::extract_doc_comments;
 
 #[cfg(test)]

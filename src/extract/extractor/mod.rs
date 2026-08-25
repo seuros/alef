@@ -1,7 +1,7 @@
 mod defaults;
 pub(crate) mod disambiguation;
 mod functions;
-mod helpers;
+pub(crate) mod helpers;
 mod paths;
 mod postprocess;
 mod reexports;
@@ -21,8 +21,9 @@ use self::functions::{
     resolve_return_type,
 };
 use self::helpers::{
-    build_rust_path, collect_reexport_map, extract_binding_exclusion_reason, extract_doc_comments,
-    extract_version_annotation, is_pub, is_test_gated, is_thiserror_enum, resolve_result_alias_scope,
+    ResultModuleContextGuard, build_rust_path, collect_reexport_map, extract_binding_exclusion_reason,
+    extract_doc_comments, extract_version_annotation, is_pub, is_test_gated, is_thiserror_enum,
+    resolve_result_alias_scope,
 };
 use self::paths::{apply_parent_reexport_shortening, derive_module_path};
 use self::postprocess::{
@@ -222,7 +223,8 @@ fn extract_items(
             // parameter (`pub type Result<T> = std::result::Result<T, MyError>;`), so
             // the hint lookup must not be gated on the alias itself being non-generic. ~keep
             if name == "Result"
-                && let Some(error_type) = type_resolver::extract_result_error_type_from_alias(&item_type.ty)
+                && let Some(error_type) =
+                    type_resolver::extract_result_error_type_from_alias(&item_type.ty, &item_type.generics)
             {
                 // Keyed by the declaring module: a crate may declare several private `Result`
                 // aliases, and a name-keyed hint would let whichever module happens to be walked
@@ -248,6 +250,9 @@ fn extract_items(
         resolve_result_alias_scope(items, module_path)
     };
     let _result_alias_scope = type_resolver::ResultAliasScopeGuard::enter(alias_scope);
+    // A return type that qualifies its `Result` (`crate::Result<T>`) resolves against the module
+    // it is written in, which the type alone does not carry. ~keep
+    let _result_module_context = ResultModuleContextGuard::enter(items, module_path);
 
     for item in items {
         // `#[cfg(test)]` items do not exist in normal builds; skip them so the

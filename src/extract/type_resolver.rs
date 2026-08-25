@@ -1,4 +1,5 @@
 use crate::core::ir::{PrimitiveType, TypeRef};
+use crate::extract::extractor::helpers::result_alias_scope::scope_for_result_type_path;
 use std::cell::RefCell;
 
 /// Which `Result` type alias the module currently being extracted resolves `Result` to.
@@ -86,7 +87,11 @@ fn canonical_result_error_hint() -> Option<String> {
 
 /// Get the error type hint for the `Result` alias in scope for the current module.
 fn get_result_error_hint() -> Option<String> {
-    let scope = RESULT_ALIAS_SCOPE.with(|s| s.borrow().clone());
+    hint_for_scope(RESULT_ALIAS_SCOPE.with(|s| s.borrow().clone()))
+}
+
+/// Get the error type hint carried by a specific `Result` alias scope.
+fn hint_for_scope(scope: Option<ResultAliasScope>) -> Option<String> {
     match scope {
         Some(ResultAliasScope::Foreign) => None,
         // The declaring module may not have been walked yet (module order is source order), so an
@@ -420,7 +425,11 @@ pub fn is_option_type(ty: &syn::Type) -> Option<TypeRef> {
 
 /// Extract the error type from a `pub type Result<T> = std::result::Result<T, E>` alias definition.
 /// Returns the string representation of the error type E.
-pub fn extract_result_error_type_from_alias(ty: &syn::Type) -> Option<String> {
+///
+/// `generics` are the alias's own parameters: an alias may be generic over its *error* parameter
+/// (`type Result<T, E = MyError>`), in which case the right-hand side names the parameter and the
+/// concrete type lives in the parameter's default.
+pub fn extract_result_error_type_from_alias(ty: &syn::Type, generics: &syn::Generics) -> Option<String> {
     if let syn::Type::Path(type_path) = ty
         && let Some(segment) = type_path.path.segments.last()
         && segment.ident == "Result"
@@ -438,10 +447,26 @@ pub fn extract_result_error_type_from_alias(ty: &syn::Type) -> Option<String> {
             })
             .collect();
         if type_args.len() == 2 {
-            return Some(type_to_string(type_args[1]));
+            return resolve_alias_error_parameter(&type_to_string(type_args[1]), generics);
         }
     }
     None
+}
+
+/// Resolve an alias's right-hand-side error type against the alias's own generic parameters.
+///
+/// A name that is not one of them is already concrete. A name that *is* one of them resolves to
+/// that parameter's default, and yields no hint at all when the parameter has none — recording the
+/// bare parameter name would put a type no crate exports into the IR. ~keep
+fn resolve_alias_error_parameter(error_type: &str, generics: &syn::Generics) -> Option<String> {
+    let parameter = generics.params.iter().find_map(|param| match param {
+        syn::GenericParam::Type(type_param) if type_param.ident == error_type => Some(type_param),
+        _ => None,
+    });
+    match parameter {
+        None => Some(error_type.to_string()),
+        Some(type_param) => type_param.default.as_ref().map(|(_, default)| type_to_string(default)),
+    }
 }
 
 /// Extract the error type string from a `Result<T, E>` return type.
@@ -466,7 +491,14 @@ pub fn extract_result_error_type(ty: &syn::Type) -> Option<String> {
             return Some(type_to_string(type_args[1]));
         }
         if !type_args.is_empty() {
-            if let Some(hint) = get_result_error_hint() {
+            // A qualified `crate::Result<T>` names its alias outright, which beats whatever the
+            // module's `use` statements bound the bare name to — qualifying is usually done
+            // precisely because a foreign `Result` already holds the bare name. ~keep
+            let hint = match scope_for_result_type_path(&type_path.path) {
+                Some(qualified) => hint_for_scope(Some(qualified)),
+                None => get_result_error_hint(),
+            };
+            if let Some(hint) = hint {
                 return Some(hint);
             }
             return Some("anyhow::Error".to_string());
@@ -722,11 +754,30 @@ mod tests {
 
     #[test]
     fn test_extract_result_error_from_alias_definition() {
-        let ty = parse_type("std::result::Result<T, SampleCrateError>");
+        let alias: syn::ItemType =
+            syn::parse_str("pub type Result<T> = std::result::Result<T, SampleCrateError>;").expect("alias must parse");
         assert_eq!(
-            extract_result_error_type_from_alias(&ty),
+            extract_result_error_type_from_alias(&alias.ty, &alias.generics),
             Some("SampleCrateError".into())
         );
+    }
+
+    #[test]
+    fn test_alias_error_parameter_resolves_to_its_default() {
+        let alias: syn::ItemType =
+            syn::parse_str("pub type Result<T, E = SampleCrateError> = std::result::Result<T, E>;")
+                .expect("alias must parse");
+        assert_eq!(
+            extract_result_error_type_from_alias(&alias.ty, &alias.generics),
+            Some("SampleCrateError".into())
+        );
+    }
+
+    #[test]
+    fn test_alias_error_parameter_without_a_default_yields_no_hint() {
+        let alias: syn::ItemType =
+            syn::parse_str("pub type Result<T, E> = std::result::Result<T, E>;").expect("alias must parse");
+        assert_eq!(extract_result_error_type_from_alias(&alias.ty, &alias.generics), None);
     }
 
     #[test]

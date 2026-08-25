@@ -162,4 +162,24 @@ mod tests {
             "the unknown-error member must be declared exactly once:\n{out}"
         );
     }
+
+    /// Zig's error union is a pure function of the IR's `error_type` string: a name that matches a
+    /// declared error set selects it, and anything else silently takes the first declared set.
+    /// That is why an `error_type` misresolved to `anyhow::Error` surfaces as a function carrying
+    /// some unrelated crate error set — nothing in the Zig backend needs fixing for it, and
+    /// nothing in the Zig backend can detect it either. ~keep
+    #[test]
+    fn resolve_zig_error_type_falls_back_to_the_first_declared_set_for_anyhow() {
+        let declared = vec!["FirstError".to_string(), "SampleCrateError".to_string()];
+        assert_eq!(resolve_zig_error_type("anyhow::Error", &declared), "FirstError");
+        assert_eq!(
+            resolve_zig_error_type("crate::error::SampleCrateError", &declared),
+            "SampleCrateError"
+        );
+    }
+
+    #[test]
+    fn resolve_zig_error_type_yields_anyerror_without_any_declared_set() {
+        assert_eq!(resolve_zig_error_type("SampleCrateError", &[]), "anyerror");
+    }
 }
