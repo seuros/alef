@@ -81,6 +81,122 @@ sources = ["src/lib.rs"]
     );
 }
 
+/// Regression test for alef#368: napi-rs resolves the package name it bakes into the
+/// generated JS loader (and, with `--platform`, every target's optional-dependency package
+/// name) from whichever `package.json` it reads, which defaults to `<cwd>/package.json` --
+/// not a path derived from `--manifest-path`/`-o`. alef always invokes napi from the repo
+/// root, so a consumer repo that also has a workspace-root `package.json` (a common
+/// monorepo layout) got that package's name baked into the loader instead of the binding
+/// crate's own -- silently generating optional-dependency requires for packages that do not
+/// exist. `--package-json-path` must always point at the binding crate's own manifest. ~keep
+#[test]
+fn napi_build_command_points_napi_at_the_crate_local_package_json() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "napi",
+        crate_suffix: "-node",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Node, &build_config, &config, false);
+
+    assert!(
+        command.contains("--package-json-path crates/sample-lib-node/package.json"),
+        "napi build must be told explicitly which package.json names the binding crate, \
+         rather than letting it default to the repo root's: {command}"
+    );
+}
+
+/// Companion to the test above: `[crates.output] node` is unconfigured here, which is the
+/// common case (most consumers never set it). Before this fix, that left `crate_dir` empty
+/// in this arm alone -- every other backend arm in this function falls back to
+/// `config.package_dir(lang)` when its own `output_path_for` lookup is empty, but this one
+/// didn't, so the emitted command was `--manifest-path /Cargo.toml -o  --dts ...`, pointing
+/// at the repo root instead of the generated crate. ~keep
+#[test]
+fn napi_build_command_falls_back_to_the_default_crate_dir_when_output_is_unconfigured() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "napi",
+        crate_suffix: "-node",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Node, &build_config, &config, false);
+
+    assert!(
+        command.contains("--manifest-path crates/sample-lib-node/Cargo.toml"),
+        "an unconfigured [crates.output] node must still resolve to the default crate \
+         directory, not an empty path: {command}"
+    );
+    assert!(
+        command.contains("-o crates/sample-lib-node "),
+        "an unconfigured [crates.output] node must still pass the default crate directory \
+         as the output dir, not an empty one: {command}"
+    );
+}
+
+/// Same regression as [`napi_build_command_points_napi_at_the_crate_local_package_json`],
+/// but with `[crates.output] node` set explicitly -- the shape of the consumer config that
+/// shipped alef#368: the crate directory itself resolved correctly (`--manifest-path`/`-o`
+/// already pointed at it), so only `--package-json-path` was missing.
+#[test]
+fn napi_build_command_honors_an_explicit_output_path_for_package_json_too() {
+    let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+
+[crates.output]
+node = "crates/sample-lib-node/src"
+"#,
+    )
+    .unwrap();
+    let config = alef_cfg.resolve().unwrap().remove(0);
+    let build_config = BuildConfig {
+        tool: "napi",
+        crate_suffix: "-node",
+        build_dep: BuildDependency::None,
+        post_build: Vec::new(),
+    };
+
+    let command = build_command_for(Language::Node, &build_config, &config, false);
+
+    assert!(
+        command.contains("--package-json-path crates/sample-lib-node/package.json"),
+        "an explicit [crates.output] node must still resolve --package-json-path to the \
+         binding crate's own manifest: {command}"
+    );
+}
+
 #[test]
 fn kotlin_gradle_build_command_runs_in_generated_package() {
     let alef_cfg: crate::core::config::NewAlefConfig = toml::from_str(

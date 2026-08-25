@@ -101,12 +101,16 @@ pub(crate) fn default_build_config(
             dependency_precondition: None,
             dependency_remediation: None,
             before: None,
+            // `--package-json-path` pins napi-rs to the binding crate's own `package.json`
+            // instead of letting it default to `<cwd>/package.json` (the repo root alef always
+            // invokes it from), which otherwise bakes the wrong package name into the generated
+            // loader whenever the repo also has a workspace-root `package.json`. See alef#368.
             build: Some(StringOrVec::Single(format!(
-                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --dts {}",
+                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --package-json-path crates/{crate_name}-node/package.json --dts {}",
                 tv::npm::NAPI_AUTO_DTS_FILENAME
             ))),
             build_release: Some(StringOrVec::Single(format!(
-                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --dts {} --release",
+                "npx --yes -p @napi-rs/cli@3.7.3 napi build --manifest-path crates/{crate_name}-node/Cargo.toml -o crates/{crate_name}-node --package-json-path crates/{crate_name}-node/package.json --dts {} --release",
                 tv::npm::NAPI_AUTO_DTS_FILENAME
             ))),
             timeout_seconds: None,
@@ -436,6 +440,34 @@ mod tests {
         assert!(check.contains("CONDA_PREFIX"), "{check}");
         assert!(check.contains(".venv"), "{check}");
         assert_eq!(c.dependency_remediation.as_deref(), Some("uv venv"));
+    }
+
+    /// Regression test for alef#368: napi-rs resolves the package name it bakes into the
+    /// generated JS loader from whichever `package.json` it reads, defaulting to
+    /// `<cwd>/package.json` rather than a path derived from `--manifest-path`/`-o`. This
+    /// default command runs from the repo root, so without `--package-json-path` it silently
+    /// read a workspace-root `package.json` in any consumer repo that had one. ~keep
+    #[test]
+    fn node_default_build_commands_point_napi_at_the_crate_local_package_json() {
+        let c = cfg(Language::Node, "crates/my-lib-node", "my-lib");
+        let build = c.build.expect("node has a default build command");
+        let build_release = c.build_release.expect("node has a default build_release command");
+
+        assert!(
+            build
+                .commands()
+                .iter()
+                .any(|cmd| cmd.contains("--package-json-path crates/my-lib-node/package.json")),
+            "node build must be told explicitly which package.json names the binding crate: {build:?}"
+        );
+        assert!(
+            build_release
+                .commands()
+                .iter()
+                .any(|cmd| cmd.contains("--package-json-path crates/my-lib-node/package.json")),
+            "node build_release must be told explicitly which package.json names the binding \
+             crate: {build_release:?}"
+        );
     }
 
     #[test]

@@ -20,6 +20,36 @@ fn toml_path(path: &Path) -> String {
     toml_basic_string(path.to_string_lossy().as_ref())
 }
 
+/// Regression test for alef#368: `alef publish`'s Node build command has the same
+/// napi-rs package-name resolution hazard as the default `alef build` command
+/// (`cli::pipeline::commands::build::build_command::build_command_for`) -- napi reads
+/// `package.json` from the process cwd unless told otherwise, and this command always runs
+/// from the repo root, not the binding crate directory. `--package-json-path` must name the
+/// binding crate's own manifest explicitly. ~keep
+#[test]
+fn node_publish_command_points_napi_at_the_crate_local_package_json() {
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(
+        r#"
+[workspace]
+languages = ["node"]
+
+[[crates]]
+name = "sample-lib"
+sources = ["src/lib.rs"]
+"#,
+    )
+    .unwrap();
+    let config = cfg.resolve().unwrap().remove(0);
+
+    let command = build_command_for_lang(Language::Node, &config, None, false);
+
+    assert!(
+        command.contains("--package-json-path crates/sample-lib-node/package.json"),
+        "napi build must be told explicitly which package.json names the binding crate, \
+         rather than letting it default to the repo root's: {command}"
+    );
+}
+
 #[test]
 #[cfg(not(target_os = "windows"))]
 fn test_run_publish_hooks_runs_before_only() {
