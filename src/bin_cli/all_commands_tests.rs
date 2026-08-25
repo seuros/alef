@@ -936,6 +936,81 @@ fn all_writes_the_full_cross_phase_union_into_the_language_manifest() {
     );
 }
 
+/// Regression for alef-tasks#303: a cache-hit `alef all` run must not delete the very files
+/// its own `<lang>.manifest` still vouches for.
+///
+/// `current_gen_paths` -- the `keep` set `handle` passes to `sweep_manifest_orphans` -- was
+/// populated only from what `bindings`/`stubs`/`public_api_files` actually returned THIS run.
+/// A language `pipeline::generate` skipped as cache-hit contributes nothing to any of those,
+/// so on the second run over an unchanged fixture `current_gen_paths` held zero python paths
+/// even though `binding_ownership` (seeded from the dedicated `all-bindings-python-ownership`
+/// stage) and `<lang>.manifest` both still correctly named `crates/test-lib-py/src/lib.rs`.
+/// `sweep_manifest_orphans`'s manifest-based route has no per-root "nothing recorded this run"
+/// guard (only its disk-scan route does), so it deleted that file as an orphan -- while
+/// `python.manifest` kept listing it. The run after THAT then found a manifested output
+/// missing (`outputs_exist` is false the moment any listed path fails `Path::exists()`, the
+/// same predicate that also rejects an outright empty manifest), regenerated, and the run
+/// after that deleted it again: an unbroken hit/miss/hit/miss cycle, never a stable hit.
+///
+/// A single run cannot see this -- the deletion only happens on the SECOND run, once a real
+/// baseline exists to misread. This test drives `handle` twice over the same fixture and
+/// asserts the second run is a genuine, non-destructive hit. ~keep
+#[test]
+fn all_a_cache_hit_run_does_not_delete_its_own_manifested_binding_output() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().unwrap_or_else(|_| temp.path().to_path_buf());
+    write_lang_manifest_fixture_workspace(&root);
+    let _cwd = E2eDeferCwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    handle(lang_manifest_all_command(), &context).expect("first `all` run must succeed against a plain fixture");
+
+    let mut expected = vec![
+        root.join("crates/test-lib-py/src/lib.rs"),
+        root.join("packages/python/test_lib/test_lib.pyi"),
+        root.join("packages/python/test_lib/options.py"),
+        root.join("packages/python/test_lib/api.py"),
+        root.join("packages/python/test_lib/exceptions.py"),
+        root.join("packages/python/test_lib/__init__.py"),
+    ];
+    expected.sort();
+
+    let mut manifest_after_first_run = cache::read_lang_manifest("test-lib", "python");
+    manifest_after_first_run.sort();
+    assert_eq!(
+        manifest_after_first_run, expected,
+        "the first (real generation) run must record the full cross-phase union"
+    );
+
+    let binding_source = root.join("crates/test-lib-py/src/lib.rs");
+    assert!(
+        binding_source.exists(),
+        "the binding source the first run generated must exist before the second run"
+    );
+
+    handle(lang_manifest_all_command(), &context)
+        .expect("second `all` run over an unchanged fixture must also succeed");
+
+    assert!(
+        binding_source.exists(),
+        "a cache-hit run must not delete a manifested binding output as a false orphan -- \
+         the file existed and was still named by python.manifest, so nothing about this run \
+         justified removing it"
+    );
+
+    let mut manifest_after_second_run = cache::read_lang_manifest("test-lib", "python");
+    manifest_after_second_run.sort();
+    assert_eq!(
+        manifest_after_second_run, expected,
+        "a cache-hit run must leave the existing manifest intact -- only a real generation \
+         may rewrite it"
+    );
+}
+
 /// A configured e2e format hook whose executable is absent is survived and *recorded* rather
 /// than fatal (see `e2e::format::resolve_shell_failure`). `alef all`'s own reporter then
 /// announced every recorded entry under "deferred until the pinned version is published" --
