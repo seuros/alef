@@ -222,6 +222,10 @@ pub(crate) fn extract_impl_block(
             serde_rename_all: None,
             has_serde: false,
             serde_container_default: false,
+            serde_container_from: None,
+            serde_container_into: None,
+            serde_container_try_from: None,
+            serde_transparent: false,
             super_traits: vec![],
             binding_excluded: true,
             binding_exclusion_reason: Some(

@@ -60,6 +60,27 @@ pub struct TypeDef {
     /// this flag and never substitute `has_default` for it. ~keep
     #[serde(default)]
     pub serde_container_default: bool,
+    /// Type path from a container-level `#[serde(from = "...")]`. Marks a struct whose wire
+    /// shape is NOT the derived, field-by-field object serde would otherwise produce -- it
+    /// instead reads a value of the named type and converts via a hand-written `From`, whose
+    /// logic (and thus the real shape) alef cannot see. Must gate validation instead of letting
+    /// codegen silently emit an object DTO that won't parse the real payload. ~keep
+    #[serde(default)]
+    pub serde_container_from: Option<String>,
+    /// Type path from `#[serde(into = "...")]`. Serialize-side counterpart of
+    /// [`TypeDef::serde_container_from`]; independent of it -- see that field's doc.
+    #[serde(default)]
+    pub serde_container_into: Option<String>,
+    /// Type path from `#[serde(try_from = "...")]`. Fallible counterpart of
+    /// [`TypeDef::serde_container_from`]; same "unknown wire shape" concern.
+    #[serde(default)]
+    pub serde_container_try_from: Option<String>,
+    /// True when the struct carries `#[serde(transparent)]`: the wire shape is exactly the
+    /// struct's one non-skipped field, unwrapped, with no companion type needed -- but alef's
+    /// generated DTO still emits an object, so this must gate the same diagnostic as the
+    /// conversion-path fields above.
+    #[serde(default)]
+    pub serde_transparent: bool,
     /// Super-traits of this trait (e.g., `["Plugin"]` for `WorkerBackend: Plugin`).
     /// Only populated when `is_trait` is true. Used by trait bridge codegen
     /// to determine which super-trait impls to generate.
@@ -723,6 +744,10 @@ mod tests {
             serde_rename_all: _,         // Go/Java/C# JSON tag casing
             has_serde: _,                // gates FFI from_json/to_json generation
             serde_container_default: _,  // per-field wire-optionality (Go omitempty pointers) ~keep
+            serde_container_from: _,     // flags an unmirrorable wire shape for validation ~keep
+            serde_container_into: _,     // flags an unmirrorable wire shape for validation ~keep
+            serde_container_try_from: _, // flags an unmirrorable wire shape for validation ~keep
+            serde_transparent: _,        // flags an unmirrorable wire shape for validation ~keep
             super_traits: _,             // trait bridge super-trait impl selection ~keep
             binding_excluded: _,         // excludes the type from generated surfaces
             binding_exclusion_reason: _, // diagnostics only; deliberately not codegen input

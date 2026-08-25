@@ -287,3 +287,105 @@ fn test_extract_function_since_annotation_is_populated() {
     assert_eq!(surface.functions[0].version.since.as_deref(), Some("1.0.0"));
     assert!(surface.functions[0].version.deprecated.is_none());
 }
+
+#[test]
+fn test_struct_serde_from_into_are_extracted_and_independent() {
+    // A struct may declare `into` without `from` (or vice versa) -- the two are independent
+    // wire-conversion directions, not a package deal.
+    let source = r#"
+        #[derive(Clone, serde::Serialize, serde::Deserialize)]
+        #[serde(into = "(i32, i32)")]
+        pub struct Point {
+            pub x: i32,
+            pub y: i32,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    let point = &surface.types[0];
+    assert_eq!(point.serde_container_into.as_deref(), Some("(i32, i32)"));
+    assert_eq!(point.serde_container_from, None);
+    assert_eq!(point.serde_container_try_from, None);
+    assert!(!point.serde_transparent);
+}
+
+#[test]
+fn test_struct_serde_from_and_try_from_are_extracted_and_distinguished() {
+    // `try_from` must never be read back as `from`: the needle-boundary check has to reject a
+    // match immediately preceded by the `_` in `try_from`.
+    let source = r#"
+        #[derive(Clone, serde::Serialize, serde::Deserialize)]
+        #[serde(from = "RangeWire", try_from = "RangeWire")]
+        pub struct Range {
+            pub start: i32,
+            pub end: i32,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    let range = &surface.types[0];
+    assert_eq!(range.serde_container_from.as_deref(), Some("RangeWire"));
+    assert_eq!(range.serde_container_try_from.as_deref(), Some("RangeWire"));
+    assert_eq!(range.serde_container_into, None);
+}
+
+#[test]
+fn test_struct_serde_transparent_is_extracted() {
+    let source = r#"
+        #[derive(Clone, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
+        pub struct Pixels {
+            pub value: u32,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    assert!(surface.types[0].serde_transparent);
+    assert_eq!(surface.types[0].serde_container_from, None);
+}
+
+#[test]
+fn test_struct_serde_container_conversion_attrs_default_absent() {
+    // A struct with no container-level conversion attributes must report all four new fields
+    // as absent, not silently inherit stale values from some other extraction path.
+    let source = r#"
+        #[derive(Clone, serde::Serialize, serde::Deserialize)]
+        pub struct PlainConfig {
+            pub name: String,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    let plain = &surface.types[0];
+    assert_eq!(plain.serde_container_from, None);
+    assert_eq!(plain.serde_container_into, None);
+    assert_eq!(plain.serde_container_try_from, None);
+    assert!(!plain.serde_transparent);
+}
+
+#[test]
+fn test_struct_serde_from_under_cfg_attr_is_extracted() {
+    // The consumer-reported bug uses `#[cfg_attr(feature = "serde", serde(from = "...", into =
+    // "..."))]` in practice, not a bare `#[serde(...)]` -- the extractor must see through the
+    // cfg_attr wrapper the same way it already does for `rename_all` (see
+    // `test_enum_rename_all_under_cfg_attr_any_is_honoured` above).
+    let source = r#"
+        #[derive(Clone)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+        #[cfg_attr(feature = "serde", serde(from = "(f64, f64)", into = "(f64, f64)"))]
+        pub struct BoundingBox {
+            pub width: f64,
+            pub height: f64,
+        }
+    "#;
+
+    let surface = extract_from_source(source);
+    assert_eq!(surface.types.len(), 1);
+    let bbox = &surface.types[0];
+    assert_eq!(bbox.serde_container_from.as_deref(), Some("(f64, f64)"));
+    assert_eq!(bbox.serde_container_into.as_deref(), Some("(f64, f64)"));
+}

@@ -497,6 +497,88 @@ pub(crate) fn has_container_serde_default(attrs: &[syn::Attribute]) -> bool {
         .any(|attr| has_serde_default(std::slice::from_ref(attr)))
 }
 
+/// Extract a `key = "value"` string literal from `#[serde(...)]` container attributes (also
+/// matching `#[cfg_attr(..., serde(key = "..."))]`), for the container-level conversion keys
+/// `from` / `into` / `try_from`.
+///
+/// The boundary check rejects a match immediately preceded by an identifier character, so a
+/// lookup for `from` never matches inside `try_from = "..."` — the same technique
+/// [`extract_serde_rename`] uses to keep `rename` out of `rename_all`. ~keep
+fn extract_serde_container_conversion(attrs: &[syn::Attribute], key: &str) -> Option<String> {
+    let with_space = format!("{key} =");
+    let without_space = format!("{key}=");
+    attrs.iter().find_map(|attr| {
+        let attr_str = quote::quote!(#attr).to_string();
+        if !attr_str.contains("serde") {
+            return None;
+        }
+        for needle in [with_space.as_str(), without_space.as_str()] {
+            for (pos, _) in attr_str.match_indices(needle) {
+                let before = attr_str[..pos].trim_end();
+                if before.chars().last().is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let after = attr_str[pos + needle.len()..].trim_start();
+                let Some(start) = after.find('"') else { continue };
+                let value = &after[start + 1..];
+                let Some(end) = value.find('"') else { continue };
+                return Some(value[..end].to_string());
+            }
+        }
+        None
+    })
+}
+
+/// Extract the type path from `#[serde(from = "...")]` on a struct/enum container (also
+/// matching `#[cfg_attr(..., serde(from = "..."))]`).
+///
+/// A container-level `from` replaces serde's derived, field-by-field wire shape with
+/// whatever the named type serializes as (frequently a tuple/array for a value type), via a
+/// hand-written `From<Named> for T`. Alef cannot see that impl's logic, so it cannot know the
+/// resulting shape — this is recorded so validation can flag the type instead of the
+/// generator silently emitting an object-shaped DTO that does not match the wire. ~keep
+pub(crate) fn extract_serde_container_from(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_container_conversion(attrs, "from")
+}
+
+/// Extract the type path from `#[serde(into = "...")]` on a struct/enum container (also
+/// matching `#[cfg_attr(..., serde(into = "..."))]`). See [`extract_serde_container_from`] —
+/// `into` is `from`'s serialize-side counterpart and is independent of it: a type may declare
+/// one without the other.
+pub(crate) fn extract_serde_container_into(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_container_conversion(attrs, "into")
+}
+
+/// Extract the type path from `#[serde(try_from = "...")]` on a struct/enum container (also
+/// matching `#[cfg_attr(..., serde(try_from = "..."))]`). See [`extract_serde_container_from`]
+/// — `try_from` is the fallible counterpart of `from` and is mutually exclusive with it in
+/// valid serde usage, but alef does not need to enforce that; it only records what is present.
+pub(crate) fn extract_serde_container_try_from(attrs: &[syn::Attribute]) -> Option<String> {
+    extract_serde_container_conversion(attrs, "try_from")
+}
+
+/// True when a container carries `#[serde(transparent)]` (also matching
+/// `#[cfg_attr(..., serde(transparent))]`).
+///
+/// Unlike `from`/`into`/`try_from`, a transparent container needs no companion type: serde
+/// requires exactly one non-skipped field, and the container's wire shape is exactly that
+/// field's own serialized shape, with no wrapping object. Still tracked as a shape alef cannot
+/// yet mirror, since the generated DTO still emits an object with that one field as a named
+/// property rather than the bare unwrapped value.
+pub(crate) fn has_serde_transparent(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|attr| {
+        let attr_str = quote::quote!(#attr).to_string();
+        if !attr_str.contains("serde") {
+            return false;
+        }
+        attr_str.contains("transparent ,")
+            || attr_str.contains("transparent,")
+            || attr_str.contains("transparent )")
+            || attr_str.contains("transparent)")
+            || attr_str.ends_with("transparent")
+    })
+}
+
 /// Check if a `#[derive(...)]` attribute contains a specific multi-segment derive path.
 /// e.g. `has_derive_path(attrs, &["thiserror", "Error"])` matches `#[derive(thiserror::Error)]`.
 /// Also checks `#[cfg_attr(..., derive(...))]` for conditional derives.

@@ -49,6 +49,10 @@ fn test_struct_type(name: &str, fields: Vec<FieldDef>, has_default: bool) -> Typ
         serde_rename_all: None,
         has_serde: true,
         serde_container_default: false,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -164,6 +168,10 @@ fn test_gen_struct_type_emits_json_tags() {
         serde_rename_all: None,
         has_serde: false,
         serde_container_default: false,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -277,6 +285,10 @@ fn gen_struct_type_marshal_optional_bytes_field_does_not_dereference() {
         serde_rename_all: None,
         has_serde: true,
         serde_container_default: false,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -323,6 +335,10 @@ fn gen_config_options_defaults_data_enum_field_to_nil_not_composite_literal() {
         serde_rename_all: None,
         has_serde: false,
         serde_container_default: false,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -377,6 +393,10 @@ fn test_gen_struct_type_emits_no_config_options_by_default() {
         serde_rename_all: None,
         has_serde: false,
         serde_container_default: false,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -434,6 +454,10 @@ fn test_gen_config_options_emitted_when_in_allowlist() {
         serde_rename_all: None,
         has_serde: false,
         serde_container_default: false,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         super_traits: vec![],
         methods: vec![],
         binding_excluded: false,
@@ -868,6 +892,10 @@ fn non_zero_default_fields() -> Vec<FieldDef> {
 fn gen_struct_type_container_serde_default_emits_omitempty_pointers() {
     let typ = TypeDef {
         serde_container_default: true,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         ..test_struct_type("RetryPolicy", non_zero_default_fields(), true)
     };
     let out = gen_struct_type(
@@ -1006,6 +1034,10 @@ fn gen_struct_type_container_serde_default_marks_unit_enum_fields_omitempty() {
 
     let with_container_default = TypeDef {
         serde_container_default: true,
+        serde_container_from: None,
+        serde_container_into: None,
+        serde_container_try_from: None,
+        serde_transparent: false,
         ..test_struct_type("BudgetConfig", vec![field.clone()], true)
     };
     let out = emit(&with_container_default);

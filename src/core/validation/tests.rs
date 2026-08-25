@@ -782,3 +782,77 @@ fn api_surface_validation_checks_handler_contract_ir_types() {
         );
     }
 }
+
+#[test]
+fn api_surface_validation_flags_a_struct_with_container_from_into() {
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        types: vec![TypeDef {
+            name: "Range".to_string(),
+            serde_container_from: Some("RangeWire".to_string()),
+            serde_container_into: Some("RangeWire".to_string()),
+            has_serde: true,
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let report = validate_api_surface(&api);
+
+    assert!(report.has_errors());
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported)
+        .expect("serde_container_conversion_unsupported diagnostic present");
+    assert_eq!(diagnostic.item_path.as_deref(), Some("type Range"));
+    assert!(diagnostic.reason.contains("from = \"RangeWire\""), "{}", diagnostic.reason);
+    assert!(diagnostic.reason.contains("into = \"RangeWire\""), "{}", diagnostic.reason);
+}
+
+#[test]
+fn api_surface_validation_flags_a_transparent_struct() {
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        types: vec![TypeDef {
+            name: "Pixels".to_string(),
+            serde_transparent: true,
+            has_serde: true,
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let report = validate_api_surface(&api);
+
+    let diagnostic = report
+        .diagnostics
+        .iter()
+        .find(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported)
+        .expect("serde_container_conversion_unsupported diagnostic present for transparent struct");
+    assert_eq!(diagnostic.item_path.as_deref(), Some("type Pixels"));
+    assert!(diagnostic.reason.contains("transparent"), "{}", diagnostic.reason);
+}
+
+#[test]
+fn api_surface_validation_does_not_flag_a_plain_struct() {
+    let api = ApiSurface {
+        crate_name: "sample-lib".to_string(),
+        types: vec![TypeDef {
+            name: "PlainConfig".to_string(),
+            has_serde: true,
+            ..TypeDef::default()
+        }],
+        ..ApiSurface::default()
+    };
+
+    let report = validate_api_surface(&api);
+
+    assert!(
+        !report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == ValidationCode::SerdeContainerConversionUnsupported),
+        "a struct with no container conversion attrs must not be flagged: {report:?}"
+    );
+}

@@ -45,6 +45,7 @@ pub enum ValidationCode {
     BackendStubPath,
     UnconsumedConfig,
     UnreadableFieldDefault,
+    SerdeContainerConversionUnsupported,
 }
 
 /// Diagnostics that are never safe to suppress globally.
@@ -66,6 +67,7 @@ impl fmt::Display for ValidationCode {
             Self::BackendStubPath => f.write_str("backend_stub_path"),
             Self::UnconsumedConfig => f.write_str("unconsumed_config"),
             Self::UnreadableFieldDefault => f.write_str("unreadable_field_default"),
+            Self::SerdeContainerConversionUnsupported => f.write_str("serde_container_conversion_unsupported"),
         }
     }
 }

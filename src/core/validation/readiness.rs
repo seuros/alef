@@ -24,6 +24,7 @@ pub(super) fn backend_readiness_diagnostics(
         if typ.binding_excluded {
             continue;
         }
+        collect_serde_container_conversion_diagnostics(api, typ, &mut diagnostics);
         let method_known_names = if typ.is_trait && bridged_trait_names.contains(typ.name.as_str()) {
             &trait_known_names
         } else {
@@ -152,6 +153,50 @@ fn opaque_type_names(api: &ApiSurface) -> AHashSet<&str> {
         .filter(|typ| typ.is_opaque)
         .map(|typ| typ.name.as_str())
         .collect()
+}
+
+/// Flag a struct whose serde container attributes give it a wire shape the generated Rust
+/// DTO cannot reproduce.
+///
+/// `structs.rs` always derives a plain, field-by-field `serde::Serialize`/`serde::Deserialize`
+/// on the generated binding struct. A container-level `#[serde(from/into/try_from = "...")]`
+/// routes the *real* wire shape through a hand-written `From`/`TryFrom` impl alef cannot see
+/// (commonly a tuple/array for a value type, not an object); `#[serde(transparent)]` collapses
+/// the wire shape to the struct's single field with no wrapping object at all. Either way the
+/// derived DTO shape silently disagrees with the real one — this must be loud instead. ~keep
+fn collect_serde_container_conversion_diagnostics(
+    api: &ApiSurface,
+    typ: &crate::core::ir::TypeDef,
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+) {
+    let mut attrs = Vec::new();
+    if let Some(path) = &typ.serde_container_from {
+        attrs.push(format!("from = \"{path}\""));
+    }
+    if let Some(path) = &typ.serde_container_into {
+        attrs.push(format!("into = \"{path}\""));
+    }
+    if let Some(path) = &typ.serde_container_try_from {
+        attrs.push(format!("try_from = \"{path}\""));
+    }
+    if typ.serde_transparent {
+        attrs.push("transparent".to_string());
+    }
+    if attrs.is_empty() {
+        return;
+    }
+    diagnostics.push(ValidationDiagnostic::error(
+        ValidationCode::SerdeContainerConversionUnsupported,
+        api.crate_name.clone(),
+        Some(format!("type {}", typ.name)),
+        format!(
+            "struct carries #[serde({})], so its real wire shape is not the object shape the \
+             generated binding DTO derives; JSON encode/decode for this type will not round-trip",
+            attrs.join(", ")
+        ),
+        "exclude the type from generated bindings, or hand-write the JSON bridge for it until \
+         alef mirrors the container conversion",
+    ));
 }
 
 fn collect_function_diagnostics(
