@@ -1,0 +1,16 @@
+{#- C# collection-literal template used once an array/list literal carries more than
+    `CSHARP_COLLECTION_INLINE_LIMIT` elements (#365). A catalog-sized literal emitted on
+    one unwrapped line forces the formatter to reflow it from scratch; pre-wrapping one
+    element per line gives the formatter output that is already close to correct.
+
+    Context variables:
+    - prefix: string - the C# constructor/array expression the literal opens with,
+        e.g. "new[]", "new List<string>()", "new List<Message>()"
+    - items: array of string - already-rendered C# element expressions
+#}
+{{ prefix }}
+{
+{% for item in items %}
+    {{ item }},
+{% endfor %}
+}

@@ -1011,7 +1011,7 @@ use http::render_http_test_method;
 use project::{render_csproj, render_test_setup};
 use setup::build_args_and_setup;
 use streaming::{render_streaming_test_method, resolve_csharp_streaming_item_type};
-use values::{json_to_csharp, render_sealed_display};
+use values::{json_to_csharp, render_collection_literal, render_sealed_display};
 use visitor::{build_csharp_visitor, resolve_csharp_visitor_config};
 
 /// Build a C# call expression for a `method_result` assertion on a sample_language Tree.
