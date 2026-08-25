@@ -5,10 +5,9 @@
 //! only an API-key variable emitted `os.Getenv` with no `os` import. ~keep
 
 use super::super::go::render_test_file;
-use crate::core::config::ResolvedCrateConfig;
 use crate::e2e::codegen::go::GoTestFileContext;
 use crate::e2e::config::{CallConfig, E2eConfig};
-use crate::e2e::fixture::{Fixture, FixtureEnv};
+use crate::e2e::fixture::Fixture;
 
 /// Regression test: a fixture that declares `env.api_key_var` but has no
 /// `mock_response`/`http` and no `client_factory` override emits `os.Getenv` in

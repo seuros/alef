@@ -328,8 +328,21 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
         if let Some(definition) = owner_type
             && !definition.fields.iter().any(|field| field.serde_flatten)
         {
-            let declared: std::collections::HashSet<&str> =
-                definition.fields.iter().map(|field| field.name.as_str()).collect();
+            // ~keep Both spellings count as declared. A fixture may key a field by its Rust
+            // name or by its wire name (`#[serde(rename)]` / a container `rename_all`), and both
+            // reach here unchanged — the camelCase conversion below happens per key, after this
+            // check. Matching only `field.name` would abort generation on a correctly-authored
+            // fixture for any renamed field, turning this guard into a worse bug than the one it
+            // catches.
+            let mut declared: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for field in &definition.fields {
+                declared.insert(field.name.clone());
+                declared.insert(crate::codegen::naming::wire_field_name(
+                    &field.name,
+                    field.serde_rename.as_deref(),
+                    definition.serde_rename_all.as_deref(),
+                ));
+            }
             if let Some(undeclared) = obj.keys().find(|key| !declared.contains(key.as_str())) {
                 panic!(
                     "typescript e2e generator: fixture input for `{type_name}` includes key `{undeclared}`, which `{type_name}` does not declare as a field. Fix the fixture (remove or rename the key) or the Rust struct (add the missing field)."

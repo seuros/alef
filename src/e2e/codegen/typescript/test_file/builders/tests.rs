@@ -484,3 +484,42 @@ fn node_and_wasm_typed_objects_read_documented_files() {
         }
     }
 }
+
+/// A fixture may key a field by its wire name rather than its Rust name, and that is correct
+/// authoring, not a typo.
+///
+/// ~keep The declared-field guard originally compared against `field.name` alone, which would
+/// have aborted generation for every `#[serde(rename)]`d field in every consumer's fixtures — a
+/// guard that fires on correct input is worse than the TS2353 asymmetry it exists to close.
+#[test]
+fn a_field_keyed_by_its_wire_name_is_accepted() {
+    let type_defs = [TypeDef {
+        name: "Options".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "max_chars".into(),
+            ty: TypeRef::Primitive(crate::core::ir::PrimitiveType::U32),
+            serde_rename: Some("maxCharacters".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+
+    let expression = ts_builder_expression(
+        serde_json::json!({"maxCharacters": 10}).as_object().expect("object"),
+        "Options",
+        &Default::default(),
+        "node",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "",
+        &[],
+        &mut Default::default(),
+    );
+
+    assert!(
+        expression.contains("10"),
+        "a key spelled with the field's wire name must build, not abort: {expression}"
+    );
+}
