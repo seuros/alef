@@ -274,18 +274,21 @@ fn collect_coverage_ledger_references(snippet_dirs: &[PathBuf], missing_cells: M
 /// fixture generated each tracked snippet file.
 ///
 /// Read from every coverage ledger beneath the configured snippet roots. A fixture/language
-/// cell `function_excluded_for_language` drops never enters `expected` in the first place --
-/// see `e2e::snippets::mod::generate`'s `~keep` comment above `coverage.expected.push`. That
-/// gate reuses [`crate::docs::language_pages::excludes::language_excludes`], which folds the
-/// crate-wide `[crates.exclude].functions` list together with every per-language
+/// cell either `function_excluded_for_language` or `function_binding_excluded_for_language`
+/// drops never enters `expected` in the first place -- see `e2e::snippets::mod`'s `~keep`
+/// comment above `coverage.expected.push`. `function_excluded_for_language` reuses
+/// [`crate::docs::language_pages::excludes::language_excludes`], which folds the crate-wide
+/// `[crates.exclude].functions` list together with every per-language
 /// `[crates.<lang>].exclude_functions` list `language_excludes` has an arm for (including the
-/// FFI-derived families' own `[crates.ffi].exclude_functions` union). It does NOT consult
-/// `[opaque_types]`, `#[alef::skip]`/`#[doc(hidden)]` (the `binding_excluded` IR flag, which
-/// applies uniformly across every language rather than per-language), or the type half of
-/// `language_excludes`'s return value -- `function_excluded_for_language` only ever checks
-/// function names. Reusing `language_excludes` here, rather than re-deriving which functions
-/// are excluded from `alef.toml` a second time, is what keeps the language-parity check from
-/// disagreeing with the generator that produced the very tree it is checking. ~keep
+/// FFI-derived families' own `[crates.ffi].exclude_functions` union) -- it only ever checks
+/// function names, never the type half of `language_excludes`'s return value, so `[opaque_types]`
+/// is still not consulted here. `function_binding_excluded_for_language` closes the gap this
+/// comment used to document: it reads `#[alef::skip]`/`#[doc(hidden)]` (the `binding_excluded` IR
+/// flag, which applies uniformly across every non-Rust language) directly off the IR, so a
+/// `binding_excluded` function or method is now also absent from `expected` before this reader
+/// ever sees the ledger. Reusing `language_excludes` here, rather than re-deriving which
+/// functions are excluded from `alef.toml` a second time, is what keeps the language-parity
+/// check from disagreeing with the generator that produced the very tree it is checking. ~keep
 #[derive(Debug, Clone, Default)]
 struct LedgerExpectations {
     expected_by_fixture: BTreeMap<String, BTreeSet<Language>>,

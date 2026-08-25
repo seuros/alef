@@ -8,6 +8,7 @@
 use super::mock_harness_guard::reject_mock_harness_scaffolding;
 use super::*;
 
+mod binding_excluded;
 mod coverage;
 mod curated;
 mod rust_crate_requirements;

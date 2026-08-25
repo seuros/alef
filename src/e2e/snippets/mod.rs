@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 
 pub mod coverage;
+mod exclusions;
 pub(crate) mod ledger_paths;
 pub mod migration;
 pub(crate) mod mock_harness_guard;
@@ -340,9 +341,20 @@ fn generate_snippet_report_with_extensions(
             // fixture out of the executable harness only and must NOT suppress a
             // documentation snippet -- see `call_skip_reason`'s doc comment and
             // `documentation_rendering_is_independent_of_test_harness_skips`. ~keep
+            // A function/method the IR itself marked `binding_excluded`
+            // (`#[alef::skip]`/`#[doc(hidden)]`) is excluded from every non-Rust binding
+            // regardless of `alef.toml` -- `function_excluded_for_language` only ever
+            // consults `alef.toml`-configured lists and never sees this flag. See
+            // `function_binding_excluded_for_language`'s doc comment. ~keep
             if crate::e2e::codegen::call_skip_reason(fixture, language, context.e2e).is_some()
-                || function_excluded_for_language(fixture, language, generator.language_name(), context)
-                || visitor_excluded_for_language(fixture, generator.language_name(), context)
+                || exclusions::function_excluded_for_language(fixture, language, generator.language_name(), context)
+                || exclusions::visitor_excluded_for_language(fixture, generator.language_name(), context)
+                || exclusions::function_binding_excluded_for_language(
+                    fixture,
+                    language,
+                    generator.language_name(),
+                    context,
+                )
             {
                 continue;
             }
@@ -815,70 +827,6 @@ fn capabilities(language: &str, snippets: &SnippetConfig, crate_config: &Resolve
     let mut values = snippets.capabilities.for_language(language);
     values.extend(crate_config.features.iter().map(|feature| format!("feature:{feature}")));
     values
-}
-
-/// Whether the function a fixture's call resolves to for `language` is excluded for that
-/// language, and therefore can never be rendered into a snippet.
-///
-/// Reuses [`crate::docs::language_pages::excludes::language_excludes`] -- the accessor the
-/// docs generator already consults for the same question -- rather than re-deriving the
-/// per-language `exclude_functions` union here. A second copy of that rule is exactly how a
-/// ledger and its emitter drift apart: one path evolves (a language gains an override, a new
-/// per-language config field is added) and the other silently keeps checking the old shape.
-/// [`CallConfig::core_lookup_name`] gives the Rust-spelled identity `exclude_functions`
-/// entries are keyed by, matching every built-in snippet recipe's own resolution (see
-/// `e2e/codegen/go/snippet.rs`, `kotlin/snippet.rs`, `php/snippet.rs`, `ruby/snippet.rs`, and
-/// the WASM-specific `rust_identity_for_wasm_symbol`, which resolves the same identity for the
-/// one target that also accepts the JS spelling of an override). ~keep
-fn function_excluded_for_language(
-    fixture: &Fixture,
-    language: &str,
-    generator_language_name: &str,
-    context: &SnippetRenderContext<'_>,
-) -> bool {
-    let Some(DocumentationLanguage::Binding(lang)) = parse_language(generator_language_name) else {
-        return false;
-    };
-    let docs_fixture = fixture.docs_call_fixture();
-    let call = context.e2e.resolve_call_for_fixture(
-        docs_fixture.call.as_deref(),
-        &docs_fixture.id,
-        &docs_fixture.resolved_category(),
-        &docs_fixture.tags,
-        &docs_fixture.input,
-    );
-    let Some(function_name) = call.core_lookup_name(language) else {
-        return false;
-    };
-    let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(context.crate_config, lang);
-    excluded_functions.contains(function_name.as_ref())
-}
-
-/// Whether `fixture` exercises the fixture engine's generic visitor/trait-bridge entry point
-/// ([`Fixture::visitor`]) and this language excludes it via the
-/// [`crate::e2e::fixture::VISITOR_EXCLUDE_FUNCTION_NAME`] convention.
-///
-/// `exclude_functions` normally names a real Rust function, so
-/// [`function_excluded_for_language`] cannot catch this case: a visitor fixture's *call*
-/// resolves to some ordinary function (e.g. `convert`), while the visitor itself attaches
-/// through a trait-bridge parameter or options-struct field that never has its own IR function
-/// name. `e2e::codegen::kotlin_android::project` already applies this exact rule when deciding
-/// whether to emit a fixture's Kotlin-Android e2e test or fall back to
-/// `ExcludedBindingsTest.kt`; without the matching check here, snippet generation rendered real
-/// code against a visitor API the binding never exposed for that language. ~keep
-fn visitor_excluded_for_language(
-    fixture: &Fixture,
-    generator_language_name: &str,
-    context: &SnippetRenderContext<'_>,
-) -> bool {
-    if fixture.visitor.is_none() {
-        return false;
-    }
-    let Some(DocumentationLanguage::Binding(lang)) = parse_language(generator_language_name) else {
-        return false;
-    };
-    let (excluded_functions, _) = crate::docs::language_pages::excludes::language_excludes(context.crate_config, lang);
-    excluded_functions.contains(crate::e2e::fixture::VISITOR_EXCLUDE_FUNCTION_NAME)
 }
 
 fn snippet_path(
