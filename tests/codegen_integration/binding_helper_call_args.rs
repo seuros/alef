@@ -478,7 +478,7 @@ fn test_gen_named_let_bindings_vec_string_is_ref() {
         original_type: None,
         map_is_ahash: false,
         map_key_is_cow: false,
-        vec_inner_is_ref: false,
+        vec_inner_is_ref: true,
         map_is_btree: false,
         core_wrapper: alef::core::ir::CoreWrapper::None,
     }];
@@ -491,6 +491,37 @@ fn test_gen_named_let_bindings_vec_string_is_ref() {
     assert!(
         result.contains(".iter().map(|s| s.as_str()).collect()"),
         "should collect str references"
+    );
+}
+
+/// Companion to the two `is_ref` tests above. `call_args` only ever consumes `&<name>_refs`
+/// when BOTH `is_ref` and `vec_inner_is_ref` hold, so emitting the intermediate on `is_ref`
+/// alone left an unused `let` in every generated crate. ~keep
+#[test]
+fn test_gen_named_let_bindings_vec_string_is_ref_without_inner_ref_emits_no_intermediate() {
+    let opaque_types = AHashSet::new();
+    let params = vec![ParamDef {
+        name: "labels".to_string(),
+        ty: TypeRef::Vec(Box::new(TypeRef::String)),
+        optional: false,
+        default: None,
+        sanitized: false,
+        typed_default: None,
+        is_ref: true,
+        is_mut: false,
+        newtype_wrapper: None,
+        original_type: None,
+        map_is_ahash: false,
+        map_key_is_cow: false,
+        vec_inner_is_ref: false,
+        map_is_btree: false,
+        core_wrapper: alef::core::ir::CoreWrapper::None,
+    }];
+
+    let result = binding_helpers::gen_named_let_bindings_pub(&params, &opaque_types, "my_crate");
+    assert!(
+        !result.contains("labels_refs"),
+        "is_ref without vec_inner_is_ref must not emit an unused Vec<&str> intermediate, got:\n{result}"
     );
 }
 
@@ -510,7 +541,7 @@ fn test_gen_named_let_bindings_vec_string_is_ref_optional() {
         original_type: None,
         map_is_ahash: false,
         map_key_is_cow: false,
-        vec_inner_is_ref: false,
+        vec_inner_is_ref: true,
         map_is_btree: false,
         core_wrapper: alef::core::ir::CoreWrapper::None,
     }];
