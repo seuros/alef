@@ -726,6 +726,7 @@ fn crate_sources_hash_differs_across_crates_with_disjoint_sources() {
         extra_clippy_allows: vec![],
         crate_attributes: vec![],
         cargo_lints: Default::default(),
+        verify: Default::default(),
     };
 
     let cfg_a = make_cfg("alpha", vec![a]);
@@ -831,6 +832,7 @@ fn crate_sources_hash_includes_source_crates() {
                 extra_clippy_allows: vec![],
                 crate_attributes: vec![],
                 cargo_lints: Default::default(),
+                verify: Default::default(),
             }
         };
 
@@ -936,6 +938,7 @@ fn compute_crate_sources_hash_dedupes_overlapping_paths() {
                 extra_clippy_allows: vec![],
                 crate_attributes: vec![],
                 cargo_lints: Default::default(),
+                verify: Default::default(),
             }
         };
 
@@ -1030,6 +1033,7 @@ fn compute_crate_sources_hash_is_order_independent() {
             extra_clippy_allows: vec![],
             crate_attributes: vec![],
             cargo_lints: Default::default(),
+            verify: Default::default(),
         }
     };
 

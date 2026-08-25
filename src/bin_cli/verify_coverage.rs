@@ -55,6 +55,18 @@ pub(crate) struct VerifyCoverage {
     /// Stating the number as coverage keeps it visible on a clean run, which the old heading
     /// (printed only when some other check had already failed) did not. ~keep
     pub(crate) create_once_unmarked: usize,
+    /// The subset of [`Self::managed_absent`] that `[crates.verify].ignore_ephemeral`
+    /// (`crate::core::config::VerifyConfig`) matched and dropped from the "missing generated
+    /// files" / "missing generated files that are also gitignored" headings -- output the
+    /// consumer declared intentionally ephemeral (e.g. registry-mode `test_apps/`) and
+    /// deliberately never commits.
+    ///
+    /// Reported here, unconditionally, for the same reason [`Self::create_once_unmarked`] is:
+    /// an opt-out that narrows what one check may report must never be free to shrink silently.
+    /// A run that excluded 316 paths must say so on every run, including a clean one -- not
+    /// only when a reader happens to look at the missing-file headings that no longer name
+    /// them. See `crate::core::config::verify`'s module doc for the incident this closes. ~keep
+    pub(crate) ephemeral_excluded: usize,
 }
 
 impl VerifyCoverage {
@@ -68,6 +80,7 @@ impl VerifyCoverage {
         marked_paths: &std::collections::HashSet<std::path::PathBuf>,
         scan: super::verify_scan::ScanCoverage,
         create_once_unmarked: usize,
+        ephemeral_excluded: usize,
     ) -> Self {
         let mut coverage = Self {
             managed_total: managed_paths.len(),
@@ -75,6 +88,7 @@ impl VerifyCoverage {
             files_opened: scan.opened,
             files_unexamined: scan.unexamined,
             create_once_unmarked,
+            ephemeral_excluded,
             ..Self::default()
         };
         for path in managed_paths {
@@ -128,6 +142,14 @@ impl VerifyCoverage {
             "    {} absent (reported under the missing-file headings)",
             self.managed_absent
         ));
+        if self.ephemeral_excluded > 0 {
+            lines.push(format!(
+                "      of which {} are excluded from those headings by `[crates.verify].ignore_ephemeral` \
+                 (declared intentionally ephemeral and deliberately never committed -- their absence is \
+                 never a failure, but they ARE still counted in the {} above)",
+                self.ephemeral_excluded, self.managed_absent
+            ));
+        }
         lines.push(format!(
             "  tree walk: {} file(s) opened, {} never examined (name and extension outside the \
              ownership walk's scan set, or not readable as text -- nothing about their contents \

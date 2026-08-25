@@ -83,6 +83,12 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
     // this checks, its stated false-positive/false-negative shape, and why it never
     // contributes to `has_stage_failures` or any other hard-fail condition below. ~keep
     let mut create_once_template_drift: Vec<String> = Vec::new();
+    // Paths `[crates.verify].ignore_ephemeral` matched and dropped from `missing`/
+    // `missing_gitignored` below, one count per crate. Reported unconditionally alongside
+    // `alef verify`'s other coverage facts -- see the `VerifyCoverage::measure` call further
+    // down and `VerifyConfig`'s module doc for why a run that narrowed its own scope must say
+    // so rather than silently passing. ~keep
+    let mut ephemeral_excluded_count = 0usize;
     for resolved_cfg in &crates_to_process {
         let languages = resolve_languages(resolved_cfg, None)?;
         let api = pipeline::extract(resolved_cfg, config_path, false)?;
@@ -93,8 +99,17 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
                 .map(|path| format!("[{}] {}", resolved_cfg.name, path.display())),
         );
         let found = find_missing_and_frozen_generated_files(&languages, &api, resolved_cfg, config_path, &base_dir)?;
-        missing_generated_files.extend(found.missing);
-        missing_gitignored_generated_files.extend(found.missing_gitignored);
+        // `ignore_ephemeral` only ever narrows `missing`/`missing_gitignored` -- both are
+        // exclusively about paths ABSENT from disk. `frozen`/`managed_paths` (which feeds the
+        // orphan diff) are untouched: those checks are about the correctness of bytes that
+        // already exist, which "this output is ephemeral" says nothing about. ~keep
+        let (missing, missing_excluded) = resolved_cfg.verify.partition_ephemeral(found.missing, &base_dir);
+        let (missing_gitignored, gitignored_excluded) = resolved_cfg
+            .verify
+            .partition_ephemeral(found.missing_gitignored, &base_dir);
+        ephemeral_excluded_count += missing_excluded + gitignored_excluded;
+        missing_generated_files.extend(missing);
+        missing_gitignored_generated_files.extend(missing_gitignored);
         frozen_generated_files.extend(found.frozen);
         all_managed_paths.extend(found.managed_paths);
         stage_failures.extend(
@@ -276,6 +291,7 @@ pub(super) fn run(context: &DispatchContext, report_only: bool) -> Result<Option
         &marked_paths,
         scan_coverage,
         unmarked_seeds.len(),
+        ephemeral_excluded_count,
     )
     .report_lines()
     {

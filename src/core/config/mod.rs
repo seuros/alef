@@ -30,6 +30,7 @@ pub mod tools;
 pub mod trait_bridge;
 pub mod update_defaults;
 pub mod validation;
+pub mod verify;
 pub mod workspace;
 
 pub use cargo_lints::CargoLintsConfig;
@@ -70,6 +71,7 @@ pub use schema::{
 pub use service::{EntrypointSpec, HandlerContractConfig, RegistrationSpec, ServiceConfig};
 pub use tools::{DEFAULT_RUST_DEV_TOOLS, LangContext, ToolsConfig, require_tool, require_tools};
 pub use trait_bridge::{BridgeBinding, TraitBridgeConfig};
+pub use verify::VerifyConfig;
 pub use workspace::WorkspaceConfig;
 
 /// A source crate group for multi-crate extraction.

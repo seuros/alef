@@ -330,6 +330,13 @@ pub struct RawCrateConfig {
     /// ```
     #[serde(default)]
     pub cargo_lints: CargoLintsConfig,
+
+    /// `alef verify` opt-outs for this crate. See [`super::VerifyConfig`] -- currently just
+    /// `ignore_ephemeral`, a narrow, path-named exemption for generated output the consumer
+    /// deliberately never commits (e.g. registry-mode `test_apps/`), so its absence never
+    /// becomes a permanent "missing generated files" failure.
+    #[serde(default)]
+    pub verify: super::VerifyConfig,
 }
 
 #[cfg(test)]

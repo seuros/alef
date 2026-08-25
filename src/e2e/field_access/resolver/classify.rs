@@ -200,6 +200,16 @@ impl FieldResolver {
         false
     }
 
+    /// Check whether `field`'s resolved leaf type is one alef cannot vouch for as implementing
+    /// `Display` — a struct/enum from the crate's own IR, per
+    /// [`ir_result_fields::leaf_is_named_type`](super::super::ir_result_fields::leaf_is_named_type).
+    ///
+    /// `false` (never a warning) whenever the anchored result type is unresolved, matching the
+    /// permissive fallback every other IR-backed check in this module uses for that state.
+    pub fn is_display_unsafe(&self, field: &str) -> bool {
+        super::super::ir_result_fields::leaf_is_named_type(&self.ir_result_field_map, self.resolve(field))
+    }
+
     fn is_optional_direct(&self, field: &str) -> bool {
         if self.optional_fields.contains(field) {
             return true;

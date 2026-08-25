@@ -5852,6 +5852,13 @@
           "default": {},
           "type": "object"
         },
+        "verify": {
+          "$ref": "#/$defs/VerifyConfig",
+          "default": {
+            "ignore_ephemeral": []
+          },
+          "description": "`alef verify` opt-outs for this crate. See [`super::VerifyConfig`] -- currently just\n`ignore_ephemeral`, a narrow, path-named exemption for generated output the consumer\ndeliberately never commits (e.g. registry-mode `test_apps/`), so its absence never\nbecomes a permanent \"missing generated files\" failure."
+        },
         "version_from": {
           "default": null,
           "description": "File whose `[package] version` is the source of truth for this crate.\nDefaults to `\"Cargo.toml\"` (resolved relative to the alef.toml).",
@@ -7389,6 +7396,21 @@
           "type": "string"
         }
       ]
+    },
+    "VerifyConfig": {
+      "additionalProperties": false,
+      "description": "Per-crate `alef verify` opt-outs. Everything here narrows what one specific check may name\nas a failure; nothing here can turn a genuine drift or ownership finding silent for a path\nit does not match.",
+      "properties": {
+        "ignore_ephemeral": {
+          "default": [],
+          "description": "Repo-relative glob patterns (matched with [`glob::Pattern`] against the path relative to\nthe config file's directory) naming generated output that is intentionally ephemeral --\nregenerated per run, deliberately gitignored, and never meant to be committed.\n\nA path this run's managed surface expects but that is absent from disk AND matches one of\nthese patterns is dropped entirely from `alef verify`'s \"missing generated files\" and\n\"missing generated files that are also gitignored\" reports, instead of failing the run\nforever for output the consumer never intended to track. It does NOT affect a path that\nalready exists on disk (stale/frozen/orphan checks are unaffected -- those apply to real\nbytes on disk, which \"ephemeral\" says nothing about the correctness of).\n\nExample, matching a consumer's whole registry-mode test-app output:\n```toml\n[crates.verify]\nignore_ephemeral = [\"test_apps/**\"]\n```",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "WasmConfig": {
       "additionalProperties": false,

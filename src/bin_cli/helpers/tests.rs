@@ -759,3 +759,149 @@ fn find_missing_and_frozen_generated_files_splits_out_a_gitignored_managed_path(
         found.missing
     );
 }
+
+/// alef-tasks #318, MEASURED before this test existed: a crate with an `[e2e]` block always
+/// runs the registry-mode test-app stage as part of `alef verify`'s managed surface, regardless
+/// of whether the consumer commits that output. A consumer whose `.gitignore` excludes the
+/// whole `test_apps/` tree -- because it is ephemeral, regenerated per CI run, and deliberately
+/// never committed -- got every one of those paths routed into `missing_gitignored`, a HARD,
+/// PERMANENT failure `alef generate` can never fix (the file is written, then discarded by the
+/// ignore rule before it can be committed). A minimal repro (one fixture, one language) measured
+/// 3 of 3 registry-mode files landing there with no config to say otherwise.
+///
+/// `[crates.verify].ignore_ephemeral` (`crate::core::config::VerifyConfig`) is the fix:
+/// `partition_ephemeral` excludes exactly the paths the glob names, no others, from
+/// `missing`/`missing_gitignored` -- proved here directly against `find_missing_and_frozen_generated_files`'s
+/// real output rather than a hand-built fixture, so this cannot pass by the two drifting apart.
+fn registry_test_apps_workspace() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+    std::fs::create_dir_all(dir.path().join("fixtures")).expect("create fixtures dir");
+    std::fs::write(
+        dir.path().join("src/lib.rs"),
+        "pub fn greet(name: String) -> String { format!(\"hi {name}\") }\n",
+    )
+    .expect("write lib.rs");
+    std::fs::write(
+        dir.path().join("Cargo.toml"),
+        "[package]\nname = \"measurelib\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("write Cargo.toml");
+    std::fs::write(
+        dir.path().join("fixtures/greet_basic.json"),
+        r#"{
+  "id": "greet_basic",
+  "description": "greet",
+  "category": "smoke",
+  "tags": ["smoke"],
+  "call": "_default",
+  "input": { "name": "world" },
+  "assertions": [{ "type": "not_error" }]
+}
+"#,
+    )
+    .expect("write fixture json");
+    // Whole-directory ignore, mirroring a consumer that treats registry-mode `test_apps/` as
+    // ephemeral, regenerated-per-run output it deliberately never commits.
+    std::fs::write(dir.path().join(".gitignore"), "/test_apps/\n").expect("write .gitignore");
+    let git_init_status = crate::test_support::git_command(dir.path())
+        .args(["init", "--quiet"])
+        .status()
+        .expect("git init must run");
+    assert!(git_init_status.success(), "git init must succeed in this environment");
+    let config_path = dir.path().join("alef.toml");
+    (dir, config_path)
+}
+
+const REGISTRY_TEST_APPS_CALL_BLOCK: &str = r#"
+[crates.e2e]
+fixtures = "fixtures"
+output = "e2e"
+languages = ["python"]
+
+[crates.e2e.call]
+function = "greet"
+module = "measurelib"
+result_var = "result"
+
+[[crates.e2e.call.args]]
+name = "name"
+field = "input.name"
+type = "string"
+"#;
+
+#[test]
+fn registry_test_apps_output_under_a_whole_directory_gitignore_is_a_hard_failure_without_ignore_ephemeral() {
+    let (dir, config_path) = registry_test_apps_workspace();
+    let config_toml = format!(
+        "[workspace]\nlanguages = [\"python\"]\n\n[[crates]]\nname = \"measurelib\"\nsources = [\"src/lib.rs\"]\n{REGISTRY_TEST_APPS_CALL_BLOCK}"
+    );
+    std::fs::write(&config_path, &config_toml).expect("write alef.toml");
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(&config_toml).expect("config parses");
+    let config = cfg.resolve().expect("config resolves").remove(0);
+    assert!(
+        config.verify.ignore_ephemeral.is_empty(),
+        "fixture precondition: no opt-out configured"
+    );
+    let api = crate::core::ir::ApiSurface::default();
+    let _cwd = crate::test_support::CwdGuard::enter(dir.path());
+
+    let found = find_missing_and_frozen_generated_files(&[Language::Python], &api, &config, &config_path, dir.path())
+        .expect("collect_managed_surface must succeed");
+
+    let test_apps_missing_gitignored = found
+        .missing_gitignored
+        .iter()
+        .filter(|path| path.contains("test_apps"))
+        .count();
+    assert!(
+        test_apps_missing_gitignored > 0,
+        "fixture precondition: registry-mode output must exist and land in missing_gitignored \
+         with no opt-out configured, got: {:?}",
+        found.missing_gitignored
+    );
+}
+
+#[test]
+fn ignore_ephemeral_excludes_registry_test_apps_output_from_missing_and_missing_gitignored() {
+    let (dir, config_path) = registry_test_apps_workspace();
+    let config_toml = format!(
+        "[workspace]\nlanguages = [\"python\"]\n\n[[crates]]\nname = \"measurelib\"\nsources = [\"src/lib.rs\"]\n{REGISTRY_TEST_APPS_CALL_BLOCK}\n[crates.verify]\nignore_ephemeral = [\"test_apps/**\"]\n"
+    );
+    std::fs::write(&config_path, &config_toml).expect("write alef.toml");
+    let cfg: crate::core::config::NewAlefConfig = toml::from_str(&config_toml).expect("config parses");
+    let config = cfg.resolve().expect("config resolves").remove(0);
+    assert_eq!(config.verify.ignore_ephemeral, vec!["test_apps/**".to_string()]);
+    let api = crate::core::ir::ApiSurface::default();
+    let _cwd = crate::test_support::CwdGuard::enter(dir.path());
+
+    let found = find_missing_and_frozen_generated_files(&[Language::Python], &api, &config, &config_path, dir.path())
+        .expect("collect_managed_surface must succeed");
+    assert!(
+        found.missing_gitignored.iter().any(|path| path.contains("test_apps")),
+        "fixture precondition: registry-mode output must still be gitignored-missing BEFORE the \
+         opt-out is applied, got: {:?}",
+        found.missing_gitignored
+    );
+
+    let (missing, missing_excluded) = config.verify.partition_ephemeral(found.missing, dir.path());
+    let (missing_gitignored, gitignored_excluded) =
+        config.verify.partition_ephemeral(found.missing_gitignored, dir.path());
+
+    assert!(
+        !missing_gitignored.iter().any(|path| path.contains("test_apps")),
+        "ignore_ephemeral must remove every test_apps path from missing_gitignored: {missing_gitignored:?}"
+    );
+    assert!(
+        !missing.iter().any(|path| path.contains("test_apps")),
+        "ignore_ephemeral must remove every test_apps path from missing: {missing:?}"
+    );
+    assert!(
+        gitignored_excluded > 0,
+        "the exclusion must be counted, not just applied silently"
+    );
+    assert_eq!(
+        missing_excluded, 0,
+        "no plain-missing entries exist under test_apps in this fixture"
+    );
+}

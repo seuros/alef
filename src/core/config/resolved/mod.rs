@@ -42,6 +42,7 @@ use crate::core::config::publish::PublishConfig;
 use crate::core::config::service::{HandlerContractConfig, ServiceConfig};
 use crate::core::config::tools::ToolsConfig;
 use crate::core::config::trait_bridge::TraitBridgeConfig;
+use crate::core::config::verify::VerifyConfig;
 use crate::core::config::workspace::ClientConstructorConfig;
 
 /// Fully-resolved configuration for one crate.
@@ -177,6 +178,13 @@ pub struct ResolvedCrateConfig {
     /// table is emitted and output is byte-identical to a crate that does not set
     /// this field.
     pub cargo_lints: CargoLintsConfig,
+
+    /// Resolved from [`crate::core::config::raw_crate::RawCrateConfig::verify`].
+    ///
+    /// `alef verify` opt-outs for this crate -- currently just `ignore_ephemeral`, glob
+    /// patterns naming generated output the consumer deliberately never commits. Empty by
+    /// default, so every check runs at full scope for a crate that never configures it.
+    pub verify: VerifyConfig,
 }
 
 impl ResolvedCrateConfig {

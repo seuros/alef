@@ -270,6 +270,15 @@ pub(crate) fn resolve_with(
         operations
     };
     let operations = clamp_swift_json_bridged_paths(operations, resolver);
+    // Rust is the only backend a display-unsafe type actually fails to compile against: Go's
+    // `%v`, Zig's `{any}`, Swift's `print`, Ruby's `puts`, and PHP/R's equivalents all accept
+    // any value, so only the Rust snippet needs the downgrade. See
+    // `downgrade_display_unsafe_operations`. ~keep
+    let operations = if language == "rust" {
+        downgrade_display_unsafe_operations(operations, resolver, &fixture.id)
+    } else {
+        operations
+    };
     // Only now are the paths this snippet will render known, and the accessor renderers read
     // optionality out of a path set rather than by asking a question -- so the anchored answer
     // for exactly these paths has to be materialised into that set before anything renders. An
@@ -335,6 +344,69 @@ pub(crate) fn resolve_with(
             }
         })
         .collect()
+}
+
+/// Refuse a Rust `display: true` whose resolved path targets a type alef cannot vouch for as
+/// implementing `Display`, falling back to the debug formatter instead of letting
+/// `rust/snippet_body.rs.jinja` emit `println!("{}", ...)` against it.
+///
+/// `extract` discards every `impl Display for X` before it reaches the IR (`Display` is one of
+/// `STD_TRAITS` in `extract::extractor::functions::impl_blocks`), so `display: true` on a fixture
+/// is a hand-authored claim alef has no way to check against the real Rust type — a struct or
+/// enum with no derived/hand-written `Display` compiles fine with `{:?}` and not at all with
+/// `{}`. This turns that compile failure into a `tracing::warn!` naming the fixture and path,
+/// and keeps the snippet compiling by rendering the same debug output every fixture without the
+/// flag already gets.
+///
+/// Only `Show` and a `fields`-less `Iterate` (which prints the raw item, not a per-item field)
+/// are checked. An `Iterate`'s per-item `fields` are rooted at the loop variable, not the
+/// anchored result type [`resolve_with`] built `resolver` against, so this map has no answer for
+/// them — downgrading only what it CAN judge keeps the same permissive "no answer, no warning"
+/// fallback [`FieldResolver::is_display_unsafe`] already uses. ~keep
+fn downgrade_display_unsafe_operations(
+    operations: Vec<FixtureDocsOperation>,
+    resolver: &FieldResolver,
+    fixture_id: &str,
+) -> Vec<FixtureDocsOperation> {
+    operations
+        .into_iter()
+        .map(|operation| match operation {
+            FixtureDocsOperation::Show { path, display: true } if resolver.is_display_unsafe(&path) => {
+                warn_display_unsafe(fixture_id, &path);
+                FixtureDocsOperation::Show { path, display: false }
+            }
+            FixtureDocsOperation::Iterate {
+                path,
+                item,
+                fields,
+                display: true,
+                optional,
+            } if fields.is_empty() && resolver.is_display_unsafe(&path) => {
+                warn_display_unsafe(fixture_id, &path);
+                FixtureDocsOperation::Iterate {
+                    path,
+                    item,
+                    fields,
+                    display: false,
+                    optional,
+                }
+            }
+            other => other,
+        })
+        .collect()
+}
+
+fn warn_display_unsafe(fixture_id: &str, path: &str) {
+    tracing::warn!(
+        target: "alef::e2e::presentation",
+        fixture = fixture_id,
+        path,
+        "fixture `{fixture_id}` sets `display: true` on `{path}`, but its resolved type is a \
+         struct/enum alef cannot confirm implements `Display` (extract does not record `Display` \
+         impls). Falling back to the debug formatter so the generated Rust snippet still \
+         compiles -- if `{path}`'s type genuinely implements `Display`, this warning cannot be \
+         resolved from the fixture alone."
+    );
 }
 
 /// Default field-access operations for a docs-tagged fixture whose `docs.shows` and
@@ -796,6 +868,90 @@ mod tests {
             with_ir[0].expression, "result.data.as_ref().unwrap().kind",
             "with IR in scope, resolve must unwrap the Option before the nested field access"
         );
+    }
+
+    /// `display: true` on a `Show` path whose IR-resolved type is a struct/enum this crate
+    /// defines must be downgraded to the debug formatter -- `extract` never records `Display`
+    /// impls (`STD_TRAITS` discards them), so `println!("{}", result.data)` against a `Data`
+    /// struct with no hand-written `Display` is a snippet that does not compile. A sibling
+    /// `Show` on a plain `String` field must keep `display: true` unchanged -- the whole point
+    /// of the flag.
+    #[test]
+    fn resolve_downgrades_display_true_against_an_ir_struct_field_but_keeps_it_for_a_scalar() {
+        use crate::core::ir::{FieldDef, FunctionDef, TypeDef, TypeRef};
+
+        let mut fixture = fixture();
+        fixture
+            .docs
+            .as_mut()
+            .and_then(|docs| docs.presentation.as_mut())
+            .expect("presentation")
+            .operations = vec![
+            FixtureDocsOperation::Show {
+                path: "data".into(),
+                display: true,
+            },
+            FixtureDocsOperation::Show {
+                path: "text".into(),
+                display: true,
+            },
+        ];
+        let config = config();
+
+        let process_result = TypeDef {
+            name: "ProcessResult".to_string(),
+            fields: vec![
+                FieldDef {
+                    name: "data".to_string(),
+                    ty: TypeRef::Named("Data".to_string()),
+                    ..FieldDef::default()
+                },
+                FieldDef {
+                    name: "text".to_string(),
+                    ty: TypeRef::String,
+                    ..FieldDef::default()
+                },
+            ],
+            ..TypeDef::default()
+        };
+        let data = TypeDef {
+            name: "Data".to_string(),
+            ..TypeDef::default()
+        };
+        let process_fn = FunctionDef {
+            name: "process".to_string(),
+            return_type: TypeRef::Named("ProcessResult".to_string()),
+            ..FunctionDef::default()
+        };
+
+        let operations = resolve(
+            &fixture,
+            &config,
+            "rust",
+            &[process_result, data],
+            std::slice::from_ref(&process_fn),
+        );
+        let by_path = |path: &str| operations.iter().find(|op| op.expression.ends_with(path)).unwrap();
+
+        assert!(
+            !by_path("data").display,
+            "a struct-typed field must be downgraded to the debug formatter"
+        );
+        assert!(
+            by_path("text").display,
+            "a scalar field must keep its authored display: true"
+        );
+
+        let rust_output = crate::e2e::template_env::render(
+            "rust/snippet_body.rs.jinja",
+            minijinja::context! { imports => Vec::<String>::new(), body => vec!["let result = process();"],
+            is_async => false, presentation => operations },
+        );
+        assert!(
+            rust_output.contains("println!(\"{:?}\", result.data);"),
+            "{rust_output}"
+        );
+        assert!(rust_output.contains("println!(\"{}\", result.text);"), "{rust_output}");
     }
 
     /// The shape every fixture-driven (non-hand-authored) docs fixture takes: `docs` is

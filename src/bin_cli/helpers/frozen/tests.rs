@@ -470,9 +470,11 @@ fn report_lines_omits_a_create_once_seed_and_never_names_the_clobber_flag() {
     assert_eq!(super::unmarked_create_once_seeds(&frozen).len(), 1);
 }
 
-/// The other half: a genuinely adoptable frozen file must still get its heading and the exact
-/// marker line to paste in. Without this, deleting the whole report would satisfy the test
-/// above. ~keep
+/// The other half: a genuinely adoptable frozen file must still get its heading and a pointer
+/// to `alef adopt <path> --write` -- never an instruction to hand-paste the marker, which
+/// `crate::cli::pipeline::generate::write::report_refused_writes` (the write guard's own
+/// refusal message) explicitly warns against. Without this, deleting the whole report would
+/// satisfy the test above. ~keep
 #[test]
 fn report_lines_still_reports_a_genuinely_adoptable_frozen_file() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -483,6 +485,11 @@ fn report_lines_still_reports_a_genuinely_adoptable_frozen_file() {
     let report = super::report_lines(&frozen).join("\n");
     assert!(report.contains("Frozen generated files detected"), "{report}");
     assert!(report.contains("SomeType.java"), "{report}");
-    assert!(report.contains("add marker:"), "{report}");
+    assert!(report.contains("alef adopt <path> --write"), "{report}");
+    assert!(
+        !report.contains("add marker:"),
+        "the report must never instruct a reader to hand-paste the marker -- that is the exact \
+         workflow the write guard warns against: {report}"
+    );
     assert!(super::unmarked_create_once_seeds(&frozen).is_empty());
 }
