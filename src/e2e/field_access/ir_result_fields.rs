@@ -128,6 +128,33 @@ pub(super) fn is_optional_path(map: &IrResultFieldMap, path: &str) -> bool {
         .is_some_and(|fields| fields.contains(&leaf))
 }
 
+/// Whether `path`'s leaf segment is declared with a type this map cannot vouch for as
+/// implementing `Display`: it resolves, after peeling `Option`/`Vec`, to a `Named` type from
+/// the crate's own IR.
+///
+/// `extract` discards every `impl Display for X` before it reaches the IR (`Display` is one of
+/// `STD_TRAITS`, dropped alongside `Debug`/`Clone`/etc. in
+/// `extract::extractor::functions::impl_blocks`), so alef has no record of which IR types
+/// genuinely implement it. `field_types` already carries exactly the fact needed to be
+/// conservative about that gap: it is populated only for fields whose declared type unwraps to
+/// a `Named` type ([`named_type`](crate::e2e::codegen::call_ir::named_type)), i.e. a struct or
+/// enum this crate defines — the shape `println!("{}", ...)` fails to compile against unless
+/// the type happens to derive/implement `Display` by hand. A scalar leaf (`String`, a numeric
+/// primitive, `char`) never appears in `field_types`, so it reads as safe here, matching every
+/// std type `display: true` was written for.
+///
+/// `false` — never "unsafe" — for an unresolved root, an unrecognized segment, or an unpopulated
+/// map, mirroring [`is_optional_path`]'s fallback: caller must already default the flag to "no
+/// warning" for a fixture with no IR in scope, so this cannot regress those.
+pub(super) fn leaf_is_named_type(map: &IrResultFieldMap, path: &str) -> bool {
+    let Some((owner, leaf)) = walk_to_owner(map, path) else {
+        return false;
+    };
+    map.field_types
+        .get(owner)
+        .is_some_and(|fields| fields.contains_key(&leaf))
+}
+
 /// Whether the call's result type declares `path`'s FIRST segment as a binding-visible field.
 ///
 /// `None` when nothing was anchored — no resolved root type, or a root type this map has no
