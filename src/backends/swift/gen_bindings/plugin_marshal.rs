@@ -213,7 +213,13 @@ pub fn swift_shim_param_decode(
 /// the bridge policy set is declared `[String]` on the protocol and travels as `RustVec<RustString>`
 /// across the shim -- `gen_rust_crate::plugin_inbound::inbound_bridge_type` maps it to `Vec<String>`
 /// on the Rust side for the same reason. A `Vec<String>` and a `Vec<bridged Named>` are therefore
-/// the same marshalling problem, and both need the element-wise conversion a `RustVec` requires. ~keep
+/// the same marshalling problem, and both need the element-wise conversion a `RustVec` requires.
+///
+/// This only decides the element type of a bare `Vec`. `Optional<Vec<_>>` never reaches this
+/// function (alef-tasks #333): `swift_type_name` and `swift_shim_return_marshal` both special-case
+/// `Optional(Vec(_))` before falling through to the plain `Vec` handling this function backs, so
+/// an Option-wrapped Vec is never asked "does this element cross as a String" -- it is one JSON
+/// blob before any per-element question would apply. ~keep
 fn vec_element_crosses_as_string(inner: &TypeRef, excluded_types: &std::collections::HashSet<String>) -> bool {
     match inner {
         TypeRef::String => true,
@@ -245,6 +251,14 @@ pub struct ParamDecode {
 /// `Vec<Named>` shares the `Vec<String>` mapping because a bridged `Named` crosses as a JSON
 /// `String`: the protocol declares `[String]` and `inbound_bridge_type` declares `Vec<String>` on
 /// the Rust side, so a single `RustString` envelope would match neither end. ~keep
+///
+/// `Optional<Vec<String>>` / `Optional<Vec<Named>>` fall through to the `RustString` catch-all
+/// rather than an `Option`-wrapped `RustVec<RustString>` (alef-tasks #333): this boundary is
+/// `extern "Rust"`, and swift-bridge cannot bridge `Option<Vec<T>>` at all (see
+/// `trait_bridge::swift_type_name`'s `~keep` for the DTO-getter precedent that proved this for
+/// the identical boundary). The catch-all already agrees with `swift_type_name`'s `String?`
+/// protocol declaration, since `RustString(protocolValue ?? "null")` (built by
+/// `swift_shim_return_marshal`) always type-checks as a bare `RustString`. ~keep
 pub fn swift_shim_return_ffi_type(method: &MethodDef) -> String {
     if method.error_type.is_some() {
         return "String".to_string();
@@ -288,6 +302,12 @@ pub fn swift_shim_return_ffi_type(method: &MethodDef) -> String {
 /// plain `String` and decodes it with `serde_json::from_str::<Option<T>>`, so `nil` is sent as the
 /// JSON literal `null` rather than as a Swift optional. ~keep
 ///
+/// `Optional(Vec(Named))` shares that exact `Optional(Named)` treatment (alef-tasks #333):
+/// `swift_type_name` declares the bridge protocol return as `String?` for this shape too (one
+/// JSON blob, not `[String]?`), so the shim collapses `nil` to the JSON literal `"null"` the same
+/// way. The per-element `Vec<Named>` arm below does not apply here -- it fires only for a bare
+/// `Vec`, and this shape is `Optional<Vec<_>>` -- so this arm must be checked before it. ~keep
+///
 /// A `Named` return is wrapped in `RustString` directly, with no JSON encoding step, because the
 /// bridge protocol already declares it as a `String`: `excluded_named_type_bridge_policy` puts
 /// every `Named` type a bridged trait mentions into the JSON-string policy, so `bridge_call_expr`
@@ -325,6 +345,10 @@ pub fn swift_shim_return_marshal(method: &MethodDef, bridge_call_expr: &str) -> 
             }
             TypeRef::Named(_) => vec![format!("return RustString({})", bridge_call_expr)],
             TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Named(_)) => {
+                vec![format!("return RustString({} ?? \"null\")", bridge_call_expr)]
+            }
+            TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Vec(elem) if matches!(elem.as_ref(), TypeRef::String | TypeRef::Named(_))) =>
+            {
                 vec![format!("return RustString({} ?? \"null\")", bridge_call_expr)]
             }
             TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::String | TypeRef::Named(_)) => {
@@ -769,6 +793,46 @@ mod tests {
         assert_eq!(
             lines,
             vec![r#"return RustString(bridge.lastStats() ?? "null")"#.to_string()]
+        );
+    }
+
+    /// alef-tasks #333: `Optional<Vec<Named>>` shares `Optional<Named>`'s one-blob treatment,
+    /// not `Vec<Named>`'s per-element `RustVec<RustString>` treatment -- the FFI return type this
+    /// boundary can declare (`swift_shim_return_ffi_type`) is `RustString` for this shape, and a
+    /// `for s in strings { vec.push(...) }` body would not compile against it.
+    #[test]
+    fn test_return_marshal_optional_vec_named_sends_json_null_for_nil() {
+        let method = make_method(
+            "stats_history",
+            vec![],
+            TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named(
+                "SinkStats".to_string(),
+            ))))),
+            None,
+        );
+        assert_eq!(swift_shim_return_ffi_type(&method), "RustString");
+        let lines = swift_shim_return_marshal(&method, "bridge.statsHistory()");
+        assert_eq!(
+            lines,
+            vec![r#"return RustString(bridge.statsHistory() ?? "null")"#.to_string()]
+        );
+    }
+
+    /// The one-blob arm for `Optional<Vec<_>>` must not fire for a bare (non-optional) `Vec`,
+    /// which keeps the existing per-element `RustVec<RustString>` treatment.
+    #[test]
+    fn test_return_marshal_bare_vec_named_still_builds_rust_vec() {
+        let method = make_method(
+            "stats_history",
+            vec![],
+            TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string()))),
+            None,
+        );
+        let lines = swift_shim_return_marshal(&method, "bridge.statsHistory()");
+        assert!(
+            lines.join("\n").contains("RustVec<RustString>"),
+            "a bare Vec<Named> must keep the per-element RustVec build, got:\n{}",
+            lines.join("\n")
         );
     }
 

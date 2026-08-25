@@ -47,20 +47,42 @@ pub(crate) use wrappers::{emit_inbound_wrapper, emit_plugin_error_helper};
 ///   container shape, not from an arbitrary per-call-site choice.
 /// - A bare `Named` (or `Optional<Named>`) transports as ONE JSON BLOB (`String`, with `null`
 ///   for `None`).
+/// - `Optional<Vec<Named>>` extends the `Vec<Named>` PER-ELEMENT rule through the `Option`
+///   wrapper: `Option<Vec<String>>`, `None` for the absent case, each present element
+///   independently JSON-encoded exactly as a bare `Vec<Named>` element is. This is the inbound
+///   (`extern "Swift"`) boundary specifically -- `test_inbound_bridge_type_vec_string_in_optional`
+///   already establishes that this boundary accepts a plain `Option<Vec<String>>` natively (no
+///   JSON needed at all when the element is already a leaf), and
+///   `method_impls::test_param_to_bridge_vec_named_encodes_per_element_optional` already proves
+///   the *param* side of this exact shape decodes per-element. Returns must agree with that
+///   already-tested param convention rather than inventing a second answer for the same shape.
+///   Do not read this across to the *outbound* direction: `trait_bridge::swift_type_name` /
+///   `plugin_marshal::swift_shim_return_marshal` cross a different swift-bridge boundary
+///   (`extern "Rust"`, backing the `{Trait}Box` FFI trampolines), and that boundary has a
+///   documented, proven limitation with `Option<Vec<T>>` regardless of the element type --
+///   commit "fix(swift): bridge optional vectors through JSON" collapsed the equivalent
+///   `Optional<Vec<T>>` DTO-getter shape to one JSON blob for exactly this reason. The two
+///   directions disagreeing here is not an oversight; it mirrors the real, asymmetric
+///   swift-bridge support for `extern "Swift"` vs `extern "Rust"` that this whole rule already
+///   rests on for `Vec` vs `Map`.
 ///
 /// Every site that decides how a `Named`-containing shape crosses this boundary must agree
 /// with this rule: the extern-block type (`inbound_bridge_type` below), the impl-body
-/// conversion (`needs_inbound_json_bridge` below plus `method_impls::is_vec_of_named`), the
-/// outbound protocol/adapter declaration (`trait_bridge::swift_type_name`), and the outbound
-/// FFI shim (`plugin_marshal::swift_shim_return_marshal` /
-/// `plugin_marshal::vec_element_crosses_as_string`). A prior divergence between the `Vec` arm
-/// (which already special-cased `Named` leaves) and the `Map` arm (which recursed into
-/// `inbound_bridge_type(k)`/`inbound_bridge_type(v)` instead of asking this same question)
-/// produced two independent bugs: alef-tasks #308 (`Vec<Named>` return/param conversions used
-/// the wrong branch because `needs_inbound_json_bridge` did not know a `Vec<Named>` needs
-/// per-element handling) and #309 (the `Map` arm declared a typed `HashMap<K, V>` extern block
-/// that swift-bridge cannot parse, while the impl body -- correctly, per this rule -- treated
-/// the whole value as one JSON blob).
+/// conversion (`needs_inbound_json_bridge` below plus `method_impls::is_vec_of_named` /
+/// `method_impls::is_optional_vec_of_named`), the outbound protocol/adapter declaration
+/// (`trait_bridge::swift_type_name`), and the outbound FFI shim
+/// (`plugin_marshal::swift_shim_return_marshal` / `plugin_marshal::vec_element_crosses_as_string`).
+/// A prior divergence between the `Vec` arm (which already special-cased `Named` leaves) and the
+/// `Map` arm (which recursed into `inbound_bridge_type(k)`/`inbound_bridge_type(v)` instead of
+/// asking this same question) produced two independent bugs: alef-tasks #308 (`Vec<Named>`
+/// return/param conversions used the wrong branch because `needs_inbound_json_bridge` did not
+/// know a `Vec<Named>` needs per-element handling) and #309 (the `Map` arm declared a typed
+/// `HashMap<K, V>` extern block that swift-bridge cannot parse, while the impl body --
+/// correctly, per this rule -- treated the whole value as one JSON blob). alef-tasks #333 is a
+/// third instance of the same shape: `is_vec_of_named` did not match `Optional<Vec<Named>>`, so
+/// a `Vec<Named>` return wrapped in `Optional` fell into the `needs_inbound_json_bridge` one-blob
+/// branch and tried to `serde_json::from_str` a value the extern block had already declared as
+/// `Option<Vec<String>>`, not `String`.
 ///
 /// Inbound-specific type bridging.
 ///
@@ -100,6 +122,14 @@ pub(super) fn needs_inbound_json_bridge(ty: &TypeRef) -> bool {
 /// and `Map` does not.
 pub(super) fn is_vec_of_named(ty: &TypeRef) -> bool {
     matches!(ty, TypeRef::Vec(inner) if matches!(inner.as_ref(), TypeRef::Named(_)))
+}
+
+/// Returns `true` when `ty` is `Optional<Vec<Named>>` -- the `Vec<Named>` per-element exception
+/// extended through an `Option` wrapper (alef-tasks #333). See the canonical rule above
+/// `inbound_bridge_type` for why the inbound (`extern "Swift"`) boundary can extend the `Vec`
+/// exception through `Optional` when the outbound `extern "Rust"` boundary cannot.
+pub(super) fn is_optional_vec_of_named(ty: &TypeRef) -> bool {
+    matches!(ty, TypeRef::Optional(inner) if is_vec_of_named(inner))
 }
 
 /// Returns true when the trait bridge config declares a Plugin super-trait.
@@ -199,6 +229,32 @@ mod tests {
     fn test_is_vec_of_named_false_for_bare_named() {
         let ty = TypeRef::Named("SinkStats".to_string());
         assert!(!is_vec_of_named(&ty));
+    }
+
+    #[test]
+    fn test_is_optional_vec_of_named_true_for_optional_vec_named() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::Named(
+            "SinkStats".to_string(),
+        )))));
+        assert!(is_optional_vec_of_named(&ty));
+    }
+
+    #[test]
+    fn test_is_optional_vec_of_named_false_for_bare_vec_named() {
+        let ty = TypeRef::Vec(Box::new(TypeRef::Named("SinkStats".to_string())));
+        assert!(!is_optional_vec_of_named(&ty));
+    }
+
+    #[test]
+    fn test_is_optional_vec_of_named_false_for_optional_vec_string() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Vec(Box::new(TypeRef::String))));
+        assert!(!is_optional_vec_of_named(&ty));
+    }
+
+    #[test]
+    fn test_is_optional_vec_of_named_false_for_optional_named() {
+        let ty = TypeRef::Optional(Box::new(TypeRef::Named("SinkStats".to_string())));
+        assert!(!is_optional_vec_of_named(&ty));
     }
 
     #[test]
