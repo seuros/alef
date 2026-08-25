@@ -33,8 +33,8 @@ mod run_command_tests;
 // to write the file, so the two can never disagree about what "up to date" means. See alef #179.
 pub(crate) use frb_cfg_gates::canonical_frb_generated;
 
-pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool) -> anyhow::Result<()> {
-    build_with_environment(config, languages, release, &[])
+pub fn build(config: &ResolvedCrateConfig, languages: &[Language], release: bool, strict: bool) -> anyhow::Result<()> {
+    build_with_environment(config, languages, release, &[], strict)
 }
 
 pub(crate) fn build_with_environment(
@@ -42,6 +42,7 @@ pub(crate) fn build_with_environment(
     languages: &[Language],
     release: bool,
     environment: &[(&str, &str)],
+    strict: bool,
 ) -> anyhow::Result<()> {
     let crate_name = &config.name;
     let base_dir = std::env::current_dir()?;
@@ -61,14 +62,21 @@ pub(crate) fn build_with_environment(
     // compiled, so folding them in would assert something about generated code that this run
     // never tested. ~keep
     let mut unmet: Vec<String> = Vec::new();
+    // Subset of the languages folded into `skipped_count` above: specifically those skipped
+    // because their toolchain was not on `PATH`, as opposed to a structural skip (no backend, no
+    // build config for this target). Tracked separately so `--strict` can fail on exactly the
+    // "never examined" case this rule targets, without also failing on a target this checkout
+    // was never going to build regardless of environment. ~keep
+    let mut toolchain_missing: Vec<String> = Vec::new();
 
     for &lang in languages {
         let build_cmd_cfg = config.build_command_config_for_language(lang);
         match backend_readiness(lang, &build_cmd_cfg) {
             BackendReadiness::Ready => {}
-            BackendReadiness::ToolchainMissing => {
+            BackendReadiness::ToolchainMissing { precondition } => {
                 observability::skipped(lang, "required tool is not on PATH");
                 skipped_count += 1;
+                toolchain_missing.push(format!("{lang} (precondition failed: {precondition})"));
                 continue;
             }
             BackendReadiness::DependenciesUnfetched { check, remediation } => {
@@ -342,15 +350,32 @@ pub(crate) fn build_with_environment(
     // `dispatched_count` entries when "ffi" wasn't explicitly requested — so
     // that subtraction could under-report. Report what's exact instead. ~keep
     info!(
-        "Backend build summary: {total_announced} announced, {skipped_count} skipped, \
-         {} blocked on unmet preconditions, {dispatched_count} dispatched, {} language-level failure(s), \
-         {} post-build tool(s) skipped (not on PATH, falling back to committed output)",
+        "Backend build summary: {total_announced} announced, {skipped_count} skipped ({} skipped for a missing \
+         toolchain), {} blocked on unmet preconditions, {dispatched_count} dispatched, {} language-level \
+         failure(s), {} post-build tool(s) skipped (not on PATH, falling back to committed output)",
+        toolchain_missing.len(),
         unmet.len(),
         failures.len(),
         skipped_post_build_tools.len()
     );
+    if !toolchain_missing.is_empty() {
+        if strict {
+            warn!(
+                "--strict is set: {} language(s) skipped for a missing toolchain will fail this run: {}",
+                toolchain_missing.len(),
+                toolchain_missing.join(", ")
+            );
+        } else {
+            info!(
+                "{} language(s) skipped for a missing toolchain (non-fatal; pass --strict in CI to fail on this): \
+                 {}",
+                toolchain_missing.len(),
+                toolchain_missing.join(", ")
+            );
+        }
+    }
 
-    build_outcome(&failures, &unmet)
+    build_outcome(&failures, &unmet, &toolchain_missing, strict)
 }
 
 /// Turn the two per-language buckets into this command's exit status.
@@ -367,10 +392,20 @@ pub(crate) fn build_with_environment(
 ///   say "not built" rather than "built and broken", which is the distinction that makes
 ///   "run `mix deps.get`" actionable where a bare failure was not. ~keep
 ///
-/// A *missing toolchain* is deliberately absent from both buckets and stays a non-fatal skip: it
-/// is a statement about the machine, not about this checkout, and a developer without `gradle`
-/// installed must still be able to build the languages they do have. ~keep
-fn build_outcome(failures: &[String], unmet: &[String]) -> anyhow::Result<()> {
+/// A *missing toolchain* is deliberately absent from both buckets and stays a non-fatal skip by
+/// default: it is a statement about the machine, not about this checkout, and a developer without
+/// `gradle` installed must still be able to build the languages they do have. That default is
+/// exactly what makes it invisible in CI, though: a language whose toolchain is absent there was
+/// never built, its bindings were never produced, and nothing downstream (including snippet
+/// validation) can tell that apart from "nothing to build" without reading the log by hand. `strict`
+/// closes that gap without changing the default: passed, `toolchain_missing` becomes a third fatal
+/// bucket with its own sentence, same shape as `unmet`. ~keep
+fn build_outcome(
+    failures: &[String],
+    unmet: &[String],
+    toolchain_missing: &[String],
+    strict: bool,
+) -> anyhow::Result<()> {
     let mut parts = Vec::new();
     if !failures.is_empty() {
         parts.push(format!(
@@ -387,6 +422,14 @@ fn build_outcome(failures: &[String], unmet: &[String]) -> anyhow::Result<()> {
             unmet.join("; ")
         ));
     }
+    if strict && !toolchain_missing.is_empty() {
+        parts.push(format!(
+            "--strict is set and {} language(s) were skipped because their toolchain is not on PATH (no build \
+             was attempted): {}",
+            toolchain_missing.len(),
+            toolchain_missing.join(", ")
+        ));
+    }
     if parts.is_empty() {
         return Ok(());
     }
@@ -398,8 +441,14 @@ fn build_outcome(failures: &[String], unmet: &[String]) -> anyhow::Result<()> {
 enum BackendReadiness {
     Ready,
     /// The tool this backend builds with is not installed on this machine. Not the checkout's
-    /// fault and not fixable from inside it — skipped, non-fatal. ~keep
-    ToolchainMissing,
+    /// fault and not fixable from inside it — skipped, non-fatal by default. Fatal under
+    /// `--strict` (see `build_outcome`), for CI runs where "not built" must not read as success.
+    /// `precondition` is the failing check itself (e.g. `command -v gradle`), carried through so
+    /// a `--strict` failure names what was missing rather than just which language was skipped.
+    /// ~keep
+    ToolchainMissing {
+        precondition: String,
+    },
     /// The tool is here and the checkout is not prepared for it: dependencies were never fetched,
     /// or the interpreter environment the build installs into does not exist. Fixable by
     /// `remediation`, and fatal so that nothing downstream mistakes the missing artifact for a
@@ -416,7 +465,12 @@ enum BackendReadiness {
 /// would report the wrong cause. ~keep
 fn backend_readiness(lang: Language, build_cmd_cfg: &BuildCommandConfig) -> BackendReadiness {
     if !check_precondition(lang, build_cmd_cfg.precondition.as_deref()) {
-        return BackendReadiness::ToolchainMissing;
+        // `check_precondition` only returns `false` when a precondition was declared and it
+        // failed, so this is never the "no precondition configured" case -- `unwrap_or_default`
+        // exists to satisfy the borrow checker, not to paper over a real `None`. ~keep
+        return BackendReadiness::ToolchainMissing {
+            precondition: build_cmd_cfg.precondition.clone().unwrap_or_default(),
+        };
     }
     let Some(check) = build_cmd_cfg.dependency_precondition.as_deref() else {
         return BackendReadiness::Ready;

@@ -288,7 +288,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
             tracing::info!("Version sync complete");
             Ok(None)
         }
-        Commands::Build { lang, release } => {
+        Commands::Build { lang, release, strict } => {
             let (_workspace, resolved) = load_config(config_path)?;
             let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
             let multi = dispatch::is_multi_crate(&crates_to_process);
@@ -304,7 +304,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                 } else {
                     tracing::info!("Building bindings ({profile}) for: {}", format_languages(&languages));
                 }
-                pipeline::build(resolved_cfg, &languages, release)?;
+                pipeline::build(resolved_cfg, &languages, release, strict)?;
             }
             tracing::info!("Build complete");
             Ok(None)
