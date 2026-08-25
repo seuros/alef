@@ -29,9 +29,21 @@
 //! `[crates.skipped]`, per-crate `[workspace.crates."<name>"]` overrides — auditing which
 //! of these actually reach `functions`/`type_defs` by the time they arrive here is
 //! `alef-tasks#323`'s scope, not this one's). It scopes itself to two signals it *can*
-//! confirm directly: an absent/ambiguous `CallIr::signature` (skip), and an explicit
-//! `binding_excluded` flag on the resolved function/method (skip) — both licensing "say
-//! nothing" rather than "say wrong."
+//! confirm directly: an absent/ambiguous `CallIr::signature` (skip), and
+//! [`crate::e2e::codegen::call_ir::binding_excluded_for_language`] agreeing across every
+//! resolved language that the call is excluded (skip) — both licensing "say nothing"
+//! rather than "say wrong."
+//!
+//! `binding_excluded` is *not* a blanket skip, and asking it per-language matters: it marks
+//! a symbol hidden from other-language bindings generated from IR, not from the Rust source
+//! itself, and `src/e2e/codegen/rust/` emits real, positionally-bound calls against
+//! `binding_excluded` methods regardless — a `DefaultClient` trait excluded from every
+//! non-Rust language via `[crates.exclude].types` still gets a real `client.chat(req)` in the
+//! generated Rust e2e suite. Skipping this check whenever the flag was set (regardless of
+//! which languages this run actually resolves) left that Rust call's argument names
+//! unchecked by construction. This validator now asks
+//! [`crate::e2e::codegen::call_ir::binding_excluded_for_language`] the same question the
+//! generator side already answers, instead of re-deriving a language-blind copy of it.
 //!
 //! ## Severity
 //!
@@ -42,7 +54,7 @@
 use super::validate::{Severity, ValidationError};
 use crate::core::config::e2e::{ArgMapping, CallConfig, E2eConfig};
 use crate::core::ir::{FunctionDef, ParamDef, TypeDef};
-use crate::e2e::codegen::call_ir::CallIr;
+use crate::e2e::codegen::call_ir::{CallIr, binding_excluded_for_language};
 use crate::e2e::fixture::Fixture;
 
 /// Run [`validate_call_arg_signatures`] and log every diagnostic. See
@@ -112,7 +124,10 @@ pub fn validate_call_arg_signatures(
         let Some(signature) = ir.signature(&lookup_name) else {
             continue;
         };
-        if binding_excluded(&lookup_name, functions, type_defs) {
+        if languages
+            .iter()
+            .all(|language| binding_excluded_for_language(&lookup_name, language, ir))
+        {
             continue;
         }
         let args = fixture.resolved_args(call_config);
@@ -130,21 +145,6 @@ pub fn validate_call_arg_signatures(
 /// against another call's result, for instance).
 fn canonical_lookup_name<'a>(call: &'a CallConfig, languages: &[String]) -> Option<std::borrow::Cow<'a, str>> {
     languages.iter().find_map(|language| call.core_lookup_name(language))
-}
-
-/// Whether the resolved free function or IR-type method named `name` is explicitly
-/// marked excluded from the binding surface. See the module doc comment's "Scope"
-/// section for why this is the one exclusion signal this validator confirms directly
-/// rather than re-deriving the full exclusion-surface audit `alef-tasks#323` owns.
-fn binding_excluded(name: &str, functions: &[FunctionDef], type_defs: &[TypeDef]) -> bool {
-    if let Some(function) = functions.iter().find(|function| function.name == name) {
-        return function.binding_excluded;
-    }
-    type_defs
-        .iter()
-        .flat_map(|type_def| type_def.methods.iter())
-        .filter(|method| method.name == name)
-        .all(|method| method.binding_excluded)
 }
 
 fn check_unknown_args(
@@ -380,8 +380,40 @@ mod tests {
         assert_eq!(errors.len(), 0, "an absent IR must license no claim: {errors:?}");
     }
 
+    /// Regression coverage for the defect this validator used to have: a `binding_excluded`
+    /// function/method still gets a real, positionally-bound call from `src/e2e/codegen/rust/`
+    /// (Rust never excludes), so a run that resolves `"rust"` must still catch a wrong arg name
+    /// on it. Before `binding_excluded_for_language`'s language-aware check, the old blanket
+    /// `binding_excluded(...)` skip made this case structurally undetectable — this exact
+    /// shape (a `DefaultClient` trait method excluded from every non-Rust language, bound
+    /// positionally in the generated Rust e2e suite) was reported as measured, not inferred.
     #[test]
-    fn a_binding_excluded_function_licenses_no_claim() {
+    fn a_binding_excluded_function_is_still_validated_when_rust_is_resolved() {
+        let functions = vec![FunctionDef {
+            binding_excluded: true,
+            ..function("complete", vec![param("prompt")])
+        }];
+        let e2e_config = E2eConfig {
+            call: call_named("complete", vec![arg("prompt", false), arg("wrong_name", false)]),
+            ..E2eConfig::default()
+        };
+        let fixtures = vec![fixture_with_call("basic", None)];
+
+        let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
+
+        assert_eq!(errors.len(), 1, "expected exactly one error, got: {errors:?}");
+        assert!(
+            errors[0].message.contains("fixture 'basic' arg 'wrong_name'"),
+            "got: {}",
+            errors[0].message
+        );
+    }
+
+    /// The flip side: when no resolved language in this run is Rust, and every one of them
+    /// treats the call as `binding_excluded`, no generator anywhere emits a real call against
+    /// it — the check still licenses no claim in that case.
+    #[test]
+    fn a_binding_excluded_function_licenses_no_claim_when_no_resolved_language_renders_it() {
         let functions = vec![FunctionDef {
             binding_excluded: true,
             ..function("complete", vec![param("prompt")])
@@ -392,12 +424,12 @@ mod tests {
         };
         let fixtures = vec![fixture_with_call("basic", None)];
 
-        let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["rust".to_string()]);
+        let errors = validate_call_arg_signatures(&fixtures, &e2e_config, &functions, &[], &["python".to_string()]);
 
         assert_eq!(
             errors.len(),
             0,
-            "an excluded function must not be claimed wrong: {errors:?}"
+            "no resolved language renders an excluded call, so it must not be claimed wrong: {errors:?}"
         );
     }
 
