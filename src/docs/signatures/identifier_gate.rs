@@ -449,7 +449,13 @@ fn test_python_free_function_named_global_is_escaped_by_func_name() {
         "global_"
     );
     let func = crate::docs::test_helpers::make_function("global", vec![], TypeRef::Unit, false, None);
-    let sig = crate::docs::signatures::render_function_signature(&func, Language::Python, TEST_PREFIX, TEST_CRATE_NAME);
+    let sig = crate::docs::signatures::render_function_signature(
+        &func,
+        Language::Python,
+        TEST_PREFIX,
+        TEST_CRATE_NAME,
+        &crate::core::ir::ApiSurface::default(),
+    );
     assert!(sig.contains("global_"), "{sig}");
     assert!(!sig.contains("def global("), "{sig}");
 }

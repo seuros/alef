@@ -1,5 +1,5 @@
 use crate::core::config::Language;
-use crate::core::ir::{FunctionDef, MethodDef, TypeRef};
+use crate::core::ir::{ApiSurface, FunctionDef, MethodDef, TypeRef};
 use crate::docs::formatting::{IdentifierPosition, report_identifier_violation};
 use crate::docs::naming::{field_name, func_name, method_name, to_camel_case, type_name};
 use crate::docs::rust_types::{rust_param_type, rust_receiver};
@@ -13,6 +13,7 @@ pub(crate) fn render_function_signature(
     lang: Language,
     ffi_prefix: &str,
     crate_name: &str,
+    api: &ApiSurface,
 ) -> String {
     match lang {
         Language::Python => render_python_fn_sig(func, ffi_prefix),
@@ -29,7 +30,7 @@ pub(crate) fn render_function_signature(
         Language::Kotlin | Language::KotlinAndroid => render_kotlin_fn_sig(func, ffi_prefix),
         Language::Swift => render_swift_fn_sig(func, ffi_prefix),
         Language::Dart => render_dart_fn_sig(func, ffi_prefix),
-        Language::Zig => render_zig_fn_sig(func, ffi_prefix),
+        Language::Zig => render_zig_fn_sig(func, ffi_prefix, api),
         Language::Gleam => {
             format!("// Phase 1: {lang} backend signature generation")
         }
@@ -476,7 +477,7 @@ pub(crate) fn render_dart_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String
     format!("{future_ret} {name}({params_str})")
 }
 
-pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String {
+pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str, api: &ApiSurface) -> String {
     let name = func_name(&func.name, Language::Zig, ffi_prefix);
     report_identifier_violation(
         &name,
@@ -484,18 +485,19 @@ pub(crate) fn render_zig_fn_sig(func: &FunctionDef, ffi_prefix: &str) -> String 
         IdentifierPosition::Declaration,
         "a function signature",
     );
-    let ret = doc_type(&func.return_type, Language::Zig, ffi_prefix);
+    // ~keep A `Named` DTO does not cross the Zig wrapper boundary as its struct type -- a
+    // non-opaque type serialises to JSON-encoded `[]const u8`/`[]u8`, only an opaque handle
+    // type keeps its real name. `zig_boundary_param_type`/`zig_boundary_return_type` ask the
+    // Zig backend's own emitter (`zig_param_type`/`zig_return_type`) that question instead of
+    // re-deriving it here -- see those functions' doc comments.
+    let ret = crate::backends::zig::zig_boundary_return_type(&func.return_type, api);
     let params: Vec<String> = func
         .params
         .iter()
         .map(|p| {
             let pname = p.name.to_snake_case();
-            let pty = doc_type(&p.ty, Language::Zig, ffi_prefix);
-            if p.optional {
-                format!("{pname}: ?{pty}")
-            } else {
-                format!("{pname}: {pty}")
-            }
+            let pty = crate::backends::zig::zig_boundary_param_type(&p.ty, p.optional, api);
+            format!("{pname}: {pty}")
         })
         .collect();
     let ret_str = if let Some(err) = &func.error_type {
@@ -597,11 +599,14 @@ pub(crate) fn render_method_signature(
         ffi_prefix,
         crate::docs::test_helpers::TEST_CRATE_NAME,
         None,
+        &ApiSurface::default(),
     )
 }
 
 /// `crate_name` is the `ApiSurface::crate_name` the backends are generated from; the Java arm
-/// needs it to name the exception class the Java backend declares. ~keep
+/// needs it to name the exception class the Java backend declares. `api` is only consulted by
+/// the Zig arm, to ask the backend whether a `Named` param/return is an opaque handle or a
+/// struct DTO that serialises to bytes at the wrapper boundary. ~keep
 pub(crate) fn render_method_signature_with_override(
     method: &MethodDef,
     type_name_str: &str,
@@ -609,6 +614,7 @@ pub(crate) fn render_method_signature_with_override(
     ffi_prefix: &str,
     crate_name: &str,
     signature_override: Option<&MethodSignatureOverride>,
+    api: &ApiSurface,
 ) -> String {
     if let Some(signature) = signature_override.and_then(|override_| override_.signature.as_deref()) {
         return signature.to_string();
@@ -633,9 +639,13 @@ pub(crate) fn render_method_signature_with_override(
     // the per-language async wrappers below must not re-wrap it into `Future<Stream<T>>`. Only an
     // IR-derived return type needs that wrapping.
     let ret_is_overridden = overridden_ret.is_some();
-    let ret = overridden_ret
-        .map(str::to_string)
-        .unwrap_or_else(|| doc_type(&method.return_type, lang, ffi_prefix));
+    let ret = overridden_ret.map(str::to_string).unwrap_or_else(|| {
+        if lang == Language::Zig {
+            crate::backends::zig::zig_boundary_return_type(&method.return_type, api)
+        } else {
+            doc_type(&method.return_type, lang, ffi_prefix)
+        }
+    });
 
     match lang {
         Language::Python => {
@@ -1027,17 +1037,17 @@ pub(crate) fn render_method_signature_with_override(
             format!("{static_kw}{future_ret} {name}({params_str})")
         }
         Language::Zig => {
+            // ~keep See `render_zig_fn_sig`'s note: a `Named` param asks the backend's own
+            // `zig_param_type` (via `zig_boundary_param_type`) whether it is an opaque handle
+            // or a struct DTO that serialises to `[]const u8` at the wrapper boundary, instead
+            // of re-deriving that shape here.
             let params: Vec<String> = method
                 .params
                 .iter()
                 .map(|p| {
                     let pname = p.name.to_snake_case();
-                    let pty = doc_type(&p.ty, lang, ffi_prefix);
-                    if p.optional {
-                        format!("{pname}: ?{pty}")
-                    } else {
-                        format!("{pname}: {pty}")
-                    }
+                    let pty = crate::backends::zig::zig_boundary_param_type(&p.ty, p.optional, api);
+                    format!("{pname}: {pty}")
                 })
                 .collect();
             let ret_str = if let Some(err) = &method.error_type {

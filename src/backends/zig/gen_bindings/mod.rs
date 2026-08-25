@@ -61,7 +61,7 @@ pub(crate) fn zig_struct_names(type_defs: &[crate::core::ir::TypeDef]) -> std::c
 /// snake_case)`, used to render a parameter/return of that type as the JSON-string wrapper
 /// boundary rather than a raw handle. Shared by `generate_bindings` and
 /// `public_function_signatures` for the same reason as `zig_struct_names`. ~keep
-fn zig_opaque_creator_map(api: &ApiSurface) -> std::collections::HashMap<String, (String, String)> {
+pub(crate) fn zig_opaque_creator_map(api: &ApiSurface) -> std::collections::HashMap<String, (String, String)> {
     let mut map = std::collections::HashMap::new();
     for opaque_ty in api
         .types
@@ -82,6 +82,24 @@ fn zig_opaque_creator_map(api: &ApiSurface) -> std::collections::HashMap<String,
         }
     }
     map
+}
+
+/// The Zig wrapper-boundary type for a function/method parameter of type `ty` -- delegates to
+/// the same `functions::zig_param_type` the emitter itself calls to decide whether a `Named`
+/// DTO crosses as its struct type or as JSON-encoded `[]const u8`, so the docs layer can never
+/// independently re-derive a shape the backend does not actually emit. See `zig_struct_names`'s
+/// doc comment for why that predicate, not a docs-local guess, is the single source of truth. ~keep
+pub(crate) fn zig_boundary_param_type(ty: &TypeRef, optional: bool, api: &ApiSurface) -> String {
+    let struct_names = zig_struct_names(&api.types);
+    let opaque_creator_map = zig_opaque_creator_map(api);
+    functions::zig_param_type(ty, optional, &struct_names, &opaque_creator_map)
+}
+
+/// The Zig wrapper-boundary type for a function/method return of type `ty` -- see
+/// `zig_boundary_param_type`'s doc comment. ~keep
+pub(crate) fn zig_boundary_return_type(ty: &TypeRef, api: &ApiSurface) -> String {
+    let struct_names = zig_struct_names(&api.types);
+    functions::zig_return_type(ty, &struct_names)
 }
 
 /// Function names `generate_bindings`'s top-level loop skips because a trait bridge emits

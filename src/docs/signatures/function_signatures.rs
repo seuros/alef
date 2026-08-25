@@ -562,7 +562,7 @@ fn test_render_zig_fn_sig_no_error() {
         false,
         None,
     );
-    let sig = render_zig_fn_sig(&func, TEST_PREFIX);
+    let sig = render_zig_fn_sig(&func, TEST_PREFIX, &ApiSurface::default());
     assert_eq!(sig, "pub fn search(query: [:0]const u8) u32");
 }
 
@@ -575,7 +575,7 @@ fn test_render_zig_fn_sig_with_error_emits_error_union() {
         false,
         Some("ConversionError"),
     );
-    let sig = render_zig_fn_sig(&func, TEST_PREFIX);
+    let sig = render_zig_fn_sig(&func, TEST_PREFIX, &ApiSurface::default());
     assert_eq!(sig, "pub fn convert(html: [:0]const u8) ConversionError![:0]const u8");
 }
 
@@ -588,8 +588,71 @@ fn test_render_zig_fn_sig_optional_param_prefixes_question_mark() {
         false,
         None,
     );
-    let sig = render_zig_fn_sig(&func, TEST_PREFIX);
+    let sig = render_zig_fn_sig(&func, TEST_PREFIX, &ApiSurface::default());
     assert_eq!(sig, "pub fn search(limit: ?u32) void");
+}
+
+/// ~keep A `Named` parameter/return referring to a non-opaque DTO does not cross the Zig
+/// wrapper boundary as its struct type -- `zig_param_type`/`zig_return_type`
+/// (backends/zig/gen_bindings/functions.rs) serialise it to JSON-encoded `[]const u8`/`[]u8`
+/// instead, because the FFI only ever hands a struct across as a scalar opaque handle
+/// constructed from JSON. Before `zig_boundary_param_type`/`zig_boundary_return_type` existed,
+/// `render_zig_fn_sig` asked the same generic `doc_type` every other language uses, which has
+/// no notion of opacity and always spelled a `Named` type by its Rust name -- documenting an
+/// API `alef build` never emits.
+#[test]
+fn test_render_zig_fn_sig_named_struct_param_and_return_serialize_to_bytes() {
+    let func = make_function(
+        "normalize",
+        vec![make_param("options", TypeRef::Named("ParseOptions".to_string()), false)],
+        TypeRef::Named("ParseOutput".to_string()),
+        false,
+        None,
+    );
+    let api = ApiSurface {
+        types: vec![
+            crate::core::ir::TypeDef {
+                name: "ParseOptions".to_string(),
+                is_opaque: false,
+                has_serde: true,
+                ..Default::default()
+            },
+            crate::core::ir::TypeDef {
+                name: "ParseOutput".to_string(),
+                is_opaque: false,
+                has_serde: true,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let sig = render_zig_fn_sig(&func, TEST_PREFIX, &api);
+    assert_eq!(sig, "pub fn normalize(options: []const u8) []u8");
+}
+
+/// ~keep Positive control for the test above: an opaque handle type keeps its real type name
+/// at the wrapper boundary -- only a non-opaque struct DTO serializes to bytes. Distinguishes
+/// "every `Named` type becomes bytes" (wrong, would make this test fail the same way) from the
+/// actual rule, which is opacity-gated.
+#[test]
+fn test_render_zig_fn_sig_named_opaque_return_keeps_its_type_name() {
+    let func = make_function(
+        "current_session",
+        vec![],
+        TypeRef::Named("Session".to_string()),
+        false,
+        None,
+    );
+    let api = ApiSurface {
+        types: vec![crate::core::ir::TypeDef {
+            name: "Session".to_string(),
+            is_opaque: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let sig = render_zig_fn_sig(&func, TEST_PREFIX, &api);
+    assert_eq!(sig, "pub fn current_session() Session");
 }
 
 #[test]

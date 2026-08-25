@@ -857,8 +857,13 @@ mod tests {
     #[test]
     fn function_example_csharp_agrees_with_signature_on_async_member_name() {
         let func = function();
-        let signature =
-            crate::docs::signatures::render_function_signature(&func, Language::Csharp, "Demo", "sample-parser-rs");
+        let signature = crate::docs::signatures::render_function_signature(
+            &func,
+            Language::Csharp,
+            "Demo",
+            "sample-parser-rs",
+            &crate::core::ir::ApiSurface::default(),
+        );
         let example = render_function_example(&func, Language::Csharp, "Demo", "sample-parser-rs");
         assert!(signature.contains("ParseDocumentAsync"), "{signature}");
         assert!(example.contains("ParseDocumentAsync"), "{example}");

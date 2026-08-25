@@ -1,5 +1,5 @@
 use crate::core::config::{AdapterConfig, AdapterPattern, Language, ResolvedCrateConfig};
-use crate::core::ir::{MethodDef, TypeRef};
+use crate::core::ir::{ApiSurface, MethodDef, TypeRef};
 use crate::docs::doc_cleaning::{demote_headings_to_start_at, extract_param_docs};
 use crate::docs::examples::MethodExampleOverride;
 use crate::docs::examples::render_method_example_with_override;
@@ -417,6 +417,7 @@ pub(super) fn render_method(
     config: &ResolvedCrateConfig,
     ffi_prefix: &str,
     crate_name: &str,
+    api: &ApiSurface,
 ) -> String {
     let mut out = String::new();
     let docs_override = streaming_method_docs_override(config, method, type_name_str, lang, ffi_prefix, crate_name);
@@ -455,6 +456,7 @@ pub(super) fn render_method(
         ffi_prefix,
         crate_name,
         docs_override.as_ref().map(|override_| &override_.signature),
+        api,
     );
     out.push_str("**Signature:**\n\n");
     out.push_str(&template_env::render(
@@ -470,7 +472,7 @@ pub(super) fn render_method(
         ffi_prefix,
         docs_override.as_ref().map(|override_| &override_.example),
     ));
-    push_parameters_table(&mut out, &method.params, &param_docs, lang, ffi_prefix);
+    push_parameters_table(&mut out, &method.params, &param_docs, lang, ffi_prefix, api);
     push_returns_with_override(
         &mut out,
         &method.return_type,
@@ -478,6 +480,7 @@ pub(super) fn render_method(
         method.error_type.as_deref(),
         lang,
         ffi_prefix,
+        api,
     );
     push_errors(
         &mut out,
@@ -569,7 +572,15 @@ mod tests {
             None,
         );
         let config = ResolvedCrateConfig::default();
-        let doc = render_method(&method, "Converter", Language::C, &config, TEST_PREFIX, TEST_CRATE_NAME);
+        let doc = render_method(
+            &method,
+            "Converter",
+            Language::C,
+            &config,
+            TEST_PREFIX,
+            TEST_CRATE_NAME,
+            &ApiSurface::default(),
+        );
         let expected_symbol = method_name("Converter", &method.name, Language::C, TEST_PREFIX);
         assert_eq!(expected_symbol, "htm_converter_convert");
         assert!(

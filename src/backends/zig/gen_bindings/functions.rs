@@ -536,7 +536,7 @@ pub(crate) fn wrapper_param_types(
 /// - `Named` struct   → `[]const u8`  (caller supplies JSON; body converts to opaque
 ///   handle via the FFI `<prefix>_<snake>_from_json` helper)
 /// - Everything else  → same as struct-field type
-fn zig_param_type(
+pub(crate) fn zig_param_type(
     ty: &TypeRef,
     optional: bool,
     struct_names: &std::collections::HashSet<String>,

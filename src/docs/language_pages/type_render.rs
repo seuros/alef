@@ -208,6 +208,7 @@ pub(super) fn render_type(
                 config,
                 ffi_prefix,
                 &api.crate_name,
+                api,
             ));
         }
     }

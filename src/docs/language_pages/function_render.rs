@@ -96,7 +96,7 @@ pub(super) fn render_function(
 
     out.push_str("**Signature:**\n\n");
     let lang_code = lang_code_fence(lang);
-    let sig = render_function_signature(func, lang, ffi_prefix, &api.crate_name);
+    let sig = render_function_signature(func, lang, ffi_prefix, &api.crate_name, api);
     out.push_str(&template_env::render(
         "code_block.jinja",
         minijinja::context! { lang_code => lang_code, body => sig },
@@ -105,7 +105,7 @@ pub(super) fn render_function(
 
     out.push_str(&render_function_example(func, lang, ffi_prefix, &api.crate_name));
 
-    push_parameters_table(&mut out, &func.params, &param_docs, lang, ffi_prefix);
+    push_parameters_table(&mut out, &func.params, &param_docs, lang, ffi_prefix, api);
 
     push_returns(
         &mut out,
@@ -113,6 +113,7 @@ pub(super) fn render_function(
         func.error_type.as_deref(),
         lang,
         ffi_prefix,
+        api,
     );
     push_errors(
         &mut out,
@@ -131,6 +132,7 @@ pub(super) fn push_parameters_table(
     param_docs: &std::collections::HashMap<String, String>,
     lang: Language,
     ffi_prefix: &str,
+    api: &ApiSurface,
 ) {
     if params.is_empty() {
         return;
@@ -142,6 +144,11 @@ pub(super) fn push_parameters_table(
         let pname = field_name(&param.name, lang);
         let pty = if lang == Language::Rust {
             rust_param_type(param, ffi_prefix)
+        } else if lang == Language::Zig {
+            // ~keep See `render_zig_fn_sig`'s note: ask the backend's own boundary predicate
+            // rather than re-deriving whether a `Named` param is an opaque handle or a struct
+            // DTO serialised to bytes.
+            crate::backends::zig::zig_boundary_param_type(&param.ty, param.optional, api)
         } else {
             doc_type_with_optional(&param.ty, lang, param.optional, ffi_prefix)
         };
@@ -169,8 +176,9 @@ pub(super) fn push_returns(
     error_type: Option<&str>,
     lang: Language,
     ffi_prefix: &str,
+    api: &ApiSurface,
 ) {
-    push_returns_with_override(out, return_type, None, error_type, lang, ffi_prefix);
+    push_returns_with_override(out, return_type, None, error_type, lang, ffi_prefix, api);
 }
 
 pub(super) fn push_returns_with_override(
@@ -180,6 +188,7 @@ pub(super) fn push_returns_with_override(
     error_type: Option<&str>,
     lang: Language,
     ffi_prefix: &str,
+    api: &ApiSurface,
 ) {
     if matches!(return_type, TypeRef::Unit) {
         if let Some(override_ty) = return_type_override {
@@ -210,9 +219,13 @@ pub(super) fn push_returns_with_override(
         return;
     }
 
-    let ret_ty = return_type_override
-        .map(str::to_string)
-        .unwrap_or_else(|| doc_type(return_type, lang, ffi_prefix));
+    let ret_ty = return_type_override.map(str::to_string).unwrap_or_else(|| {
+        if lang == Language::Zig {
+            crate::backends::zig::zig_boundary_return_type(return_type, api)
+        } else {
+            doc_type(return_type, lang, ffi_prefix)
+        }
+    });
     if ret_ty.is_empty() {
         out.push_str("**Returns:** No return value.\n");
         out.push('\n');
@@ -317,7 +330,8 @@ This function is intentionally excluded from language bindings."#
             Some("InitError"),
         );
 
-        let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
+        let signature =
+            render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME, &ApiSurface::default());
 
         let mut returns_prose = String::new();
         push_returns(
@@ -326,6 +340,7 @@ This function is intentionally excluded from language bindings."#
             func.error_type.as_deref(),
             Language::C,
             TEST_PREFIX,
+            &ApiSurface::default(),
         );
 
         assert!(signature.starts_with("int32_t "), "signature: {signature}");
@@ -343,7 +358,8 @@ This function is intentionally excluded from language bindings."#
     fn test_c_signature_and_returns_prose_agree_infallible_void_stays_silent() {
         let func = make_function("touch", vec![], TypeRef::Unit, false, None);
 
-        let signature = render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME);
+        let signature =
+            render_function_signature(&func, Language::C, TEST_PREFIX, TEST_CRATE_NAME, &ApiSurface::default());
 
         let mut returns_prose = String::new();
         push_returns(
@@ -352,6 +368,7 @@ This function is intentionally excluded from language bindings."#
             func.error_type.as_deref(),
             Language::C,
             TEST_PREFIX,
+            &ApiSurface::default(),
         );
 
         assert!(signature.starts_with("void "), "signature: {signature}");
@@ -372,6 +389,7 @@ This function is intentionally excluded from language bindings."#
             Some("StreamError"),
             Language::C,
             TEST_PREFIX,
+            &ApiSurface::default(),
         );
         assert!(out.contains("StreamHandle"), "{out}");
         assert!(!out.contains("int32_t"), "{out}");
