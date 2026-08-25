@@ -201,6 +201,10 @@ fn generated_lib_rs_carries_no_compile_error_for_named_ref_free_functions() {
         lib_rs.contains("sample_fixture::score_pair(&query_core, &candidate_core)"),
         "generated lib.rs must delegate to the core call:\n{lib_rs}"
     );
+    assert!(
+        lib_rs.contains("impl From<WasmSampleVector> for sample_fixture::SampleVector"),
+        "the let-binding's `query.into()` needs this From impl in the same crate:\n{lib_rs}"
+    );
 }
 
 /// Negative control for the deliberate loud-failure design: a genuinely non-delegatable function
