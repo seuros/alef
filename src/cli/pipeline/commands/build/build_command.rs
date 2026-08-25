@@ -58,7 +58,7 @@ pub(super) fn build_command_for(
         }
         "napi" => {
             format!(
-                "npx --yes -p @napi-rs/cli@{} napi build --platform --manifest-path {}/Cargo.toml -o {} --dts {}{}",
+                "npx --yes -p @napi-rs/cli@{} napi build --platform --no-js --manifest-path {}/Cargo.toml -o {} --dts {}{}",
                 tv::npm::NAPI_RS_CLI_CRATE,
                 crate_dir,
                 crate_dir,

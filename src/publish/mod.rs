@@ -261,7 +261,7 @@ fn build_command_for_lang(
             let dts = tv::npm::NAPI_AUTO_DTS_FILENAME;
             format!(
                 "napi build --manifest-path crates/{pkg}/Cargo.toml \
-                 -o crates/{pkg} --platform --dts {dts} --release{napi_target}"
+                 -o crates/{pkg} --platform --no-js --dts {dts} --release{napi_target}"
             )
         }
         Language::Wasm => {
