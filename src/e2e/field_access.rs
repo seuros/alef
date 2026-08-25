@@ -59,3 +59,7 @@ mod map_key_quoting_tests;
 #[cfg(test)]
 #[path = "field_access/swift_json_bridged_alias_prefix_tests.rs"]
 mod swift_json_bridged_alias_prefix_tests;
+
+#[cfg(test)]
+#[path = "field_access/envelope_nested_path_tests.rs"]
+mod envelope_nested_path_tests;

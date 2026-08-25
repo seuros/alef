@@ -50,7 +50,7 @@ fn is_array_agrees_with_result_relative_path() {
     let relative = resolver.result_relative_path("interaction.action_results");
     assert_eq!(relative, "action_results", "the virtual prefix must be stripped");
     assert!(
-        resolver.is_array(relative),
+        resolver.is_array(&relative),
         "the relative spelling names a declared array field"
     );
     assert!(

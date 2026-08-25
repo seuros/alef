@@ -258,6 +258,7 @@ pub(super) fn render_engine_factory_test_function(
             // Strips virtual namespace prefixes (e.g. "interaction.action_results[0].x"
             // → "action_results[0].x") before building the accessor chain.
             let resolved = field_resolver.result_relative_path(f);
+            let resolved = resolved.as_ref();
             let local_var = f.replace(['.', '['], "_").replace(']', "");
             let has_map_access = resolved.contains('[');
             if resolved.contains('.') {

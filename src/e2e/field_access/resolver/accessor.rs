@@ -28,7 +28,7 @@ impl FieldResolver {
     /// not, and the generated Go package stopped compiling.
     pub fn accessor(&self, fixture_field: &str, language: &str, result_var: &str) -> String {
         let effective = self.result_relative_path(fixture_field);
-        let segments = parse_path(effective);
+        let segments = parse_path(&effective);
         let segments = self.inject_array_indexing(segments);
         match language {
             // `node` and `wasm` are one language and must answer "does this link need `?.`"
@@ -198,7 +198,7 @@ impl FieldResolver {
         // name is derived from this path, so a copy that drifted would name the binding after one
         // path while the assertion that must reference it was rendered from another.
         let effective = self.result_relative_path(fixture_field);
-        let segments = parse_path(effective);
+        let segments = parse_path(&effective);
         let segments = self.inject_array_indexing(segments);
         // Sanitize the resolved path into a snake_case Rust identifier:
         // 1. `.` and `[` become `_` separators, `]` is dropped.

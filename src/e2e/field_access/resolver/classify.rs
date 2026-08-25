@@ -1,9 +1,11 @@
 use super::super::ir_collection::is_collection_path;
 use super::super::ir_enum::{enum_type_at_path, is_enum_path};
+use super::super::leaf_anchor::LeafAnchor;
 use super::super::parse::{
     normalize_indices_to_wildcards, normalize_numeric_indices, parse_path, strip_numeric_indices,
 };
 use super::super::types::{FieldResolver, PathSegment, StringyField};
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 impl FieldResolver {
@@ -525,18 +527,50 @@ impl FieldResolver {
     /// two of the copies were gated on `result_fields.contains(..)` rather than
     /// `is_valid_for_result(..)`, so they could place the same field somewhere else. Add callers
     /// here; do not add a fourth copy.
-    pub fn result_relative_path<'a>(&'a self, fixture_field: &'a str) -> &'a str {
+    ///
+    /// ~keep The envelope projection is asked FIRST, and it is asked of
+    /// [`Self::anchor_leaf`] rather than re-derived here. On an envelope root the strip rule below
+    /// cannot tell a real nested hop from a virtual label — `ir_declares_struct_field_on_root`
+    /// only ever inspects the root's OWN fields, so a genuine `metadata.output_format` reached
+    /// through a `result_fields` projection looked exactly like a grouping label and lost the
+    /// `metadata` hop entirely. `anchor_leaf` already answers "which `result_fields` prefix reaches
+    /// this" for the synthetic handlers; the generic path asking it, instead of growing a third
+    /// copy of the prefix search, is what keeps the two from disagreeing about one fixture field.
+    pub fn result_relative_path<'a>(&'a self, fixture_field: &'a str) -> Cow<'a, str> {
         let resolved = self.resolve(fixture_field);
+        if let Some(projected) = self.envelope_projected_path(resolved) {
+            return Cow::Owned(projected);
+        }
         let Some(stripped) = self.namespace_stripped_path(resolved) else {
-            return resolved;
+            return Cow::Borrowed(resolved);
         };
         let stripped_first = stripped.split('.').next().unwrap_or(stripped);
         let stripped_first = stripped_first.split('[').next().unwrap_or(stripped_first);
         if self.is_valid_for_result(stripped_first) {
-            stripped
+            Cow::Borrowed(stripped)
         } else {
-            resolved
+            Cow::Borrowed(resolved)
         }
+    }
+
+    /// Where `resolved` sits once the call's own envelope projection is accounted for, or `None`
+    /// when no projection applies and the caller's existing strip rule should decide.
+    ///
+    /// ~keep The `root_declares_path == Some(true)` confirmation is load-bearing, not belt-and-
+    /// braces. [`Self::anchor_leaf`] accepts whatever [`Self::result_field_oracle_knows`] accepts,
+    /// and that oracle falls back to the flat, name-keyed sets whenever the IR walk declines to
+    /// answer — so on a config-only resolver (no anchored root at all, which is every fixture
+    /// suite whose result type never resolved) ANY `result_fields` entry would read as a
+    /// confirming prefix and relocate every path in the suite. Demanding that the IR positively
+    /// declare the whole prefixed path keeps this additive: it can only move a path the crate's
+    /// own type graph proves is there.
+    fn envelope_projected_path(&self, resolved: &str) -> Option<String> {
+        let LeafAnchor::Prefixed(prefix) = self.anchor_leaf(resolved)? else {
+            return None;
+        };
+        let candidate = format!("{prefix}.{resolved}");
+        let declared = super::super::ir_result_fields::root_declares_path(&self.ir_result_field_map, &candidate);
+        (declared == Some(true)).then_some(candidate)
     }
 
     /// Whether the IR positively declares `field_name` as a struct-typed field of the call's
@@ -583,7 +617,7 @@ impl FieldResolver {
             return true;
         }
         let relative = self.result_relative_path(field);
-        relative != field && self.array_fields.contains(relative)
+        relative != field && self.array_fields.contains(relative.as_ref())
     }
 
     /// Check whether `field` (a raw or already-resolved fixture path) is
