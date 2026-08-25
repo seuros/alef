@@ -3,8 +3,8 @@ use crate::core::config::{AdapterPattern, BridgeBinding, Language, ResolvedCrate
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::capitalize_first, scaffold::cargo_package_header, scaffold::core_dep_features,
-    scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::capitalize_first, scaffold::cargo_package_header, scaffold::detect_workspace_inheritance_for_crate,
+    scaffold::render_extra_deps, scaffold::scaffold_meta,
 };
 use heck::{ToPascalCase, ToSnakeCase};
 use std::path::PathBuf;
@@ -69,7 +69,13 @@ pub(crate) fn scaffold_elixir_cargo(
         String::new()
     };
 
-    let features_str = core_dep_features(config, Language::Elixir);
+    let excluded_default_features: std::collections::HashSet<&str> = config
+        .elixir
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let features_str =
+        crate::scaffold::core_dep_features_excluding(config, Language::Elixir, &excluded_default_features);
     let core_overrides = config
         .elixir
         .as_ref()
@@ -182,7 +188,14 @@ pub(crate) fn scaffold_elixir_cargo(
     // features to the core crate. Without this, #[cfg(feature = "X")] arms fail
     let features_table = {
         let mut lines: Vec<String> = Vec::with_capacity(always_features.len() + 1);
-        let default_list: Vec<String> = always_features.iter().map(|name| format!("\"{name}\"")).collect();
+        // A name in `excluded_default_features` is still declared below (so
+        // `cargo build --features <name>` keeps working) but dropped from `default`,
+        // matching `RubyConfig::excluded_default_features`. ~keep
+        let default_list: Vec<String> = always_features
+            .iter()
+            .filter(|name| !excluded_default_features.contains(name.as_str()))
+            .map(|name| format!("\"{name}\""))
+            .collect();
         lines.push(format!("default = [{}]", default_list.join(", ")));
         for name in &always_features {
             lines.push(format!(

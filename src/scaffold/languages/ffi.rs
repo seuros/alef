@@ -3,8 +3,8 @@ use crate::core::config::{AdapterPattern, FfiTargetDepOverride, Language, Resolv
 use crate::core::ir::ApiSurface;
 use crate::core::template_versions as tv;
 use crate::{
-    scaffold::cargo_package_header, scaffold::core_dep_features, scaffold::detect_workspace_inheritance_for_crate,
-    scaffold::render_extra_deps, scaffold::scaffold_meta,
+    scaffold::cargo_package_header, scaffold::detect_workspace_inheritance_for_crate, scaffold::render_extra_deps,
+    scaffold::scaffold_meta,
 };
 use std::path::PathBuf;
 
@@ -129,12 +129,17 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
         .as_ref()
         .map(|c| c.target_dep_overrides.as_slice())
         .unwrap_or(&[]);
+    let excluded_default_features: std::collections::HashSet<&str> = config
+        .ffi
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     let core_dep_path = config.core_crate_dep_path(std::path::Path::new(&crate_dir));
     let (core_dep_line, target_blocks) = render_core_dep(
         &config.name,
         &core_dep_path,
         version,
-        &core_dep_features(config, Language::Ffi),
+        &crate::scaffold::core_dep_features_excluding(config, Language::Ffi, &excluded_default_features),
         target_overrides,
     );
 
@@ -194,6 +199,27 @@ pub(crate) fn scaffold_ffi(api: &ApiSurface, config: &ResolvedCrateConfig) -> an
                 core_features_passthrough_block.push('\n');
                 core_features_passthrough_block.push_str(&line);
             }
+        }
+    }
+    // `effective_ffi_default_features` already drops `excluded_default_features` names from
+    // `default_feature_names`, so `cargo build --features <name>` would fail to declare the
+    // feature at all without this: a name listed there stays a *declared* opt-in flag, just
+    // never defaulted, the same tradeoff `extra_features` makes above. ~keep
+    for feat in &excluded_default_features {
+        // Deliberately checked against `default_feature_names` alone, not
+        // `passthrough_feature_names`: a name in `excluded_default_features` is stripped out of
+        // `default_feature_names` by `effective_ffi_default_features` even when it IS present in
+        // `passthrough_feature_names` (i.e. explicitly configured), so that unfiltered list can
+        // no longer prove a declare-only row already exists for it. ~keep
+        if default_feature_names.contains(feat) {
+            continue;
+        }
+        let line = format!("{feat} = [\"{}/{feat}\"]", config.name);
+        if core_features_passthrough_block.is_empty() {
+            core_features_passthrough_block = line;
+        } else {
+            core_features_passthrough_block.push('\n');
+            core_features_passthrough_block.push_str(&line);
         }
     }
     let target_blocks_section = if target_blocks.is_empty() {
@@ -673,6 +699,74 @@ extra_features = ["wasm-http"]
         assert!(
             !default_line.contains("wasm-http"),
             "extra_features must stay opt-in, got: {default_line}"
+        );
+    }
+
+    /// Regression for alef-task #320: `effective_ffi_default_features` unconditionally forwarded
+    /// `[crates.ffi].features` into the FFI crate's own `default = [...]` array, which re-enables
+    /// a feature a `target_dep_overrides` entry excluded for one cfg target -- the same defect
+    /// `RubyConfig::excluded_default_features` fixed for the Magnus crate, generalized here.
+    /// Asserts both directions: the excluded name is never defaulted, and a name nobody excluded
+    /// still is.
+    #[test]
+    fn ffi_cargo_toml_excludes_named_feature_from_default_but_keeps_others() {
+        let config = resolve_config(
+            r#"
+[workspace]
+languages = ["ffi"]
+[[crates]]
+name = "my-lib"
+sources = []
+[crates.ffi]
+features = ["native-http", "wasm-http"]
+excluded_default_features = ["native-http"]
+[[crates.ffi.target_dep_overrides]]
+cfg = 'target_os = "windows"'
+features = ["wasm-http"]
+default_features = false
+"#,
+        );
+        let api = ApiSurface {
+            crate_name: "my-lib".to_string(),
+            version: "1.0.0".to_string(),
+            ..Default::default()
+        };
+        let files = scaffold_ffi(&api, &config).expect("scaffold");
+        let cargo = &files
+            .iter()
+            .find(|f| f.path.ends_with("Cargo.toml"))
+            .expect("ffi Cargo.toml emitted")
+            .content;
+        let features = features_section(cargo);
+        let default_line = features
+            .lines()
+            .find(|line| line.starts_with("default = ["))
+            .expect("default line emitted");
+        assert!(
+            !default_line.contains("native-http"),
+            "excluded_default_features must drop the name from the FFI crate's own default array:\n{default_line}"
+        );
+        assert!(
+            default_line.contains("wasm-http"),
+            "a feature nobody excluded must still be forwarded into default:\n{default_line}"
+        );
+        assert!(
+            features.contains(r#"native-http = ["my-lib/native-http"]"#),
+            "the excluded feature stays declared (so `cargo build --features native-http` still \
+             works), just not defaulted:\n{features}"
+        );
+        let core_dep_line = cargo
+            .lines()
+            .find(|line| line.trim_start().starts_with("my-lib = { path ="))
+            .expect("core dependency line emitted");
+        assert!(
+            !core_dep_line.contains("native-http"),
+            "excluded_default_features must also drop the name from the core dependency's own \
+             explicit features = [...] line, not just the wrapper's default array:\n{core_dep_line}"
+        );
+        assert!(
+            core_dep_line.contains("wasm-http"),
+            "a feature nobody excluded must still reach the core dependency line:\n{core_dep_line}"
         );
     }
 

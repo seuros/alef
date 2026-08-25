@@ -1495,6 +1495,7 @@ fn kotlin_android_test_file_loads_resolved_jni_lib_name_not_crate_name() {
         rename_fields: HashMap::new(),
         plugin_error_constructor: None,
         target_dep_overrides: Vec::new(),
+        excluded_default_features: Vec::new(),
     });
     let type_defs: Vec<crate::core::ir::TypeDef> = Vec::new();
     let out = render_test_file_inner(

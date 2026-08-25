@@ -595,7 +595,31 @@ pub(crate) fn cargo_lints_section(config: &ResolvedCrateConfig) -> String {
 }
 
 pub(crate) fn core_dep_features(config: &ResolvedCrateConfig, lang: Language) -> String {
-    let features = config.features_for_language(lang);
+    core_dep_features_excluding(config, lang, &std::collections::HashSet::new())
+}
+
+/// Like [`core_dep_features`], but drops any name in `excluded` from the core dependency's
+/// `features = [...]` line.
+///
+/// Mirrors `scaffold::languages::ruby::ruby_core_dep_features`, generalized here because more
+/// than two languages need it -- see `RubyConfig::excluded_default_features`'s doc comment for
+/// the full rationale. The consumer-facing exclusion is meant to keep a feature off this
+/// dependency edge entirely, not just out of the wrapper's own `default = [...]` array:
+/// forwarding an excluded name into this explicit line unions it straight back into the core
+/// crate via Cargo's feature unification, defeating a `target_dep_overrides` entry that tried to
+/// turn it off for a specific cfg target. Missing this surface -- filtering only the wrapper's
+/// own default array -- is precisely what left the original Swift widening defect reachable. ~keep
+pub(crate) fn core_dep_features_excluding(
+    config: &ResolvedCrateConfig,
+    lang: Language,
+    excluded: &std::collections::HashSet<&str>,
+) -> String {
+    let features: Vec<&str> = config
+        .features_for_language(lang)
+        .iter()
+        .map(String::as_str)
+        .filter(|f| !excluded.contains(f))
+        .collect();
     if features.is_empty() {
         String::new()
     } else {

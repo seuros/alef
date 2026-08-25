@@ -164,6 +164,7 @@ fn test_scaffold_ffi_target_dep_overrides_emit_cfg_blocks() {
             features: vec!["android-target".to_string()],
             default_features: true,
         }],
+        excluded_default_features: vec![],
     });
 
     let api = test_api();
@@ -230,6 +231,7 @@ fn test_scaffold_ffi_target_dep_overrides_default_features_false_drops_defaults(
             features: vec!["windows-target".to_string()],
             default_features: false,
         }],
+        excluded_default_features: vec![],
     });
 
     let api = test_api();
@@ -301,6 +303,7 @@ fn test_scaffold_ffi_target_dep_overrides_sort_all_before_not() {
                 default_features: true,
             },
         ],
+        excluded_default_features: vec![],
     });
 
     let api = test_api();

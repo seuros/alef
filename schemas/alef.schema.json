@@ -2395,6 +2395,14 @@
           },
           "type": "array"
         },
+        "excluded_default_features": {
+          "default": [],
+          "description": "Feature names that should be declared as opt-in flags in the generated NIF\ncrate's `[features]` table but excluded from its `default = [...]` array and\nfrom the core-crate dependency's own explicit `features = [...]` list.\n\n`scaffold_elixir_cargo` otherwise puts every name `collect_cfg_features` finds\nstraight into the wrapper's unconditional `default = [...]` list, which\nforwards `<name> = [\"<core-crate>/<name>\"]` on every platform. Cargo unions\nfeature sets across every dependency edge to the same resolved package, so\nthat unconditional forwarding re-enables a feature a [`Self::target_dep_overrides`]\nentry excluded for a specific `cfg` target -- defeating the override. Listing\nthe name here keeps it declared (so `cargo build --features <name>` still\nworks) without auto-enabling it, the same tradeoff\n`RubyConfig::excluded_default_features` makes for the Magnus crate. ~keep",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "extra_dependencies": {
           "additionalProperties": true,
           "default": {},
@@ -2618,6 +2626,14 @@
         "exclude_types": {
           "default": [],
           "description": "Types to exclude from FFI binding generation.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excluded_default_features": {
+          "default": [],
+          "description": "Feature names that should be declared as opt-in flags in the generated FFI\ncrate's `[features]` table but excluded from its `default = [...]` array and\nfrom the core-crate dependency's own explicit `features = [...]` list.\n\n[`effective_ffi_default_features`](crate::codegen::cfg::effective_ffi_default_features)\notherwise puts every name explicitly configured via [`Self::features`] straight into the\nFFI crate's unconditional `default = [...]` list, which forwards\n`<name> = [\"<core-crate>/<name>\"]` on every platform. Cargo unions feature sets across\nevery dependency edge to the same resolved package, so that unconditional forwarding\nre-enables a feature a [`Self::target_dep_overrides`] entry excluded for a specific `cfg`\ntarget -- defeating the override. Listing the name here keeps it declared (so\n`cargo build --features <name>` still works) without auto-enabling it, the same tradeoff\n`RubyConfig::excluded_default_features` makes for the Magnus crate.\n\nDistinct from [`Self::extra_features`]: that field is for a name the FFI source\nreferences in a cfg gate but that must never default (a mutually-exclusive alternative);\nthis field is for a name that legitimately belongs in [`Self::features`] or in\n`collect_cfg_features`'s discovered set, but must be stripped back out of both defaulting\nsurfaces once a [`Self::target_dep_overrides`] entry needs to exclude it somewhere. ~keep",
           "items": {
             "type": "string"
           },
@@ -4119,6 +4135,14 @@
           },
           "type": "array"
         },
+        "excluded_default_features": {
+          "default": [],
+          "description": "Feature names that should be declared as opt-in flags in the generated wrapper\ncrate's `[features]` table but excluded from its `default = [...]` array and\nfrom the core-crate dependency's own explicit `features = [...]` list.\n\n`scaffold_node_cargo` otherwise puts every name `collect_cfg_features` finds\nstraight into the wrapper's unconditional `default = [...]` list, which\nforwards `<name> = [\"<core-crate>/<name>\"]` on every platform. Cargo unions\nfeature sets across every dependency edge to the same resolved package, so\nthat unconditional forwarding re-enables a feature a [`Self::target_dep_overrides`]\nentry excluded for a specific `cfg` target -- defeating the override. Listing\nthe name here keeps it declared (so `cargo build --features <name>` still\nworks) without auto-enabling it, the same tradeoff\n`RubyConfig::excluded_default_features` makes for the Magnus crate. ~keep",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "extra_dependencies": {
           "additionalProperties": true,
           "default": {},
@@ -4635,6 +4659,14 @@
         "exclude_types": {
           "default": [],
           "description": "Types to exclude from PHP binding generation.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excluded_default_features": {
+          "default": [],
+          "description": "Feature names that should be declared as opt-in flags in the generated wrapper\ncrate's `[features]` table but excluded from its `default = [...]` array and\nfrom the core-crate dependency's own explicit `features = [...]` list.\n\n`scaffold_php_cargo` otherwise puts every name `collect_cfg_features` finds\nstraight into the wrapper's unconditional `default = [...]` list, which\nforwards `<name> = [\"<core-crate>/<name>\"]` on every platform. Cargo unions\nfeature sets across every dependency edge to the same resolved package, so\nthat unconditional forwarding re-enables a feature a [`Self::target_dep_overrides`]\nentry excluded for a specific `cfg` target -- defeating the override. Listing\nthe name here keeps it declared (so `cargo build --features <name>` still\nworks) without auto-enabling it, the same tradeoff\n`RubyConfig::excluded_default_features` makes for the Magnus crate. ~keep",
           "items": {
             "type": "string"
           },

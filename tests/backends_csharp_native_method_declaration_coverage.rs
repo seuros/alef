@@ -178,6 +178,7 @@ fn visitor_config() -> ResolvedCrateConfig {
             rename_fields: HashMap::new(),
             plugin_error_constructor: None,
             target_dep_overrides: Vec::new(),
+            excluded_default_features: Vec::new(),
         }),
         trait_bridges: vec![TraitBridgeConfig {
             trait_name: TRAIT_NAME.to_owned(),
