@@ -135,19 +135,42 @@ fn a_quoted_digit_key_indexes_like_a_bare_digit_key() {
     assert_eq!(typescript, "result.labels[0]");
 }
 
-/// Languages whose map-key literal is emitted by `renderers.rs` (plus TypeScript/node, whose
-/// `optional_renderers` path already formats the key with `{:?}`). The remaining languages route
-/// their map access through `optional_renderers.rs`, which still interpolates the key raw.
+/// Every language `render_accessor`/`FieldResolver::accessor` dispatches on, in the same order
+/// as `LANGUAGES` above. Each one must escape a `"` or `\` in a map key before splicing it into a
+/// target-language string literal — via `renderers::quoted_key_literal` (used directly by the
+/// TypeScript-family/Go/Swift renderers and, after the `optional_renderers.rs` map-key escaping
+/// fix, by every other renderer that builds a literal from a raw key), or `render_dot_access`'s
+/// own call to the same helper, or the TypeScript-family renderer's `{key:?}`.
+///
+/// ~keep The two tests below zip THIS constant against a parallel `expected` array of bare
+/// strings (no per-entry language label) and iterate the zipped pairs, so this list is what
+/// selects which languages get checked — not a second, separately hand-maintained list. A prior
+/// version paired each `expected` entry with its own inline language literal and used this
+/// constant only for `assert_eq!(expected.len(), ESCAPING_LANGUAGES.len())`; that only caught the
+/// two lists disagreeing in COUNT, so shrinking this constant to 9 entries while
+/// java/kotlin/kotlin_android/csharp/rust/zig/dart/php/r/c stayed broken changed nothing about
+/// what the test checked — those 10 languages were never covered, silently. Keep every entry from
+/// `LANGUAGES` here: there is currently no renderer left that interpolates a map key raw.
 const ESCAPING_LANGUAGES: &[&str] = &[
+    "rust",
+    "python",
     "typescript",
     "node",
     "wasm",
     "go",
+    "java",
+    "kotlin",
+    "kotlin_android",
+    "csharp",
     "ruby",
+    "php",
     "elixir",
-    "python",
-    "gleam",
+    "r",
+    "c",
     "swift",
+    "dart",
+    "zig",
+    "gleam",
 ];
 
 fn accessor_for(path: &str, language: &str) -> String {
@@ -163,38 +186,58 @@ fn a_key_containing_a_quote_stays_inside_its_literal() {
     // `labels["a"b"]` in a config path yields the key `a"b` once the delimiters are stripped.
     // Interpolating it raw would close the literal early and emit code that does not parse.
     let expected = [
-        ("typescript", r#"result.labels["a\"b"]"#),
-        ("node", r#"result.labels["a\"b"]"#),
-        ("wasm", r#"result.labels.get("a\"b")"#),
-        ("go", r#"result.Labels["a\"b"]"#),
-        ("ruby", r#"result.labels["a\"b"]"#),
-        ("elixir", r#"result.labels["a\"b"]"#),
-        ("python", r#"result.labels.get("a\"b")"#),
-        ("gleam", r#"result.labels.get("a\"b")"#),
-        ("swift", r#"result.labels()["a\"b"]"#),
+        r#"result.labels.get("a\"b").map(|s| s.as_str())"#, // rust
+        r#"result.labels.get("a\"b")"#,                     // python
+        r#"result.labels["a\"b"]"#,                         // typescript
+        r#"result.labels["a\"b"]"#,                         // node
+        r#"result.labels.get("a\"b")"#,                     // wasm
+        r#"result.Labels["a\"b"]"#,                         // go
+        r#"result.labels().get("a\"b")"#,                   // java
+        r#"result.labels().get("a\"b")"#,                   // kotlin
+        r#"result.labels.get("a\"b")"#,                     // kotlin_android
+        r#"result.Labels["a\"b"]"#,                         // csharp
+        r#"result.labels["a\"b"]"#,                         // ruby
+        r#"result->labels["a\"b"]"#,                        // php
+        r#"result.labels["a\"b"]"#,                         // elixir
+        r#"result$labels[["a\"b"]]"#,                       // r
+        r#"result_labels(result)["a\"b"]"#,                 // c
+        r#"result.labels()["a\"b"]"#,                       // swift
+        r#"result.labels["a\"b"]"#,                         // dart
+        r#"result.labels.get("a\"b")"#,                     // zig
+        r#"result.labels.get("a\"b")"#,                     // gleam
     ];
     assert_eq!(expected.len(), ESCAPING_LANGUAGES.len());
-    for (language, wanted) in expected {
-        assert_eq!(accessor_for(r#"labels["a"b"]"#, language), wanted, "{language}");
+    for (language, wanted) in ESCAPING_LANGUAGES.iter().zip(expected.iter()) {
+        assert_eq!(&accessor_for(r#"labels["a"b"]"#, language), wanted, "{language}");
     }
 }
 
 #[test]
 fn a_key_containing_a_backslash_stays_inside_its_literal() {
     let expected = [
-        ("typescript", r#"result.labels["a\\b"]"#),
-        ("node", r#"result.labels["a\\b"]"#),
-        ("wasm", r#"result.labels.get("a\\b")"#),
-        ("go", r#"result.Labels["a\\b"]"#),
-        ("ruby", r#"result.labels["a\\b"]"#),
-        ("elixir", r#"result.labels["a\\b"]"#),
-        ("python", r#"result.labels.get("a\\b")"#),
-        ("gleam", r#"result.labels.get("a\\b")"#),
-        ("swift", r#"result.labels()["a\\b"]"#),
+        r#"result.labels.get("a\\b").map(|s| s.as_str())"#, // rust
+        r#"result.labels.get("a\\b")"#,                     // python
+        r#"result.labels["a\\b"]"#,                         // typescript
+        r#"result.labels["a\\b"]"#,                         // node
+        r#"result.labels.get("a\\b")"#,                     // wasm
+        r#"result.Labels["a\\b"]"#,                         // go
+        r#"result.labels().get("a\\b")"#,                   // java
+        r#"result.labels().get("a\\b")"#,                   // kotlin
+        r#"result.labels.get("a\\b")"#,                     // kotlin_android
+        r#"result.Labels["a\\b"]"#,                         // csharp
+        r#"result.labels["a\\b"]"#,                         // ruby
+        r#"result->labels["a\\b"]"#,                        // php
+        r#"result.labels["a\\b"]"#,                         // elixir
+        r#"result$labels[["a\\b"]]"#,                       // r
+        r#"result_labels(result)["a\\b"]"#,                 // c
+        r#"result.labels()["a\\b"]"#,                       // swift
+        r#"result.labels["a\\b"]"#,                         // dart
+        r#"result.labels.get("a\\b")"#,                     // zig
+        r#"result.labels.get("a\\b")"#,                     // gleam
     ];
     assert_eq!(expected.len(), ESCAPING_LANGUAGES.len());
-    for (language, wanted) in expected {
-        assert_eq!(accessor_for(r#"labels["a\b"]"#, language), wanted, "{language}");
+    for (language, wanted) in ESCAPING_LANGUAGES.iter().zip(expected.iter()) {
+        assert_eq!(&accessor_for(r#"labels["a\b"]"#, language), wanted, "{language}");
     }
 }
 
