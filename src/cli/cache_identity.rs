@@ -303,6 +303,88 @@ mod tests {
         );
     }
 
+    /// The regression this closes: every test above proves only that two [`CacheKey`]s differ in
+    /// isolation. None of them prove that difference reaches the read path a real `alef generate`
+    /// run actually takes -- `cli::cache::is_ir_cached`/`is_lang_cached`/`is_stage_cached`, the
+    /// functions `pipeline::extract`, `pipeline::generate::generation`, and every stage call site
+    /// (`bin_cli::core_commands`, `bin_cli::all_commands::e2e_stage`, ...) call to decide
+    /// skip-vs-regenerate. This writes a real on-disk cache entry keyed to alef "0.62.12", then
+    /// queries it through those same public functions keyed to alef "0.64.0" for byte-identical
+    /// inputs, and requires a miss on all three caches -- proving an alef upgrade actually forces
+    /// regeneration rather than merely producing a `CacheKey` that nothing reads differently. ~keep
+    #[test]
+    fn upgrading_the_alef_version_turns_a_real_cache_hit_into_a_miss() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let _cwd = crate::test_support::CwdGuard::enter(tmp.path());
+
+        assert_ir_cache_miss_after_version_bump();
+        assert_lang_cache_miss_after_version_bump(tmp.path());
+        assert_stage_cache_miss_after_version_bump(tmp.path());
+    }
+
+    fn assert_ir_cache_miss_after_version_bump() {
+        let api = crate::core::ir::ApiSurface {
+            crate_name: "sample-crate".to_string(),
+            ..Default::default()
+        };
+        let old_key = compute_ir_key_for_version("0.62.12", IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH);
+        crate::cli::cache::write_ir_cache("sample-crate", &api, &old_key).expect("write ir cache");
+
+        assert!(
+            crate::cli::cache::is_ir_cached("sample-crate", &old_key),
+            "querying with the version that wrote the cache must still be a hit"
+        );
+
+        let new_key = compute_ir_key_for_version("0.64.0", IR_SCHEMA, SOURCES_HASH, CRATE_VERSION, CONFIG_HASH);
+        assert!(
+            !crate::cli::cache::is_ir_cached("sample-crate", &new_key),
+            "a newer alef querying the same on-disk IR cache for byte-identical extraction \
+             inputs must be a miss, or it replays a previous release's ApiSurface verbatim"
+        );
+    }
+
+    fn assert_lang_cache_miss_after_version_bump(root: &std::path::Path) {
+        let generated = root.join("bindings.py");
+        std::fs::write(&generated, "# generated\n").expect("write generated output");
+
+        let old_key = compute_lang_hash_for_version("0.62.12", IR, "python", CONFIG);
+        crate::cli::cache::write_lang_hash("sample-crate", "python", &old_key, &[generated])
+            .expect("write lang hash and manifest");
+
+        assert!(
+            crate::cli::cache::is_lang_cached("sample-crate", "python", &old_key, "inputs-hash"),
+            "querying with the version that wrote the cache must still be a hit"
+        );
+
+        let new_key = compute_lang_hash_for_version("0.64.0", IR, "python", CONFIG);
+        assert!(
+            !crate::cli::cache::is_lang_cached("sample-crate", "python", &new_key, "inputs-hash"),
+            "a newer alef querying the same on-disk language cache for byte-identical inputs \
+             must be a miss, or `alef generate` reports the language up to date and skips it"
+        );
+    }
+
+    fn assert_stage_cache_miss_after_version_bump(root: &std::path::Path) {
+        let output = root.join("README.md");
+        std::fs::write(&output, "generated readme\n").expect("write stage output");
+
+        let old_key = compute_stage_hash_for_version("0.62.12", IR, "readme", CONFIG, &[]);
+        crate::cli::cache::write_stage_hash("sample-crate", "readme", old_key.as_str(), &[output])
+            .expect("write stage hash and manifest");
+
+        assert!(
+            crate::cli::cache::is_stage_cached("sample-crate", "readme", &old_key, "inputs-hash"),
+            "querying with the version that wrote the cache must still be a hit"
+        );
+
+        let new_key = compute_stage_hash_for_version("0.64.0", IR, "readme", CONFIG, &[]);
+        assert!(
+            !crate::cli::cache::is_stage_cached("sample-crate", "readme", &new_key, "inputs-hash"),
+            "a newer alef querying the same on-disk stage cache must be a miss, or `alef generate` \
+             reports the stage up to date and skips it"
+        );
+    }
+
     #[test]
     fn stage_hash_still_separates_stages_and_inputs_within_one_version() {
         let version = "0.64.0";
