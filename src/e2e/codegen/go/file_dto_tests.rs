@@ -133,7 +133,7 @@ fn renders_pointer_integer_field_with_explicit_width_cast() {
         &serde_json::json!({"max_characters": 300}),
         "ChunkingConfig",
         GoValueContext {
-            import_alias: "xberg",
+            import_alias: "samplecrate",
             type_defs: &types,
             enums: &[],
             files: &[],
@@ -167,7 +167,7 @@ fn renders_pointer_bool_field_without_a_cast() {
         &serde_json::json!({"retry": true}),
         "SampleConfig",
         GoValueContext {
-            import_alias: "xberg",
+            import_alias: "samplecrate",
             type_defs: &types,
             enums: &[],
             files: &[],
@@ -208,7 +208,7 @@ fn go_snippet_uses_binding_field_identifier_not_wire_name() {
         &serde_json::json!({"max_chars": 300}),
         "ChunkingConfig",
         GoValueContext {
-            import_alias: "xberg",
+            import_alias: "samplecrate",
             type_defs: &types,
             enums: &[],
             files: &[],

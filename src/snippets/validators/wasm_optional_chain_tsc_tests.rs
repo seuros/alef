@@ -9,7 +9,7 @@
 //! keeps the string right but the compiler wrong is caught here instead of in a consumer's CI.
 //!
 //! Reproduces `ProcessResult { data: Option<DataNode> }` / `DataNode { kind, children }`, the
-//! shape measured against a released alef in `tree-sitter-language-pack`'s
+//! shape measured against a released alef in a consumer repo's
 //! `data_extraction_*` wasm snippet family. No imported module is declared -- the accessor
 //! shape is the only thing under test, so the snippet declares its own ambient types instead of
 //! needing a `node_modules` stub package.

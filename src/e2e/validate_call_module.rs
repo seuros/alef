@@ -11,8 +11,8 @@
 //! - `src/e2e/codegen/java/snippet.rs` reads `overrides.java.module` (never the base
 //!   field — see `effective_go_module`'s sibling reasoning inline below for why the base
 //!   is skipped for java) and splices it verbatim into `import {value}.*;`. A value that
-//!   names a *class* instead of a *package* (e.g. `"io.xberg.Xberg"`, copied from a
-//!   `class` override one line up) produces `import io.xberg.Xberg.*;`, which does not
+//!   names a *class* instead of a *package* (e.g. `"io.sample.Sample"`, copied from a
+//!   `class` override one line up) produces `import io.sample.Sample.*;`, which does not
 //!   compile — every emitted snippet, not the config.
 //! - `src/e2e/codegen/go/snippet.rs` (per-fixture snippets, which may resolve to any named
 //!   `[e2e.calls.*]` call) resolves, in order: the resolved call's own `overrides.go.module`,
@@ -162,7 +162,7 @@ fn check_java_module(config_key: &str, call: &CallConfig, errors: &mut Vec<Valid
 /// A java package segment starts with a lowercase letter (or `_`/`$`) by strong,
 /// near-universal Java convention; a class name starts with an uppercase letter by the
 /// same convention. This checks only the last dot-segment, mirroring the exact reported
-/// regression (`"io.xberg.Xberg"`): a correctly-cased package prefix with a class name
+/// regression (`"io.sample.Sample"`): a correctly-cased package prefix with a class name
 /// appended at the end, copy-pasted from a `class` override one line up.
 fn java_module_looks_like_a_class(value: &str) -> bool {
     let trimmed = value.trim();
@@ -335,7 +335,7 @@ mod tests {
     fn a_java_override_naming_a_class_fails() {
         let config = make_config("sample_crate");
         let e2e_config = E2eConfig {
-            call: call_with_java_override("io.xberg.Xberg"),
+            call: call_with_java_override("io.sample.Sample"),
             ..E2eConfig::default()
         };
 
@@ -346,7 +346,7 @@ mod tests {
         assert!(
             errors[0]
                 .message
-                .contains("[e2e.call].overrides.java.module = \"io.xberg.Xberg\""),
+                .contains("[e2e.call].overrides.java.module = \"io.sample.Sample\""),
             "got: {}",
             errors[0].message
         );
@@ -385,7 +385,7 @@ mod tests {
     fn java_is_not_checked_when_java_is_not_an_active_language() {
         let config = make_config("sample_crate");
         let e2e_config = E2eConfig {
-            call: call_with_java_override("io.xberg.Xberg"),
+            call: call_with_java_override("io.sample.Sample"),
             ..E2eConfig::default()
         };
 
@@ -514,7 +514,7 @@ module = "{go_module}"
         let mut e2e_config = E2eConfig::default();
         e2e_config
             .calls
-            .insert("summarize".to_string(), call_with_java_override("io.xberg.Xberg"));
+            .insert("summarize".to_string(), call_with_java_override("io.sample.Sample"));
 
         let errors = validate_call_module_overrides(&e2e_config, &config, &["java".to_string()]);
 
@@ -680,7 +680,7 @@ module = "{go_module}"
     fn enforce_does_not_bail_on_a_flagged_java_module() {
         let config = make_config("sample_crate");
         let e2e_config = E2eConfig {
-            call: call_with_java_override("io.xberg.Xberg"),
+            call: call_with_java_override("io.sample.Sample"),
             ..E2eConfig::default()
         };
 

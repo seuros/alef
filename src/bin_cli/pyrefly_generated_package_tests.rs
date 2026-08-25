@@ -166,7 +166,7 @@ pub fn validate(value: i64) -> Result<i64, ValidationError> {
 }
 
 // The three constructs below target the three converter-generator defects found auditing
-// liter-llm and crawlberg against 0.67.6 (which removed `bad-argument-type`/`bad-return` from
+// two consumer repos against 0.67.6 (which removed `bad-argument-type`/`bad-return` from
 // the scaffolded pyrefly suppressions on the claim that codegen now emits correct
 // `_to_rust_*`/`_from_native_*` conversions for these boundaries -- this fixture proves that
 // claim against the specific shapes it did not originally cover). ~keep

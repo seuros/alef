@@ -70,6 +70,12 @@ DOWNSTREAM_SAMPLE_NAMES = {
 ALEF_INFRASTRUCTURE_ALLOWLIST = (
     "xberg-io",
     "xberg.io",
+    # Governance plumbing, not consumer special-casing: the `[[includes]]` labels in
+    # .ai-rulez/config.toml that pull the org's shared agent-conventions modules, and the
+    # brand skill those modules ship. Alef consumes org governance; it does not branch on it.
+    "xberg-core",
+    "xberg-cicd",
+    "xberg-brand-and-docs",
     "owner: kreuzberg-dev",
     "kreuzberg-bot",
     "kreuzberg, inc.",

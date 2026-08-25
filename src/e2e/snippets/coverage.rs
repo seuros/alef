@@ -472,7 +472,7 @@ mod curated_snippet_tests {
     /// a single `*` component crosses `/` exactly like `**` would -- `*/getting-started/x.md`
     /// matches `generated/rust/getting-started/x.md` just as readily as `python/getting-started/x.md`,
     /// because the `*` alone can consume the whole `generated/rust` remainder as one match.
-    /// Measured in crawlberg: `docs-site/src/snippets/*/getting-started/basic_usage.md` matched
+    /// Measured in a consumer repo: `docs-site/src/snippets/*/getting-started/basic_usage.md` matched
     /// files inside `output`'s own `generated/<lang>/` subtree, not just the intended per-language
     /// top-level directories. `resolve_curated_snippet_paths` must find these crossing matches (so
     /// `reject_generated_curated_paths` below has something to refuse), and the refusal must name
