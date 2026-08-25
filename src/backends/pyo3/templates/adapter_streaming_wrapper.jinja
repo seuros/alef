@@ -2,6 +2,8 @@ async def {{ adapter_name }}({{ params }}) -> {{ return_type }}:
     """{{ doc_content }}"""
 {% if request_construction %}
 {{ request_construction }}{% endif %}
+{% if param_conversions %}
+{{ param_conversions }}{% endif %}
     async for item in engine.{{ adapter_name }}({{ params_list }}):
 {% if item_converter %}
         yield {{ item_converter }}(item)

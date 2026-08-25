@@ -34,6 +34,70 @@ pub(super) fn streaming_item_converter(
     Some(format!("_from_native_{}", item_type.to_snake_case()))
 }
 
+/// Name of the `options._from_native_<snake>` converter an `AsyncMethod` adapter's body must
+/// apply to the value the engine returns, or `None` when the return type keeps its single
+/// native identity.
+///
+/// Mirrors `streaming_item_converter` for the non-streaming adapter pattern: the wrapper's
+/// `-> ReturnType` annotation names whatever `adapter.returns` says verbatim
+/// (`adapter_param_python_type` only maps a handful of primitives), so when that name is a
+/// public `options` dataclass the body must convert the engine's native pyclass return value
+/// into it — the engine has no idea the dataclass exists. ~keep
+pub(super) fn adapter_return_converter(
+    adapter: &crate::core::config::AdapterConfig,
+    options_dataclass_types: &std::collections::HashSet<String>,
+) -> Option<String> {
+    use heck::ToSnakeCase;
+
+    if !matches!(adapter.pattern, crate::core::config::AdapterPattern::AsyncMethod) {
+        return None;
+    }
+    let return_type = adapter.returns.as_deref()?;
+    if !options_dataclass_types.contains(return_type) {
+        return None;
+    }
+    Some(format!("_from_native_{}", return_type.to_snake_case()))
+}
+
+/// Build the pre-call `_rust_<name> = _to_rust_<snake>(<name>)` conversion statements for
+/// adapter params typed as public `options` dataclasses, plus the call-site argument list to use
+/// in place of the raw parameter names.
+///
+/// An adapter wrapper forwards its params straight to the engine method, which accepts the
+/// native pyclass — not the `options` dataclass the param is annotated with. Plain function
+/// wrappers already apply this exact `_to_rust_*` conversion (`emit_function_wrappers`); an
+/// adapter is not exempt from it. A non-optional param falls back to the type's Rust default via
+/// `config_default_on_none.jinja` when the converter still produced `None`, matching
+/// `emit_function_wrappers`'s required-param handling. Params of any other type pass through
+/// unchanged. ~keep
+fn adapter_param_conversions(
+    params: &[crate::core::config::AdapterParam],
+    options_dataclass_types: &std::collections::HashSet<String>,
+) -> (String, Vec<String>) {
+    use heck::ToSnakeCase;
+
+    let mut conversions = String::new();
+    let mut args = Vec::with_capacity(params.len());
+    for param in params {
+        if !options_dataclass_types.contains(&param.ty) {
+            args.push(param.name.clone());
+            continue;
+        }
+        let snake = param.ty.to_snake_case();
+        let var = format!("_rust_{}", param.name);
+        let body = format!("_to_rust_{snake}({})", param.name);
+        super::signature_params::emit_param_conversion(&mut conversions, &var, &param.name, &body, param.optional);
+        if !param.optional {
+            conversions.push_str(&crate::backends::pyo3::template_env::render(
+                "config_default_on_none.jinja",
+                minijinja::context! { var => &var, name => &param.ty },
+            ));
+        }
+        args.push(var);
+    }
+    (conversions, args)
+}
+
 /// Emit a module-level wrapper function for an adapter-based method.
 ///
 /// Two patterns are supported:
@@ -130,15 +194,18 @@ pub(super) fn emit_adapter_wrapper(
         format!("{capitalized}.")
     };
 
-    let params_list = if request_construction.is_some() {
-        "req".to_string()
+    let (params_list, param_conversions) = if request_construction.is_some() {
+        ("req".to_string(), None)
     } else {
-        adapter
-            .params
-            .iter()
-            .map(|p| p.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
+        let (conversions, args) = adapter_param_conversions(&adapter.params, options_dataclass_types);
+        (
+            args.join(", "),
+            if conversions.is_empty() {
+                None
+            } else {
+                Some(conversions)
+            },
+        )
     };
 
     match &adapter.pattern {
@@ -153,6 +220,7 @@ pub(super) fn emit_adapter_wrapper(
                     return_type => return_type,
                     doc_content => doc_content,
                     request_construction => request_construction.unwrap_or_default(),
+                    param_conversions => param_conversions.unwrap_or_default(),
                     params_list => params_list,
                     item_converter => streaming_item_converter(adapter, options_dataclass_types).unwrap_or_default(),
                 },
@@ -169,7 +237,9 @@ pub(super) fn emit_adapter_wrapper(
                     return_type => return_type,
                     doc_content => doc_content,
                     request_construction => request_construction.unwrap_or_default(),
+                    param_conversions => param_conversions.unwrap_or_default(),
                     params_list => params_list,
+                    return_converter => adapter_return_converter(adapter, options_dataclass_types).unwrap_or_default(),
                 },
             ));
         }

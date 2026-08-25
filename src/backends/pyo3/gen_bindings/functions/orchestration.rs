@@ -4,7 +4,9 @@ use crate::core::hash::{self, CommentStyle};
 use crate::core::ir::ApiSurface;
 use ahash::{AHashMap, AHashSet};
 
-use super::async_wrappers::{adapter_param_python_type, emit_adapter_wrapper, streaming_item_converter};
+use super::async_wrappers::{
+    adapter_param_python_type, adapter_return_converter, emit_adapter_wrapper, streaming_item_converter,
+};
 use super::converters::emit_converters;
 use super::function_wrappers::emit_function_wrappers;
 use super::helper_type_mapping::classify_param_type;
@@ -57,6 +59,15 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         .map(|t| (t.name.clone(), t))
         .collect();
 
+    // Types `options.py` emits as public `@dataclass` DTOs. An adapter param or return value
+    // typed as one of these crosses the Python/native boundary at a different shape than the
+    // engine call actually produces/accepts, so both directions need the `_to_rust_*` /
+    // `_from_native_*` converters — the same requirement plain function wrappers already honor
+    // via `default_types`, scoped down to the subset that is genuinely a public dataclass
+    // (excludes native-pyclass return types, which pass straight through). ~keep
+    let options_dataclass_types =
+        crate::backends::pyo3::gen_bindings::types::options_dataclass_type_names(api, reexported_types);
+
     let enum_names: AHashSet<&str> = api.enums.iter().map(|e| e.name.as_str()).collect();
 
     // A sanitized data enum has an unresolvable variant field, so no serde-based `#[new]` is
@@ -95,6 +106,17 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         for param in &func.params {
             if let Some((name, _)) = classify_param_type(&param.ty) {
                 collect_needed(name, &default_types, &mut needed_converters, &mut visited);
+            }
+        }
+    }
+    // An adapter wrapper is not exempt from the same param-conversion requirement as a plain
+    // function wrapper: a param typed as a public dataclass needs the `_to_rust_*` converter
+    // `emit_adapter_wrapper` applies below. Only walk params that are genuinely emitted as
+    // dataclasses — an `is_return_type` param would have no converter to find. ~keep
+    for adapter in adapters {
+        for param in &adapter.params {
+            if options_dataclass_types.contains(&param.ty) {
+                collect_needed(&param.ty, &default_types, &mut needed_converters, &mut visited);
             }
         }
     }
@@ -266,14 +288,17 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         }
     }
 
-    let options_dataclass_types =
-        crate::backends::pyo3::gen_bindings::types::options_dataclass_type_names(api, reexported_types);
     let streaming_item_converters: std::collections::BTreeSet<String> = adapters
         .iter()
         .filter_map(|adapter| streaming_item_converter(adapter, &options_dataclass_types))
         .collect();
+    let adapter_return_converters: std::collections::BTreeSet<String> = adapters
+        .iter()
+        .filter_map(|adapter| adapter_return_converter(adapter, &options_dataclass_types))
+        .collect();
 
     options_imports.extend(streaming_item_converters.iter().map(String::as_str));
+    options_imports.extend(adapter_return_converters.iter().map(String::as_str));
     native_imports.sort_unstable();
     options_imports.sort_unstable();
     if !native_imports.is_empty() {
