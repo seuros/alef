@@ -137,17 +137,23 @@ pub(crate) fn emit_cargo_toml(
         format!("../../../crates/{core_crate_dir}")
     };
 
-    let features = config.features_for_language(crate::core::config::extras::Language::Dart);
-    let features_block = if features.is_empty() {
-        String::new()
-    } else {
-        let list = features
-            .iter()
-            .map(|f| format!("\"{f}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(", features = [{list}]")
-    };
+    // `[crates.dart].excluded_default_features` must also drop a name from this explicit
+    // `features = [...]` line on the core dependency, not just the wrapper's own `default =
+    // [...]` array below -- forwarding an excluded name here unions it straight back into the
+    // core crate via Cargo's feature unification, defeating a `target_dep_overrides` entry that
+    // turned it off for a specific cfg target. This is the same defect
+    // `RubyConfig::excluded_default_features` fixed for the Magnus crate, generalized in
+    // `scaffold::core_dep_features_excluding`. ~keep
+    let excluded_default_features: std::collections::HashSet<&str> = config
+        .dart
+        .as_ref()
+        .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+    let features_block = crate::scaffold::core_dep_features_excluding(
+        config,
+        crate::core::config::extras::Language::Dart,
+        &excluded_default_features,
+    );
 
     let package_rename_block = if dart_override.is_none() && core_dep_key != crate_name {
         format!(", package = \"{crate_name}\"")
@@ -343,16 +349,11 @@ pub(crate) fn emit_cargo_toml(
             String::new()
         } else {
             // `[target.'cfg(...)'.dependencies]` block alone is insufficient
-            let excluded: std::collections::HashSet<&str> = config
-                .dart
-                .as_ref()
-                .map(|c| c.excluded_default_features.iter().map(String::as_str).collect())
-                .unwrap_or_default();
             let mut lines: Vec<String> = Vec::with_capacity(features.len() + 1);
             // `#[cfg(feature = "X")]` arms emitted by the codegen compile
             let default_list: Vec<String> = features
                 .iter()
-                .filter(|name| !excluded.contains(name.as_str()))
+                .filter(|name| !excluded_default_features.contains(name.as_str()))
                 .map(|name| format!("\"{name}\""))
                 .collect();
             lines.push(format!("default = [{}]", default_list.join(", ")));
