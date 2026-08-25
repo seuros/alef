@@ -284,6 +284,18 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 .entry(*lang)
                                 .or_default()
                                 .extend(pipeline::managed_output_paths(files, &base_dir));
+                            // `binding_ownership` seeded above from `bindings` alone: for a backend
+                            // whose `generate_bindings()` writes only a Rust glue crate (`crates/{name}-py/src`,
+                            // never `packages/python`), the service-API output landing under the
+                            // language's actual package root is the ONLY evidence this stage's manifest
+                            // (`all-bindings-{language}-ownership`) will ever record for that root --
+                            // see the matching fold-in for stubs/public API below and
+                            // `core_commands/generate.rs`'s `generation_owned_paths`, which already does
+                            // this for `alef generate`. ~keep
+                            binding_ownership
+                                .entry(*lang)
+                                .or_default()
+                                .extend(files.iter().map(|file| base_dir.join(&file.path)));
                         }
                         let report = pipeline::write_files_report(&svc_files, &base_dir)?;
                         refusals.absorb_refusals(&report);
@@ -378,6 +390,16 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         .entry(*lang)
                         .or_default()
                         .extend(pipeline::managed_output_paths(files, &base_dir));
+                    // See the matching comment on the service-API fold-in above: type stubs are
+                    // where Python's `packages/python` output actually lives (`generate_bindings()`
+                    // only ever writes the pyo3 glue crate under `crates/{name}-py/src`), so without
+                    // this the `all-bindings-python-ownership` stage manifest recorded zero entries
+                    // under `packages/python` on every run and orphan reclaim was permanently
+                    // disabled for that root. ~keep
+                    binding_ownership
+                        .entry(*lang)
+                        .or_default()
+                        .extend(files.iter().map(|file| base_dir.join(&file.path)));
                 }
 
                 let mut api_count = 0;
@@ -407,6 +429,11 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                                 .entry(*lang)
                                 .or_default()
                                 .extend(pipeline::managed_output_paths(files, &base_dir));
+                            // Same fold-in as service API and stubs above. ~keep
+                            binding_ownership
+                                .entry(*lang)
+                                .or_default()
+                                .extend(files.iter().map(|file| base_dir.join(&file.path)));
                         }
 
                         if !api_match || clean {
