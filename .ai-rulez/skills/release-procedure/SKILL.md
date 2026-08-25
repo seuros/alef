@@ -73,6 +73,18 @@ asks for it.
   surface it under `### Changed (BREAKING)` with explicit migration guidance.
 - Verify no entries are lost: `git diff CHANGELOG.md` should show only adds
   in the new section + the moved bullets.
+- When folding scratchpad or agent-drafted bullets into a section, strip every
+  heading line from the source first — write plain bullets only, never nested
+  `#`/`##` lines. A stray heading from a pasted source reparents everything
+  below it under the wrong version. Before and after any CHANGELOG edit,
+  `grep -c '^## \['` must be unchanged and `grep -c '^# '` must be exactly `1`
+  (the file's single top-level title).
+- `poly fmt --fix CHANGELOG.md` has previously demoted every heading below the
+  first (rumdl's autofix for a second level-1 heading treats it as a title and
+  reparents everything that follows). `poly.toml`'s
+  `[fmt.markdown.rumdl] disable` already includes `"MD025"` as the guard — do
+  not remove it. Re-run the `grep -c '^## \['` / `grep -c '^# '` check after
+  any `poly fmt` pass over this file regardless.
 
 ### 2. Set the version via Taskfile
 
@@ -134,9 +146,15 @@ skipped in the release notes.
 
 ### 6. Tag and publish
 
+Push `main` **before** tagging. Tagging first and pushing second means a
+rebase or a rejected push after the tag exists leaves the tag pointing at a
+commit `origin/main` never contains — `--force-with-lease` does not work on
+tags, so recovering means deleting and recreating the tag. Push main, confirm
+it landed, then tag against the now-confirmed commit:
+
 ```bash
-git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin main
+git tag -a vX.Y.Z -m "vX.Y.Z"
 git push origin vX.Y.Z
 ```
 
@@ -158,18 +176,44 @@ For pre-releases (RC, beta), add `--prerelease`.
 
 ### 7. Verify
 
+The release object existing is not proof the crate shipped — verify the
+*registry*, not just the GitHub release:
+
 ```bash
-gh release view vX.Y.Z          # confirms the release exists with notes
-git tag -l vX.Y.Z               # confirms the tag exists locally
-git ls-remote --tags origin vX.Y.Z   # confirms it pushed
+gh release view vX.Y.Z                                  # release exists with notes
+git ls-remote --tags origin vX.Y.Z                       # tag pushed
+gh run list --workflow=publish.yaml --json databaseId,status,conclusion -L 5
+gh run view <run-id> --json jobs \
+  --jq '.jobs[] | select(.name | test("crates")) | {name, conclusion}'
+curl -sI -H 'User-Agent: alef-release (contact: <maintainer email>)' \
+  https://index.crates.io/al/ef/alef | head -1     # 200 if the version is on the index
 ```
 
-If any of those are empty, redo the failed step — do not move on.
+Notes:
+
+- A *failed* publish job may still have published (e.g. it failed on a later
+  step after `cargo publish` already succeeded) — check the crates.io index
+  before assuming a red run means nothing shipped, and before re-running.
+- A *skipped* job in the run is not the same as a passing one — a publish run
+  that reports overall success while a job inside it was skipped can still
+  mean the crate never moved. Read individual job conclusions, not just the
+  run's headline status.
+- If a run must be retried, `gh run rerun --failed <run-id>` re-runs only the
+  failed jobs; confirm which ones actually need it first.
+- If none of the above resolve, redo the failed step — do not move on.
 
 ### 8. Downstream pins
 
 For any consumer repo that pins this version, open a follow-up
 PR that bumps the pin. Don't bundle that into the release commit.
+
+### 9. Local install and cleanup (optional)
+
+To pick up the release locally, `cargo install --path . --force` from the repo
+root (see the `local-alef-install` rule — never `cargo install alef` from
+crates.io for testing a pre-release change). Then `task clean` (`cargo clean` +
+`rm -rf .alef/`) to reclaim space once the release artifacts are no longer
+needed.
 
 ## Anti-patterns
 
@@ -184,6 +228,18 @@ PR that bumps the pin. Don't bundle that into the release commit.
 - `--no-verify` to skip a real lint failure.
 - AI attribution in commit/tag/release text.
 - Squashing release prep with code fixes — keep `chore(release): X.Y.Z` atomic.
+- Treating a green publish run as proof of a shipped crate without checking
+  for a skipped job inside it.
+- Re-running a failed publish job without first checking whether it already
+  published — a second `cargo publish` for the same version fails loudly, but
+  the confusion it causes is avoidable.
+- Tagging before pushing `main` (see step 6) — recovering from a stranded tag
+  means delete-and-recreate, not `--force-with-lease`.
+- Chasing a `Publish` run stuck in `queued` as a code bug — this is commonly
+  account-wide runner capacity, not this repo. Report it once with the run
+  link; if it is genuinely wedged rather than merely slow,
+  `gh run cancel --force-cancel <run-id>` before retrying (`cancel` alone can
+  leave a queued run deadlocked).
 
 ## Quick reference
 
@@ -194,6 +250,7 @@ PR that bumps the pin. Don't bundle that into the release commit.
 | Version    | `task set-version -- X.Y.Z` then `grep -E '^version' Cargo.toml`   | Crate version updated      |
 | Lint       | `poly fmt --fix . && poly lint .`                                  | Lint clean                 |
 | Commit     | `git commit -m "chore(release): X.Y.Z"`                            | Atomic release commit      |
-| Tag        | `git tag -a vX.Y.Z -m "vX.Y.Z" && git push --tags`                 | Tag exists remotely        |
+| Push main  | `git push origin main`                                             | Tag will land on a commit `origin/main` actually has |
+| Tag        | `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`          | Tag exists remotely        |
 | Publish    | `gh release create vX.Y.Z --notes-from-tag --verify-tag`           | GitHub release exists      |
-| Verify     | `gh release view vX.Y.Z`                                           | Release is discoverable    |
+| Verify     | `gh run view <run-id> --json jobs --jq '...test("crates")...'` + crates.io index `curl` | Crate actually shipped, not just the release object |
