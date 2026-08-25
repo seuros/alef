@@ -487,6 +487,102 @@ mod tests {
         );
     }
 
+    /// The equal-roots case the 0.67.6 nested-tree fix (`nested_prefix`) did not itself add a
+    /// test for: `alef e2e snippets-migrate docs-site/src/snippets` where `docs-site/src/snippets`
+    /// IS the configured `[crates.e2e.snippets].output`, not merely a directory containing it.
+    ///
+    /// `nested_prefix(existing_root, generated_root)` strips an equal pair down to an empty
+    /// remainder, which `non_empty` collapses to `None` -- the same "no rebasing needed" answer
+    /// it gives for two genuinely unrelated (parallel) trees. That is deliberate, not
+    /// coincidental: an existing-root walk and a generated-file list keyed off the identical root
+    /// already share one key space without any prefix, so forcing a non-empty rebase here would
+    /// double the prefix (`generated/generated/...`) and break the exact case this test pins.
+    /// A migrated root equal to `output` is a real, useful invocation -- it answers "is this
+    /// tree's content still fresh", the same question `alef verify` answers via hash comparison
+    /// -- so the right contract is a correct comparison, not a refusal: refusing here would take
+    /// away the one shape of this command that needs no separate hand-authored directory at all.
+    #[test]
+    fn equal_existing_and_generated_roots_compare_correctly_without_double_prefixing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path().join("docs-site/src/snippets");
+        fs::create_dir_all(root.join("rust/topic")).expect("create rust tree");
+        fs::create_dir_all(root.join("python/topic")).expect("create python tree");
+        fs::write(root.join("rust/topic/a.md"), "same content").expect("write fresh rust snippet");
+        fs::write(root.join("python/topic/a.md"), "stale content").expect("write stale python snippet");
+
+        let generated = vec![
+            generated(&root.join("rust/topic/a.md").to_string_lossy(), "same content"),
+            generated(&root.join("python/topic/a.md").to_string_lossy(), "fresh content"),
+        ];
+
+        let entries = compare_root(&root, &root, &generated).expect("compare snippets against an equal root");
+
+        assert_eq!(
+            entries,
+            vec![
+                MigrationEntry {
+                    path: PathBuf::from("python/topic/a.md"),
+                    status: MigrationStatus::Different,
+                    curated: false,
+                },
+                MigrationEntry {
+                    path: PathBuf::from("rust/topic/a.md"),
+                    status: MigrationStatus::Identical,
+                    curated: false,
+                },
+            ],
+            "a migrated root equal to the configured output must match every file alef itself \
+             generated, never report it as having no generated equivalent"
+        );
+    }
+
+    /// The curated-aware sibling of the equal-roots case above, shaped like the real CLI wiring
+    /// (`snippet_migration::compare`): `project_root` is the directory holding `alef.toml`,
+    /// `existing_root` is nested under it and equals `generated_root`, and a curated glob names a
+    /// hand-authored file that sits beside the generated tree. Equal roots must not disturb
+    /// `curated_base`, which rebases off `project_root` independently of the `existing_root` /
+    /// `generated_root` relationship this test targets.
+    #[test]
+    fn equal_roots_compare_correctly_through_the_curated_aware_entry_point_too() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let project_root = directory.path();
+        let existing_root = project_root.join("docs-site/src/snippets");
+        fs::create_dir_all(existing_root.join("rust/topic")).expect("create rust tree");
+        fs::create_dir_all(existing_root.join("cli")).expect("create curated directory");
+        fs::write(existing_root.join("rust/topic/a.md"), "same content").expect("write fresh rust snippet");
+        fs::write(existing_root.join("cli/quickstart.md"), "by hand").expect("write curated snippet");
+
+        let generated = vec![generated(
+            &existing_root.join("rust/topic/a.md").to_string_lossy(),
+            "same content",
+        )];
+
+        let entries = compare_root_curated(&CuratedComparison {
+            project_root,
+            existing_root: &existing_root,
+            generated_root: &existing_root,
+            generated: &generated,
+            curated_globs: &["docs-site/src/snippets/cli/*.md".to_string()],
+        })
+        .expect("curated comparison over an equal root succeeds");
+
+        assert_eq!(
+            entries,
+            vec![
+                MigrationEntry {
+                    path: PathBuf::from("cli/quickstart.md"),
+                    status: MigrationStatus::NoGeneratedEquivalent,
+                    curated: true,
+                },
+                MigrationEntry {
+                    path: PathBuf::from("rust/topic/a.md"),
+                    status: MigrationStatus::Identical,
+                    curated: false,
+                },
+            ]
+        );
+    }
+
     fn generated(path: &str, content: &str) -> GeneratedFile {
         GeneratedFile {
             path: PathBuf::from(path),
