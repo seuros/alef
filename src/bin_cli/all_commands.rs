@@ -247,6 +247,10 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                 let api = pipeline::extract(resolved_cfg, config_path, clean)?;
                 let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
+                // The fingerprint every stamped stage output (e2e, test-apps) was stamped under --
+                // `is_stage_cached` needs it to tell a hand-edited stage output from an untouched
+                // one, not just whether the file still exists. ~keep
+                let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
 
                 // Accumulated across every phase below and stamped exactly ONCE, by the
                 // `finalize_hashes_sweeping` call after the format pass at the end of this loop
@@ -600,7 +604,7 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                     let fixture_hash = cache::hash_directory(fixtures_dir).unwrap_or_default();
                     let ir_json = serde_json::to_string(&api)?;
                     let e2e_stage_hash = cache::compute_stage_hash(&ir_json, "e2e", &config_toml, &fixture_hash);
-                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash) {
+                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "e2e", &e2e_stage_hash, &inputs_hash) {
                         tracing::info!("  [e2e] up to date (skipping)");
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "e2e");
                         deferred_formatting.extend(crate::e2e::format::run_formatters_for_cached_paths(
@@ -674,7 +678,9 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
 
                     let test_apps_stage_hash =
                         cache::compute_stage_hash(&ir_json, "test-apps", &config_toml, &fixture_hash);
-                    if !clean && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash) {
+                    if !clean
+                        && cache::is_stage_cached(&resolved_cfg.name, "test-apps", &test_apps_stage_hash, &inputs_hash)
+                    {
                         tracing::info!("  [test-apps] up to date (skipping)");
                         let cached_paths = cache::read_stage_paths(&resolved_cfg.name, "test-apps");
                         let mut registry_e2e_config = e2e_config.clone();

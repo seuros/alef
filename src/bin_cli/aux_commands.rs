@@ -314,7 +314,14 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             this_e2e_config
                         };
                         let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
-                        if cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
+                        // Computed before the cache check -- `is_stage_cached` needs the same
+                        // `inputs_hash` every stamped e2e output was stamped under to tell a
+                        // hand-edited suite from an untouched one, not just whether it still
+                        // exists. ~keep
+                        let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
+                        let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
+                        let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
+                        if cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash, &inputs_hash) {
                             let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             grand_count += cached_paths.len();
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
@@ -347,8 +354,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.functions,
                             &api.errors,
                         )?;
-                        let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
-                        let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         pipeline::report_refused_writes(&report);
                         let count = report.expected_count();
@@ -571,7 +576,12 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                         let cache_key = format!("test-apps-{selector}");
                         let previous_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                         let stage_hash = cache::compute_stage_hash(&ir_json, &cache_key, &config_toml, &fixture_hash);
-                        if !clean && cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash) {
+                        // Computed before the cache check -- see the matching comment on the `e2e`
+                        // stage above for why `is_stage_cached` needs this. ~keep
+                        let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
+                        let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
+                        let inputs_hash = crate::core::hash::compute_inputs_hash(&sources_hash, &alef_toml_bytes);
+                        if !clean && cache::is_stage_cached(&e2e_crate.name, &cache_key, &stage_hash, &inputs_hash) {
                             let cached_paths = cache::read_stage_paths(&e2e_crate.name, &cache_key);
                             crate::e2e::format::warn_deferred(&crate::e2e::format::run_formatters_for_cached_paths(
                                 &cached_paths,
@@ -594,8 +604,6 @@ pub(crate) fn handle(command: Commands, context: &DispatchContext) -> Result<Opt
                             &api.functions,
                             &api.errors,
                         )?;
-                        let sources_hash = cache::sources_hash(&e2e_crate.sources)?;
-                        let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
                         let report = pipeline::write_scaffold_files_report(&files, &base_dir, true)?;
                         pipeline::report_refused_writes(&report);
                         let count = report.changed_count();
