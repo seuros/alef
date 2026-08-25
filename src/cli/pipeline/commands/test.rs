@@ -57,6 +57,35 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
         }
     }
 
+    // `[crates.e2e.env]` entries (e.g. an SSRF-policy allowlist var a fixture's loopback URL
+    // needs) must reach the e2e process at spawn time, not just from generated in-tree setup
+    // code -- some runtimes (Elixir's `mix test`, whose Rustler NIF loads during Mix's compile
+    // phase, before `test_helper.exs` ever runs) load native code before any generated fixture
+    // file gets a chance to set it via the language's own env APIs. `test_apps_run` (the
+    // registry-mode runner) already exports these at spawn time via a plain `export K='V'; `
+    // prefix; this mirrors that exact mechanism here for the local `e2e/<lang>` runner so both
+    // paths agree.
+    //
+    // Deliberately NOT folded into `env_vars` above and passed through
+    // `run_command_streamed_with_env`: that path's `inline_env_in_shell_cmd` uses a
+    // PATH-style "prepend to the existing value" guard (`export K='V'"${K:+:$K}"`), which is
+    // correct for search-path variables (a duplicated directory is harmless) but corrupts an
+    // exact-value var -- `command.env()` sets the child's `K` to `V` before the script runs, so
+    // the guard then reads that same `V` back and appends it to itself (`V:V`), never matching
+    // a strict comparison an SSRF-policy check performs. A plain, non-appending export avoids
+    // that. ~keep
+    let e2e_env_prefix: String = config
+        .e2e
+        .as_ref()
+        .map(|e2e| {
+            let mut vars: Vec<(&String, &String)> = e2e.env.iter().collect();
+            vars.sort();
+            vars.iter()
+                .map(|(k, v)| format!("export {k}='{}'; ", v.replace('\'', "'\\''")))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let base_dir = std::env::current_dir()?;
 
     let langs_to_test: Vec<Language> = languages
@@ -160,7 +189,8 @@ pub fn test(config: &ResolvedCrateConfig, languages: &[Language], e2e: bool, cov
                 && check_e2e_precondition(*lang, &lang_test)
             {
                 for cmd in e2e_cmd_list.commands() {
-                    if let Err(e) = run_command_streamed_with_env(cmd, Some(&label), &env_vars) {
+                    let cmd_with_e2e_env = format!("{e2e_env_prefix}{cmd}");
+                    if let Err(e) = run_command_streamed_with_env(&cmd_with_e2e_env, Some(&label), &env_vars) {
                         return (*lang, Err(e));
                     }
                 }
@@ -514,6 +544,45 @@ command = "{cmd}"
             "command must not run when the main precondition fails"
         );
         std::fs::remove_dir_all(marker.parent().unwrap()).ok();
+    }
+
+    /// `[crates.e2e.env]` entries must reach the local `e2e` run command's spawned process --
+    /// not just generated in-tree fixture setup code, which for some runtimes (e.g. Elixir's
+    /// `mix test`, whose NIF loads before `test_helper.exs` runs) executes too late to matter.
+    /// Mirrors `test_apps::test_apps_run_tests::e2e_env_vars_are_exported_to_run_command`,
+    /// which already covers the registry-mode runner; this covers the local one.
+    #[cfg(unix)]
+    #[test]
+    fn e2e_config_env_vars_are_exported_to_e2e_run_command() {
+        let toml = r#"
+[workspace]
+languages = ["python"]
+
+[[crates]]
+name = "test-lib"
+sources = ["src/lib.rs"]
+
+[crates.e2e]
+fixtures = "fixtures"
+output = "e2e"
+[crates.e2e.env]
+ALEF_TEST_ALLOW_PRIVATE_NETWORK = "true"
+[crates.e2e.call]
+function = "process"
+module = "test-lib"
+result_var = "result"
+
+[crates.test.python]
+e2e = "test \"$ALEF_TEST_ALLOW_PRIVATE_NETWORK\" = true"
+"#;
+        let cfg: NewAlefConfig = toml::from_str(toml).unwrap();
+        let config = cfg.resolve().unwrap().remove(0);
+
+        let result = test(&config, &[Language::Python], true, false);
+        assert!(
+            result.is_ok(),
+            "a declared [crates.e2e.env] var must reach the local e2e run command: {result:?}"
+        );
     }
 
     #[test]

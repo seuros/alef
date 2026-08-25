@@ -152,8 +152,25 @@ pub(super) fn gen_struct(
         } else {
             base_type
         };
-        // Honor `#[serde(rename = "...")]` on the core field so JS callers see the wire
-        let js_name = field.serde_rename.clone().unwrap_or_else(|| to_node_name(&field.name));
+        // The napi `js_name` is the public JS identifier and must come from casing policy
+        // (`to_node_name`) alone, never from `field.serde_rename` -- that field is the JSON
+        // wire name (set by `#[serde(rename = "...")]` on the core struct for reasons that
+        // can be entirely unrelated to this napi binding, e.g. an external HTTP API's field
+        // name) and is a separate name surface. Reading `alef::codegen::naming`'s
+        // "serde_rename/serde_rename_all define wire names only; they must not be used as
+        // host-language public identifier casing rules" -- bleeding the wire rename into
+        // `js_name` here previously made the compiled `.node` artifact expose e.g. `max_chars`
+        // while `gen_dts` (this backend's `.d.ts` generator, a few files over) independently
+        // computed `maxCharacters` for the very same field from the very same IR, since it
+        // never consulted `serde_rename` in the first place. The two generators disagreed
+        // about one field on one struct; this makes the wire name irrelevant to `js_name` so
+        // they can't diverge again. ~keep
+        let js_name = to_node_name(&field.name);
+        let wire_name = crate::codegen::naming::wire_field_name(
+            &field.name,
+            field.serde_rename.as_deref(),
+            typ.serde_rename_all.as_deref(),
+        );
         let ts_type_override =
             ts_type_for_bytes_field(&field.ty).or_else(|| ts_type_for_string_enum_field(&field.ty, enums));
         let napi_attr_inner: Vec<String> = {
@@ -172,9 +189,11 @@ pub(super) fn gen_struct(
             vec![]
         };
 
-        // When js_name differs from field.name, add #[serde(rename = "js_name")] so serde
-        if has_serde && js_name != field.name {
-            attrs.push(format!("serde(rename = \"{}\")", js_name));
+        // Wire (JSON) renaming is independent of the JS-visible `js_name` above -- a field can
+        // be `maxCharacters` in JS while still serializing as `max_chars` over JSON (or vice
+        // versa). Emit `#[serde(rename = ...)]` from the field's own wire name only.
+        if has_serde && wire_name != field.name {
+            attrs.push(format!("serde(rename = \"{}\")", wire_name));
         }
 
         fn contains_vec_u8(ty: &TypeRef) -> bool {
@@ -899,8 +918,58 @@ pub(super) fn gen_dto_method_fns(
 /// with a discriminant field and all variant fields as optional.
 #[cfg(test)]
 mod tests {
+    use super::gen_struct;
+    use crate::backends::napi::type_map::NapiMapper;
+    use crate::core::ir::{FieldDef, TypeDef};
+
     /// gen_struct (pub(super)) is accessible from mod.rs — smoke test via trait.
     /// The actual output is tested via the integration test (gen_bindings_test.rs).
     #[test]
     fn struct_gen_function_exists() {}
+
+    /// A field's `#[napi(js_name = ...)]` must come from casing policy alone, never from
+    /// `#[serde(rename = ...)]` on the core struct -- the two are separate name surfaces (the
+    /// public JS identifier vs. the JSON wire key), and `gen_dts` (this backend's `.d.ts`
+    /// generator) already computes the JS-visible name from casing policy only. Before this
+    /// fix, a field with an explicit `serde_rename` made the *compiled* binding expose that
+    /// wire name in JS while the generated `.d.ts` kept the camelCase name for the same field
+    /// from the same IR -- the artifact and its own tracked declaration disagreed.
+    #[test]
+    fn js_name_ignores_serde_rename_but_wire_rename_is_preserved() {
+        let typ = TypeDef {
+            name: "ChunkerConfig".to_string(),
+            fields: vec![FieldDef {
+                name: "max_characters".to_string(),
+                serde_rename: Some("max_chars".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mapper = NapiMapper::new("Js".to_string());
+        let opaque_types = ahash::AHashSet::default();
+        let never_skip_cfg_field_names: Vec<String> = Vec::new();
+
+        let out = gen_struct(
+            &typ,
+            &mapper,
+            "Js",
+            true,
+            &opaque_types,
+            &never_skip_cfg_field_names,
+            &[],
+        );
+
+        assert!(
+            out.contains("js_name = \"maxCharacters\""),
+            "js_name must use casing policy (maxCharacters), matching gen_dts's .d.ts output:\n{out}"
+        );
+        assert!(
+            !out.contains("js_name = \"max_chars\""),
+            "js_name must not bleed the wire (serde) rename into the public JS identifier:\n{out}"
+        );
+        assert!(
+            out.contains("serde(rename = \"max_chars\")"),
+            "the field's own wire rename must still reach #[serde(rename = ...)] independently:\n{out}"
+        );
+    }
 }
