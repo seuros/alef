@@ -1,0 +1,494 @@
+//! `alef generate`'s command-arm body, split out of `core_commands.rs` for the
+//! file-modularization cap. Pure extraction of the `Commands::Generate` match arm --
+//! no behaviour change.
+
+use anyhow::Result;
+
+use crate::cli::{cache, dispatch, pipeline, version_pin};
+
+use crate::bin_cli::args::Commands;
+use crate::bin_cli::dispatch::DispatchContext;
+use crate::bin_cli::helpers::*;
+
+pub(crate) fn handle_generate(
+    lang: Option<Vec<String>>,
+    clean: bool,
+    skip_frb: bool,
+    strict: bool,
+    config_path: &std::path::Path,
+    context: &DispatchContext,
+) -> Result<Option<Commands>> {
+    if skip_frb {
+        let existing = std::env::var("ALEF_SKIP_COMMANDS").unwrap_or_default();
+        let updated = if existing.is_empty() {
+            "flutter_rust_bridge_codegen".to_string()
+        } else {
+            format!("{existing},flutter_rust_bridge_codegen")
+        };
+        // SAFETY: single-threaded CLI dispatch; no concurrent env access here.
+        unsafe { std::env::set_var("ALEF_SKIP_COMMANDS", updated) };
+    }
+    let _ = skip_frb;
+    let (workspace, resolved) = load_config(config_path)?;
+    version_pin::check_alef_toml_version(&workspace)?;
+    let crates_to_process = dispatch::select_crates(&resolved, &context.crate_filter)?;
+    let multi = dispatch::is_multi_crate(&crates_to_process);
+    let base_dir = std::env::current_dir()?;
+
+    let alef_toml_bytes = cache::read_alef_toml_bytes(config_path);
+
+    // Accumulated across every writing phase and reported once: a refusal is a
+    // run-level fact for an operator, and a per-phase summary silently omits every
+    // other phase's frozen files. ~keep
+    let mut refusals = pipeline::WriteReport::default();
+    let mut grand_total_generated: usize = 0;
+    for resolved_cfg in &crates_to_process {
+        let languages = resolve_languages(resolved_cfg, lang.as_deref())?;
+        pipeline::warn_missing_formatters(&languages);
+        if multi {
+            tracing::info!(
+                "[{}] Generating bindings for: {}",
+                resolved_cfg.name,
+                format_languages(&languages)
+            );
+        } else {
+            tracing::info!("Generating bindings for: {}", format_languages(&languages));
+        }
+        let api = pipeline::extract(resolved_cfg, config_path, clean)?;
+        let files = pipeline::generate(&api, resolved_cfg, &languages, clean, config_path, true)?;
+        let regenerated_languages: std::collections::HashSet<_> = files.iter().map(|(language, _)| *language).collect();
+        let sources_hash = cache::sources_hash(&resolved_cfg.sources)?;
+
+        // Accumulated across every phase below and stamped exactly ONCE, by the
+        // `finalize_hashes` call after the format pass at the end of this loop body.
+        // Every phase used to stamp its own output as soon as it was written -- five
+        // `finalize_hashes(&current_gen_paths, ..)` checkpoints, all ahead of the only
+        // formatting pass this command runs -- and a stamped file is one poly refuses to
+        // format, so those checkpoints made the format pass a no-op for everything `alef
+        // generate` emitted. Exactly the shape `alef all` had (see
+        // `pipeline::format::stamp_gate`'s module doc for the mechanism and the
+        // measurements) before it was fixed in `all_commands.rs`; this mirrors that fix
+        // here. ~keep
+        let mut current_gen_paths = std::collections::HashSet::new();
+        let mut language_output_paths: std::collections::HashMap<_, std::collections::HashSet<_>> = files
+            .iter()
+            .map(|(language, generated)| {
+                (
+                    *language,
+                    generated
+                        .iter()
+                        .filter(|file| file.carries_alef_marker())
+                        .map(|file| base_dir.join(&file.path))
+                        .collect(),
+                )
+            })
+            .collect();
+        let mut generation_owned_paths: std::collections::HashMap<_, std::collections::HashSet<_>> = files
+            .iter()
+            .map(|(language, generated)| {
+                (
+                    *language,
+                    generated.iter().map(|file| base_dir.join(&file.path)).collect(),
+                )
+            })
+            .collect();
+        for language in languages
+            .iter()
+            .filter(|language| !regenerated_languages.contains(language))
+        {
+            let cached_paths = cache::read_lang_manifest(&resolved_cfg.name, &language.to_string());
+            current_gen_paths.extend(cached_paths.iter().cloned());
+            language_output_paths
+                .entry(*language)
+                .or_default()
+                .extend(cached_paths.iter().cloned());
+            generation_owned_paths
+                .entry(*language)
+                .or_default()
+                .extend(cached_paths);
+        }
+        let mut changed_languages: std::collections::HashSet<crate::core::config::Language> =
+            std::collections::HashSet::new();
+
+        // The grand total this loop reports (`grand_total_generated`) counts actual
+        // writes only, matching every per-phase "Generated N ... files" line below --
+        // it must never be the size of a candidate set the generator merely computed in
+        // memory. A file that was cache-skipped, refused by the ownership guard, or
+        // matched what was already on disk was not generated this run in any sense a
+        // reader of that line would expect, so it must not inflate the count. ~keep
+        let mut written_count: usize = 0;
+        let mut any_written = false;
+        for (lang, lang_files) in &files {
+            let lang_str = lang.to_string();
+            current_gen_paths.extend(pipeline::stampable_output_paths(lang_files, &base_dir));
+
+            let hashes: Vec<(String, String)> = lang_files
+                .iter()
+                .map(|f| {
+                    let normalized = pipeline::normalize_content(&f.path, &f.content);
+                    (
+                        base_dir.join(&f.path).display().to_string(),
+                        cache::hash_content(&normalized),
+                    )
+                })
+                .collect();
+
+            let cache_key = format!("{}.{lang_str}", resolved_cfg.name);
+            let stored = cache::read_generation_hashes(&cache_key).unwrap_or_default();
+            let cache_match = !hashes.is_empty() && hashes.iter().all(|(p, h)| stored.get(p) == Some(h));
+
+            if cache_match && !clean && generated_files_match_disk(lang_files, &base_dir) {
+                tracing::info!("  [{lang_str}] up to date (skipping)");
+                continue;
+            }
+
+            let single = vec![(*lang, lang_files.clone())];
+            let report = pipeline::write_files_report(&single, &base_dir)?;
+            refusals.absorb_refusals(&report);
+            written_count += report.changed_count();
+            if report.changed_count() > 0 {
+                any_written = true;
+                changed_languages.insert(*lang);
+            }
+            let _ = cache::write_generation_hashes(&cache_key, &hashes);
+        }
+
+        if !api.services.is_empty() {
+            let svc_files = pipeline::generate_service_api(&api, resolved_cfg, &languages)?;
+            if !svc_files.is_empty() {
+                for (_, files) in &svc_files {
+                    current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
+                }
+                for (language, generated) in &svc_files {
+                    generation_owned_paths
+                        .entry(*language)
+                        .or_default()
+                        .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                    language_output_paths.entry(*language).or_default().extend(
+                        generated
+                            .iter()
+                            .filter(|file| file.carries_alef_marker())
+                            .map(|file| base_dir.join(&file.path)),
+                    );
+                }
+                let report = pipeline::write_files_report(&svc_files, &base_dir)?;
+                refusals.absorb_refusals(&report);
+                let svc_count = report.changed_count();
+                written_count += svc_count;
+                tracing::info!("Generated {svc_count} service API files");
+                if svc_count > 0 {
+                    any_written = true;
+                    for (lang, generated) in &svc_files {
+                        if generated
+                            .iter()
+                            .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                        {
+                            changed_languages.insert(*lang);
+                        }
+                    }
+                }
+            }
+        }
+
+        if resolved_cfg.generate.public_api {
+            let public_api_files = pipeline::generate_public_api(&api, resolved_cfg, &languages, config_path)?;
+            if !public_api_files.is_empty() {
+                let api_hashes: Vec<(String, String)> = public_api_files
+                    .iter()
+                    .flat_map(|(_, fs)| {
+                        fs.iter().map(|f| {
+                            let normalized = pipeline::normalize_content(&f.path, &f.content);
+                            (
+                                base_dir.join(&f.path).display().to_string(),
+                                cache::hash_content(&normalized),
+                            )
+                        })
+                    })
+                    .collect();
+                let api_cache_key = format!("{}.public_api", resolved_cfg.name);
+                let stored_api = cache::read_generation_hashes(&api_cache_key).unwrap_or_default();
+                let api_match = !api_hashes.is_empty() && api_hashes.iter().all(|(p, h)| stored_api.get(p) == Some(h));
+
+                for (_, files) in &public_api_files {
+                    current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
+                }
+                for (language, generated) in &public_api_files {
+                    generation_owned_paths
+                        .entry(*language)
+                        .or_default()
+                        .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                    language_output_paths.entry(*language).or_default().extend(
+                        generated
+                            .iter()
+                            .filter(|file| file.carries_alef_marker())
+                            .map(|file| base_dir.join(&file.path)),
+                    );
+                }
+
+                if !api_match || clean {
+                    let report = pipeline::write_files_report(&public_api_files, &base_dir)?;
+                    refusals.absorb_refusals(&report);
+                    let api_count = report.changed_count();
+                    written_count += api_count;
+                    tracing::info!("Generated {api_count} public API files");
+                    any_written |= api_count > 0;
+                    let _ = cache::write_generation_hashes(&api_cache_key, &api_hashes);
+                    for (lang, generated) in &public_api_files {
+                        if generated
+                            .iter()
+                            .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                        {
+                            changed_languages.insert(*lang);
+                        }
+                    }
+                } else {
+                    tracing::info!("  [public_api] up to date (skipping)");
+                }
+            }
+        }
+
+        let stub_files = pipeline::generate_stubs(&api, resolved_cfg, &languages)?;
+        if !stub_files.is_empty() {
+            let stub_hashes: Vec<(String, String)> = stub_files
+                .iter()
+                .flat_map(|(_, fs)| {
+                    fs.iter().map(|f| {
+                        (
+                            base_dir.join(&f.path).display().to_string(),
+                            cache::hash_content(&f.content),
+                        )
+                    })
+                })
+                .collect();
+
+            let stubs_cache_key = format!("{}.stubs", resolved_cfg.name);
+            let stored_stubs = cache::read_generation_hashes(&stubs_cache_key).unwrap_or_default();
+            let stubs_match =
+                !stub_hashes.is_empty() && stub_hashes.iter().all(|(p, h)| stored_stubs.get(p) == Some(h));
+
+            for (_, files) in &stub_files {
+                current_gen_paths.extend(pipeline::stampable_output_paths(files, &base_dir));
+            }
+            for (language, generated) in &stub_files {
+                generation_owned_paths
+                    .entry(*language)
+                    .or_default()
+                    .extend(generated.iter().map(|file| base_dir.join(&file.path)));
+                language_output_paths.entry(*language).or_default().extend(
+                    generated
+                        .iter()
+                        .filter(|file| file.carries_alef_marker())
+                        .map(|file| base_dir.join(&file.path)),
+                );
+            }
+
+            if !stubs_match || clean {
+                let report = pipeline::write_files_report(&stub_files, &base_dir)?;
+                refusals.absorb_refusals(&report);
+                let stub_count = report.changed_count();
+                written_count += stub_count;
+                tracing::info!("Generated {stub_count} type stub files");
+                any_written |= stub_count > 0;
+                let _ = cache::write_generation_hashes(&stubs_cache_key, &stub_hashes);
+
+                for (lang, generated) in &stub_files {
+                    if generated
+                        .iter()
+                        .any(|file| report.changed_paths.contains(&base_dir.join(&file.path)))
+                    {
+                        changed_languages.insert(*lang);
+                    }
+                }
+            } else {
+                tracing::info!("  [stubs] up to date (skipping)");
+            }
+        }
+
+        let scaffold_files = pipeline::scaffold(&api, resolved_cfg, &languages, config_path)?;
+        let report = pipeline::reconcile_managed_scaffold_manifests(&scaffold_files, &base_dir)?;
+        if report.changed_count() > 0 {
+            any_written = true;
+        }
+        // `reconcile_managed_scaffold_manifests` silently drops a manifest it cannot
+        // prove alef owns; this repair runs regardless, since a missing forwarded feature
+        // is additive-only and safe even without that proof (see `scaffold::repair`). ~keep
+        crate::scaffold::repair_missing_cfg_binding_features(&api, resolved_cfg, &languages);
+        current_gen_paths.extend(pipeline::stampable_output_paths(&scaffold_files, &base_dir));
+
+        tracing::info!("Running post-build processing...");
+        // Post-build MUST run before the format pass below, not after: several
+        // post-build steps (Swift's `MaterializeSwiftBridge`, Dart's
+        // `flutter_rust_bridge_codegen`) write straight to disk, unguarded by
+        // `write_files_report`, and a format pass that already ran before they wrote
+        // never sees their output at all -- the file this run ships is whatever the
+        // post-build tool produced, untouched by `poly fmt`. Stamping that output
+        // afterward (as this function used to) embeds `alef:hash:` over UNFORMATTED
+        // bytes: the moment anything reformats the file later -- this repo's own
+        // whole-tree `converge_full_regen` on a later `alef all` run, or a standalone
+        // `poly fmt --fix .` a consumer runs before committing -- the body no longer
+        // matches its own embedded hash and `alef verify` reports it stale, even though
+        // nothing about the *generation inputs* changed. `all_commands.rs`'s "All" arm
+        // already runs post-build before its own format pass for exactly this reason;
+        // this mirrors that ordering here. Surface refusals before a post-build error,
+        // not after -- see the identical guard (and its full rationale) on
+        // `all_commands.rs`'s "All" arm. ~keep
+        if let Err(error) = complete_generated_artifacts(&languages, resolved_cfg, &base_dir) {
+            pipeline::report_refused_writes(&refusals);
+            return Err(error);
+        }
+
+        // Fold in every path a post-build step writes unguarded (see
+        // `PostBuildStep::owned_paths`'s doc for why this can't be left to the
+        // generator's own `GeneratedFile` output). Claimed on every run the step is
+        // configured for, independent of whether the generator found fresh content
+        // to emit for the same path this time -- that independence is the fix for the
+        // alef #B incident: without it, a run where the generator legitimately emits
+        // nothing for a path a post-build step still writes reads as "no longer
+        // generated" to the orphan sweep below.
+        for &language in &languages {
+            let Some(backend) = crate::cli::registry::try_get_backend(language) else {
+                continue;
+            };
+            let Some(build_config) = backend.build_config_with_config(resolved_cfg) else {
+                continue;
+            };
+            let owned: Vec<_> = build_config
+                .post_build
+                .iter()
+                .flat_map(|step| step.owned_paths(&base_dir))
+                .collect();
+            if owned.is_empty() {
+                continue;
+            }
+            generation_owned_paths
+                .entry(language)
+                .or_default()
+                .extend(owned.iter().cloned());
+            current_gen_paths.extend(owned);
+        }
+        // Deliberately NOT `finalize_hashes` here, unlike every other phase above: a
+        // post-build-owned path (`RustBridgeC.h`) must stay UNSTAMPED until it has been
+        // through the format pass below. Stamping it now -- over content the format pass
+        // has not touched yet -- would embed `alef:hash:` while the body is still
+        // whatever the post-build tool produced. `poly`'s built-in "hash-stamped
+        // generated file" skip then protects that stamp from ever being reformatted
+        // again (verified: once a file carries a well-formed `alef:hash:` line, `poly
+        // fmt --fix` leaves it untouched), so the file would ship non-canonical forever
+        // and never get a second chance to be formatted. The single `finalize_hashes`
+        // call after the format pass below is what actually stamps these paths. ~keep
+
+        // A post-build-owning language must be formatted even when nothing in
+        // `files`/`stub_files` changed this run: Swift's `RustBridgeC.h` and Dart's FRB
+        // bridge are written unguarded by post-build (see above), invisible to
+        // `any_written`/`changed_languages`, and would otherwise never reach
+        // `poly_paths`'s per-language directory scoping below. Mirrors
+        // `any_output_changed`'s `languages_have_post_build_steps` seed in
+        // `all_commands.rs`. ~keep
+        let post_build_languages = languages_with_post_build_steps(&languages, resolved_cfg);
+        if !post_build_languages.is_empty() {
+            any_written = true;
+            changed_languages.extend(post_build_languages);
+        }
+
+        let any_output_changed = any_written && !changed_languages.is_empty();
+        // `any_output_changed` alone is the wrong gate for a tree an EARLIER run (a
+        // pre-fix `alef generate`, or a standalone `alef scaffold`/`alef stubs` that
+        // stamps its own output) left stamped and never formatted: nothing was written
+        // THIS run, and the tree is still non-canonical. `generated_tree_needs_formatting`
+        // answers "no" on a settled tree, so the fast path (skip formatting entirely) is
+        // unchanged -- see `pipeline::format::stamp_gate`. ~keep
+        if any_output_changed || pipeline::generated_tree_needs_formatting(&base_dir) {
+            tracing::info!("Formatting generated files...");
+            // Load-bearing, not defence in depth: removing the per-phase
+            // `finalize_hashes` checkpoints above stops a FRESH run from stamping too
+            // early, but a tree an EARLIER, pre-fix run already stamped-and-never-formatted
+            // needs this too -- `write_files_report` compares hash-stripped bodies, so an
+            // unchanged file is never rewritten and keeps the stamp it was given,
+            // forever. Scope-symmetric by construction: the final `finalize_hashes`
+            // call below re-stamps `current_gen_paths`, a superset of what is stripped
+            // here, so no file is left carrying no hash line at all. ~keep
+            let unstamped = pipeline::unstamp_before_formatting(&current_gen_paths);
+            tracing::debug!("unstamped {unstamped} generated file(s) so the formatter can see them");
+            // `changed_languages` is the right scope when something in THIS run's own
+            // output actually changed -- narrower is faster and correct. It is the WRONG
+            // scope when the gate fired only because `generated_tree_needs_formatting`
+            // found a stale tree with nothing changed this run: `changed_languages` is
+            // then empty, and an empty language set makes `format_generated_reporting` a
+            // no-op (see `run_format_pass`), silently defeating the very pass this branch
+            // exists to run. Fall back to every language this invocation resolved so the
+            // healing case actually reformats something. ~keep
+            let format_scope: std::collections::HashSet<_> = if any_output_changed {
+                changed_languages.clone()
+            } else {
+                languages.iter().copied().collect()
+            };
+            // `strict`, not `false`: this pass formats `packages/<lang>` -- the SHIPPED
+            // bindings -- and used to swallow every missing-formatter skip in a `warn!`
+            // the caller never saw, so `--strict` guarded only the e2e formatter while
+            // the more important surface went unguarded. ~keep
+            pipeline::format_generated_reporting(resolved_cfg, &base_dir, Some(&format_scope), strict)?;
+        }
+        // Final stamp, after post-build AND formatting have both settled every byte this
+        // run will ship -- see the ordering comment above `complete_generated_artifacts`
+        // for why an intermediate stamp before formatting is not enough. ~keep
+        pipeline::finalize_hashes(&current_gen_paths, &sources_hash, &alef_toml_bytes)?;
+
+        let previous_generation_owned: std::collections::HashMap<_, _> = languages
+            .iter()
+            .map(|language| {
+                (
+                    *language,
+                    cache::read_stage_paths(&resolved_cfg.name, &format!("generate-{language}-ownership")),
+                )
+            })
+            .collect();
+        for (language, previous_paths) in &previous_generation_owned {
+            if !regenerated_languages.contains(language) {
+                generation_owned_paths
+                    .entry(*language)
+                    .or_default()
+                    .extend(previous_paths.iter().cloned());
+            }
+        }
+        let cleanup_keep_paths: std::collections::HashSet<_> = generation_owned_paths
+            .values()
+            .flat_map(|paths| paths.iter().cloned())
+            .collect();
+        let cleanup_roots = pipeline::generate_sweep_roots(&languages, lang.is_some(), resolved_cfg, &base_dir);
+        let previous_paths: Vec<_> = previous_generation_owned.into_values().flatten().collect();
+        // `cleanup_roots` doubles as the disk-scan candidate list: `sweep_manifest_orphans`
+        // only actually scans a root once it has independently verified both `previous_paths`
+        // and `cleanup_keep_paths` carry at least one entry under it (plus git-tracked-ness),
+        // so a language this run skipped or whose bookkeeping is broken is refused, not
+        // scanned -- see that function's doc for the measured evidence behind the gate. ~keep
+        pipeline::sweep_manifest_orphans(&previous_paths, &cleanup_keep_paths, &cleanup_roots, &cleanup_roots)?;
+        for (language, paths) in &generation_owned_paths {
+            let paths: Vec<_> = paths.iter().cloned().collect();
+            cache::write_stage_hash(
+                &resolved_cfg.name,
+                &format!("generate-{language}-ownership"),
+                &sources_hash,
+                &paths,
+            )?;
+        }
+        for (language, paths) in language_output_paths {
+            let paths: Vec<_> = paths.into_iter().collect();
+            cache::write_lang_manifest(&resolved_cfg.name, &language.to_string(), &paths)?;
+        }
+
+        if let Err(e) = pipeline::sync_versions(resolved_cfg, config_path, None, true, true, None) {
+            tracing::warn!("version sync failed: {e}");
+        }
+
+        if resolved_cfg.e2e.is_some() {
+            // An [e2e] block is a correct, intentional configuration; this is advice on
+            // the next command to run, not a problem with the current one. ~keep
+            tracing::info!("[e2e] block detected — run 'alef e2e generate' to regenerate e2e test suites");
+        }
+
+        grand_total_generated += written_count;
+    }
+    pipeline::report_refused_writes(&refusals);
+    tracing::info!("Generated {grand_total_generated} files");
+    Ok(None)
+}

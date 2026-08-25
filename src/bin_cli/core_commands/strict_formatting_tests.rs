@@ -39,11 +39,15 @@ fn generate_accepts_strict_and_defaults_to_lenient() {
 /// answers to the same question again. ~keep
 #[test]
 fn generate_threads_strict_into_the_package_formatting_pass() {
-    let source = include_str!("../core_commands.rs");
+    let dispatch_source = include_str!("../core_commands.rs");
     assert!(
-        source.contains("Commands::Generate {\n            lang,\n            clean,\n            skip_frb,\n            strict,\n        }"),
+        dispatch_source.contains("Commands::Generate {\n            lang,\n            clean,\n            skip_frb,\n            strict,\n        }"),
         "the Generate arm must destructure `strict` from the parsed command"
     );
+    // The arm's body -- including the formatting-pass call this test pins -- lives in
+    // `core_commands/generate.rs`, split out of `core_commands.rs` for the file-modularization
+    // cap. ~keep
+    let source = include_str!("generate.rs");
     let call = source
         .find("pipeline::format_generated_reporting(")
         .expect("`alef generate` must format through the reporting entry point, not the discarding one");
