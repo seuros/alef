@@ -844,3 +844,52 @@ fn a_missing_formatter_executable_is_not_reported_as_a_publish_deferral() {
         "the report must still carry the entry's own reason"
     );
 }
+
+/// Regression: `binding_ownership` -- the map `handle` writes to the dedicated
+/// `all-bindings-{language}-ownership` stage manifest that seeds `sweep_manifest_orphans`'s
+/// disk-scan baseline -- was populated only from `pipeline::generate`'s own `bindings` output
+/// (the pyo3 glue crate under `crates/{name}-py/src`), and was never folded together with the
+/// stub/public-API files the same run writes under `packages/python`. `generate_bindings()`
+/// never writes anything under `packages/python` at all, so that stage manifest recorded ZERO
+/// entries under `packages/python` on every run, forever -- not merely on a cache hit (that is
+/// the distinct, already-fixed alef-tasks#303 defect the test above pins). Because
+/// `sweep_manifest_orphans`'s disk-scan route refuses to scan a root that has zero manifest
+/// entries under it (see its own `warn!` -- "disk-scan orphan reclaim skipped ... 0 manifest
+/// entry(s)"), orphan reclaim for `packages/python` was permanently disabled, no matter how
+/// many times `alef all` ran. Asserts the exact path set the stage manifest must hold, not
+/// mere non-emptiness -- a single bogus entry would satisfy a non-emptiness check while leaving
+/// this defect fully in place. ~keep
+#[test]
+fn all_records_the_full_cross_phase_union_into_the_binding_ownership_stage_manifest() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().canonicalize().unwrap_or_else(|_| temp.path().to_path_buf());
+    write_lang_manifest_fixture_workspace(&root);
+    let _cwd = E2eDeferCwdGuard::enter(&root);
+
+    let context = DispatchContext {
+        config_path: root.join("alef.toml"),
+        crate_filter: Vec::new(),
+    };
+
+    handle(lang_manifest_all_command(), &context).expect("all must succeed against a plain python fixture");
+
+    let mut ownership = cache::read_stage_paths("test-lib", "all-bindings-python-ownership");
+    ownership.sort();
+
+    let mut expected = vec![
+        root.join("crates/test-lib-py/src/lib.rs"),
+        root.join("packages/python/test_lib/test_lib.pyi"),
+        root.join("packages/python/test_lib/options.py"),
+        root.join("packages/python/test_lib/api.py"),
+        root.join("packages/python/test_lib/exceptions.py"),
+        root.join("packages/python/test_lib/__init__.py"),
+    ];
+    expected.sort();
+
+    assert_eq!(
+        ownership, expected,
+        "the all-bindings-python-ownership stage manifest must hold the union of every phase's \
+         output -- bindings, stubs, and public API -- not just generate_bindings' single \
+         crates/test-lib-py/src/lib.rs entry. Got: {ownership:?}"
+    );
+}
