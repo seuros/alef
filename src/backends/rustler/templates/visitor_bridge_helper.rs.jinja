@@ -2,7 +2,8 @@ fn nodecontext_to_elixir_map<'a>(
     env: rustler::Env<'a>,
     ctx: &{{ context_type_path }},
 ) -> rustler::Term<'a> {
-    let mut pairs: Vec<(rustler::Term<'a>, rustler::Term<'a>)> = Vec::new();
+    let pairs: Vec<(rustler::Term<'a>, rustler::Term<'a>)> = vec![
 {{ context_field_lines }}
+    ];
     rustler::Term::map_from_pairs(env, &pairs).unwrap_or_else(|_| rustler::types::atom::Atom::from_str(env, "nil").unwrap().to_term(env))
 }

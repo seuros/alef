@@ -230,29 +230,32 @@ fn extendr_field_line(field: &FieldDef, shape: FieldShape) -> String {
     let name = &field.name;
     match shape {
         FieldShape::String => {
-            format!(r#"    pairs.push(("{host_name}", extendr_api::Robj::from(AsRef::<str>::as_ref(&ctx.{name}))));"#)
+            format!(r#"        ("{host_name}", extendr_api::Robj::from(AsRef::<str>::as_ref(&ctx.{name}))),"#)
         }
         FieldShape::OptionalString => format!(
-            r#"    pairs.push(("{host_name}", match ctx.{name}.as_deref() {{
-        Some(value) => extendr_api::Robj::from(value),
-        None => extendr_api::Robj::from(extendr_api::NULL),
-    }}));"#
+            r#"        ("{host_name}", match ctx.{name}.as_deref() {{
+            Some(value) => extendr_api::Robj::from(value),
+            None => extendr_api::Robj::from(extendr_api::NULL),
+        }}),"#
         ),
-        FieldShape::Bool => format!(r#"    pairs.push(("{host_name}", extendr_api::Robj::from(ctx.{name})));"#),
+        FieldShape::Bool => format!(r#"        ("{host_name}", extendr_api::Robj::from(ctx.{name})),"#),
         FieldShape::Number => {
-            format!(r#"    pairs.push(("{host_name}", extendr_api::Robj::from(ctx.{name} as f64)));"#)
+            format!(r#"        ("{host_name}", extendr_api::Robj::from(ctx.{name} as f64)),"#)
         }
         FieldShape::Enum => format!(
-            r#"    pairs.push(("{host_name}", extendr_api::Robj::from(format!("{{:?}}", ctx.{name}).as_str())));"#
+            r#"        ("{host_name}", extendr_api::Robj::from(format!("{{:?}}", ctx.{name}).as_str())),"#
         ),
+        // Inlined rather than bound to a `let` first: the pairs are elements of a `vec![]`
+        // literal, so a preceding statement would have nowhere to live. ~keep
         FieldShape::StringMap => format!(
-            r#"    let {name}_pairs: Vec<(&str, extendr_api::Robj)> = ctx.{name}.iter()
-        .map(|(key, value)| (key.as_str(), extendr_api::Robj::from(value.as_str())))
-        .collect();
-    pairs.push(("{host_name}", extendr_api::prelude::List::from_pairs({name}_pairs).into()));"#
+            r#"        ("{host_name}", extendr_api::prelude::List::from_pairs(
+            ctx.{name}.iter()
+                .map(|(key, value)| (key.as_str(), extendr_api::Robj::from(value.as_str())))
+                .collect::<Vec<(&str, extendr_api::Robj)>>(),
+        ).into()),"#
         ),
         FieldShape::StringVec => {
-            format!(r#"    pairs.push(("{host_name}", extendr_api::Robj::from(ctx.{name}.clone())));"#)
+            format!(r#"        ("{host_name}", extendr_api::Robj::from(ctx.{name}.clone())),"#)
         }
     }
 }
@@ -265,9 +268,9 @@ fn rustler_field_line(field: &FieldDef, shape: FieldShape) -> String {
         FieldShape::OptionalString => {
             let value_expr = format!(
                 r#"match ctx.{name}.as_deref() {{
-        Some(value) => value.encode(env),
-        None => rustler::types::atom::Atom::from_str(env, "nil").unwrap().to_term(env),
-    }}"#
+            Some(value) => value.encode(env),
+            None => rustler::types::atom::Atom::from_str(env, "nil").unwrap().to_term(env),
+        }}"#
             );
             rustler_pair(&host_name, &value_expr)
         }
@@ -277,13 +280,13 @@ fn rustler_field_line(field: &FieldDef, shape: FieldShape) -> String {
         FieldShape::StringMap => {
             let value_expr = format!(
                 r#"rustler::Term::map_from_pairs(
-        env,
-        &ctx.{name}
-            .iter()
-            .map(|(key, value)| (key.encode(env), value.encode(env)))
-            .collect::<Vec<_>>(),
-    )
-    .unwrap_or_else(|_| rustler::types::atom::Atom::from_str(env, "nil").unwrap().to_term(env))"#
+            env,
+            &ctx.{name}
+                .iter()
+                .map(|(key, value)| (key.encode(env), value.encode(env)))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_else(|_| rustler::types::atom::Atom::from_str(env, "nil").unwrap().to_term(env))"#
             );
             rustler_pair(&host_name, &value_expr)
         }
@@ -297,7 +300,7 @@ fn reflect_set(host_name: &str, value_expr: &str) -> String {
 
 fn rustler_pair(host_name: &str, value_expr: &str) -> String {
     format!(
-        r#"    pairs.push((rustler::types::atom::Atom::from_str(env, "{host_name}").unwrap().to_term(env), {value_expr}));"#
+        r#"        (rustler::types::atom::Atom::from_str(env, "{host_name}").unwrap().to_term(env), {value_expr}),"#
     )
 }
 

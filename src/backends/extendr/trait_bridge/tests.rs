@@ -15,6 +15,48 @@ fn visitor_bridge_uses_configured_context_and_result_metadata() {
     assert!(output.code.contains("\"display_name\""));
 }
 
+/// `let mut pairs = Vec::new();` followed by a statically known run of `pairs.push(...)` is
+/// `clippy::vec_init_then_push`, which a consumer building the generated extendr crate under
+/// `-D warnings` rejects. The context pairs must be a `vec![]` literal instead. ~keep
+#[test]
+fn visitor_context_helper_builds_pairs_as_a_vec_literal_not_init_then_push() {
+    let (api, trait_type, bridge) = crate::codegen::visitor_context::test_support::neutral_visitor_fixture();
+    let output = super::gen_trait_bridge(
+        &trait_type,
+        &bridge,
+        "sample_core",
+        "SampleError",
+        "SampleError::Message { message: {msg} }",
+        &api,
+    )
+    .expect("visitor bridge should generate");
+
+    assert!(
+        output
+            .code
+            .contains("let pairs: Vec<(&str, extendr_api::Robj)> = vec!["),
+        "context pairs must be built as a vec! literal:\n{}",
+        output.code
+    );
+    assert!(
+        output
+            .code
+            .contains(r#"        ("display_name", extendr_api::Robj::from(AsRef::<str>::as_ref(&ctx.display_name))),"#),
+        "each context field must render as a vec! element:\n{}",
+        output.code
+    );
+    assert!(
+        !output.code.contains("pairs.push("),
+        "context pairs must not be built by push:\n{}",
+        output.code
+    );
+    assert!(
+        !output.code.contains("let mut pairs"),
+        "context pairs must not need a mutable binding:\n{}",
+        output.code
+    );
+}
+
 use crate::backends::extendr::trait_bridge::{ExtendrBridgeGenerator, native_marshalled_extendr_struct_params};
 use crate::codegen::generators::trait_bridge::{TraitBridgeGenerator, TraitBridgeSpec};
 use crate::core::config::TraitBridgeConfig;
