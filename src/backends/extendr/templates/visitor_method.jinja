@@ -28,10 +28,10 @@
                     {{ default_result_expr }}
                 } else {
 {%- for variant in payload_result_variants %}
-                    if let Ok(custom_val) = val.dollar("{{ variant.wire_name }}") {
-                        if let Some(s) = custom_val.as_str() {
-                            return {{ return_type }}::{{ variant.name }}(s.to_string());
-                        }
+                    if let Ok(custom_val) = val.dollar("{{ variant.wire_name }}")
+                        && let Some(s) = custom_val.as_str()
+                    {
+                        return {{ return_type }}::{{ variant.name }}(s.to_string());
                     }
 {%- endfor %}
                     {{ default_result_expr }}

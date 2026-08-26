@@ -85,11 +85,11 @@ impl {{ wrapper_name }} {
     /// Idempotent: safe to call multiple times. After disposal the bridge can no
     /// longer invoke the JS object.
     fn release_ref(&self) {
-        if let Ok(mut guard) = self.obj_ref.lock() {
-            if let Some(obj_ref) = guard.take() {
-                let env = napi::Env::from_raw(self.env);
-                let _ = obj_ref.unref(&env);
-            }
+        if let Ok(mut guard) = self.obj_ref.lock()
+            && let Some(obj_ref) = guard.take()
+        {
+            let env = napi::Env::from_raw(self.env);
+            let _ = obj_ref.unref(&env);
         }
     }
 

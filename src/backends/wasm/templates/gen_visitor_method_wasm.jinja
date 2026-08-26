@@ -34,10 +34,10 @@ fn {{ name }}({{ sig }}) -> {{ ret_ty }} {
             } else if val.is_object() {
 {%- for variant in payload_result_variants %}
                 let payload_key_{{ loop.index0 }} = wasm_bindgen::JsValue::from_str("{{ variant.wire_name }}");
-                if let Ok(cv) = js_sys::Reflect::get(&val, &payload_key_{{ loop.index0 }}) {
-                    if let Some(s) = cv.as_string() {
-                        return {{ ret_ty }}::{{ variant.name }}(s);
-                    }
+                if let Ok(cv) = js_sys::Reflect::get(&val, &payload_key_{{ loop.index0 }})
+                    && let Some(s) = cv.as_string()
+                {
+                    return {{ ret_ty }}::{{ variant.name }}(s);
                 }
 {%- endfor %}
                 {{ default_result_expr }}

@@ -137,10 +137,10 @@ fn fix_handler_executor_calls() {
     if !source.ends_with('\n') && out.ends_with('\n') {
         out.pop();
     }
-    if out != source {
-        if let Err(err) = std::fs::write(path, &out) {
-            println!("cargo:warning=failed to write handler-executor rewrite: {err}");
-        }
+    if out != source
+        && let Err(err) = std::fs::write(path, &out)
+    {
+        println!("cargo:warning=failed to write handler-executor rewrite: {err}");
     }
 }
 
