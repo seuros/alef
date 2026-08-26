@@ -151,7 +151,10 @@ pub(super) fn gen_php_opaque_class_file(
         content.push('\n');
     }
 
-    for bridge in trait_bridges {
+    for bridge in trait_bridges
+        .iter()
+        .filter(|bridge| crate::backends::php::trait_bridge::targets_php(bridge))
+    {
         if let Some(ref type_alias) = bridge.type_alias
             && type_alias == &typ.name
         {

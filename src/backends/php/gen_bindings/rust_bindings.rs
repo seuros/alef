@@ -166,9 +166,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     let has_serde = php_crate_requires_serde(api, config);
 
     // Including them ensures gen_php_struct emits #[serde(skip)] for fields of those types so
-    let bridge_type_aliases_php: Vec<String> = config
-        .trait_bridges
-        .iter()
+    let bridge_type_aliases_php: Vec<String> = crate::backends::php::trait_bridge::active_bridges(config)
         .filter_map(|b| b.type_alias.clone())
         .collect();
     let bridge_type_aliases_set: AHashSet<String> = bridge_type_aliases_php.iter().cloned().collect();
@@ -182,9 +180,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
 
     let mut cfg = binding_config(&core_import, has_serde);
     cfg.opaque_type_names = &opaque_names_vec_php;
-    let never_skip_cfg_field_names: Vec<String> = config
-        .trait_bridges
-        .iter()
+    let never_skip_cfg_field_names: Vec<String> = crate::backends::php::trait_bridge::active_bridges(config)
         .filter_map(|b| {
             if b.bind_via == crate::core::config::BridgeBinding::OptionsField {
                 b.resolved_options_field().map(|s| s.to_string())
@@ -437,7 +433,8 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
                 &func.return_type,
                 &opaque_types,
             )?;
-            let bridge_param = crate::backends::php::trait_bridge::find_bridge_param(func, &config.trait_bridges);
+            let bridge_param = crate::backends::php::trait_bridge::find_bridge_param(func, &config.trait_bridges)
+                .filter(|(_, bridge_cfg)| crate::backends::php::trait_bridge::targets_php(bridge_cfg));
             if let Some((param_idx, bridge_cfg)) = bridge_param {
                 let bridge_handle_path =
                     crate::codegen::generators::trait_bridge::bridge_handle_path(api, bridge_cfg, &core_import);
@@ -499,6 +496,9 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         }
 
         for bridge_cfg in &config.trait_bridges {
+            if crate::backends::php::trait_bridge::active_bridge_trait(bridge_cfg, api).is_none() {
+                continue;
+            }
             if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
                 let php_name = crate::backends::php::naming::php_bridge_method_name(register_fn);
                 method_items.push(format!(
@@ -550,7 +550,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
         builder.add_item(&facade_struct);
 
         for bridge_cfg in &config.trait_bridges {
-            if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
+            if let Some(trait_type) = crate::backends::php::trait_bridge::active_bridge_trait(bridge_cfg, api) {
                 let bridge = crate::backends::php::trait_bridge::gen_trait_bridge(
                     trait_type,
                     bridge_cfg,
@@ -571,21 +571,17 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     let core_to_binding = crate::codegen::conversions::core_to_binding_convertible_types(api, &[]);
     let input_types = crate::codegen::conversions::input_type_names(api);
     let enum_names_ref = &mapper.enum_names;
-    let bridge_skip_types: Vec<String> = config
-        .trait_bridges
-        .iter()
+    let bridge_skip_types: Vec<String> = crate::backends::php::trait_bridge::active_bridges(config)
         .filter(|b| !matches!(b.bind_via, crate::core::config::BridgeBinding::OptionsField))
         .filter_map(|b| b.type_alias.clone())
         .collect();
-    let trait_bridge_arc_wrapper_field_names: Vec<String> = config
-        .trait_bridges
-        .iter()
+    let trait_bridge_arc_wrapper_field_names: Vec<String> = crate::backends::php::trait_bridge::active_bridges(config)
         .filter(|b| b.bind_via == crate::core::config::BridgeBinding::OptionsField)
         .filter_map(|b| b.resolved_options_field().map(String::from))
         .collect();
     // Set of opaque type names for ConversionConfig. Combines Rust `#[opaque]`
     let mut conv_opaque_types: AHashSet<String> = opaque_types.clone();
-    for bridge in &config.trait_bridges {
+    for bridge in crate::backends::php::trait_bridge::active_bridges(config) {
         if let Some(alias) = &bridge.type_alias {
             conv_opaque_types.insert(alias.clone());
         }
@@ -802,7 +798,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
 
     let mut content = builder.build();
 
-    for bridge in &config.trait_bridges {
+    for bridge in crate::backends::php::trait_bridge::active_bridges(config) {
         if let Some(field_name) = bridge.resolved_options_field() {
             let param_name = bridge.param_name.as_deref().unwrap_or(field_name);
             let Some(type_alias) = bridge.type_alias.as_deref() else {
@@ -852,7 +848,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     });
 
     for bridge_cfg in &config.trait_bridges {
-        if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
+        if let Some(trait_type) = crate::backends::php::trait_bridge::active_bridge_trait(bridge_cfg, api) {
             let is_visitor_bridge = bridge_cfg.type_alias.is_some()
                 && bridge_cfg.register_fn.is_none()
                 && bridge_cfg.super_trait.is_none()

@@ -49,9 +49,7 @@ pub(super) fn generate_public_api(
         context! { class_name => &class_name },
     ));
 
-    let bridge_param_names_pub: ahash::AHashSet<&str> = config
-        .trait_bridges
-        .iter()
+    let bridge_param_names_pub: ahash::AHashSet<&str> = crate::backends::php::trait_bridge::active_bridges(config)
         .filter_map(|b| b.param_name.as_deref())
         .collect();
 
@@ -253,6 +251,9 @@ pub(super) fn generate_public_api(
     }
 
     for bridge_cfg in &config.trait_bridges {
+        if crate::backends::php::trait_bridge::active_bridge_trait(bridge_cfg, api).is_none() {
+            continue;
+        }
         if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
             let method_name = crate::backends::php::naming::php_bridge_method_name(register_fn);
             content.push_str(&crate::backends::php::template_env::render(

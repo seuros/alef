@@ -79,8 +79,12 @@ fn only_surface(backend: &dyn Backend, config: &ResolvedCrateConfig) -> TraitBri
 }
 
 fn generated_text(backend: &dyn Backend, config: &ResolvedCrateConfig) -> String {
+    generated_text_for(backend, &plugin_api(), config)
+}
+
+fn generated_text_for(backend: &dyn Backend, api: &ApiSurface, config: &ResolvedCrateConfig) -> String {
     backend
-        .generate_bindings(&plugin_api(), config)
+        .generate_bindings(api, config)
         .unwrap_or_else(|error| panic!("{}: generation failed: {error}", backend.name()))
         .iter()
         .map(|file| file.content.as_str())
@@ -91,13 +95,27 @@ fn generated_text(backend: &dyn Backend, config: &ResolvedCrateConfig) -> String
 /// PHP and Elixir emit their consumer-facing wrapper from `generate_public_api`, not from
 /// `generate_bindings`, so the declaration lookup has to read that output instead.
 fn generated_public_api_text(backend: &dyn Backend, config: &ResolvedCrateConfig) -> String {
+    generated_public_api_text_for(backend, &plugin_api(), config)
+}
+
+fn generated_public_api_text_for(backend: &dyn Backend, api: &ApiSurface, config: &ResolvedCrateConfig) -> String {
     backend
-        .generate_public_api(&plugin_api(), config)
+        .generate_public_api(api, config)
         .unwrap_or_else(|error| panic!("{}: public API generation failed: {error}", backend.name()))
         .iter()
         .map(|file| file.content.as_str())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// An API surface with no trait at all — the shape a consumer gets when the bridged trait is
+/// excluded from the binding surface or renamed out from under `alef.toml`. ~keep
+fn api_without_the_trait() -> ApiSurface {
+    ApiSurface {
+        crate_name: "sample-core".to_owned(),
+        version: "0.1.0".to_owned(),
+        ..Default::default()
+    }
 }
 
 fn assert_declares(backend: &dyn Backend, generated: &str, declaration: &str) {
@@ -333,6 +351,56 @@ fn php_surface_names_the_static_methods_on_the_public_wrapper_class() {
     for method in ["installSamplePlugin", "removeSamplePlugin", "clearSamplePlugins"] {
         assert_declares(&PhpBackend, &generated, &format!("function {method}("));
     }
+}
+
+#[test]
+fn php_emits_no_wrapper_and_reports_no_surface_when_the_target_is_excluded() {
+    let mut config = minimal_config("php", "");
+    config.trait_bridges[0].exclude_languages = vec!["php".to_owned()];
+
+    let surfaces = PhpBackend.trait_bridge_registration_surface(&plugin_api(), &config);
+    let public_api = generated_public_api_text(&PhpBackend, &config);
+    let bindings = generated_text(&PhpBackend, &config);
+
+    assert_eq!(
+        surfaces.len(),
+        0,
+        "`exclude_languages = [\"php\"]` suppresses the wrapper methods, so nothing is left to \
+         document; got {surfaces:?}"
+    );
+    assert!(
+        !public_api.contains("installSamplePlugin"),
+        "`exclude_languages = [\"php\"]` must suppress the public wrapper method"
+    );
+    assert!(
+        !bindings.contains(REGISTER_FN),
+        "`exclude_languages = [\"php\"]` must suppress the `…Api` extension method too"
+    );
+}
+
+#[test]
+fn php_emits_no_wrapper_when_the_bridged_trait_is_absent_from_the_api_surface() {
+    let config = minimal_config("php", "");
+    let api = api_without_the_trait();
+
+    let surfaces = PhpBackend.trait_bridge_registration_surface(&api, &config);
+    let public_api = generated_public_api_text_for(&PhpBackend, &api, &config);
+    let bindings = generated_text_for(&PhpBackend, &api, &config);
+
+    assert_eq!(
+        surfaces.len(),
+        0,
+        "no trait means `gen_trait_bridge` never ran, so there is no registration API; \
+         got {surfaces:?}"
+    );
+    assert!(
+        !public_api.contains("installSamplePlugin"),
+        "the public wrapper would call `SampleCoreApi::installSamplePlugin`, which no pass emitted"
+    );
+    assert!(
+        !bindings.contains(REGISTER_FN),
+        "the `…Api` extension method would forward to `crate::{REGISTER_FN}`, which no pass emitted"
+    );
 }
 
 #[test]

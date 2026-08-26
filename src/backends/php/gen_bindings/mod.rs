@@ -97,11 +97,12 @@ impl Backend for PhpBackend {
 
     /// PHP consumers call the static methods on the public wrapper class emitted by
     /// `generate_public_api`, which forward to the identically named methods on the `…Api`
-    /// extension class. Both are emitted straight off `config.trait_bridges` with no
-    /// `exclude_languages` or `ApiSurface` gate, so this reports the same. ~keep
+    /// extension class. Both wrapper passes gate on
+    /// `php::trait_bridge::active_bridge_trait`, so this asks the same question and reports
+    /// only what those passes emitted. ~keep
     fn trait_bridge_registration_surface(
         &self,
-        _api: &ApiSurface,
+        api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> Vec<TraitBridgeRegistrationSurface> {
         use crate::backends::php::naming::{php_bridge_method_name, php_public_class_name};
@@ -115,6 +116,7 @@ impl Backend for PhpBackend {
         config
             .trait_bridges
             .iter()
+            .filter(|bridge| crate::backends::php::trait_bridge::active_bridge_trait(bridge, api).is_some())
             .filter(|bridge| {
                 bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
             })
