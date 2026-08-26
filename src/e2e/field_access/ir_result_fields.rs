@@ -199,10 +199,20 @@ pub(super) fn root_declares_first_segment(map: &IrResultFieldMap, first_segment:
 /// the IR positively knows the owner of, and positively does not find, answers `Some(false)`. ~keep
 pub(super) fn root_declares_path(map: &IrResultFieldMap, path: &str) -> Option<bool> {
     let root = map.root_type.as_deref()?;
+    type_declares_path(map, root, path)
+}
+
+/// The same walk [`root_declares_path`] does, starting from an explicit `owner_type` instead of
+/// `map.root_type` — for a caller that has already resolved a different anchor `root_declares_path`
+/// cannot itself express, e.g. a tagged-union variant's payload type once
+/// [`path_crosses_unwalkable_field`] has been overridden by a `fields_method_calls` entry that
+/// names how to cross that exact union. Shares every fallback `root_declares_path` documents
+/// (`None` on an unresolvable prefix segment, `Some(false)` only on a positively-undeclared one).
+pub(super) fn type_declares_path(map: &IrResultFieldMap, owner_type: &str, path: &str) -> Option<bool> {
     let segments = parse_path(path);
     let (last, prefix) = segments.split_last()?;
 
-    let mut owner = root;
+    let mut owner = owner_type;
     for segment in prefix {
         let name = segment_name(segment)?;
         if !map.declared_fields.get(owner)?.contains(name) {
