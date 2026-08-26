@@ -678,9 +678,54 @@ fn variant_constructors_absent_without_mapper() {
     assert!(!generated.contains("_factory_circle"), "{generated}");
 }
 
+/// The generated `__new__` must PARSE, which a `contains(...)` assertion cannot tell you.
+///
+/// `trim_blocks` consumes the newline after a `{% ... %}` tag and `{%-` consumes the one before
+/// it, so a source line followed directly by a stripping tag loses its line ending entirely and
+/// the next emitted line is welded onto it. Where that previous line is a `//` comment, the
+/// comment swallows the code after it -- here an entire `if let ... {`, whose closing brace then
+/// had nothing to match. A consumer's generated PyO3 crate failed to parse at exactly this point.
+///
+/// Multi-variant is the discriminating shape: the single-variant arm renders different code.
+/// `syn::parse_file` is the assertion because the defect is invisible to substring matching --
+/// every expected fragment was present, just commented out. ~keep
+#[test]
+fn gen_pyo3_multi_variant_enum_new_parses_as_rust() {
+    let cfg = pyo3_unit_enum_config();
+    let generated = gen_enum(
+        &enum_def(
+            "AssetCategory",
+            vec![
+                variant("Document", Vec::new()),
+                variant("Image", Vec::new()),
+                variant("Audio", Vec::new()),
+            ],
+        ),
+        &cfg,
+    );
+
+    let wrapped = format!("{generated}\n");
+    syn::parse_file(&wrapped).unwrap_or_else(|error| panic!("generated enum must parse as Rust: {error}\n{generated}"));
+
+    assert!(
+        !generated.contains("(by discriminant value)        if let"),
+        "the discriminant comment must not swallow the code after it, got:\n{generated}"
+    );
+}
+
 #[test]
 fn gen_pyo3_unit_enum_emits_string_methods() {
-    let cfg = RustBindingConfig {
+    let cfg = pyo3_unit_enum_config();
+    let generated = gen_enum(&enum_def("StructureKind", vec![variant("Function", Vec::new())]), &cfg);
+    assert!(
+        generated.contains("fn __str__(&self) -> PyResult<String>"),
+        "{generated}"
+    );
+    assert!(generated.contains("serde_json::to_value(self)"), "{generated}");
+}
+
+fn pyo3_unit_enum_config() -> RustBindingConfig<'static> {
+    RustBindingConfig {
         struct_attrs: &[],
         field_attrs: &[],
         struct_derives: &[],
@@ -711,14 +756,7 @@ fn gen_pyo3_unit_enum_emits_string_methods() {
         source_crate_remaps: &[],
         emit_delegating_default_for_types: None,
         delegate_deserialize_to_core_for_types: None,
-    };
-    let generated = gen_enum(&enum_def("StructureKind", vec![variant("Function", Vec::new())]), &cfg);
-
-    assert!(
-        generated.contains("fn __str__(&self) -> PyResult<String>"),
-        "{generated}"
-    );
-    assert!(generated.contains("serde_json::to_value(self)"), "{generated}");
+    }
 }
 
 #[test]

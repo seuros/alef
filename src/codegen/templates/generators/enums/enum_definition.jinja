@@ -29,7 +29,7 @@ impl {{ enum_name }} {
         // Try to extract as string first
         if let Ok(s) = value.extract::<&str>() {
             let s_lower = s.to_lowercase();
-{%- if variants | length == 1 %}
+{% if variants | length == 1 %}
             if matches!(s_lower.as_str(), "{{ variants[0].name | lower }}"{% if variants[0].wire_name and (variants[0].wire_name | lower) != (variants[0].name | lower) %} | "{{ variants[0].wire_name | lower }}"{% endif %}) {
                 return Ok(Self::{{ variants[0].name }});
             }
@@ -46,7 +46,7 @@ impl {{ enum_name }} {
 {%- endif %}
         }
         // Try to extract as integer (by discriminant value)
-{%- if variants | length == 1 %}
+{% if variants | length == 1 %}
         if let Ok(n) = value.extract::<i32>()
             && n == {{ variants[0].idx }}
         {
