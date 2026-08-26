@@ -19,11 +19,10 @@ pub use enums::{
     gen_enum_from_core_to_binding_cfg,
 };
 pub use helpers::{
-    apply_crate_remaps, binding_to_core_match_arm, build_type_path_map, can_generate_conversion,
-    can_generate_enum_conversion, can_generate_enum_conversion_from_core, convertible_types, core_enum_path,
-    core_enum_path_remapped, core_to_binding_convertible_types, core_to_binding_match_arm, core_type_path,
-    core_type_path_remapped, field_references_excluded_type, has_sanitized_fields, input_type_names, is_tuple_variant,
-    pyo3_from_json_eligible, resolve_named_path,
+    apply_crate_remaps, build_type_path_map, can_generate_conversion, can_generate_enum_conversion,
+    can_generate_enum_conversion_from_core, convertible_types, core_enum_path, core_enum_path_remapped,
+    core_to_binding_convertible_types, core_type_path, core_type_path_remapped, field_references_excluded_type,
+    has_sanitized_fields, input_type_names, is_tuple_variant, pyo3_from_json_eligible, resolve_named_path,
 };
 
 #[cfg(test)]

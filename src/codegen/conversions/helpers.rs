@@ -13,11 +13,7 @@ pub use eligibility::{
     core_to_binding_convertible_types, has_sanitized_fields, is_newtype, is_tuple_variant, pyo3_from_json_eligible,
     variant_emits_tuple_form,
 };
-#[allow(unused_imports)]
-pub use enum_arms::{
-    binding_to_core_match_arm, binding_to_core_match_arm_ext, binding_to_core_match_arm_ext_cfg,
-    core_to_binding_match_arm, core_to_binding_match_arm_ext, core_to_binding_match_arm_ext_cfg,
-};
+pub use enum_arms::{binding_to_core_match_arm_ext_cfg, core_to_binding_match_arm_ext_cfg};
 pub(crate) use field_fragments::{
     sanitized_field_to_binding_expr, sanitized_map_field_to_core_expr, sanitized_vec_field_to_core_expr,
 };
