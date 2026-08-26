@@ -24,7 +24,6 @@
 # <path> <ceiling>
 src/backends/csharp/gen_bindings/functions.rs 1554
 src/backends/csharp/gen_bindings/methods/wrappers.rs 1327
-src/backends/csharp/gen_bindings/mod.rs 1062
 src/backends/extendr/gen_bindings/tests/wrappers.rs 1319
 src/backends/ffi/gen_bindings/functions/orchestration.rs 1154
 src/backends/ffi/gen_bindings/helpers.rs 1041

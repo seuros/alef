@@ -929,6 +929,10 @@ fn gen_single_trait_bridge(
         "trait_registry_class.jinja",
         Value::from_serialize(serde_json::json!({
             "trait_pascal": trait_pascal,
+            "registry_class": registration_surface::registry_class_name(trait_name),
+            "register_method": registration_surface::register_method_name(trait_name),
+            "unregister_method": registration_surface::UNREGISTER_METHOD,
+            "clear_method": registration_surface::CLEAR_METHOD,
             "has_super_trait": has_super_trait,
             "has_unregister": has_unregister,
             "has_clear": has_clear,
@@ -942,6 +946,9 @@ fn gen_single_trait_bridge(
 fn _to_json_string(_obj: &dyn std::any::Any) -> String {
     "null".to_string()
 }
+
+mod registration_surface;
+pub use registration_surface::registration_surface;
 
 #[cfg(test)]
 mod tests;

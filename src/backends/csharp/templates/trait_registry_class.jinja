@@ -1,11 +1,11 @@
 /// <summary>Static helpers for registering trait implementations</summary>
-public static class {{ trait_pascal }}Registry {
+public static class {{ registry_class }} {
 
     private static readonly ConcurrentDictionary<string, {{ trait_pascal }}Bridge> _bridges =
         new ConcurrentDictionary<string, {{ trait_pascal }}Bridge>();
 
     /// <summary>Register a {{ trait_pascal }} implementation and return its native handle</summary>
-    public static IntPtr Register{{ trait_pascal }}(I{{ trait_pascal }} impl) {
+    public static IntPtr {{ register_method }}(I{{ trait_pascal }} impl) {
         if (impl == null)
             throw new ArgumentNullException(nameof(impl));
 
@@ -70,7 +70,7 @@ public static class {{ trait_pascal }}Registry {
 
 {% if has_unregister %}
     /// <summary>Unregister a {{ trait_pascal }} implementation</summary>
-    public static void Unregister(string name) {
+    public static void {{ unregister_method }}(string name) {
         if (string.IsNullOrEmpty(name))
             throw new ArgumentException("Name cannot be empty", nameof(name));
 
@@ -89,7 +89,7 @@ public static class {{ trait_pascal }}Registry {
 
 {% if has_clear %}
     /// <summary>Clear all registered {{ trait_pascal }} implementations</summary>
-    public static void Clear() {
+    public static void {{ clear_method }}() {
         var result = NativeMethods.Clear{{ trait_pascal }}(out var outError);
         if (result != 0) {
             var errorMsg = global::System.Runtime.InteropServices.Marshal.PtrToStringUTF8(outError) ?? "Unknown error";
