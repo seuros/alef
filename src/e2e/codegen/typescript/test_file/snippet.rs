@@ -198,6 +198,28 @@ pub(crate) fn render_snippet_body(context: SnippetContext<'_>) -> String {
             .map(|name| import_name(&name))
             .filter(|name| referenced_code.contains(name)),
     );
+    // WASM builder expressions construct nested classes recursively
+    // (`ts_builder_expression_inner`): `_u0.config = (() => { const _u1 =
+    // WasmFileExtractionConfig.default(); ... })()`. `nested_types` above is only the
+    // config-authored map (`[crates.e2e.calls.<call>.overrides.wasm].nested_types`), so a
+    // class reached solely through the options type's own IR fields — with no per-call
+    // config entry naming it, as a call with no wasm override at all has none — was built
+    // into the snippet body but never imported, failing at typecheck with "Cannot find
+    // name". `render_test_file`'s import builder already walks the IR transitively for the
+    // same reason (`collect_transitive_nested_types_for_wasm`); this standalone-snippet path
+    // lacked the same walk. Filtered by `referenced_code.contains`, matching every other
+    // entry in this list, so a reachable-but-unused class is never imported. ~keep
+    if lang == "wasm"
+        && let Some(seed) = options_type.as_deref()
+    {
+        let seeds: std::collections::BTreeSet<String> = std::iter::once(seed.to_string()).collect();
+        imports.extend(
+            collect_transitive_nested_types_for_wasm(&seeds, type_defs, wasm_type_prefix)
+                .into_iter()
+                .map(|name| import_name(&name))
+                .filter(|name| referenced_code.contains(name)),
+        );
+    }
     // A trait-bridge stub method returning a named enum annotates its signature with that
     // enum and casts through it (`(): ProcessingStage { return "\"Early\"" as unknown as
     // ProcessingStage; }` — see `emit_test_backend`'s `type_imports`). The enum is a
@@ -739,6 +761,74 @@ mod tests {
         assert!(body.contains("new WasmVisitorHandle(_testVisitor)"));
         assert!(body.contains("RenderOptions.default()"));
         assert!(body.contains("VisitorHandle"));
+    }
+
+    /// A doc-only WASM snippet whose options type has a class-typed field that is reached
+    /// only through the IR (no `nested_types` entry configured on the call override, which
+    /// this fixture deliberately leaves unset). The builder expression still constructs the
+    /// nested class (`ts_builder_expression_inner` derives it from `type_defs` on its own),
+    /// so the import statement must name it too, or the emitted snippet references an
+    /// undeclared symbol and fails to typecheck. `render_test_file`'s import builder already
+    /// walks the IR transitively for this reason; this pins the same behaviour for the
+    /// standalone-snippet path.
+    #[test]
+    fn wasm_snippet_imports_a_nested_class_reached_only_through_the_ir() {
+        let mut fixture = fixture();
+        fixture.input = serde_json::json!({"config": {}});
+        fixture.args = vec![crate::e2e::config::ArgMapping {
+            name: "input".into(),
+            field: "input".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: true,
+            element_type: None,
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let mut e2e = E2eConfig::default();
+        e2e.call.function = "extract".into();
+        e2e.call.overrides.entry("wasm".into()).or_default().options_type = Some("ExtractInput".into());
+        let type_defs = [
+            TypeDef {
+                name: "ExtractInput".into(),
+                fields: vec![crate::core::ir::FieldDef {
+                    name: "config".into(),
+                    ty: crate::core::ir::TypeRef::Optional(Box::new(crate::core::ir::TypeRef::Named(
+                        "FileExtractionConfig".into(),
+                    ))),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            TypeDef {
+                name: "FileExtractionConfig".into(),
+                ..Default::default()
+            },
+        ];
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let body = render_snippet_body(SnippetContext {
+            lang: "wasm",
+            fixture: &fixture,
+            module: "@example/wasm",
+            client_factory: None,
+            e2e_config: &e2e,
+            type_defs: &type_defs,
+            enums: &[],
+            functions: &[],
+            wasm_type_prefix: "Wasm",
+            config: &config,
+        });
+
+        assert!(
+            body.contains("WasmFileExtractionConfig.default()"),
+            "test setup did not reach the nested-builder path, got: {body}"
+        );
+        assert!(
+            body.contains("import { WasmExtractInput, WasmFileExtractionConfig, extract }"),
+            "nested class reached only through the IR must still be imported, got: {body}"
+        );
     }
 
     /// Pins that a `client_factory` documentation snippet never points the reader at the
