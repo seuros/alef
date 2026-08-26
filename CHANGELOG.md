@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-08-27
+
 ### Fixed
 
 - **Four independent trait-bridge stub defects, one per backend.** Go emitted a bare identifier as
