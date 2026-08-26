@@ -219,10 +219,9 @@ fn emit_primitive_return(out: &mut String, invocation: &SyncInvocation<'_>) {
     let return_expr = if invocation.is_optional_return {
         let present = format!("Optional.of({return_expr})");
         match presence {
-            Some(_) => crate::backends::java::gen_bindings::result_presence::presence_conditional(
-                &present,
-                "Optional.empty()",
-            ),
+            Some(_) => {
+                crate::backends::java::gen_bindings::result_presence::presence_conditional(&present, "Optional.empty()")
+            }
             None => present,
         }
     } else {

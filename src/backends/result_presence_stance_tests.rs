@@ -114,8 +114,14 @@ fn the_companion_covers_scalar_optionals_except_on_an_owned_receiver() {
     let scalar_option = TypeRef::Optional(Box::new(TypeRef::Primitive(PrimitiveType::I64)));
 
     assert!(result_presence_companion_exists(&scalar_option, None));
-    assert!(result_presence_companion_exists(&scalar_option, Some(&ReceiverKind::Ref)));
-    assert!(result_presence_companion_exists(&scalar_option, Some(&ReceiverKind::RefMut)));
+    assert!(result_presence_companion_exists(
+        &scalar_option,
+        Some(&ReceiverKind::Ref)
+    ));
+    assert!(result_presence_companion_exists(
+        &scalar_option,
+        Some(&ReceiverKind::RefMut)
+    ));
     assert!(
         !result_presence_companion_exists(&scalar_option, Some(&ReceiverKind::Owned)),
         "an owned receiver's first call consumes the handle, so the companion cannot re-invoke it"

@@ -137,7 +137,9 @@ fn should_report_absent_as_an_empty_optional_and_keep_a_zero_valued_result_prese
 fn should_invoke_the_companion_before_the_primary_downcall() {
     let generated = render(&surface(vec![], vec![free_function("port", i64_option())]));
 
-    let companion_at = generated.find("TEST_PORT_HAS_RESULT.invoke(").expect("companion invocation");
+    let companion_at = generated
+        .find("TEST_PORT_HAS_RESULT.invoke(")
+        .expect("companion invocation");
     let primary_at = generated
         .find("var primitiveResult = (long) NativeLib.TEST_PORT.invoke(")
         .expect("primary invocation");
@@ -149,7 +151,10 @@ fn should_invoke_the_companion_before_the_primary_downcall() {
 
 #[test]
 fn should_not_reference_a_companion_for_a_pointer_shaped_optional_return() {
-    let generated = render(&surface(vec![], vec![free_function("label", optional(TypeRef::String))]));
+    let generated = render(&surface(
+        vec![],
+        vec![free_function("label", optional(TypeRef::String))],
+    ));
 
     assert!(
         !generated.contains(COMPANION_MARKER),

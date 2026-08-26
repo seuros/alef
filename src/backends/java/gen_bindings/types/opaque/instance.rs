@@ -37,11 +37,9 @@ fn instance_method_symbols(
     };
     let return_type_java = instance_return_type(method, is_bytes_result, is_optional_return);
     let ffi_handle = format!("NativeLib.{prefix_upper}_{owner_upper}_{method_upper}");
-    let presence_handle = crate::backends::ffi::type_map::result_presence_companion_exists(
-        &method.return_type,
-        method.receiver.as_ref(),
-    )
-    .then(|| crate::backends::java::gen_bindings::result_presence::presence_handle_name(&ffi_handle));
+    let presence_handle =
+        crate::backends::ffi::type_map::result_presence_companion_exists(&method.return_type, method.receiver.as_ref())
+            .then(|| crate::backends::java::gen_bindings::result_presence::presence_handle_name(&ffi_handle));
     InstanceMethodSymbols {
         method_name: safe_java_method_name(&method.name),
         exception_class: format!("{main_class}Exception"),
@@ -497,13 +495,15 @@ fn emit_primitive_result(out: &mut String, context: &ResultMarshalling<'_>) {
     };
     let is_optional_long = matches!(
         symbols.dispatch_return,
-        TypeRef::Primitive(
-            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize
-        ) | TypeRef::Duration
+        TypeRef::Primitive(PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize)
+            | TypeRef::Duration
     );
     let java_primitive_expr = java_ffi_return_expr(&symbols.dispatch_return, "result");
     let (present_expr, empty_expr) = if is_optional_long {
-        ("java.util.OptionalLong.of(result)".to_string(), "java.util.OptionalLong.empty()")
+        (
+            "java.util.OptionalLong.of(result)".to_string(),
+            "java.util.OptionalLong.empty()",
+        )
     } else {
         (
             format!("java.util.Optional.of({java_primitive_expr})"),
