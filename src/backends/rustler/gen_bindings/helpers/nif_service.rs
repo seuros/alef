@@ -204,7 +204,12 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_native_ex(
         );
     }
 
-    for bridge in crate::backends::rustler::trait_bridge::active_bridges(config) {
+    // These stubs declare NIFs `native::gen_trait_bridge` exports, and that pass runs only when
+    // the bridged trait resolves in the `ApiSurface`. Filtering on `active_bridges` alone left
+    // `Native` declaring a register/unregister/clear NIF nothing had defined. ~keep
+    let bridges_with_a_trait = crate::backends::rustler::trait_bridge::active_bridges(config)
+        .filter(|bridge| crate::backends::rustler::trait_bridge::active_bridge_trait(bridge, api).is_some());
+    for bridge in bridges_with_a_trait {
         if let Some(register_fn) = &bridge.register_fn {
             let params = vec![
                 "_pid".to_string(),

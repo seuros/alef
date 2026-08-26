@@ -483,7 +483,7 @@ fn rustler_emits_no_delegate_when_the_bridged_trait_is_absent_from_the_api_surfa
     for func in [REGISTER_FN, UNREGISTER_FN, CLEAR_FN] {
         assert!(
             !public_api.contains(&format!("def {func}")),
-            "the `{func}` delegate would call `SampleCore.Native.{func}`, a NIF no pass emitted"
+            "the `{func}` delegate would call `SampleCore.Native.{func}`, a NIF no pass emitted:\n{public_api}"
         );
     }
 }

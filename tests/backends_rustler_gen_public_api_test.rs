@@ -2122,10 +2122,19 @@ fn test_trait_behaviour_callback_params_are_maps_with_optional_callbacks() {
 #[test]
 fn test_register_nif_stub_has_implemented_methods_parameter() {
     let backend = RustlerBackend;
+    // `native.ex` declares the NIFs `native::gen_trait_bridge` exports, and that pass runs only
+    // when the bridged trait resolves — so the trait has to be in the surface for a stub to exist
+    // at all. Method-less keeps the stub's parameter list the only thing under test. ~keep
     let api = ApiSurface {
         crate_name: "my-lib".to_string(),
         version: "1.0.0".to_string(),
-        types: vec![],
+        types: vec![TypeDef {
+            name: "OcrBackend".to_string(),
+            rust_path: "my_lib::OcrBackend".to_string(),
+            is_trait: true,
+            is_opaque: true,
+            ..Default::default()
+        }],
         functions: vec![],
         enums: vec![],
         errors: vec![],

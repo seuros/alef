@@ -407,8 +407,10 @@ fn trait_bridge_builder_field_forwards_the_handle() {
         ..Default::default()
     };
     let content = "core_options.renderer(renderer.as_ref().map(|v| &v.inner));".to_string();
+    let mut config = make_config();
+    config.trait_bridges = vec![bridge];
 
-    let generated = forward_trait_bridge_builder_fields(content, &[bridge]);
+    let generated = forward_trait_bridge_builder_fields(content, &config);
 
     assert_eq!(
         generated,
