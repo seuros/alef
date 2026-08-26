@@ -19,6 +19,27 @@ const MODULE_SCOPE_MARKER: &str = "export {};";
 const UNRESOLVED_BATCH_SLOT: &str = "TypeScript batch validation produced no result for this snippet";
 const BATCH_FAILED_WITHOUT_DIAGNOSTIC: &str = "tsc failed without a snippet-specific diagnostic";
 
+/// Every docs/e2e-generated TypeScript snippet that reads a fixture file from disk (see
+/// `typescript/docs_file_expression.jinja`, `typescript/docs_file_assignment.jinja`) does it via
+/// `await import("node:fs/promises")`, unconditionally, regardless of which binding target the
+/// snippet demonstrates. When the target session's own package has no `@types/node` reachable
+/// (a WASM/browser package has no reason to depend on Node's types at all), `tsc` does not report
+/// the usual "cannot find module" -- for a `node:`-prefixed specifier it cannot resolve, it
+/// degrades the dynamic `import(...)` to a bare identifier lookup and reports
+/// `TS2591: Cannot find name 'node:fs/promises'`, the Node-specific sibling of TS2580. Since alef
+/// itself is what emits this construct into every TypeScript target uniformly, alef -- not the
+/// consumer's package.json -- is responsible for making it typecheck. Declaring only the single
+/// function these templates actually call keeps this from ever needing to match a real
+/// `@types/node`'s full surface; TypeScript merges declaration blocks for the same module
+/// specifier across files, so this coexists with a real `@types/node` if one is also resolvable
+/// (verified: a second, richer `declare module "node:fs/promises"` in the same program does not
+/// conflict with this one). Written unconditionally on every check, session or not -- an unused
+/// ambient module declaration is a no-op, so detecting whether a given snippet's code actually
+/// needs it would only add a second, fragile way for this to miss a case. ~keep
+const NODE_AMBIENT_DECLARATION_FILE_NAME: &str = "alef_node_fs_promises_ambient.d.ts";
+const NODE_AMBIENT_DECLARATION_CONTENT: &str =
+    "declare module \"node:fs/promises\" {\n  function readFile(path: string): Promise<Uint8Array>;\n}\n";
+
 impl TypeScriptValidator {
     fn validate_batch_with_context(
         snippets: &[&Snippet],
@@ -68,6 +89,10 @@ impl TypeScriptValidator {
         if session.is_none() {
             std::fs::write(directory.join("tsconfig.json"), Self::isolated_tsconfig())?;
         }
+        std::fs::write(
+            directory.join(NODE_AMBIENT_DECLARATION_FILE_NAME),
+            NODE_AMBIENT_DECLARATION_CONTENT,
+        )?;
         for (index, file_name) in checked.iter().zip(file_names) {
             let code = Self::as_module(&Self::dedent(&snippets[*index].code));
             std::fs::write(directory.join(file_name), code)?;
@@ -162,6 +187,10 @@ impl TypeScriptValidator {
         if session.is_none() {
             std::fs::write(directory.join("tsconfig.json"), Self::isolated_tsconfig())?;
         }
+        std::fs::write(
+            directory.join(NODE_AMBIENT_DECLARATION_FILE_NAME),
+            NODE_AMBIENT_DECLARATION_CONTENT,
+        )?;
         let file_path = directory.join(SNIPPET_FILE_NAME);
         let mut file = std::fs::File::create(&file_path)?;
         file.write_all(Self::dedent(&snippet.code).as_bytes())?;
@@ -198,10 +227,18 @@ impl TypeScriptValidator {
                 manifest.display()
             ))
         })?;
+        // Unlike `isolated_tsconfig`'s glob `include`, these two overlays name every checked file
+        // explicitly in `files` -- the ambient declaration must be listed the same way, or `tsc`
+        // never loads it and `NODE_AMBIENT_DECLARATION_FILE_NAME` sits on disk unused. ~keep
+        let file_names_with_ambient: Vec<String> = file_names
+            .iter()
+            .cloned()
+            .chain(std::iter::once(NODE_AMBIENT_DECLARATION_FILE_NAME.to_string()))
+            .collect();
         let content = if manifest_value.get("compilerOptions").is_some() {
-            Self::project_overlay(directory, manifest, file_names)
+            Self::project_overlay(directory, manifest, &file_names_with_ambient)
         } else {
-            Self::package_overlay(manifest, &manifest_value, file_names)?
+            Self::package_overlay(manifest, &manifest_value, &file_names_with_ambient)?
         };
         std::fs::write(
             &path,
@@ -448,6 +485,45 @@ mod tests {
             package.path().join("index.d.ts").to_string_lossy().as_ref()
         );
         assert!(value["compilerOptions"].get("baseUrl").is_none());
+    }
+
+    /// `check_batch`/`validate_with_context` write `NODE_AMBIENT_DECLARATION_FILE_NAME` to disk
+    /// unconditionally, but `tsc` only loads a file that also appears in the config's `files`
+    /// list -- this is the other half, proving the package-manifest overlay branch names it. See
+    /// `project_overlay_includes_the_node_ambient_declaration` for the other overlay branch, and
+    /// `node_fs_promises_typechecks_without_a_types_node_dependency` for the end-to-end proof. ~keep
+    #[test]
+    fn package_overlay_includes_the_node_ambient_declaration() {
+        let package = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let manifest = package.path().join("package.json");
+        std::fs::write(&manifest, r#"{"name":"sample-binding","types":"index.d.ts"}"#).unwrap();
+        let config = TypeScriptValidator::write_overlay_config(scratch.path(), &manifest).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(config).unwrap()).unwrap();
+        let files = value["files"].as_array().expect("files array");
+        assert!(
+            files.iter().any(|entry| entry == NODE_AMBIENT_DECLARATION_FILE_NAME),
+            "package overlay must list the node ambient declaration: {files:?}"
+        );
+    }
+
+    /// The `project_overlay` branch (manifest is itself a tsconfig with `compilerOptions`) builds
+    /// its `files` list differently -- absolute paths joined against `directory` -- so it needs
+    /// its own proof the ambient declaration survives that branch too.
+    #[test]
+    fn project_overlay_includes_the_node_ambient_declaration() {
+        let project = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let manifest = project.path().join("tsconfig.json");
+        std::fs::write(&manifest, r#"{"compilerOptions":{"strict":true}}"#).unwrap();
+        let config = TypeScriptValidator::write_overlay_config(scratch.path(), &manifest).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&std::fs::read(config).unwrap()).unwrap();
+        let files = value["files"].as_array().expect("files array");
+        let ambient_path = scratch.path().join(NODE_AMBIENT_DECLARATION_FILE_NAME);
+        assert!(
+            files.iter().any(|entry| entry.as_str() == Some(ambient_path.to_string_lossy().as_ref())),
+            "project overlay must list the node ambient declaration: {files:?}"
+        );
     }
 
     #[test]
@@ -782,3 +858,7 @@ mod tests {
 #[cfg(test)]
 #[path = "wasm_optional_chain_tsc_tests.rs"]
 mod wasm_optional_chain_tsc_tests;
+
+#[cfg(test)]
+#[path = "node_ambient_declaration_tsc_tests.rs"]
+mod node_ambient_declaration_tsc_tests;

@@ -13,10 +13,12 @@ use std::time::Instant;
 
 mod batch;
 mod dependency_reclassification;
+mod session_locks;
 mod session_prep;
 mod session_resolution;
 
 use batch::validate_batches;
+use session_locks::{session_lock_for, session_locks_by_fingerprint};
 use session_prep::{session_preparation_error, session_preparation_result};
 
 // Re-exported so `output::unresolved_dependency_rollup` can split its two remediation lines
@@ -83,10 +85,13 @@ pub fn run_validation(snippets: &[Snippet], registry: &ValidatorRegistry, config
     let preparation = prepare_sessions_isolated(&sessions_to_prepare, config.resolved_before_timeout_secs());
     let sessions = preparation.sessions;
     let session_errors = preparation.errors;
-    let session_locks = sessions
-        .keys()
-        .map(|target| (target.clone(), Mutex::new(())))
-        .collect::<HashMap<_, _>>();
+    // Keyed by *fingerprint*, not by the config session name: `alef.toml` can point two
+    // differently-named sessions (a language fallback like `typescript` and an explicit
+    // binding-package target like `node`) at the identical `cwd`/manifest, which resolves to one
+    // physical workspace directory. Keying by name handed each alias its own `Mutex`, so two
+    // batch groups that both believed they held "the" session lock wrote into the same
+    // `snippet_batch_N.ts` files concurrently -- see `session_lock_for`. ~keep
+    let session_locks = session_locks_by_fingerprint(sessions.values());
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(config.parallelism)
         .build()
@@ -130,7 +135,7 @@ fn fail_fast_results(
     for snippet in snippets {
         let preparation_error = session_preparation_error(snippet, config, session_errors);
         let session = session_for(snippet, sessions);
-        let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
+        let lock = session_lock_for(session, session_locks);
         let result = validate_one(
             snippet,
             registry,
@@ -194,7 +199,7 @@ fn parallel_results(
                 return result;
             }
             let session = session_for(snippet, sessions);
-            let lock = session_key(snippet, sessions).and_then(|key| session_locks.get(key));
+            let lock = session_lock_for(session, session_locks);
             let result = validate_one(snippet, registry, config, session, lock, None, Some(&reporter));
             reporter.record(&result);
             result

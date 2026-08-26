@@ -86,6 +86,10 @@ impl RendezvousValidator {
 }
 
 fn snippet() -> Snippet {
+    snippet_targeting("shared")
+}
+
+fn snippet_targeting(target: &str) -> Snippet {
     Snippet {
         id: None,
         path: "example.md".into(),
@@ -96,7 +100,7 @@ fn snippet() -> Snippet {
         block_index: 0,
         annotation: None,
         metadata: SnippetMetadata {
-            target: Some("shared".into()),
+            target: Some(target.into()),
             ..SnippetMetadata::default()
         },
         source_origin: SourceOrigin {
@@ -167,5 +171,74 @@ fn a_validator_with_shared_session_state_is_still_serialized() {
         peak_concurrency(true),
         1,
         "a validator that shares fixed-name files in the session workspace must not run concurrently"
+    );
+}
+
+/// Peak concurrency observed for two snippets that target two *differently-named* session config
+/// keys which both resolve to the identical fingerprint (same `working_directory`, `manifest`,
+/// `env`, features -- see `session::fingerprint::session_fingerprint`, which never hashes the
+/// config key itself). `alef.toml` sets this up deliberately: `[workspace.docs.snippets.sessions.
+/// typescript]` and `[...sessions.node]` can point at the same `cwd`/manifest so a language
+/// fallback and an explicit binding-package target share one built package.
+fn peak_concurrency_across_aliased_session_names(exclusive: bool) -> usize {
+    let state = Arc::new((Mutex::new(Rendezvous::default()), Condvar::new()));
+    let mut registry = ValidatorRegistry::new();
+    registry.register(Box::new(RendezvousValidator {
+        state: Arc::clone(&state),
+        exclusive,
+    }));
+    let directory = tempfile::tempdir().expect("session directory");
+    let aliased_spec = || SessionSpec {
+        language: crate::snippets::types::Language::Rust,
+        working_directory: directory.path().into(),
+        manifest: None,
+        before: Vec::new(),
+        env: Default::default(),
+        include_paths: Vec::new(),
+        rust_features: Vec::new(),
+        rust_dependencies: Default::default(),
+    };
+    let config = RunnerConfig {
+        level: ValidationLevel::Syntax,
+        parallelism: PAIR,
+        cache_dir: None,
+        sessions: HashMap::from([
+            ("shared".to_string(), aliased_spec()),
+            ("shared_alias".to_string(), aliased_spec()),
+        ]),
+        ..RunnerConfig::default()
+    };
+
+    let snippets = [snippet_targeting("shared"), snippet_targeting("shared_alias")];
+    let summary = run_validation(&snippets, &registry, &config).expect("validation completes");
+    assert_eq!(summary.passed, PAIR);
+    state.0.lock().expect("rendezvous").peak
+}
+
+/// The regression this fix closes: `session_lock_for` must resolve the lock by the session's
+/// *fingerprint*, not its config name, or `"shared"` and `"shared_alias"` -- which alias the same
+/// physical workspace directory -- each get their own `Mutex` and a validator that shares
+/// fixed-name files in that directory runs concurrently against itself. Before the fix this
+/// observed a peak of `PAIR`, byte-for-byte the same failure shape as
+/// `a_validator_without_shared_session_state_runs_concurrently` even though this validator
+/// declares `requires_session_exclusivity() == true`.
+#[test]
+fn aliased_session_names_sharing_a_fingerprint_still_serialize() {
+    assert_eq!(
+        peak_concurrency_across_aliased_session_names(true),
+        1,
+        "two differently-named sessions resolving to the same fingerprint must share one lock"
+    );
+}
+
+/// Negative control: when the validator declares no shared session state, aliased session names
+/// must still run concurrently -- the fingerprint-keyed lock must not over-serialize work that
+/// never needed exclusivity in the first place.
+#[test]
+fn aliased_session_names_without_shared_state_still_run_concurrently() {
+    assert_eq!(
+        peak_concurrency_across_aliased_session_names(false),
+        PAIR,
+        "aliased session names must not be serialized when the validator declares no shared state"
     );
 }

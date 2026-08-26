@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Snippet session locks are keyed by fingerprint, not by config name.** `alef.toml` can point two
+  differently-named sessions (a language fallback such as `typescript` and an explicit
+  binding-package target such as `node`) at the same `cwd` and manifest. They resolve to one
+  physical workspace directory but each name got its own `Mutex`, so two batch groups that both
+  believed they held the session lock wrote into the same `snippet_batch_N.ts` files concurrently.
+  The corruption was worse than the lost work it caused: a file cut mid-token silences `tsc`'s
+  semantic diagnostics for **every other file in the same program**, so unrelated real failures
+  were reported as passes. Any TypeScript snippet count taken before this fix understates the
+  failures.
+
+- **TypeScript snippet checks no longer require `@types/node` to read a file.** The generated
+  `await (await import("node:fs/promises")).readFile(...)` form is emitted into every TypeScript
+  target, but `tsc` degrades an unresolvable `node:`-prefixed dynamic import to a bare-identifier
+  lookup and reports `TS2591: Cannot find name 'node:fs/promises'`. A browser/WASM package with no
+  `@types/node` in its graph therefore failed every byte-payload snippet. The validator now writes
+  a minimal self-contained ambient declaration into each check, which merges cleanly with a real
+  `@types/node` when one is present.
+
 - **Generated wasm TypeScript now constructs the classes wasm-bindgen actually exports.** The wasm
   backend lowers every struct with fields to a JS class with a positional constructor, never a
   plain interface, but four places in the shared node/wasm e2e generator still assumed the NAPI

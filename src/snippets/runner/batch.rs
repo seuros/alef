@@ -1,6 +1,6 @@
 use super::{
     BatchKey, FailureReporter, RunnerConfig, ValidationOutcome, batch_level, finalize_result, session_for, session_key,
-    session_preparation_error, session_preparation_result,
+    session_lock_for, session_preparation_error, session_preparation_result,
 };
 use crate::snippets::error::Result;
 use crate::snippets::session::ValidationSession;
@@ -87,11 +87,15 @@ fn group_batchable_snippets(
 
 /// Runs every batch group concurrently and returns the positioned results to merge.
 ///
-/// Two groups with different session keys hold different locks, run different toolchains and
-/// touch different scratch trees, so nothing serializes them but this dispatch — with sixteen
-/// languages configured, running them one after another made the batch pass as long as the sum of
-/// its slowest members. Groups that *do* share a session key still serialize, on that session's
-/// mutex, exactly as they did before. ~keep
+/// Two groups with different session *names* usually run different toolchains against different
+/// scratch trees, so nothing needs to serialize them but this dispatch — with sixteen languages
+/// configured, running them one after another made the batch pass as long as the sum of its
+/// slowest members. But a session name is only a config label: `alef.toml` can alias two names
+/// (e.g. a language fallback and an explicit binding-package target) to the identical
+/// `cwd`/manifest, which resolves to the same physical workspace directory and the same session
+/// fingerprint. Groups that share a session *name*, or whose sessions resolve to the same
+/// fingerprint, still serialize -- on that fingerprint's mutex, via `session_lock_for` -- exactly
+/// as they did before. ~keep
 ///
 /// Each group returns its own `(index, result)` pairs rather than writing into a shared `Vec`, so
 /// the position-indexed merge stays a single-threaded step the parallelism cannot race. ~keep
@@ -148,15 +152,7 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
         "Starting batched snippet validation"
     );
     let started = Instant::now();
-    let batch = run_batch(
-        context,
-        validator,
-        session,
-        session_target.as_deref(),
-        *level,
-        &batch_snippets,
-        timeout_secs,
-    );
+    let batch = run_batch(context, validator, session, *level, &batch_snippets, timeout_secs);
     // `supports_batching` only screens out languages that never batch; a validator that
     // does support it (rust) can still decline a specific group — e.g. `Run` snippets, which
     // must execute one at a time — and return `None` here. Every `Starting` above must reach
@@ -192,17 +188,20 @@ fn validate_group(context: &BatchContext<'_>, key: &BatchKey, indices: &[usize])
 
 /// Invokes the group's validator, holding the session's lock for the whole invocation when the
 /// group has one.
+///
+/// Looked up by the session's *fingerprint* (via `session_lock_for`), not by its config name --
+/// two differently-named sessions that alias the same physical workspace directory must share one
+/// `Mutex`, or the exclusivity this lock exists to provide never actually holds between them. ~keep
 fn run_batch(
     context: &BatchContext<'_>,
     validator: &dyn SnippetValidator,
     session: Option<&ValidationSession>,
-    session_target: Option<&str>,
     level: ValidationLevel,
     batch_snippets: &[&Snippet],
     timeout_secs: u64,
 ) -> Option<Result<BatchValidation>> {
     let validation = || validator.validate_batch_in_session(batch_snippets, level, timeout_secs, session);
-    match session_target.and_then(|value| context.session_locks.get(value)) {
+    match session_lock_for(session, context.session_locks) {
         Some(lock) => lock.lock().ok().and_then(|_guard| validation()),
         None => validation(),
     }
