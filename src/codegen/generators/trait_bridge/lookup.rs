@@ -244,6 +244,29 @@ pub fn find_trait_def<'a>(bridge: &TraitBridgeConfig, api: &'a ApiSurface) -> Op
         .find(|typ| typ.is_trait && typ.name == bridge.trait_name)
 }
 
+/// The trait `TypeDef` a bridge wraps, when the target named by `target_spellings` emits that
+/// bridge at all.
+///
+/// Combines the two gates a bridge emitter applies: the bridge must not be excluded for the target
+/// — under *every* spelling the target answers to, since `exclude_languages` may name a backend by
+/// its language (`"r"`) or by the backend itself (`"extendr"`) — and its trait must resolve in the
+/// `ApiSurface`.
+///
+/// Backends that emit the Rust bridge and the host-language wrapper from separate passes ask
+/// through this one lookup, so the passes cannot answer the question differently and leave a
+/// wrapper calling a symbol no pass generated. `Backend::trait_bridge_registration_surface` asks
+/// through it too, so the reference docs describe the API that was actually emitted. ~keep
+pub fn active_bridge_trait_def<'a>(
+    bridge: &TraitBridgeConfig,
+    api: &'a ApiSurface,
+    target_spellings: &[&str],
+) -> Option<&'a TypeDef> {
+    if !target_spellings.iter().all(|spelling| bridge.is_active_for(spelling)) {
+        return None;
+    }
+    find_trait_def(bridge, api)
+}
+
 /// True if `field_ty` references a `Named` type whose name equals `alias`,
 /// allowing for `Option<>` and `Vec<>` wrappers.
 fn field_type_matches_alias(field_ty: &TypeRef, alias: &str) -> bool {
