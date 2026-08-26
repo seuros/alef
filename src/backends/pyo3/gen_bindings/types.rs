@@ -52,6 +52,34 @@ pub(in crate::backends::pyo3) fn options_dataclass_type_names(
         .collect()
 }
 
+/// Names of the return types `options.py` defines itself, as public `TypedDict`s, instead of
+/// leaving them to the native module's `#[pyclass]`.
+///
+/// Every emitter that has to decide whether a return type's public spelling lives in `.options`
+/// or in the extension module asks this. `api.py` restating it as "is a return type and is not
+/// config-re-exported" is how `-> _rust.<Name>` came to annotate a function whose name
+/// `__init__.py` re-exports from `.options` -- two different types under one public name. ~keep
+pub(in crate::backends::pyo3) fn options_return_typeddict_names(
+    api: &ApiSurface,
+    dto: &DtoConfig,
+    reexported_types: &[String],
+) -> std::collections::HashSet<String> {
+    let output_style = dto.python_output_style();
+    let reexported: AHashSet<&str> = reexported_types.iter().map(String::as_str).collect();
+    api.types
+        .iter()
+        .filter(|t| t.is_return_type && super::errors::is_dataclass_backed_config(t, output_style, &reexported))
+        .map(|t| t.name.clone())
+        .collect()
+}
+
+/// Name of the `options._from_native_<snake>` converter that turns the native `#[pyclass]` a
+/// function returns into the public type `options.py` publishes under the same name.
+pub(in crate::backends::pyo3) fn from_native_converter_name(type_name: &str) -> String {
+    use heck::ToSnakeCase;
+    format!("_from_native_{}", type_name.to_snake_case())
+}
+
 pub(super) fn gen_options_py(
     api: &ApiSurface,
     module_name: &str,
@@ -59,7 +87,6 @@ pub(super) fn gen_options_py(
     reexported_types: &[String],
 ) -> String {
     use crate::core::ir::TypeRef;
-    let reexported_names: AHashSet<&str> = reexported_types.iter().map(String::as_str).collect();
 
     let enum_names: AHashSet<&str> = api.enums.iter().map(|e| e.name.as_str()).collect();
     let data_enum_names: AHashSet<&str> = api
@@ -76,17 +103,15 @@ pub(super) fn gen_options_py(
         .collect();
 
     let output_style = dto.python_output_style();
-    let any_typeddict = output_style == PythonDtoStyle::TypedDict
-        && api.types.iter().any(|t| {
-            t.has_default
-                && t.is_return_type
-                && !t.fields.is_empty()
-                && !t.name.ends_with("Update")
-                && !reexported_names.contains(t.name.as_str())
-        });
+    let return_typeddict_names = options_return_typeddict_names(api, dto, reexported_types);
+    let any_typeddict = !return_typeddict_names.is_empty();
 
+    // Must track `gen_from_native_converters`' own set exactly: a converter emitted for a
+    // return-type `TypedDict` annotates its parameter `Any` just like a dataclass one does, and
+    // an `Any` used without its import is a NameError in the file a consumer installs. ~keep
     let emits_from_native_converters = {
-        let options_types = options_dataclass_type_names(api, reexported_types);
+        let mut options_types = options_dataclass_type_names(api, reexported_types);
+        options_types.extend(return_typeddict_names.iter().cloned());
         api.types.iter().any(|t| options_types.contains(&t.name))
     };
     // Json-typed fields used to render as `dict[str, Any]` and so pulled in `Any`. They now
@@ -152,11 +177,7 @@ pub(super) fn gen_options_py(
             if typ.has_default && !typ.is_return_type {
                 local.insert(typ.name.as_str());
             }
-            if output_style == PythonDtoStyle::TypedDict
-                && typ.is_return_type
-                && typ.has_default
-                && !reexported_names.contains(typ.name.as_str())
-            {
+            if return_typeddict_names.contains(&typ.name) {
                 local.insert(typ.name.as_str());
             }
         }
@@ -306,9 +327,7 @@ pub(super) fn gen_options_py(
             continue;
         }
 
-        let use_typeddict = output_style == PythonDtoStyle::TypedDict
-            && typ.is_return_type
-            && !reexported_names.contains(typ.name.as_str());
+        let use_typeddict = return_typeddict_names.contains(&typ.name);
 
         // Return types are defined authoritatively by the Rust native module as #[pyclass]
         if typ.is_return_type && !use_typeddict {
@@ -408,18 +427,24 @@ pub(super) fn gen_options_py(
         }
     }
 
-    out.push_str(&gen_from_native_converters(api, reexported_types));
+    out.push_str(&gen_from_native_converters(api, dto, reexported_types));
 
     out
 }
 
-/// Emit `_from_native_<snake>(native)` module-level converters for every emitted
-/// options dataclass. Nested dataclass fields recurse (including through
-/// `Optional`/`Vec`/`Map` wrappers); every other field passes through unchanged —
-/// enums and re-exported types keep their single native identity.
-fn gen_from_native_converters(api: &ApiSurface, reexported_types: &[String]) -> String {
-    use heck::ToSnakeCase;
-    let options_types = options_dataclass_type_names(api, reexported_types);
+/// Emit `_from_native_<snake>(native)` module-level converters for every public type
+/// `options.py` defines itself — the input dataclasses and the return-type `TypedDict`s.
+/// Nested public fields recurse (including through `Optional`/`Vec`/`Map` wrappers); every
+/// other field passes through unchanged — enums and re-exported types keep their single
+/// native identity.
+///
+/// A return-type `TypedDict` needs one for the same reason a dataclass does: `api.py` publishes
+/// that name as the function's return type, but the extension module hands back a `#[pyclass]`.
+/// A `TypedDict` is constructed by keyword exactly like a dataclass, so one template serves
+/// both. ~keep
+fn gen_from_native_converters(api: &ApiSurface, dto: &DtoConfig, reexported_types: &[String]) -> String {
+    let mut options_types = options_dataclass_type_names(api, reexported_types);
+    options_types.extend(options_return_typeddict_names(api, dto, reexported_types));
     let mut out = String::new();
     let mut emitted: Vec<&crate::core::ir::TypeDef> =
         api.types.iter().filter(|t| options_types.contains(&t.name)).collect();
@@ -445,7 +470,7 @@ fn gen_from_native_converters(api: &ApiSurface, reexported_types: &[String]) -> 
         out.push_str(&crate::backends::pyo3::template_env::render(
             "trait_bridge/options_from_native.jinja",
             minijinja::context! {
-                fn_name => format!("_from_native_{}", typ.name.to_snake_case()),
+                fn_name => from_native_converter_name(&typ.name),
                 class_name => &typ.name,
                 fields => fields,
             },
@@ -463,10 +488,9 @@ fn from_native_field_expr(
     src: &str,
 ) -> String {
     use crate::core::ir::TypeRef;
-    use heck::ToSnakeCase;
     match ty {
         TypeRef::Named(n) if options_types.contains(n) => {
-            format!("_from_native_{}({src})", n.to_snake_case())
+            format!("{}({src})", from_native_converter_name(n))
         }
         TypeRef::Optional(inner) => {
             let inner_expr = from_native_field_expr(inner, options_types, src);

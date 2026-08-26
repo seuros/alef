@@ -7,8 +7,33 @@ pub(super) fn emit_function_return_call(
     return_prefix: &str,
     name: &str,
     kwargs: &[String],
+    return_converter: Option<&str>,
 ) {
     let is_void_return = matches!(return_type, TypeRef::Unit);
+
+    // The wrapper's declared return type is the name `options.py` publishes; the extension
+    // module hands back its own `#[pyclass]` under that same name. Converting here is what makes
+    // the annotation true, exactly as `emit_adapter_wrapper` already does for an adapter whose
+    // return type is a public `options` type. ~keep
+    if let Some(converter) = return_converter
+        && !is_void_return
+    {
+        let template = if matches!(return_type, TypeRef::Optional(_)) {
+            "function_convert_optional_return.jinja"
+        } else {
+            "function_convert_return.jinja"
+        };
+        out.push_str(&crate::backends::pyo3::template_env::render(
+            template,
+            minijinja::context! {
+                converter => converter,
+                return_prefix => return_prefix,
+                name => name,
+                kwargs => kwargs.join(", "),
+            },
+        ));
+        return;
+    }
 
     if is_void_return {
         out.push_str(&crate::backends::pyo3::template_env::render(

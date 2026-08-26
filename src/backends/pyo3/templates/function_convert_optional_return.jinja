@@ -1,0 +1,2 @@
+    __native = {{ return_prefix }}_rust.{{ name }}({{ kwargs }})
+    return None if __native is None else {{ converter }}(__native)

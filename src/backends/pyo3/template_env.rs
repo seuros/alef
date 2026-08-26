@@ -426,6 +426,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         include_str!("templates/function_cast_return.jinja"),
     ),
     (
+        "function_convert_return.jinja",
+        include_str!("templates/function_convert_return.jinja"),
+    ),
+    (
+        "function_convert_optional_return.jinja",
+        include_str!("templates/function_convert_optional_return.jinja"),
+    ),
+    (
         "function_docstring.jinja",
         include_str!("templates/function_docstring.jinja"),
     ),

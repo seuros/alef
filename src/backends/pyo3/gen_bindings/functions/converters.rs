@@ -1,5 +1,4 @@
 use crate::codegen::shared::binding_fields;
-use crate::core::config::{DtoConfig, PythonDtoStyle};
 use crate::core::ir::{TypeDef, TypeRef};
 use ahash::{AHashMap, AHashSet};
 use heck::ToSnakeCase;
@@ -58,12 +57,11 @@ pub(super) fn emit_converters(
     options_field_bridges: &OptionsFieldBridges<'_>,
     enum_names: &AHashSet<&str>,
     data_enum_names: &AHashSet<&str>,
-    dto: &DtoConfig,
     reexported_types: &[String],
     config: &crate::core::config::ResolvedCrateConfig,
     field_defaults: &crate::backends::pyo3::gen_bindings::types::OptionsFieldDefaults<'_>,
+    options_return_types: &std::collections::HashSet<String>,
 ) {
-    let output_style = dto.python_output_style();
     let reexported_names: AHashSet<&str> = reexported_types.iter().map(|s| s.as_str()).collect();
     out.push_str("_E = TypeVar(\"_E\")\n\n");
     out.push_str(
@@ -77,9 +75,7 @@ pub(super) fn emit_converters(
         let typ = default_types[type_name];
         let snake = type_name.to_snake_case();
 
-        let is_typeddict = output_style == PythonDtoStyle::TypedDict
-            && typ.is_return_type
-            && !reexported_names.contains(type_name.as_str());
+        let is_typeddict = options_return_types.contains(type_name);
         let is_reexported = reexported_names.contains(type_name.as_str());
 
         // The same per-type `rename_fields` lookup `gen_stubs/classes.rs::gen_type_init_stub`

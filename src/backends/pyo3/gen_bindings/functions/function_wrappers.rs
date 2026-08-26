@@ -25,6 +25,7 @@ pub(super) fn emit_function_wrappers(
     data_enum_names: &AHashSet<&str>,
     return_type_names: &AHashSet<String>,
     reexported_names: &AHashSet<&str>,
+    options_return_types: &std::collections::HashSet<String>,
 ) {
     for func in &api.functions {
         if exclude_functions.contains(&func.name) {
@@ -83,18 +84,30 @@ pub(super) fn emit_function_wrappers(
             sig_parts.push(format!("{kwarg_name}: {visitor_type} | None = None"));
         }
 
+        // `_rust.` is the private extension module. Prefixing it is right only while the public
+        // package has no type of its own under that name -- which is a question for the emitter
+        // that writes `options.py`, not a rule to restate here. `options_return_types` names the
+        // return types `options.py` does define, and those are what `__init__.py` re-exports and
+        // what a consumer therefore imports. ~keep
+        let return_leaf = match &func.return_type {
+            crate::core::ir::TypeRef::Named(name) => Some(name.as_str()),
+            crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
+                crate::core::ir::TypeRef::Named(name) => Some(name.as_str()),
+                _ => None,
+            },
+            _ => None,
+        };
+        let public_return_leaf = return_leaf.filter(|name| options_return_types.contains(*name));
+        let needs_native_prefix = return_leaf.is_some_and(|name| {
+            return_type_names.contains(name) && !reexported_names.contains(name) && public_return_leaf.is_none()
+        });
+
         let mut return_type_str = crate::backends::pyo3::type_map::python_type(&func.return_type);
-        if let crate::core::ir::TypeRef::Named(name) = &func.return_type {
-            if return_type_names.contains(name) && !reexported_names.contains(name.as_str()) {
-                return_type_str = format!("_rust.{return_type_str}");
-            }
-        } else if let crate::core::ir::TypeRef::Optional(inner) = &func.return_type
-            && let crate::core::ir::TypeRef::Named(name) = inner.as_ref()
-            && return_type_names.contains(name)
-            && !reexported_names.contains(name.as_str())
-            && let Some(base) = return_type_str.strip_suffix(" | None")
-        {
-            return_type_str = format!("_rust.{} | None", base);
+        if needs_native_prefix {
+            return_type_str = match return_type_str.strip_suffix(" | None") {
+                Some(base) => format!("_rust.{base} | None"),
+                None => format!("_rust.{return_type_str}"),
+            };
         }
         let def_keyword = if func.is_async { "async def" } else { "def" };
         let has_builtin_param = sig_parts.iter().any(|p| {
@@ -257,6 +270,9 @@ pub(super) fn emit_function_wrappers(
         let kwargs: Vec<String> = call_args.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let return_prefix = if func.is_async { "await " } else { "" };
 
+        let return_converter = public_return_leaf
+            .map(crate::backends::pyo3::gen_bindings::types::from_native_converter_name);
+
         emit_function_return_call(
             out,
             &func.return_type,
@@ -264,6 +280,7 @@ pub(super) fn emit_function_wrappers(
             return_prefix,
             &func.name,
             &kwargs,
+            return_converter.as_deref(),
         );
         out.push_str("\n\n");
     }

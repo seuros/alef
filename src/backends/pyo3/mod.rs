@@ -8,6 +8,8 @@ mod gen_stubs;
 mod kwarg_unpack_tests;
 mod py_signature;
 #[cfg(test)]
+mod public_return_type_tests;
+#[cfg(test)]
 mod signature_agreement_tests;
 mod template_env;
 pub mod trait_bridge;

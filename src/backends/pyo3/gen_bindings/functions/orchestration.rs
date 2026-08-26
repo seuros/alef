@@ -69,6 +69,11 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
     let options_dataclass_types =
         crate::backends::pyo3::gen_bindings::types::options_dataclass_type_names(api, reexported_types);
 
+    // Return types `options.py` publishes itself. A function returning one of these must name the
+    // public type and convert into it, not name the native `#[pyclass]` behind the same word.
+    let options_return_types =
+        crate::backends::pyo3::gen_bindings::types::options_return_typeddict_names(api, dto, reexported_types);
+
     let enum_names: AHashSet<&str> = api.enums.iter().map(|e| e.name.as_str()).collect();
 
     // A sanitized data enum has an unresolvable variant field, so no serde-based `#[new]` is
@@ -215,19 +220,16 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         .collect();
     let error_names: AHashSet<String> = api.errors.iter().map(|e| e.name.clone()).collect();
     let reexported_names: AHashSet<&str> = reexported_types.iter().map(|s| s.as_str()).collect();
-    let output_style = dto.python_output_style();
-    let options_type_names: AHashSet<String> = api
-        .types
-        .iter()
-        .filter(|t| {
-            t.has_default
-                && !t.name.ends_with("Update")
-                && !(t.is_return_type
-                    && (output_style != crate::core::config::PythonDtoStyle::TypedDict
-                        || reexported_names.contains(t.name.as_str())))
-        })
-        .map(|t| t.name.clone())
-        .collect();
+    let options_type_names: AHashSet<String> = {
+        let mut names: AHashSet<String> = api
+            .types
+            .iter()
+            .filter(|t| t.has_default && !t.name.ends_with("Update") && !t.is_return_type)
+            .map(|t| t.name.clone())
+            .collect();
+        names.extend(options_return_types.iter().cloned());
+        names
+    };
     let return_type_names: AHashSet<String> = api
         .types
         .iter()
@@ -298,8 +300,27 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         .filter_map(|adapter| adapter_return_converter(adapter, &options_dataclass_types))
         .collect();
 
+    // A wrapper returning a type `options.py` publishes calls that type's `_from_native_*`
+    // converter, so `api.py` has to import it alongside the type itself.
+    let function_return_converters: std::collections::BTreeSet<String> = api
+        .functions
+        .iter()
+        .filter(|func| !exclude_functions.contains(&func.name))
+        .filter_map(|func| match &func.return_type {
+            crate::core::ir::TypeRef::Named(name) => Some(name),
+            crate::core::ir::TypeRef::Optional(inner) => match inner.as_ref() {
+                crate::core::ir::TypeRef::Named(name) => Some(name),
+                _ => None,
+            },
+            _ => None,
+        })
+        .filter(|name| options_return_types.contains(*name))
+        .map(|name| crate::backends::pyo3::gen_bindings::types::from_native_converter_name(name))
+        .collect();
+
     options_imports.extend(streaming_item_converters.iter().map(String::as_str));
     options_imports.extend(adapter_return_converters.iter().map(String::as_str));
+    options_imports.extend(function_return_converters.iter().map(String::as_str));
     native_imports.sort_unstable();
     options_imports.sort_unstable();
     if !native_imports.is_empty() {
@@ -355,10 +376,10 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         &options_field_bridges,
         &enum_names,
         &data_enum_names,
-        dto,
         reexported_types,
         config,
         &crate::backends::pyo3::gen_bindings::types::OptionsFieldDefaults::new(api),
+        &options_return_types,
     );
 
     emit_function_wrappers(
@@ -373,6 +394,7 @@ pub(in crate::backends::pyo3::gen_bindings) fn gen_api_py(
         &data_enum_names,
         &return_type_names,
         &reexported_names,
+        &options_return_types,
     );
 
     for adapter in adapters {
