@@ -14,6 +14,7 @@ use super::visitors::build_typescript_visitor;
 
 mod args;
 mod builders;
+mod bytes;
 mod cache;
 #[cfg(test)]
 mod call_arity_tests;
@@ -48,6 +49,7 @@ pub(in crate::e2e::codegen::typescript::test_file) use args::build_args_and_setu
 pub(in crate::e2e::codegen::typescript::test_file) use builders::{
     rename_napi_serde_tags_to_kind, ts_builder_expression, ts_builder_expression_inner,
 };
+pub(in crate::e2e::codegen::typescript::test_file) use bytes::ts_bytes_value_expression;
 pub(in crate::e2e::codegen::typescript::test_file) use cache::{
     detect_cache_isolation_needs, emit_cache_isolation_setup,
 };

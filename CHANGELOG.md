@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated TypeScript no longer splices a raw fixture string or array literal into a
+  `Uint8Array` field.** Two call sites each lowered a `bytes` fixture value independently and both
+  got the string case wrong: the napi object-literal builder wrapped any value in
+  `Uint8Array.from(...)`, which rejects a `string`, and the WASM `default()`+setter builder had no
+  string branch at all and emitted a bare quoted string. Both now ask one shared classifier, which
+  lowers a file path, inline text, base64 or a number array to the right expression. WASM
+  array-of-object arguments with a known IR element type also route through the typed builder as
+  node already did, so their elements construct real wasm-bindgen class instances instead of plain
+  object literals.
+
 - **Generated Rust docs snippets no longer move out of a plain collection field, and no longer
   `Display`-format a field that does not implement it.** The `Iterate` template appended a borrow
   adapter only when the collection was `Option`-wrapped, so a plain `Vec` field behind an index

@@ -447,6 +447,9 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     };
 
     let mut stmts: Vec<String> = vec![init_stmt];
+    // Set when a field expression below contains an `await` (a bytes field whose fixture
+    // value is a file path) so the emitted IIFE is declared `async`.
+    let mut needs_async = false;
     let ir_owner_name = type_name.strip_prefix(wasm_type_prefix).unwrap_or(type_name);
     let owner_type = type_defs.iter().find(|definition| definition.name == ir_owner_name);
     for (key, val) in obj {
@@ -470,6 +473,17 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             continue;
         }
         let is_bigint = bigint_fields.contains(&camel_key) || bigint_fields.contains(key);
+        // A `bytes` field's fixture value may be a JSON array of numbers or a JSON string
+        // (file path / inline text / base64) — ask `ts_bytes_value_expression` how to lower
+        // it rather than assuming array-shaped input, matching every other TypeRef::Bytes
+        // call site in this backend. See the `bytes` module docs for why this used to be two
+        // independently-guessed rules. ~keep
+        if matches!(field_type, Some(crate::core::ir::TypeRef::Bytes)) {
+            let (expr, needs_await) = ts_bytes_value_expression(val);
+            needs_async = needs_async || needs_await;
+            stmts.push(format!("{var}.{camel_key} = {expr};"));
+            continue;
+        }
         if let serde_json::Value::Object(nested_obj) = val {
             if let Some(nested_type) = effective_nested_types.get(key.as_str()) {
                 let nested_expr = ts_builder_expression_inner(
@@ -497,9 +511,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
             // (registered in `effective_nested_types`), wrap each object element
             // via the same builder-expression emitter; primitive elements pass
             // through as JS literals.
-            if matches!(field_type, Some(crate::core::ir::TypeRef::Bytes)) {
-                stmts.push(format!("{var}.{camel_key} = Uint8Array.from({});", json_to_js(val)));
-            } else if let Some(elem_type) = effective_nested_types.get(key.as_str()) {
+            if let Some(elem_type) = effective_nested_types.get(key.as_str()) {
                 let element_exprs: Vec<String> = items
                     .iter()
                     .enumerate()
@@ -571,7 +583,7 @@ pub(in crate::e2e::codegen::typescript::test_file) fn ts_builder_expression_inne
     let body = stmts.join(" ");
     crate::e2e::template_env::render(
         "typescript/builder_iife.jinja",
-        minijinja::context! { body => body, is_async => !docs_files.is_empty() },
+        minijinja::context! { body => body, is_async => !docs_files.is_empty() || needs_async },
     )
     .trim_end()
     .to_string()
@@ -606,7 +618,15 @@ fn node_value_expression(
         other => other,
     });
     if matches!(field_type, Some(crate::core::ir::TypeRef::Bytes)) {
-        return format!("Uint8Array.from({})", json_to_js(value));
+        // Ask the shared classifier rather than assuming array-shaped input — a fixture's
+        // `bytes` value is just as often a JSON string (file path / inline text / base64).
+        // `Uint8Array.from(value)` unconditionally wrapped a string here, producing an
+        // argument typed `string` where `Uint8Array.from` expects `Iterable<number>`. The
+        // resulting expression is spliced inline into an already-`await`-containing snippet
+        // body (see the `docs_file_expression.jinja` branch just above), so a file-path
+        // expression's own `await` needs no further propagation here. ~keep
+        let (expr, _needs_await) = ts_bytes_value_expression(value);
+        return expr;
     }
     if let Some(crate::core::ir::TypeRef::Named(type_name)) = field_type
         && enums.iter().any(|definition| definition.name == *type_name)

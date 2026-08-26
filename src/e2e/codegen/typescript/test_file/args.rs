@@ -349,11 +349,13 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                         // A raw `json_to_js_camel` dump only camelCases keys — it does not know
                         // that a node/napi element type can be a tagged-data enum whose payload
                         // napi nests under a synthesized per-variant field (see
-                        // `build_node_tagged_enum_variant_literal`), nor that a string field
-                        // typed as an enum must reference the generated host identifier rather
-                        // than the bare wire string. Route each element through the same typed
-                        // builder single objects use so an array of e.g. `Message` matches the
-                        // shape napi's `.d.ts` union actually declares. ~keep
+                        // `build_node_tagged_enum_variant_literal`), nor that a field typed as
+                        // `bytes` or as an enum needs a real `Uint8Array`/host identifier rather
+                        // than the bare wire value — wasm-bindgen also rejects a plain object
+                        // literal where it expects a class instance. Route each element through
+                        // the same typed builder single objects use, for both node and wasm, so
+                        // an array of e.g. `ExtractInput` matches the shape the binding actually
+                        // declares (napi's `.d.ts` union, or wasm-bindgen's wrapped class). ~keep
                         let element_type = arg
                             .element_type
                             .as_deref()
@@ -361,9 +363,11 @@ pub(in crate::e2e::codegen::typescript::test_file) fn build_args_and_setup(
                         let is_known_element_type = element_type.as_deref().is_some_and(|name| {
                             type_defs.iter().any(|t| t.name == name) || enums.iter().any(|e| e.name == name)
                         });
-                        if lang == "node"
+                        if matches!(lang, "node" | "wasm")
                             && let Some(element_type) = element_type.filter(|_| is_known_element_type)
                         {
+                            let element_type =
+                                wasm_prefixed_wrapped_type(lang, &element_type, type_defs, enums, wasm_type_prefix);
                             let items: Vec<String> = v
                                 .as_array()
                                 .expect("checked is_array above")
@@ -580,6 +584,89 @@ mod tests {
         assert_eq!(
             call_args, "[{ role: \"user\", user: { content: \"Hello\" } } as Message]",
             "array element must nest the payload under the synthesized variant field, not flatten it"
+        );
+    }
+
+    fn extract_input_type_def() -> TypeDef {
+        TypeDef {
+            name: "ExtractInput".into(),
+            fields: vec![
+                crate::core::ir::FieldDef {
+                    name: "bytes".into(),
+                    ty: TypeRef::Bytes,
+                    ..Default::default()
+                },
+                crate::core::ir::FieldDef {
+                    name: "kind".into(),
+                    ty: TypeRef::Named("ExtractInputKind".into()),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    /// Regression for the #468 byte-payload typing defect (the wasm half of the 8 failing
+    /// `docs-site` snippets, e.g. `extractBatch`'s `inputs: WasmExtractInput[]` argument): an
+    /// array-typed `json_object` arg whose element type is a known IR struct used to route
+    /// through the typed builder for node only — wasm fell back to `json_to_js_camel`, a pure
+    /// key-casing dump with no notion of a `bytes` field or of wasm-bindgen's class-instance
+    /// requirement. That dump produced a plain object literal carrying the fixture's raw
+    /// `bytes` value (`{ bytes: [72, 105], kind: "bytes" }`), which is neither a
+    /// `WasmExtractInput` instance nor assignable to its `Uint8Array` field. Each element must
+    /// instead go through `ts_builder_expression`, exactly as node's array elements already do.
+    #[test]
+    fn wasm_array_of_known_element_type_lowers_bytes_field_via_builder() {
+        let enums = [EnumDef {
+            name: "ExtractInputKind".into(),
+            ..Default::default()
+        }];
+        let type_defs = [extract_input_type_def()];
+        let fixture = fixture();
+        let input = serde_json::json!({ "inputs": [{ "bytes": [72, 105], "kind": "bytes" }] });
+        let args = [ArgMapping {
+            name: "inputs".into(),
+            field: "input.inputs".into(),
+            arg_type: "json_object".into(),
+            optional: false,
+            owned: true,
+            element_type: Some("ExtractInput".into()),
+            go_type: None,
+            vec_inner_is_ref: false,
+            trait_name: None,
+        }];
+        let config = crate::core::config::ResolvedCrateConfig::default();
+
+        let (_setup_lines, call_args) = build_args_and_setup(
+            &input,
+            &args,
+            None,
+            &fixture,
+            &Default::default(),
+            "wasm",
+            &Default::default(),
+            &Default::default(),
+            None,
+            &type_defs,
+            &enums,
+            "Wasm",
+            &config,
+            true,
+            &mut Default::default(),
+            crate::e2e::codegen::call_ir::TargetParams::IrAbsent,
+        );
+
+        assert!(
+            call_args.contains("_u0.bytes = Uint8Array.from([72, 105]);"),
+            "array element must build a real Uint8Array via the typed builder, not dump the raw fixture literal: {call_args}"
+        );
+        assert!(
+            call_args.contains("WasmExtractInput.default()"),
+            "the wasm element must be constructed as a real binding-class instance, not a plain object literal: {call_args}"
+        );
+        assert!(
+            !call_args.contains("bytes: [72, 105]"),
+            "must not fall back to the untyped json_to_js_camel dump: {call_args}"
         );
     }
 }

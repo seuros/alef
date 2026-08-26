@@ -291,6 +291,131 @@ fn wasm_typed_objects_lower_bytes_and_enums_from_ir() {
     assert_strict_typescript_compiles(&source);
 }
 
+/// Regression for the #468 byte-payload typing defect: a `bytes`-typed field whose fixture
+/// value is a JSON *string* (a file path, here) used to reach the WASM setter builder's
+/// generic fallback and render as the bare fixture string (`_u0.bytes = "pdf/fake_memo.pdf";`)
+/// — not assignable to the generated binding's `bytes: Uint8Array` setter. The builder must
+/// ask `ts_bytes_value_expression` instead of assuming the array-shaped value the sibling test
+/// `wasm_typed_objects_lower_bytes_and_enums_from_ir` exercises.
+#[test]
+fn wasm_typed_objects_lower_bytes_file_path_from_ir() {
+    let type_defs = [TypeDef {
+        name: "ExtractInput".into(),
+        fields: vec![
+            crate::core::ir::FieldDef {
+                name: "bytes".into(),
+                ty: crate::core::ir::TypeRef::Bytes,
+                ..Default::default()
+            },
+            crate::core::ir::FieldDef {
+                name: "kind".into(),
+                ty: crate::core::ir::TypeRef::Named("ExtractInputKind".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    }];
+    let enums = [EnumDef {
+        name: "ExtractInputKind".into(),
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"bytes": "pdf/fake_memo.pdf", "kind": "bytes"})
+            .as_object()
+            .expect("object"),
+        "WasmExtractInput",
+        &Default::default(),
+        "wasm",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &enums,
+        "Wasm",
+        &[],
+        &mut Default::default(),
+    );
+    assert!(
+        expression.contains(
+            "_u0.bytes = await (await import(\"node:fs/promises\")).readFile(\"pdf/fake_memo.pdf\");"
+        ),
+        "{expression}"
+    );
+    // Reading the fixture file is async — the IIFE wrapping the setters must be declared
+    // `async` too, or the `await` inside it is a syntax error.
+    assert!(expression.starts_with("await (async () =>"), "{expression}");
+}
+
+/// Negative control: a plain `String` field (not `TypeRef::Bytes`) whose value happens to look
+/// like a file path must stay a quoted string literal. The gate is the field's declared IR
+/// type, not a heuristic over the value's shape.
+#[test]
+fn wasm_typed_objects_leave_plain_string_field_quoted() {
+    let type_defs = [TypeDef {
+        name: "ExtractInput".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "filename".into(),
+            ty: crate::core::ir::TypeRef::String,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"filename": "pdf/fake_memo.pdf"})
+            .as_object()
+            .expect("object"),
+        "WasmExtractInput",
+        &Default::default(),
+        "wasm",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "Wasm",
+        &[],
+        &mut Default::default(),
+    );
+    assert!(
+        expression.contains("_u0.filename = \"pdf/fake_memo.pdf\";"),
+        "a non-bytes String field must stay a quoted literal, not a file read: {expression}"
+    );
+    assert!(!expression.contains("readFile"), "{expression}");
+}
+
+/// Negative control: a genuinely `Vec<u32>`-typed field (not `TypeRef::Bytes`) with a numeric
+/// array value must stay a plain JS array literal, not get wrapped as `Uint8Array.from(...)`.
+#[test]
+fn wasm_typed_objects_leave_number_array_field_as_array_literal() {
+    let type_defs = [TypeDef {
+        name: "Sample".into(),
+        fields: vec![crate::core::ir::FieldDef {
+            name: "weights".into(),
+            ty: crate::core::ir::TypeRef::Vec(Box::new(crate::core::ir::TypeRef::Primitive(
+                crate::core::ir::PrimitiveType::U32,
+            ))),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }];
+    let expression = ts_builder_expression(
+        serde_json::json!({"weights": [1, 2, 3]}).as_object().expect("object"),
+        "WasmSample",
+        &Default::default(),
+        "wasm",
+        &Default::default(),
+        &Default::default(),
+        &type_defs,
+        &[],
+        "Wasm",
+        &[],
+        &mut Default::default(),
+    );
+    assert!(
+        expression.contains("_u0.weights = [1, 2, 3];"),
+        "a non-bytes number[] field must stay a plain array literal, not Uint8Array.from: {expression}"
+    );
+    assert!(!expression.contains("Uint8Array"), "{expression}");
+}
+
 #[test]
 fn wasm_untagged_data_enum_field_emits_raw_value_not_enum_member() {
     // `EmbeddingInput` is an untagged data enum: on the wire it is the bare
