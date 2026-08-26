@@ -1671,6 +1671,66 @@
       ],
       "type": "object"
     },
+    "DeclaredMcpItem": {
+      "additionalProperties": false,
+      "description": "A single MCP tool, prompt, or resource declared in config because it is constructed at\nruntime rather than through a `#[tool]`/`#[prompt]`/`#[resource]` attribute. See\n[`DocsMcpConfig::declared`] for when this fallback applies.",
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Free-form annotations (e.g. `read_only_hint`), matching attribute extraction's shape.",
+          "type": "object"
+        },
+        "description": {
+          "default": null,
+          "description": "Human-readable description shown in the reference page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/DeclaredMcpKind",
+          "description": "Which MCP surface this entry belongs to."
+        },
+        "name": {
+          "description": "The name the MCP client sees.",
+          "type": "string"
+        },
+        "params_type": {
+          "default": null,
+          "description": "Rendered parameter type name, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "default": null,
+          "description": "Human-readable title. Defaults to a title-cased `name`, matching attribute extraction.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "DeclaredMcpKind": {
+      "description": "The MCP surface a [`DeclaredMcpItem`] belongs to.",
+      "enum": [
+        "tool",
+        "prompt",
+        "resource"
+      ],
+      "type": "string"
+    },
     "DocsConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1701,7 +1761,7 @@
         "mcp": {
           "anyOf": [
             {
-              "$ref": "#/$defs/DocsSourceConfig"
+              "$ref": "#/$defs/DocsMcpConfig"
             },
             {
               "type": "null"
@@ -1709,6 +1769,11 @@
           ],
           "default": null,
           "description": "Static extraction config for rmcp-style MCP reference docs."
+        },
+        "reference_link_style": {
+          "$ref": "#/$defs/DocsReferenceLinkStyle",
+          "default": "suffixed",
+          "description": "How generated reference pages link to each other. Defaults to\n[`DocsReferenceLinkStyle::Suffixed`]."
         },
         "reference_output": {
           "default": null,
@@ -1771,6 +1836,65 @@
         }
       },
       "type": "object"
+    },
+    "DocsMcpConfig": {
+      "additionalProperties": false,
+      "description": "Static extraction config for rmcp-style MCP reference docs, plus a declarative fallback\nfor surfaces that static extraction cannot see at all.\n\n`rust_static::extract_mcp_surface` finds tools, prompts, and resources by scanning method\nattributes (`#[tool]`, `#[prompt]`, `#[resource]`). That works only for surfaces *declared*\nthat way. Some consumers instead *construct* prompts/resources at runtime (for example a\n`Prompt::new(...)` or `Resource::new(...)` call assembled from a config file or a loop), and\nno attribute exists for extraction to find. `declared` is the fallback for exactly that\ncondition — MCP surfaces constructed at runtime rather than declared by attribute — not a\ngeneral-purpose override of attribute extraction.\n\nThis is intentionally a second source of truth rather than lifting constructor-call\narguments: lifting `Prompt::new(...)` arguments only works while every argument is a string\nliteral, and it degrades silently the moment one argument becomes computed (a `format!`, a\nvariable, a loop). A declarative list is bounded and honest about being hand-maintained,\ninstead of quietly falling back to guesses.\n\nThis field lives on `DocsMcpConfig` rather than the shared `DocsSourceConfig` used by\n`docs.cli` on purpose: Clap CLI surfaces are always declared through struct/enum derives, so\na `declared` escape hatch would be a no-op there — accepted by config, silently ignored by\nextraction. That is the same \"examined nothing\" shape this fallback exists to fix, so the\nfield only exists where it does something.",
+      "properties": {
+        "adopt_existing": {
+          "default": false,
+          "description": "Allow the first render to replace an existing unmanaged output file.\nDefaults to false to avoid clobbering hand-authored CLI/MCP docs.",
+          "type": "boolean"
+        },
+        "declared": {
+          "default": [],
+          "description": "Tools, prompts, and resources that are constructed at runtime and therefore invisible\nto attribute-based extraction. Additive: entries here are appended to what extraction\nfinds. When a declared entry's `(kind, name)` matches an attribute-derived item, the\nattribute-derived item wins and the declared entry is dropped with a warning, since a\ncollision means the declared entry is stale (the surface has since gained an attribute)\nrather than a genuine second copy. Consumers who declare nothing see no behavior\nchange and no new warnings.",
+          "items": {
+            "$ref": "#/$defs/DeclaredMcpItem"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": null,
+          "description": "Enable this reference extractor. Defaults to true when the table exists.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "output": {
+          "default": null,
+          "description": "Output markdown file. Relative paths are resolved from the repository root.\nWhen unset, Alef writes into `reference_output`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sources": {
+          "default": [],
+          "description": "Rust source files to parse for this reference surface. When empty, Alef\nfalls back to the crate source list.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "DocsReferenceLinkStyle": {
+      "description": "How a generated reference page links to another generated reference page in the same\n`reference_output` directory.\n\nDifferent docs-site generators resolve a sibling page's URL differently: plain\nGitHub-rendered Markdown and most static-site generators serve the file as written, so\nthe link must keep the `.md` suffix, while content-collection site generators (for\nexample Astro Starlight) resolve routes from a page's slug and treat a `.md`-suffixed\nlink as a broken route. Alef cannot infer which is true for a given consumer, so this is\nconfiguration rather than a guess -- see `docs::shared_pages::reference_page_link`,\nthe single place that reads it. ~keep",
+      "oneOf": [
+        {
+          "const": "suffixed",
+          "description": "Keep the `.md` suffix: `configuration.md`. Correct for GitHub-rendered Markdown and\nmost static-site generators that serve the file as-is.",
+          "type": "string"
+        },
+        {
+          "const": "extensionless",
+          "description": "Drop the file extension and use a directory-style route: `./configuration/`.\nMatches content-collection site generators that resolve routes from slugs.",
+          "type": "string"
+        }
+      ]
     },
     "DocsSkillTemplateConfig": {
       "additionalProperties": false,
