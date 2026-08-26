@@ -16,13 +16,14 @@
 //! Error handling: C callbacks return null-terminated JSON strings; parsing errors are
 //! logged and cause the handler dispatch to return an error JSON response.
 
+use crate::codegen::c_consumer;
 use crate::core::backend::GeneratedFile;
 use crate::core::config::ResolvedCrateConfig;
 use crate::core::ir::{
     ApiSurface, EntrypointKind, HandlerContractDef, RegistrationDef, RegistrationVariant, ServiceDef, TypeRef,
     WrapperConstructorArg,
 };
-use heck::{ToSnakeCase, ToUpperCamelCase};
+use heck::ToUpperCamelCase;
 use std::path::PathBuf;
 
 /// Find the `HandlerContractDef` by trait name in the surface.
@@ -104,17 +105,14 @@ fn gen_service_h(api: &ApiSurface, crate_name: &str) -> String {
 
 #[allow(dead_code)]
 fn gen_service_h_decls(out: &mut String, service: &ServiceDef, api: &ApiSurface, prefix: &str) {
-    let service_snake = service.name.to_snake_case();
     let opaque_name = format!("{}Opaque", service.name);
-    let prefix_lower = prefix.to_lowercase();
 
     out.push_str(&render(
         "service_api_h_constructor_decl.h.jinja",
         minijinja::context! {
             service_name => service.name.clone(),
-            prefix_lower => prefix_lower.clone(),
+            symbol => c_consumer::service_new_symbol(prefix, &service.name),
             opaque_name => opaque_name.clone(),
-            service_snake => service_snake.clone(),
         },
     ));
 
@@ -122,21 +120,17 @@ fn gen_service_h_decls(out: &mut String, service: &ServiceDef, api: &ApiSurface,
         "service_api_h_destructor_decl.h.jinja",
         minijinja::context! {
             service_name => service.name.clone(),
-            prefix_lower => prefix_lower.clone(),
-            service_snake => service_snake.clone(),
+            symbol => c_consumer::service_free_symbol(prefix, &service.name),
             opaque_name => opaque_name.clone(),
         },
     ));
 
     for reg in &service.registrations {
-        let reg_method_snake = reg.method.to_snake_case();
         out.push_str(&render_inline(
             "service_api_h_registration_decl_start.h.jinja",
             minijinja::context! {
                 method_name => reg.method.clone(),
-                prefix_lower => prefix_lower.clone(),
-                service_snake => service_snake.clone(),
-                reg_method_snake,
+                symbol => c_consumer::service_register_symbol(prefix, &service.name, &reg.method),
                 opaque_name => opaque_name.clone(),
             },
         ));
@@ -155,7 +149,6 @@ fn gen_service_h_decls(out: &mut String, service: &ServiceDef, api: &ApiSurface,
         if matches!(ep.kind, EntrypointKind::Finalize) && !entrypoint_return_representable(ep, api) {
             continue;
         }
-        let ep_name_snake = ep.method.to_snake_case();
         let return_type = match &ep.return_type {
             TypeRef::Named(name) if api.types.iter().any(|typ| typ.name == *name) => "uint64_t".to_owned(),
             _ => typeref_to_c_type(&ep.return_type),
@@ -171,9 +164,7 @@ fn gen_service_h_decls(out: &mut String, service: &ServiceDef, api: &ApiSurface,
             minijinja::context! {
                 kind,
                 return_type,
-                prefix_lower => prefix_lower.clone(),
-                service_snake => service_snake.clone(),
-                ep_name_snake,
+                symbol => c_consumer::service_entrypoint_symbol(prefix, &service.name, &ep.method),
                 opaque_name => opaque_name.clone(),
             },
         ));
@@ -421,11 +412,9 @@ fn gen_service_rs(api: &ApiSurface, config: &ResolvedCrateConfig) -> String {
 /// Emit the opaque service type and its constructor/destructor.
 fn gen_service_opaque(out: &mut String, service: &ServiceDef, _core_import: &str, prefix: &str) {
     let opaque_name = format!("{}Opaque", service.name);
-    let service_snake = service.name.to_snake_case();
     let owner_path = &service.rust_path;
-    let prefix_lower = prefix.to_lowercase();
-    let new_fn_name = format!("{prefix_lower}_{service_snake}_new");
-    let free_fn_name = format!("{prefix_lower}_{service_snake}_free");
+    let new_fn_name = c_consumer::service_new_symbol(prefix, &service.name);
+    let free_fn_name = c_consumer::service_free_symbol(prefix, &service.name);
 
     out.push_str(&render(
         "service_api_opaque.rs.jinja",
@@ -543,14 +532,7 @@ fn gen_registration_function(
     prefix: &str,
     opaque_name: &str,
 ) {
-    let service_snake = service.name.to_snake_case();
-    let reg_method_snake = reg.method.to_snake_case();
-    let fn_name = format!(
-        "{}_{}_register_{}",
-        prefix.to_lowercase(),
-        service_snake,
-        reg_method_snake
-    );
+    let fn_name = c_consumer::service_register_symbol(prefix, &service.name, &reg.method);
 
     let contract = find_contract(api, &reg.callback_contract).expect("contract not found");
     let bridge_name = format!("Ffi{}Bridge", contract.trait_name.to_upper_camel_case());
@@ -591,7 +573,7 @@ fn gen_registration_function(
         "service_api_registration_function.rs.jinja",
         minijinja::context! {
             method_name => reg.method.clone(),
-            new_fn_name => format!("{}_{}_new", prefix.to_lowercase(), service_snake),
+            new_fn_name => c_consumer::service_new_symbol(prefix, &service.name),
             fn_name,
             opaque_name => opaque_name.to_owned(),
             param_decls => param_decl_suffix(&meta_bindings),
@@ -628,14 +610,8 @@ fn gen_registration_variants(
         return;
     }
 
-    let service_snake = service.name.to_snake_case();
-    let base_fn_name = format!(
-        "{}_{}_register_{}",
-        prefix.to_lowercase(),
-        service_snake,
-        reg.method.to_snake_case()
-    );
-    let new_fn_name = format!("{}_{}_new", prefix.to_lowercase(), service_snake);
+    let base_fn_name = c_consumer::service_register_symbol(prefix, &service.name, &reg.method);
+    let new_fn_name = c_consumer::service_new_symbol(prefix, &service.name);
 
     let contract = find_contract(api, &reg.callback_contract).expect("contract not found");
     let bridge_name = format!("Ffi{}Bridge", contract.trait_name.to_upper_camel_case());
@@ -680,13 +656,7 @@ fn gen_registration_variant(
     bridge_name: &str,
     contract: &HandlerContractDef,
 ) {
-    let service_snake = service.name.to_snake_case();
-    let variant_fn_name = format!(
-        "{}_{}_{}",
-        prefix.to_lowercase(),
-        service_snake,
-        variant.name.to_snake_case()
-    );
+    let variant_fn_name = c_consumer::service_method_symbol(prefix, &service.name, &variant.name);
 
     let sig_bindings: Vec<FfiParamBinding> = variant
         .signature_params
@@ -801,9 +771,7 @@ fn gen_configurator_function(
     prefix: &str,
     opaque_name: &str,
 ) {
-    let service_snake = service.name.to_snake_case();
-    let cfg_method_snake = cfg.name.to_snake_case();
-    let fn_name = format!("{}_{}_{}", prefix.to_lowercase(), service_snake, cfg_method_snake);
+    let fn_name = c_consumer::service_method_symbol(prefix, &service.name, &cfg.name);
 
     let param_bindings: Vec<FfiParamBinding> = cfg
         .params
@@ -826,7 +794,7 @@ fn gen_configurator_function(
         "service_api_configurator_function.rs.jinja",
         minijinja::context! {
             method_name => cfg.name.clone(),
-            new_fn_name => format!("{}_{}_new", prefix.to_lowercase(), service_snake),
+            new_fn_name => c_consumer::service_new_symbol(prefix, &service.name),
             fn_name,
             opaque_name => opaque_name.to_owned(),
             param_decls => param_decl_suffix(&param_bindings),
@@ -849,9 +817,7 @@ fn gen_entrypoint_function(
         return;
     }
 
-    let service_snake = service.name.to_snake_case();
-    let ep_name_snake = ep.method.to_snake_case();
-    let fn_name = format!("{}_{}_ep_{}", prefix.to_lowercase(), service_snake, ep_name_snake);
+    let fn_name = c_consumer::service_entrypoint_symbol(prefix, &service.name, &ep.method);
 
     let returns_opaque = matches!(&ep.return_type, TypeRef::Named(n) if api.types.iter().any(|t| t.name == *n));
     let return_type = match &ep.return_type {
@@ -915,7 +881,7 @@ fn gen_entrypoint_function(
         "service_api_entrypoint_function.rs.jinja",
         minijinja::context! {
             method_name => ep.method.clone(),
-            new_fn_name => format!("{}_{}_new", prefix.to_lowercase(), service_snake),
+            new_fn_name => c_consumer::service_new_symbol(prefix, &service.name),
             fn_name,
             opaque_name => opaque_name.to_owned(),
             param_decls => param_decl_suffix(&param_bindings),

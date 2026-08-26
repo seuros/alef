@@ -7,7 +7,8 @@
 //! 2. A bridge struct holding `vtable`, `user_data: *const c_void`, and `cached_name: String`.
 //! 3. `impl Plugin for FfiBridge` (when a `super_trait` is configured).
 //! 4. `impl Trait for FfiBridge` forwarding each method through the vtable.
-//! 5. A `{prefix}_register_{trait_snake}` `extern "C"` function.
+//! 5. A `{prefix}_{register_fn}` `extern "C"` function, named from the configured
+//!    `register_fn` rather than from the trait name.
 //! 6. A `{prefix}_unregister_{trait_snake}` `extern "C"` function.
 //!
 //! C has no closures or objects, so thread-safety is the caller's responsibility.
@@ -19,7 +20,7 @@ mod helpers;
 mod registration;
 mod vtable;
 
-use crate::codegen::generators::trait_bridge::{TraitBridgeSpec, gen_bridge_plugin_impl, trait_snake_of};
+use crate::codegen::generators::trait_bridge::{TraitBridgeSpec, gen_bridge_plugin_impl};
 use crate::codegen::naming::{pascal_to_snake, to_class_name};
 use crate::core::backend::TraitBridgeRegistrationSurface;
 use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
@@ -172,15 +173,14 @@ pub fn registration_surface(api: &ApiSurface, config: &ResolvedCrateConfig) -> V
         .filter_map(|bridge| {
             let trait_def = api.types.iter().find(|t| t.is_trait && t.name == bridge.trait_name)?;
             let register_fn = bridge.register_fn.as_deref()?;
-            let trait_snake = trait_snake_of(&trait_def.name);
             Some(TraitBridgeRegistrationSurface {
                 trait_name: trait_def.name.clone(),
                 register_symbol: Some(registration::ffi_register_symbol(&prefix, register_fn)),
-                unregister_symbol: Some(registration::ffi_unregister_symbol(&prefix, &trait_snake)),
+                unregister_symbol: Some(registration::ffi_unregister_symbol(&prefix, &trait_def.name)),
                 clear_symbol: bridge
                     .clear_fn
                     .as_ref()
-                    .map(|_| registration::ffi_clear_symbol(&prefix, &trait_snake)),
+                    .map(|_| registration::ffi_clear_symbol(&prefix, &trait_def.name)),
             })
         })
         .collect()

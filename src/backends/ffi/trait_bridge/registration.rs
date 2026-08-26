@@ -9,26 +9,23 @@ use super::FfiBridgeGenerator;
 
 /// The exported C symbol for a trait bridge's `register` entry point.
 ///
-/// These three helpers are the single authority for the ABI names the generated `extern "C"`
-/// items carry, shared with `FfiBackend::trait_bridge_registration_surface` so the C reference
-/// docs cannot name a symbol cbindgen never exports. They deliberately do not route through
-/// `naming::abi_symbol`, which snake-cases its input: these names are assembled from an
-/// already-snake configured function name and an already-snake trait name, and re-casing them
-/// would silently rewrite a symbol consumers link against. ~keep
+/// These three helpers name the ABI symbols the generated `extern "C"` items carry. The
+/// spelling lives in `codegen::c_consumer`, the ABI surface every C-consuming backend asks, so
+/// Go's cgo call site and the C reference docs cannot drift from what cbindgen exports. ~keep
 pub(crate) fn ffi_register_symbol(prefix: &str, register_fn: &str) -> String {
-    format!("{prefix}_{register_fn}")
+    crate::codegen::c_consumer::trait_register_symbol(prefix, register_fn)
 }
 
 /// The exported C symbol for a trait bridge's `unregister` entry point. Derived from the trait
 /// name rather than the configured `unregister_fn`; see [`ffi_register_symbol`]. ~keep
-pub(crate) fn ffi_unregister_symbol(prefix: &str, trait_snake: &str) -> String {
-    format!("{prefix}_unregister_{trait_snake}")
+pub(crate) fn ffi_unregister_symbol(prefix: &str, trait_name: &str) -> String {
+    crate::codegen::c_consumer::trait_unregister_symbol(prefix, trait_name)
 }
 
 /// The exported C symbol for a trait bridge's `clear` entry point. Derived from the trait name
 /// rather than the configured `clear_fn`; see [`ffi_register_symbol`]. ~keep
-pub(crate) fn ffi_clear_symbol(prefix: &str, trait_snake: &str) -> String {
-    format!("{prefix}_clear_{trait_snake}")
+pub(crate) fn ffi_clear_symbol(prefix: &str, trait_name: &str) -> String {
+    crate::codegen::c_consumer::trait_clear_symbol(prefix, trait_name)
 }
 
 impl FfiBridgeGenerator {
@@ -108,12 +105,11 @@ impl FfiBridgeGenerator {
             .expect("gen_registration_fn called without registry_getter");
 
         let prefix = &self.prefix;
-        let trait_snake = spec.trait_snake();
         let vtable = self.vtable_name(spec);
         let bridge = self.bridge_name(spec);
         let trait_path = spec.trait_path();
         let full_register_name = ffi_register_symbol(prefix, register_fn_name);
-        let full_unregister_name = ffi_unregister_symbol(prefix, &trait_snake);
+        let full_unregister_name = ffi_unregister_symbol(prefix, &spec.trait_def.name);
 
         let mut out = String::with_capacity(2048);
 
@@ -162,7 +158,7 @@ impl FfiBridgeGenerator {
         ));
 
         if spec.bridge_config.clear_fn.is_some() {
-            let full_clear_name = ffi_clear_symbol(prefix, &trait_snake);
+            let full_clear_name = ffi_clear_symbol(prefix, &spec.trait_def.name);
             out.push('\n');
             out.push_str(&crate::backends::ffi::template_env::render(
                 "clear_fn.jinja",
