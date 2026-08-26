@@ -331,17 +331,47 @@ struct ShellFailure {
     error: anyhow::Error,
 }
 
+/// Runs `cmd` under `sh -c`, capturing its output instead of inheriting the parent's stdio.
+///
+/// A formatter that ran and rejected the code used to report only its bare exit status --
+/// `formatter for rust exited with exit status: 1: (cd .../e2e/rust && cargo fmt --all)` said
+/// nothing about what rustfmt actually objected to, so the only way to find out was to
+/// reconstruct and re-run the command by hand. Capturing costs the live-progress view
+/// `Stdio::inherit()` gave for free, but formatter passes run in seconds, not the 30-minute
+/// builds `run_run_command` (`cli::pipeline::commands::build`) has to stay live for. ~keep
 fn run_shell(cmd: &str, lang: &str) -> Result<(), ShellFailure> {
-    match std::process::Command::new("sh").args(["-c", cmd]).status() {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(ShellFailure {
-            executable_missing: status.code() == Some(SHELL_COMMAND_NOT_FOUND),
-            error: anyhow::anyhow!("formatter for {lang} exited with {status}: {cmd}"),
+    match std::process::Command::new("sh").args(["-c", cmd]).output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(ShellFailure {
+            executable_missing: output.status.code() == Some(SHELL_COMMAND_NOT_FOUND),
+            error: anyhow::anyhow!(
+                "formatter for {lang} exited with {}: {cmd}\n{}",
+                output.status,
+                format_shell_output(&output)
+            ),
         }),
         Err(error) => Err(ShellFailure {
             executable_missing: error.kind() == std::io::ErrorKind::NotFound,
             error: anyhow::Error::new(error).context(format!("failed to run formatter for {lang}: {cmd}")),
         }),
+    }
+}
+
+/// Renders a failed shell formatter's captured stdout/stderr for [`ShellFailure::error`].
+///
+/// Both streams, not just stderr: several formatters this override wraps (php-cs-fixer, ruff
+/// under some configs) write their real diagnostic to stdout, so surfacing only stderr would
+/// still leave some of these failures unexplained.
+fn format_shell_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = stdout.trim();
+    let stderr = stderr.trim();
+    match (stdout.is_empty(), stderr.is_empty()) {
+        (false, false) => format!("--- stderr ---\n{stderr}\n--- stdout ---\n{stdout}"),
+        (false, true) => format!("--- stdout ---\n{stdout}"),
+        (true, false) => format!("--- stderr ---\n{stderr}"),
+        (true, true) => "<no output>".to_string(),
     }
 }
 

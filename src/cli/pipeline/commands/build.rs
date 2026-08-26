@@ -3,6 +3,7 @@ use crate::cli::pipeline::helpers::{
 };
 use crate::cli::registry;
 use crate::core::config::{BuildCommandConfig, Language, ResolvedCrateConfig};
+use crate::process::capture::{OUTPUT_DRAIN_GRACE, collect_output_within, output_reader_tee};
 use crate::process::timed::{Deadline, GroupChild};
 use anyhow::Context as _;
 use rayon::prelude::*;
@@ -800,8 +801,8 @@ fn run_run_command(
     command
         .args(args)
         .current_dir(base_dir)
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     frb_cache::configure(&mut command, cmd, cache_scope)?;
 
     let mut child = match GroupChild::spawn(&mut command) {
@@ -815,6 +816,13 @@ fn run_run_command(
         Err(err) => return Err(anyhow::Error::new(err).context(format!("failed to spawn '{cmd}'"))),
     };
 
+    // Mirrored to alef's own stderr as they arrive (so a cold release build still looks alive)
+    // and captured at the same time, so a failure below can quote what the child actually said
+    // instead of just its exit code. Taken before the wait, not after: a child that fills the OS
+    // pipe buffer blocks on the write and never exits if nothing is draining it concurrently.
+    let stdout = child.take_stdout().map(output_reader_tee);
+    let stderr = child.take_stderr().map(output_reader_tee);
+
     // `flutter_rust_bridge_codegen` and the cargo builds it drives are trees, not processes:
     // killing the direct child leaves whatever it started running past this ceiling. ~keep
     let waited = child
@@ -824,10 +832,53 @@ fn run_run_command(
         anyhow::bail!("'{cmd}' exceeded {}s timeout; killed", timeout.as_secs());
     };
 
+    let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)
+        .with_context(|| format!("failed to read the output of '{cmd}'"))?;
+    if !drained.complete {
+        warn!(
+            command = cmd,
+            grace_seconds = OUTPUT_DRAIN_GRACE.as_secs(),
+            "a descendant outlived the command still holding its output pipes; killing the process group"
+        );
+        child.kill_tree();
+    }
+
     if !status.success() {
         let code = status.code().unwrap_or(-1);
-        anyhow::bail!("'{cmd}' exited with status {code}");
+        // Both streams, not just stderr: `flutter_rust_bridge_codegen` and cargo wrapped by
+        // sccache both put real diagnostics on stdout, so stderr alone can be empty on the run
+        // that most needs explaining. ~keep
+        anyhow::bail!(
+            "'{cmd}' exited with status {code}\n--- stderr (tail) ---\n{}\n--- stdout (tail) ---\n{}",
+            tail(&drained.stderr, ERROR_TAIL_BYTES),
+            tail(&drained.stdout, ERROR_TAIL_BYTES)
+        );
     }
 
     Ok(true)
+}
+
+/// How much of a failed command's captured stdout/stderr to quote in its error, from the end of
+/// each stream.
+///
+/// Enough to carry a real compiler diagnostic (the whole point) without letting a linker
+/// invocation's thousands of lines of "ignoring duplicate libraries" and "built for newer macOS
+/// version" warnings — a real case that motivated this — balloon the propagated error. ~keep
+const ERROR_TAIL_BYTES: usize = 4096;
+
+/// Keeps roughly the last `max_bytes` of `text`, snapped forward to the next line boundary so a
+/// truncated diagnostic reads as whole lines instead of a byte fragment.
+fn tail(text: &str, max_bytes: usize) -> &str {
+    let Some(mut start) = text.len().checked_sub(max_bytes) else {
+        return text;
+    };
+    // `text.len() - max_bytes` can land inside a multi-byte character; a `String` decoded
+    // lossily from a compiler's output is not guaranteed ASCII. ~keep
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    match text[start..].find('\n') {
+        Some(offset) => &text[start + offset + 1..],
+        None => &text[start..],
+    }
 }

@@ -87,7 +87,30 @@ pub(crate) struct DrainedOutput {
     pub(crate) complete: bool,
 }
 
-pub(crate) fn output_reader(mut stream: impl Read + Send + 'static) -> OutputReader {
+pub(crate) fn output_reader(stream: impl Read + Send + 'static) -> OutputReader {
+    spawn_capturing_drain(stream, |_chunk| {})
+}
+
+/// Like [`output_reader`], but also mirrors each chunk to alef's own stderr as it arrives.
+///
+/// A command bounded by a long timeout (a cold release build can legitimately run past 30
+/// minutes) still needs to look alive while it runs, not just explain itself after the fact --
+/// see `RUN_COMMAND_TIMEOUT`. Capturing without echoing traded that live view away for a
+/// message that could finally quote the child instead of just its exit code; this keeps both. ~keep
+pub(crate) fn output_reader_tee(stream: impl Read + Send + 'static) -> OutputReader {
+    use std::io::Write as _;
+    spawn_capturing_drain(stream, |chunk| {
+        let _ = std::io::stderr().write_all(chunk);
+    })
+}
+
+/// Shared body for [`output_reader`] and [`output_reader_tee`]: read `stream` to end of stream on
+/// a drain thread, handing each chunk to `on_chunk` before it joins the buffer the caller reads
+/// back later.
+fn spawn_capturing_drain(
+    mut stream: impl Read + Send + 'static,
+    mut on_chunk: impl FnMut(&[u8]) + Send + 'static,
+) -> OutputReader {
     let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let sink = std::sync::Arc::clone(&buffer);
     let drain = spawn_drain(move || {
@@ -95,7 +118,10 @@ pub(crate) fn output_reader(mut stream: impl Read + Send + 'static) -> OutputRea
         loop {
             match stream.read(&mut chunk) {
                 Ok(0) => break Ok(()),
-                Ok(count) => lock(&sink).extend_from_slice(&chunk[..count]),
+                Ok(count) => {
+                    on_chunk(&chunk[..count]);
+                    lock(&sink).extend_from_slice(&chunk[..count]);
+                }
                 Err(error) => break Err(error),
             }
         }
@@ -138,7 +164,9 @@ fn decode(reader: &OutputReader) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{OUTPUT_DRAIN_GRACE, collect_output_within, output_reader, spawn_drain, wait_for_drains};
+    use super::{
+        OUTPUT_DRAIN_GRACE, collect_output_within, output_reader, output_reader_tee, spawn_drain, wait_for_drains,
+    };
     use std::time::{Duration, Instant};
 
     #[test]
@@ -150,6 +178,20 @@ mod tests {
         assert!(drained.complete);
         assert_eq!(drained.stdout, "finished");
         assert_eq!(drained.stderr, "");
+    }
+
+    /// [`output_reader_tee`] mirrors each chunk to alef's own stderr as a side effect, but the
+    /// captured buffer it hands back must still contain exactly what the stream wrote -- a
+    /// `run_run_command` failure quotes this buffer, so a tee that dropped or duplicated bytes
+    /// on the way into it would make the error message lie about what the child said. ~keep
+    #[test]
+    fn output_reader_tee_captures_the_same_bytes_as_output_reader() {
+        let reader = output_reader_tee(std::io::Cursor::new(b"tapped through".to_vec()));
+
+        let drained = collect_output_within(Some(reader), None, OUTPUT_DRAIN_GRACE).expect("a readable stream");
+
+        assert!(drained.complete);
+        assert_eq!(drained.stdout, "tapped through");
     }
 
     /// The bound the whole module exists for, measured rather than asserted structurally: a reader

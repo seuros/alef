@@ -51,6 +51,33 @@ fn run_run_command_honors_skip_env_var() {
     );
 }
 
+/// The regression this fix closes: a post-build command that ran and rejected the code used to
+/// report only its bare exit status, discarding whatever it actually said on the way out --
+/// exactly what happened to a real `cargo build` linker failure, which surfaced as
+/// `'cargo' exited with status 101` with no way to tell a linker bug from a missing crate
+/// without re-running the build by hand. The failing command's own diagnostic must now reach
+/// the propagated error. ~keep
+#[test]
+fn run_run_command_error_quotes_the_failing_commands_own_stderr() {
+    let _guard = SkipCommandsGuard::set("");
+    let dir = std::env::temp_dir();
+    let result = run_run_command(
+        "sh",
+        &["-c", "echo alef-regression-marker-9f31 1>&2; exit 3"],
+        &dir,
+        "sample",
+        super::RUN_COMMAND_TIMEOUT,
+    );
+
+    let error = result.expect_err("a script that exits 3 must fail the step");
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("alef-regression-marker-9f31"),
+        "the command's own stderr must survive into the error, not just its exit code: {message}"
+    );
+    assert!(message.contains("exited with status 3"), "got: {message}");
+}
+
 /// A tool missing from `PATH` used to be indistinguishable from a tool that ran and
 /// produced current output -- both returned `Ok(())`. `run_post_build`'s `RunCommand` arm
 /// (and `PostBuildOutcome::skipped_missing_tools`) depend on `Ok(false)` here to tell the
@@ -180,6 +207,33 @@ fn a_timed_out_run_command_kills_its_grandchild_too() {
         wait_until_gone(grandchild),
         "grandchild {grandchild} survived the ceiling that killed its parent"
     );
+}
+
+#[test]
+fn tail_returns_the_whole_text_when_it_fits_within_the_limit() {
+    assert_eq!(super::tail("short", 4096), "short");
+}
+
+/// Truncation snaps forward to the next line boundary rather than cutting mid-line, so a
+/// quoted diagnostic reads as whole lines instead of a byte fragment. Cutting the last 7 bytes
+/// of "aaaa\nbbbb\ncccc\n" lands on the trailing "b" of "bbbb"; the result must start at the
+/// next whole line, "cccc\n", not mid-word.
+#[test]
+fn tail_snaps_to_a_line_boundary_when_truncating() {
+    let text = "aaaa\nbbbb\ncccc\n";
+    assert_eq!(super::tail(text, 7), "cccc\n");
+}
+
+/// A multi-byte UTF-8 character sitting right at the naive cut point must not panic. Compiler
+/// output is decoded lossily and is not guaranteed ASCII.
+#[test]
+fn tail_does_not_panic_on_a_multibyte_boundary() {
+    let text = "prefix-\u{1F600}\u{1F600}\u{1F600}-suffix";
+    // Byte 9 sits inside the first emoji's 4-byte UTF-8 sequence (which starts at byte 7), so
+    // cutting there without adjustment would slice a character in half.
+    assert!(!text.is_char_boundary(9), "test setup: byte 9 must land mid-character");
+    let truncated = super::tail(text, text.len() - 9);
+    assert!(text.ends_with(truncated), "truncated text must be a real suffix: {truncated:?}");
 }
 
 fn is_alive(pid: i32) -> bool {
