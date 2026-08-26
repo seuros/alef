@@ -19,6 +19,29 @@ fn test_gen_constructor_produces_new_method() {
     assert!(result.contains("count"), "should include count field in struct literal");
 }
 
+/// A `has_default` type routes through `config_constructor_parts_inner`, where an optional
+/// field's assignment is a pure passthrough of the constructor parameter. Emitting that as
+/// `count: count` is `clippy::redundant_field_names`, denied when a consumer builds the
+/// generated crate under `-D warnings`; the initializer must be field-init shorthand. ~keep
+#[test]
+fn should_emit_field_init_shorthand_when_default_type_constructor_passes_an_optional_through() {
+    let mut typ = simple_type_def();
+    typ.has_default = true;
+    let mapper = RustMapper;
+    let cfg = default_cfg();
+
+    let result = gen_constructor(&typ, &mapper, &cfg);
+
+    assert!(
+        result.contains("Self { name: name.unwrap_or_default(), count }"),
+        "optional passthrough must render as field-init shorthand; got:\n{result}"
+    );
+    assert!(
+        !result.contains("count: count"),
+        "constructor must not emit a redundant field name; got:\n{result}"
+    );
+}
+
 #[test]
 fn test_gen_instance_method_with_ref_receiver() {
     let typ = simple_type_def();

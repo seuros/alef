@@ -440,6 +440,38 @@ fn owned_receiver_alias_check_has_concrete_request_type() {
     );
 }
 
+/// Every generated `*_free` guarded its `remove_handle` call with a nested `if` whose outer
+/// block held nothing else. In edition 2024 — which the generated crates use —
+/// `clippy::collapsible_if` reaches that shape through let-chains, so it is a build failure
+/// for a consumer compiling the FFI crate under `-D warnings`. The guard must be one
+/// let-chain. ~keep
+#[test]
+fn generated_free_functions_guard_remove_handle_with_a_let_chain() {
+    let files = super::super::FfiBackend
+        .generate_bindings(&super::common::sample_api(), &super::common::sample_config())
+        .expect("FFI generation");
+    let source = &files
+        .iter()
+        .find(|file| file.path.ends_with("lib.rs"))
+        .expect("generated Rust library")
+        .content;
+
+    syn::parse_file(source).unwrap_or_else(|error| panic!("free wrappers must parse: {error}\n{source}"));
+    // Confirm the fixture actually emits a free wrapper before trusting the absence check. ~keep
+    assert!(
+        source.contains("_free(handle: AlefHandle)"),
+        "fixture must emit at least one handle-free wrapper:\n{source}"
+    );
+    assert!(
+        source.contains("    if handle != 0\n        && let Err(error) = remove_handle::<"),
+        "free wrappers must guard remove_handle with a let-chain:\n{source}"
+    );
+    assert!(
+        !source.contains("    if handle != 0 {\n        if let Err(error) = remove_handle::<"),
+        "clippy::collapsible_if: the free guard must not stay a nested if:\n{source}"
+    );
+}
+
 #[test]
 fn generated_ffi_lib_rs_carries_the_handle_abi_stamp() {
     let files = super::super::FfiBackend

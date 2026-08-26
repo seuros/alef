@@ -20,7 +20,7 @@ pub fn gen_php_kwargs_constructor(typ: &TypeDef, type_mapper: &dyn Fn(&TypeRef) 
             minijinja::context! {
                 name => field.name.clone(),
                 ty => mapped,
-                assignment => assignment,
+                init => crate::codegen::field_init::struct_field_init(&field.name, &assignment),
             }
         })
         .collect();
