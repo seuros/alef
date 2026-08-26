@@ -20,15 +20,29 @@
 //! A facade function can also be legitimately absent from the bridge with frb having done nothing
 //! wrong at all: flutter_rust_bridge's codegen macro expansion runs against the crate's own
 //! `default` Cargo features (see the `cfg_gates` module doc), so a `#[cfg(feature = "X")]`-gated
-//! function whose feature is not in that manifest's `default` list is correctly invisible to frb
-//! and must not be reported missing. [`missing_bridge_functions`] takes the enabled-feature set
-//! callers resolve from that same manifest (via
+//! function whose feature is declared in that manifest but not in its `default` list is correctly
+//! invisible to frb and must not be reported missing. [`missing_bridge_functions`] takes the
+//! enabled-feature set callers resolve from that same manifest (via
 //! [`crate::codegen::cfg::read_default_enabled_cargo_features`]) and skips any facade function
-//! whose gate that set does not satisfy.
+//! whose gate that set does not satisfy -- **provided** the manifest's `[features]` table declares
+//! the gated feature at all.
+//!
+//! A gate naming a feature the manifest never declares is a different situation, not the same
+//! one: "declared but off" is a choice the manifest owner made on purpose, while "never declared"
+//! means the manifest has nothing to turn on for that name at all. Alef's own generation forwards
+//! every cfg-gated feature it emits into the facade's sibling manifest (see
+//! `crate::codegen::cfg::collect_cfg_features`), so an undeclared feature almost always means that
+//! forwarding write never landed -- most commonly because the ownership guard refused it (alef
+//! #464). Treating the two cases identically let this check silently agree with a broken
+//! manifest instead of catching the break: [`missing_bridge_functions`] and
+//! [`active_free_function_names`] keep an undeclared-gate function a coverage candidate, via
+//! `declared_features` (resolved from the same manifest via
+//! [`crate::codegen::cfg::read_declared_cargo_features`]), and [`undeclared_gate_features`] lets a
+//! caller attribute a resulting failure to the actual cause. ~keep
 
 use super::cfg_gates::{cfg_gated_free_functions, free_pub_fn_name};
 use super::text_transformations::{contains_function_at_token_boundary, snake_to_camel};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// Names of every top-level (column 0) `pub fn` / `pub async fn` free function declared in
 /// `lib_rs_source`, in declaration order.
@@ -51,17 +65,42 @@ fn cfg_predicate(gate: &str) -> &str {
         .unwrap_or(gate)
 }
 
+/// Every `feature = "..."` name a (possibly `any`/`all`/`not`-composed) cfg predicate
+/// references, via the same recursive walk [`crate::codegen::cfg::collect_cfg_features`] uses to
+/// decide which features a binding crate's own `[features]` table must forward. `predicate` is
+/// the bare text [`cfg_predicate`] returns (no `#[cfg(` / `)]` wrapper).
+fn cfg_predicate_feature_names(predicate: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    crate::codegen::cfg::collect_cfg_feature_names(predicate, &mut names);
+    names
+}
+
 /// Names of every top-level free function in `lib_rs_source` that flutter_rust_bridge would
 /// actually see and bridge, given `enabled_features`.
 ///
-/// A function with no `#[cfg(...)]` gate is always included. A gated function is included only
-/// when `enabled_features` satisfies its gate (evaluated with the same
-/// [`crate::core::ir::cfg_feature_satisfied`] every other cfg filter in this repo uses). When
-/// `enabled_features` is `None` -- the manifest that would supply it could not be read or parsed
-/// -- every function, gated or not, is included: this is the pre-cfg-awareness behavior, so an
-/// unreadable manifest degrades to the old blanket check rather than silently exempting every
-/// gated function from coverage.
-fn active_free_function_names(lib_rs_source: &str, enabled_features: Option<&HashSet<&str>>) -> Vec<String> {
+/// A function with no `#[cfg(...)]` gate is always included. A gated function whose gate
+/// `enabled_features` satisfies (evaluated with the same [`crate::core::ir::cfg_feature_satisfied`]
+/// every other cfg filter in this repo uses) is also included. When `enabled_features` is `None`
+/// -- the manifest that would supply it could not be read or parsed -- every function, gated or
+/// not, is included: this is the pre-cfg-awareness behavior, so an unreadable manifest degrades to
+/// the old blanket check rather than silently exempting every gated function from coverage.
+///
+/// A gate `enabled_features` does NOT satisfy is only excluded (treated as a deliberate,
+/// legitimate "off by default" choice frb agrees with) when `declared_features` shows the
+/// manifest actually declares every feature the gate names. A gate naming a feature the manifest
+/// never declares at all cannot be that kind of choice -- there is nothing in the manifest to
+/// turn on -- so it is kept as a coverage candidate instead, the same way an unresolved
+/// `target_arch` leaf is kept indeterminate rather than dropped. This is what lets a real
+/// consumer-repo failure surface: `collect_cfg_features` wants to add a forwarding `[features]`
+/// entry for a newly cfg-gated facade function, the ownership guard refuses that write because
+/// the manifest predates alef's marker convention, and the function's gate is left referencing a
+/// feature name the manifest never got. Silently excluding it here (the old behavior) let the
+/// coverage check agree with a broken manifest instead of catching the break. ~keep
+fn active_free_function_names(
+    lib_rs_source: &str,
+    enabled_features: Option<&HashSet<&str>>,
+    declared_features: Option<&HashSet<&str>>,
+) -> Vec<String> {
     let gates: HashMap<String, String> = cfg_gated_free_functions(lib_rs_source).into_iter().collect();
     free_function_names(lib_rs_source)
         .into_iter()
@@ -72,9 +111,47 @@ fn active_free_function_names(lib_rs_source: &str, enabled_features: Option<&Has
             let Some(features) = enabled_features else {
                 return true;
             };
-            crate::core::ir::cfg_feature_satisfied(Some(cfg_predicate(gate)), features)
+            if crate::core::ir::cfg_feature_satisfied(Some(cfg_predicate(gate)), features) {
+                return true;
+            }
+            match declared_features {
+                Some(declared) => cfg_predicate_feature_names(cfg_predicate(gate))
+                    .iter()
+                    .any(|feature_name| !declared.contains(feature_name.as_str())),
+                // No declared-feature information to check against (an unreadable/unparseable
+                // manifest, which `enabled_features` being `Some` here should never pair with in
+                // practice -- both are derived from the same read). Keep the function a
+                // candidate rather than silently trusting an unverifiable "off by default". ~keep
+                None => true,
+            }
         })
         .collect()
+}
+
+/// The feature names among `function_name`'s facade cfg gate (if any) that `declared_features`
+/// does not declare at all.
+///
+/// Always empty for an ungated function, or for a gated function whose every referenced feature
+/// IS declared (whether on or off by default) -- both are outside the shape
+/// [`active_free_function_names`]'s doc comment describes. Exists so a caller that already has a
+/// [`missing_bridge_functions`] result can attribute each name accurately: a name this returns
+/// non-empty for is missing because its manifest entry never landed (most often a refused write),
+/// not because `flutter_rust_bridge_codegen` failed to run.
+pub fn undeclared_gate_features(
+    lib_rs_source: &str,
+    function_name: &str,
+    declared_features: &HashSet<&str>,
+) -> BTreeSet<String> {
+    cfg_gated_free_functions(lib_rs_source)
+        .into_iter()
+        .find(|(name, _)| name == function_name)
+        .map(|(_, gate)| {
+            cfg_predicate_feature_names(cfg_predicate(&gate))
+                .into_iter()
+                .filter(|feature_name| !declared_features.contains(feature_name.as_str()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Names (as declared in `lib_rs_source`, snake_case) of facade free functions that have no
@@ -85,7 +162,9 @@ fn active_free_function_names(lib_rs_source: &str, enabled_features: Option<&Has
 /// to be permanently absent, independent of whether the bridge is otherwise fresh.
 ///
 /// `enabled_features` -- see [`active_free_function_names`] -- excludes a `#[cfg(...)]`-gated
-/// function from consideration when its gate is not satisfied, since frb never saw it either.
+/// function from consideration only when its gate is not satisfied AND `declared_features` shows
+/// the manifest declares every feature the gate names; a gate naming an undeclared feature stays
+/// a candidate (see that function's doc for why).
 ///
 /// Matching uses flutter_rust_bridge's snake_case -> lowerCamelCase convention and a
 /// token-boundary lookup ([`contains_function_at_token_boundary`]) rather than a literal
@@ -98,9 +177,10 @@ pub fn missing_bridge_functions(
     bridge_dart_source: &str,
     exclude_functions: &[String],
     enabled_features: Option<&HashSet<&str>>,
+    declared_features: Option<&HashSet<&str>>,
 ) -> Vec<String> {
     let excluded: HashSet<&str> = exclude_functions.iter().map(String::as_str).collect();
-    active_free_function_names(lib_rs_source, enabled_features)
+    active_free_function_names(lib_rs_source, enabled_features, declared_features)
         .into_iter()
         .filter(|name| !excluded.contains(name.as_str()))
         .filter(|name| {
@@ -150,7 +230,7 @@ pub fn record_price(id: String, price_cents: i64) -> Result<(), String> {
         // added to the facade and never ran again afterward.
         let bridge_dart = "Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);\n";
 
-        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], None);
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], None, None);
         assert_eq!(
             missing,
             vec!["record_price".to_string()],
@@ -163,7 +243,7 @@ pub fn record_price(id: String, price_cents: i64) -> Result<(), String> {
         let lib_rs = "pub fn count_widgets(collection: String) -> Result<i64, String> {\n    Ok(0)\n}\n";
         let bridge_dart = "Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);\n";
 
-        assert!(missing_bridge_functions(lib_rs, bridge_dart, &[], None).is_empty());
+        assert!(missing_bridge_functions(lib_rs, bridge_dart, &[], None, None).is_empty());
     }
 
     /// `dartfmt` wraps a long return type onto its own line, pushing the function name onto the
@@ -187,7 +267,7 @@ createChunkClassificationDefinitionFromJson({required String json}) =>
     RustLib.instance.api.crateCreateChunkClassificationDefinitionFromJson(json: json);
 ";
 
-        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], None);
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], None, None);
         assert_eq!(
             missing,
             Vec::<String>::new(),
@@ -211,21 +291,21 @@ pub fn internal_only(id: String) -> Result<(), String> {
         // and that is expected -- excluding it must not show up as a coverage gap.
         let bridge_dart = "Future<int> countWidgets({required String collection}) => RustLib.instance.api.crateCountWidgets(collection: collection);\n";
 
-        let missing = missing_bridge_functions(lib_rs, bridge_dart, &["internal_only".to_string()], None);
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &["internal_only".to_string()], None, None);
         assert!(
             missing.is_empty(),
             "excluded function must not be reported missing: {missing:?}"
         );
     }
 
-    /// The critical regression: a facade function gated behind a feature that is NOT in the
-    /// enabled set must never be reported missing -- frb's own codegen never saw it either, so
-    /// the bridge is not stale with respect to it. This is the shape of a real `alef all` failure
-    /// this fix closes: several `#[cfg(feature = "...")]` functions a dart rust crate's manifest
-    /// never enabled by default were reported as a stale bridge, even though frb correctly never
-    /// saw them.
+    /// The critical regression: a facade function gated behind a feature that IS declared in the
+    /// manifest but not in the enabled (default) set must never be reported missing -- frb's own
+    /// codegen never saw it either, so the bridge is not stale with respect to it. This is the
+    /// shape of a real `alef all` failure this fix closes: several `#[cfg(feature = "...")]`
+    /// functions a dart rust crate's manifest never enabled by default were reported as a stale
+    /// bridge, even though frb correctly never saw them.
     #[test]
-    fn missing_bridge_functions_ignores_a_facade_function_behind_an_inactive_cfg_gate() {
+    fn missing_bridge_functions_ignores_a_facade_function_behind_a_declared_but_inactive_cfg_gate() {
         let lib_rs = "\
 #[cfg(feature = \"premium-tier\")]
 pub fn create_premium_backend_options_from_json(json: String) -> Result<String, String> {
@@ -236,18 +316,52 @@ pub fn create_premium_backend_options_from_json(json: String) -> Result<String, 
         // produces when the gating feature is off.
         let bridge_dart = "";
         let enabled: HashSet<&str> = HashSet::new();
+        // The manifest DOES declare `premium-tier` (just not in `default`) -- a deliberate,
+        // legitimate "off by default" choice.
+        let declared: HashSet<&str> = ["premium-tier"].into_iter().collect();
 
-        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled));
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled), Some(&declared));
         assert!(
             missing.is_empty(),
-            "a facade function behind an inactive cfg gate must not be reported missing: {missing:?}"
+            "a facade function behind a declared-but-inactive cfg gate must not be reported \
+             missing: {missing:?}"
         );
     }
 
-    /// Negative control for the above: a facade function that is genuinely absent from the
+    /// The other half of the same regression, and the shape alef #464 pins: a facade
+    /// function gated behind a feature the manifest does not declare AT ALL (not even as an
+    /// off-by-default entry) must still be reported missing. There is nothing to "turn on" for an
+    /// undeclared feature, so this cannot be the same deliberate choice the declared-but-inactive
+    /// case above is -- most often it means a forwarding `[features]` entry alef's own generation
+    /// wanted to write to this manifest never landed (e.g. the ownership guard refused the
+    /// write), and that gap must surface as a build failure rather than being silently agreed
+    /// with. ~keep
+    #[test]
+    fn missing_bridge_functions_still_reports_a_function_behind_an_undeclared_cfg_gate() {
+        let lib_rs = "\
+#[cfg(feature = \"widgets\")]
+pub fn count_widgets(collection: String) -> Result<i64, String> {
+    Ok(0)
+}
+";
+        let bridge_dart = "";
+        let enabled: HashSet<&str> = HashSet::new();
+        // The manifest's `[features]` table does not mention `widgets` at all.
+        let declared: HashSet<&str> = HashSet::new();
+
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled), Some(&declared));
+        assert_eq!(
+            missing,
+            vec!["count_widgets".to_string()],
+            "a facade function behind an undeclared cfg gate must still be reported missing: \
+             {missing:?}"
+        );
+    }
+
+    /// Negative control for both cases above: a facade function that is genuinely absent from the
     /// bridge -- either because it carries no cfg gate at all, or because its gate IS active --
     /// must still be reported missing. Without this control, a fix that simply stopped reporting
-    /// every cfg-gated function (active or not) would pass the positive test above while quietly
+    /// every cfg-gated function (active or not) would pass the positive tests above while quietly
     /// breaking the coverage check's entire purpose.
     #[test]
     fn missing_bridge_functions_still_reports_a_genuinely_missing_function_under_an_active_gate() {
@@ -266,8 +380,9 @@ pub fn create_premium_backend_options_from_json(json: String) -> Result<String, 
         // expected -- both must be reported.
         let bridge_dart = "";
         let enabled: HashSet<&str> = ["premium-tier"].into_iter().collect();
+        let declared: HashSet<&str> = ["premium-tier"].into_iter().collect();
 
-        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled));
+        let missing = missing_bridge_functions(lib_rs, bridge_dart, &[], Some(&enabled), Some(&declared));
         assert_eq!(
             missing,
             vec![
@@ -276,6 +391,45 @@ pub fn create_premium_backend_options_from_json(json: String) -> Result<String, 
             ],
             "an ungated function and a function under an active gate must both still be reported \
              missing: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn undeclared_gate_features_is_empty_for_an_ungated_function() {
+        let lib_rs = "pub fn count_widgets(collection: String) -> Result<i64, String> {\n    Ok(0)\n}\n";
+        let declared: HashSet<&str> = HashSet::new();
+
+        assert!(undeclared_gate_features(lib_rs, "count_widgets", &declared).is_empty());
+    }
+
+    #[test]
+    fn undeclared_gate_features_is_empty_when_the_gate_is_declared() {
+        let lib_rs = "\
+#[cfg(feature = \"premium-tier\")]
+pub fn create_premium_backend_options_from_json(json: String) -> Result<String, String> {
+    Ok(json)
+}
+";
+        let declared: HashSet<&str> = ["premium-tier"].into_iter().collect();
+
+        assert!(undeclared_gate_features(lib_rs, "create_premium_backend_options_from_json", &declared).is_empty());
+    }
+
+    #[test]
+    fn undeclared_gate_features_names_a_feature_the_manifest_never_declared() {
+        let lib_rs = "\
+#[cfg(feature = \"widgets\")]
+pub fn count_widgets(collection: String) -> Result<i64, String> {
+    Ok(0)
+}
+";
+        let declared: HashSet<&str> = HashSet::new();
+
+        let undeclared = undeclared_gate_features(lib_rs, "count_widgets", &declared);
+        assert_eq!(
+            undeclared,
+            BTreeSet::from(["widgets".to_string()]),
+            "the gate's feature name must be reported as undeclared: {undeclared:?}"
         );
     }
 }
