@@ -47,13 +47,12 @@ pub(super) fn render_assertion(
     // Handle synthetic / derived fields before the is_valid_for_result check
     // so they are never treated as struct field accesses on the result.
     if let Some(f) = &assertion.field {
+        if let Some(reason) = crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) {
+            let _ = writeln!(out, "      # skipped: {reason}");
+            return;
+        }
+
         match f.as_str() {
-            _ if let Some(reason) =
-                crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) =>
-            {
-                let _ = writeln!(out, "      # skipped: {reason}");
-                return;
-            }
             "chunks_have_content" => {
                 let result_var = &chunks_result_var(field_resolver, "elixir", result_var);
                 let pred =

@@ -148,14 +148,13 @@ pub(super) fn render_assertion(
 
     // Handle synthetic/virtual fields that are computed rather than direct record accessors.
     if let Some(f) = &assertion.field {
+        if let Some(reason) = crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) {
+            out.push_str(&format!("        // skipped: {reason}\n"));
+            return;
+        }
+
         match f.as_str() {
             // ---- ProcessingResult chunk-level computed predicates ----
-            _ if let Some(reason) =
-                crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) =>
-            {
-                out.push_str(&format!("        // skipped: {reason}\n"));
-                return;
-            }
             "chunks_have_content" => {
                 let result_var = &chunks_result_var(field_resolver, "java", result_var);
                 let pred = format!(

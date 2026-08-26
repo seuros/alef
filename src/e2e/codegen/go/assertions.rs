@@ -29,13 +29,12 @@ pub(super) fn render_assertion(
 ) {
     if !result_is_simple && let Some(f) = &assertion.field {
         let embed_deref = format!("(*{result_var})");
+        if let Some(reason) = crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) {
+            let _ = writeln!(out, "\t// skipped: {reason}");
+            return;
+        }
+
         match f.as_str() {
-            _ if let Some(reason) =
-                crate::e2e::codegen::assertion_recipes::chunks_synthetic_skip_reason(f, field_resolver) =>
-            {
-                let _ = writeln!(out, "\t// skipped: {reason}");
-                return;
-            }
             "chunks_have_content" => {
                 let result_var = &chunks_result_var(field_resolver, "go", result_var);
                 let pred = format!(
