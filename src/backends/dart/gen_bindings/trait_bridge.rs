@@ -23,12 +23,22 @@ use heck::ToLowerCamelCase;
 ///
 /// FRB auto-bridges these as free Dart functions, and we wrap them here as static
 /// methods for discoverability and a unified bridge-class interface.
+/// The Dart static-method name for a configured `register_fn`/`unregister_fn`/`clear_fn`.
+///
+/// FRB bridges the verbatim-named Rust `pub fn` as a lowerCamelCase free Dart function, so this
+/// transform must match FRB's own convention or the emitted wrapper calls a symbol FRB never
+/// produced. `DartBackend::trait_bridge_registration_surface` reports through this same helper
+/// so the reference docs cannot name a method the bridge class does not declare. ~keep
+pub(super) fn dart_bridge_method_name(configured_fn: &str) -> String {
+    configured_fn.to_lower_camel_case()
+}
+
 pub(super) fn emit_trait_bridge_methods(bridge_cfg: &TraitBridgeConfig, out: &mut String) {
     let trait_name = &bridge_cfg.trait_name;
     let impl_type = format!("{trait_name}DartImpl");
 
     if let Some(register_fn) = bridge_cfg.register_fn.as_deref() {
-        let dart_name = register_fn.to_lower_camel_case();
+        let dart_name = dart_bridge_method_name(register_fn);
         out.push_str(&crate::backends::dart::template_env::render(
             "dart_trait_register_method.jinja",
             minijinja::context! {
@@ -40,7 +50,7 @@ pub(super) fn emit_trait_bridge_methods(bridge_cfg: &TraitBridgeConfig, out: &mu
     }
 
     if let Some(unregister_fn) = bridge_cfg.unregister_fn.as_deref() {
-        let dart_name = unregister_fn.to_lower_camel_case();
+        let dart_name = dart_bridge_method_name(unregister_fn);
         out.push_str(&crate::backends::dart::template_env::render(
             "dart_trait_unregister_method.jinja",
             minijinja::context! {
@@ -51,7 +61,7 @@ pub(super) fn emit_trait_bridge_methods(bridge_cfg: &TraitBridgeConfig, out: &mu
     }
 
     if let Some(clear_fn) = bridge_cfg.clear_fn.as_deref() {
-        let dart_name = clear_fn.to_lower_camel_case();
+        let dart_name = dart_bridge_method_name(clear_fn);
         out.push_str(&crate::backends::dart::template_env::render(
             "dart_trait_clear_method.jinja",
             minijinja::context! {

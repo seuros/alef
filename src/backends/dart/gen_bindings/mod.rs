@@ -10,6 +10,7 @@ mod wire_value;
 use crate::backends::dart::naming::{dart_frb_version, dart_style};
 use crate::core::backend::{
     Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, PostProcessor,
+    TraitBridgeRegistrationSurface,
 };
 use crate::core::config::{DartStyle, Language, ResolvedCrateConfig, TraitBridgeConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, FunctionDef};
@@ -23,7 +24,7 @@ use dart_traits::emit_dart_traits;
 pub(crate) use functions::config_param_is_named_optional;
 use functions::emit_function;
 use service_api as gen_service_api;
-use trait_bridge::emit_trait_bridge_methods;
+use trait_bridge::{dart_bridge_method_name, emit_trait_bridge_methods};
 
 pub struct DartBackend;
 
@@ -314,6 +315,39 @@ impl Backend for DartBackend {
         config: &ResolvedCrateConfig,
     ) -> anyhow::Result<Vec<GeneratedFile>> {
         gen_service_api::generate(api, config)
+    }
+
+    /// Dart hangs the registration methods off the FRB bridge class, so each reported symbol is
+    /// `<bridge class>.<method>`. `DartStyle::Ffi` short-circuits `generate_bindings` into
+    /// `gen_ffi::emit`, which emits no trait-bridge methods at all — hence the style gate. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        if dart_style(config) == DartStyle::Ffi {
+            return Vec::new();
+        }
+        let bridge_class = config.dart_bridge_class_name();
+        let qualified = |configured: &Option<String>| {
+            configured
+                .as_deref()
+                .map(|name| format!("{bridge_class}.{}", dart_bridge_method_name(name)))
+        };
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("dart"))
+            .filter(|bridge| {
+                bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+            })
+            .map(|bridge| TraitBridgeRegistrationSurface {
+                trait_name: bridge.trait_name.clone(),
+                register_symbol: qualified(&bridge.register_fn),
+                unregister_symbol: qualified(&bridge.unregister_fn),
+                clear_symbol: qualified(&bridge.clear_fn),
+            })
+            .collect()
     }
 }
 

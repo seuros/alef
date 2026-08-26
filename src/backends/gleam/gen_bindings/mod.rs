@@ -1,5 +1,7 @@
 use crate::backends::gleam::naming::gleam_nif_module;
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{Language, ResolvedCrateConfig, TraitBridgeConfig, resolve_output_dir};
 use crate::core::ir::ApiSurface;
 use std::collections::BTreeSet;
@@ -187,5 +189,33 @@ impl Backend for GleamBackend {
             build_dep: BuildDependency::Rustler,
             post_build: vec![],
         })
+    }
+
+    /// Gleam names its register shim after the *trait*, while `unregister`/`clear` keep the
+    /// configured names verbatim — see `trait_bridge::emit_trait_bridge_shims`. The register
+    /// shim is emitted whether or not the trait resolves in the `ApiSurface`, so `api` is
+    /// deliberately unused here. ~keep
+    fn trait_bridge_registration_surface(
+        &self,
+        _api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        config
+            .trait_bridges
+            .iter()
+            .filter(|bridge| bridge.is_active_for("gleam"))
+            .filter(|bridge| {
+                bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
+            })
+            .map(|bridge| TraitBridgeRegistrationSurface {
+                trait_name: bridge.trait_name.clone(),
+                register_symbol: bridge
+                    .register_fn
+                    .as_ref()
+                    .map(|_| trait_bridge::gleam_register_fn_name(&bridge.trait_name)),
+                unregister_symbol: bridge.unregister_fn.clone(),
+                clear_symbol: bridge.clear_fn.clone(),
+            })
+            .collect()
     }
 }

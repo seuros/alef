@@ -77,7 +77,7 @@ pub(crate) fn emit_trait_bridge_shims(
             minijinja::context! {
                 nif_module => nif_module,
                 register_fn => register_fn,
-                trait_snake => &trait_snake,
+                gleam_register_fn => gleam_register_fn_name(trait_name),
             },
         ));
         out.push('\n');
@@ -157,6 +157,16 @@ pub(crate) fn emit_trait_bridge_shims(
             out.push('\n');
         }
     }
+}
+
+/// The Gleam-visible name of the register shim emitted by [`emit_trait_bridge_shims`].
+///
+/// Derived from the *trait* name, not from the configured `register_fn` — that config value
+/// only names the Erlang NIF the shim binds to via `@external`. Both this function and
+/// `register_fn.jinja` must stay the single source of that identifier so
+/// `GleamBackend::trait_bridge_registration_surface` cannot drift from what is emitted. ~keep
+pub(super) fn gleam_register_fn_name(trait_name: &str) -> String {
+    format!("register_{}", gleam_public_member_name(trait_name))
 }
 
 fn gleam_public_member_name(name: &str) -> String {
