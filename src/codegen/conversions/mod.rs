@@ -26,6 +26,8 @@ pub use helpers::{
 };
 
 #[cfg(test)]
+mod enum_cfg_gate_tests;
+#[cfg(test)]
 mod enum_sanitized_field_tests;
 #[cfg(test)]
 mod tests;
