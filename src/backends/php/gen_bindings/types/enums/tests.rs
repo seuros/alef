@@ -72,10 +72,7 @@ mod variant_constructor_tests {
 
         assert!(code.contains(r#"#[php(name = "circle")]"#), "{code}");
         assert!(code.contains("pub fn _factory_circle(radius: f64) -> Self"), "{code}");
-        assert!(
-            code.contains("test_lib::Shape::Circle { radius }.into()"),
-            "{code}"
-        );
+        assert!(code.contains("test_lib::Shape::Circle { radius }.into()"), "{code}");
         assert!(code.contains(r#"#[php(name = "rect")]"#), "{code}");
         assert!(
             code.contains("pub fn _factory_rect(width: f64, height: f64) -> Self"),

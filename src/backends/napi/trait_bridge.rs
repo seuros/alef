@@ -121,7 +121,9 @@ mod tests {
             output.code
         );
         assert!(
-            !output.code.contains("{\n                    if let Ok(obj) = val.coerce_to_object() {"),
+            !output
+                .code
+                .contains("{\n                    if let Ok(obj) = val.coerce_to_object() {"),
             "clippy::collapsible_if: the object branch must not stay a nested if:\n{}",
             output.code
         );

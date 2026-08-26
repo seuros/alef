@@ -242,9 +242,9 @@ fn extendr_field_line(field: &FieldDef, shape: FieldShape) -> String {
         FieldShape::Number => {
             format!(r#"        ("{host_name}", extendr_api::Robj::from(ctx.{name} as f64)),"#)
         }
-        FieldShape::Enum => format!(
-            r#"        ("{host_name}", extendr_api::Robj::from(format!("{{:?}}", ctx.{name}).as_str())),"#
-        ),
+        FieldShape::Enum => {
+            format!(r#"        ("{host_name}", extendr_api::Robj::from(format!("{{:?}}", ctx.{name}).as_str())),"#)
+        }
         // Inlined rather than bound to a `let` first: the pairs are elements of a `vec![]`
         // literal, so a preceding statement would have nowhere to live. ~keep
         FieldShape::StringMap => format!(

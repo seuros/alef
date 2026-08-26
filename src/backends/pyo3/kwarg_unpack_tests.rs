@@ -289,11 +289,7 @@ fn should_keep_the_kwargs_unpack_when_options_defaults_the_field_to_none() {
         rust_path: "test_lib::Theme".to_string(),
         ..Default::default()
     };
-    let api = surface(
-        vec![function_default_field("theme", "Theme")],
-        Vec::new(),
-        vec![theme],
-    );
+    let api = surface(vec![function_default_field("theme", "Theme")], Vec::new(), vec![theme]);
     let (facade, _stub) = render_facade_and_stub(&api);
     let arguments = constructor_call_arguments(&facade);
 

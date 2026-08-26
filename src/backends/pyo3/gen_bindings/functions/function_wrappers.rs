@@ -270,8 +270,8 @@ pub(super) fn emit_function_wrappers(
         let kwargs: Vec<String> = call_args.iter().map(|(k, v)| format!("{k}={v}")).collect();
         let return_prefix = if func.is_async { "await " } else { "" };
 
-        let return_converter = public_return_leaf
-            .map(crate::backends::pyo3::gen_bindings::types::from_native_converter_name);
+        let return_converter =
+            public_return_leaf.map(crate::backends::pyo3::gen_bindings::types::from_native_converter_name);
 
         emit_function_return_call(
             out,
