@@ -61,6 +61,15 @@ pub enum AuditIssueKind {
     MissingInclude,
     InvalidInclude,
     UnknownLanguage,
+    /// A fence tag that names no language alef generates bindings for and resolves to nothing.
+    ///
+    /// A warning, not an error: a human-authored docs page may legitimately fence `astro`, `mdx`,
+    /// `hcl` or any other prose vocabulary, and failing the run on those made consumers relabel
+    /// their own documentation. But a typo (`pythn`) is indistinguishable from a prose vocabulary
+    /// without maintaining an allowlist of every language in existence, so staying SILENT here
+    /// makes snippet validation falsely green. Warning keeps the typo actionable while letting
+    /// prose fences through. ~keep
+    UnrecognizedFenceLanguage,
     UnreadableFile,
     MissingDirectory,
     /// A snippet under an audited root that neither a coverage ledger claims as generated nor
@@ -373,13 +382,23 @@ fn audit_fences(path: &Path, content: &str) -> Vec<AuditIssue> {
                     index + 1,
                     "fenced code block is missing a language tag".to_string(),
                 ));
-            } else if Language::from_fence_info(&tag) == Language::Unknown && tag_claims_a_binding_target_language(&tag) {
-                issues.push(issue(
-                    AuditIssueKind::UnknownLanguage,
-                    path,
-                    index + 1,
-                    format!("unknown fenced code language: {tag}"),
-                ));
+            } else if Language::from_fence_info(&tag) == Language::Unknown {
+                let (kind, message) = if tag_claims_a_binding_target_language(&tag) {
+                    (
+                        AuditIssueKind::UnknownLanguage,
+                        format!("unknown fenced code language: {tag}"),
+                    )
+                } else {
+                    (
+                        AuditIssueKind::UnrecognizedFenceLanguage,
+                        format!(
+                            "fenced code language `{tag}` names no binding target and is not a recognized \
+                             display tag; it will not be validated. If that is a typo, correct it -- if it \
+                             is prose (`astro`, `mdx`, ...), this line is informational."
+                        ),
+                    )
+                };
+                issues.push(issue(kind, path, index + 1, message));
             }
             open = Some((index + 1, tag));
         }
@@ -441,7 +460,7 @@ fn issue(kind: AuditIssueKind, path: &Path, line: usize, message: String) -> Aud
 /// constructor that hard-coded it. ~keep
 fn severity_for(kind: &AuditIssueKind) -> AuditSeverity {
     match kind {
-        AuditIssueKind::UnaccountedSnippet => AuditSeverity::Warning,
+        AuditIssueKind::UnaccountedSnippet | AuditIssueKind::UnrecognizedFenceLanguage => AuditSeverity::Warning,
         AuditIssueKind::BrokenFrontmatter
         | AuditIssueKind::MissingFrontmatter
         | AuditIssueKind::BrokenFence
@@ -624,16 +643,16 @@ mod tests {
     /// generate bindings for (`astro`, `mdx`, `hcl`, ...). Such a fence is prose decoration
     /// and must never fail `alef all`'s docs/snippet validation just because nobody happened
     /// to add its tag to a hand-maintained allowlist.
+    /// The reason the prose-fence allowance cannot be silent. `pythn` is a typo for a real
+    /// binding target, but nothing distinguishes it from a legitimate prose vocabulary without
+    /// an allowlist of every language in existence -- so it must surface as a warning rather
+    /// than pass unnoticed and make snippet validation falsely green. ~keep
     #[test]
-    fn unknown_fence_language_that_claims_no_binding_target_audits_clean() {
+    fn a_typo_of_a_real_language_still_surfaces_as_a_warning() {
         let dir = tempfile::tempdir().unwrap();
         let docs = dir.path().join("docs");
         std::fs::create_dir_all(&docs).unwrap();
-        std::fs::write(
-            docs.join("development.md"),
-            "```astro\n<Foo client:load />\n```\n",
-        )
-        .unwrap();
+        std::fs::write(docs.join("guide.md"), "```pythn\nprint(1)\n```\n").unwrap();
 
         let report = audit(&AuditConfig {
             docs_dirs: vec![docs],
@@ -643,9 +662,47 @@ mod tests {
         });
 
         assert_eq!(
-            report.issues,
-            Vec::new(),
-            "an `astro` fence names no language alef targets, so it must audit clean: {:?}",
+            report.issues.iter().map(|issue| &issue.kind).collect::<Vec<_>>(),
+            vec![&AuditIssueKind::UnrecognizedFenceLanguage],
+            "a typo'd language tag must be reported: {:?}",
+            report.issues
+        );
+        assert!(
+            report.issues[0].message.contains("pythn"),
+            "the diagnostic must name the offending tag so it is actionable: {:?}",
+            report.issues
+        );
+        assert!(
+            !report.has_errors(),
+            "but it must not fail the run: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn unknown_fence_language_that_claims_no_binding_target_warns_but_does_not_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("development.md"), "```astro\n<Foo client:load />\n```\n").unwrap();
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert!(
+            !report.has_errors(),
+            "an `astro` fence names no language alef targets, so it must never fail the run: {:?}",
+            report.issues
+        );
+        assert_eq!(
+            report.issues.iter().map(|issue| &issue.kind).collect::<Vec<_>>(),
+            vec![&AuditIssueKind::UnrecognizedFenceLanguage],
+            "it must still be reported at warning severity -- staying silent is what let a typo \
+             like `pythn` make validation falsely green: {:?}",
             report.issues
         );
     }
