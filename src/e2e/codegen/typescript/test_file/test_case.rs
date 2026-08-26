@@ -75,7 +75,14 @@ pub(in crate::e2e::codegen::typescript::test_file) fn render_test_case(
         &std::collections::HashSet::new(),
     )
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    // `with_ir_fields` only proves a BARE field name optional, by crate-wide unanimity — no
+    // path context. The `_with_optionals` renderers key their per-segment `?.`/`?.[0]` check by
+    // the FULL cumulative path walked so far, so a bare name never matches once the path crosses
+    // more than one segment (an `Option<Vec<T>>` reached through e.g. `entries[0].sections`).
+    // Anchors this fixture's own assertion paths via the IR's real (owner_type, field_name)
+    // walk, mirroring `presentation.rs`'s existing use of `with_anchored_optional_paths`. ~keep
+    .with_anchored_optional_paths(fixture.assertions.iter().filter_map(|a| a.field.as_deref()));
     let field_resolver = &call_field_resolver;
     let recipe = crate::e2e::codegen::recipe::ResolvedE2eCallRecipe::resolve(lang, fixture, call_config, type_defs)
         .with_functions(functions);

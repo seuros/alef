@@ -35,6 +35,8 @@ mod collection_field_classification_tests;
 #[cfg(test)]
 mod enum_field_classification_tests;
 #[cfg(test)]
+mod optional_segment_len_tests;
+#[cfg(test)]
 mod qualified_class_import_tests;
 #[cfg(test)]
 mod tests;

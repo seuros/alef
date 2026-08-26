@@ -153,7 +153,11 @@ pub(super) fn render_test_method(
     // ever indexes into (no per-element fixture path) has no IR-backed signal at all.
     .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
     .with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, lang), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    // `with_ir_fields` only proves a bare field name optional, with no path context; anchors
+    // this fixture's assertion paths via the IR's real per-type walk instead, matching
+    // `presentation.rs`'s existing `with_anchored_optional_paths` use. ~keep
+    .with_anchored_optional_paths(fixture.assertions.iter().filter_map(|a| a.field.as_deref()));
     let field_resolver = &call_field_resolver;
     let effective_enum_fields = e2e_config.effective_fields_enum(call_config);
     let enum_fields = effective_enum_fields;

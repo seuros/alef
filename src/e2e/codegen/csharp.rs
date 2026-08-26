@@ -479,34 +479,23 @@ fn render_test_method(
     let lang = "csharp";
     let cs_overrides = call_config.overrides.get(lang);
 
-    // See `values::effective_csharp_enum_fields` for why this must be an effective (per-call
-    // override wins, not merges) set rather than the raw global `fields_enum`.
-    let effective_enum_fields =
-        values::effective_csharp_enum_fields(e2e_config, call_config, enum_fields, cs_overrides);
-
     // Per-call field resolver: overrides the top-level resolver when this call
     // declares its own result_fields / fields / fields_optional / fields_array.
     // Without this, fields like `pages.length` on a `crawl` call would be skipped
     // because the default `result_fields` (configured for the top-level `scrape`
     // call) does not contain `pages`.
-    let (ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields) = FieldResolver::ir_field_sets(type_defs);
-    let call_root_type = values::resolve_csharp_call_root_type(call_config, type_defs, functions);
-    let call_field_resolver = FieldResolver::new(
-        e2e_config.effective_fields(call_config),
-        e2e_config.effective_fields_optional(call_config),
-        e2e_config.effective_result_fields(call_config),
-        e2e_config.effective_fields_array(call_config),
-        &std::collections::HashSet::new(),
-    )
-    .with_display_as_text_fields(e2e_config.effective_fields_display_as_text(call_config).clone())
-    .with_enum_fields(effective_enum_fields.clone())
-    .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
-    .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type.clone())
-    .with_ir_result_fields(
-        FieldResolver::ir_result_field_facts(type_defs, "csharp"),
-        call_root_type,
-    )
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    //
+    // Extracted to `call_field_resolver.rs` (this file is at the file-size ratchet's frozen
+    // ceiling).
+    let call_field_resolver = call_field_resolver::build_call_field_resolver(
+        e2e_config,
+        call_config,
+        fixture,
+        enum_fields,
+        type_defs,
+        enums,
+        functions,
+    );
     let field_resolver = &call_field_resolver;
 
     // Streaming branch: streaming adapters return IAsyncEnumerable<T>, not
@@ -994,6 +983,7 @@ fn render_test_method(
 }
 
 mod assertions;
+mod call_field_resolver;
 mod declared_error_value;
 mod discriminated;
 mod http;
@@ -1136,6 +1126,8 @@ mod enum_field_classification_tests;
 mod fact_attribute_layout_tests;
 #[cfg(test)]
 mod not_error_presence_guard_tests;
+#[cfg(test)]
+mod optional_segment_len_tests;
 #[cfg(test)]
 mod object_initializer_tests;
 #[cfg(test)]

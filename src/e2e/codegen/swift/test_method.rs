@@ -114,7 +114,11 @@ pub(super) fn render_test_method(
     .with_enum_fields(effective_enum_fields)
     .with_ir_enum_map(FieldResolver::ir_enum_fields(type_defs, enums), call_root_type.clone())
     .with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), call_root_type)
-    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields);
+    .with_ir_fields(ir_reachable_fields, ir_known_excluded_fields, ir_optional_fields)
+    // `with_ir_fields` only proves a bare field name optional, with no path context; anchors
+    // this fixture's assertion paths via the IR's real per-type walk instead, matching
+    // `presentation.rs`'s existing `with_anchored_optional_paths` use. ~keep
+    .with_anchored_optional_paths(fixture.assertions.iter().filter_map(|a| a.field.as_deref()));
     let field_resolver = &call_field_resolver;
     let function_name = call_overrides
         .and_then(|o| o.function.as_ref())

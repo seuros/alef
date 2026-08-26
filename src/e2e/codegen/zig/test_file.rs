@@ -218,7 +218,11 @@ fn render_test_fn(
     .with_ir_enum_map(
         FieldResolver::ir_enum_fields(type_defs, enums),
         crate::e2e::codegen::call_ir::resolve_declared_result_type(call_config, lang, ir),
-    );
+    )
+    // `with_ir_fields` only proves a bare field name optional, with no path context; anchors
+    // this fixture's assertion paths via the IR's real per-type walk instead, matching
+    // `presentation.rs`'s existing `with_anchored_optional_paths` use. ~keep
+    .with_anchored_optional_paths(fixture.assertions.iter().filter_map(|a| a.field.as_deref()));
     let field_resolver = &call_field_resolver;
     let function_name = call_overrides
         .and_then(|o| o.function.as_ref())
