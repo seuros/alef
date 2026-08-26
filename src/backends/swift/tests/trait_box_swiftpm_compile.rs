@@ -407,7 +407,10 @@ fn materialize_package(root: &Path) -> std::io::Result<()> {
 
     std::fs::write(root.join("Package.swift"), PACKAGE_MANIFEST)?;
     std::fs::write(rust_bridge.join("SwiftBridgeCoreStub.swift"), RUST_BRIDGE_RUNTIME_STUB)?;
-    std::fs::write(rust_bridge.join("RustBridgeRegisterStub.swift"), RUST_BRIDGE_REGISTER_STUB)?;
+    std::fs::write(
+        rust_bridge.join("RustBridgeRegisterStub.swift"),
+        RUST_BRIDGE_REGISTER_STUB,
+    )?;
     std::fs::write(client.join("ClientDTOs.swift"), CLIENT_DTOS)?;
     std::fs::write(client.join("FixtureSink.swift"), CLIENT_CONFORMER)?;
     std::fs::write(client.join("ClientBoxForwarderStub.swift"), CLIENT_BOX_FORWARDER_STUB)?;

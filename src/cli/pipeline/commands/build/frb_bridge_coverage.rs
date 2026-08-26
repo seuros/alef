@@ -49,12 +49,16 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
     // up. A missing/unparseable manifest resolves to `None`, and `missing_bridge_functions`
     // degrades to the pre-cfg-awareness blanket check rather than exempting every gated function
     // from coverage.
-    let manifest_path = facade_file.parent().and_then(Path::parent).map(|dir| dir.join("Cargo.toml"));
+    let manifest_path = facade_file
+        .parent()
+        .and_then(Path::parent)
+        .map(|dir| dir.join("Cargo.toml"));
     let enabled_features = manifest_path
         .as_deref()
         .and_then(crate::codegen::cfg::read_default_enabled_cargo_features);
-    let enabled_features_refs: Option<HashSet<&str>> =
-        enabled_features.as_ref().map(|set| set.iter().map(String::as_str).collect());
+    let enabled_features_refs: Option<HashSet<&str>> = enabled_features
+        .as_ref()
+        .map(|set| set.iter().map(String::as_str).collect());
 
     let missing = crate::backends::dart::missing_bridge_functions(
         &facade_source,
@@ -216,8 +220,7 @@ mod tests {
         // function, and did not.
         std::fs::write(&bridge, "").unwrap();
 
-        let error =
-            verify(&facade, &bridge, &[]).expect_err("a missing function under an active gate must still fail");
+        let error = verify(&facade, &bridge, &[]).expect_err("a missing function under an active gate must still fail");
         let message = format!("{error:#}");
         assert!(
             message.contains("create_premium_backend_options_from_json"),

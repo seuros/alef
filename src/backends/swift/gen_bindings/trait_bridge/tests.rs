@@ -547,7 +547,9 @@ fn umbrella_module_reexports_every_protocol_the_rustbridge_target_declares() {
         "sanity check on the naming helper both sides must agree on"
     );
     assert!(
-        overloads_content.contains(&format!("public typealias {protocol_name} = RustBridge.{protocol_name}")),
+        overloads_content.contains(&format!(
+            "public typealias {protocol_name} = RustBridge.{protocol_name}"
+        )),
         "Sources/<Module>/BridgeRegistrationOverloads.swift must re-export `{protocol_name}` \
          (declared in Sources/RustBridge/{protocol_filename}) so a snippet that only imports the \
          umbrella module can still conform to it; got:\n{overloads_content}"

@@ -113,8 +113,7 @@ const FIXTURE_PACKAGE_JSON: &str = r#"{ "name": "napi-ownership-fixture", "versi
 /// crate's `index.js` -- alef doesn't need the real dispatch-generator output here, only a
 /// stand-in for "content a consumer might have hand-edited after scaffold", since ownership
 /// survives regardless of what the bytes are.
-const USER_OWNED_INDEX_JS: &str =
-    "// USER-AUTHORED after alef scaffold -- napi build must never overwrite this.\nmodule.exports = { marker: \"user-owned\" };\n";
+const USER_OWNED_INDEX_JS: &str = "// USER-AUTHORED after alef scaffold -- napi build must never overwrite this.\nmodule.exports = { marker: \"user-owned\" };\n";
 
 /// Real-fixture regression test: builds an actual napi crate through the exact command
 /// [`build_command_for`]'s `"napi"` arm constructs, and asserts the scaffolded `index.js`
@@ -145,7 +144,8 @@ fn napi_build_never_clobbers_alefs_scaffolded_index_js() {
     std::fs::create_dir_all(crate_path.join("src")).expect("failed to create fixture src/");
     std::fs::write(crate_path.join("src/lib.rs"), FIXTURE_LIB_RS).expect("failed to write fixture lib.rs");
     std::fs::write(crate_path.join("build.rs"), FIXTURE_BUILD_RS).expect("failed to write fixture build.rs");
-    std::fs::write(crate_path.join("package.json"), FIXTURE_PACKAGE_JSON).expect("failed to write fixture package.json");
+    std::fs::write(crate_path.join("package.json"), FIXTURE_PACKAGE_JSON)
+        .expect("failed to write fixture package.json");
     std::fs::write(crate_path.join("index.js"), USER_OWNED_INDEX_JS).expect("failed to write fixture index.js");
 
     let config = resolved_node_config(crate_path);

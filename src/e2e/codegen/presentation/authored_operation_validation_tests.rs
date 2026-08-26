@@ -85,7 +85,13 @@ fn type_defs() -> Vec<TypeDef> {
 }
 
 fn resolved(fixture: &Fixture, language: &str) -> Vec<PresentationOperation> {
-    resolve(fixture, &config(), language, &type_defs(), &convert_returning("Envelope"))
+    resolve(
+        fixture,
+        &config(),
+        language,
+        &type_defs(),
+        &convert_returning("Envelope"),
+    )
 }
 
 /// The renamed-field shape: `wrong_label` does not exist, `label` does. The bad `show` is
@@ -123,11 +129,17 @@ fn a_correct_authored_show_survives_in_every_language() {
         serde_json::json!([]),
     );
     assert_eq!(
-        resolved(&fixture, "python").into_iter().map(|op| op.expression).collect::<Vec<_>>(),
+        resolved(&fixture, "python")
+            .into_iter()
+            .map(|op| op.expression)
+            .collect::<Vec<_>>(),
         vec!["result.document.label"]
     );
     assert_eq!(
-        resolved(&fixture, "rust").into_iter().map(|op| op.expression).collect::<Vec<_>>(),
+        resolved(&fixture, "rust")
+            .into_iter()
+            .map(|op| op.expression)
+            .collect::<Vec<_>>(),
         vec!["result.document.label"]
     );
 }
@@ -183,7 +195,10 @@ fn dropping_every_authored_operation_falls_back_to_deriving_from_assertions() {
         serde_json::json!([{"type": "equals", "field": "document.label", "value": "Hello"}]),
     );
     assert_eq!(
-        resolved(&fixture, "python").into_iter().map(|op| op.expression).collect::<Vec<_>>(),
+        resolved(&fixture, "python")
+            .into_iter()
+            .map(|op| op.expression)
+            .collect::<Vec<_>>(),
         vec!["result.document.label"]
     );
 }

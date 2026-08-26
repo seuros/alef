@@ -181,7 +181,10 @@ mod element_type_at_path_tests {
 
     #[test]
     fn an_indexed_vec_field_resolves_the_same_way() {
-        assert_eq!(element_type_at_path(&anchored_map(), "rows[0]"), Some("Row".to_string()));
+        assert_eq!(
+            element_type_at_path(&anchored_map(), "rows[0]"),
+            Some("Row".to_string())
+        );
     }
 
     #[test]

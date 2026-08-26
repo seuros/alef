@@ -343,6 +343,20 @@ impl FieldResolver {
         self.is_known_via_sibling_field_config(fixture_field, resolved)
     }
 
+    /// Whether any *IR* was wired into this resolver, as opposed to config alone.
+    ///
+    /// [`Self::result_field_oracle_knows`] deliberately treats a non-empty `[e2e].result_fields`
+    /// as an oracle in its own right, so with no IR present it answers `Some(false)` for every
+    /// name that list omits. That is the right answer for a path this generator *derived* — the
+    /// consumer's own config is the only statement of intent available. It is the wrong answer for
+    /// a path a fixture author wrote by hand, because `result_fields` is an incomplete allow-list
+    /// by construction and the author is entitled to name a virtual or namespaced path no config
+    /// key lists. Callers validating authored input gate the refutation on this predicate so only
+    /// real IR evidence can drop an entry. ~keep
+    pub fn has_ir_result_evidence(&self) -> bool {
+        !self.ir_reachable_fields.is_empty() || !self.ir_known_excluded_fields.is_empty()
+    }
+
     /// Whether the availability oracle *positively recognizes* `fixture_field`'s first segment,
     /// as opposed to [`Self::is_valid_for_result`]'s deliberate default-allow answer for a name
     /// it has never heard of.
@@ -364,20 +378,6 @@ impl FieldResolver {
     ///   was consulted and nothing can be concluded. Mirrors `e2e::validate`'s
     ///   `IrFieldShape::IrAbsent`; callers must fall back to their pre-oracle behaviour rather
     ///   than treat silence as rejection, or every IR-less call site would reject everything.
-    /// Whether any *IR* was wired into this resolver, as opposed to config alone.
-    ///
-    /// [`Self::result_field_oracle_knows`] deliberately treats a non-empty `[e2e].result_fields`
-    /// as an oracle in its own right, so with no IR present it answers `Some(false)` for every
-    /// name that list omits. That is the right answer for a path this generator *derived* — the
-    /// consumer's own config is the only statement of intent available. It is the wrong answer for
-    /// a path a fixture author wrote by hand, because `result_fields` is an incomplete allow-list
-    /// by construction and the author is entitled to name a virtual or namespaced path no config
-    /// key lists. Callers validating authored input gate the refutation on this predicate so only
-    /// real IR evidence can drop an entry. ~keep
-    pub fn has_ir_result_evidence(&self) -> bool {
-        !self.ir_reachable_fields.is_empty() || !self.ir_known_excluded_fields.is_empty()
-    }
-
     pub fn result_field_oracle_knows(&self, fixture_field: &str) -> Option<bool> {
         if self.ir_reachable_fields.is_empty()
             && self.ir_known_excluded_fields.is_empty()

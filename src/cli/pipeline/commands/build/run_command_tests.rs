@@ -233,7 +233,10 @@ fn tail_does_not_panic_on_a_multibyte_boundary() {
     // cutting there without adjustment would slice a character in half.
     assert!(!text.is_char_boundary(9), "test setup: byte 9 must land mid-character");
     let truncated = super::tail(text, text.len() - 9);
-    assert!(text.ends_with(truncated), "truncated text must be a real suffix: {truncated:?}");
+    assert!(
+        text.ends_with(truncated),
+        "truncated text must be a real suffix: {truncated:?}"
+    );
 }
 
 fn is_alive(pid: i32) -> bool {
