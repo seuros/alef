@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hand-authored `docs.shows`/`docs.presentation.operations` field paths are now validated against
+  the IR before rendering**, matching the check already applied to paths derived from `assertions`.
+  A fixture-authored typo or stale field name now drops the operation (falling back to
+  assertion-derived shows when every authored operation is dropped) instead of emitting a
+  non-compiling accessor identically across every generator that shares the snippet/e2e
+  presentation layer (Rust, Dart, Java, Swift, Kotlin, TypeScript, WASM, and the rest).
+- **A docs/e2e presentation path that continues past a field the IR can confirm is not a struct it
+  can walk further into (the tagged-union/enum shape) is now refused** instead of silently falling
+  through to a permissive flat check that let the accessor renderer emit a plain field access into
+  an enum variant.
+- **An `Iterate` operation's per-item `fields` are now validated against the collection's own
+  element type**, resolved from the IR, instead of the call's result type. A per-item field name
+  that does not exist on the iterated element (e.g. a renamed struct field) is now dropped from the
+  operation instead of reaching every backend's snippet compiler.
+
 - **C#, Zig, Dart (`style = "ffi"`) and Kotlin/Native now consult the result-presence companion.**
   A scalar `Option` return crosses the C ABI as a bare scalar, so absence and a legitimate zero are
   the same bytes. C# matched `TypeRef::Optional(_)` unconditionally and emitted
