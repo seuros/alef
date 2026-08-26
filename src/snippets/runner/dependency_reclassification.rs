@@ -90,8 +90,13 @@ mod tests {
     /// to rebuild artifacts a session-less run could never see in the first place.
     #[test]
     fn no_session_configured_message_never_points_at_alef_build() {
-        let message =
-            unresolved_dependency_message(true, Language::Go, "go", ValidationLevel::Compile, "cannot find package");
+        let message = unresolved_dependency_message(
+            true,
+            Language::Go,
+            "go",
+            ValidationLevel::Compile,
+            "cannot find package",
+        );
 
         assert!(message.contains(NO_SESSION_CONFIGURED_PHRASE), "{message}");
         assert!(
@@ -133,8 +138,13 @@ mod tests {
     /// must never claim no session is configured.
     #[test]
     fn ordering_message_still_points_at_alef_build() {
-        let message =
-            unresolved_dependency_message(false, Language::Go, "go", ValidationLevel::Compile, "cannot find package");
+        let message = unresolved_dependency_message(
+            false,
+            Language::Go,
+            "go",
+            ValidationLevel::Compile,
+            "cannot find package",
+        );
 
         assert!(message.contains("run `alef build` first"), "{message}");
         assert!(!message.contains(NO_SESSION_CONFIGURED_PHRASE), "{message}");

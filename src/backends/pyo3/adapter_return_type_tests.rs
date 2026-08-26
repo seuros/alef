@@ -122,7 +122,9 @@ fn an_adapter_converts_its_native_return_value_into_a_typeddict_only_published_t
         "__init__.py must be re-exporting the options definition:\n{init_py}"
     );
     assert!(
-        api_py.contains(&format!("async def {ADAPTER_NAME}(engine: Engine, uri: str) -> {RETURN_TYPE}:")),
+        api_py.contains(&format!(
+            "async def {ADAPTER_NAME}(engine: Engine, uri: str) -> {RETURN_TYPE}:"
+        )),
         "the wrapper must be annotated with the published name:\n{api_py}"
     );
     assert!(

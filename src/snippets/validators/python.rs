@@ -72,7 +72,13 @@ impl PythonValidator {
         // `validate_batch_with_context` uses for `ValidationLevel::Compile`, ahead of `pyrefly`,
         // and overrides any snippet it fails -- see `apply_compile_precheck`. ~keep
         let compile_precheck = if level == ValidationLevel::TypeCheck {
-            Some(Self::batch_compile_precheck(&file_names, dir.path(), &paths, session, timeout_secs)?)
+            Some(Self::batch_compile_precheck(
+                &file_names,
+                dir.path(),
+                &paths,
+                session,
+                timeout_secs,
+            )?)
         } else {
             None
         };

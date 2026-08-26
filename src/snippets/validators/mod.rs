@@ -277,31 +277,41 @@ mod all_error_lines_match_tests {
 
     #[test]
     fn empty_when_no_line_matches_the_diagnostic_predicate() {
-        assert!(!all_error_lines_match("nothing to see here\n", |line| line.contains("error"), |_| true));
+        assert!(!all_error_lines_match(
+            "nothing to see here\n",
+            |line| line.contains("error"),
+            |_| true
+        ));
     }
 
     #[test]
     fn true_only_when_every_diagnostic_line_matches() {
         let output = "a: error: X missing\nb: error: X missing\n";
-        assert!(all_error_lines_match(output, |line| line.contains("error"), |line| {
-            line.contains("missing")
-        }));
+        assert!(all_error_lines_match(
+            output,
+            |line| line.contains("error"),
+            |line| { line.contains("missing") }
+        ));
     }
 
     #[test]
     fn false_when_one_diagnostic_line_does_not_match() {
         let output = "a: error: X missing\nb: error: real defect\n";
-        assert!(!all_error_lines_match(output, |line| line.contains("error"), |line| {
-            line.contains("missing")
-        }));
+        assert!(!all_error_lines_match(
+            output,
+            |line| line.contains("error"),
+            |line| { line.contains("missing") }
+        ));
     }
 
     #[test]
     fn non_diagnostic_lines_are_never_consulted_by_the_match_predicate() {
         let output = "a: error: X missing\nsome unrelated context line\n";
-        assert!(all_error_lines_match(output, |line| line.contains("error"), |line| {
-            line.contains("missing")
-        }));
+        assert!(all_error_lines_match(
+            output,
+            |line| line.contains("error"),
+            |line| { line.contains("missing") }
+        ));
     }
 }
 

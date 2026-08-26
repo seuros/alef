@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A snippet run could report success while most of the corpus was never checked at the level it
+  asked for.** `RunSummary` now tracks `fully_verified` — results that reached their requested level
+  with no downgrade or capability cap — and the summary leads with `Checked at requested level:
+  N/Total (P%)`. `alef snippets check` now fails, unconditionally rather than only under `--strict`,
+  when not one single result reached its requested level; `alef docs`/`alef all` warn loudly on the
+  same condition instead of bailing, because that pipeline cannot guarantee a build ran in the same
+  invocation. Related: the Java validator no longer counts a `package does not exist` symbol cascade
+  as real failures when the package was simply never built, the "no snippet session configured"
+  diagnostic now names the session *target* rather than the language, and Python `typecheck` runs
+  the interpreter's own compile check ahead of `pyrefly`, so a hard `IndentationError` can no longer
+  pass.
+
+- **Four generated-snippet type defects.** Python field access now narrows an `Optional` before
+  subscripting it instead of indexing it bare; the C free-function call site routes omitted optional
+  arguments through `resolve_optional_sentinel`, so an IR-declared handle parameter gets the `0`
+  sentinel rather than `NULL`; an `iterate` operation with an empty `fields` list renders a fallback
+  `print(item)` rather than an empty — and therefore syntactically invalid — Python loop body; and a
+  Python adapter wrapper now converts its native return value when `options.py` publishes that type
+  only as a return-only `TypedDict`, matching the wrapper's own annotation.
+
 - **Generated output that is not formatter-canonical by construction.** Three emitters produced
   output a consumer's own formatter rewrites: `binding.go`'s stdlib import block was assembled by
   manual insert-position juggling that mis-ordered one real combination (declared errors, no sync

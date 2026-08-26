@@ -2,10 +2,10 @@
 
 // pub(crate): e2e::codegen::python calls gen_bindings::crate_has_serde to mirror this backend's
 // from_json eligibility gate. ~keep
-pub(crate) mod gen_bindings;
-mod gen_stubs;
 #[cfg(test)]
 mod adapter_return_type_tests;
+pub(crate) mod gen_bindings;
+mod gen_stubs;
 #[cfg(test)]
 mod kwarg_unpack_tests;
 #[cfg(test)]

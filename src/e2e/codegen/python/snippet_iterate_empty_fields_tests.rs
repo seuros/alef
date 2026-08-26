@@ -14,11 +14,13 @@
 use crate::e2e::codegen::presentation::PresentationOperation;
 
 fn iterate_operation(fields: Vec<&str>) -> PresentationOperation {
+    let fields: Vec<String> = fields.into_iter().map(str::to_string).collect();
     PresentationOperation {
         kind: "iterate",
         expression: "result.items".to_string(),
         item: "item".to_string(),
-        fields: fields.into_iter().map(str::to_string).collect(),
+        field_displays: vec![false; fields.len()],
+        fields,
         optional: false,
         display: false,
         destructure_source: String::new(),
