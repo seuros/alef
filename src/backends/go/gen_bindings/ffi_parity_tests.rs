@@ -125,10 +125,14 @@ fn expression_result_type(generated: &str) -> String {
         .to_string()
 }
 
+/// The wrapper's value-producing return, which is its last one. A scalar `Option` return is
+/// preceded by the presence gate's early `return nil`, so taking the first `return` would
+/// assert against the absent branch rather than the lowering under test. ~keep
 fn return_line(generated: &str) -> String {
     generated
         .lines()
-        .find(|line| line.trim_start().starts_with("return "))
+        .filter(|line| line.trim_start().starts_with("return "))
+        .next_back()
         .unwrap_or_else(|| panic!("no return statement in:\n{generated}"))
         .trim()
         .to_string()
