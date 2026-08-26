@@ -25,6 +25,8 @@ mod json_object_field_agreement_tests;
 mod loop_binding_tests;
 #[cfg(test)]
 mod node_enum_import_tests;
+#[cfg(test)]
+mod optional_segment_len_tests;
 mod render;
 mod snippet;
 mod test_case;

@@ -172,7 +172,7 @@ fn nested_optional_segment_field_unwraps_before_indexing() {
     );
 
     let unit = syn::parse_file(&out);
-    assert!(unit.is_ok(), "generated Rust must parse: {unit:?}\n{out}");
+    assert!(unit.is_ok(), "generated Rust must parse: {:?}\n{out}", unit.err());
 }
 
 /// The confirmed defect, length site: `entries[0].sections.length` must unwrap the
@@ -195,7 +195,7 @@ fn nested_optional_segment_field_unwraps_before_len() {
     );
 
     let unit = syn::parse_file(&out);
-    assert!(unit.is_ok(), "generated Rust must parse: {unit:?}\n{out}");
+    assert!(unit.is_ok(), "generated Rust must parse: {:?}\n{out}", unit.err());
 }
 
 /// Negative control: `entries[0].tags` is a plain `Vec<String>` (not `Option<Vec<T>>`) on the
@@ -227,5 +227,5 @@ fn non_optional_sibling_segment_field_stays_unwrapped_plain() {
     );
 
     let unit = syn::parse_file(&out);
-    assert!(unit.is_ok(), "generated Rust must parse: {unit:?}\n{out}");
+    assert!(unit.is_ok(), "generated Rust must parse: {:?}\n{out}", unit.err());
 }
