@@ -6,6 +6,7 @@ mod common;
 mod constructors;
 mod custom_modules;
 mod doxygen;
+mod enum_item_cfg;
 mod feature_defines;
 mod fields;
 mod handle_registry;
