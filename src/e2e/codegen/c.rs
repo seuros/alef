@@ -925,11 +925,31 @@ fn resolve_fixture_call_info(
     // actually generates for a trait-bridge registry operation, rather than trusting
     // the raw `fixture.call` config text (`register_fn`/`unregister_fn`/`clear_fn`),
     // which can diverge from it for `unregister`/`clear` (see that function's doc
-    // comment for the exact derivation rule). A fixture author who set
-    // `skip.languages` for `lang` has already declared that this generator cannot
-    // speak for it, so this fallback must not run for a skipped fixture.
-    // `src/e2e/snippets/mod.rs` applies an equivalent guard before it ever calls into
-    // this generator, but this check must not depend on that upstream filtering having
+    // comment for the exact derivation rule).
+    //
+    // Gated on `call_skip_reason`, NOT `fixture.skip` -- those are different questions.
+    // `fixture.skip.languages` opts a fixture out of the *executable test harness*
+    // only (`documentation_rendering_is_independent_of_test_harness_skips`); the
+    // docs-snippet generator renders a fixture-skipped-for-`lang` fixture's
+    // documentation regardless, so blocking this derivation for that case does not
+    // stop the snippet from rendering -- it only starves it of the correct symbol,
+    // leaving the naive `call.function` config text (already resolved into
+    // `info.function_name` by the time `resolve_call_info` returns) uncorrected. That
+    // was the actual defect behind 13 C `plugin_api` snippets calling a plural
+    // `..._clear_reranker_backends`-shaped symbol the header never declares: every one
+    // of those fixtures sets a well-formed base `function` *and* `skip.languages =
+    // ["c"]` (originally true only of the register-shaped call sharing the same
+    // trait, which genuinely cannot cross a callback-free C ABI), so gating on
+    // `fixture.skip` left the wrong, already-populated name in place instead of the
+    // real one this derivation can supply for the register-independent clear/unregister
+    // exports. `call_skip_reason` (call-level `skip_languages`) is the authority for
+    // "this language cannot represent this call at all" that both the executable
+    // harness (`fixture_inclusion`) and the docs generator's own inclusion filter
+    // (`generate_snippet_report_with_extensions`) already gate on; matching it here
+    // keeps this function's "own terms" protection (see below) for a call that
+    // genuinely has no C shape, without also punishing a call that does. ~keep
+    //
+    // This must not depend on the docs generator's upstream filtering having
     // happened -- a caller that reaches this function directly (as this module's own
     // unit tests, and the compiled e2e test-file path via `render_test_file`, both do)
     // must get the same protection on its own terms.
@@ -940,8 +960,8 @@ fn resolve_fixture_call_info(
     // per-language override, as a well-formed config sets) while its result type is
     // still unresolvable against the core IR -- the two fallbacks are independent, so
     // neither can be conditioned on the other having fired. ~keep
-    let skipped_for_lang = fixture.skip.as_ref().is_some_and(|skip| skip.should_skip(lang));
-    let trait_bridge_identity = (!skipped_for_lang)
+    let call_skipped_for_lang = crate::e2e::codegen::call_skip_reason(fixture, lang, e2e_config).is_some();
+    let trait_bridge_identity = (!call_skipped_for_lang)
         .then(|| crate::e2e::codegen::recipe::trait_bridge_derived_c_identity(config, fixture))
         .flatten();
 
@@ -1469,97 +1489,9 @@ mod snippet_tests {
         );
     }
 
-    /// `resolve_fixture_call_info` must not trust `trait_bridge_function_identity`'s
-    /// raw-config-text-derived symbol name for a fixture that declares
-    /// `skip.languages = ["c"]` -- exactly the shape of the 13 fixtures fixed in
-    /// `8ddaa0559` (via `src/e2e/snippets/mod.rs`'s equivalent guard). This exercises
-    /// the resolver directly, independent of the prefixing/template logic that
-    /// `render_c_snippet` layers on top, so a regression here is unambiguous: it can
-    /// only mean the skip check stopped gating the fallback.
-    #[test]
-    fn resolve_fixture_call_info_ignores_naive_identity_when_skipped_for_lang() {
-        let fixture = Fixture {
-            id: "clear_sample_backends".into(),
-            call: Some("clear_sample_backends".into()),
-            skip: Some(crate::e2e::fixture::SkipDirective {
-                languages: vec!["c".into()],
-                reason: None,
-            }),
-            ..Fixture::default()
-        };
-        let mut e2e = E2eConfig::default();
-        e2e.calls.insert(
-            "clear_sample_backends".into(),
-            CallConfig {
-                returns_result: false,
-                returns_void: true,
-                ..CallConfig::default()
-            },
-        );
-        let config = ResolvedCrateConfig {
-            name: "sample".into(),
-            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
-                trait_name: "SampleBackend".into(),
-                clear_fn: Some("clear_sample_backends".into()),
-                ..Default::default()
-            }],
-            ..ResolvedCrateConfig::default()
-        };
-
-        let info = resolve_fixture_call_info(&fixture, &e2e, &config, "c", CallIr::default());
-
-        assert_eq!(
-            info.function_name, "",
-            "skip.languages = [\"c\"] must block the naive identity fallback, leaving no function \
-             configured rather than a symbol name that may not exist"
-        );
-    }
-
-    /// End-to-end counterpart of the resolver-level test above: a fixture skipped for
-    /// `c` must not produce a snippet that calls the config-text-derived symbol name.
-    /// `render_c_snippet` is exercised directly (not through
-    /// `src/e2e/snippets/mod.rs`'s gate) so this proves the C generator's own
-    /// invariant, not just the upstream caller's filtering.
-    #[test]
-    fn trait_bridge_operation_skipped_for_c_does_not_trust_naive_identity() {
-        let fixture = Fixture {
-            id: "clear_sample_backends".into(),
-            description: "Clear registered sample backends".into(),
-            call: Some("clear_sample_backends".into()),
-            skip: Some(crate::e2e::fixture::SkipDirective {
-                languages: vec!["c".into()],
-                reason: Some("c FFI export does not match the configured clear_fn text".into()),
-            }),
-            ..Fixture::default()
-        };
-        let mut e2e = E2eConfig::default();
-        e2e.calls.insert(
-            "clear_sample_backends".into(),
-            CallConfig {
-                returns_result: false,
-                returns_void: true,
-                ..CallConfig::default()
-            },
-        );
-        let config = ResolvedCrateConfig {
-            name: "sample".into(),
-            trait_bridges: vec![crate::core::config::TraitBridgeConfig {
-                trait_name: "SampleBackend".into(),
-                clear_fn: Some("clear_sample_backends".into()),
-                ..Default::default()
-            }],
-            ..ResolvedCrateConfig::default()
-        };
-
-        let rendered = render_c_snippet(&fixture, &e2e, &config, &[], &[]).expect("C snippet renders");
-
-        assert!(
-            !rendered.contains("sample_clear_sample_backends("),
-            "skipped fixture must not call the naive-identity symbol: {rendered}"
-        );
-        assert!(rendered.contains("sample_();"), "{rendered}");
-    }
-
+    // The fixture-level-skip-vs-derivation coverage (resolver-level and end-to-end) lives in
+    // `trait_bridge_registry_symbol_tests.rs`, alongside the sibling "configured base function
+    // shadows the derivation" cases this same authority resolves. ~keep
     #[test]
     fn expected_error_snippet_checks_the_native_null_result() {
         let mut fixture = Fixture {

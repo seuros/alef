@@ -155,3 +155,74 @@ fn an_explicit_c_function_override_still_outranks_the_derived_symbol() {
 
     assert_eq!(info.function_name, "sample_drop_every_backend");
 }
+
+/// A fixture-level `skip.languages = ["c"]` opts the fixture out of the *executable* C test
+/// harness only (`documentation_rendering_is_independent_of_test_harness_skips`); the
+/// docs-snippet generator renders this fixture's C documentation regardless. This is exactly
+/// the shape of 13 real `plugin_api` fixtures (`clear_reranker_backends` and its siblings):
+/// each sets a well-formed base `function` *and* `skip.languages = ["c"]` (true of the
+/// register-shaped call sharing the same trait, which genuinely cannot cross a callback-free C
+/// ABI, but not of the register-independent clear/unregister exports these fixtures actually
+/// name). Before this fix, `resolve_fixture_call_info` gated the derivation on `fixture.skip`
+/// and left the naive, already-populated `call.function` text in `info.function_name`
+/// uncorrected, so the rendered snippet called a plural symbol (`clear_sample_backends`) the
+/// header never declares. The derivation must win here exactly as it does for a non-skipped
+/// fixture. ~keep
+#[test]
+fn a_fixture_level_skip_does_not_block_the_derivation() {
+    let mut e2e = E2eConfig::default();
+    e2e.calls
+        .insert("clear_sample_backends".into(), clear_call("clear_sample_backends"));
+    let mut fixture = clear_fixture();
+    fixture.skip = Some(crate::e2e::fixture::SkipDirective {
+        languages: vec!["c".into()],
+        reason: Some("the register-shaped call sharing this trait cannot cross the C ABI".into()),
+    });
+
+    let info = resolve_fixture_call_info(&fixture, &e2e, &clear_backends_config(), "c", CallIr::default());
+
+    assert_eq!(info.function_name, "clear_sample_backend");
+    assert_eq!(info.extra_args, vec!["NULL".to_string()]);
+}
+
+/// A *call-level* `skip_languages` (`call_skip_reason`'s authority) is the one that still must
+/// block the derivation: it declares the language cannot represent this call at all -- the
+/// case the register-shaped half of a trait bridge is in -- and both the executable harness
+/// (`fixture_inclusion`) and the docs generator's own inclusion filter already exclude a call
+/// with this set before either ever reaches a generator. This is `resolve_fixture_call_info`'s
+/// own-terms half of that same protection. ~keep
+#[test]
+fn a_call_level_skip_still_blocks_the_derivation() {
+    let mut e2e = E2eConfig::default();
+    let mut call = clear_call("clear_sample_backends");
+    call.skip_languages = vec!["c".into()];
+    e2e.calls.insert("clear_sample_backends".into(), call);
+
+    let info = resolve_fixture_call_info(&clear_fixture(), &e2e, &clear_backends_config(), "c", CallIr::default());
+
+    assert_eq!(
+        info.function_name, "clear_sample_backends",
+        "a call-level skip_languages must leave the naive config text uncorrected -- this fixture \
+         should never have reached a C generator at all, so its output is not this test's concern"
+    );
+}
+
+/// End-to-end counterpart of [`a_fixture_level_skip_does_not_block_the_derivation`]: a fixture
+/// skipped for `c` (fixture-level only) must still produce a snippet that calls the derived ABI
+/// symbol, not the config-text-derived name.
+#[test]
+fn rendered_snippet_calls_the_derived_symbol_despite_a_fixture_level_skip() {
+    let mut e2e = E2eConfig::default();
+    e2e.calls
+        .insert("clear_sample_backends".into(), clear_call("clear_sample_backends"));
+    let mut fixture = clear_fixture();
+    fixture.skip = Some(crate::e2e::fixture::SkipDirective {
+        languages: vec!["c".into()],
+        reason: Some("the register-shaped call sharing this trait cannot cross the C ABI".into()),
+    });
+
+    let rendered = render_c_snippet(&fixture, &e2e, &clear_backends_config(), &[], &[]).expect("C snippet renders");
+
+    assert!(rendered.contains("sample_clear_sample_backend(NULL)"), "{rendered}");
+    assert!(!rendered.contains("sample_clear_sample_backends("), "{rendered}");
+}
