@@ -340,6 +340,16 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = &enum_def.name;
+    // A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's
+    // own cfg gate; this PHP crate never declares a Cargo feature for it (see
+    // `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(...)]` produces an
+    // `unexpected cfg condition value` error. Such a variant is dropped from both match arms
+    // below instead -- named via `tracing::warn!` -- mirroring
+    // `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper` and
+    // `codegen::conversions::enums::gen_enum_from_core_to_binding_cfg`. A host-owned cfg keeps
+    // its arm and its `#[cfg(...)]`. ~keep
+    let is_host_enum = crate::codegen::cfg::is_host_owned_rust_path(core_import, &enum_def.rust_path);
+    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
 
     let all_flat_fields: std::collections::BTreeSet<String> = {
         let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
@@ -361,6 +371,18 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
         },
     ));
     for variant in &enum_def.variants {
+        if variant.cfg.is_some() && !is_host_enum {
+            tracing::warn!(
+                enum_name = %enum_def.name,
+                enum_rust_path = %enum_def.rust_path,
+                variant_name = %variant.name,
+                cfg = variant.cfg.as_deref().unwrap_or_default(),
+                "dropping PHP flat-enum From<CoreType> arm for a foreign-crate enum variant \
+                 behind a #[cfg(...)] this crate cannot declare as a Cargo feature; the variant \
+                 is unreachable from this conversion"
+            );
+            continue;
+        }
         let tag_val = variant_tag_value(variant, enum_def);
         if variant.fields.is_empty() {
             out.push_str(&crate::backends::php::template_env::render(
@@ -371,6 +393,7 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
                     tag_field => tag_field,
                     tag_val => &tag_val,
                     needs_default => !all_flat_fields.is_empty(),
+                    cfg => variant.cfg.as_deref(),
                 },
             ));
         } else {
@@ -407,6 +430,15 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
             } else {
                 format!("            {core_path}::{}{{ {pattern} }} => Self {{", variant.name)
             };
+            // `pattern_start` is a pre-existing raw `format!` site (not this fix's doing --
+            // see the `jinja-templates` rule note this leaves for a future pass); the cfg
+            // guard itself is a plain attribute line, matching how every other backend
+            // (dart, swift, ffi) emits a per-arm `#[cfg(...)]` without a dedicated template.
+            if let Some(cfg) = variant.cfg.as_deref() {
+                out.push_str("            #[cfg(");
+                out.push_str(cfg);
+                out.push_str(")]\n");
+            }
             out.push_str(&pattern_start);
             out.push_str(&crate::backends::php::template_env::render(
                 "php_flat_enum_tag_assignment.jinja",
@@ -443,7 +475,9 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
     }
     // When the IR has excluded variants (e.g. cfg-gated variants with #[alef(skip)] or
     // #[doc(hidden)]), the Rust compiler sees those variants at compile time but the generated
-    if !enum_def.excluded_variants.is_empty() {
+    // A cfg-gated variant leaves the same kind of gap: either its arm is gated off (feature not
+    // enabled) or dropped entirely (foreign-crate cfg), so the match needs the same catch-all.
+    if !enum_def.excluded_variants.is_empty() || has_cfg_variants {
         out.push_str("            _ => Default::default(),\n");
     }
     out.push_str(&crate::backends::php::template_env::render(
@@ -461,6 +495,18 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
         },
     ));
     for variant in &enum_def.variants {
+        if variant.cfg.is_some() && !is_host_enum {
+            tracing::warn!(
+                enum_name = %enum_def.name,
+                enum_rust_path = %enum_def.rust_path,
+                variant_name = %variant.name,
+                cfg = variant.cfg.as_deref().unwrap_or_default(),
+                "dropping PHP flat-enum From<Binding> arm for a foreign-crate enum variant \
+                 behind a #[cfg(...)] this crate cannot declare as a Cargo feature; the tag \
+                 falls through to the existing fallback arm instead"
+            );
+            continue;
+        }
         let tag_val = variant_tag_value(variant, enum_def);
         if variant.fields.is_empty() {
             out.push_str(&crate::backends::php::template_env::render(
@@ -469,6 +515,7 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
                     tag_val => &tag_val,
                     core_path => &core_path,
                     variant_name => &variant.name,
+                    cfg => variant.cfg.as_deref(),
                 },
             ));
         } else {
@@ -478,6 +525,13 @@ pub(crate) fn gen_flat_data_enum_from_impls(enum_def: &EnumDef, core_import: &st
             } else {
                 format!("            \"{tag_val}\" => {core_path}::{}{{", variant.name)
             };
+            // See the matching note in the core→binding loop above: `pattern_start` is a
+            // pre-existing raw `format!` site; the cfg guard is a plain attribute line.
+            if let Some(cfg) = variant.cfg.as_deref() {
+                out.push_str("            #[cfg(");
+                out.push_str(cfg);
+                out.push_str(")]\n");
+            }
             out.push_str(&pattern_start);
             if is_tuple {
                 let exprs: Vec<String> = variant

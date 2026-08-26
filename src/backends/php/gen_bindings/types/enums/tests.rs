@@ -451,4 +451,69 @@ mod flat_data_enum_from_impls_tests {
         );
         assert!(generated_methods.contains("return Err(PhpException::default(format!("));
     }
+
+    /// The regression this task fixes: neither direction of the flat-enum `From` impl ever read
+    /// `variant.cfg`, so a cfg-gated variant's match arm was always emitted unconditionally --
+    /// an `E0599: no variant found` when the variant does not exist in the build. A host-owned
+    /// cfg-gated variant (`rust_path` rooted in the same crate as `core_import`) must keep its
+    /// arm in both directions, now carrying its `#[cfg(...)]` guard exactly once per direction.
+    #[test]
+    fn host_cfg_variant_keeps_its_arm_and_gains_a_cfg_guard_in_both_directions() {
+        let mut enum_def = make_enum("Message", Some("kind"), false, false);
+        enum_def.rust_path = "core_lib::Message".to_string();
+        enum_def.variants[1].cfg = Some(r#"feature = "thumbnails""#.to_string());
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib");
+
+        assert!(
+            generated.contains("core_lib::Message::Variant2 =>"),
+            "host-owned variant's From<CoreType> arm must still be emitted, got:\n{generated}"
+        );
+        assert!(
+            generated.contains("\"Variant2\" => core_lib::Message::Variant2,"),
+            "host-owned variant's From<Binding> arm must still be emitted, got:\n{generated}"
+        );
+        assert_eq!(
+            generated.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            2,
+            "the gate must land on both directions' arms exactly once each, got:\n{generated}"
+        );
+    }
+
+    /// Same regression, the foreign-crate half: a variant merged in from a foreign
+    /// `[[crates.source_crates]]` crate (`rust_path` rooted in a crate other than `core_import`)
+    /// carries that crate's own cfg. Forwarding it verbatim as `#[cfg(...)]` names a feature this
+    /// PHP crate never declares -- an `unexpected cfg condition value` error -- so the arm must be
+    /// dropped entirely in both directions instead.
+    #[test]
+    fn foreign_cfg_variant_arm_is_dropped_not_gated_in_both_directions() {
+        let mut enum_def = make_enum("Message", Some("kind"), false, false);
+        enum_def.rust_path = "dep_crate::Message".to_string();
+        enum_def.variants[1].cfg = Some(r#"feature = "testkit""#.to_string());
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib");
+
+        assert!(
+            !generated.contains("#[cfg(feature = \"testkit\")]"),
+            "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{generated}"
+        );
+        assert!(
+            !generated.contains("Message::Variant2 =>") && !generated.contains("\"Variant2\" =>"),
+            "a foreign-crate cfg-gated variant must not be referenced in either direction, got:\n{generated}"
+        );
+        assert!(
+            generated.contains("_ => Default::default(),"),
+            "dropping the arm must still leave the core→binding match exhaustive via the catch-all, got:\n{generated}"
+        );
+    }
+
+    /// Negative control: an ungated enum (`make_enum`'s variants, `cfg: None`) must emit no
+    /// `#[cfg(...)]` at all.
+    #[test]
+    fn ungated_enum_emits_no_cfg_in_either_direction() {
+        let enum_def = make_enum("Message", Some("kind"), false, false);
+        let generated = gen_flat_data_enum_from_impls(&enum_def, "core_lib");
+        assert!(
+            !generated.contains("#[cfg("),
+            "ungated enum must not emit #[cfg(...)], got:\n{generated}"
+        );
+    }
 }
