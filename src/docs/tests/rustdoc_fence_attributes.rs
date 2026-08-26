@@ -195,13 +195,23 @@ fn body_level_rustdoc_attribute_fence_is_stripped_from_a_non_rust_page() {
 /// silently started proving nothing while still reading green. Use a fence tag with no
 /// relationship to the rustdoc attribute vocabulary so the control stays independent of
 /// the fix it is guarding. ~keep
+///
+/// task: a bare unrecognized single-token tag (the original `some_unknown_language` this
+/// test used) no longer flags at all -- a human-authored docs page may legitimately fence a
+/// language alef does not generate bindings for (`astro`, `mdx`, `hcl`, ...), and that is
+/// prose decoration, not a defect (see `snippets::audit::tag_claims_a_binding_target_language`).
+/// The control now uses a fence that genuinely still must fail: it combines a real
+/// binding-target language (`rust`) with a token that is not a recognized rustdoc doctest
+/// attribute either, so the combined info string still resolves to `Unknown` while
+/// unambiguously claiming a real target language. ~keep
 #[test]
 fn the_docs_fence_audit_still_reports_a_genuinely_unknown_language() {
-    let page = "# Page\n\n```some_unknown_language\nlet x = 1;\n```\n";
+    let page = "# Page\n\n```rust,definitely_bogus\nlet x = 1;\n```\n";
     let findings = audit_unknown_language_messages(page);
     assert_eq!(
         findings,
-        vec!["unknown fenced code language: some_unknown_language".to_string()],
-        "the audit must flag a genuinely unknown fence — otherwise the assertions above prove nothing"
+        vec!["unknown fenced code language: rust,definitely_bogus".to_string()],
+        "the audit must flag a fence that claims a real binding-target language and gets it \
+         wrong — otherwise the assertions above prove nothing"
     );
 }

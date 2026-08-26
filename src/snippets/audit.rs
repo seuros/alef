@@ -373,7 +373,7 @@ fn audit_fences(path: &Path, content: &str) -> Vec<AuditIssue> {
                     index + 1,
                     "fenced code block is missing a language tag".to_string(),
                 ));
-            } else if Language::from_fence_info(&tag) == Language::Unknown && !is_known_display_tag(&tag) {
+            } else if Language::from_fence_info(&tag) == Language::Unknown && tag_claims_a_binding_target_language(&tag) {
                 issues.push(issue(
                     AuditIssueKind::UnknownLanguage,
                     path,
@@ -454,59 +454,23 @@ fn severity_for(kind: &AuditIssueKind) -> AuditSeverity {
     }
 }
 
-/// Returns true for fence tags that are valid display-only markup the audit
-/// should accept without flagging as `UnknownLanguage`. These tags do not map
-/// to executable validators in `Language::from_fence_tag`, but they are
-/// well-known in the Markdown / docs ecosystem (data formats, diagram DSLs,
-/// shell session transcripts, third-party JVM build files, etc.). ~keep
-fn is_known_display_tag(tag: &str) -> bool {
-    matches!(
-        tag.trim().to_lowercase().as_str(),
-        "json"
-            | "yaml"
-            | "yml"
-            | "xml"
-            | "ini"
-            | "csv"
-            | "tsv"
-            | "properties"
-            | "env"
-            | "diff"
-            | "patch"
-            | "html"
-            | "css"
-            | "scss"
-            | "sass"
-            | "svg"
-            | "markdown"
-            | "md"
-            | "mdx"
-            | "rst"
-            | "tex"
-            | "latex"
-            | "mermaid"
-            | "plantuml"
-            | "graphviz"
-            | "dot"
-            | "d2"
-            | "groovy"
-            | "gradle"
-            | "make"
-            | "makefile"
-            | "cmake"
-            | "nginx"
-            | "apache"
-            | "text"
-            | "txt"
-            | "plain"
-            | "plaintext"
-            | "output"
-            | "log"
-            | "console"
-            | "sql"
-            | "graphql"
-            | "gql"
-    )
+/// True when `tag` (a fence's raw info string, e.g. `rust,no_run` or `astro`) names a
+/// language alef actually generates bindings for, even though `tag` as a whole did not
+/// resolve cleanly via [`Language::from_fence_info`] -- for example a rustdoc-attribute-style
+/// fence combining `rust` with an unrecognized extra token. A fence in that state is
+/// claiming a real binding-target language and getting it wrong, which is worth flagging.
+///
+/// A tag that names no binding-target language at all -- `astro`, `mdx`, `hcl`, or any other
+/// prose-decoration language a human-authored docs page may legitimately fence -- returns
+/// `false`: that fence is display-only, and must not fail validation just because nobody
+/// happened to add it to a hand-maintained allowlist. This replaced a hardcoded
+/// "known display tag" allowlist that was itself a second, drifting vocabulary alongside
+/// `Language`'s own -- ask [`Language::is_binding_target`], the single authority, instead of
+/// growing a parallel list here. ~keep
+fn tag_claims_a_binding_target_language(tag: &str) -> bool {
+    tag.split(',')
+        .map(str::trim)
+        .any(|token| Language::from_fence_tag(token).is_binding_target())
 }
 
 #[cfg(test)]
@@ -653,6 +617,91 @@ mod tests {
         });
 
         assert_eq!(report.issues.len(), 1);
+        assert_eq!(report.issues[0].kind, AuditIssueKind::BrokenFence);
+    }
+
+    /// task: a human-authored docs page may legitimately fence a language alef does not
+    /// generate bindings for (`astro`, `mdx`, `hcl`, ...). Such a fence is prose decoration
+    /// and must never fail `alef all`'s docs/snippet validation just because nobody happened
+    /// to add its tag to a hand-maintained allowlist.
+    #[test]
+    fn unknown_fence_language_that_claims_no_binding_target_audits_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(
+            docs.join("development.md"),
+            "```astro\n<Foo client:load />\n```\n",
+        )
+        .unwrap();
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert_eq!(
+            report.issues,
+            Vec::new(),
+            "an `astro` fence names no language alef targets, so it must audit clean: {:?}",
+            report.issues
+        );
+    }
+
+    /// Control, paired with the test above: the audit must still flag a fence info string
+    /// that genuinely claims a real binding-target language and gets it wrong -- for example
+    /// a leaked rustdoc-attribute-style fence combining `rust` with a token that is not a
+    /// recognized rustdoc doctest attribute either. This is the "prove the check still
+    /// fires" half required alongside the astro case: without it, the fix above would pass
+    /// equally well with `UnknownLanguage` disabled outright.
+    #[test]
+    fn fence_language_that_claims_a_binding_target_still_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(
+            docs.join("api-rust.md"),
+            "```rust,definitely_bogus\nfn main() {}\n```\n",
+        )
+        .unwrap();
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert_eq!(report.issues.len(), 1, "issues: {:?}", report.issues);
+        assert_eq!(report.issues[0].kind, AuditIssueKind::UnknownLanguage);
+        assert_eq!(
+            report.issues[0].message,
+            "unknown fenced code language: rust,definitely_bogus"
+        );
+    }
+
+    /// task: fixing the false positive on decorative tags (`astro`) must not disable real
+    /// structural validation for a fence that DOES claim a binding-target language. A
+    /// `python`-tagged fence with no closing fence is exactly the kind of broken snippet the
+    /// audit must still catch -- if this stopped failing, the fix above would have passed
+    /// equally well with the whole fence audit silently disabled.
+    #[test]
+    fn python_tagged_fence_with_broken_snippet_still_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        std::fs::create_dir_all(&docs).unwrap();
+        std::fs::write(docs.join("usage.md"), "```python\nprint('unterminated'\n").unwrap();
+
+        let report = audit(&AuditConfig {
+            docs_dirs: vec![docs],
+            snippet_dirs: Vec::new(),
+            require_frontmatter: false,
+            ..AuditConfig::default()
+        });
+
+        assert_eq!(report.issues.len(), 1, "issues: {:?}", report.issues);
         assert_eq!(report.issues[0].kind, AuditIssueKind::BrokenFence);
     }
 }

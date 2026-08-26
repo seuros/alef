@@ -108,6 +108,37 @@ impl Language {
         }
     }
 
+    /// True for the variants that name a language alef actually generates bindings for, as
+    /// opposed to a markup/data/prose language (`Json`, `Yaml`, `Bash`, `Docker`,
+    /// `PowerShell`, `Text`, `Toml`, `Xml`, `Mermaid`) that a fence may legitimately use for
+    /// illustration without alef ever targeting it as a binding language.
+    ///
+    /// The single authority a fence-tag audit asks to decide whether an unrecognized tag is
+    /// a real target-language typo/leak worth flagging, or prose decoration (`astro`, `mdx`,
+    /// `hcl`, ...) that must never fail validation just because nobody added it to a
+    /// hand-maintained allowlist. ~keep
+    #[must_use]
+    pub fn is_binding_target(self) -> bool {
+        matches!(
+            self,
+            Self::C
+                | Self::Csharp
+                | Self::Dart
+                | Self::Elixir
+                | Self::Go
+                | Self::Java
+                | Self::Kotlin
+                | Self::Php
+                | Self::Python
+                | Self::R
+                | Self::Ruby
+                | Self::Rust
+                | Self::Swift
+                | Self::TypeScript
+                | Self::Zig
+        )
+    }
+
     #[must_use]
     pub fn from_session_target(target: &str) -> Self {
         match Self::normalize_session_target(target).as_str() {
