@@ -16,10 +16,17 @@
 //! `facade_file`'s sibling `Cargo.toml` (`facade_file` is always `<rust crate dir>/src/lib.rs`) --
 //! and passes it through so [`crate::backends::dart::missing_bridge_functions`] never reports a
 //! `#[cfg(...)]`-gated facade function frb correctly never saw, alongside every function it
-//! genuinely dropped.
+//! genuinely dropped. It also resolves that same manifest's *declared* `[features]` keys (not
+//! just the `default`-enabled subset) so a missing function whose gate names a feature the
+//! manifest never declares at all -- most often because alef's own generation wanted to forward
+//! that feature there and the write was refused -- is attributed to that cause instead of the
+//! generic "rerun flutter_rust_bridge_codegen" guidance, which is wrong for that case: frb never
+//! had a chance to see the function regardless of when it last ran (alef #464). See
+//! [`crate::backends::dart::frb_rewrite::bridge_coverage`]'s module doc for the declared-vs-active
+//! distinction this rests on.
 
 use anyhow::Context as _;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
 /// Read `facade_file` and `bridge_file` and return an error naming every facade free function
@@ -46,9 +53,10 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
 
     // `facade_file` is always `<rust crate dir>/src/lib.rs` (see
     // `backends::dart::gen_bindings::frb_rust_facade_paths`), so its manifest is two directories
-    // up. A missing/unparseable manifest resolves to `None`, and `missing_bridge_functions`
-    // degrades to the pre-cfg-awareness blanket check rather than exempting every gated function
-    // from coverage.
+    // up. A missing/unparseable manifest resolves both `enabled_features` and `declared_features`
+    // to `None` together (both read and parse the same file the same way), and
+    // `missing_bridge_functions` degrades to the pre-cfg-awareness blanket check rather than
+    // exempting every gated function from coverage.
     let manifest_path = facade_file
         .parent()
         .and_then(Path::parent)
@@ -56,7 +64,13 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
     let enabled_features = manifest_path
         .as_deref()
         .and_then(crate::codegen::cfg::read_default_enabled_cargo_features);
+    let declared_features = manifest_path
+        .as_deref()
+        .and_then(crate::codegen::cfg::read_declared_cargo_features);
     let enabled_features_refs: Option<HashSet<&str>> = enabled_features
+        .as_ref()
+        .map(|set| set.iter().map(String::as_str).collect());
+    let declared_features_refs: Option<HashSet<&str>> = declared_features
         .as_ref()
         .map(|set| set.iter().map(String::as_str).collect());
 
@@ -65,25 +79,70 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
         &bridge_source,
         exclude_functions,
         enabled_features_refs.as_ref(),
+        declared_features_refs.as_ref(),
     );
     if missing.is_empty() {
         return Ok(());
     }
 
-    anyhow::bail!(
-        "flutter_rust_bridge bridge {} has {} facade function(s) from {} with no matching entry: \
-         {}. Each is reachable per this crate's manifest (ungated, or its `#[cfg(feature = ...)]` \
-         is in the manifest's default features), so the gap has one of several possible causes: \
+    // Attribute each missing name to an undeclared cfg gate when applicable -- see
+    // `undeclared_gate_features`'s doc. This is what lets the diagnostic below name the real
+    // cause (a manifest missing a `[features]` entry, commonly from a refused write) instead of
+    // defaulting every gap to "rerun flutter_rust_bridge_codegen", which cannot fix an undeclared
+    // gate: frb's codegen macro can never see a function gated on a feature its manifest does not
+    // declare, no matter how many times it reruns. ~keep
+    let mut undeclared_functions: Vec<&str> = Vec::new();
+    let mut undeclared_features: BTreeSet<String> = BTreeSet::new();
+    if let Some(declared) = declared_features_refs.as_ref() {
+        for name in &missing {
+            let gate_features = crate::backends::dart::undeclared_gate_features(&facade_source, name, declared);
+            if !gate_features.is_empty() {
+                undeclared_functions.push(name.as_str());
+                undeclared_features.extend(gate_features);
+            }
+        }
+    }
+
+    let count = missing.len();
+    let suffix = if count == 1 { "" } else { "s" };
+    let bridge_display = bridge_file.display();
+    let facade_display = facade_file.display();
+    let names = missing.join(", ");
+
+    let guidance = if undeclared_functions.is_empty() {
+        "Each is reachable per this crate's manifest (ungated, or its `#[cfg(feature = ...)]` is \
+         in the manifest's default features), so the gap has one of several possible causes: \
          flutter_rust_bridge_codegen did not (re)generate this bridge against the current facade; \
          the manifest's default feature set does not actually match what the codegen run used; or \
          the function's gate depends on a non-feature predicate (target_os, ...) this check cannot \
          evaluate and treats as reachable. Determine which applies, then either rerun \
          flutter_rust_bridge_codegen or update the committed bridge source -- alef's post-build \
-         patches must not be applied to a stale bridge.",
-        bridge_file.display(),
-        missing.len(),
-        facade_file.display(),
-        missing.join(", "),
+         patches must not be applied to a stale bridge."
+            .to_string()
+    } else {
+        let undeclared_function_names = undeclared_functions.join(", ");
+        let undeclared_feature_names = undeclared_features.into_iter().collect::<Vec<_>>().join(", ");
+        let manifest_display = manifest_path
+            .as_deref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unresolved manifest>".to_string());
+        format!(
+            "{} of these ({undeclared_function_names}) are gated on a Cargo feature this crate's \
+             manifest ({manifest_display}) does not declare at all: {undeclared_feature_names}. \
+             flutter_rust_bridge's codegen macro can only bridge a function through a feature its \
+             manifest actually declares, so this cannot be fixed by rerunning \
+             flutter_rust_bridge_codegen -- the manifest itself never gained the `[features]` \
+             entry, most commonly because a write alef's own generation wanted to make there was \
+             refused by the ownership guard. Check the refusal report above for this manifest and, \
+             if it was refused, run `alef adopt <path>`; otherwise the manifest needs the feature \
+             added to its `[features]` table by hand.",
+            undeclared_functions.len(),
+        )
+    };
+
+    anyhow::bail!(
+        "flutter_rust_bridge bridge {bridge_display} is missing {count} function{suffix} from \
+         {facade_display}: {names}. {guidance}"
     );
 }
 
@@ -156,14 +215,19 @@ mod tests {
         assert!(verify(&facade, &bridge, &[]).is_ok());
     }
 
-    /// The real `alef all` failure this fix closes: a facade function gated behind a feature the
-    /// sibling `Cargo.toml` does not enable by default must not be reported missing, because
-    /// flutter_rust_bridge's own codegen macro expansion never saw it either. Uses the real
-    /// `<rust crate dir>/src/lib.rs` + `<rust crate dir>/Cargo.toml` layout `verify` resolves the
-    /// manifest from, not the flat `dir.path()` layout the other tests in this module use for
-    /// their cfg-blind fixtures.
+    /// A facade function gated behind a feature the sibling `Cargo.toml` declares but does not
+    /// enable by default must not be reported missing, because flutter_rust_bridge's own codegen
+    /// macro expansion never saw it either. Uses the real `<rust crate dir>/src/lib.rs` +
+    /// `<rust crate dir>/Cargo.toml` layout `verify` resolves the manifest from, not the flat
+    /// `dir.path()` layout the other tests in this module use for their cfg-blind fixtures.
+    ///
+    /// "Declared but off" is the key distinction from
+    /// `verify_fails_when_a_facade_function_is_gated_on_a_feature_the_manifest_never_declared`
+    /// below: this manifest's `[features]` table names `premium-tier` explicitly, just not in
+    /// `default` -- a deliberate, legitimate choice, unlike a feature the table never mentions
+    /// at all.
     #[test]
-    fn verify_ignores_a_facade_function_behind_an_inactive_cfg_gate() {
+    fn verify_ignores_a_facade_function_behind_a_declared_but_inactive_cfg_gate() {
         let dir = tempfile::tempdir().expect("temp dir");
         let rust_dir = dir.path().join("rust");
         std::fs::create_dir_all(rust_dir.join("src")).unwrap();
@@ -225,6 +289,57 @@ mod tests {
         assert!(
             message.contains("create_premium_backend_options_from_json"),
             "error must name the missing function: {message}"
+        );
+    }
+
+    /// The alef #464 regression: a facade function gated on a feature the sibling
+    /// `Cargo.toml` does not declare AT ALL (no `[features]` table whatsoever here -- the exact
+    /// shape a pre-marker-convention `packages/dart/rust/Cargo.toml` has) must still fail the
+    /// check. Before this fix, `active_free_function_names` could not tell "declared but off"
+    /// apart from "never declared" -- both simply read as absent from the enabled set -- so this
+    /// case was silently treated the same as the legitimate one in
+    /// `verify_ignores_a_facade_function_behind_a_declared_but_inactive_cfg_gate` above, and
+    /// `alef all` returned `Ok` even though the facade and its manifest had fallen out of sync
+    /// (most often because a forwarding write to that manifest was refused by the ownership
+    /// guard). The message must also name the real cause rather than defaulting to "rerun
+    /// flutter_rust_bridge_codegen", which cannot fix a gate on an undeclared feature no matter
+    /// how many times it runs.
+    #[test]
+    fn verify_fails_when_a_facade_function_is_gated_on_a_feature_the_manifest_never_declared() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let rust_dir = dir.path().join("rust");
+        std::fs::create_dir_all(rust_dir.join("src")).unwrap();
+        let facade = rust_dir.join("src/lib.rs");
+        let bridge = dir.path().join("lib.dart");
+        std::fs::write(
+            &facade,
+            "#[cfg(feature = \"widgets\")]\n\
+             pub fn count_widgets(collection: String) -> Result<i64, String> {\n    Ok(0)\n}\n",
+        )
+        .unwrap();
+        // No `[features]` table at all -- the manifest never gained a `widgets` entry, exactly
+        // as if the ownership guard refused a `collect_cfg_features` write to it.
+        std::fs::write(
+            rust_dir.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(&bridge, "").unwrap();
+
+        let error = verify(&facade, &bridge, &[])
+            .expect_err("a function gated on an undeclared feature must still fail the check");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("count_widgets") && message.contains("missing 1 function"),
+            "error must name the missing function and count: {message}"
+        );
+        assert!(
+            message.contains("widgets") && message.contains("does not declare"),
+            "error must name the undeclared feature: {message}"
+        );
+        assert!(
+            message.contains("alef adopt"),
+            "error must point at the actual remedy for a refused manifest write: {message}"
         );
     }
 
