@@ -294,8 +294,7 @@ fn vtable_slot_check_accepts_a_faithful_bridge() {
     };
     let emitted = crate::codegen::generators::trait_bridge::vtable_slot_names(&trait_def, true, &[]);
 
-    assert_vtable_matches_rust_struct(&api, &trait_def, true, &[], &emitted)
-        .expect("matching slot lists must pass");
+    assert_vtable_matches_rust_struct(&api, &trait_def, true, &[], &emitted).expect("matching slot lists must pass");
 }
 
 #[test]
@@ -340,8 +339,7 @@ fn vtable_slot_check_rejects_a_reordered_slot() {
         "a reordering keeps the count, so the counts alone must not be what fails;\nactual:\n{message}"
     );
     assert!(
-        message.contains("backend_type, supported_languages")
-            && message.contains("supported_languages, backend_type"),
+        message.contains("backend_type, supported_languages") && message.contains("supported_languages, backend_type"),
         "the failure must show both orders so the swapped pair is identifiable;\nactual:\n{message}"
     );
 }

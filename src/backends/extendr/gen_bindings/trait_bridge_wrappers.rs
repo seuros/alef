@@ -41,15 +41,10 @@ pub(super) fn extendr_registration_surface(config: &ResolvedCrateConfig) -> Vec<
         .trait_bridges
         .iter()
         .filter(|bridge| bridge_targets_extendr(bridge))
-        .filter(|bridge| {
-            bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
-        })
+        .filter(|bridge| bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some())
         .map(|bridge| TraitBridgeRegistrationSurface {
             trait_name: bridge.trait_name.clone(),
-            register_symbol: bridge
-                .register_fn
-                .clone()
-                .filter(|_| bridge.registry_getter.is_some()),
+            register_symbol: bridge.register_fn.clone().filter(|_| bridge.registry_getter.is_some()),
             unregister_symbol: bridge.unregister_fn.clone(),
             clear_symbol: bridge.clear_fn.clone(),
         })

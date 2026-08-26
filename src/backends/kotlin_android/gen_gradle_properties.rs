@@ -57,7 +57,9 @@ mod tests {
             "the build cache must be enabled: {settings:?}"
         );
         assert!(
-            !settings.iter().any(|line| line.starts_with("org.gradle.configuration-cache")),
+            !settings
+                .iter()
+                .any(|line| line.starts_with("org.gradle.configuration-cache")),
             "the configuration cache must not be an active setting: {settings:?}"
         );
         assert!(

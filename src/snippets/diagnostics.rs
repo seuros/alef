@@ -79,10 +79,7 @@ fn bound_lines(output: &str) -> (String, usize) {
     let dropped = lines.len() - budget;
     let head = lines[..DIAGNOSTIC_HEAD_LINES].join("\n");
     let tail = lines[lines.len() - DIAGNOSTIC_TAIL_LINES..].join("\n");
-    (
-        format!("{head}\n{}\n{tail}", omitted_lines_marker(dropped)),
-        dropped,
-    )
+    (format!("{head}\n{}\n{tail}", omitted_lines_marker(dropped)), dropped)
 }
 
 /// Truncation is by character, not byte, so a diagnostic quoting non-ASCII source cannot panic on

@@ -135,7 +135,10 @@ prefix = "sample"
     // Register carries the configured name; unregister and clear are synthesised from the trait.
     assert_eq!(surface.trait_name, TRAIT);
     assert_eq!(surface.register_symbol.as_deref(), Some("sample_install_sample_plugin"));
-    assert_eq!(surface.unregister_symbol.as_deref(), Some("sample_unregister_sample_plugin"));
+    assert_eq!(
+        surface.unregister_symbol.as_deref(),
+        Some("sample_unregister_sample_plugin")
+    );
     assert_eq!(surface.clear_symbol.as_deref(), Some("sample_clear_sample_plugin"));
 
     let generated = generated_text(&FfiBackend, &config);
@@ -212,7 +215,11 @@ module = "github.com/sample/sample-core"
 
     let generated = generated_text(&GoBackend, &config);
     assert_declares(&GoBackend, &generated, "func RegisterSamplePlugin(");
-    assert_declares(&GoBackend, &generated, "func UnregisterSamplePlugin(name string) error {");
+    assert_declares(
+        &GoBackend,
+        &generated,
+        "func UnregisterSamplePlugin(name string) error {",
+    );
     assert_declares(&GoBackend, &generated, "func ClearSamplePlugins(");
 }
 
@@ -280,7 +287,10 @@ package = "io.sample.core"
 
     // None of the three names is derived from the configured values.
     assert_eq!(surface.register_symbol.as_deref(), Some("SamplePluginBridge.register"));
-    assert_eq!(surface.unregister_symbol.as_deref(), Some("SamplePluginBridge.unregister"));
+    assert_eq!(
+        surface.unregister_symbol.as_deref(),
+        Some("SamplePluginBridge.unregister")
+    );
     assert_eq!(surface.clear_symbol.as_deref(), Some("SamplePluginBridge.clearAll"));
 
     let generated = generated_text(&KotlinAndroidBackend, &config);

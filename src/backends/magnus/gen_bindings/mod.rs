@@ -829,9 +829,7 @@ impl Backend for MagnusBackend {
         config: &ResolvedCrateConfig,
     ) -> Vec<TraitBridgeRegistrationSurface> {
         let module = get_module_name(&api.crate_name);
-        let qualified = |configured: &Option<String>| {
-            configured.as_deref().map(|name| format!("{module}.{name}"))
-        };
+        let qualified = |configured: &Option<String>| configured.as_deref().map(|name| format!("{module}.{name}"));
         config
             .trait_bridges
             .iter()

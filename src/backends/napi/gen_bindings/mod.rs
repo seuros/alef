@@ -19,8 +19,7 @@ use crate::backends::napi::type_map::NapiMapper;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators::{self, AsyncPattern, RustBindingConfig};
 use crate::core::backend::{
-    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep,
-    TraitBridgeRegistrationSurface,
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, TraitBridgeRegistrationSurface,
 };
 use crate::core::config::{Language, NodeCapsuleTypeConfig, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::{ApiSurface, TypeRef};

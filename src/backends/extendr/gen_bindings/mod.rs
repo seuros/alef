@@ -10,8 +10,7 @@ mod type_mapping;
 
 use self::cfg_registration::{always_registered, apply_r_cfg_policy, effective_r_cfg_features, prepend_cfg};
 use self::trait_bridge_wrappers::{
-    bridge_targets_extendr, collect_trait_bridge_fn_names, collect_trait_bridge_functions,
-    extendr_registration_surface,
+    bridge_targets_extendr, collect_trait_bridge_fn_names, collect_trait_bridge_functions, extendr_registration_surface,
 };
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;

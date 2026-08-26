@@ -1,10 +1,8 @@
 use crate::core::backend::{
-    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep,
-    TraitBridgeRegistrationSurface,
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, PostBuildStep, TraitBridgeRegistrationSurface,
 };
 use crate::core::config::{
-    AdapterConfig, AdapterPattern, BridgeBinding, Language, ResolvedCrateConfig, TraitBridgeConfig,
-    resolve_output_dir,
+    AdapterConfig, AdapterPattern, BridgeBinding, Language, ResolvedCrateConfig, TraitBridgeConfig, resolve_output_dir,
 };
 use crate::core::ir::{ApiSurface, TypeDef};
 use std::collections::BTreeSet;
@@ -724,11 +722,8 @@ impl Backend for SwiftBackend {
                 bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
             })
             .map(|bridge| {
-                let forwarder = |configured: &Option<String>| {
-                    configured
-                        .as_deref()
-                        .map(forwarders::swift_trait_forwarder_name)
-                };
+                let forwarder =
+                    |configured: &Option<String>| configured.as_deref().map(forwarders::swift_trait_forwarder_name);
                 TraitBridgeRegistrationSurface {
                     trait_name: bridge.trait_name.clone(),
                     register_symbol: forwarder(&bridge.register_fn),
