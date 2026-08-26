@@ -2,12 +2,13 @@
 
 use crate::{
     codegen::{
+        cfg::is_host_owned_rust_path,
         conversions::helpers::{
             sanitized_field_to_binding_expr, sanitized_map_field_to_core_expr, sanitized_vec_field_to_core_expr,
         },
         naming::wire_variant_value,
     },
-    core::ir::{EnumDef, TypeRef},
+    core::ir::{EnumDef, EnumVariant, TypeRef},
 };
 
 use super::enums::{
@@ -68,6 +69,34 @@ fn sanitized_core_to_binding_expr(f: &str, ty: &TypeRef, optional: bool) -> Stri
     }
 }
 
+/// Whether `variant`'s match arm should be emitted, and with which `#[cfg(...)]` guard.
+///
+/// A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's own
+/// cfg gate; this NAPI crate never declares a Cargo feature for it (see
+/// `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(feature = "...")]` is
+/// an `unexpected cfg condition value` error. Such an arm is dropped entirely instead --
+/// named and counted via `tracing::warn!`, not silently -- mirroring
+/// `codegen::conversions::enums::emit_cfg_gated_arm` and
+/// `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper`. A host-owned cfg keeps its
+/// arm and its `#[cfg(...)]`: forwarding already declared that feature, so the gate is valid. ~keep
+fn napi_variant_cfg(enum_def: &EnumDef, variant: &EnumVariant, is_host_enum: bool, direction: &str) -> Option<String> {
+    let cfg = variant.cfg.as_deref()?;
+    if !is_host_enum {
+        tracing::warn!(
+            enum_name = %enum_def.name,
+            enum_rust_path = %enum_def.rust_path,
+            variant_name = %variant.name,
+            cfg = cfg,
+            direction = direction,
+            "dropping NAPI tagged-enum conversion match arm for a foreign-crate variant behind a \
+             #[cfg(...)] this crate cannot declare as a Cargo feature; the variant is unreachable \
+             from this conversion"
+        );
+        return None;
+    }
+    Some(cfg.to_string())
+}
+
 /// Generate `From<JsTaggedEnum> for core::TaggedEnum` for a flattened struct representation.
 pub(super) fn gen_tagged_enum_binding_to_core(
     enum_def: &EnumDef,
@@ -78,6 +107,7 @@ pub(super) fn gen_tagged_enum_binding_to_core(
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
 
     let fields_with_binding_struct = tagged_enum_binding_struct_fields(enum_def, struct_names);
     let mixed_named_fields = tagged_enum_mixed_named_fields(enum_def);
@@ -85,7 +115,12 @@ pub(super) fn gen_tagged_enum_binding_to_core(
     let variants = enum_def
         .variants
         .iter()
-        .map(|variant| {
+        .filter_map(|variant| {
+            let kept = variant.cfg.is_none() || is_host_enum;
+            let cfg = napi_variant_cfg(enum_def, variant, is_host_enum, "binding_to_core");
+            if !kept {
+                return None;
+            }
             let tag_value = wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
@@ -94,12 +129,13 @@ pub(super) fn gen_tagged_enum_binding_to_core(
             let is_tuple = crate::codegen::conversions::is_tuple_variant(&variant.fields);
             let is_empty = variant.fields.is_empty();
 
-            if is_empty {
+            Some(if is_empty {
                 minijinja::context! {
                     name => variant.name.clone(),
                     tag_value => tag_value.to_string(),
                     is_empty => true,
                     is_tuple => false,
+                    cfg => cfg,
                 }
             } else {
                 let field_exprs: Vec<String> = variant
@@ -198,12 +234,23 @@ pub(super) fn gen_tagged_enum_binding_to_core(
                     is_tuple => is_tuple,
                     field_exprs => field_exprs,
                     field_inits => field_inits,
+                    cfg => cfg,
                 }
-            }
+            })
         })
         .collect::<Vec<_>>();
 
-    let default_variant = enum_def.variants.first().map(|first| {
+    // Prefer the first variant with no cfg gate as the unconditional `_ =>` fallback: a cfg-gated
+    // variant (host-owned or foreign) may not exist in every build, so it cannot safely stand in
+    // as the always-available default. Falls back to the very first variant only when every
+    // variant carries a cfg -- matching the pre-existing behavior for an all-gated enum, which
+    // was already relying on at least one feature subset making it available. ~keep
+    let default_variant = enum_def
+        .variants
+        .iter()
+        .find(|v| v.cfg.is_none())
+        .or_else(|| enum_def.variants.first())
+        .map(|first| {
         let is_tuple = crate::codegen::conversions::is_tuple_variant(&first.fields);
         let is_empty = first.fields.is_empty();
 
@@ -258,6 +305,7 @@ pub(super) fn gen_tagged_enum_core_to_binding(
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let binding_name = format!("{prefix}{}", enum_def.name);
     let tag_field = enum_def.serde_tag.as_deref().unwrap_or("type");
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let fields_with_binding_struct = tagged_enum_binding_struct_fields(enum_def, struct_names);
     let mixed_named_fields = tagged_enum_mixed_named_fields(enum_def);
 
@@ -279,7 +327,12 @@ pub(super) fn gen_tagged_enum_core_to_binding(
     let variants = enum_def
         .variants
         .iter()
-        .map(|variant| {
+        .filter_map(|variant| {
+            let kept = variant.cfg.is_none() || is_host_enum;
+            let cfg = napi_variant_cfg(enum_def, variant, is_host_enum, "core_to_binding");
+            if !kept {
+                return None;
+            }
             let tag_value = wire_variant_value(
                 &variant.name,
                 variant.serde_rename.as_deref(),
@@ -301,13 +354,14 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                 for sf in &synth_field_names {
                     all_fields_none.push(format!("{sf}: None"));
                 }
-                minijinja::context! {
+                Some(minijinja::context! {
                     name => variant.name.clone(),
                     tag_value => tag_value.to_string(),
                     is_empty => true,
                     is_tuple => false,
                     all_fields_none => all_fields_none,
-                }
+                    cfg => cfg,
+                })
             } else {
                 use crate::core::ir::TypeRef;
                 let is_tuple = crate::codegen::conversions::is_tuple_variant(&variant.fields);
@@ -404,19 +458,21 @@ pub(super) fn gen_tagged_enum_core_to_binding(
                     }
                 }
 
-                minijinja::context! {
+                Some(minijinja::context! {
                     name => variant.name.clone(),
                     tag_value => tag_value,
                     is_empty => false,
                     is_tuple => is_tuple,
                     destructured => destructured,
                     field_inits => field_inits,
-                }
+                    cfg => cfg,
+                })
             }
         })
         .collect::<Vec<_>>();
 
-    let has_excluded_variants = !enum_def.excluded_variants.is_empty();
+    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
+    let has_excluded_variants = !enum_def.excluded_variants.is_empty() || has_cfg_variants;
 
     crate::backends::napi::template_env::render(
         "gen_tagged_enum_core_to_binding.jinja",
@@ -428,4 +484,148 @@ pub(super) fn gen_tagged_enum_core_to_binding(
             has_excluded_variants => has_excluded_variants,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gen_tagged_enum_binding_to_core, gen_tagged_enum_core_to_binding};
+    use crate::core::ir::{EnumDef, EnumVariant};
+
+    fn unit_variant(name: &str, cfg: Option<&str>) -> EnumVariant {
+        EnumVariant {
+            name: name.to_string(),
+            cfg: cfg.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn tagged_enum(rust_path: &str, variants: Vec<EnumVariant>) -> EnumDef {
+        EnumDef {
+            name: "VisitorResult".to_string(),
+            rust_path: rust_path.to_string(),
+            variants,
+            serde_tag: Some("type".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// The regression this task fixes: `gen_tagged_enum_binding_to_core` and
+    /// `gen_tagged_enum_core_to_binding` referenced every variant unconditionally, regardless of
+    /// `EnumVariant::cfg` -- E0599 in a build excluding a gated variant's feature. A host-owned
+    /// cfg-gated variant must now keep its arm, gated with `#[cfg(...)]`, in both directions.
+    #[test]
+    fn host_owned_cfg_variant_keeps_its_arm_and_gate_in_both_directions() {
+        let en = tagged_enum(
+            "mylib::VisitorResult",
+            vec![
+                unit_variant("Continue", None),
+                unit_variant("Thumbnail", Some(r#"feature = "thumbnails""#)),
+            ],
+        );
+        let struct_names = ahash::AHashSet::new();
+
+        let binding_to_core = gen_tagged_enum_binding_to_core(&en, "mylib", "Js", &struct_names);
+        assert!(
+            binding_to_core.contains("Self::Thumbnail"),
+            "the host-owned variant's arm must still be emitted, got:\n{binding_to_core}"
+        );
+        assert_eq!(
+            binding_to_core.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            1,
+            "the host-owned variant's arm must carry its #[cfg] guard exactly once, got:\n{binding_to_core}"
+        );
+
+        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names);
+        assert!(
+            core_to_binding.contains("mylib::VisitorResult::Thumbnail"),
+            "the host-owned variant's arm must still be emitted, got:\n{core_to_binding}"
+        );
+        assert_eq!(
+            core_to_binding.matches("#[cfg(feature = \"thumbnails\")]").count(),
+            1,
+            "the host-owned variant's arm must carry its #[cfg] guard exactly once, got:\n{core_to_binding}"
+        );
+    }
+
+    /// A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's
+    /// own cfg gate. Forwarding it as `#[cfg(...)]` names a feature this NAPI crate never
+    /// declares -- an `unexpected cfg condition value` warning -- so the arm must be dropped
+    /// entirely instead, mirroring `codegen::conversions::enums::emit_cfg_gated_arm`.
+    #[test]
+    fn foreign_owned_cfg_variant_arm_is_dropped_not_gated_in_both_directions() {
+        let en = tagged_enum(
+            "dep_crate::VisitorResult",
+            vec![
+                unit_variant("Continue", None),
+                unit_variant("Testkit", Some(r#"feature = "testkit""#)),
+            ],
+        );
+        let struct_names = ahash::AHashSet::new();
+
+        let binding_to_core = gen_tagged_enum_binding_to_core(&en, "mylib", "Js", &struct_names);
+        assert!(
+            !binding_to_core.contains("#[cfg(feature = \"testkit\")]"),
+            "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{binding_to_core}"
+        );
+        assert!(
+            !binding_to_core.contains("Self::Testkit"),
+            "a foreign-crate cfg-gated variant must not be referenced, got:\n{binding_to_core}"
+        );
+
+        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names);
+        assert!(
+            !core_to_binding.contains("#[cfg(feature = \"testkit\")]"),
+            "no invalid #[cfg] naming an undeclared feature may be emitted, got:\n{core_to_binding}"
+        );
+        assert!(
+            !core_to_binding.contains("::Testkit"),
+            "a foreign-crate cfg-gated variant must not be referenced, got:\n{core_to_binding}"
+        );
+        assert!(
+            core_to_binding.contains("_ => Default::default()"),
+            "dropping the arm must still leave the match exhaustive via the catch-all, got:\n{core_to_binding}"
+        );
+    }
+
+    /// Negative control: an ungated enum emits no `#[cfg(...)]` at all.
+    #[test]
+    fn ungated_enum_emits_no_cfg_in_either_direction() {
+        let en = tagged_enum(
+            "mylib::VisitorResult",
+            vec![unit_variant("Continue", None), unit_variant("Skip", None)],
+        );
+        let struct_names = ahash::AHashSet::new();
+
+        let binding_to_core = gen_tagged_enum_binding_to_core(&en, "mylib", "Js", &struct_names);
+        assert!(
+            !binding_to_core.contains("#[cfg("),
+            "ungated enum must not emit #[cfg(...)], got:\n{binding_to_core}"
+        );
+
+        let core_to_binding = gen_tagged_enum_core_to_binding(&en, "mylib", "Js", &struct_names);
+        assert!(
+            !core_to_binding.contains("#[cfg("),
+            "ungated enum must not emit #[cfg(...)], got:\n{core_to_binding}"
+        );
+    }
+
+    /// A cfg-gated first variant must not be chosen as the unconditional `_ =>` default in
+    /// `gen_tagged_enum_binding_to_core` -- the fallback must skip to the next ungated variant.
+    #[test]
+    fn default_variant_skips_a_cfg_gated_first_variant() {
+        let en = tagged_enum(
+            "mylib::VisitorResult",
+            vec![
+                unit_variant("Thumbnail", Some(r#"feature = "thumbnails""#)),
+                unit_variant("Continue", None),
+            ],
+        );
+        let struct_names = ahash::AHashSet::new();
+
+        let binding_to_core = gen_tagged_enum_binding_to_core(&en, "mylib", "Js", &struct_names);
+        assert!(
+            binding_to_core.contains("_ => Self::Continue,"),
+            "the unconditional default must fall back to the ungated variant, got:\n{binding_to_core}"
+        );
+    }
 }

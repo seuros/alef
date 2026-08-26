@@ -2,6 +2,9 @@ impl From<{{ binding_name }}> for {{ core_path }} {
     fn from(val: {{ binding_name }}) -> Self {
         match val.{{ tag_field }}_tag.as_str() {
 {%- for variant in variants %}
+    {%- if variant.cfg %}
+            #[cfg({{ variant.cfg }})]
+    {%- endif %}
     {%- if variant.is_empty %}
             "{{ variant.tag_value }}" => Self::{{ variant.name }},
     {%- elif variant.is_tuple %}
