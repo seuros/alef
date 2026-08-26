@@ -1,8 +1,35 @@
 use crate::backends::rustler::template_env;
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::shared::binding_fields;
 use crate::codegen::type_mapper::TypeMapper;
-use crate::core::ir::{EnumDef, FieldDef, TypeDef, TypeRef};
+use crate::core::ir::{EnumDef, EnumVariant, FieldDef, TypeDef, TypeRef};
 use ahash::AHashSet;
+
+/// Whether `variant`'s `#[cfg(...)]` is safe to re-emit verbatim on its match arm.
+///
+/// A variant merged in from a foreign `[[crates.source_crates]]` crate carries that crate's own
+/// cfg gate; this Rustler crate never declares a Cargo feature for it (see
+/// `codegen::cfg::collect_cfg_gates`), so forwarding it verbatim as `#[cfg(feature = "...")]` is
+/// an `unexpected cfg condition value` error. Such a variant is dropped entirely instead --
+/// named and counted via `tracing::warn!`, not silently -- mirroring
+/// `codegen::conversions::enums::emit_cfg_gated_arm`. A host-owned cfg keeps its arm and its
+/// `#[cfg(...)]`: forwarding already declared that feature, so the gate is valid. ~keep
+fn rustler_flat_variant_kept(enum_def: &EnumDef, variant: &EnumVariant, is_host_enum: bool, direction: &str) -> bool {
+    if variant.cfg.is_none() || is_host_enum {
+        return true;
+    }
+    tracing::warn!(
+        enum_name = %enum_def.name,
+        enum_rust_path = %enum_def.rust_path,
+        variant_name = %variant.name,
+        cfg = variant.cfg.as_deref().unwrap_or_default(),
+        direction = direction,
+        "dropping Rustler flat-data-enum conversion match arm for a foreign-crate variant behind \
+         a #[cfg(...)] this crate cannot declare as a Cargo feature; the variant is unreachable \
+         from this conversion"
+    );
+    false
+}
 
 /// Generate a Rustler opaque resource wrapper for a type.
 pub(super) fn gen_opaque_resource(typ: &TypeDef, core_import: &str, _opaque_types: &AHashSet<String>) -> String {
@@ -283,6 +310,7 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let discriminator =
         crate::codegen::naming::internal_rust_identifier(super::helpers::flat_data_enum_discriminator(enum_def));
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -294,6 +322,9 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
     ));
 
     for variant in &enum_def.variants {
+        if !rustler_flat_variant_kept(enum_def, variant, is_host_enum, "from_core") {
+            continue;
+        }
         let field_name = crate::codegen::naming::pascal_to_snake(&variant.name);
         let wire_name = variant_wire_name(variant, enum_def);
 
@@ -305,6 +336,7 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
                     vname => &variant.name,
                     disc => discriminator,
                     wire => &wire_name,
+                    cfg => variant.cfg.clone(),
                 },
             ));
         } else if variant.is_tuple {
@@ -350,12 +382,14 @@ pub(super) fn gen_rustler_flat_data_enum_from_core(enum_def: &EnumDef, core_impo
                     fname => &field_name,
                     expr => &data_expr,
                     all_fields_specified => all_fields_specified,
+                    cfg => variant.cfg.clone(),
                 },
             ));
         }
     }
 
-    if !enum_def.excluded_variants.is_empty() {
+    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
+    if !enum_def.excluded_variants.is_empty() || has_cfg_variants {
         out.push_str("            #[allow(unreachable_patterns)]\n");
         out.push_str("            _ => Self::default(),\n");
     }
@@ -378,6 +412,7 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
     let core_path = crate::codegen::conversions::core_enum_path(enum_def, core_import);
     let discriminator =
         crate::codegen::naming::internal_rust_identifier(super::helpers::flat_data_enum_discriminator(enum_def));
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let mut out = String::with_capacity(512);
 
     out.push_str(&template_env::render(
@@ -390,6 +425,9 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
     ));
 
     for variant in &enum_def.variants {
+        if !rustler_flat_variant_kept(enum_def, variant, is_host_enum, "to_core") {
+            continue;
+        }
         let field_name = crate::codegen::naming::pascal_to_snake(&variant.name);
         let wire_name = variant_wire_name(variant, enum_def);
 
@@ -400,6 +438,7 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
                     wire => &wire_name,
                     core_path => &core_path,
                     variant_name => &variant.name,
+                    cfg => variant.cfg.clone(),
                 },
             ));
         } else if variant.is_tuple {
@@ -430,6 +469,7 @@ pub(super) fn gen_rustler_flat_data_enum_to_core(enum_def: &EnumDef, core_import
                     core_path => &core_path,
                     variant_name => &variant.name,
                     payload_expr => &payload_expr,
+                    cfg => variant.cfg.clone(),
                 },
             ));
         }
@@ -681,3 +721,5 @@ pub(super) fn gen_rustler_wrap_return(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod cfg_gate_tests;

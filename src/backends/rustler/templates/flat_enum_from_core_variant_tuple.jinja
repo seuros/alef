@@ -1,1 +1,2 @@
-            {{ core_path }}::{{ vname }}(_0) => Self { {{ disc }}: "{{ wire }}".to_string(), {{ fname }}: Some({{ expr }}){% if not all_fields_specified %}, ..Default::default(){% endif %} },
+{% if cfg %}            #[cfg({{ cfg }})]
+{% endif %}            {{ core_path }}::{{ vname }}(_0) => Self { {{ disc }}: "{{ wire }}".to_string(), {{ fname }}: Some({{ expr }}){% if not all_fields_specified %}, ..Default::default(){% endif %} },
