@@ -7,6 +7,8 @@ mod is_true_tests;
 mod json;
 #[cfg(test)]
 mod not_error_sibling_assertion_tests;
+#[cfg(test)]
+mod npmrc_marker_tests;
 pub(crate) mod test_file;
 mod visitors;
 #[cfg(test)]
@@ -136,7 +138,7 @@ impl E2eCodegen for TypeScriptCodegen {
         // (`cd e2e/<lang> && pnpm install`), so this scopes the override to e2e.
         files.push(GeneratedFile {
             path: output_base.join(".npmrc"),
-            content: "; alef-generated — frozen-lockfile is disabled because the under-test napi\n; package pins platform optionalDependencies to the unpublished release version.\nfrozen-lockfile=false\n".to_string(),
+            content: format!("; {}\n; frozen-lockfile is disabled: the under-test napi package pins platform optionalDependencies to the unpublished release version.\nfrozen-lockfile=false\n", crate::core::hash::STANDARD_HEADER_LINE),
             generated_header: false,
         });
 

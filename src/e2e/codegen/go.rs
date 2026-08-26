@@ -493,31 +493,37 @@ fn render_main_test_go(
     let mut out = String::new();
     let _ = writeln!(out, "package e2e_test");
     let _ = writeln!(out);
-    let _ = writeln!(out, "import (");
+    // Collect the needed stdlib import paths and sort them: gofmt orders a single
+    // (blank-line-free) import block alphabetically by path, and building the list by
+    // sequential conditional `writeln!` calls does not guarantee that order by
+    // construction — it previously emitted e.g. `testing` before `fmt`. Sorting explicitly
+    // here makes the block gofmt-canonical even when no formatter runs afterward. ~keep
+    let mut import_paths: Vec<&str> = vec!["os", "path/filepath", "runtime", "testing"];
     if needs_mock_server_bootstrap {
-        let _ = writeln!(out, "\t\"bufio\"");
-        let _ = writeln!(out, "\t\"encoding/json\"");
+        import_paths.push("bufio");
+        import_paths.push("encoding/json");
     }
-    let _ = writeln!(out, "\t\"os\"");
     // Only import os/exec if we need to spawn a process (mock-server or harness).
     if needs_mock_server_bootstrap || has_http_fixtures {
-        let _ = writeln!(out, "\t\"os/exec\"");
+        import_paths.push("os/exec");
     }
-    let _ = writeln!(out, "\t\"path/filepath\"");
-    let _ = writeln!(out, "\t\"runtime\"");
-    let _ = writeln!(out, "\t\"testing\"");
     if needs_mock_server_bootstrap {
-        let _ = writeln!(out, "\t\"fmt\"");
-        let _ = writeln!(out, "\t\"io\"");
-        let _ = writeln!(out, "\t\"net/http\"");
-        let _ = writeln!(out, "\t\"strings\"");
-        let _ = writeln!(out, "\t\"time\"");
+        import_paths.push("fmt");
+        import_paths.push("io");
+        import_paths.push("net/http");
+        import_paths.push("strings");
+        import_paths.push("time");
     } else if has_http_fixtures {
         // HTTP-fixture harness path: uses fmt, io, net.DialTimeout for readiness polling.
-        let _ = writeln!(out, "\t\"fmt\"");
-        let _ = writeln!(out, "\t\"io\"");
-        let _ = writeln!(out, "\t\"net\"");
-        let _ = writeln!(out, "\t\"time\"");
+        import_paths.push("fmt");
+        import_paths.push("io");
+        import_paths.push("net");
+        import_paths.push("time");
+    }
+    import_paths.sort_unstable();
+    let _ = writeln!(out, "import (");
+    for path in &import_paths {
+        let _ = writeln!(out, "\t\"{path}\"");
     }
     let _ = writeln!(out, ")");
     let _ = writeln!(out);
@@ -597,16 +603,20 @@ fn render_main_test_go(
         // and the mock-server (a C FFI process) reads the libc environment directly.
         for k in env.keys() {
             let _ = writeln!(out, "\tif v := os.Getenv(\"{k}\"); v != \"\" {{");
-            let _ = writeln!(out, "\t\tcmdEnv = append(cmdEnv, \"{k}=\" + v)");
+            let _ = writeln!(out, "\t\tcmdEnv = append(cmdEnv, \"{k}=\"+v)");
             let _ = writeln!(out, "\t}}");
         }
 
         let _ = writeln!(out, "\tcmdEnv = append(cmdEnv, \"MOCK_SERVER_NO_STDIN_WATCH=1\")");
         let _ = writeln!(out, "\tcmd.Env = cmdEnv");
         let _ = writeln!(out, "\tstdout, err := cmd.StdoutPipe()");
-        let _ = writeln!(out, "\tif err != nil {{ panic(err) }}");
+        let _ = writeln!(out, "\tif err != nil {{");
+        let _ = writeln!(out, "\t\tpanic(err)");
+        let _ = writeln!(out, "\t}}");
         let _ = writeln!(out, "\tcmd.Stderr = os.Stderr");
-        let _ = writeln!(out, "\tif err := cmd.Start(); err != nil {{ panic(err) }}");
+        let _ = writeln!(out, "\tif err := cmd.Start(); err != nil {{");
+        let _ = writeln!(out, "\t\tpanic(err)");
+        let _ = writeln!(out, "\t}}");
         let _ = writeln!(
             out,
             "\t// Defer cleanup to a helper to avoid 'exitAfterDefer' linter violation."
@@ -692,7 +702,10 @@ fn render_main_test_go(
             out,
             "\t// Drain remaining stdout asynchronously so the pipe doesn't fill."
         );
-        let _ = writeln!(out, "\tgo func() {{ for scanner.Scan() {{ }} }}()");
+        let _ = writeln!(out, "\tgo func() {{");
+        let _ = writeln!(out, "\t\tfor scanner.Scan() {{");
+        let _ = writeln!(out, "\t\t}}");
+        let _ = writeln!(out, "\t}}()");
         let _ = writeln!(out);
         let _ = writeln!(
             out,
@@ -939,3 +952,6 @@ mod go_mod_tests;
 #[cfg(test)]
 #[path = "go/tests/import_set_tests.rs"]
 mod import_set_tests;
+#[cfg(test)]
+#[path = "go/tests/main_test_go_gofmt_tests.rs"]
+mod main_test_go_gofmt_tests;

@@ -719,6 +719,33 @@ mod composer_json_tests {
             "install.sh must append to php.ini, got:\n{content}"
         );
     }
+
+    /// Regression for alef task #477: `render_install_sh`'s `GeneratedFile` uses
+    /// `generated_header: false`, so ownership tracking depends entirely on the rendered
+    /// content itself carrying a marker `hash::content_has_alef_marker` recognizes. A prior
+    /// version hand-spelled `"# alef-generated installer..."`, which that guard does not
+    /// match, permanently stranding `install.sh` as unowned/unadoptable. Asserts through the
+    /// real guard function rather than a hand-copied literal, so this fails if the two ever
+    /// disagree again.
+    #[test]
+    fn registry_install_sh_marker_is_recognised_by_the_real_ownership_guard() {
+        let content = render_install_sh("test/pkg", "my_ext", "1.0.0");
+        assert!(
+            crate::core::hash::content_has_alef_marker(&content),
+            "install.sh must carry a marker the real alef ownership guard recognises, got:\n{content}"
+        );
+    }
+
+    /// Negative control for the test above: content with no ownership marker at all must
+    /// still be reported unowned, proving the guard is not vacuously true.
+    #[test]
+    fn content_with_no_marker_is_not_recognised_by_the_ownership_guard() {
+        let content = "#!/usr/bin/env bash\n# just a plain hand-written script\nset -euo pipefail\necho hi\n";
+        assert!(
+            !crate::core::hash::content_has_alef_marker(content),
+            "content with no alef marker must not be recognised as alef-owned, got:\n{content}"
+        );
+    }
 }
 
 #[cfg(test)]

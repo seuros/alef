@@ -16,6 +16,8 @@ pub mod identifiers;
 pub mod imports;
 pub mod lookups;
 pub mod naming;
+#[cfg(test)]
+mod package_dir_trailing_slash_tests;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

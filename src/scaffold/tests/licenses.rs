@@ -152,3 +152,64 @@ fn test_scaffold_license_files_deduplicates_same_package_dir() {
         "Dart LICENSE must live in packages/dart/"
     );
 }
+
+/// Regression for alef task #477: `PathBuf::from(format!("{pkg_dir}/LICENSE"))` produced a
+/// double-slash path (`packages/python-custom//LICENSE`) whenever a configured package
+/// directory already ended in `/`, which `alef adopt` could never match against the real
+/// on-disk file, permanently stranding it as unadoptable. `scaffold_license_files` must join
+/// with `Path::join` (or otherwise normalise) so a trailing-slash `pkg_dir` produces the same
+/// path as the equivalent directory without one.
+#[test]
+fn test_scaffold_license_files_normalises_trailing_slash_in_package_dir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+    std::fs::write(workspace_root.join("LICENSE"), "MIT License\n").expect("write LICENSE");
+
+    let mut config = test_config_from_toml(
+        r#"
+[crates.python]
+scaffold_output = "packages/python-custom/"
+"#,
+    );
+    config.workspace_root = Some(workspace_root);
+    let api = test_api();
+
+    let all_files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let license_files: Vec<_> = all_files.iter().filter(|f| f.path.ends_with("LICENSE")).collect();
+
+    assert_eq!(
+        license_files.len(),
+        1,
+        "should emit exactly one LICENSE for the configured package dir"
+    );
+    assert_eq!(
+        license_files[0].path,
+        PathBuf::from("packages/python-custom/LICENSE"),
+        "a trailing slash on the configured package dir must not produce a double-slash path; got: {:?}",
+        license_files[0].path
+    );
+}
+
+/// Negative control for the test above: a package dir with no trailing slash must produce
+/// the same single-slash path, proving the normalisation isn't needed to pass the control case.
+#[test]
+fn test_scaffold_license_files_normal_package_dir_is_unchanged() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let workspace_root = dir.path().to_path_buf();
+    std::fs::write(workspace_root.join("LICENSE"), "MIT License\n").expect("write LICENSE");
+
+    let mut config = test_config_from_toml(
+        r#"
+[crates.python]
+scaffold_output = "packages/python-custom"
+"#,
+    );
+    config.workspace_root = Some(workspace_root);
+    let api = test_api();
+
+    let all_files = scaffold(&api, &config, &[Language::Python]).unwrap();
+    let license_files: Vec<_> = all_files.iter().filter(|f| f.path.ends_with("LICENSE")).collect();
+
+    assert_eq!(license_files.len(), 1);
+    assert_eq!(license_files[0].path, PathBuf::from("packages/python-custom/LICENSE"));
+}

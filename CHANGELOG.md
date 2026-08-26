@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Ownership markers alef itself refused to recognise.** The PHP `install.sh`, R `install.R`, and
+  Node/napi e2e `.npmrc` emitters hand-spelled an `alef-generated` marker string that alef's own
+  `content_has_alef_marker` guard does not match. All three are `generated_header: false`, so the
+  hand-written text was the *only* ownership signal — these files were permanently stranded as
+  unowned. They now source their marker from `hash::header`/`hash::STANDARD_HEADER_LINE`, and each
+  has a test asserting through the real guard rather than a copied literal.
+
+- **`package_dir` no longer leaks a trailing slash into every path built from it.**
+  `ResolvedCrateConfig::package_dir` returned a user's configured `[crates.output]`/`scaffold_output`
+  string verbatim, so a trailing `/` produced double-slash paths that `alef adopt` could never match
+  against the real on-disk file. Fixed at the source, which protects the ~35 `format!("{pkg_dir}/…")`
+  call sites across `scaffold/languages/` and `publish/`; `scaffold_license_files` also now builds its
+  `LICENSE` path with `Path::join`.
+
 - **Trait-bridge test stubs now satisfy the interfaces they claim to implement, in four
   backends.** Four independent causes, each a generator re-deriving or hardcoding a fact another
   part of the pipeline already had:

@@ -133,10 +133,15 @@ pub(super) fn strip_version_constraint(version: &str) -> &str {
 
 pub(super) fn render_install_sh(pkg_name: &str, extension_name: &str, pkg_version: &str) -> String {
     let clean_version = strip_version_constraint(pkg_version);
+    // `generated_header: false` on this GeneratedFile (see php.rs) means ownership tracking
+    // relies entirely on `hash::content_has_alef_marker` recognizing text embedded in the
+    // rendered content itself -- so the marker line must come from the shared authority
+    // (`hash::header`) rather than a hand-spelled "alef-generated" line that guard doesn't
+    // recognize, which would strand the file unowned forever. ~keep
+    let header = hash::header(CommentStyle::Hash);
     format!(
         r#"#!/usr/bin/env bash
-# alef-generated installer for registry-mode PHP test_app.
-# Installs the {pkg_name} extension via PIE before `composer install` runs.
+{header}# Installs the {pkg_name} extension via PIE before `composer install` runs.
 # Requires `php` on PATH; downloads and runs PIE if needed.
 # Version is alef-injected at generate time so the script is self-contained.
 set -euo pipefail

@@ -163,7 +163,12 @@ pub(super) fn render_test_runner(
 pub(super) fn render_install_r(pkg_name: &str, pkg_version: &str, github_repo: &str) -> String {
     let github_repo = github_repo.trim_end_matches('/');
     let mut out = String::new();
-    let _ = writeln!(out, "# alef-generated installer for registry-mode R test_app.");
+    // `generated_header: false` on this GeneratedFile (see r.rs) means ownership tracking
+    // relies entirely on `hash::content_has_alef_marker` recognizing text embedded in the
+    // rendered content itself -- so the marker must come from the shared authority
+    // (`hash::header`) rather than a hand-spelled "alef-generated" line that guard doesn't
+    // recognize, which would strand the file unowned forever. ~keep
+    out.push_str(&hash::header(CommentStyle::Hash));
     let _ = writeln!(out, "# Installs the configured R package from GitHub releases.");
     let _ = writeln!(out, "# Requires `R` on PATH.");
     let _ = writeln!(out);
@@ -316,6 +321,33 @@ mod install_r_tests {
         assert!(
             success > trycatch_end,
             "success message must come after the tryCatch block closes, got: {out}"
+        );
+    }
+
+    /// Regression for alef task #477: `render_install_r`'s `GeneratedFile` uses
+    /// `generated_header: false`, so ownership tracking depends entirely on the rendered
+    /// content itself carrying a marker `hash::content_has_alef_marker` recognizes. A prior
+    /// version hand-spelled `"# alef-generated installer..."`, which that guard does not
+    /// match, permanently stranding `install.R` as unowned/unadoptable. Asserts through the
+    /// real guard function rather than a hand-copied literal, so this fails if the two ever
+    /// disagree again.
+    #[test]
+    fn install_r_marker_is_recognised_by_the_real_ownership_guard() {
+        let out = render_install_r("mypkg", "1.2.3", "https://github.com/org/repo");
+        assert!(
+            crate::core::hash::content_has_alef_marker(&out),
+            "install.R must carry a marker the real alef ownership guard recognises, got: {out}"
+        );
+    }
+
+    /// Negative control for the test above: content with no ownership marker at all must
+    /// still be reported unowned, proving the guard is not vacuously true.
+    #[test]
+    fn content_with_no_marker_is_not_recognised_by_the_ownership_guard() {
+        let content = "# just a plain hand-written R script\ninstall.packages(\"mypkg\")\n";
+        assert!(
+            !crate::core::hash::content_has_alef_marker(content),
+            "content with no alef marker must not be recognised as alef-owned, got: {content}"
         );
     }
 }

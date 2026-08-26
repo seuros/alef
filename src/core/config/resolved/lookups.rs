@@ -28,7 +28,17 @@ impl ResolvedCrateConfig {
     /// Uses resolved output_paths (from [crates.output] config) if available,
     /// otherwise falls back to scaffold_output overrides and hardcoded defaults.
     /// For Node and Wasm, checks `crate_dir` override before the default formula.
+    ///
+    /// Trailing slashes are stripped from the result (alef task #477): most downstream call
+    /// sites join with `format!("{pkg_dir}/child")`, not the trailing-slash-safe `Path::join`,
+    /// so an un-normalised `pkg_dir` produces a double-slash path (`packages/csharp/src//LICENSE`)
+    /// that `alef adopt` can never match against the real on-disk file. See
+    /// `package_dir_trailing_slash_tests`. ~keep
     pub fn package_dir(&self, lang: Language) -> String {
+        self.package_dir_raw(lang).trim_end_matches('/').to_string()
+    }
+
+    fn package_dir_raw(&self, lang: Language) -> String {
         if !matches!(
             lang,
             Language::Python
@@ -614,6 +624,9 @@ tokio = "1"
         assert_eq!(r.package_dir(Language::Kotlin), "packages/kotlin");
         assert_eq!(r.package_dir(Language::KotlinAndroid), "packages/kotlin-android");
     }
+
+    // Trailing-slash normalisation regression coverage for `package_dir` (alef task #477)
+    // lives in `package_dir_trailing_slash_tests`, split out to stay under the 1,000-line cap.
 
     #[test]
     fn package_dir_go_with_module_major() {

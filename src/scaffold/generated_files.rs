@@ -41,7 +41,11 @@ pub(crate) fn scaffold_license_files(config: &ResolvedCrateConfig, languages: &[
         let pkg_dir = config.package_dir(lang);
         if seen.insert(pkg_dir.clone()) {
             files.push(GeneratedFile {
-                path: std::path::PathBuf::from(format!("{pkg_dir}/LICENSE")),
+                // `Path::join` instead of `format!("{pkg_dir}/LICENSE")`: when `pkg_dir` already
+                // ends in `/`, string concatenation produces a double-slash path
+                // (`crates/<pkg>/src//LICENSE`) that no longer matches the on-disk path `alef
+                // adopt` resolves against, permanently stranding the file as unadoptable. ~keep
+                path: std::path::Path::new(&pkg_dir).join("LICENSE"),
                 content: license_content.clone(),
                 generated_header: false,
             });

@@ -27,6 +27,15 @@ pub(super) fn strip_trailing_whitespace(content: &str) -> String {
     result
 }
 
+/// Sort key for a rendered Go import line (`"path"` or `alias "path"`): the text between the
+/// first pair of double quotes, matching gofmt's own import-sort rule of ordering by import
+/// path and ignoring any alias prefix. Falls back to the whole line for a malformed line (no
+/// quotes) so a bad input degrades to a stable, if unhelpful, sort rather than panicking.
+pub(super) fn go_import_sort_key(line: &str) -> &str {
+    let after_open = line.find('"').map(|i| &line[i + 1..]).unwrap_or(line);
+    after_open.find('"').map(|i| &after_open[..i]).unwrap_or(after_open)
+}
+
 fn body_uses_qualified_name(body: &str, qualified_name: &str) -> bool {
     body.lines().any(|line| {
         line.split("//")
@@ -558,7 +567,7 @@ pub(super) fn gen_go_file(
 
     let mut imports = vec!["fmt"];
     if needs_json {
-        imports.insert(0, "encoding/json");
+        imports.push("encoding/json");
     }
     if body_uses_qualified_name(&body, "runtime.") {
         imports.push("runtime");
@@ -567,7 +576,7 @@ pub(super) fn gen_go_file(
         imports.push("unsafe");
     }
     if !api.errors.is_empty() {
-        imports.insert(1.min(imports.len()), "errors");
+        imports.push("errors");
     }
     let capsule_emitted = go_capsule_types.values().any(|c| !c.package.is_empty())
         && api
@@ -597,6 +606,12 @@ pub(super) fn gen_go_file(
             import_lines.push(line);
         }
     }
+    // gofmt sorts a single (non-blank-line-separated) import block alphabetically by
+    // import PATH, ignoring any alias prefix a line carries. Building `import_lines` by
+    // successive conditional pushes does not guarantee that order (e.g. `errors` landing
+    // after `fmt` when `encoding/json` is absent), so sort explicitly rather than relying
+    // on push order to already be canonical. ~keep
+    import_lines.sort_by(|a, b| go_import_sort_key(a).cmp(go_import_sort_key(b)));
     let imports_str = crate::backends::go::template_env::render(
         "imports_basic.jinja",
         minijinja::context! {
@@ -610,4 +625,76 @@ pub(super) fn gen_go_file(
     out.push_str(&body);
 
     Ok(out)
+}
+
+#[cfg(test)]
+mod import_order_tests {
+    use super::go_import_sort_key;
+
+    #[test]
+    fn sort_key_extracts_path_ignoring_alias() {
+        assert_eq!(go_import_sort_key("\"errors\""), "errors");
+        assert_eq!(go_import_sort_key("alias \"zzz/aaa\""), "zzz/aaa");
+    }
+
+    /// Reproduces the concrete drift this fix closes: a crate with declared errors but no
+    /// sync functions or non-static methods (`needs_json == false`) used to render
+    /// `["fmt", "errors"]` verbatim (`imports.insert(1.min(imports.len()), "errors")` pushed
+    /// `errors` onto the end of a single-element list). `gofmt` reorders that to
+    /// `["errors", "fmt"]`, which is exactly the byte-level drift a consumer's own `gofmt -w`
+    /// hook would introduce after generation, permanently stranding the file. Confirmed
+    /// against a real `gofmt` invocation in the scratch verification for this change; this
+    /// test pins the sort key alef now applies at generation time so no formatter has to run
+    /// after the fact for this class of drift. ~keep
+    #[test]
+    fn import_lines_sort_matches_gofmt_path_order() {
+        let mut import_lines: Vec<String> = vec!["\"fmt\"".to_string(), "\"errors\"".to_string()];
+        import_lines.sort_by(|a, b| go_import_sort_key(a).cmp(go_import_sort_key(b)));
+        assert_eq!(import_lines, vec!["\"errors\"".to_string(), "\"fmt\"".to_string()]);
+    }
+
+    /// Negative control: an already-canonical import list must not be reordered.
+    #[test]
+    fn import_lines_sort_is_a_no_op_when_already_canonical() {
+        let mut import_lines: Vec<String> =
+            vec!["\"encoding/json\"".to_string(), "\"errors\"".to_string(), "\"fmt\"".to_string()];
+        let before = import_lines.clone();
+        import_lines.sort_by(|a, b| go_import_sort_key(a).cmp(go_import_sort_key(b)));
+        assert_eq!(import_lines, before);
+    }
+
+    /// Renders the actual `imports_basic.jinja` template for the fixed drift case and, when
+    /// `gofmt` is on `PATH`, asserts the rendered file is byte-identical to `gofmt`'s own
+    /// output — the same self-skipping shape as `e2e::codegen::go::snippet`'s
+    /// `snippet_matches_gofmt_when_available`. Skips (rather than failing) when `gofmt` is
+    /// unavailable, so this test still runs the structural sort-key assertions above on every
+    /// machine and only exercises the real formatter where it can. ~keep
+    #[test]
+    fn rendered_import_block_matches_gofmt_when_available() {
+        use std::io::Write as _;
+
+        let import_lines = vec!["\"errors\"".to_string(), "\"fmt\"".to_string()];
+        let rendered = crate::backends::go::template_env::render(
+            "imports_basic.jinja",
+            minijinja::context! { imports => import_lines },
+        );
+        let code = format!("package pkg\n\n{rendered}\nvar _ = fmt.Sprintf\nvar _ = errors.New\n");
+
+        let Ok(mut child) = std::process::Command::new("gofmt")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
+            return;
+        };
+        child
+            .stdin
+            .take()
+            .expect("gofmt stdin")
+            .write_all(code.as_bytes())
+            .expect("write Go source");
+        let output = child.wait_with_output().expect("wait for gofmt");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert_eq!(String::from_utf8(output.stdout).expect("gofmt output is UTF-8"), code);
+    }
 }

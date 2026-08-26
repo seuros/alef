@@ -24,7 +24,6 @@
       {:noreply, registrations}
     end
 
-
     defp decode_args_and_dispatch(method, args, registrations) do
       # Find handler entry for the method
       case find_handler(method, registrations) do
