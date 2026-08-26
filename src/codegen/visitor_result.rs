@@ -368,7 +368,10 @@ mod tests {
     fn ungated_enum_keeps_every_variant_with_no_cfg() {
         let en = ir_enum(
             "mylib::VisitorResult",
-            vec![ir_variant_ex("Continue", None, false, true), ir_variant("Skip", None, false)],
+            vec![
+                ir_variant_ex("Continue", None, false, true),
+                ir_variant("Skip", None, false),
+            ],
         );
         let metadata = visitor_result_metadata_from_enum_checked(&en, "MyTrait", "mylib").expect("valid metadata");
 

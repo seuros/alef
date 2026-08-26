@@ -807,6 +807,9 @@ mod tests {
         let mut out = String::new();
         emit_from_json_fn(&mut out, &ty, "mylib");
 
-        assert!(!out.contains("#[cfg("), "ungated type must not emit #[cfg(...)], got:\n{out}");
+        assert!(
+            !out.contains("#[cfg("),
+            "ungated type must not emit #[cfg(...)], got:\n{out}"
+        );
     }
 }

@@ -251,37 +251,37 @@ pub(super) fn gen_tagged_enum_binding_to_core(
         .find(|v| v.cfg.is_none())
         .or_else(|| enum_def.variants.first())
         .map(|first| {
-        let is_tuple = crate::codegen::conversions::is_tuple_variant(&first.fields);
-        let is_empty = first.fields.is_empty();
+            let is_tuple = crate::codegen::conversions::is_tuple_variant(&first.fields);
+            let is_empty = first.fields.is_empty();
 
-        if is_empty {
-            minijinja::context! {
-                name => first.name.clone(),
-                is_empty => true,
-                is_tuple => false,
+            if is_empty {
+                minijinja::context! {
+                    name => first.name.clone(),
+                    is_empty => true,
+                    is_tuple => false,
+                }
+            } else if is_tuple {
+                let defaults: Vec<&str> = first.fields.iter().map(|_| "Default::default()").collect();
+                minijinja::context! {
+                    name => first.name.clone(),
+                    is_empty => false,
+                    is_tuple => true,
+                    defaults => defaults,
+                }
+            } else {
+                let default_fields: Vec<String> = first
+                    .fields
+                    .iter()
+                    .map(|f| format!("{}: Default::default()", f.name))
+                    .collect();
+                minijinja::context! {
+                    name => first.name.clone(),
+                    is_empty => false,
+                    is_tuple => false,
+                    default_fields => default_fields,
+                }
             }
-        } else if is_tuple {
-            let defaults: Vec<&str> = first.fields.iter().map(|_| "Default::default()").collect();
-            minijinja::context! {
-                name => first.name.clone(),
-                is_empty => false,
-                is_tuple => true,
-                defaults => defaults,
-            }
-        } else {
-            let default_fields: Vec<String> = first
-                .fields
-                .iter()
-                .map(|f| format!("{}: Default::default()", f.name))
-                .collect();
-            minijinja::context! {
-                name => first.name.clone(),
-                is_empty => false,
-                is_tuple => false,
-                default_fields => default_fields,
-            }
-        }
-    });
+        });
 
     crate::backends::napi::template_env::render(
         "gen_tagged_enum_binding_to_core.jinja",

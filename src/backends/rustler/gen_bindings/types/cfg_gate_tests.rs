@@ -110,5 +110,8 @@ fn ungated_enum_emits_no_cfg_in_either_direction() {
     );
 
     let to_core = gen_rustler_flat_data_enum_to_core(&en, "mylib");
-    assert!(!to_core.contains("#[cfg("), "ungated enum must not emit #[cfg(...)], got:\n{to_core}");
+    assert!(
+        !to_core.contains("#[cfg("),
+        "ungated enum must not emit #[cfg(...)], got:\n{to_core}"
+    );
 }

@@ -186,5 +186,8 @@ fn ungated_struct_variant_factory_emits_no_cfg() {
         generated.contains("_factory_thumbnail"),
         "the ungated variant's factory must be emitted, got:\n{generated}"
     );
-    assert!(!generated.contains("#[cfg("), "ungated variant must not emit #[cfg(...)], got:\n{generated}");
+    assert!(
+        !generated.contains("#[cfg("),
+        "ungated variant must not emit #[cfg(...)], got:\n{generated}"
+    );
 }

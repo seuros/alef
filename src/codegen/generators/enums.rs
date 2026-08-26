@@ -703,6 +703,6 @@ pub(crate) fn write_pyo3_serde_tag_getter(out: &mut String, tag_field: &str) {
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod cfg_gate_tests;
+#[cfg(test)]
+mod tests;

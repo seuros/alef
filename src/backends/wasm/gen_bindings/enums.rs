@@ -787,6 +787,6 @@ pub(super) fn gen_enum(enum_def: &EnumDef, prefix: &str) -> String {
     lines.join("\n")
 }
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod cfg_gate_tests;
+#[cfg(test)]
+mod tests;

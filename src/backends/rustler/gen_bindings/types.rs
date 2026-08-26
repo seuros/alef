@@ -720,6 +720,6 @@ pub(super) fn gen_rustler_wrap_return(
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod cfg_gate_tests;
+#[cfg(test)]
+mod tests;
