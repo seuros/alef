@@ -10,12 +10,21 @@
 //! regenerated it this run. [`verify`] is the gate `run_post_build` calls between those two:
 //! a stale bridge now aborts the post-build sequence for this language instead of receiving
 //! alef's patches on top of missing functions.
+//!
+//! [`verify`] also resolves the enabled-feature set flutter_rust_bridge's own codegen macro
+//! expansion would have used -- the Rust crate's own `[features] default = [...]`, read from
+//! `facade_file`'s sibling `Cargo.toml` (`facade_file` is always `<rust crate dir>/src/lib.rs`) --
+//! and passes it through so [`crate::backends::dart::missing_bridge_functions`] never reports a
+//! `#[cfg(...)]`-gated facade function frb correctly never saw, alongside every function it
+//! genuinely dropped.
 
 use anyhow::Context as _;
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Read `facade_file` and `bridge_file` and return an error naming every facade free function
-/// (outside `exclude_functions`) that has no matching function in the bridge.
+/// (outside `exclude_functions`, and reachable given the sibling manifest's default features)
+/// that has no matching function in the bridge.
 ///
 /// A no-op when either file does not exist yet — mirrors every other `PostBuildStep` handler in
 /// `run_post_build`, which treats "nothing to check yet" as fine rather than an error (a
@@ -35,16 +44,38 @@ pub(super) fn verify(facade_file: &Path, bridge_file: &Path, exclude_functions: 
     let bridge_source = std::fs::read_to_string(bridge_file)
         .with_context(|| format!("failed to read FRB bridge {}", bridge_file.display()))?;
 
-    let missing = crate::backends::dart::missing_bridge_functions(&facade_source, &bridge_source, exclude_functions);
+    // `facade_file` is always `<rust crate dir>/src/lib.rs` (see
+    // `backends::dart::gen_bindings::frb_rust_facade_paths`), so its manifest is two directories
+    // up. A missing/unparseable manifest resolves to `None`, and `missing_bridge_functions`
+    // degrades to the pre-cfg-awareness blanket check rather than exempting every gated function
+    // from coverage.
+    let manifest_path = facade_file.parent().and_then(Path::parent).map(|dir| dir.join("Cargo.toml"));
+    let enabled_features = manifest_path
+        .as_deref()
+        .and_then(crate::codegen::cfg::read_default_enabled_cargo_features);
+    let enabled_features_refs: Option<HashSet<&str>> =
+        enabled_features.as_ref().map(|set| set.iter().map(String::as_str).collect());
+
+    let missing = crate::backends::dart::missing_bridge_functions(
+        &facade_source,
+        &bridge_source,
+        exclude_functions,
+        enabled_features_refs.as_ref(),
+    );
     if missing.is_empty() {
         return Ok(());
     }
 
     anyhow::bail!(
-        "flutter_rust_bridge bridge {} is missing {} function(s) declared in facade {}: {}. \
-         flutter_rust_bridge_codegen did not (re)generate this bridge against the current facade \
-         -- install/enable `flutter_rust_bridge_codegen` (or update the committed bridge source) \
-         and rerun, since alef's post-build patches must not be applied to a stale bridge.",
+        "flutter_rust_bridge bridge {} has {} facade function(s) from {} with no matching entry: \
+         {}. Each is reachable per this crate's manifest (ungated, or its `#[cfg(feature = ...)]` \
+         is in the manifest's default features), so the gap has one of several possible causes: \
+         flutter_rust_bridge_codegen did not (re)generate this bridge against the current facade; \
+         the manifest's default feature set does not actually match what the codegen run used; or \
+         the function's gate depends on a non-feature predicate (target_os, ...) this check cannot \
+         evaluate and treats as reachable. Determine which applies, then either rerun \
+         flutter_rust_bridge_codegen or update the committed bridge source -- alef's post-build \
+         patches must not be applied to a stale bridge.",
         bridge_file.display(),
         missing.len(),
         facade_file.display(),
@@ -119,6 +150,79 @@ mod tests {
         std::fs::write(&facade, FACADE_ONE_FUNCTION).unwrap();
 
         assert!(verify(&facade, &bridge, &[]).is_ok());
+    }
+
+    /// The real `alef all` failure this fix closes: a facade function gated behind a feature the
+    /// sibling `Cargo.toml` does not enable by default must not be reported missing, because
+    /// flutter_rust_bridge's own codegen macro expansion never saw it either. Uses the real
+    /// `<rust crate dir>/src/lib.rs` + `<rust crate dir>/Cargo.toml` layout `verify` resolves the
+    /// manifest from, not the flat `dir.path()` layout the other tests in this module use for
+    /// their cfg-blind fixtures.
+    #[test]
+    fn verify_ignores_a_facade_function_behind_an_inactive_cfg_gate() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let rust_dir = dir.path().join("rust");
+        std::fs::create_dir_all(rust_dir.join("src")).unwrap();
+        let facade = rust_dir.join("src/lib.rs");
+        let bridge = dir.path().join("lib.dart");
+        std::fs::write(
+            &facade,
+            "#[cfg(feature = \"premium-tier\")]\n\
+             pub fn create_premium_backend_options_from_json(json: String) -> Result<String, String> {\n    Ok(json)\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            rust_dir.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n\n\
+             [features]\ndefault = []\npremium-tier = [\"sample-core/premium-tier\"]\n",
+        )
+        .unwrap();
+        // The bridge has nothing for this function -- exactly what a correct frb run produces
+        // when the gating feature is off.
+        std::fs::write(&bridge, "").unwrap();
+
+        assert!(
+            verify(&facade, &bridge, &[]).is_ok(),
+            "a facade function behind a feature the manifest does not enable by default must not \
+             fail the coverage check"
+        );
+    }
+
+    /// Negative control for the test above: a facade function whose gate IS in the manifest's
+    /// default features, but that is genuinely absent from the bridge, must still fail the check.
+    /// Without this control, a fix that stopped evaluating cfg gates at all (treating every gated
+    /// function as inactive) would pass the positive test above while quietly breaking the
+    /// coverage check's entire purpose.
+    #[test]
+    fn verify_still_fails_when_a_facade_function_under_an_active_gate_is_missing() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let rust_dir = dir.path().join("rust");
+        std::fs::create_dir_all(rust_dir.join("src")).unwrap();
+        let facade = rust_dir.join("src/lib.rs");
+        let bridge = dir.path().join("lib.dart");
+        std::fs::write(
+            &facade,
+            "#[cfg(feature = \"premium-tier\")]\n\
+             pub fn create_premium_backend_options_from_json(json: String) -> Result<String, String> {\n    Ok(json)\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            rust_dir.join("Cargo.toml"),
+            "[package]\nname = \"sample\"\nversion = \"0.1.0\"\n\n\
+             [features]\ndefault = [\"premium-tier\"]\npremium-tier = [\"sample-core/premium-tier\"]\n",
+        )
+        .unwrap();
+        // The bridge is stale: the gate IS active by default, so frb should have bridged this
+        // function, and did not.
+        std::fs::write(&bridge, "").unwrap();
+
+        let error =
+            verify(&facade, &bridge, &[]).expect_err("a missing function under an active gate must still fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("create_premium_backend_options_from_json"),
+            "error must name the missing function: {message}"
+        );
     }
 
     /// End-to-end proof that `run_post_build` itself refuses to patch a stale bridge: when the
