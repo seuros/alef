@@ -88,6 +88,7 @@ pub enum AdoptionState {
 /// One alef-managed output path, paired with the exact bytes the writer would put
 /// there. Produced by [`managed_outputs`] so the diff a human reads is the writer's
 /// real output, not an approximation of it.
+#[derive(Debug)]
 pub struct ManagedOutput {
     pub relative: PathBuf,
     pub content: String,
