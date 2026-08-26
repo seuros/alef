@@ -673,7 +673,7 @@ impl Backend for ExtendrBackend {
 
         let mut emitted_send_robj_helper = false;
         for bridge_cfg in &config.trait_bridges {
-            if bridge_cfg.exclude_languages.iter().any(|l| l == "r" || l == "extendr") {
+            if !bridge_targets_extendr(bridge_cfg) {
                 continue;
             }
             if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
@@ -781,7 +781,7 @@ impl Backend for ExtendrBackend {
 
     fn trait_bridge_registration_surface(
         &self,
-        _api: &ApiSurface,
+        api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> Vec<TraitBridgeRegistrationSurface> {
         extendr_registration_surface(config)

@@ -553,6 +553,34 @@ fn extendr_reports_no_register_symbol_without_a_registry_getter() {
 }
 
 #[test]
+fn extendr_module_macro_and_surface_agree_about_the_register_function() {
+    // `extendr_module!` naming a `fn` no `#[extendr]` item defines is a Rust compile error, so
+    // the macro entry and the reported symbol have to appear and disappear together. ~keep
+    let getter = "sample_core::plugins::registry::get_sample_plugin_registry";
+    for (registry_getter, expected) in [(Some(getter.to_owned()), Some(REGISTER_FN)), (None, None)] {
+        let mut config = minimal_config("r", "");
+        config.trait_bridges[0].registry_getter = registry_getter.clone();
+
+        let surface = only_surface(&ExtendrBackend, &config);
+        let generated = generated_text(&ExtendrBackend, &config);
+
+        assert_eq!(surface.register_symbol.as_deref(), expected);
+        assert_eq!(
+            generated.contains(&format!("    fn {REGISTER_FN};")),
+            expected.is_some(),
+            "the `extendr_module!` entry must track the reported surface \
+             (registry_getter = {registry_getter:?})"
+        );
+        assert_eq!(
+            generated.contains(&format!("pub fn {REGISTER_FN}(")),
+            expected.is_some(),
+            "the `#[extendr]` item must track the reported surface \
+             (registry_getter = {registry_getter:?})"
+        );
+    }
+}
+
+#[test]
 fn extendr_reports_nothing_when_the_bridge_excludes_either_spelling_of_the_target() {
     for excluded in ["r", "extendr"] {
         let mut config = minimal_config("r", "");
