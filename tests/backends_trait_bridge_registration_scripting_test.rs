@@ -221,6 +221,32 @@ fn napi_reports_no_register_symbol_without_a_registry_getter() {
 }
 
 #[test]
+fn napi_emits_no_bridge_and_reports_no_surface_when_the_target_is_excluded() {
+    for excluded in ["node", "napi"] {
+        let mut config = minimal_config("node", "");
+        config.trait_bridges[0].exclude_languages = vec![excluded.to_owned()];
+
+        let surfaces = NapiBackend.trait_bridge_registration_surface(&plugin_api(), &config);
+        let generated = generated_text(&NapiBackend, &config);
+
+        assert_eq!(
+            surfaces.len(),
+            0,
+            "`exclude_languages = [\"{excluded}\"]` suppresses the `#[napi]` items, so nothing is \
+             left to document; got {surfaces:?}"
+        );
+        assert!(
+            !generated.contains(REGISTER_FN),
+            "`exclude_languages = [\"{excluded}\"]` must suppress the registration item too"
+        );
+        assert!(
+            !generated.contains("JsSamplePluginBridge"),
+            "`exclude_languages = [\"{excluded}\"]` must suppress the bridge wrapper struct"
+        );
+    }
+}
+
+#[test]
 fn wasm_surface_names_the_js_names_stamped_on_the_wasm_bindgen_exports() {
     let config = minimal_config("wasm", "");
     let surface = only_surface(&WasmBackend, &config);

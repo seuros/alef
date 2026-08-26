@@ -24,6 +24,28 @@ pub use typescript_bridge::gen_typescript_trait_bridge_files;
 /// Returns `None` when no bridge applies.
 pub use crate::codegen::generators::trait_bridge::find_bridge_param;
 
+/// The `exclude_languages` spellings that name this target: the language (`"node"`) and the
+/// backend (`"napi"`). Both are honoured so a consumer who names either one gets the same
+/// answer from every site that asks. ~keep
+pub const TARGET_SPELLINGS: [&str; 2] = ["node", "napi"];
+
+/// Whether `bridge` is emitted for the NAPI target at all.
+///
+/// Every NAPI site that decides whether a bridge exists — the `#[napi]` items, the options-field
+/// wiring, and `NapiBackend::trait_bridge_registration_surface` — asks this, so they cannot
+/// disagree and leave one pass referring to a struct another pass never wrote. ~keep
+pub fn targets_napi(bridge: &TraitBridgeConfig) -> bool {
+    crate::codegen::generators::trait_bridge::bridge_targets_language(bridge, &TARGET_SPELLINGS)
+}
+
+/// The trait a bridge wraps, when NAPI emits that bridge at all.
+pub fn active_bridge_trait<'a>(
+    bridge: &TraitBridgeConfig,
+    api: &'a crate::core::ir::ApiSurface,
+) -> Option<&'a crate::core::ir::TypeDef> {
+    crate::codegen::generators::trait_bridge::active_bridge_trait_def(bridge, api, &TARGET_SPELLINGS)
+}
+
 /// Find a bridge config that uses options_field binding and a parameter of the options_type.
 /// This complements find_bridge_param which only handles FunctionParam bindings.
 pub fn find_options_field_binding<'a>(

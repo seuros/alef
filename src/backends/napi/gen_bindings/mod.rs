@@ -118,6 +118,7 @@ impl Backend for NapiBackend {
         let never_skip_cfg_field_names: Vec<String> = config
             .trait_bridges
             .iter()
+            .filter(|b| crate::backends::napi::trait_bridge::targets_napi(b))
             .filter_map(|b| {
                 if b.bind_via == crate::core::config::BridgeBinding::OptionsField {
                     b.resolved_options_field().map(|s| s.to_string())
@@ -392,8 +393,10 @@ impl Backend for NapiBackend {
                 &func.return_type,
                 &opaque_types,
             )?;
-            let bridge_param = crate::backends::napi::trait_bridge::find_bridge_param(func, &config.trait_bridges);
+            let bridge_param = crate::backends::napi::trait_bridge::find_bridge_param(func, &config.trait_bridges)
+                .filter(|(_, bridge_cfg)| crate::backends::napi::trait_bridge::targets_napi(bridge_cfg));
             let options_field_bridge = crate::backends::napi::trait_bridge::find_options_field_binding(func, &config.trait_bridges)
+                .filter(|(_, bridge_cfg)| crate::backends::napi::trait_bridge::targets_napi(bridge_cfg))
                 // into the binding struct. If the core field is `#[cfg(...)]`-gated, the
                 .filter(|(_, bridge_cfg)| {
                     let Some(field_name) = bridge_cfg.resolved_options_field() else { return false; };
@@ -476,7 +479,7 @@ impl Backend for NapiBackend {
         }
 
         for bridge_cfg in &config.trait_bridges {
-            if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
+            if let Some(trait_type) = crate::backends::napi::trait_bridge::active_bridge_trait(bridge_cfg, api) {
                 let bridge = crate::backends::napi::trait_bridge::gen_trait_bridge(
                     trait_type,
                     bridge_cfg,
@@ -710,6 +713,9 @@ impl Backend for NapiBackend {
             if bridge.bind_via != crate::core::config::BridgeBinding::OptionsField {
                 continue;
             }
+            if !crate::backends::napi::trait_bridge::targets_napi(bridge) {
+                continue;
+            }
             if let Some(field_name) = bridge.resolved_options_field() {
                 // cfg-gated fields in the binding (decorated with `#[cfg(...)]`) when their
                 let Some(options_type) = bridge.options_type.as_deref() else {
@@ -814,6 +820,9 @@ impl Backend for NapiBackend {
     /// Rust item already carries the configured name and napi-rs applies the same snake-to-camel
     /// conversion itself. Routing all three through `to_camel_case` therefore reports what the
     /// module actually exports in every case. ~keep
+    ///
+    /// `active_bridge_trait` is the same gate `generate_bindings` applies before calling
+    /// `gen_trait_bridge`, so an `exclude_languages`-suppressed bridge is absent from both. ~keep
     fn trait_bridge_registration_surface(
         &self,
         api: &ApiSurface,
@@ -824,7 +833,7 @@ impl Backend for NapiBackend {
             .trait_bridges
             .iter()
             .filter_map(|bridge| {
-                let trait_def = api.types.iter().find(|t| t.is_trait && t.name == bridge.trait_name)?;
+                let trait_def = crate::backends::napi::trait_bridge::active_bridge_trait(bridge, api)?;
                 // A visitor bridge takes `gen_visitor_bridge`, which emits no registry API. ~keep
                 let is_visitor_bridge = bridge.type_alias.is_some()
                     && bridge.register_fn.is_none()
