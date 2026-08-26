@@ -541,6 +541,63 @@ fn test_wrap_bare_urls_empty_string() {
     assert_eq!(wrap_bare_urls(""), "");
 }
 
+/// task: the URL autolink regex must stop at trailing punctuation that cannot be part of a
+/// URL (quote, comma, period, semicolon, unbalanced closing paren) while still autolinking a
+/// URL whose path/query legitimately contains a comma or balanced parentheses. Table-driven
+/// per `meaningful-assertions`: each row is a distinct case, not a single happy-path check.
+#[test]
+fn test_wrap_bare_urls_trailing_punctuation() {
+    let cases: &[(&str, &str)] = &[
+        (
+            // The exact consumer-reported corruption: a quoted URL followed by a comma.
+            "Proxy URL (e.g. \"http://proxy:8080\", \"socks5://proxy:1080\").",
+            "Proxy URL (e.g. \"<http://proxy:8080>\", \"<socks5://proxy:1080>\").",
+        ),
+        (
+            "See http://example.com, for details.",
+            "See <http://example.com>, for details.",
+        ),
+        ("End of sentence: http://example.com.", "End of sentence: <http://example.com>."),
+        ("Path: http://example.com/a;b;", "Path: <http://example.com/a;b>;"),
+        (
+            "See http://example.com; then continue.",
+            "See <http://example.com>; then continue.",
+        ),
+        (
+            "Parenthetical aside (see http://example.com) for more.",
+            "Parenthetical aside (see <http://example.com>) for more.",
+        ),
+        (
+            "Trailing slash is part of the URL: http://example.com/path/.",
+            "Trailing slash is part of the URL: <http://example.com/path/>.",
+        ),
+        // Over-correction guard: a comma legitimately inside the URL's path must survive.
+        (
+            "See http://example.com/a,b,c for the list.",
+            "See <http://example.com/a,b,c> for the list.",
+        ),
+        // Over-correction guard: balanced Wikipedia-style disambiguation parens must survive,
+        // including when a real sentence-ending period follows.
+        (
+            "See http://en.wikipedia.org/wiki/Foo_(disambiguation) for background.",
+            "See <http://en.wikipedia.org/wiki/Foo_(disambiguation)> for background.",
+        ),
+        (
+            "See http://en.wikipedia.org/wiki/Foo_(disambiguation).",
+            "See <http://en.wikipedia.org/wiki/Foo_(disambiguation)>.",
+        ),
+        // Doubly-unbalanced trailing parens must both be stripped.
+        (
+            "(see http://example.com/foo))",
+            "(see <http://example.com/foo>))",
+        ),
+    ];
+
+    for (input, expected) in cases {
+        assert_eq!(wrap_bare_urls(input), *expected, "input: {input}");
+    }
+}
+
 #[test]
 fn test_demote_headings_to_start_at_demotes_h1_to_target() {
     let doc = "# Details\n\n## More Details";
