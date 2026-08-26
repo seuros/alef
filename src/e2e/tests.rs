@@ -240,6 +240,21 @@ impl codegen::E2eCodegen for FailingGenerator {
     fn language_name(&self) -> &'static str {
         "failing"
     }
+
+    /// Test double, no snippet recipe -- forwards to [`codegen::E2eCodegen::render_snippet_body`]'s
+    /// own "does not support documentation snippets" default, same as `gleam`/`php_ext`/`homebrew`.
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &fixture::Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
 }
 
 struct SucceedingGenerator;
@@ -264,6 +279,21 @@ impl codegen::E2eCodegen for SucceedingGenerator {
 
     fn language_name(&self) -> &'static str {
         "succeeding"
+    }
+
+    /// Test double, no snippet recipe -- forwards to [`codegen::E2eCodegen::render_snippet_body`]'s
+    /// own "does not support documentation snippets" default, same as `gleam`/`php_ext`/`homebrew`.
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &fixture::Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
     }
 }
 

@@ -142,6 +142,26 @@ impl E2eCodegen for BrewCodegen {
     ) -> Result<String> {
         snippet::render_snippet_body(fixture, e2e_config)
     }
+
+    /// A brew snippet is a single CLI invocation (`snippet::render_snippet_body`, built from
+    /// `category::build_cli_command`/`determine_subcommand`) -- it never reads a call's
+    /// *result* type or renders field access, so it has no use for the free-function registry
+    /// that anchors a result root, or for `errors`. Forwarding to the functions-unaware
+    /// [`E2eCodegen::render_snippet_body`] here is a deliberate, checked choice rather than an
+    /// inherited default -- see [`E2eCodegen::render_snippet_body_with_functions`]'s doc comment
+    /// for the bug that distinction rules out. ~keep
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
 }
 
 /// Emit a brew test backend stub.

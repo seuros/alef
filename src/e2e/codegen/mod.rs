@@ -697,9 +697,23 @@ pub trait E2eCodegen: Send + Sync {
     }
 
     /// ~keep `errors` is `ApiSurface::errors`. A snippet renderer needs it to name the exception
-    /// class a specific error variant maps to (see [`snippet_error_branch`]); the default
-    /// forwards to the errors-unaware [`Self::render_snippet_body`], which is what a backend that
-    /// cannot differentiate variants should keep doing.
+    /// class a specific error variant maps to (see [`snippet_error_branch`]).
+    ///
+    /// Deliberately has **no default implementation.** It used to forward to the
+    /// functions-unaware [`Self::render_snippet_body`], silently discarding `functions` for any
+    /// backend that forgot to override it. Losing `functions` makes
+    /// [`call_ir::CallIr::signature`] fall back to searching `type_defs`' methods, which can
+    /// anchor a call's result root to an unrelated struct that merely shares its name -- the
+    /// field oracle then correctly rejects every path whose first segment that wrong struct does
+    /// not declare, a TOTAL, silent loss of every documented field under that root. That shipped
+    /// for `kotlin_android` (see its own override's doc comment): a backend that should have
+    /// forwarded and simply forgot was indistinguishable from one that deliberately opted out,
+    /// because both looked identical -- no override at all. An implicit default cannot be told
+    /// apart from an implicit omission; only a required method forces every implementer to say,
+    /// in its own override, which one it is. A backend with no snippet body to forward into at
+    /// all (see `gleam`, `php_ext`, `homebrew`) still writes one line stating that; a backend
+    /// that never renders result-field access (see `brew`) states why `functions` is unused;
+    /// every other backend forwards and reads `functions` for real. ~keep
     #[allow(clippy::too_many_arguments)]
     fn render_snippet_body_with_functions(
         &self,
@@ -708,11 +722,9 @@ pub trait E2eCodegen: Send + Sync {
         config: &ResolvedCrateConfig,
         type_defs: &[TypeDef],
         enums: &[EnumDef],
-        _functions: &[crate::core::ir::FunctionDef],
-        _errors: &[crate::core::ir::ErrorDef],
-    ) -> Result<String> {
-        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
-    }
+        functions: &[crate::core::ir::FunctionDef],
+        errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String>;
 
     /// Language name for display and directory naming.
     fn language_name(&self) -> &'static str;

@@ -230,4 +230,24 @@ impl E2eCodegen for GleamE2eCodegen {
     fn language_name(&self) -> &'static str {
         "gleam"
     }
+
+    /// Gleam has no documentation-snippet recipe at all -- `render_snippet_body` is
+    /// unimplemented here and falls to [`E2eCodegen::render_snippet_body`]'s own "does not
+    /// support documentation snippets" error, for every fixture, always. Forwarding to it
+    /// explicitly states that as a checked choice rather than an inherited default: gleam never
+    /// reaches `CallIr::signature` through this path, so it structurally cannot have the
+    /// kotlin_android bug this override exists to rule out. See
+    /// [`E2eCodegen::render_snippet_body_with_functions`]'s doc comment. ~keep
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
+    }
 }

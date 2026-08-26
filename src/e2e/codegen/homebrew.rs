@@ -36,7 +36,7 @@ use crate::core::config::ResolvedCrateConfig;
 use crate::core::config::e2e::HomebrewCliTest;
 use crate::core::hash::{self, CommentStyle};
 use crate::e2e::config::E2eConfig;
-use crate::e2e::fixture::FixtureGroup;
+use crate::e2e::fixture::{Fixture, FixtureGroup};
 use anyhow::Result;
 use std::fmt::Write as FmtWrite;
 use std::path::PathBuf;
@@ -134,6 +134,26 @@ impl E2eCodegen for HomebrewCodegen {
 
     fn language_name(&self) -> &'static str {
         "homebrew"
+    }
+
+    /// Homebrew has no documentation-snippet recipe at all -- `render_snippet_body` is
+    /// unimplemented here and falls to [`E2eCodegen::render_snippet_body`]'s own "does not
+    /// support documentation snippets" error, for every fixture, always. Forwarding to it
+    /// explicitly states that as a checked choice rather than an inherited default: homebrew
+    /// never reaches `CallIr::signature` through this path, so it structurally cannot have the
+    /// kotlin_android bug this override exists to rule out. See
+    /// [`E2eCodegen::render_snippet_body_with_functions`]'s doc comment. ~keep
+    fn render_snippet_body_with_functions(
+        &self,
+        fixture: &Fixture,
+        e2e_config: &E2eConfig,
+        config: &ResolvedCrateConfig,
+        type_defs: &[crate::core::ir::TypeDef],
+        enums: &[crate::core::ir::EnumDef],
+        _functions: &[crate::core::ir::FunctionDef],
+        _errors: &[crate::core::ir::ErrorDef],
+    ) -> Result<String> {
+        self.render_snippet_body(fixture, e2e_config, config, type_defs, enums)
     }
 }
 
