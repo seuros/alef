@@ -1,7 +1,49 @@
+use crate::codegen::cfg::is_host_owned_rust_path;
 use crate::codegen::conversions::helpers::is_tuple_variant;
 use crate::codegen::generators::type_paths::resolve_type_path;
 use crate::core::ir::{EnumDef, EnumVariant};
 use std::collections::HashMap;
+
+/// A variant behind `#[cfg(...)]` needs different treatment depending on who owns the enum
+/// (see [`is_host_owned_rust_path`], the same authority `codegen::cfg::collect_cfg_gates` uses
+/// to decide which cfgs get a Cargo feature forwarded for them). A host-owned gated variant
+/// keeps its match arm under a matching `#[cfg(...)]` guard -- forwarding already declared that
+/// feature, so the gate is valid. A variant merged in from a foreign `[[crates.source_crates]]`
+/// crate carries that crate's own cfg gate, which this generated crate's `Cargo.toml` never
+/// declares as a feature; re-emitting it verbatim is an `unexpected cfg condition value` error,
+/// so the arm is dropped entirely instead -- named and counted via `tracing::warn!`, not
+/// silently -- mirroring `codegen::conversions::enums::emit_cfg_gated_arm` and
+/// `backends::ffi::gen_bindings::types::gen_enum_from_i32_rs_helper`. ~keep
+fn emit_cfg_gated_arm(
+    enum_def: &EnumDef,
+    variant: &EnumVariant,
+    is_host_enum: bool,
+    pattern: &str,
+    expression: &str,
+    direction: &str,
+) -> Option<String> {
+    if variant.cfg.is_some() && !is_host_enum {
+        tracing::warn!(
+            enum_name = %enum_def.name,
+            enum_rust_path = %enum_def.rust_path,
+            variant_name = %variant.name,
+            cfg = variant.cfg.as_deref().unwrap_or_default(),
+            direction = direction,
+            "dropping extendr enum conversion match arm for a foreign-crate variant behind a \
+             #[cfg(...)] this generated crate cannot declare as a Cargo feature; the variant is \
+             unreachable from this conversion"
+        );
+        return None;
+    }
+    Some(crate::backends::extendr::template_env::render(
+        format!("enum_from_{direction}_arm.jinja").as_str(),
+        minijinja::context! {
+            pattern => pattern,
+            expression => expression,
+            cfg => variant.cfg.as_deref(),
+        },
+    ))
+}
 
 pub(super) fn gen_from_binding_to_core(
     enum_def: &EnumDef,
@@ -10,19 +52,14 @@ pub(super) fn gen_from_binding_to_core(
 ) -> String {
     let core_path = resolve_type_path(&enum_def.name, core_import, type_paths);
     let binding_name = enum_def.name.as_str();
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let arms: Vec<String> = enum_def
         .variants
         .iter()
-        .map(|variant| {
+        .filter_map(|variant| {
             let pattern = binding_pattern(binding_name, variant);
             let expression = core_expression(variant);
-            crate::backends::extendr::template_env::render(
-                "enum_from_binding_to_core_arm.jinja",
-                minijinja::context! {
-                    pattern => &pattern,
-                    expression => &expression,
-                },
-            )
+            emit_cfg_gated_arm(enum_def, variant, is_host_enum, &pattern, &expression, "binding_to_core")
         })
         .collect();
 
@@ -51,19 +88,14 @@ pub(super) fn gen_from_core_to_binding(
 ) -> String {
     let core_path = resolve_type_path(&enum_def.name, core_import, type_paths);
     let binding_name = enum_def.name.as_str();
+    let is_host_enum = is_host_owned_rust_path(core_import, &enum_def.rust_path);
     let arms: Vec<String> = enum_def
         .variants
         .iter()
-        .map(|variant| {
+        .filter_map(|variant| {
             let pattern = core_pattern(&core_path, variant);
             let expression = binding_expression(variant);
-            crate::backends::extendr::template_env::render(
-                "enum_from_core_to_binding_arm.jinja",
-                minijinja::context! {
-                    pattern => &pattern,
-                    expression => &expression,
-                },
-            )
+            emit_cfg_gated_arm(enum_def, variant, is_host_enum, &pattern, &expression, "core_to_binding")
         })
         .collect();
 
@@ -92,8 +124,12 @@ fn catch_all(enum_def: &EnumDef) -> bool {
         .iter()
         .any(|variant| !variant.fields.is_empty() && !variant.is_tuple);
     let has_any_data_variants = enum_def.variants.iter().any(|v| !v.fields.is_empty());
+    // A cfg-gated variant's arm is either wrapped in a `#[cfg(...)]` guard (host-owned) or
+    // dropped entirely (foreign-owned, see `emit_cfg_gated_arm`); either way the match is no
+    // longer guaranteed exhaustive without a catch-all once any variant carries a cfg. ~keep
+    let has_cfg_variants = enum_def.variants.iter().any(|v| v.cfg.is_some());
 
-    has_excluded_variants || core_has_struct_variants || has_any_data_variants
+    has_excluded_variants || core_has_struct_variants || has_any_data_variants || has_cfg_variants
 }
 
 fn binding_pattern(binding_name: &str, variant: &EnumVariant) -> String {
