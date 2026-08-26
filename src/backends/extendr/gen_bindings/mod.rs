@@ -781,7 +781,7 @@ impl Backend for ExtendrBackend {
 
     fn trait_bridge_registration_surface(
         &self,
-        api: &ApiSurface,
+        _api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> Vec<TraitBridgeRegistrationSurface> {
         extendr_registration_surface(config)

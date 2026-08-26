@@ -282,11 +282,13 @@ pub fn active_bridge_trait_def<'a>(
     api: &'a ApiSurface,
     target_spellings: &[&str],
 ) -> Option<&'a TypeDef> {
-    let target = target_spellings.first().copied().unwrap_or("");
+    // `target` is reserved syntax in the `tracing` macros, so the field carries the backend's
+    // spelling under a different key. ~keep
+    let bridge_target = target_spellings.first().copied().unwrap_or("");
     if !bridge_targets_language(bridge, target_spellings) {
         tracing::debug!(
             trait_name = %bridge.trait_name,
-            target,
+            bridge_target,
             "trait bridge skipped: exclude_languages names this target"
         );
         return None;
@@ -295,7 +297,7 @@ pub fn active_bridge_trait_def<'a>(
     if trait_def.is_none() {
         tracing::warn!(
             trait_name = %bridge.trait_name,
-            target,
+            bridge_target,
             "trait bridge skipped: the configured trait is absent from the API surface"
         );
     }
