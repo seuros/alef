@@ -161,7 +161,7 @@ fn stub_constructor_parameters(stub: &str) -> Vec<String> {
     split_top_level(&balanced_slice(&stub[init_start..], stub))
         .into_iter()
         .map(|entry| entry.split(':').next().unwrap_or_default().trim().to_string())
-        .filter(|name| name != "self")
+        .filter(|name| name.as_str() != "self")
         .collect()
 }
 
