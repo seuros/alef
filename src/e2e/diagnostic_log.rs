@@ -84,7 +84,11 @@ mod tests {
         let second = unreported(&diagnostics, &log);
 
         assert_eq!(first.len(), 2);
-        assert_eq!(second.len(), 0, "the registry pass must not repeat the local pass's diagnostics");
+        assert_eq!(
+            second.len(),
+            0,
+            "the registry pass must not repeat the local pass's diagnostics"
+        );
     }
 
     /// The distinct set is the invariant that matters: a dedup that also dropped a real

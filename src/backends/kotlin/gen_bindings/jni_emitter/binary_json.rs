@@ -36,9 +36,7 @@ fn is_binary_param_type(ty: &TypeRef) -> bool {
 fn needs_json_deserialize(ty: &TypeRef) -> bool {
     match ty {
         TypeRef::Named(_) => true,
-        TypeRef::Optional(inner) => {
-            !matches!(inner.as_ref(), TypeRef::String) && !is_binary_return_type(inner)
-        }
+        TypeRef::Optional(inner) => !matches!(inner.as_ref(), TypeRef::String) && !is_binary_return_type(inner),
         TypeRef::Map(_, _) => true,
         TypeRef::Vec(inner) => !matches!(inner.as_ref(), TypeRef::Primitive(crate::core::ir::PrimitiveType::U8)),
         _ => false,

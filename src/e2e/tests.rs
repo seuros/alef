@@ -605,7 +605,9 @@ fn separate_logs_report_the_same_diagnostic_once_per_render() {
 
     logs_assert(|lines: &[&str]| match module_warning_counts(lines) {
         (2, 2) => Ok(()),
-        other => Err(format!("expected each diagnostic once per un-shared render, got {other:?}")),
+        other => Err(format!(
+            "expected each diagnostic once per un-shared render, got {other:?}"
+        )),
     });
 }
 

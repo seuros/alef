@@ -23,11 +23,11 @@ pub mod validate_call_module;
 pub mod validate_call_result_type;
 
 use crate::core::backend::GeneratedFile;
-use diagnostic_log::{DiagnosticLog, unreported};
 use crate::core::config::e2e::DependencyMode;
 use crate::core::config::{Language, ResolvedCrateConfig};
 use anyhow::{Context, Result, bail};
 use config::E2eConfig;
+use diagnostic_log::{DiagnosticLog, unreported};
 use fixture::{group_fixtures, load_fixtures};
 use std::path::Path;
 use tracing::{error, info, warn};
