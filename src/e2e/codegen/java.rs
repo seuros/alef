@@ -388,6 +388,8 @@ mod optional_collection_default_agreement_tests;
 #[cfg(test)]
 mod sealed_display_wire_name_tests;
 #[cfg(test)]
+mod super_trait_stub_lifecycle_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod void_not_error_call_tests;

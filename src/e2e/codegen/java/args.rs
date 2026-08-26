@@ -227,6 +227,31 @@ pub(super) fn build_args_and_setup(
                     }
                 }
 
+                // `gen_interface_file` declares `name()`/`version()` abstract on `I<Trait>`
+                // unconditionally whenever `super_trait` is configured -- it never looks up the
+                // super-trait's own `TypeDef` (see `trait_bridge_naming::SUPER_TRAIT_REQUIRED_METHODS`).
+                // The lookup above does, by matching `rust_path`, and finds nothing for a
+                // super-trait declared in a private module and re-exported via `pub use` (its
+                // `rust_path` need not equal the configured value), silently leaving the stub
+                // without either method and failing to compile against the interface's guarantee.
+                // Synthesize whichever required method the lookup above did not already supply,
+                // instead of re-deriving the same convention a second way. ~keep
+                let synthetic_super_trait_methods: Vec<crate::core::ir::MethodDef> =
+                    if trait_bridge.super_trait.is_some() {
+                        crate::backends::java::gen_bindings::trait_bridge_naming::SUPER_TRAIT_REQUIRED_METHODS
+                            .iter()
+                            .filter(|required| !methods.iter().any(|m| m.name == required.name))
+                            .map(|required| crate::core::ir::MethodDef {
+                                name: required.name.to_string(),
+                                return_type: crate::core::ir::TypeRef::String,
+                                ..Default::default()
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    };
+                methods.extend(synthetic_super_trait_methods.iter());
+
                 let excluded_named =
                     crate::e2e::codegen::recipe::trait_bridge_excluded_type_names(config, type_defs, &methods);
 

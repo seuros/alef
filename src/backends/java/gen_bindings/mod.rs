@@ -18,7 +18,7 @@ mod native_lib;
 mod result_presence;
 mod service_api;
 pub mod trait_bridge;
-mod trait_bridge_naming;
+pub(crate) mod trait_bridge_naming;
 mod types;
 #[cfg(test)]
 mod vtable_slot_tests;
