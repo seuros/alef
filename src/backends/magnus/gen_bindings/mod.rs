@@ -345,7 +345,7 @@ impl Backend for MagnusBackend {
                 } else if has_explicit_impl_default {
                     let map_fn = |ty: &crate::core::ir::TypeRef| mapper.map_type(ty);
                     if let Some(impl_str) =
-                        classes::gen_struct_default_impl_explicit(typ, &map_fn, &config.trait_bridges)
+                        classes::gen_struct_default_impl_explicit(typ, &map_fn, &config.trait_bridges, &default_types)
                     {
                         builder.add_item(&impl_str);
                     }

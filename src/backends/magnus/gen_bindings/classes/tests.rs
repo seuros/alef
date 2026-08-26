@@ -88,7 +88,7 @@ fn explicit_default_impl_preserves_serde_default_fn_instead_of_type_zero_value()
         _ => "u32".to_string(),
     };
 
-    let output = gen_struct_default_impl_explicit(&typ, &map_fn, &[])
+    let output = gen_struct_default_impl_explicit(&typ, &map_fn, &[], &std::collections::HashSet::default())
         .expect("a struct with a field-level default must get an explicit Default impl");
 
     assert!(
@@ -98,6 +98,78 @@ fn explicit_default_impl_preserves_serde_default_fn_instead_of_type_zero_value()
     assert!(
         output.contains("serde_json::from_str::<test_lib::GridCell>"),
         "row_span must recover the real serde default by deserializing a stub:\n{output}"
+    );
+}
+
+/// Regression: a struct with one field carrying a real default (`element_id`, via
+/// `#[serde(default)]`) and a second, unrelated *required* field of a `Named` type that has no
+/// `Default` impl of its own (mirrors `xberg::Element.metadata: ElementMetadata`, where
+/// `ElementMetadata` derives no `Default`). Before the fix, `has_non_trivial_default` being true
+/// because of `element_id` alone was enough to synthesize a whole-struct Default impl, and the
+/// untyped fallback table blindly emitted `ElementMetadata::default()` for the `metadata` field —
+/// code that fails to compile with "no function or associated item named `default` found for
+/// struct `ElementMetadata`" because `ElementMetadata` never implements `Default`. The fix must
+/// recognize this and skip the whole impl rather than emit a call the type cannot satisfy.
+#[test]
+fn gen_struct_default_impl_explicit_skips_struct_with_undefaultable_required_field() {
+    let mut element_id = make_field("element_id", TypeRef::String, false);
+    element_id.typed_default = Some(crate::core::ir::DefaultValue::Empty);
+
+    let typ = make_typedef(
+        "Element",
+        vec![
+            element_id,
+            make_field("metadata", TypeRef::Named("ElementMetadata".to_string()), false),
+        ],
+    );
+
+    let map_fn = |ty: &TypeRef| match ty {
+        TypeRef::String => "String".to_string(),
+        TypeRef::Named(name) => name.clone(),
+        _ => "()".to_string(),
+    };
+
+    // `ElementMetadata` is deliberately absent from `types_with_default`: it has no `Default`
+    // impl in the source, matching the real xberg struct.
+    let output = gen_struct_default_impl_explicit(&typ, &map_fn, &[], &std::collections::HashSet::default());
+    assert!(
+        output.is_none(),
+        "a struct with a required field whose type has no Default must not get a synthesized \
+         Default impl: {output:?}"
+    );
+}
+
+/// Positive control for the above: same shape, but `ElementMetadata` IS in `types_with_default`
+/// (it derives `Default` in this scenario). The Default impl must still be generated, and the
+/// `metadata` field must still call `ElementMetadata::default()` — proving the fix is a real
+/// per-type lookup, not a blanket refusal to ever call `{Type}::default()`.
+#[test]
+fn gen_struct_default_impl_explicit_still_calls_default_when_field_type_has_one() {
+    let mut element_id = make_field("element_id", TypeRef::String, false);
+    element_id.typed_default = Some(crate::core::ir::DefaultValue::Empty);
+
+    let typ = make_typedef(
+        "Element",
+        vec![
+            element_id,
+            make_field("metadata", TypeRef::Named("ElementMetadata".to_string()), false),
+        ],
+    );
+
+    let map_fn = |ty: &TypeRef| match ty {
+        TypeRef::String => "String".to_string(),
+        TypeRef::Named(name) => name.clone(),
+        _ => "()".to_string(),
+    };
+
+    let mut types_with_default = std::collections::HashSet::default();
+    types_with_default.insert("ElementMetadata");
+
+    let output = gen_struct_default_impl_explicit(&typ, &map_fn, &[], &types_with_default)
+        .expect("a struct whose required field type has Default must still get an impl");
+    assert!(
+        output.contains("metadata: ElementMetadata::default()"),
+        "metadata must still call the field type's own default(): {output}"
     );
 }
 
