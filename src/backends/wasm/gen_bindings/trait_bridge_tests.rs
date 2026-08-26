@@ -5,9 +5,7 @@
 //! a generated `From` impl, and whether it correctly decides a function or bridge operation is
 //! reachable/exported for a given `ApiSurface` and config.
 
-use super::{
-    WasmCallability, forward_trait_bridge_builder_fields, function_is_exported, wasm_callability,
-};
+use super::{WasmCallability, forward_trait_bridge_builder_fields, function_is_exported, wasm_callability};
 use crate::core::config::{BridgeBinding, NewAlefConfig, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::ir::FunctionDef;
 

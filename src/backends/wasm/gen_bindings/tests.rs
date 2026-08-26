@@ -4,9 +4,7 @@ use super::{
 };
 use crate::core::backend::Backend;
 use crate::core::config::{NewAlefConfig, ResolvedCrateConfig};
-use crate::core::ir::{
-    ApiSurface, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef,
-};
+use crate::core::ir::{ApiSurface, FieldDef, MethodDef, ParamDef, PrimitiveType, ReceiverKind, TypeDef, TypeRef};
 
 fn empty_api() -> ApiSurface {
     ApiSurface {

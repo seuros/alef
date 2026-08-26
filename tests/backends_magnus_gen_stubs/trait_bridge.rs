@@ -199,4 +199,3 @@ fn test_rbs_plugin_interface_omits_defaulted_methods_and_documents_them() {
         "defaulted method must be documented as optional:\n{content}"
     );
 }
-

@@ -333,4 +333,3 @@ fn test_register_nif_stub_has_implemented_methods_parameter() {
         native.content
     );
 }
-
