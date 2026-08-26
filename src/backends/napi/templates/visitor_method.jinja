@@ -34,6 +34,10 @@
                     && let Ok(obj) = val.coerce_to_object()
                 {
 {%- for variant in payload_result_variants %}
+    {%- if variant.cfg %}
+                    #[cfg({{ variant.cfg }})]
+    {%- endif %}
+                    {
                     let prop_name = "{{ variant.wire_name }}";
                     if let Ok(cv) = obj.get_named_property::<napi::bindgen_prelude::Unknown>(prop_name)
                         && !matches!(cv.get_type().unwrap_or(napi::bindgen_prelude::ValueType::Undefined), napi::bindgen_prelude::ValueType::Undefined | napi::bindgen_prelude::ValueType::Null)
@@ -41,11 +45,15 @@
                     {
                         return {{ return_type }}::{{ variant.name }}(s);
                     }
+                    }
 {%- endfor %}
                 }
                 if let Ok(s) = val.coerce_to_string().and_then(|s| s.into_utf8()).and_then(|s| s.into_owned()) {
                     match s.as_str() {
 {%- for variant in unit_result_variants %}
+    {%- if variant.cfg %}
+                        #[cfg({{ variant.cfg }})]
+    {%- endif %}
                         "{{ variant.wire_name }}" => {{ return_type }}::{{ variant.name }},
 {%- endfor %}
                         _ => {{ unknown_string_result_expr }},

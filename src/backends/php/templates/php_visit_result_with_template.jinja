@@ -1,6 +1,9 @@
 fn php_visit_result_with_template(val: &ext_php_rs::types::Zval, tmpl_vars: &[(&str, &str)]) -> {{ result_type_path }} {
     match php_zval_to_visit_result(val) {
 {%- for variant in payload_result_variants %}
+    {%- if variant.cfg %}
+        #[cfg({{ variant.cfg }})]
+    {%- endif %}
         {{ result_type_path }}::{{ variant.name }}(mut value) => {
             for (name, replacement) in tmpl_vars {
                 value = value.replace(&format!("{% raw %}{{{}}}{% endraw %}", name), replacement);
