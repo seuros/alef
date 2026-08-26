@@ -343,7 +343,7 @@ pub(super) fn generate_bindings(api: &ApiSurface, config: &ResolvedCrateConfig) 
     let has_trait_bridges = config
         .trait_bridges
         .iter()
-        .any(|b| crate::backends::rustler::trait_bridge::targets_rustler(b));
+        .any(crate::backends::rustler::trait_bridge::targets_rustler);
 
     for bridge_cfg in config
         .trait_bridges
