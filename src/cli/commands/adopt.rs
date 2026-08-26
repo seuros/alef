@@ -14,15 +14,20 @@
 //! This command is the door out, and it is deliberately narrow:
 //!
 //! - **Explicit and human-invoked.** One or more paths or globs per invocation, each
-//!   resolved and reported independently (see `bin_cli::aux_commands`'s `Commands::Adopt`,
-//!   which loops this module's single-target [`run`] once per requested target). It is
-//!   not wired into `alef all`, `alef generate`, or any other command, and must not be.
+//!   resolved and reported independently against **one** managed surface built once for the
+//!   whole invocation (see `bin_cli::adopt_command`, and [`batch`] for the session that
+//!   shares classification, diff rendering and the ownership-record write across targets).
+//!   It is not wired into `alef all`, `alef generate`, or any other command, and must not be.
 //! - **Dry-run by default.** A bare `alef adopt <path>` prints the full diff and
 //!   changes nothing; `--write` applies.
-//! - **The full diff, never truncated, for every file whose content actually differs.**
+//! - **The full diff, never truncated, for every file this run could actually adopt.**
 //!   Unlike `alef migrate`'s preview, which caps at `MAX_DIFF_LINES` because a config
 //!   migration is mechanical, adoption is a consent decision over content. A truncated
-//!   diff is a diff the human did not read.
+//!   diff is a diff the human did not read. The one bounded case is `--converged-only`,
+//!   which *cannot* adopt a drifted file: those diffs decide nothing in that run, so
+//!   `bin_cli::adopt_command::report` prints a bounded number of bodies and then names
+//!   every remaining path alongside an exact count of the bodies it withheld. Nothing is
+//!   ever dropped silently, and nothing is bounded on a code path that can write.
 //! - **Adoption stamps the marker onto the bytes already on disk.** It never writes
 //!   generated content. Convergence happens on the next ordinary `alef generate`,
 //!   through the guard, where `git diff` shows it.
@@ -63,7 +68,7 @@
 //! human reading the diff. Automate it and the guard is deleted while the warning
 //! remains. See `cli::pipeline::generate::write::stamp_for_adoption`. ~keep
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 /// How the bytes on disk relate to what alef would generate for the same path.
@@ -350,12 +355,7 @@ pub fn managed_outputs(files: &[crate::core::backend::GeneratedFile], base_dir: 
 /// satisfy one of these targets" -- from the identical predicate, rather than a second,
 /// hand-maintained notion of what counts as a match. ~keep
 pub(crate) fn matches_target(target: &str, relative: &Path) -> bool {
-    let spelled = relative.to_string_lossy().replace('\\', "/");
-    let target = target.trim_start_matches("./");
-    if spelled == target {
-        return true;
-    }
-    glob::Pattern::new(target).is_ok_and(|pattern| pattern.matches(&spelled))
+    batch::TargetMatcher::new(target).matches(relative)
 }
 
 /// The regenerate command embedded in a self-marking Markdown header, read back out
@@ -571,73 +571,6 @@ pub fn render_diff(candidate: &AdoptCandidate) -> String {
     body
 }
 
-/// What [`collect_candidates`] found: the classifiable matches, plus the matches alef
-/// could neither read as text nor decode as one of its own binary outputs.
-struct CollectedCandidates {
-    candidates: Vec<AdoptCandidate>,
-    unreadable: Vec<PathBuf>,
-}
-
-/// Collect every managed output the target selects, refusing paths alef does not
-/// generate and paths that do not exist yet.
-fn collect_candidates(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<CollectedCandidates> {
-    let mut matched: Vec<&ManagedOutput> = managed
-        .iter()
-        .filter(|output| matches_target(&options.target, &output.relative))
-        .collect();
-    matched.sort_by(|left, right| left.relative.cmp(&right.relative));
-
-    if matched.is_empty() {
-        // Refusing an unmatched target is the property that keeps `alef adopt` from
-        // being a general-purpose "stamp this file" tool: a path alef does not generate
-        // can never be adopted, whatever the human types. ~keep
-        bail!(
-            "no alef-managed output matches `{}` -- adopt only applies to paths alef generates",
-            options.target
-        );
-    }
-
-    let mut candidates = Vec::with_capacity(matched.len());
-    let mut unreadable: Vec<PathBuf> = Vec::new();
-    for output in matched {
-        let full_path = options.base_dir.join(&output.relative);
-        if !full_path.exists() {
-            // Nothing to consent to: the guard never engages on a path with no
-            // pre-existing content, so an ordinary generate already writes this. ~keep
-            continue;
-        }
-        let bytes =
-            std::fs::read(&full_path).with_context(|| format!("failed to read existing {}", full_path.display()))?;
-        if crate::cli::pipeline::is_base64_binary_output(&output.relative) {
-            match classify_binary(&options.base_dir, &full_path, output, &bytes) {
-                Some(candidate) => candidates.push(candidate),
-                None => unreadable.push(output.relative.clone()),
-            }
-            continue;
-        }
-        let Ok(existing) = String::from_utf8(bytes) else {
-            unreadable.push(output.relative.clone());
-            continue;
-        };
-        candidates.push(classify(
-            &full_path,
-            &output.relative,
-            &output.content,
-            &existing,
-            output.create_once,
-        ));
-    }
-
-    if candidates.is_empty() && unreadable.is_empty() {
-        bail!(
-            "`{}` matches alef-managed output but nothing exists on disk yet -- \
-             run `alef generate`, there is no ownership conflict to resolve",
-            options.target
-        );
-    }
-    Ok(CollectedCandidates { candidates, unreadable })
-}
-
 /// Stamp one candidate so a later run's ownership guard recognises it.
 ///
 /// Writes the *existing* bytes plus a header, never the generated bytes. Formats with
@@ -670,102 +603,21 @@ fn apply(candidate: &AdoptCandidate, report: &mut AdoptReport, to_record: &mut V
     Ok(())
 }
 
-/// Run the adopt command against a pre-computed managed-output set.
+/// Run the adopt command against a pre-computed managed-output set for one target.
 ///
 /// `managed` is passed in rather than derived here so the whole command is exercisable
 /// without a config, an extraction pass, or a real crate — the ownership decision is
 /// the thing worth testing, and it must not be reachable only through a full pipeline.
+///
+/// Thin over [`batch::run_single`] so the single-target and multi-target entry points
+/// share one decision body rather than two that must be kept in step. See
+/// [`batch`]'s header. ~keep
 pub fn run(options: &AdoptOptions, managed: &[ManagedOutput]) -> Result<AdoptReport> {
-    let CollectedCandidates { candidates, unreadable } = collect_candidates(options, managed)?;
-    let mut report = AdoptReport {
-        preview: !options.write,
-        unreadable,
-        ..AdoptReport::default()
-    };
-
-    // Partitioned before anything is classified for the report, so an excluded seed
-    // contributes no diff, no converged tally and no adopted entry -- it is not a thing
-    // this run is deciding about, it is a thing this run refuses to decide about.
-    //
-    // `AlreadyOwned` seeds are deliberately not excluded: the file already carries a
-    // marker, so there is no consent left to give and no content this command could put
-    // at risk. Listing them as blocked would be a false alarm on the exact list whose
-    // whole value is that every line on it is genuinely dangerous. ~keep
-    let (adoptable, blocked): (Vec<&AdoptCandidate>, Vec<&AdoptCandidate>) = candidates.iter().partition(|candidate| {
-        options.clobber_create_once_seeds || !candidate.create_once || candidate.state == AdoptionState::AlreadyOwned
-    });
-    for candidate in &blocked {
-        report.skipped_create_once.push(candidate.relative.clone());
-        tracing::warn!(
-            path = %candidate.relative.display(),
-            "create-once seed: alef emits this path only when absent, so adopting it consents to alef \
-             replacing its contents with a placeholder seed on the next overwriting regen (an \
-             `alef version` sync, `alef all --clobber-create-once-seeds`) -- a plain `alef generate` \
-             skips it"
-        );
-    }
-
-    for candidate in &adoptable {
-        match candidate.state {
-            AdoptionState::AlreadyOwned => report.already_owned.push(candidate.relative.clone()),
-            AdoptionState::Converged => report.converged.push(candidate.relative.clone()),
-            AdoptionState::Drifted => report.diffs.push(AdoptDiff {
-                relative: candidate.relative.clone(),
-                state: candidate.state,
-                body: render_diff(candidate),
-            }),
-        }
-    }
-
-    for diff in report.drifted() {
-        tracing::warn!(
-            path = %diff.relative.display(),
-            "content differs from generated output: adopting consents to alef replacing it on the next generate"
-        );
-    }
-
-    if !options.write {
-        return Ok(report);
-    }
-
-    // Non-zero only when the exclusion emptied the run, so a mixed glob still does its
-    // legitimate work instead of forcing the operator to re-type a narrower target (and
-    // learn, from the failure, that the way to make adopt succeed is to pass the
-    // dangerous flag). A `--write` that adopted nothing at all is a different matter: it
-    // exits 0 today only because "nothing matched" is already a `bail!`, and staying
-    // silent here would let a seeds-only glob look like a successful adoption. ~keep
-    let has_work = adoptable.iter().any(|c| c.state != AdoptionState::AlreadyOwned);
-    if !has_work && !report.skipped_create_once.is_empty() {
-        bail!(
-            "`{}` matches only create-once seeds, which alef emits solely when absent -- \
-             adopting one consents to alef replacing its contents with a placeholder seed on the \
-             next overwriting regen (an `alef version` sync, `alef all --clobber-create-once-seeds`), \
-             so nothing was written. Pass --clobber-create-once-seeds to adopt them anyway.",
-            options.target
-        );
-    }
-
-    let mut to_record: Vec<PathBuf> = Vec::new();
-    for candidate in adoptable.iter().filter(|c| c.state != AdoptionState::AlreadyOwned) {
-        if options.converged_only && candidate.state == AdoptionState::Drifted {
-            report.skipped_drifted.push(candidate.relative.clone());
-            continue;
-        }
-        apply(candidate, &mut report, &mut to_record)?;
-        if candidate.state == AdoptionState::Drifted {
-            // Per-file at DEBUG for converged paths and INFO only for drifted ones: a
-            // converged bulk adoption is one event of 12,000 paths, and emitting 12,000
-            // INFO lines for it drowns the drifted adoptions, which are the ones a reader
-            // has to be able to find in the log afterwards. ~keep
-            tracing::info!(path = %candidate.relative.display(), "adopted (drifted): marker stamped, content kept");
-        } else {
-            tracing::debug!(path = %candidate.relative.display(), "adopted (converged): marker stamped");
-        }
-    }
-    let record_refs: Vec<&Path> = to_record.iter().map(PathBuf::as_path).collect();
-    crate::cli::cache::record_scaffold_owned_paths(&options.base_dir, &record_refs)?;
-    Ok(report)
+    batch::run_single(options, managed)
 }
+
+pub(crate) mod batch;
+pub use batch::{AdoptBatchOptions, AdoptBatchOutcome, run_batch};
 
 #[cfg(test)]
 mod tests;

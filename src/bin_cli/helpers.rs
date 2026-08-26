@@ -496,7 +496,7 @@ impl StageFailure {
 ///
 /// This is the single answer to "what does alef own here", and it has exactly two
 /// consumers: [`find_missing_and_frozen_generated_files`] (`alef verify`'s report)
-/// and `bin_cli::aux_commands`'s `Commands::Adopt` (the remedy the report points
+/// and `bin_cli::adopt_command` (the remedy the report points
 /// at). They are the report and the fix for the same fact, so they must not be able
 /// to disagree — and they did. Both were built from hand-maintained stage lists
 /// that each omitted different stages: adopt covered bindings + stubs + scaffold and

@@ -1,3 +1,4 @@
+pub(crate) mod adopt_command;
 pub(crate) mod all_commands;
 pub(crate) mod args;
 pub(crate) mod aux_commands;

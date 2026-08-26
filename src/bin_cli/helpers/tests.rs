@@ -151,8 +151,9 @@ fn both_consumers_build_their_managed_set_only_from_the_shared_surface() {
         "docs::generate_docs_stage(",
     ];
     // Each region is the consumer's own code, cut so it excludes the shared collector
-    // itself (which must name every stage) and, for `aux_commands`, the unrelated
-    // `Commands::Init` arm, which legitimately generates and writes. ~keep
+    // itself, which must name every stage. `alef adopt`'s region is now its whole handler
+    // module: since the adopt arm moved out of `aux_commands` it no longer has to be sliced
+    // away from the unrelated `Commands::Init` arm that legitimately generates and writes. ~keep
     let regions = [
         (
             "alef verify's frozen report",
@@ -161,14 +162,7 @@ fn both_consumers_build_their_managed_set_only_from_the_shared_surface() {
                 .next()
                 .expect("helpers splits on the shared collector"),
         ),
-        (
-            "alef adopt's candidate set",
-            include_str!("../aux_commands.rs")
-                .split("Commands::Adopt {")
-                .nth(1)
-                .and_then(|rest| rest.split("Commands::Migrate {").next())
-                .expect("aux_commands splits on the adopt arm"),
-        ),
+        ("alef adopt's candidate set", include_str!("../adopt_command.rs")),
     ];
     for (name, region) in regions {
         for call in stage_calls {
