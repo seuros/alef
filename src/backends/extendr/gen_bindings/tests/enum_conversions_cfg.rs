@@ -57,7 +57,10 @@ fn host_owned_cfg_gated_variant_keeps_arm_under_matching_cfg_guard() {
         enums: vec![EnumDef {
             name: "Status".to_string(),
             rust_path: "test_lib::Status".to_string(),
-            variants: vec![gated_variant("Active", None), gated_variant("Beta", Some(r#"feature = "beta""#))],
+            variants: vec![
+                gated_variant("Active", None),
+                gated_variant("Beta", Some(r#"feature = "beta""#)),
+            ],
             ..Default::default()
         }],
         functions: vec![returning_function("get_status", "Status")],
@@ -103,7 +106,10 @@ fn foreign_owned_cfg_gated_variant_drops_arm_entirely() {
         enums: vec![EnumDef {
             name: "External".to_string(),
             rust_path: "foreign_crate::External".to_string(),
-            variants: vec![gated_variant("Foo", None), gated_variant("Bar", Some(r#"feature = "extra""#))],
+            variants: vec![
+                gated_variant("Foo", None),
+                gated_variant("Bar", Some(r#"feature = "extra""#)),
+            ],
             ..Default::default()
         }],
         functions: vec![returning_function("get_external", "External")],
@@ -154,7 +160,10 @@ fn ungated_enum_emits_no_cfg_guard_and_no_catch_all() {
         out.contains("Plain::On => Self::On,") && out.contains("Plain::Off => Self::Off,"),
         "both ungated variants' binding->core arms must be present:\n{out}"
     );
-    assert!(!out.contains("#[cfg("), "an ungated enum must not emit any #[cfg(...)] guard:\n{out}");
+    assert!(
+        !out.contains("#[cfg("),
+        "an ungated enum must not emit any #[cfg(...)] guard:\n{out}"
+    );
     assert!(
         !out.contains("_ => Self::default()"),
         "an ungated enum with no data/excluded variants must not emit a catch-all fallback arm:\n{out}"

@@ -59,7 +59,14 @@ pub(super) fn gen_from_binding_to_core(
         .filter_map(|variant| {
             let pattern = binding_pattern(binding_name, variant);
             let expression = core_expression(variant);
-            emit_cfg_gated_arm(enum_def, variant, is_host_enum, &pattern, &expression, "binding_to_core")
+            emit_cfg_gated_arm(
+                enum_def,
+                variant,
+                is_host_enum,
+                &pattern,
+                &expression,
+                "binding_to_core",
+            )
         })
         .collect();
 
@@ -95,7 +102,14 @@ pub(super) fn gen_from_core_to_binding(
         .filter_map(|variant| {
             let pattern = core_pattern(&core_path, variant);
             let expression = binding_expression(variant);
-            emit_cfg_gated_arm(enum_def, variant, is_host_enum, &pattern, &expression, "core_to_binding")
+            emit_cfg_gated_arm(
+                enum_def,
+                variant,
+                is_host_enum,
+                &pattern,
+                &expression,
+                "core_to_binding",
+            )
         })
         .collect();
 

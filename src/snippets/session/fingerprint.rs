@@ -213,8 +213,11 @@ mod tests {
             let spec = fingerprint_spec(directory.path());
             let before = session_fingerprint(&spec).expect("fingerprint before the binding surface changed");
 
-            std::fs::write(package.join("index.d.ts"), "export declare const maxCharacters: number;")
-                .expect("regenerated binding surface");
+            std::fs::write(
+                package.join("index.d.ts"),
+                "export declare const maxCharacters: number;",
+            )
+            .expect("regenerated binding surface");
             let after = session_fingerprint(&spec).expect("fingerprint after the binding surface changed");
 
             assert_ne!(
@@ -300,8 +303,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("temp directory");
         let package = directory.path().join("node_modules/sample-binding");
         std::fs::create_dir_all(&package).expect("linked package directory");
-        std::fs::write(package.join("index.d.ts"), "export declare function chunk(maxChars: number): void;")
-            .expect("original binding surface");
+        std::fs::write(
+            package.join("index.d.ts"),
+            "export declare function chunk(maxChars: number): void;",
+        )
+        .expect("original binding surface");
         let spec = fingerprint_spec(directory.path());
         let cache = crate::snippets::cache::ValidationCache::new(directory.path().join(".alef/snippets"));
         let snippet = cached_snippet("chunk(10)");
@@ -309,7 +315,12 @@ mod tests {
 
         let before_fingerprint = session_fingerprint(&spec).expect("fingerprint before the binding surface changed");
         cache
-            .store(&snippet, ValidationLevel::Compile, Some(before_fingerprint.as_str()), &passing)
+            .store(
+                &snippet,
+                ValidationLevel::Compile,
+                Some(before_fingerprint.as_str()),
+                &passing,
+            )
             .expect("store the passing result");
 
         // Negative control: nothing about the snippet or the binding surface changed, so the exact
