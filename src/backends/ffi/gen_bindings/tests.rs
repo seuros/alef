@@ -13,5 +13,6 @@ mod last_error_unused_variable;
 mod method_param_enums;
 mod methods;
 mod regressions;
+mod result_presence;
 mod security;
 mod visitor;
