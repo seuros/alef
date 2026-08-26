@@ -73,11 +73,12 @@ impl Backend for RustlerBackend {
     }
 
     /// Elixir consumers call the delegates on the generated app module, which forward to the
-    /// same-named NIFs on `<AppModule>.Native`. `exclude_languages` is honoured under both the
-    /// `elixir` and `rustler` spellings, matching `public_api_delegates`. ~keep
+    /// same-named NIFs on `<AppModule>.Native`. `trait_bridge::active_bridge_trait` is the gate
+    /// `public_api_delegates` applies — `exclude_languages` under both the `elixir` and `rustler`
+    /// spellings, plus the trait resolving in the `ApiSurface`. ~keep
     fn trait_bridge_registration_surface(
         &self,
-        _api: &ApiSurface,
+        api: &ApiSurface,
         config: &ResolvedCrateConfig,
     ) -> Vec<TraitBridgeRegistrationSurface> {
         use heck::ToPascalCase;
@@ -92,7 +93,7 @@ impl Backend for RustlerBackend {
         config
             .trait_bridges
             .iter()
-            .filter(|bridge| bridge.is_active_for("elixir") && bridge.is_active_for("rustler"))
+            .filter(|bridge| crate::backends::rustler::trait_bridge::active_bridge_trait(bridge, api).is_some())
             .filter(|bridge| {
                 bridge.register_fn.is_some() || bridge.unregister_fn.is_some() || bridge.clear_fn.is_some()
             })

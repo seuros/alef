@@ -88,7 +88,7 @@ pub(super) fn gen_nif_init(
     let has_trait_bridges = config
         .trait_bridges
         .iter()
-        .any(|b| !b.exclude_languages.iter().any(|l| l == "elixir" || l == "rustler"));
+        .any(|b| crate::backends::rustler::trait_bridge::targets_rustler(b));
     if has_trait_bridges {
         exports.push("complete_trait_call".to_string());
         exports.push("fail_trait_call".to_string());

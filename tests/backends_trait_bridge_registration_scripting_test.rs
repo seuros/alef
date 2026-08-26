@@ -467,6 +467,28 @@ fn rustler_reports_nothing_when_the_bridge_excludes_either_spelling_of_the_targe
 }
 
 #[test]
+fn rustler_emits_no_delegate_when_the_bridged_trait_is_absent_from_the_api_surface() {
+    let config = minimal_config("elixir", "");
+    let api = api_without_the_trait();
+
+    let surfaces = RustlerBackend.trait_bridge_registration_surface(&api, &config);
+    let public_api = generated_public_api_text_for(&RustlerBackend, &api, &config);
+
+    assert_eq!(
+        surfaces.len(),
+        0,
+        "no trait means `native::gen_trait_bridge` never ran, so there is no NIF to delegate to; \
+         got {surfaces:?}"
+    );
+    for func in [REGISTER_FN, UNREGISTER_FN, CLEAR_FN] {
+        assert!(
+            !public_api.contains(&format!("def {func}")),
+            "the `{func}` delegate would call `SampleCore.Native.{func}`, a NIF no pass emitted"
+        );
+    }
+}
+
+#[test]
 fn kotlin_jvm_reports_no_registration_surface_because_it_emits_none() {
     let config = minimal_config("kotlin", "package = \"io.sample.core\"");
 

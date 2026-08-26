@@ -123,20 +123,13 @@ pub(in crate::backends::rustler::gen_bindings) fn append_trait_bridge_delegates(
         native_mod,
     } = ctx;
     for bridge_cfg in &config.trait_bridges {
-        if bridge_cfg
-            .exclude_languages
-            .iter()
-            .any(|language| language == "elixir" || language == "rustler")
-        {
+        let Some(trait_def) = crate::backends::rustler::trait_bridge::active_bridge_trait(bridge_cfg, api) else {
             continue;
-        }
+        };
 
         let behaviour_mod = behaviour_module(app_module, &bridge_cfg.trait_name);
 
-        if bridge_cfg.register_fn.is_some()
-            && let Some(trait_def) = crate::codegen::generators::trait_bridge::find_trait_def(bridge_cfg, api)
-            && !trait_def.methods.is_empty()
-        {
+        if bridge_cfg.register_fn.is_some() && !trait_def.methods.is_empty() {
             content.push_str(&template_env::render(
                 "elixir_trait_behaviour.ex.jinja",
                 minijinja::context! {

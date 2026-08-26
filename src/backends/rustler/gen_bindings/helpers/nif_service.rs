@@ -204,11 +204,7 @@ pub(in crate::backends::rustler::gen_bindings) fn gen_native_ex(
         );
     }
 
-    for bridge in &config.trait_bridges {
-        if bridge.exclude_languages.contains(&"elixir".to_string()) {
-            continue;
-        }
-
+    for bridge in crate::backends::rustler::trait_bridge::active_bridges(config) {
         if let Some(register_fn) = &bridge.register_fn {
             let params = vec![
                 "_pid".to_string(),
