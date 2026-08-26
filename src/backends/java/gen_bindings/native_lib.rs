@@ -5,7 +5,10 @@ use ahash::AHashSet;
 use heck::ToSnakeCase;
 use std::collections::BTreeSet;
 
-use super::marshal::{gen_ffi_layout_with_enums, gen_function_descriptor, is_bytes_result, is_ffi_string_return};
+use super::marshal::{
+    gen_ffi_layout_with_enums, gen_function_descriptor, is_bytes_result, is_ffi_string_return, push_param_layouts,
+};
+use super::result_presence::presence_handle_declaration;
 
 /// Returns true if the FFI backend exports a `{type_name}_to_json` symbol for this type.
 /// This matches the predicate in `src/backends/ffi/gen_bindings/mod.rs`:
@@ -163,46 +166,15 @@ pub(crate) fn gen_native_lib(
 
         let ffi_name = format!("{}_{}", prefix, func.name.to_lowercase());
 
-        let (return_layout, param_layouts) = if is_bytes_result(func) {
-            let mut layouts: Vec<String> = Vec::new();
-            for param in &func.params {
-                match &param.ty {
-                    TypeRef::Bytes => {
-                        layouts.push("ValueLayout.ADDRESS".to_string());
-                        layouts.push("ValueLayout.JAVA_LONG".to_string());
-                    }
-                    TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes) => {
-                        layouts.push("ValueLayout.ADDRESS".to_string());
-                        layouts.push("ValueLayout.JAVA_LONG".to_string());
-                    }
-                    other => {
-                        layouts.push(gen_ffi_layout_with_enums(other, &enum_names));
-                    }
-                }
-            }
-            layouts.push("ValueLayout.ADDRESS".to_string());
-            layouts.push("ValueLayout.ADDRESS".to_string());
-            layouts.push("ValueLayout.ADDRESS".to_string());
-            ("ValueLayout.JAVA_LONG".to_string(), layouts)
+        let mut param_layouts: Vec<String> = Vec::new();
+        push_param_layouts(&func.params, &enum_names, &mut param_layouts);
+        let return_layout = if is_bytes_result(func) {
+            param_layouts.push("ValueLayout.ADDRESS".to_string());
+            param_layouts.push("ValueLayout.ADDRESS".to_string());
+            param_layouts.push("ValueLayout.ADDRESS".to_string());
+            "ValueLayout.JAVA_LONG".to_string()
         } else {
-            let return_layout = gen_ffi_layout_with_enums(&func.return_type, &enum_names);
-            let mut param_layouts: Vec<String> = Vec::new();
-            for param in &func.params {
-                match &param.ty {
-                    TypeRef::Bytes => {
-                        param_layouts.push("ValueLayout.ADDRESS".to_string());
-                        param_layouts.push("ValueLayout.JAVA_LONG".to_string());
-                    }
-                    TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes) => {
-                        param_layouts.push("ValueLayout.ADDRESS".to_string());
-                        param_layouts.push("ValueLayout.JAVA_LONG".to_string());
-                    }
-                    other => {
-                        param_layouts.push(gen_ffi_layout_with_enums(other, &enum_names));
-                    }
-                }
-            }
-            (return_layout, param_layouts)
+            gen_ffi_layout_with_enums(&func.return_type, &enum_names)
         };
 
         let layout_str = gen_function_descriptor(&return_layout, &param_layouts);
@@ -228,6 +200,16 @@ pub(crate) fn gen_native_lib(
             )
         };
         function_handles.push(handle_code);
+
+        // Deliberately gated on `result_presence_companion_exists` alone, with no second
+        // condition: the wrapper emitter in `ffi_class::sync_functions::returns` consults that
+        // same predicate and cannot see `ffi_excluded`, so any extra condition here would let the
+        // declaration and the call site disagree and reference an undeclared handle. ~keep
+        if let Some(handle) =
+            presence_handle_declaration(&func.return_type, None, &handle_name, &ffi_name, &param_layouts)
+        {
+            function_handles.push(handle);
+        }
 
         if is_ffi_string_return(&func.return_type) {
             let len_handle_name = format!("{}_{}_LEN", prefix.to_uppercase(), func.name.to_uppercase());
@@ -681,21 +663,7 @@ pub(crate) fn gen_native_lib(
             } else {
                 vec!["ValueLayout.ADDRESS".to_string()]
             };
-            for p in &method.params {
-                match &p.ty {
-                    TypeRef::Bytes => {
-                        param_layouts.push("ValueLayout.ADDRESS".to_string());
-                        param_layouts.push("ValueLayout.JAVA_LONG".to_string());
-                    }
-                    TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes) => {
-                        param_layouts.push("ValueLayout.ADDRESS".to_string());
-                        param_layouts.push("ValueLayout.JAVA_LONG".to_string());
-                    }
-                    other => {
-                        param_layouts.push(gen_ffi_layout_with_enums(other, &enum_names));
-                    }
-                }
-            }
+            push_param_layouts(&method.params, &enum_names, &mut param_layouts);
             let return_layout = if is_bytes_result_method(method) {
                 param_layouts.push("ValueLayout.ADDRESS".to_string());
                 param_layouts.push("ValueLayout.ADDRESS".to_string());
@@ -715,6 +683,16 @@ pub(crate) fn gen_native_lib(
                 },
             );
             function_handles.push(handle_code);
+
+            if let Some(handle) = presence_handle_declaration(
+                &method.return_type,
+                method.receiver.as_ref(),
+                &handle_name,
+                &ffi_name,
+                &param_layouts,
+            ) {
+                function_handles.push(handle);
+            }
 
             let return_named = match &method.return_type {
                 TypeRef::Named(n) => Some(n.clone()),

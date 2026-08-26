@@ -194,12 +194,22 @@ fn emit_bytes_return(out: &mut String, invocation: &SyncInvocation<'_>) {
 }
 
 fn emit_primitive_return(out: &mut String, invocation: &SyncInvocation<'_>) {
+    let call_args = invocation.call_args.join(", ");
+    let presence = crate::backends::java::gen_bindings::result_presence::presence_capture(
+        &invocation.func.return_type,
+        None,
+        &invocation.ffi_handle,
+        &call_args,
+    );
+    if let Some(capture) = &presence {
+        out.push_str(capture);
+    }
     out.push_str(&crate::backends::java::template_env::render(
         "ffi_invoke_primitive_result.jinja",
         minijinja::context! {
             cast_type => java_ffi_return_cast(&invocation.dispatch_return_type),
             ffi_handle => &invocation.ffi_handle,
-            call_args => invocation.call_args.join(", "),
+            call_args => &call_args,
         },
     ));
     if invocation.func.error_type.is_some() {
@@ -207,7 +217,14 @@ fn emit_primitive_return(out: &mut String, invocation: &SyncInvocation<'_>) {
     }
     let return_expr = java_ffi_return_expr(&invocation.dispatch_return_type, "primitiveResult");
     let return_expr = if invocation.is_optional_return {
-        format!("Optional.of({return_expr})")
+        let present = format!("Optional.of({return_expr})");
+        match presence {
+            Some(_) => crate::backends::java::gen_bindings::result_presence::presence_conditional(
+                &present,
+                "Optional.empty()",
+            ),
+            None => present,
+        }
     } else {
         return_expr
     };

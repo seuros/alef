@@ -1,5 +1,5 @@
 use crate::backends::java::type_map::java_ffi_type;
-use crate::core::ir::{FunctionDef, MethodDef, PrimitiveType, TypeRef};
+use crate::core::ir::{FunctionDef, MethodDef, ParamDef, PrimitiveType, TypeRef};
 use ahash::AHashSet;
 use heck::ToSnakeCase;
 
@@ -339,6 +339,29 @@ pub(crate) fn ffi_param_args(name: &str, ty: &TypeRef, _opaque_types: &AHashSet<
         },
         TypeRef::Primitive(PrimitiveType::Bool) => vec![format!("({name} ? 1 : 0)")],
         _ => vec![name.to_string()],
+    }
+}
+
+/// Append the FFI layout of every parameter to `layouts`.
+///
+/// A `Bytes` parameter (bare or `Optional`) occupies an address/length pair; everything else takes
+/// one layout. This is the single construction of that rule: the byte-buffer descriptor path, the
+/// ordinary free-function path, and the opaque-method path all build from it, so a downcall
+/// descriptor can never disagree with a sibling about a parameter's ABI width. Callers pass a Vec
+/// rather than receiving one because the method path pre-seeds the receiver's `ADDRESS`. ~keep
+pub(crate) fn push_param_layouts(params: &[ParamDef], enum_names: &AHashSet<String>, layouts: &mut Vec<String>) {
+    for param in params {
+        match &param.ty {
+            TypeRef::Bytes => {
+                layouts.push("ValueLayout.ADDRESS".to_string());
+                layouts.push("ValueLayout.JAVA_LONG".to_string());
+            }
+            TypeRef::Optional(inner) if matches!(inner.as_ref(), TypeRef::Bytes) => {
+                layouts.push("ValueLayout.ADDRESS".to_string());
+                layouts.push("ValueLayout.JAVA_LONG".to_string());
+            }
+            other => layouts.push(gen_ffi_layout_with_enums(other, enum_names)),
+        }
     }
 }
 

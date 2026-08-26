@@ -1,0 +1,13 @@
+
+    static final MethodHandle {{ handle_name }} = LINKER.downcallHandle(
+        LIB.find("{{ ffi_name }}")
+            .or(() -> LIB.find("_{{ ffi_name }}"))
+            .or(() -> LINKER.defaultLookup().find("{{ ffi_name }}"))
+            .or(() -> LINKER.defaultLookup().find("_{{ ffi_name }}"))
+            .orElseThrow(() -> new ExceptionInInitializerError(
+                "Native symbol not found: " + "{{ ffi_name }}" +
+                " (tried: {{ ffi_name }}, _{{ ffi_name }}). " +
+                "This is the presence companion for an Option-returning export; " +
+                "regenerate the FFI crate so it is exported alongside its primary function.")),
+        {{ layout }}
+    );

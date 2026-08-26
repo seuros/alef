@@ -11,6 +11,12 @@ struct InstanceMethodSymbols {
     is_bytes_result: bool,
     is_optional_return: bool,
     owned_receiver: bool,
+    /// The companion `MethodHandle` that answers whether this method's `Option` return was
+    /// `Some`, or `None` when the FFI crate exports no companion for this return type and
+    /// receiver. Resolved once, here, from the real `MethodDef` — the emitters downstream keep
+    /// only `dispatch_return` (the *unwrapped* inner type) and `owned_receiver`, so asking the
+    /// authority from there would mean rebuilding the very facts it judges. ~keep
+    presence_handle: Option<String>,
 }
 
 fn instance_method_symbols(
@@ -30,16 +36,23 @@ fn instance_method_symbols(
         other => (false, other.clone()),
     };
     let return_type_java = instance_return_type(method, is_bytes_result, is_optional_return);
+    let ffi_handle = format!("NativeLib.{prefix_upper}_{owner_upper}_{method_upper}");
+    let presence_handle = crate::backends::ffi::type_map::result_presence_companion_exists(
+        &method.return_type,
+        method.receiver.as_ref(),
+    )
+    .then(|| crate::backends::java::gen_bindings::result_presence::presence_handle_name(&ffi_handle));
     InstanceMethodSymbols {
         method_name: safe_java_method_name(&method.name),
         exception_class: format!("{main_class}Exception"),
-        ffi_handle: format!("NativeLib.{prefix_upper}_{owner_upper}_{method_upper}"),
+        ffi_handle,
         params_signature: method_params_signature(method),
         return_type_java,
         dispatch_return,
         is_bytes_result,
         is_optional_return,
         owned_receiver: method.receiver == Some(ReceiverKind::Owned),
+        presence_handle,
         prefix_upper,
     }
 }
@@ -474,11 +487,32 @@ fn emit_string_result(out: &mut String, context: &ResultMarshalling<'_>) {
 }
 
 fn emit_primitive_result(out: &mut String, context: &ResultMarshalling<'_>) {
+    use crate::backends::java::gen_bindings::result_presence;
+
     let symbols = context.symbols;
     let template = if symbols.is_optional_return {
         "stream_method_optional_primitive_result.jinja"
     } else {
         "stream_method_primitive_result.jinja"
+    };
+    let is_optional_long = matches!(
+        symbols.dispatch_return,
+        TypeRef::Primitive(
+            PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize
+        ) | TypeRef::Duration
+    );
+    let java_primitive_expr = java_ffi_return_expr(&symbols.dispatch_return, "result");
+    let (present_expr, empty_expr) = if is_optional_long {
+        ("java.util.OptionalLong.of(result)".to_string(), "java.util.OptionalLong.empty()")
+    } else {
+        (
+            format!("java.util.Optional.of({java_primitive_expr})"),
+            "java.util.Optional.empty()",
+        )
+    };
+    let return_expr = match &symbols.presence_handle {
+        Some(_) => result_presence::presence_conditional(&present_expr, empty_expr),
+        None => present_expr,
     };
     out.push_str(&crate::backends::java::template_env::render(
         template,
@@ -487,8 +521,14 @@ fn emit_primitive_result(out: &mut String, context: &ResultMarshalling<'_>) {
             args_joined => context.args_joined,
             named_frees => receiver_commit(symbols),
             java_primitive_type => java_ffi_return_cast(&symbols.dispatch_return),
-            java_primitive_expr => java_ffi_return_expr(&symbols.dispatch_return, "result"),
-            is_optional_long => matches!(symbols.dispatch_return, TypeRef::Primitive(PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::Isize | PrimitiveType::Usize) | TypeRef::Duration),
+            java_primitive_expr => java_primitive_expr,
+            is_optional_long => is_optional_long,
+            return_expr => return_expr,
+            presence_capture => symbols
+                .presence_handle
+                .as_ref()
+                .map(|handle| result_presence::presence_capture_line(handle, context.args_joined))
+                .unwrap_or_default(),
         },
     ));
 }

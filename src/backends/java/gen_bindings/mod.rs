@@ -13,6 +13,7 @@ pub mod helpers;
 mod line_wrap;
 mod marshal;
 mod native_lib;
+mod result_presence;
 mod service_api;
 pub mod trait_bridge;
 mod types;

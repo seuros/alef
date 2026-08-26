@@ -474,6 +474,14 @@ static TEMPLATES: &[(&str, &str)] = &[
         "duration_millis_deserializer.jinja",
         include_str!("templates/duration_millis_deserializer.jinja"),
     ),
+    (
+        "method_handle_presence.jinja",
+        include_str!("templates/method_handle_presence.jinja"),
+    ),
+    (
+        "presence_capture.jinja",
+        include_str!("templates/presence_capture.jinja"),
+    ),
 ];
 
 pub(crate) fn make_env() -> Environment<'static> {
