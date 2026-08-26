@@ -1,7 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const CACHE_DIR: &str = ".alef";
+/// Eager legacy-to-committed ownership migration -- see [`ownership::is_scaffold_owned_path`],
+/// re-exported below at this module's own path so every existing caller
+/// (`crate::cli::cache::is_scaffold_owned_path`) keeps compiling unchanged. Split out of this
+/// file on its own, rather than folded into the surrounding ownership-manifest code, purely to
+/// keep this already-oversized file from growing further -- see `file-modularization`. ~keep
+mod ownership;
+pub use ownership::is_scaffold_owned_path;
+
+pub(super) const CACHE_DIR: &str = ".alef";
 const PER_FILE_CACHE_NAME: &str = "sources_hash.cache";
 
 /// Read the raw bytes of the alef config file for use in [`crate::core::hash::compute_inputs_hash`].
@@ -308,7 +316,7 @@ pub fn read_scaffold_manifest(crate_name: &str) -> Vec<PathBuf> {
 /// of. Rooted at `base_dir` rather than the process CWD so parallel tests
 /// (each with their own tempdir `base_dir`) never share, and race on, the
 /// same manifest file. ~keep
-const OWNERSHIP_MANIFEST: &str = ".alef-ownership.toml";
+pub(super) const OWNERSHIP_MANIFEST: &str = ".alef-ownership.toml";
 
 /// The pre-#80 location of the same record, under the gitignored `.alef/` cache.
 ///
@@ -319,7 +327,7 @@ const OWNERSHIP_MANIFEST: &str = ".alef-ownership.toml";
 /// the first time alef performs an authorised write of that path. Dropping the
 /// read outright would be correct in the abstract and a mass outage in
 /// practice. ~keep
-const LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST: &str = "scaffold-owned-paths.manifest";
+pub(super) const LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST: &str = "scaffold-owned-paths.manifest";
 
 /// Preamble written above the path list.
 ///
@@ -363,7 +371,7 @@ const OWNERSHIP_MANIFEST_HEADER: &str = "\
 /// happen in practice, since every caller builds `path` via
 /// `base_dir.join(...)`, but a mismatched pair must degrade to "some key"
 /// rather than panic). ~keep
-fn scaffold_owned_path_key(base_dir: &Path, path: &Path) -> String {
+pub(super) fn scaffold_owned_path_key(base_dir: &Path, path: &Path) -> String {
     path.strip_prefix(base_dir)
         .unwrap_or(path)
         .to_string_lossy()
@@ -419,7 +427,7 @@ fn read_owned_paths_record(base_dir: &Path) -> OwnedPathsRecord {
 /// This is emphatically *not* the safe direction for a caller that rewrites the record from what
 /// it read back -- [`record_scaffold_owned_paths`] must refuse instead, because there the same
 /// empty `Vec` would erase every recorded path. ~keep
-fn read_committed_owned_paths(base_dir: &Path) -> Vec<String> {
+pub(super) fn read_committed_owned_paths(base_dir: &Path) -> Vec<String> {
     match read_owned_paths_record(base_dir) {
         OwnedPathsRecord::Present(paths) => paths,
         OwnedPathsRecord::Absent => Vec::new(),
@@ -435,7 +443,7 @@ fn read_committed_owned_paths(base_dir: &Path) -> Vec<String> {
     }
 }
 
-fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
+pub(super) fn read_legacy_owned_paths(base_dir: &Path) -> Vec<String> {
     let manifest_path = base_dir.join(CACHE_DIR).join(LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST);
     fs::read_to_string(manifest_path)
         .map(|content| {
@@ -603,26 +611,6 @@ pub fn record_scaffold_owned_paths(base_dir: &Path, paths: &[&Path]) -> anyhow::
     Ok(())
 }
 
-/// True when `path` was previously recorded by [`record_scaffold_owned_path`]
-/// for this `base_dir`.
-///
-/// Reads the committed [`OWNERSHIP_MANIFEST`] unioned with the legacy
-/// gitignored record (see [`LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST`]). Once the
-/// committed manifest is in the repository this answers identically on a fresh
-/// clone and on a warm machine, which is the whole point of moving it; the
-/// legacy half is the only remaining source of machine-local divergence and it
-/// can only ever say `true` where the old code already did. When neither knows
-/// the path the answer is `false` and the write-time guard refuses rather than
-/// risk clobbering foreign content. ~keep
-pub fn is_scaffold_owned_path(base_dir: &Path, path: &Path) -> bool {
-    note_untracked_required_records(base_dir);
-    let key = scaffold_owned_path_key(base_dir, path);
-    read_committed_owned_paths(base_dir)
-        .iter()
-        .chain(read_legacy_owned_paths(base_dir).iter())
-        .any(|existing| *existing == key)
-}
-
 /// The namespace alef reserves for its own bookkeeping artifacts, and the first of the
 /// two conditions [`is_alef_derived_output`] requires.
 ///
@@ -771,7 +759,7 @@ static REPORTED_RECORD_TRACKING: std::sync::Mutex<Option<std::collections::BTree
 /// `WARN`, not `ERROR`: per this repo's level contract the run is degraded but correct on
 /// this disk, and the output it produced is real. Escalation to a hard failure belongs to
 /// `alef verify`, via [`untracked_required_records`]. ~keep
-fn note_untracked_required_records(base_dir: &Path) {
+pub(super) fn note_untracked_required_records(base_dir: &Path) {
     {
         let mut reported = REPORTED_RECORD_TRACKING
             .lock()
@@ -1914,26 +1902,6 @@ mod tests {
             is_scaffold_owned_path(clone.path(), &clone.path().join(relative)),
             "a fresh clone must agree with the warm machine about what alef owns"
         );
-    }
-
-    /// A record written by a pre-#80 alef, which exists only under the
-    /// gitignored cache, must keep working -- otherwise upgrading turns every
-    /// unmarkable file in every existing consumer repo into a refusal at once.
-    #[test]
-    fn legacy_gitignored_record_is_still_honoured_for_reads() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let base = dir.path();
-        let relative = std::path::Path::new("packages/java/pom.xml");
-
-        std::fs::create_dir_all(base.join(CACHE_DIR)).expect("create legacy cache dir");
-        std::fs::write(
-            base.join(CACHE_DIR).join(LEGACY_SCAFFOLD_OWNED_PATHS_MANIFEST),
-            "packages/java/pom.xml\n",
-        )
-        .expect("seed legacy record");
-
-        assert!(!base.join(OWNERSHIP_MANIFEST).exists(), "no committed record yet");
-        assert!(is_scaffold_owned_path(base, &base.join(relative)));
     }
 
     /// One bad hand-edit must cost the edit, not the record. `record_scaffold_owned_paths`
