@@ -1,1 +1,2 @@
-            "{{ tag_val }}" => {{ core_path }}::{{ variant_name }},
+{% if cfg %}            #[cfg({{ cfg }})]
+{% endif %}            "{{ tag_val }}" => {{ core_path }}::{{ variant_name }},

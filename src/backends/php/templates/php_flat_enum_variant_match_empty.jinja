@@ -1,1 +1,2 @@
-            {{ core_path }}::{{ variant_name }} => Self { {{ tag_field }}_tag: "{{ tag_val }}".to_string(){% if needs_default %}, ..Default::default(){% endif %} },
+{% if cfg %}            #[cfg({{ cfg }})]
+{% endif %}            {{ core_path }}::{{ variant_name }} => Self { {{ tag_field }}_tag: "{{ tag_val }}".to_string(){% if needs_default %}, ..Default::default(){% endif %} },
