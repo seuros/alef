@@ -51,7 +51,8 @@
 
     defp find_handler(_method, []), do: nil
 
-    defp find_handler(target, [{name, _metadata, _handler} = entry | _rest]) when name == target do
+    defp find_handler(target, [{name, _metadata, _handler} = entry | _rest])
+         when name == target do
       entry
     end
 

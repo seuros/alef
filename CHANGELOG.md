@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Generated output that is not formatter-canonical by construction.** Three emitters produced
+  output a consumer's own formatter rewrites: `binding.go`'s stdlib import block was assembled by
+  manual insert-position juggling that mis-ordered one real combination (declared errors, no sync
+  functions or non-static methods); e2e `main_test.go` had an unsorted import block, two one-line
+  `if err != nil { panic(err) }` checks, a one-line `go func() { for … } }()` drain, and
+  gofmt-incorrect `+` spacing; and the Elixir `GenServer` template carried a double blank line and a
+  pre-joined `when` clause one column past `mix format`'s limit. Each drift let a consumer's
+  `gofmt -w` or `mix format` rewrite the file *after* alef hashed and stamped it, permanently
+  stranding it outside alef's ownership. All three now round-trip byte-identically through the real
+  formatter, asserted by tests that invoke `gofmt`/`mix format` and self-skip when absent.
+
 - **Ownership markers alef itself refused to recognise.** The PHP `install.sh`, R `install.R`, and
   Node/napi e2e `.npmrc` emitters hand-spelled an `alef-generated` marker string that alef's own
   `content_has_alef_marker` guard does not match. All three are `generated_header: false`, so the

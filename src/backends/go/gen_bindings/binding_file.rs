@@ -656,8 +656,11 @@ mod import_order_tests {
     /// Negative control: an already-canonical import list must not be reordered.
     #[test]
     fn import_lines_sort_is_a_no_op_when_already_canonical() {
-        let mut import_lines: Vec<String> =
-            vec!["\"encoding/json\"".to_string(), "\"errors\"".to_string(), "\"fmt\"".to_string()];
+        let mut import_lines: Vec<String> = vec![
+            "\"encoding/json\"".to_string(),
+            "\"errors\"".to_string(),
+            "\"fmt\"".to_string(),
+        ];
         let before = import_lines.clone();
         import_lines.sort_by(|a, b| go_import_sort_key(a).cmp(go_import_sort_key(b)));
         assert_eq!(import_lines, before);
