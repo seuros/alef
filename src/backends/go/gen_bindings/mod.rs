@@ -428,4 +428,7 @@ impl Backend for GoBackend {
 }
 
 #[cfg(test)]
+mod ffi_parity_tests;
+
+#[cfg(test)]
 mod tests;
