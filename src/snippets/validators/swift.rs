@@ -2,7 +2,7 @@ use crate::snippets::error::Result;
 use crate::snippets::scratch::ScratchDir;
 use crate::snippets::session::ValidationSession;
 use crate::snippets::types::{Language, Snippet, SnippetStatus, ValidationLevel};
-use crate::snippets::validators::{SnippetValidator, run_command};
+use crate::snippets::validators::{SnippetValidator, run_command, run_command_streams};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -79,7 +79,7 @@ impl SnippetValidator for SwiftValidator {
         let dir = session.scratch_dir()?;
         let file = dir.path().join("snippet.swift");
         std::fs::write(&file, snippet.code.trim())?;
-        let module_directories = self.module_directories(session)?;
+        let module_directories = self.module_directories(session, timeout_secs)?;
         let mut command = std::process::Command::new("swiftc");
         match level {
             ValidationLevel::Syntax => {
@@ -122,8 +122,8 @@ impl SnippetValidator for SwiftValidator {
 }
 
 impl SwiftValidator {
-    fn module_directories(&self, session: &ValidationSession) -> Result<Vec<std::path::PathBuf>> {
-        self.cached_module_directories(session, || swift_module_directories(session))
+    fn module_directories(&self, session: &ValidationSession, timeout_secs: u64) -> Result<Vec<std::path::PathBuf>> {
+        self.cached_module_directories(session, || swift_module_directories(session, timeout_secs))
     }
 
     fn cached_module_directories(
@@ -163,20 +163,25 @@ fn swift_module_lookup(session: &ValidationSession) -> SwiftModuleLookup {
     }
 }
 
-fn swift_module_directories(session: &ValidationSession) -> Result<Vec<std::path::PathBuf>> {
+/// `swift build --show-bin-path` is not a lookup: SwiftPM resolves the package first, which can
+/// fetch dependencies over the network and, on a package it cannot resolve, retry until something
+/// gives up. It ran unbounded here while every other subprocess in snippet validation was already
+/// under the session's `timeout_secs`; it is now under the same bound, and the same process-group
+/// teardown, as the `swiftc` invocation it feeds. ~keep
+fn swift_module_directories(session: &ValidationSession, timeout_secs: u64) -> Result<Vec<std::path::PathBuf>> {
     let mut command = std::process::Command::new("swift");
     command.args(["build", "--show-bin-path"]);
     session.apply(&mut command);
     if let Some(package_root) = session.manifest.as_deref().and_then(std::path::Path::parent) {
         command.current_dir(package_root);
     }
-    let output = command.output()?;
-    if !output.status.success() {
+    let captured = run_command_streams(&mut command, timeout_secs)?;
+    if !captured.success {
         return Err(crate::snippets::error::Error::Other(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            crate::snippets::diagnostics::bounded_text(captured.stderr.trim()),
         ));
     }
-    let binary_directory = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    let binary_directory = std::path::PathBuf::from(captured.stdout.trim());
     swift_module_directories_in(&binary_directory)
 }
 

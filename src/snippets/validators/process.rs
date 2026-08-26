@@ -37,6 +37,15 @@ fn strip_ansi_codes(input: &str) -> String {
 /// flush what is already buffered and is then torn down with the rest of the group. ~keep
 const OUTPUT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// A finished command's exit verdict and its two output streams, kept apart for the callers that
+/// parse one of them -- `swift build --show-bin-path` prints a path on stdout while SwiftPM's
+/// resolution chatter lands on stderr, and merging the two makes the path unfindable. ~keep
+pub struct CapturedStreams {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
 /// Run a child process with a timeout and capture combined stdout/stderr.
 ///
 /// Returns within `timeout_secs` plus [`OUTPUT_DRAIN_GRACE`], whatever the child's descendants do
@@ -46,6 +55,16 @@ const OUTPUT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5
 ///
 /// Returns an error when the child process cannot be spawned, waited on, or times out.
 pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Result<(bool, String)> {
+    let captured = run_command_streams(command, timeout_secs)?;
+    Ok((captured.success, format!("{}{}", captured.stdout, captured.stderr)))
+}
+
+/// [`run_command`] with the two output streams reported separately, under the identical bound.
+///
+/// # Errors
+///
+/// Returns an error when the child process cannot be spawned, waited on, or times out.
+pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u64) -> Result<CapturedStreams> {
     sanitize_environment(command);
     configure_process_group(command);
     let mut child = command
@@ -69,7 +88,11 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
                 );
                 kill_process_tree(&mut child);
             }
-            Ok((status.success(), strip_ansi_codes(&drained.text)))
+            Ok(CapturedStreams {
+                success: status.success(),
+                stdout: strip_ansi_codes(&drained.stdout),
+                stderr: strip_ansi_codes(&drained.stderr),
+            })
         }
         Ok(None) => {
             kill_process_tree(&mut child);
@@ -127,10 +150,11 @@ struct OutputReader {
     finished: std::sync::mpsc::Receiver<std::io::Result<()>>,
 }
 
-/// A command's combined output, and whether every stream reached end of stream before the drain
-/// budget ran out.
+/// A command's output, and whether every stream reached end of stream before the drain budget ran
+/// out.
 struct DrainedOutput {
-    text: String,
+    stdout: String,
+    stderr: String,
     complete: bool,
 }
 
@@ -169,9 +193,13 @@ fn collect_output_within(
     budget: std::time::Duration,
 ) -> Result<DrainedOutput> {
     let deadline = std::time::Instant::now() + budget;
-    let mut bytes = Vec::new();
     let mut complete = true;
-    for reader in [stdout, stderr].into_iter().flatten() {
+    let mut drained = Vec::with_capacity(2);
+    for reader in [stdout, stderr] {
+        let Some(reader) = reader else {
+            drained.push(String::new());
+            continue;
+        };
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         match reader.finished.recv_timeout(remaining) {
             Ok(Ok(())) => {}
@@ -183,10 +211,12 @@ fn collect_output_within(
                 ));
             }
         }
-        bytes.extend_from_slice(&lock(&reader.buffer));
+        drained.push(String::from_utf8_lossy(&lock(&reader.buffer)).into_owned());
     }
+    let mut streams = drained.into_iter();
     Ok(DrainedOutput {
-        text: String::from_utf8_lossy(&bytes).into_owned(),
+        stdout: streams.next().unwrap_or_default(),
+        stderr: streams.next().unwrap_or_default(),
         complete,
     })
 }
@@ -565,6 +595,21 @@ mod process_tests {
             wait_until_gone(holder),
             "pipe holder {holder} was left running after run_command returned"
         );
+    }
+
+    /// A caller that parses one stream must not have to find it inside the other: SwiftPM prints
+    /// the bin path on stdout while its resolution chatter goes to stderr, and merging them is
+    /// what made bounding that call require a separated capture in the first place. ~keep
+    #[test]
+    fn the_two_output_streams_are_reported_separately_to_callers_that_parse_one() {
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", "echo /path/to/bin; echo 'warning: resolving' 1>&2"]);
+
+        let captured = super::run_command_streams(&mut command, 5).expect("well-behaved command");
+
+        assert!(captured.success);
+        assert_eq!(captured.stdout, "/path/to/bin\n");
+        assert_eq!(captured.stderr, "warning: resolving\n");
     }
 
     /// The bound must not cost a well-behaved command its output: a child that writes and exits is
