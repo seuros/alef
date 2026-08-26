@@ -283,6 +283,12 @@ fn c_return_optional(inner: &TypeRef, core_import: &str) -> String {
         TypeRef::Optional(inner2) => match inner2.as_ref() {
             TypeRef::Primitive(PrimitiveType::Bool) => "i32".to_string(),
             TypeRef::Primitive(_) => c_return_type(inner2, core_import).into_owned(),
+            // `Option<Option<Named>>` returns a handle, exactly like the single-level
+            // `Option<Named>` one line below. This arm used to fall through to `*mut c_char`
+            // while the emitted body (`gen_owned_value_to_c` -> `insert_handle`) and the absent
+            // branch (`null_return_value`, which answers `0` for this shape) both produced a
+            // handle -- a declaration the function's own body could not satisfy. ~keep
+            TypeRef::Named(_) => "AlefHandle".to_string(),
             _ => "*mut std::ffi::c_char".to_string(),
         },
         TypeRef::String | TypeRef::Char | TypeRef::Path | TypeRef::Json => "*mut std::ffi::c_char".to_string(),
@@ -536,6 +542,23 @@ mod tests {
             c_return_type(&TypeRef::Optional(Box::new(TypeRef::Named("Foo".to_string()))), CORE),
             "AlefHandle"
         );
+    }
+
+    /// A C function returns one value, so `Option<Option<Named>>` collapses to the same handle
+    /// the single-level `Option<Named>` returns. The declaration used to say `*mut c_char` while
+    /// the emitted body handed back `insert_handle(..)` and the absent branch handed back the
+    /// handle-shaped `0` -- three answers to one question, only one of which cbindgen writes into
+    /// the header. Asserting the declaration alone would not have caught it, so this pins it
+    /// against the single-level spelling that the body and the null value already agree with.
+    /// ~keep
+    #[test]
+    fn should_return_a_handle_when_a_nested_option_returns_a_named_type() {
+        let single = TypeRef::Optional(Box::new(TypeRef::Named("Foo".to_string())));
+        let nested = TypeRef::Optional(Box::new(single.clone()));
+
+        assert_eq!(c_return_type(&nested, CORE), "AlefHandle");
+        assert_eq!(c_return_type(&nested, CORE), c_return_type(&single, CORE));
+        assert_ne!(c_return_type(&nested, CORE), "*mut std::ffi::c_char");
     }
 
     /// `optional_return_crosses_as_scalar` is the fact every C-ABI-consuming backend asks instead
