@@ -5,10 +5,34 @@
 use crate::codegen::generators::trait_bridge::to_camel_case;
 use crate::core::backend::TraitBridgeRegistrationSurface;
 use crate::core::config::{ResolvedCrateConfig, TraitBridgeConfig};
-use crate::core::ir::ApiSurface;
+use crate::core::ir::{ApiSurface, TypeDef};
 
-pub(super) fn forward_trait_bridge_builder_fields(mut content: String, trait_bridges: &[TraitBridgeConfig]) -> String {
-    for bridge in trait_bridges {
+/// The `exclude_languages` spellings that name this target. WASM has no second spelling — the
+/// language and the backend are both `"wasm"` — but the gate is expressed as a list so it reads
+/// the same here as in the backends that do. ~keep
+const TARGET_SPELLINGS: [&str; 1] = ["wasm"];
+
+/// Whether `bridge` is emitted for the WASM target at all.
+pub(super) fn targets_wasm(bridge: &TraitBridgeConfig) -> bool {
+    crate::codegen::generators::trait_bridge::bridge_targets_language(bridge, &TARGET_SPELLINGS)
+}
+
+/// The configured bridges WASM actually emits, in configuration order.
+///
+/// Every site that enumerates bridges — the `#[wasm_bindgen]` items, the options-field wiring,
+/// the opaque-alias set, and `WasmBackend::trait_bridge_registration_surface` — iterates this,
+/// so no pass can wire up a bridge another pass skipped. ~keep
+pub(super) fn active_bridges(config: &ResolvedCrateConfig) -> impl Iterator<Item = &TraitBridgeConfig> {
+    config.trait_bridges.iter().filter(|bridge| targets_wasm(bridge))
+}
+
+/// The trait a bridge wraps, when WASM emits that bridge at all.
+pub(super) fn active_bridge_trait<'a>(bridge: &TraitBridgeConfig, api: &'a ApiSurface) -> Option<&'a TypeDef> {
+    crate::codegen::generators::trait_bridge::active_bridge_trait_def(bridge, api, &TARGET_SPELLINGS)
+}
+
+pub(super) fn forward_trait_bridge_builder_fields(mut content: String, config: &ResolvedCrateConfig) -> String {
+    for bridge in active_bridges(config) {
         if let Some(field_name) = bridge.resolved_options_field() {
             let param_name = bridge.param_name.as_deref().unwrap_or(field_name);
             let pattern = format!(".{}({}.as_ref().map(|v| &v.inner))", field_name, param_name);
@@ -25,9 +49,8 @@ pub(super) fn forward_trait_bridge_builder_fields(mut content: String, trait_bri
 /// Registration additionally requires `registry_getter`, without which
 /// `WasmBridgeGenerator::gen_registration_fn` emits nothing.
 ///
-/// `exclude_languages` is deliberately not consulted: the WASM emission path does not check it
-/// either, so filtering here would hide a function the module really does export. The only gate
-/// the emitter applies is that the trait resolve in the `ApiSurface`. ~keep
+/// `active_bridge_trait` is the same gate the emission path applies before calling
+/// `gen_trait_bridge`, so an `exclude_languages`-suppressed bridge is absent from both. ~keep
 pub(super) fn registration_surface(
     api: &ApiSurface,
     config: &ResolvedCrateConfig,
@@ -36,7 +59,7 @@ pub(super) fn registration_surface(
         .trait_bridges
         .iter()
         .filter_map(|bridge| {
-            let trait_def = api.types.iter().find(|t| t.is_trait && t.name == bridge.trait_name)?;
+            let trait_def = active_bridge_trait(bridge, api)?;
             // A visitor bridge takes `gen_visitor_bridge`, which emits no registry API. ~keep
             let is_visitor_bridge = bridge.type_alias.is_some()
                 && bridge.register_fn.is_none()

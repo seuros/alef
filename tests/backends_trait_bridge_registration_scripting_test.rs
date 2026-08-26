@@ -262,6 +262,32 @@ fn wasm_surface_names_the_js_names_stamped_on_the_wasm_bindgen_exports() {
 }
 
 #[test]
+fn wasm_emits_no_bridge_and_reports_no_surface_when_the_target_is_excluded() {
+    let mut config = minimal_config("wasm", "");
+    config.trait_bridges[0].exclude_languages = vec!["wasm".to_owned()];
+
+    let surfaces = WasmBackend.trait_bridge_registration_surface(&plugin_api(), &config);
+    let generated = generated_text(&WasmBackend, &config);
+
+    assert_eq!(
+        surfaces.len(),
+        0,
+        "`exclude_languages = [\"wasm\"]` suppresses the `#[wasm_bindgen]` items, so nothing is \
+         left to document; got {surfaces:?}"
+    );
+    for js_name in ["installSamplePlugin", "removeSamplePlugin", "clearSamplePlugins"] {
+        assert!(
+            !generated.contains(js_name),
+            "`exclude_languages = [\"wasm\"]` must suppress the `{js_name}` export too"
+        );
+    }
+    assert!(
+        !generated.contains("WasmSamplePluginBridge"),
+        "`exclude_languages = [\"wasm\"]` must suppress the bridge wrapper struct"
+    );
+}
+
+#[test]
 fn magnus_surface_names_the_module_functions_bound_under_the_configured_names() {
     let config = minimal_config("ruby", "");
     let surface = only_surface(&MagnusBackend, &config);

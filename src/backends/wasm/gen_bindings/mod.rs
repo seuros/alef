@@ -140,9 +140,7 @@ fn wasm_export_candidates<'a>(
     functions: &'a [crate::core::ir::FunctionDef],
     config: &'a ResolvedCrateConfig,
 ) -> impl Iterator<Item = &'a str> {
-    let bridge_registry_fns = config
-        .trait_bridges
-        .iter()
+    let bridge_registry_fns = trait_bridge_docs::active_bridges(config)
         .flat_map(|bridge| {
             [
                 bridge.register_fn.as_deref(),
@@ -550,9 +548,7 @@ impl Backend for WasmBackend {
             }
         }
 
-        let bridge_type_aliases: AHashSet<String> = config
-            .trait_bridges
-            .iter()
+        let bridge_type_aliases: AHashSet<String> = trait_bridge_docs::active_bridges(config)
             .filter_map(|b| b.type_alias.clone())
             .collect();
         let mut opaque_names_vec: Vec<String> = opaque_types.iter().cloned().collect();
@@ -810,9 +806,11 @@ impl Backend for WasmBackend {
                 if refs_excluded {
                     continue;
                 }
-                let bridge_param = crate::backends::wasm::trait_bridge::find_bridge_param(func, &config.trait_bridges);
+                let bridge_param = crate::backends::wasm::trait_bridge::find_bridge_param(func, &config.trait_bridges)
+                    .filter(|(_, bridge_cfg)| trait_bridge_docs::targets_wasm(bridge_cfg));
                 let options_field_bridge =
                     crate::backends::wasm::trait_bridge::find_options_field_binding(func, &config.trait_bridges)
+                        .filter(|(_, bridge_cfg)| trait_bridge_docs::targets_wasm(bridge_cfg))
                         .filter(|(_, bridge_cfg)| {
                             let Some(field_name) = bridge_cfg.resolved_options_field() else {
                                 return false;
@@ -870,7 +868,7 @@ impl Backend for WasmBackend {
         }
 
         for bridge_cfg in &config.trait_bridges {
-            if let Some(trait_type) = api.types.iter().find(|t| t.is_trait && t.name == bridge_cfg.trait_name) {
+            if let Some(trait_type) = trait_bridge_docs::active_bridge_trait(bridge_cfg, api) {
                 let bridge = crate::backends::wasm::trait_bridge::gen_trait_bridge(
                     trait_type,
                     bridge_cfg,
@@ -886,9 +884,7 @@ impl Backend for WasmBackend {
             }
         }
 
-        let trait_bridge_arc_wrapper_field_names: Vec<String> = config
-            .trait_bridges
-            .iter()
+        let trait_bridge_arc_wrapper_field_names: Vec<String> = trait_bridge_docs::active_bridges(config)
             .filter(|b| b.bind_via == crate::core::config::BridgeBinding::OptionsField)
             .filter_map(|b| b.resolved_options_field().map(String::from))
             .collect();
@@ -993,9 +989,9 @@ impl Backend for WasmBackend {
         let mut content = builder.build();
         content = fix_dropped_payload_enum_option_fields(content);
 
-        content = forward_trait_bridge_builder_fields(content, &config.trait_bridges);
+        content = forward_trait_bridge_builder_fields(content, config);
 
-        for bridge in &config.trait_bridges {
+        for bridge in trait_bridge_docs::active_bridges(config) {
             if bridge.bind_via != crate::core::config::BridgeBinding::OptionsField {
                 continue;
             }
