@@ -11,4 +11,4 @@
 crates = []
 
 [workspace]
-alef_version = "0.69.0"
+alef_version = "0.70.0"
