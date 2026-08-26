@@ -2,8 +2,15 @@ use std::path::Path;
 
 use crate::core::config::Language;
 use crate::core::config::output::StringOrVec;
+use crate::process::capture::{
+    OUTPUT_DRAIN_GRACE, StreamDrain, collect_output_within, output_reader, spawn_drain, wait_for_drains,
+};
+use crate::process::timed::{Deadline, GroupChild};
 use anyhow::Context as _;
 use tracing::info;
+
+#[cfg(all(test, unix))]
+mod timeout_tests;
 
 /// Run a shell command, logging and failing on non-zero exit.
 pub(crate) fn run_command(cmd: &str) -> anyhow::Result<()> {
@@ -169,8 +176,12 @@ fn pump_lines<R: std::io::Read>(reader: R, prefix: &str) {
 /// `cwd` is the directory the child shell inherits as its working directory. Used
 /// by `setup` so install commands run from each binding's manifest directory
 /// (e.g. `packages/swift` for `swift package resolve`). Output is piped to the
-/// parent's stderr live (line-prefixed when `label` is set), and the child is
-/// killed if the deadline elapses.
+/// parent's stderr live (line-prefixed when `label` is set).
+///
+/// When `timeout_secs` is set the child leads its own process group and the deadline kills that
+/// whole group -- the `sh` wrapper alone is never what needs killing, since it is the `gradlew`
+/// and the daemon underneath it that outlive the budget. The untimed path is left in the
+/// terminal's foreground group deliberately, where Ctrl-C already reaches it by delivery. ~keep
 pub(crate) fn run_command_streamed_with_cwd_and_timeout(
     cmd: &str,
     label: Option<&str>,
@@ -211,59 +222,69 @@ fn run_command_streamed_full(
         command.env(key, value);
     }
 
-    let mut child = if prefix.is_some() {
+    if prefix.is_some() {
         command
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .with_context(|| format!("failed to spawn: {cmd}"))?
-    } else {
-        command.spawn().with_context(|| format!("failed to spawn: {cmd}"))?
-    };
-
-    let h_out = if let (Some(p), Some(s)) = (prefix.clone(), child.stdout.take()) {
-        Some(std::thread::spawn(move || pump_lines(s, &p)))
-    } else {
-        None
-    };
-    let h_err = if let (Some(p), Some(s)) = (prefix.clone(), child.stderr.take()) {
-        Some(std::thread::spawn(move || pump_lines(s, &p)))
-    } else {
-        None
-    };
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                if let Some(h) = h_out {
-                    let _ = h.join();
-                }
-                if let Some(h) = h_err {
-                    let _ = h.join();
-                }
-                if !status.success() {
-                    anyhow::bail!("Command failed: {cmd}");
-                }
-                return Ok(());
-            }
-            None => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    anyhow::bail!("Command timed out after {secs}s: {cmd}");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
+            .stderr(std::process::Stdio::piped());
     }
+
+    let mut child = GroupChild::spawn(&mut command).with_context(|| format!("failed to spawn: {cmd}"))?;
+    let out_pump = prefix.clone().zip(child.take_stdout()).map(pump_in_background);
+    let err_pump = prefix.clone().zip(child.take_stderr()).map(pump_in_background);
+
+    let waited = child
+        .wait_within(std::time::Duration::from_secs(secs), &cmd)
+        .with_context(|| format!("failed to wait on: {cmd}"))?;
+    let Deadline::Exited(status) = waited else {
+        anyhow::bail!("Command timed out after {secs}s: {cmd}");
+    };
+
+    finish_pumping_or_kill(&mut child, [out_pump, err_pump], cmd);
+    if !status.success() {
+        anyhow::bail!("Command failed: {cmd}");
+    }
+    Ok(())
+}
+
+/// Copies one of the child's streams to alef's stderr on a thread that reports when it reaches
+/// end of stream, rather than one that is joined unconditionally.
+fn pump_in_background<R: std::io::Read + Send + 'static>((prefix, stream): (String, R)) -> StreamDrain {
+    spawn_drain(move || {
+        pump_lines(stream, &prefix);
+        Ok(())
+    })
+}
+
+/// Waits out the pumps that were still running when the command exited, then kills the tree if
+/// any of them is still holding a pipe.
+///
+/// The pumps used to be `join`ed. A child hands its stdout and stderr to every descendant it
+/// starts, so a descendant that outlives the command -- a Gradle daemon, anything a hook
+/// backgrounded -- keeps the write end open and that `join` never returns: a bounded wait
+/// followed by an unbounded drain is still unbounded, and it is how a command under a 1800s
+/// budget ran past half an hour without ever being killed. ~keep
+fn finish_pumping_or_kill(child: &mut GroupChild, pumps: [Option<StreamDrain>; 2], cmd: &str) {
+    let pending = pumps.iter().flatten().collect::<Vec<_>>();
+    if pending.is_empty() {
+        return;
+    }
+    if wait_for_drains(pending, OUTPUT_DRAIN_GRACE).unwrap_or(false) {
+        return;
+    }
+    tracing::warn!(
+        command = cmd,
+        grace_seconds = OUTPUT_DRAIN_GRACE.as_secs(),
+        "a descendant outlived the command still holding its output pipes; killing the process group"
+    );
+    child.kill_tree();
 }
 
 /// Run a shell command with an optional timeout.
 ///
-/// If `timeout_secs` is `Some(n)`, kills the child process after `n` seconds and
-/// returns a "timed out" error. Otherwise behaves identically to
-/// [`run_command_captured`].
+/// If `timeout_secs` is `Some(n)`, kills the child's whole process group after `n` seconds and
+/// returns a "timed out" error; the returned output is bounded by that deadline plus
+/// [`OUTPUT_DRAIN_GRACE`], whatever the child's descendants do with the pipes they inherited.
+/// Otherwise behaves identically to [`run_command_captured`].
 pub(crate) fn run_command_captured_with_timeout(
     cmd: &str,
     timeout_secs: Option<u64>,
@@ -272,34 +293,40 @@ pub(crate) fn run_command_captured_with_timeout(
         return run_command_captured(cmd);
     };
     info!("Running (timeout {secs}s): {cmd}");
-    let mut child = std::process::Command::new("sh")
+    let mut command = std::process::Command::new("sh");
+    command
         .args(["-c", cmd])
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| format!("failed to spawn: {cmd}"))?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
-    loop {
-        match child.try_wait()? {
-            Some(status) => {
-                let output = child.wait_with_output()?;
-                let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-                let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-                if !status.success() {
-                    anyhow::bail!("Command failed: {cmd}\n{stderr}");
-                }
-                return Ok((stdout, stderr));
-            }
-            None => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    anyhow::bail!("Command timed out after {secs}s: {cmd}");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-        }
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = GroupChild::spawn(&mut command).with_context(|| format!("failed to spawn: {cmd}"))?;
+    // The readers run alongside the wait, not after it. A child that fills the OS pipe buffer
+    // blocks on the write and never exits, so a wait that does not drain concurrently turns every
+    // chatty before-hook into a command that can only end by timing out. ~keep
+    let stdout = child.take_stdout().map(output_reader);
+    let stderr = child.take_stderr().map(output_reader);
+
+    let waited = child
+        .wait_within(std::time::Duration::from_secs(secs), &cmd)
+        .with_context(|| format!("failed to wait on: {cmd}"))?;
+    let Deadline::Exited(status) = waited else {
+        anyhow::bail!("Command timed out after {secs}s: {cmd}");
+    };
+
+    let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)
+        .with_context(|| format!("failed to read the output of: {cmd}"))?;
+    if !drained.complete {
+        tracing::warn!(
+            command = cmd,
+            grace_seconds = OUTPUT_DRAIN_GRACE.as_secs(),
+            "a descendant outlived the command still holding its output pipes; killing the process group"
+        );
+        child.kill_tree();
     }
+    if !status.success() {
+        anyhow::bail!("Command failed: {cmd}\n{}", drained.stderr);
+    }
+    Ok((drained.stdout, drained.stderr))
 }
 
 /// Run a shell command, capturing stdout and stderr.
