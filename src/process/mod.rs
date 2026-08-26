@@ -13,6 +13,7 @@
 
 pub(crate) mod capture;
 pub(crate) mod termination;
+pub(crate) mod timed;
 
 /// Puts `command`'s child in a new process group of its own, so its whole tree can be addressed
 /// by one signal.

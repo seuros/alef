@@ -2,7 +2,7 @@
 //! process-group lifecycle in [`crate::process`].
 
 use crate::process::capture::{OUTPUT_DRAIN_GRACE, collect_output_within, output_reader};
-use crate::process::{WaitTimeout as _, configure_process_group, kill_process_tree};
+use crate::process::timed::{Deadline, GroupChild};
 use crate::snippets::error::Result;
 
 fn strip_ansi_codes(input: &str) -> String {
@@ -55,19 +55,18 @@ pub fn run_command(command: &mut std::process::Command, timeout_secs: u64) -> Re
 /// Returns an error when the child process cannot be spawned, waited on, or times out.
 pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u64) -> Result<CapturedStreams> {
     sanitize_environment(command);
-    configure_process_group(command);
-    let mut child = command
+    command
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+        .stderr(std::process::Stdio::piped());
+    let mut child = GroupChild::spawn(command)
         .map_err(|err| crate::snippets::error::Error::Other(format!("spawn failed: {err}")))?;
-    let _tracked = crate::process::termination::track(&child);
-    let stdout = child.stdout.take().map(output_reader);
-    let stderr = child.stderr.take().map(output_reader);
+    let stdout = child.take_stdout().map(output_reader);
+    let stderr = child.take_stderr().map(output_reader);
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
-    match child.wait_timeout(timeout) {
-        Ok(Some(status)) => {
+    let waited = child.wait_within(timeout, &*command);
+    match waited {
+        Ok(Deadline::Exited(status)) => {
             let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)
                 .map_err(crate::snippets::error::Error::from)?;
             if !drained.complete {
@@ -76,7 +75,7 @@ pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u6
                     grace_secs = OUTPUT_DRAIN_GRACE.as_secs(),
                     "a descendant outlived the command still holding its output pipes; killing the process group"
                 );
-                kill_process_tree(&mut child);
+                child.kill_tree();
             }
             Ok(CapturedStreams {
                 success: status.success(),
@@ -84,9 +83,7 @@ pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u6
                 stderr: strip_ansi_codes(&drained.stderr),
             })
         }
-        Ok(None) => {
-            kill_process_tree(&mut child);
-            let _ = child.wait();
+        Ok(Deadline::Expired) => {
             let _ = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE);
             Err(crate::snippets::error::Error::Timeout {
                 command: format!("{command:?}"),
@@ -94,8 +91,6 @@ pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u6
             })
         }
         Err(err) => {
-            kill_process_tree(&mut child);
-            let _ = child.wait();
             let _ = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE);
             Err(crate::snippets::error::Error::Other(format!("wait failed: {err}")))
         }
