@@ -1,0 +1,87 @@
+//! Names of the Java trait-bridge registration API.
+//!
+//! `trait_bridge.rs` emits the class and its methods; `JavaBackend::trait_bridge_registration_
+//! surface` reports them to the reference-doc renderer. Both spell the names from here so the
+//! docs cannot describe a method the emitted class does not declare.
+
+use crate::core::backend::TraitBridgeRegistrationSurface;
+use crate::core::config::{BridgeBinding, Language, ResolvedCrateConfig};
+use crate::core::ir::ApiSurface;
+use heck::ToPascalCase;
+
+/// PascalCase form of a trait name, as every emitted Java identifier derived from it spells it.
+pub(crate) fn trait_pascal(trait_name: &str) -> String {
+    trait_name.to_pascal_case()
+}
+
+/// The static class holding the registration methods, e.g. `SamplePluginBridge`.
+pub(crate) fn bridge_class_name(trait_pascal: &str) -> String {
+    format!("{trait_pascal}Bridge")
+}
+
+/// `register<Trait>` — always emitted, and named after the trait rather than the configured
+/// `register_fn`.
+pub(crate) fn register_method_name(trait_pascal: &str) -> String {
+    format!("register{trait_pascal}")
+}
+
+/// `unregister<Trait>` — emitted only when `unregister_fn` is configured, but named after the
+/// trait, not after that configured value.
+pub(crate) fn unregister_method_name(trait_pascal: &str) -> String {
+    format!("unregister{trait_pascal}")
+}
+
+/// `clear<Plural>` — the one registration method whose name *is* derived from its configured
+/// value, so that `clear_text_backends` becomes `clearTextBackends` and keeps the plural the
+/// Rust side spells. The `clear_` prefix is re-attached rather than camel-cased along with the
+/// rest, so a `clear_fn` that does not start with `clear_` still yields a `clear`-prefixed
+/// method. ~keep
+pub(crate) fn clear_method_name(clear_fn: &str) -> String {
+    let without_prefix = clear_fn.strip_prefix("clear_").unwrap_or(clear_fn);
+    let mut camel = String::from("clear");
+    for word in without_prefix.split('_') {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            camel.extend(first.to_uppercase());
+            camel.push_str(chars.as_str());
+        }
+    }
+    camel
+}
+
+/// The registration API `gen_trait_bridge_files` emits for each configured bridge.
+///
+/// Mirrors the gates `JavaBackend::generate_bindings` applies before calling it: the bridge must
+/// not exclude `java`, an `options_field` bridge is handled by the visitor path instead, and the
+/// trait must resolve in the `ApiSurface`. The visitor gate is only active when the crate has a
+/// visitor pattern, matching the emitter. ~keep
+pub(crate) fn registration_surface(
+    api: &ApiSurface,
+    config: &ResolvedCrateConfig,
+    has_visitor_pattern: bool,
+) -> Vec<TraitBridgeRegistrationSurface> {
+    let java = Language::Java.to_string();
+    config
+        .trait_bridges
+        .iter()
+        .filter(|bridge| !bridge.exclude_languages.contains(&java))
+        .filter(|bridge| !(has_visitor_pattern && bridge.bind_via == BridgeBinding::OptionsField))
+        .filter_map(|bridge| {
+            let trait_def = api.types.iter().find(|t| t.name == bridge.trait_name && t.is_trait)?;
+            let pascal = trait_pascal(&trait_def.name);
+            let bridge_class = bridge_class_name(&pascal);
+            Some(TraitBridgeRegistrationSurface {
+                trait_name: trait_def.name.clone(),
+                register_symbol: Some(format!("{bridge_class}.{}", register_method_name(&pascal))),
+                unregister_symbol: bridge
+                    .unregister_fn
+                    .as_ref()
+                    .map(|_| format!("{bridge_class}.{}", unregister_method_name(&pascal))),
+                clear_symbol: bridge
+                    .clear_fn
+                    .as_deref()
+                    .map(|clear_fn| format!("{bridge_class}.{}", clear_method_name(clear_fn))),
+            })
+        })
+        .collect()
+}

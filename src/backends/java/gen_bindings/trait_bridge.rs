@@ -19,6 +19,7 @@ use heck::{ToPascalCase, ToSnakeCase};
 use minijinja::Value;
 use std::collections::HashSet;
 
+use crate::backends::java::gen_bindings::trait_bridge_naming as naming;
 use crate::backends::java::template_env;
 use crate::backends::java::type_map::{java_ffi_type, java_type};
 
@@ -294,6 +295,7 @@ pub fn gen_unregistration_fn(
             prefix_upper => prefix_upper,
             bridge_class => bridge_class,
             registry_field => registry_field,
+            unregister_method_name => naming::unregister_method_name(trait_pascal),
         },
     )
 }
@@ -317,23 +319,7 @@ pub fn gen_clear_fn(
     if clear_fn.is_none() {
         return String::new();
     }
-    let method_name = if let Some(fn_name) = clear_fn {
-        let without_prefix = fn_name.strip_prefix("clear_").unwrap_or(fn_name);
-        let words: Vec<&str> = without_prefix.split('_').collect();
-        let mut camel = String::from("clear");
-        for word in words {
-            if !word.is_empty() {
-                let mut chars = word.chars();
-                if let Some(first) = chars.next() {
-                    camel.push(first.to_uppercase().next().unwrap());
-                    camel.push_str(chars.as_str());
-                }
-            }
-        }
-        camel
-    } else {
-        format!("clearAll{trait_pascal}")
-    };
+    let method_name = clear_fn.map(naming::clear_method_name).unwrap_or_default();
 
     template_env::render(
         "bridge_clear_method.jinja",
@@ -425,11 +411,11 @@ fn gen_bridge_file(
     excluded_types: &HashSet<String>,
     ffi_skip_methods: &[String],
 ) -> (String, Vec<String>) {
-    let trait_pascal = trait_def.name.to_pascal_case();
+    let trait_pascal = naming::trait_pascal(&trait_def.name);
     let trait_snake = trait_def.name.to_snake_case();
     let prefix_upper = prefix.to_uppercase();
     let registry_field = format!("{}_BRIDGES", trait_snake.to_uppercase());
-    let bridge_class = format!("{trait_pascal}Bridge");
+    let bridge_class = naming::bridge_class_name(&trait_pascal);
 
     let direct_return = |method: &MethodDef| -> Option<DirectReturn> {
         if method.error_type.is_some() {
@@ -812,6 +798,7 @@ fn gen_bridge_file(
         stubs => stubs,
         methods => methods,
         register_takes_name => register_takes_name,
+        register_method_name => naming::register_method_name(&trait_pascal),
         name_expr => if has_super_trait { "impl.name()" } else { "name" },
         unregister_method => &unregister_method,
         clear_method => &clear_method,

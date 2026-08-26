@@ -173,13 +173,13 @@ public final class {{ bridge_class }} implements AutoCloseable {
 
     /** Register a {{ trait_pascal }} implementation via Panama FFM upcall stubs. */
 {% if register_takes_name %}
-    public static void register{{ trait_pascal }}(final I{{ trait_pascal }} impl) throws Exception {
+    public static void {{ register_method_name }}(final I{{ trait_pascal }} impl) throws Exception {
         var bridge = new {{ bridge_class }}(impl);
         try {
             try (var nameArena = Arena.ofShared()) {
                 var nameCs = nameArena.allocateFrom({{ name_expr }});
 {% else %}
-    public static void register{{ trait_pascal }}(final I{{ trait_pascal }} impl, String name) throws Exception {
+    public static void {{ register_method_name }}(final I{{ trait_pascal }} impl, String name) throws Exception {
         var bridge = new {{ bridge_class }}(impl);
         try {
             try (var nameArena = Arena.ofShared()) {

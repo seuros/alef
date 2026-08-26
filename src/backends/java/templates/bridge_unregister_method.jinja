@@ -1,5 +1,5 @@
     /** Unregister a {{ trait_pascal }} implementation by name. */
-    public static void unregister{{ trait_pascal }}(String name) throws Exception {
+    public static void {{ unregister_method_name }}(String name) throws Exception {
         try {
             try (var nameArena = Arena.ofShared()) {
                 var nameCs = nameArena.allocateFrom(name);

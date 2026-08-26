@@ -1,5 +1,7 @@
 use crate::codegen::naming::field_uses_duration_map_wire;
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{BridgeBinding, JavaBuilderMode, Language, ResolvedCrateConfig};
 use crate::core::ir::ApiSurface;
 use ahash::AHashSet;
@@ -16,6 +18,7 @@ mod native_lib;
 mod result_presence;
 mod service_api;
 pub mod trait_bridge;
+mod trait_bridge_naming;
 mod types;
 #[cfg(test)]
 mod vtable_slot_tests;
@@ -700,6 +703,15 @@ impl Backend for JavaBackend {
             build_dep: BuildDependency::Ffi,
             post_build: vec![],
         })
+    }
+
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        let has_visitor_pattern = crate::backends::java::gen_visitor::has_visitor_generation_metadata(api, config);
+        trait_bridge_naming::registration_surface(api, config, has_visitor_pattern)
     }
 }
 
