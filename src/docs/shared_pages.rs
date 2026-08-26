@@ -21,7 +21,11 @@ use super::{clean_doc, template_env, version_labels};
 /// way `types.md`'s link to `configuration.md` once did (hardcoded to the suffixed form,
 /// which a content-collection docs site such as Astro Starlight cannot resolve). ~keep
 fn reference_page_link(config: &ResolvedCrateConfig, page_stem: &str) -> String {
-    let style = config.docs.as_ref().map(|docs| docs.reference_link_style).unwrap_or_default();
+    let style = config
+        .docs
+        .as_ref()
+        .map(|docs| docs.reference_link_style)
+        .unwrap_or_default();
     match style {
         DocsReferenceLinkStyle::Suffixed => format!("{page_stem}.md"),
         DocsReferenceLinkStyle::Extensionless => format!("./{page_stem}/"),

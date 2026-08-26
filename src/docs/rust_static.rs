@@ -552,8 +552,14 @@ mod tests {
         assert_eq!(surface.resources[0].title, "App Config");
 
         let page = crate::docs::render::generate_mcp_doc(&surface, PathBuf::from("mcp.md"));
-        assert!(page.content.contains("summarize"), "declared prompt must render into mcp.md");
-        assert!(page.content.contains("config"), "declared resource must render into mcp.md");
+        assert!(
+            page.content.contains("summarize"),
+            "declared prompt must render into mcp.md"
+        );
+        assert!(
+            page.content.contains("config"),
+            "declared resource must render into mcp.md"
+        );
     }
 
     #[test]

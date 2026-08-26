@@ -270,7 +270,10 @@ sources = ["src/lib.rs"]
         .find(|file| file.path == Path::new("docs/reference/mcp.md"))
         .expect("mcp.md must be emitted");
 
-    assert!(mcp_doc.content.contains("run_work"), "attribute-derived tool must still render");
+    assert!(
+        mcp_doc.content.contains("run_work"),
+        "attribute-derived tool must still render"
+    );
     assert!(
         mcp_doc.content.contains("summarize"),
         "declared prompt built at runtime must render into mcp.md, not be silently omitted"

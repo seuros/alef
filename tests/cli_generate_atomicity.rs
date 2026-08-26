@@ -135,8 +135,7 @@ fn generated_marked_files(root: &Path) -> Vec<PathBuf> {
         .filter(|entry| entry.file_type().is_file())
         .map(walkdir::DirEntry::into_path)
         .filter(|path| {
-            fs::read_to_string(path)
-                .is_ok_and(|content| content.to_ascii_lowercase().contains(OWNERSHIP_MARKER))
+            fs::read_to_string(path).is_ok_and(|content| content.to_ascii_lowercase().contains(OWNERSHIP_MARKER))
         })
         .collect()
 }
@@ -188,9 +187,7 @@ fn failed_swift_post_build_preserves_owned_files_and_written_outputs() {
         "outputs written before the first required post-build failure must stay on disk; stderr:\n{first_stderr}"
     );
     assert!(
-        generated
-            .iter()
-            .any(|path| path.starts_with(root.join("packages/go"))),
+        generated.iter().any(|path| path.starts_with(root.join("packages/go"))),
         "Go output written before the later Swift post-build failure must stay on disk"
     );
     seed_owned_files(root);

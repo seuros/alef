@@ -558,7 +558,10 @@ fn test_wrap_bare_urls_trailing_punctuation() {
             "See http://example.com, for details.",
             "See <http://example.com>, for details.",
         ),
-        ("End of sentence: http://example.com.", "End of sentence: <http://example.com>."),
+        (
+            "End of sentence: http://example.com.",
+            "End of sentence: <http://example.com>.",
+        ),
         ("Path: http://example.com/a;b;", "Path: <http://example.com/a;b>;"),
         (
             "See http://example.com; then continue.",
@@ -588,10 +591,7 @@ fn test_wrap_bare_urls_trailing_punctuation() {
             "See <http://en.wikipedia.org/wiki/Foo_(disambiguation)>.",
         ),
         // Doubly-unbalanced trailing parens must both be stripped.
-        (
-            "(see http://example.com/foo))",
-            "(see <http://example.com/foo>))",
-        ),
+        ("(see http://example.com/foo))", "(see <http://example.com/foo>))"),
     ];
 
     for (input, expected) in cases {
