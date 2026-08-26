@@ -122,7 +122,9 @@ fn test_gen_enum_with_single_variant_uses_discriminant_zero() {
     let pyo3_result = gen_enum(&enum_def, &pyo3_cfg);
     assert!(!pyo3_result.contains("match s_lower.as_str()"), "{pyo3_result}");
     assert!(!pyo3_result.contains("match n"), "{pyo3_result}");
-    assert!(pyo3_result.contains("if n == 0"), "{pyo3_result}");
+    // A single variant needs one comparison, not a `match`. The discriminant test rides the
+    // `if let Ok(n) = ...` extraction as a let-chain, so it reads `&& n == 0`. ~keep
+    assert!(pyo3_result.contains("&& n == 0"), "{pyo3_result}");
 }
 
 #[test]
