@@ -1,5 +1,5 @@
 use super::super::FfiBackend;
-use super::super::types::{gen_field_accessor, gen_field_presence_accessor, optional_field_needs_presence_accessor};
+use super::super::types::{gen_field_accessor, gen_field_presence_accessor, optional_leaf_needs_presence_signal};
 use super::common::*;
 use crate::core::backend::Backend;
 use crate::core::ir::*;
@@ -632,7 +632,7 @@ fn test_binding_excluded_field_emits_no_accessor() {
     );
 }
 
-/// `optional_field_needs_presence_accessor` decides which leaf types collapse `None` into the
+/// `optional_leaf_needs_presence_signal` decides which leaf types collapse `None` into the
 /// same sentinel a legitimate `Some` can also produce -- the exact defect a `has_<field>`
 /// companion getter exists to fix. Table-driven over every primitive plus `Duration`
 /// (ambiguous: the C ABI has no null for a number, so both need a presence companion) and every
@@ -657,7 +657,7 @@ fn presence_accessor_predicate_covers_every_optional_leaf_shape() {
     ];
     for (label, ty) in ambiguous_cases {
         assert!(
-            optional_field_needs_presence_accessor(&ty),
+            optional_leaf_needs_presence_signal(&ty),
             "{label} getter has no null representation and must require a presence companion"
         );
     }
@@ -672,7 +672,7 @@ fn presence_accessor_predicate_covers_every_optional_leaf_shape() {
     ];
     for (label, ty) in distinguishable_cases {
         assert!(
-            !optional_field_needs_presence_accessor(&ty),
+            !optional_leaf_needs_presence_signal(&ty),
             "{label} getter already returns a real null/reserved-zero sentinel and must not get a presence companion"
         );
     }
