@@ -14,6 +14,15 @@
 //! renderers (which must name symbols a reader can actually link against) derive their
 //! names from these functions, so a rename cannot land on one side only.
 
+mod service;
+mod trait_bridge;
+
+pub use service::{
+    service_entrypoint_symbol, service_free_symbol, service_method_symbol, service_new_symbol,
+    service_register_symbol,
+};
+pub use trait_bridge::{trait_clear_symbol, trait_register_symbol, trait_unregister_symbol};
+
 use crate::codegen::naming::pascal_to_snake;
 use crate::core::config::{ResolvedCrateConfig, resolve_output_dir};
 use heck::ToShoutySnakeCase;
