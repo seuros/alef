@@ -300,9 +300,12 @@ fn rustler_surface_names_the_elixir_delegates_on_the_app_module() {
 
     let generated = generated_public_api_text(&RustlerBackend, &config);
     assert_declares(&RustlerBackend, &generated, "defmodule SampleCore do");
-    for func in [REGISTER_FN, UNREGISTER_FN, CLEAR_FN] {
+    for func in [REGISTER_FN, UNREGISTER_FN] {
         assert_declares(&RustlerBackend, &generated, &format!("def {func}("));
     }
+    // The clear delegate takes no arguments, and Elixir spells a zero-arity `def` without
+    // parentheses -- `def clear_sample_plugins do`. ~keep
+    assert_declares(&RustlerBackend, &generated, &format!("def {CLEAR_FN} do"));
 }
 
 #[test]
@@ -337,7 +340,13 @@ fn kotlin_jvm_reports_no_registration_surface_because_it_emits_none() {
 
 #[test]
 fn jni_reports_no_registration_surface_because_its_shims_are_not_a_host_api() {
-    let config = minimal_config("jni", "");
+    // `jni` is not standalone: config resolution rejects it unless `kotlin_android` is also
+    // enabled, because the shims it emits exist for that target to link against. ~keep
+    let config = config_with_bridge(
+        "[workspace]\nlanguages = [\"jni\", \"kotlin_android\"]\n\n\
+         [[crates]]\nname = \"sample-core\"\nsources = [\"src/lib.rs\"]\n\n\
+         [crates.jni]\n",
+    );
 
     let surfaces = JniBackend.trait_bridge_registration_surface(&plugin_api(), &config);
 
