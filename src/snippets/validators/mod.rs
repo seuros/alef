@@ -27,7 +27,6 @@ use std::collections::HashMap;
 use std::io::Write;
 
 mod process;
-mod termination;
 
 pub use process::{CapturedStreams, run_command, run_command_streams};
 

@@ -34,6 +34,7 @@ pub mod docs;
 pub mod e2e;
 pub mod extensions;
 pub mod extract;
+pub(crate) mod process;
 pub mod publish;
 pub mod readme;
 pub mod scaffold;

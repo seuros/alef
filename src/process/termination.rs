@@ -1,7 +1,8 @@
-//! Termination propagation for the subprocess trees [`super::process::run_command`] spawns.
+//! Termination propagation for the subprocess trees alef spawns into their own process groups.
 //!
-//! Every snippet child is placed in its own process group so a timeout can tear the whole tree
-//! down with one `kill(-pgid)`. That detachment costs the tree the terminal's own signals:
+//! Every child spawned through [`super::configure_process_group`] gets a process group of its
+//! own, so a timeout can tear the whole tree down with one `kill(-pgid)`. That detachment costs
+//! the tree the terminal's own signals:
 //! `SIGINT` from Ctrl-C reaches the foreground process group only -- alef's -- so a child in its
 //! own group never sees it, keeps running after alef exits 130, and reparents to PID 1 along with
 //! every descendant it started. Having taken the children out of the terminal's reach, alef owns
@@ -17,8 +18,9 @@ use std::sync::atomic::{AtomicI32, Ordering};
 const UNUSED_SLOT: i32 = 0;
 
 /// How many live child process groups can be tracked at once. A run validates snippets across at
-/// most a few dozen sessions in parallel, so this is far above the working set; a spawn that finds
-/// the table full is still killed by the timeout path, it just loses signal forwarding. The table
+/// most a few dozen sessions in parallel and drives one pipeline command per language beside them,
+/// so this is far above the working set; a spawn that finds the table full is still killed by the
+/// timeout path, it just loses signal forwarding. The table
 /// is fixed-size and lock-free because the signal handler that reads it may only call
 /// async-signal-safe functions -- a `Vec` behind a `Mutex` would be neither. ~keep
 #[cfg(unix)]
@@ -35,7 +37,7 @@ static TRACKED_PROCESS_GROUPS: [AtomicI32; MAX_TRACKED_PROCESS_GROUPS] =
 const FORWARDED_SIGNALS: &[libc::c_int] = &[libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
 
 /// Holds one registry slot for as long as the child process group it names may still be alive.
-pub(super) struct TrackedProcessGroup {
+pub(crate) struct TrackedProcessGroup {
     #[cfg(unix)]
     slot: Option<usize>,
 }
@@ -52,7 +54,7 @@ impl Drop for TrackedProcessGroup {
 /// Registers `child`'s process group for signal forwarding and installs the forwarding handlers
 /// on first use.
 #[cfg(unix)]
-pub(super) fn track(child: &std::process::Child) -> TrackedProcessGroup {
+pub(crate) fn track(child: &std::process::Child) -> TrackedProcessGroup {
     install_termination_forwarding();
     TrackedProcessGroup {
         slot: claim_slot(&TRACKED_PROCESS_GROUPS, child.id().cast_signed()),
@@ -60,7 +62,7 @@ pub(super) fn track(child: &std::process::Child) -> TrackedProcessGroup {
 }
 
 #[cfg(not(unix))]
-pub(super) fn track(_child: &std::process::Child) -> TrackedProcessGroup {
+pub(crate) fn track(_child: &std::process::Child) -> TrackedProcessGroup {
     TrackedProcessGroup {}
 }
 
@@ -139,7 +141,7 @@ mod tests {
     /// Names the file the probe below announces its child's process group in. Its presence is also
     /// what tells the probe it is running as a probe rather than as an ordinary ignored test.
     const ORPHAN_PROBE_MARKER: &str = "ALEF_TERMINATION_ORPHAN_PROBE";
-    const ORPHAN_PROBE_NAME: &str = "snippets::validators::termination::tests::orphan_probe_child";
+    const ORPHAN_PROBE_NAME: &str = "process::termination::tests::orphan_probe_child";
 
     fn slots() -> Vec<AtomicI32> {
         (0..SLOT_COUNT).map(|_| AtomicI32::new(UNUSED_SLOT)).collect()
@@ -289,7 +291,7 @@ mod tests {
         };
         let mut command = std::process::Command::new("sh");
         command.args(["-c", &format!("echo $$ > {marker}; sleep 30")]);
-        let _ = super::super::run_command(&mut command, 30);
+        let _ = crate::snippets::validators::run_command(&mut command, 30);
     }
 
     /// The end-to-end measurement of the orphaning half of this module's reason to exist.
@@ -345,8 +347,8 @@ mod tests {
         );
     }
 
-    /// `run_command` must put its child in the process-wide table, not just in whatever table a
-    /// test hands the sweep. Without this the two halves could drift apart and every unit above
+    /// `snippets::validators::run_command` must put its child in the process-wide table, not just
+    /// in whatever table a test hands the sweep. Without this the two halves could drift apart and every unit above
     /// would still pass. The child announces its own pid, and that exact value is looked for --
     /// "some slot is occupied" would be satisfied by any other test's child running beside this
     /// one. ~keep
@@ -358,7 +360,7 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let mut command = std::process::Command::new("sh");
             command.args(["-c", &script]);
-            let _ = super::super::run_command(&mut command, 2);
+            let _ = crate::snippets::validators::run_command(&mut command, 2);
         });
 
         let deadline = std::time::Instant::now() + PROCESS_SETTLE_LIMIT;

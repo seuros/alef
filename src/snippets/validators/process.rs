@@ -1,8 +1,9 @@
-//! Subprocess execution for snippet validation: environment sanitisation, the timed wait,
-//! and the process-group teardown every validator's child depends on.
+//! Subprocess execution for snippet validation: environment sanitisation on top of the shared
+//! process-group lifecycle in [`crate::process`].
 
+use crate::process::capture::{OUTPUT_DRAIN_GRACE, collect_output_within, output_reader};
+use crate::process::{WaitTimeout as _, configure_process_group, kill_process_tree};
 use crate::snippets::error::Result;
-use std::io::Read;
 
 fn strip_ansi_codes(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
@@ -24,18 +25,6 @@ fn strip_ansi_codes(input: &str) -> String {
 
     result
 }
-
-/// How long the output pipes may still be drained once the child itself is no longer running.
-///
-/// `timeout_secs` bounds the *command*, and the child inherits its stdout and stderr to every
-/// descendant it starts. A descendant that outlives the command -- a Gradle daemon, an MSBuild
-/// node, anything a hook backgrounded and never waited on -- keeps the write end of those pipes
-/// open, so a `read_to_string` that waits for end of stream waits for that descendant, not for
-/// the command. That is how a hook under a 1800s budget ran for over half an hour and was never
-/// killed: the wait had already succeeded, and the unbounded drain that followed it answered to
-/// nothing. Everything after the child exits is a leaked writer, so it gets a fixed grace to
-/// flush what is already buffered and is then torn down with the rest of the group. ~keep
-const OUTPUT_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A finished command's exit verdict and its two output streams, kept apart for the callers that
 /// parse one of them -- `swift build --show-bin-path` prints a path on stdout while SwiftPM's
@@ -72,14 +61,15 @@ pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u6
         .stderr(std::process::Stdio::piped())
         .spawn()
         .map_err(|err| crate::snippets::error::Error::Other(format!("spawn failed: {err}")))?;
-    let _tracked = super::termination::track(&child);
+    let _tracked = crate::process::termination::track(&child);
     let stdout = child.stdout.take().map(output_reader);
     let stderr = child.stderr.take().map(output_reader);
 
     let timeout = std::time::Duration::from_secs(timeout_secs);
     match child.wait_timeout(timeout) {
         Ok(Some(status)) => {
-            let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)?;
+            let drained = collect_output_within(stdout, stderr, OUTPUT_DRAIN_GRACE)
+                .map_err(crate::snippets::error::Error::from)?;
             if !drained.complete {
                 tracing::warn!(
                     command = ?command,
@@ -110,115 +100,6 @@ pub fn run_command_streams(command: &mut std::process::Command, timeout_secs: u6
             Err(crate::snippets::error::Error::Other(format!("wait failed: {err}")))
         }
     }
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut std::process::Command) {
-    use std::os::unix::process::CommandExt;
-    command.process_group(0);
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut std::process::Command) {}
-
-#[cfg(unix)]
-fn kill_process_tree(child: &mut std::process::Child) {
-    let process_group = format!("-{}", child.id());
-    let killed_group = std::process::Command::new("kill")
-        .args(["-KILL", "--", &process_group])
-        .status()
-        .is_ok_and(|status| status.success());
-    if !killed_group {
-        let _ = child.kill();
-    }
-}
-
-#[cfg(not(unix))]
-fn kill_process_tree(child: &mut std::process::Child) {
-    let _ = child.kill();
-}
-
-/// How much of a stream is moved into the shared buffer per read. Large enough that a megabyte of
-/// compiler output costs tens of locks rather than thousands. ~keep
-const OUTPUT_CHUNK_BYTES: usize = 16 * 1024;
-
-/// One drained stream. The bytes live behind a lock the reader thread appends to as they arrive,
-/// rather than in a `String` the thread only hands over at end of stream, so a drain that gives up
-/// on a stuck pipe still returns everything the command actually wrote. ~keep
-struct OutputReader {
-    buffer: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-    finished: std::sync::mpsc::Receiver<std::io::Result<()>>,
-}
-
-/// A command's output, and whether every stream reached end of stream before the drain budget ran
-/// out.
-struct DrainedOutput {
-    stdout: String,
-    stderr: String,
-    complete: bool,
-}
-
-fn output_reader(mut stream: impl Read + Send + 'static) -> OutputReader {
-    let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let sink = std::sync::Arc::clone(&buffer);
-    let (sender, finished) = std::sync::mpsc::channel();
-    // The thread is deliberately detached rather than joined: when a leaked descendant holds the
-    // write end open, this read never returns, and joining it is exactly the unbounded wait
-    // `OUTPUT_DRAIN_GRACE` exists to stop. It exits on its own once the last writer closes. ~keep
-    std::thread::spawn(move || {
-        let mut chunk = [0_u8; OUTPUT_CHUNK_BYTES];
-        let outcome = loop {
-            match stream.read(&mut chunk) {
-                Ok(0) => break Ok(()),
-                Ok(count) => lock(&sink).extend_from_slice(&chunk[..count]),
-                Err(error) => break Err(error),
-            }
-        };
-        let _ = sender.send(outcome);
-    });
-    OutputReader { buffer, finished }
-}
-
-fn lock(buffer: &std::sync::Mutex<Vec<u8>>) -> std::sync::MutexGuard<'_, Vec<u8>> {
-    buffer.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Drains both streams, giving up `budget` after the first byte is waited on.
-///
-/// Output is decoded lossily: a toolchain that emits a stray non-UTF-8 byte reports a broken
-/// snippet, and losing the whole diagnostic to a decode error helps nobody. ~keep
-fn collect_output_within(
-    stdout: Option<OutputReader>,
-    stderr: Option<OutputReader>,
-    budget: std::time::Duration,
-) -> Result<DrainedOutput> {
-    let deadline = std::time::Instant::now() + budget;
-    let mut complete = true;
-    let mut drained = Vec::with_capacity(2);
-    for reader in [stdout, stderr] {
-        let Some(reader) = reader else {
-            drained.push(String::new());
-            continue;
-        };
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        match reader.finished.recv_timeout(remaining) {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => return Err(crate::snippets::error::Error::from(error)),
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => complete = false,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(crate::snippets::error::Error::Other(
-                    "snippet output reader panicked".into(),
-                ));
-            }
-        }
-        drained.push(String::from_utf8_lossy(&lock(&reader.buffer)).into_owned());
-    }
-    let mut streams = drained.into_iter();
-    Ok(DrainedOutput {
-        stdout: streams.next().unwrap_or_default(),
-        stderr: streams.next().unwrap_or_default(),
-        complete,
-    })
 }
 
 /// `HOME` is the Unix counterpart of `USERPROFILE` below: cargo, gradle, `dart pub`, `gem`, `mix`,
@@ -312,49 +193,6 @@ fn apply_environment_allowlist(
     command.envs(values);
     command.envs(explicit_values);
     command.env("NO_COLOR", "1");
-}
-
-trait WaitTimeout {
-    fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>>;
-}
-
-/// The first gap between `try_wait` polls. A fixed 50ms interval charged every subprocess about
-/// 25ms of pure sleep on average — invisible for one `cargo check`, tens of seconds across a run
-/// with thousands of snippets, because most snippet toolchain invocations finish in single-digit
-/// milliseconds. ~keep
-const INITIAL_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(1);
-
-/// The ceiling the backoff grows to, so a genuinely long compile still costs at most one wakeup
-/// per 50ms rather than a thousand. ~keep
-const MAX_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
-
-/// Doubles a poll interval up to [`MAX_WAIT_POLL_INTERVAL`].
-fn next_poll_interval(current: std::time::Duration) -> std::time::Duration {
-    current
-        .checked_mul(2)
-        .unwrap_or(MAX_WAIT_POLL_INTERVAL)
-        .min(MAX_WAIT_POLL_INTERVAL)
-}
-
-impl WaitTimeout for std::process::Child {
-    fn wait_timeout(&mut self, timeout: std::time::Duration) -> std::io::Result<Option<std::process::ExitStatus>> {
-        let start = std::time::Instant::now();
-        let mut poll_interval = INITIAL_WAIT_POLL_INTERVAL;
-
-        loop {
-            if let Some(status) = self.try_wait()? {
-                return Ok(Some(status));
-            }
-
-            let elapsed = start.elapsed();
-            if elapsed >= timeout {
-                return Ok(None);
-            }
-
-            std::thread::sleep(poll_interval.min(timeout - elapsed));
-            poll_interval = next_poll_interval(poll_interval);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -461,42 +299,6 @@ mod environment_tests {
 #[cfg(all(test, unix))]
 mod process_tests {
     use std::time::{Duration, Instant};
-
-    /// The backoff has to start far below the old fixed 50ms floor and still stop growing, so a
-    /// short command returns almost immediately while a long compile is not polled a thousand
-    /// times a second. ~keep
-    ///
-    /// ~keep This is the whole coverage for that property, deliberately. A companion test used to
-    /// time 20 trivial `sh -c 'exit 0'` runs and assert the amortised cost stayed under the old
-    /// fixed interval, but bare process-spawn overhead on a loaded machine reaches 60ms/command --
-    /// more than the 50ms bound it was trying to prove we no longer pay -- so it failed on load
-    /// rather than on regression, at two successive thresholds. Asserting the schedule directly
-    /// proves the same thing and cannot be perturbed by what else the machine is doing. Do not
-    /// re-add a wall-clock version.
-    #[test]
-    fn the_wait_backoff_starts_at_one_millisecond_and_caps_at_fifty() {
-        assert_eq!(super::INITIAL_WAIT_POLL_INTERVAL, Duration::from_millis(1));
-
-        let intervals = std::iter::successors(Some(super::INITIAL_WAIT_POLL_INTERVAL), |current| {
-            Some(super::next_poll_interval(*current))
-        })
-        .take(8)
-        .collect::<Vec<_>>();
-
-        assert_eq!(
-            intervals,
-            vec![
-                Duration::from_millis(1),
-                Duration::from_millis(2),
-                Duration::from_millis(4),
-                Duration::from_millis(8),
-                Duration::from_millis(16),
-                Duration::from_millis(32),
-                Duration::from_millis(50),
-                Duration::from_millis(50),
-            ]
-        );
-    }
 
     #[test]
     fn drains_output_larger_than_an_os_pipe_buffer() {
