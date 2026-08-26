@@ -31,10 +31,6 @@ enum PresenceStance {
     /// C-ABI backend now calls the companion. Kept, and kept named, because the failure this file
     /// guards is a *silent* omission: the next C-ABI backend must be able to say "not yet" out
     /// loud rather than be quietly absorbed into one of the other three stances. ~keep
-    #[expect(
-        dead_code,
-        reason = "the gap list is empty today; the variant is the vocabulary the next gap needs"
-    )]
     ConsumesCabiNotYetWired,
     /// Hands a real Rust `Option<T>` to a macro framework (PyO3, napi-rs, magnus, ext-php-rs,
     /// wasm-bindgen, Rustler, extendr) or to its own non-C-ABI bridge, which lowers `None` to a

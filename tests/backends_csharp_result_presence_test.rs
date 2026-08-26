@@ -195,13 +195,11 @@ fn should_throw_rather_than_report_absence_when_a_fallible_optional_call_fails()
     let generated = render(&surface(vec![], vec![func]));
 
     assert!(
-        generated.contains(
-            concat!(
-                "        if (NativeMethods.PortHasResult() != 1)\n",
-                "        {\n",
-                "            if (NativeMethods.LastErrorCode() != 0)\n",
-            )
-        ),
+        generated.contains(concat!(
+            "        if (NativeMethods.PortHasResult() != 1)\n",
+            "        {\n",
+            "            if (NativeMethods.LastErrorCode() != 0)\n",
+        )),
         "the companion's own failure must surface as an exception, not as absence; got:\n{generated}"
     );
     let primary_at = generated
@@ -235,13 +233,20 @@ fn should_pass_the_same_arguments_to_the_companion_as_to_the_primary_call() {
     timeout.params = vec![scalar_param("scale", TypeRef::Primitive(PrimitiveType::U32))];
     let generated = render(&surface(vec![opaque_type("Settings", vec![timeout])], vec![]));
 
-    let companion = call_arguments(&generated, "NativeMethods.SettingsTimeoutHasResult(");
-    let primary = call_arguments(&generated, "var nativeResult = NativeMethods.SettingsTimeout(")
-        .replace(['\n', ','], " ");
+    let normalise = |args: &str| {
+        args.replace(['\n', ','], " ")
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let companion = normalise(call_arguments(&generated, "NativeMethods.SettingsTimeoutHasResult("));
+    let primary = normalise(call_arguments(
+        &generated,
+        "var nativeResult = NativeMethods.SettingsTimeout(",
+    ));
 
     assert_eq!(
-        companion.split_whitespace().collect::<Vec<_>>(),
-        primary.split_whitespace().collect::<Vec<_>>(),
+        companion, primary,
         "the companion and the primary must pass the same arguments; got:\n{generated}"
     );
     assert!(

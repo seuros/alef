@@ -128,6 +128,3 @@ pub(super) fn presence_gate(
 fn absent_expr(return_type: &TypeRef) -> String {
     format!("({})null", crate::backends::csharp::type_map::csharp_type(return_type))
 }
-
-#[cfg(test)]
-mod tests;

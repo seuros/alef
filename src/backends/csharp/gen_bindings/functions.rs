@@ -5,7 +5,7 @@ use super::{HANDLE_PINVOKE_TYPE, StreamingMethodMeta};
 use crate::codegen::naming::{csharp_type_name, to_csharp_name};
 use crate::core::config::TraitBridgeConfig;
 use crate::core::config::workspace::ClientConstructorConfig;
-use crate::core::ir::{ApiSurface, FunctionDef, TypeRef};
+use crate::core::ir::{ApiSurface, TypeRef};
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use std::collections::{HashMap, HashSet};
 
