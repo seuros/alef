@@ -1,4 +1,4 @@
 // Register{{ name }} registers a {{ name }} implementation with the C runtime.
-func Register{{ name }}(impl {{ name }}) error {
+func {{ register_fn }}(impl {{ name }}) error {
 	bridge := New{{ name }}Bridge(impl)
 	handle := cgo.NewHandle(bridge)

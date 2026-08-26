@@ -1,5 +1,4 @@
 use crate::core::config::TraitBridgeConfig;
-use heck::ToPascalCase;
 
 /// Generate a config-driven unregistration wrapper.
 ///
@@ -22,7 +21,7 @@ pub(super) fn gen_unregistration_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: 
     }
 
     let c_function = format!("{}_unregister_{}", ffi_prefix, trait_snake);
-    let go_fn_name = fn_name.to_pascal_case();
+    let go_fn_name = super::registration_surface::configured_unregister_fn_name(fn_name);
 
     let mut out = String::new();
     out.push_str(&crate::backends::go::template_env::render(
@@ -56,7 +55,7 @@ pub(super) fn gen_clear_fn(bridge_cfg: &TraitBridgeConfig, ffi_prefix: &str, tra
     };
     let trait_snake = heck::AsSnakeCase(trait_name).to_string();
     let c_function = format!("{}_clear_{}", ffi_prefix, trait_snake);
-    let go_fn_name = fn_name.to_pascal_case();
+    let go_fn_name = super::registration_surface::clear_fn_name(fn_name);
 
     let mut out = String::new();
     out.push_str(&crate::backends::go::template_env::render(

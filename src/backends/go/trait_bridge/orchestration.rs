@@ -374,6 +374,7 @@ pub(super) fn gen_trait_bridge(
         "register_function_header.jinja",
         minijinja::context! {
             name => trait_name,
+            register_fn => super::registration_surface::register_fn_name(trait_name),
         },
     ));
 
@@ -409,6 +410,7 @@ pub(super) fn gen_trait_bridge(
         "unregister_function_header.jinja",
         minijinja::context! {
             name => trait_name,
+            unregister_fn => super::registration_surface::unregister_fn_name(trait_name),
         },
     ));
 

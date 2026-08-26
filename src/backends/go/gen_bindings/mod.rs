@@ -8,7 +8,9 @@ pub(super) mod types;
 
 use binding_file::{find_options_bridge_function, format_go_code, gen_go_file, strip_trailing_whitespace};
 
-use crate::core::backend::{Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile};
+use crate::core::backend::{
+    Backend, BuildConfig, BuildDependency, Capabilities, GeneratedFile, TraitBridgeRegistrationSurface,
+};
 use crate::core::config::{AdapterPattern, BridgeBinding, Language, ResolvedCrateConfig, resolve_output_dir};
 use crate::core::ir::ApiSurface;
 use heck::ToShoutySnakeCase;
@@ -424,6 +426,14 @@ impl Backend for GoBackend {
             build_dep: BuildDependency::Ffi,
             post_build: vec![],
         })
+    }
+
+    fn trait_bridge_registration_surface(
+        &self,
+        api: &ApiSurface,
+        config: &ResolvedCrateConfig,
+    ) -> Vec<TraitBridgeRegistrationSurface> {
+        super::trait_bridge::registration_surface(api, config)
     }
 }
 
