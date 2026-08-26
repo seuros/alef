@@ -202,6 +202,51 @@ pub(super) fn root_declares_path(map: &IrResultFieldMap, path: &str) -> Option<b
     Some(map.declared_fields.get(owner)?.contains(segment_name(last)?))
 }
 
+/// Whether `path` walks PAST a segment that is a real, declared field but whose type this map
+/// cannot advance through as a struct — the shape a tagged-union field has: a field like `format`
+/// can be a genuine member of its owner type while its own type is an enum, which is never
+/// entered into `field_types` (only struct-typed fields are, per [`build_ir_result_field_map`]),
+/// so a path like `metadata.format.variant.detail` has nowhere left to walk after `format` yet
+/// two more segments to go.
+///
+/// [`root_declares_path`] cannot answer this itself: it treats a declared-but-unresolvable prefix
+/// segment as `None` ("no answer") on purpose, for the primitive/map/foreign-type cases where that
+/// conservatism is correct. This asks the narrower, positive question those cases can't — was the
+/// segment DECLARED, yet had no further hop, with path left to walk past it — which a foreign or
+/// primitive-typed field never has (there is nothing to have "no further hop" from if the field
+/// itself is the path's last segment). Unlike `is_enum_path` (`ir_enum` module), this needs no
+/// `EnumDef` list wired in: any field the IR cannot advance through as a struct answers the same
+/// way, whether the reason is a tagged union, a map value, or a `serde_json::Value` — all of which
+/// share the one fact that matters here, that `accessor()` cannot walk a plain field access past
+/// them either. ~keep
+pub(super) fn path_crosses_unwalkable_field(map: &IrResultFieldMap, path: &str) -> bool {
+    let Some(root) = map.root_type.as_deref() else {
+        return false;
+    };
+    let segments = parse_path(path);
+    let Some((_last, prefix)) = segments.split_last() else {
+        return false;
+    };
+
+    let mut owner = root;
+    for segment in prefix {
+        let Some(name) = segment_name(segment) else {
+            return false;
+        };
+        let Some(declared) = map.declared_fields.get(owner) else {
+            return false;
+        };
+        if !declared.contains(name) {
+            return false;
+        }
+        match map.field_types.get(owner).and_then(|fields| fields.get(name)) {
+            Some(next) => owner = next.as_str(),
+            None => return true,
+        }
+    }
+    false
+}
+
 /// The `(owner_type, leaf_field_name)` a path resolves to, walking every prefix segment through
 /// `field_types`. `None` when the root is unresolved or any segment names something the IR does
 /// not recognize as a field on the type reached so far.
@@ -216,4 +261,89 @@ fn walk_to_owner<'a>(map: &'a IrResultFieldMap, path: &str) -> Option<(&'a str, 
         owner = map.field_types.get(owner)?.get(name)?.as_str();
     }
     Some((owner, segment_name(last)?.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, TypeDef};
+
+    fn field(name: &str, ty: crate::core::ir::TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    /// `Envelope { metadata: Metadata }`, `Metadata { format: VariantInfo, title: String }`, and
+    /// `VariantInfo` is deliberately absent from `type_defs` — a tagged union (or any other type
+    /// the IR's own struct graph does not carry) looks identical here: declared, but with no
+    /// further hop.
+    fn type_defs_with_unresolvable_variant_field() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "Envelope".to_string(),
+                fields: vec![field(
+                    "metadata",
+                    crate::core::ir::TypeRef::Named("Metadata".to_string()),
+                )],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Metadata".to_string(),
+                fields: vec![
+                    field("format", crate::core::ir::TypeRef::Named("VariantInfo".to_string())),
+                    field("title", crate::core::ir::TypeRef::String),
+                ],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    fn anchored_map(type_defs: &[TypeDef]) -> IrResultFieldMap {
+        let mut map = build_ir_result_field_map(type_defs, OptionalityRule::DeclaredType);
+        map.root_type = Some("Envelope".to_string());
+        map
+    }
+
+    #[test]
+    fn a_path_continuing_past_a_declared_but_unwalkable_field_crosses() {
+        let map = anchored_map(&type_defs_with_unresolvable_variant_field());
+        assert!(path_crosses_unwalkable_field(&map, "metadata.format.variant.detail"));
+    }
+
+    /// The control: a path that stops AT the unwalkable field, rather than past it, is exactly
+    /// what `root_declares_path` already renders fine — this check must not fire for it.
+    #[test]
+    fn a_path_stopping_at_the_unwalkable_field_does_not_cross() {
+        let map = anchored_map(&type_defs_with_unresolvable_variant_field());
+        assert!(!path_crosses_unwalkable_field(&map, "metadata.format"));
+    }
+
+    /// A field the IR CAN walk through (a real struct-to-struct edge) must never be flagged,
+    /// or every ordinary nested path in the suite would be rejected.
+    #[test]
+    fn a_path_through_a_real_struct_field_does_not_cross() {
+        let map = anchored_map(&type_defs_with_unresolvable_variant_field());
+        assert!(!path_crosses_unwalkable_field(&map, "metadata.title"));
+    }
+
+    /// An unknown segment is a different question (`root_declares_path` already answers `Some(false)`
+    /// for it) — this check must stay silent rather than double-report it.
+    #[test]
+    fn a_path_through_an_undeclared_segment_does_not_cross() {
+        let map = anchored_map(&type_defs_with_unresolvable_variant_field());
+        assert!(!path_crosses_unwalkable_field(&map, "not_a_real_field.anything"));
+    }
+
+    #[test]
+    fn no_anchored_root_never_crosses() {
+        let mut map = build_ir_result_field_map(
+            &type_defs_with_unresolvable_variant_field(),
+            OptionalityRule::DeclaredType,
+        );
+        map.root_type = None;
+        assert!(!path_crosses_unwalkable_field(&map, "metadata.format.variant.detail"));
+    }
 }

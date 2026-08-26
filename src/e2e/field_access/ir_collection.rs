@@ -115,3 +115,83 @@ pub(super) fn is_collection_path(map: &IrCollectionMap, path: &str) -> bool {
         .get(owner)
         .is_some_and(|fields| fields.contains(name))
 }
+
+/// The IR type name `path`'s elements are, walking `map.field_types` from `map.root_type`
+/// through EVERY segment of `path` (including the leaf) — e.g. `"tables"` on a `Vec<Table>`
+/// field resolves to `"Table"`, because [`build_ir_collection_map`] records a `Vec<T>` field's
+/// traversal edge as `T`, the same way it would a plain struct-to-struct edge.
+///
+/// `None` under the same "IR cannot judge" conditions [`is_collection_path`] answers `false`
+/// for: an unresolved root, or a segment the IR does not recognize as a struct-to-struct edge on
+/// the type reached so far (a scalar leaf, a foreign type, a field not populated here because
+/// its own type is not itself another struct in `type_defs`). Callers validating an `Iterate`
+/// operation's per-item fields against this answer must treat `None` as "no answer, don't
+/// reject" — exactly the same fallback every other IR oracle in this module uses.
+pub(super) fn element_type_at_path(map: &IrCollectionMap, path: &str) -> Option<String> {
+    let root = map.root_type.as_deref()?;
+    let segments = parse_path(path);
+    let mut owner = root;
+    for segment in &segments {
+        let name = segment_name(segment)?;
+        owner = map.field_types.get(owner)?.get(name)?.as_str();
+    }
+    Some(owner.to_string())
+}
+
+#[cfg(test)]
+mod element_type_at_path_tests {
+    use super::*;
+    use crate::core::ir::{FieldDef, TypeDef, TypeRef};
+
+    fn field(name: &str, ty: TypeRef) -> FieldDef {
+        FieldDef {
+            name: name.to_string(),
+            ty,
+            ..FieldDef::default()
+        }
+    }
+
+    /// `Container { rows: Vec<Row> }`, `Row { values: Vec<String> }` — the shape a fixture's
+    /// `iterate` operation over a collection field needs resolved.
+    fn type_defs() -> Vec<TypeDef> {
+        vec![
+            TypeDef {
+                name: "Container".to_string(),
+                fields: vec![field("rows", TypeRef::Vec(Box::new(TypeRef::Named("Row".to_string()))))],
+                ..TypeDef::default()
+            },
+            TypeDef {
+                name: "Row".to_string(),
+                fields: vec![field("values", TypeRef::Vec(Box::new(TypeRef::String)))],
+                ..TypeDef::default()
+            },
+        ]
+    }
+
+    fn anchored_map() -> IrCollectionMap {
+        let mut map = build_ir_collection_map(&type_defs());
+        map.root_type = Some("Container".to_string());
+        map
+    }
+
+    #[test]
+    fn a_vec_field_resolves_to_its_element_type() {
+        assert_eq!(element_type_at_path(&anchored_map(), "rows"), Some("Row".to_string()));
+    }
+
+    #[test]
+    fn an_indexed_vec_field_resolves_the_same_way() {
+        assert_eq!(element_type_at_path(&anchored_map(), "rows[0]"), Some("Row".to_string()));
+    }
+
+    #[test]
+    fn an_unknown_field_resolves_to_nothing() {
+        assert_eq!(element_type_at_path(&anchored_map(), "not_a_real_field"), None);
+    }
+
+    #[test]
+    fn no_anchored_root_resolves_to_nothing() {
+        let map = build_ir_collection_map(&type_defs());
+        assert_eq!(element_type_at_path(&map, "rows"), None);
+    }
+}

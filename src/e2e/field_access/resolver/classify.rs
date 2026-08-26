@@ -1,4 +1,4 @@
-use super::super::ir_collection::is_collection_path;
+use super::super::ir_collection::{element_type_at_path, is_collection_path};
 use super::super::ir_enum::{enum_type_at_path, is_enum_path};
 use super::super::leaf_anchor::LeafAnchor;
 use super::super::parse::{
@@ -386,6 +386,14 @@ impl FieldResolver {
         {
             return Some(declared || self.namespace_prefix_reaches_a_declared_field(resolved));
         }
+        // `root_declares_path` abstains (`None`) on a declared-but-unresolvable prefix segment on
+        // purpose, so a map value or `serde_json::Value` still derives its accessor. A tagged-union
+        // field is the same shape, but has a definite answer this map now carries: `accessor()`
+        // cannot walk a plain field access past it either, so a path that tries reads as refused
+        // here rather than falling through to the permissive flat check below. ~keep
+        if super::super::ir_result_fields::path_crosses_unwalkable_field(&self.ir_result_field_map, resolved) {
+            return Some(false);
+        }
         if self.ir_known_excluded_fields.contains(first_segment) {
             return Some(false);
         }
@@ -743,6 +751,37 @@ impl FieldResolver {
         }
         let resolved = self.resolve(field);
         is_collection_path(&self.ir_collection_map, resolved)
+    }
+
+    /// The IR type name `field`'s elements are, when `field` is a collection reachable from the
+    /// call's own anchored root — e.g. `"rows"` on a `Vec<Row>` field resolves to `"Row"`.
+    ///
+    /// Used to anchor validation of an `Iterate` operation's per-item field names against the
+    /// LOOP ITEM's own type, rather than the call's result type: `default_operations_from_assertions`
+    /// already documents why the latter is the wrong anchor for them. `None` when the IR cannot
+    /// resolve the element type (no anchored root, an unrecognized field, a collection of a
+    /// scalar or foreign type) — callers must treat that as "no answer, don't reject" like every
+    /// other IR oracle here.
+    pub fn collection_element_type(&self, field: &str) -> Option<String> {
+        let resolved = self.resolve(field);
+        element_type_at_path(&self.ir_collection_map, resolved)
+    }
+
+    /// Whether `field_name` is a binding-visible member of the IR type named `type_name`,
+    /// regardless of which type the call's own root is anchored at.
+    ///
+    /// Reads [`super::super::types::IrResultFieldMap::declared_fields`] directly rather than
+    /// walking from `root_type`: that map already records every crate type's declared fields
+    /// (`build_ir_result_field_map` iterates the whole `type_defs` list), so a type reached only
+    /// by traversal — an `Iterate`'s loop-item type, never the call's own result type — still has
+    /// an answer here. `None` when the map has no entry for `type_name` at all (an opaque type,
+    /// or IR data was never wired in); callers must fall back to their pre-oracle behaviour for
+    /// that case rather than treat silence as rejection.
+    pub fn is_declared_field_of_type(&self, type_name: &str, field_name: &str) -> Option<bool> {
+        self.ir_result_field_map
+            .declared_fields
+            .get(type_name)
+            .map(|fields| fields.contains(field_name))
     }
 
     /// Check if a resolved field path traverses a tagged-union variant.

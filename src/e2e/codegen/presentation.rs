@@ -153,7 +153,14 @@ fn anchor_to_declared_result_type(
         language,
         crate::e2e::codegen::call_ir::CallIr { functions, type_defs },
     );
-    resolver.with_ir_result_fields(FieldResolver::ir_result_field_facts(type_defs, language), root_type)
+    let result_fields = FieldResolver::ir_result_field_facts(type_defs, language);
+    let resolver = resolver.with_ir_result_fields(result_fields, root_type.clone());
+    // Only `ir_result_field_map` was ever anchored here; every per-language assertion resolver
+    // ALSO anchors `ir_collection_map` (and `ir_enum_map`) at construction, but this shared
+    // snippet/docs resolver never did. `validate_authored_operations` needs the collection map to
+    // resolve an `Iterate` operation's loop-item type (`FieldResolver::collection_element_type`),
+    // so it has to be anchored here too, not re-derived at the one call site that needs it. ~keep
+    resolver.with_ir_collection_map(FieldResolver::ir_collection_fields(type_defs), root_type)
 }
 
 /// Write the field paths [`resolve`] would derive from `fixture`'s own assertions into the
@@ -257,6 +264,13 @@ pub(crate) fn resolve_with(
                 .flat_map(|presentation| presentation.operations.iter().cloned()),
         )
         .collect::<Vec<_>>();
+    // A hand-authored `shows`/`presentation.operations` entry never went through
+    // `default_operations_from_assertions`'s IR check at all -- `shows_on_result` was the ONLY
+    // gate on a field path reaching this snippet, and it only ever saw derived paths. Applying it
+    // here too is what makes a fixture author's own typo (spelling a renamed field the way it used
+    // to be spelled) get caught the same way a derivation mistake already was, instead of reaching
+    // five language backends' compilers as the first check. ~keep
+    let operations = validate_authored_operations(operations, fixture, call, language, resolver);
     // A fixture-driven docs entry (the common shape: authored once as `assertions`, never
     // hand-annotated with `shows`/`presentation`) has no explicit field list here, but its
     // `assertions` already name the exact result fields it checks -- the same field paths the
@@ -526,6 +540,94 @@ fn shows_on_result(field: &str, resolver: &FieldResolver, fixture_is_streaming: 
     true
 }
 
+/// Drop a hand-authored `docs.shows`/`docs.presentation.operations` entry the IR cannot vouch
+/// for, and trim an `Iterate`'s per-item `fields` list the same way.
+///
+/// [`default_operations_from_assertions`] already runs every path it derives through
+/// [`shows_on_result`]; an EXPLICIT operation skipped that check entirely before this function
+/// existed, because `resolve_with` only reached the derivation path when `operations` came back
+/// empty. A fixture author who spelled a renamed field the way it used to be spelled, or wrote a
+/// path through a tagged-union field `accessor()` cannot walk any further into, therefore got
+/// exactly the accessor spelled -- uncaught until the per-language snippet validator compiled it
+/// and failed identically in every backend sharing this one resolved path.
+///
+/// `Iterate`'s per-item `fields` are checked against the collection path's OWN element type
+/// (`FieldResolver::collection_element_type`), never the call's result type: they are rooted at
+/// the loop variable, the same reason `default_operations_from_assertions` declines to derive
+/// `Iterate` operations at all. A field the element type can't be resolved for is left alone --
+/// "no answer, don't reject" -- rather than dropped for want of an anchor `resolve_with` never
+/// needed before.
+fn validate_authored_operations(
+    operations: Vec<FixtureDocsOperation>,
+    fixture: &Fixture,
+    call: &crate::core::config::e2e::CallConfig,
+    language: &str,
+    resolver: &FieldResolver,
+) -> Vec<FixtureDocsOperation> {
+    let fixture_is_streaming =
+        crate::e2e::codegen::streaming_assertions::resolve_is_streaming(fixture, call.streaming_enabled());
+    operations
+        .into_iter()
+        .filter_map(|operation| match operation {
+            FixtureDocsOperation::Show { path, display } => {
+                let renderable = shows_on_result(&path, resolver, fixture_is_streaming, language);
+                renderable.then_some(FixtureDocsOperation::Show { path, display })
+            }
+            FixtureDocsOperation::Iterate {
+                path,
+                item,
+                fields,
+                display,
+                optional,
+            } => {
+                if !shows_on_result(&path, resolver, fixture_is_streaming, language) {
+                    return None;
+                }
+                let element_type = resolver.collection_element_type(&path);
+                let fields = fields
+                    .into_iter()
+                    .filter(|field| iterate_field_is_renderable(element_type.as_deref(), field, resolver, &path))
+                    .collect();
+                Some(FixtureDocsOperation::Iterate {
+                    path,
+                    item,
+                    fields,
+                    display,
+                    optional,
+                })
+            }
+        })
+        .collect()
+}
+
+/// Whether an `Iterate` operation's per-item `field` is a real member of `element_type` — or, when
+/// `element_type` could not be resolved, the pre-existing permissive default.
+fn iterate_field_is_renderable(
+    element_type: Option<&str>,
+    field: &str,
+    resolver: &FieldResolver,
+    collection_path: &str,
+) -> bool {
+    let Some(element_type) = element_type else {
+        return true;
+    };
+    match resolver.is_declared_field_of_type(element_type, field) {
+        Some(false) => {
+            tracing::warn!(
+                target: "alef::e2e::presentation",
+                collection_path,
+                element_type,
+                field,
+                "fixture iterates `{collection_path}` and shows per-item field `{field}`, but \
+                 `{element_type}` has no such member. Dropping the field rather than emitting a \
+                 non-compiling accessor -- correct the field name in the fixture's `docs` block."
+            );
+            false
+        }
+        _ => true,
+    }
+}
+
 /// The root variable an accessor chain is anchored on, spelled the way the target
 /// language spells a variable reference.
 ///
@@ -580,3 +682,7 @@ mod deep_result_path_tests;
 #[cfg(test)]
 #[path = "presentation/wasm_optional_leaf_field_tests.rs"]
 mod wasm_optional_leaf_field_tests;
+
+#[cfg(test)]
+#[path = "presentation/authored_operation_validation_tests.rs"]
+mod authored_operation_validation_tests;
