@@ -9,6 +9,10 @@ use heck::ToPascalCase;
 
 use super::functions::{emit_rustdoc, format_param_unused, wasm_wrap_return};
 
+#[cfg(test)]
+#[path = "methods_tests.rs"]
+mod methods_tests;
+
 /// Generate a method binding for a struct method.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn gen_method(
@@ -22,6 +26,14 @@ pub(super) fn gen_method(
     mutex_types: &AHashSet<String>,
     streaming_item_types: &ahash::AHashMap<String, String>,
 ) -> String {
+    // `type_name` is the bare IR name (`typ.name`) and is only safe to interpolate as
+    // `{core_import}::{type_name}` when the type happens to be re-exported at the core crate
+    // root. A type nested in a private module (e.g. `core::config::extraction::RenderOptions`)
+    // is not reachable that way — rustc reports "cannot find `RenderOptions` in `sample_core`"
+    // even though `sample_core` genuinely has the feature enabled. `core_type_path` is the
+    // shared authority for this: it walks `typ.rust_path` and only falls back to
+    // `{core_import}::{name}` when the type actually lives at the crate root. ~keep
+    let qualified_type_path = crate::codegen::conversions::core_type_path(typ, core_import);
     let has_mut_methods = typ
         .methods
         .iter()
@@ -160,7 +172,7 @@ pub(super) fn gen_method(
             )
         } else {
             format!(
-                "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+                "{qualified_type_path}::from(self.clone()).{method_name}({call_args})",
                 method_name = method.name
             )
         };
@@ -294,7 +306,7 @@ pub(super) fn gen_method(
             };
 
             let combined_let_bindings = format!("{let_bindings}{lifetime_bindings}");
-            let core_call = format!("{core_import}::{type_name}::{actual_method_name}({call_args})");
+            let core_call = format!("{qualified_type_path}::{actual_method_name}({call_args})");
             if method.error_type.is_some() {
                 let wrap = wasm_wrap_return(
                     "result",
@@ -377,7 +389,7 @@ pub(super) fn gen_method(
                 )
             } else {
                 format!(
-                    "{core_import}::{type_name}::from(self.clone()).{method_name}({call_args})",
+                    "{qualified_type_path}::from(self.clone()).{method_name}({call_args})",
                     method_name = method.name
                 )
             };
