@@ -46,6 +46,26 @@
 //! first target name) instead of an ambiguity report -- session identity is the physical package a
 //! session validates, not the `Language` its target string happens to resolve to. Two candidates
 //! that really do point at different directories are still reported `Ambiguous`, unchanged. ~keep
+//!
+//! ## The remaining ambiguous-alias case
+//!
+//! #255's directory collapse leaves one shape unresolved: a consumer with two genuinely different
+//! physical packages for one language (e.g. a Node build and a separate WASM build) who also
+//! configures a *third*, redundant session key over one of those two directories, spelled exactly
+//! like the bare language, specifically so that target-less snippets land there by default. That
+//! third key does not collapse away under #255 (its directory is shared with only one of the two
+//! packages, not both), and #127's fix correctly still calls the two-package split ambiguous on
+//! its own -- so before `alias_default_claim`, every target-less snippet failed with the same
+//! "N configured sessions ... alef will not silently guess" error regardless of the alias, because
+//! the alias only ever added a third name to the same ambiguous set rather than resolving it.
+//!
+//! [`alias_default_claim`] is the narrow rule that lets the alias win without reopening #127: it
+//! only fires when the exactly-named candidate shares its working directory with another,
+//! differently-named candidate -- i.e. it is corroborated as a deliberate second entry point into
+//! an existing session, not merely a session that happens to be spelled like the language. #127's
+//! own session was never corroborated that way (nothing else in that config shared its directory),
+//! so it still resolves `Ambiguous`, unchanged; see the `..._over_different_directories_are_ambiguous`
+//! test below. ~keep
 
 use crate::snippets::types::{Language, Snippet};
 use std::collections::HashMap;
@@ -100,8 +120,10 @@ pub(super) enum SessionClaim<'a> {
 /// language-matched candidate, because a snippet that named a target asked for that session
 /// specifically, not "guess something in the same language". Only a snippet with no explicit
 /// target considers every session whose own `language` matches; resolution only succeeds there
-/// when exactly one candidate exists, or when every candidate shares one working directory (see
-/// [`SessionIdentity`] and the `#255` module doc). ~keep
+/// when exactly one candidate exists, when every candidate shares one working directory (see
+/// [`SessionIdentity`] and the `#255` module doc), or when one candidate is both spelled exactly
+/// like the bare language and a redundant alias of another same-directory candidate (see
+/// [`alias_default_claim`]). ~keep
 pub(super) fn resolve_session_claim<'a, T: SessionIdentity>(
     snippet: &Snippet,
     entries: &'a HashMap<String, T>,
@@ -125,8 +147,48 @@ pub(super) fn resolve_session_claim<'a, T: SessionIdentity>(
         [] => SessionClaim::Unclaimed,
         [only] => SessionClaim::Claimed(only),
         _ if distinct_working_directory_count(entries, &candidates) <= 1 => SessionClaim::Claimed(candidates[0]),
-        _ => SessionClaim::Ambiguous(candidates),
+        _ => match alias_default_claim(entries, &candidates, snippet.language) {
+            Some(key) => SessionClaim::Claimed(key),
+            None => SessionClaim::Ambiguous(candidates),
+        },
     }
+}
+
+/// The one naming coincidence [`resolve_session_claim`] is allowed to trust, and the reason it is
+/// safe where alef defect #127 proved naming coincidence in general is not.
+///
+/// #127's bug was a session spelled exactly like the bare language (`typescript`) silently
+/// absorbing every target-less snippet even when it was the *only* TypeScript session configured
+/// under that name -- an accident, not a declared default, because nothing else in the config
+/// corroborated it. That shape must keep failing closed: [`distinct_working_directory_count`]
+/// still sees a standalone `typescript` candidate as one of several genuinely different packages,
+/// and this function refuses it below for exactly that reason.
+///
+/// The shape this function *does* accept: a candidate named exactly like the bare language whose
+/// working directory is **also** claimed by another, differently-named candidate. That directory
+/// match is corroboration a bare naming coincidence can never produce by itself -- the consumer
+/// configured a second, redundant key over a session that already exists under another name, and
+/// happened to spell that second key like the language. Two configured names for one physical
+/// session is already how [`distinct_working_directory_count`] treats same-directory candidates
+/// elsewhere in this module; this only extends that "one physical session, multiple aliases" read
+/// to pick a winner when the whole alias *group* still has to compete against a genuinely
+/// different-directory candidate (a real second package, e.g. a separate wasm build) that no
+/// alias resolves. ~keep
+fn alias_default_claim<'a, T: SessionIdentity>(
+    entries: &'a HashMap<String, T>,
+    candidates: &[&'a str],
+    language: Language,
+) -> Option<&'a str> {
+    let exact_name = language.to_string();
+    let exact_key = candidates.iter().copied().find(|&key| key == exact_name.as_str())?;
+    let exact_directory = entries.get(exact_key)?.working_directory();
+    let is_redundant_alias = candidates.iter().any(|&key| {
+        key != exact_key
+            && entries
+                .get(key)
+                .is_some_and(|value| value.working_directory() == exact_directory)
+    });
+    is_redundant_alias.then_some(exact_key)
 }
 
 /// How many distinct working directories `candidates` actually validate. A count of `1` (or `0`,
@@ -286,6 +348,49 @@ mod tests {
         assert_eq!(
             resolve_session_claim(&snippet, &sessions, |session| session.language),
             SessionClaim::Claimed("node")
+        );
+    }
+
+    /// The remaining ambiguous-alias case (module doc): three configured sessions -- `node` and
+    /// `wasm` validate two genuinely different packages, and `typescript` is a redundant third key
+    /// aliased onto `node`'s own directory, spelled exactly like the bare language so target-less
+    /// snippets land there by default. `node` and `typescript` collapse under #255 (same
+    /// directory), but the collapsed pair still competes against `wasm`'s different directory, so
+    /// this must resolve via the alias -- not report all three names as ambiguous. ~keep
+    #[test]
+    fn an_alias_named_exactly_like_the_language_wins_over_a_real_second_package() {
+        let sessions = HashMap::from([
+            ("node".to_string(), session(Language::TypeScript, "packages/node")),
+            (
+                "typescript".to_string(),
+                session(Language::TypeScript, "packages/node"),
+            ),
+            ("wasm".to_string(), session(Language::TypeScript, "packages/wasm")),
+        ]);
+        let snippet = snippet(Language::TypeScript, None);
+
+        assert_eq!(
+            resolve_session_claim(&snippet, &sessions, |session| session.language),
+            SessionClaim::Claimed("typescript")
+        );
+    }
+
+    /// Negative control for the alias case above: same three-way, two-directory shape, but no
+    /// candidate is spelled like the bare language at all. Nothing corroborates a default, so this
+    /// must still refuse rather than guess -- proving the fix above did not just delete the #127
+    /// refusal wholesale. ~keep
+    #[test]
+    fn three_same_language_sessions_with_no_exact_language_name_stay_ambiguous() {
+        let sessions = HashMap::from([
+            ("node".to_string(), session(Language::TypeScript, "packages/node")),
+            ("electron".to_string(), session(Language::TypeScript, "packages/node")),
+            ("wasm".to_string(), session(Language::TypeScript, "packages/wasm")),
+        ]);
+        let snippet = snippet(Language::TypeScript, None);
+
+        assert_eq!(
+            resolve_session_claim(&snippet, &sessions, |session| session.language),
+            SessionClaim::Ambiguous(vec!["electron", "node", "wasm"])
         );
     }
 
