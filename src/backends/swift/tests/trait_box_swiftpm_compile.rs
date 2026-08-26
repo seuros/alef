@@ -1,20 +1,31 @@
-//! Two-target SwiftPM compile regression for the `FunctionParam` trait-box generator.
+//! Three-target SwiftPM compile regression for the `FunctionParam` trait-box generator.
 //!
 //! Every other Swift trait-bridge test asserts on emitted *strings*, which is how alef #258
 //! shipped twice: a string can be spelled exactly as intended and still not compile. This test
-//! writes the generated `Sources/RustBridge/*.swift` into a real SwiftPM package whose target
-//! graph matches what alef scaffolds -- `Client -> RustBridge`, never the reverse -- and runs
-//! `swift build` on it.
+//! writes the generated `Sources/RustBridge/*.swift` and `Sources/Client/BridgeRegistrationOverloads.swift`
+//! into a real SwiftPM package whose target graph matches what alef scaffolds --
+//! `DocsSnippet -> Client -> RustBridge`, never the reverse -- and runs `swift build` on it.
 //!
 //! The dependency direction is the whole point. Public `Codable` DTOs live in the downstream
 //! `Client` target, so the `RustBridge` target where the box and the bridge protocol are emitted
 //! cannot name them at all. Any generated code that mentions a DTO type, encodes one, or
 //! constructs a case of one is a compile error here even though it reads fine as a string.
+//!
+//! `DocsSnippet` plays the role alef's generated doc snippets (`snippets-generated/swift/**`)
+//! actually play: a file that depends on the umbrella module alone (`import Client`, standing in
+//! for `import Xberg`) and never sees `RustBridge` directly. `Client`'s own hand-authored
+//! `FixtureSink` conformer already imports `RustBridge` explicitly, which is legal for code that
+//! lives inside the umbrella module's own sources but proves nothing about a downstream file that
+//! doesn't -- `DocsSnippet` is the target that actually reproduces the "cannot find type
+//! 'Swift...Bridge' in scope" failure a generated doc snippet hit before the umbrella module
+//! re-exported the protocol.
 
 #![allow(clippy::print_stderr)]
 
 use crate::backends::swift::gen_bindings::boxes::emit_function_param_box_files;
-use crate::backends::swift::gen_bindings::trait_bridge::gen_trait_bridge_files;
+use crate::backends::swift::gen_bindings::trait_bridge::{
+    gen_bridge_registration_overloads_file, gen_trait_bridge_files,
+};
 use crate::core::config::{BridgeBinding, ResolvedCrateConfig, TraitBridgeConfig};
 use crate::core::ir::{
     ApiSurface, EnumDef, EnumVariant, FieldDef, MethodDef, ParamDef, PrimitiveType, TypeDef, TypeRef,
@@ -48,6 +59,17 @@ public class RustVec<T> {
     public func len() -> UInt { return UInt(storage.count) }
     public func get(index: UInt) -> T? { return storage[Int(index)] }
 }
+"#;
+
+/// Stand-in for the swift-bridge-generated FFI entry points a real `extern "Rust" fn
+/// register_document_sink(bridge: Box<dyn DocumentSink>)` (plus its `unregister` counterpart)
+/// compile to. In a real crate these come from the `swift-bridge-build` crate's own codegen at
+/// `cargo build` time (the file the real package calls `<crate>-swift.swift`), never from any
+/// alef template -- only the signature `CLIENT_BOX_FORWARDER_STUB` calls through needs to exist
+/// for this fixture, so the body is a no-op.
+const RUST_BRIDGE_REGISTER_STUB: &str = r#"
+public func registerDocumentSink(_ swiftBox: SwiftDocumentSinkBox) throws {}
+public func unregisterDocumentSink(_ name: String) throws {}
 "#;
 
 /// The public `Codable` DTOs, emitted into the **downstream** target exactly as alef emits
@@ -112,6 +134,66 @@ public final class FixtureSink: SwiftDocumentSinkBridge {
 }
 "#;
 
+/// Stand-in for the `Box`-typed register forwarder alef's own `forwarders::emit_trait_bridge_forwarders`
+/// writes into `<Binding>.swift` (e.g. `Xberg.swift`) -- a different file than
+/// `BridgeRegistrationOverloads.swift`, but the same `Client` target, so `registerDocumentSink`
+/// overloads across both files resolve against each other exactly like the real generated
+/// package. This is what `BridgeRegistrationOverloads.swift`'s bridge-typed overload
+/// (`registerDocumentSink(_ bridge: any SwiftDocumentSinkBridge)`) calls into.
+const CLIENT_BOX_FORWARDER_STUB: &str = r#"import RustBridge
+
+public func registerDocumentSink(_ swiftBox: SwiftDocumentSinkBox) throws {
+    try RustBridge.registerDocumentSink(swiftBox)
+}
+"#;
+
+/// A stand-in for an alef-generated doc snippet (`snippets-generated/swift/**`): a *separate*
+/// SwiftPM target that depends only on the umbrella `Client` target and never sees `RustBridge`
+/// directly -- exactly how alef's generated docs import only `import <Module>`
+/// (`crate::e2e::codegen::swift::snippet` renders exactly one `import {{ module }}` line and
+/// nothing from `RustBridge`). `Client` plays `Xberg`'s role here; this target plays the docs
+/// site's role. Conforming to `SwiftDocumentSinkBridge` from this target only compiles if
+/// `Client` re-exports the protocol `gen_trait_bridge_files` declared inside `RustBridge` --
+/// proving the fix at the boundary that actually reproduced the failure, not at the string level.
+const DOCS_SNIPPET_CONFORMER: &str = r#"import Foundation
+import Client
+
+public final class DocsSnippetSink: SwiftDocumentSinkBridge {
+    public init() {}
+
+    public var name: String { return "docs-snippet" }
+    public func version() -> String { return "0.0.0" }
+    public func initialize() throws {}
+    public func shutdown() throws {}
+
+    public func accept(chunk: String) throws {}
+
+    public func pageLayout() -> String {
+        return String(data: try! JSONEncoder().encode(PageLayout.facing), encoding: .utf8)!
+    }
+
+    public func stats() -> String {
+        return String(data: try! JSONEncoder().encode(SinkStats(accepted: 0)), encoding: .utf8)!
+    }
+
+    public func isReady() -> Bool { return false }
+
+    public func describe(layout: String) -> String { return layout }
+
+    public func statsHistory() -> [String] { return [] }
+
+    public func lastStats() -> String? { return nil }
+
+    public func latestBatch() -> String? { return nil }
+
+    public func record(entries: [String]) {}
+
+    public func sinkTotals() -> String {
+        return "{}"
+    }
+}
+"#;
+
 const PACKAGE_MANIFEST: &str = r#"// swift-tools-version:5.9
 import PackageDescription
 
@@ -122,7 +204,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "RustBridge"),
-        .target(name: "Client", dependencies: ["RustBridge"])
+        .target(name: "Client", dependencies: ["RustBridge"]),
+        .target(name: "DocsSnippet", dependencies: ["Client"])
     ]
 )
 "#;
@@ -317,13 +400,18 @@ fn materialize_package(root: &Path) -> std::io::Result<()> {
 
     let rust_bridge = root.join("Sources").join("RustBridge");
     let client = root.join("Sources").join("Client");
+    let docs_snippet = root.join("Sources").join("DocsSnippet");
     std::fs::create_dir_all(&rust_bridge)?;
     std::fs::create_dir_all(&client)?;
+    std::fs::create_dir_all(&docs_snippet)?;
 
     std::fs::write(root.join("Package.swift"), PACKAGE_MANIFEST)?;
     std::fs::write(rust_bridge.join("SwiftBridgeCoreStub.swift"), RUST_BRIDGE_RUNTIME_STUB)?;
+    std::fs::write(rust_bridge.join("RustBridgeRegisterStub.swift"), RUST_BRIDGE_REGISTER_STUB)?;
     std::fs::write(client.join("ClientDTOs.swift"), CLIENT_DTOS)?;
     std::fs::write(client.join("FixtureSink.swift"), CLIENT_CONFORMER)?;
+    std::fs::write(client.join("ClientBoxForwarderStub.swift"), CLIENT_BOX_FORWARDER_STUB)?;
+    std::fs::write(docs_snippet.join("DocsSnippetSink.swift"), DOCS_SNIPPET_CONFORMER)?;
 
     let trait_defs: Vec<_> = config
         .trait_bridges
@@ -341,6 +429,12 @@ fn materialize_package(root: &Path) -> std::io::Result<()> {
     }
     for file in emit_function_param_box_files(&api, &config, &rust_bridge, &exclude) {
         std::fs::write(&file.path, &file.content)?;
+    }
+    // The umbrella-module re-export the fix above adds: without writing this into the `Client`
+    // target, `DocsSnippet.swift`'s `import Client` alone would never see `SwiftDocumentSinkBridge`,
+    // which lives in `RustBridge` and is not on `DocsSnippet`'s dependency graph.
+    if let Some((filename, content)) = gen_bridge_registration_overloads_file(&trait_defs) {
+        std::fs::write(client.join(filename), content)?;
     }
 
     Ok(())
@@ -395,6 +489,11 @@ fn swift_driver() -> Option<PathBuf> {
 ///   `return RustString(bridge.latestBatch())` without the `?? "null"` fallback, and this test
 ///   must fail with a type mismatch feeding a `String?` into the non-optional `RustString(_:)`
 ///   initializer in `Swift{Trait}Box.swift`.
+/// - dropping the `protocol_aliases` re-export from `gen_bridge_registration_overloads_file`
+///   reproduces the doc-snippet regression fixed alongside this test: `DocsSnippet.swift`
+///   (which only `import Client`s, never `RustBridge`) fails with `cannot find type
+///   'SwiftDocumentSinkBridge' in scope`, since the protocol is declared in `RustBridge` and
+///   `DocsSnippet` never depends on it directly.
 #[test]
 fn generated_trait_box_package_compiles() {
     let Some(swift) = swift_driver() else { return };
