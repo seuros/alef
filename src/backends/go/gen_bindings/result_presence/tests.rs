@@ -177,7 +177,10 @@ fn assert_companion_matches_primary_arguments(generated: &str) -> String {
 
 #[test]
 fn should_pass_an_opaque_receivers_handle_and_params_to_the_companion() {
-    let generated = render_method(&opaque_type("Settings"), &timeout_method(Some(ReceiverKind::Ref), false));
+    let generated = render_method(
+        &opaque_type("Settings"),
+        &timeout_method(Some(ReceiverKind::Ref), false),
+    );
 
     assert_eq!(assert_companion_matches_primary_arguments(&generated), "h.ptr, cScale");
 }
@@ -191,7 +194,9 @@ fn should_pass_a_value_receivers_marshalled_handle_to_the_companion() {
 
     assert_eq!(assert_companion_matches_primary_arguments(&generated), "cRecv, cScale");
     assert!(
-        generated.find("defer C.sample_settings_free(cRecv)").expect("receiver free")
+        generated
+            .find("defer C.sample_settings_free(cRecv)")
+            .expect("receiver free")
             < generated.find(COMPANION_MARKER).expect("presence gate"),
         "the receiver handle must already be scheduled for release when the gate returns early; \
          got:\n{generated}"

@@ -87,7 +87,10 @@ mod tests {
 
         let rendered = render_trait_bridges(&api, &config, Language::Python);
 
-        assert_eq!(rendered, "", "no configured trait bridges must render no section at all");
+        assert_eq!(
+            rendered, "",
+            "no configured trait bridges must render no section at all"
+        );
     }
 
     /// A backend not (yet) covered by `trait_bridge_registration_surface` (default empty

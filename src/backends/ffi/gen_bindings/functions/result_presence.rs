@@ -30,10 +30,10 @@ use crate::codegen::c_consumer;
 use crate::codegen::conversions::core_type_path;
 use crate::core::ir::{CoreWrapper, FunctionDef, MethodDef, ParamDef, ReceiverKind, TypeDef, TypeRef};
 
-use crate::backends::ffi::type_map::result_presence_companion_exists;
 use super::orchestration::{named_handle_type, named_type_path};
 use super::params::{ParamConversionContext, gen_param_conversion_with_enums};
 use super::support::{ffi_doxygen_block, method_sanitized_recoverable, sanitized_recoverable};
+use crate::backends::ffi::type_map::result_presence_companion_exists;
 
 /// Every presence companion fails the same way regardless of the primary function's return
 /// shape: it always returns `i32`, so a param-conversion failure, a bad handle, or a caught
@@ -192,7 +192,11 @@ fn presence_param_list(
             "    {}: {}",
             param_name,
             crate::backends::ffi::type_map::c_param_type_with_paths_and_enums(
-                &p.ty, core_import, path_map, enum_names, p.is_mut,
+                &p.ty,
+                core_import,
+                path_map,
+                enum_names,
+                p.is_mut,
             )
         ));
         if matches!(p.ty, TypeRef::Bytes) {
@@ -300,7 +304,10 @@ fn render_handle_acquisition(
             named_type_path(type_name, core_import, path_map)
         );
         if parameter.optional {
-            requests.push(format!("if {} != 0 {{ Some({request}) }} else {{ None }}", parameter.name));
+            requests.push(format!(
+                "if {} != 0 {{ Some({request}) }} else {{ None }}",
+                parameter.name
+            ));
         } else {
             requests.push(format!("Some({request})"));
         }
@@ -404,7 +411,14 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_result_presence_wrapper
         let self_request = Some(format!(
             "Some(HandleRequest {{ handle: this, expected_type: std::any::TypeId::of::<{handle_qualified}>() }})"
         ));
-        render_handle_acquisition(&mut out, self_request, &method.params, core_import, path_map, enum_names);
+        render_handle_acquisition(
+            &mut out,
+            self_request,
+            &method.params,
+            core_import,
+            path_map,
+            enum_names,
+        );
 
         let null_check = if typ.has_lifetime_params {
             crate::backends::ffi::template_env::render(
@@ -437,7 +451,12 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_method_result_presence_wrapper
 
     render_presence_param_conversions(&mut out, &method.params, core_import, path_map, enum_names, has_error);
 
-    let call_args = method.params.iter().map(presence_call_arg).collect::<Vec<_>>().join(", ");
+    let call_args = method
+        .params
+        .iter()
+        .map(presence_call_arg)
+        .collect::<Vec<_>>()
+        .join(", ");
     if method.is_static {
         out.push_str(&crate::backends::ffi::template_env::render(
             "static_method_call_result.jinja",
@@ -489,7 +508,14 @@ pub(in crate::backends::ffi::gen_bindings) fn gen_free_function_result_presence_
     ));
     let source_cfg = func.cfg.as_deref().unwrap_or("").to_string();
 
-    let c_params = presence_param_list(&func.params, None, core_import, path_map, enum_names, will_be_unimplemented);
+    let c_params = presence_param_list(
+        &func.params,
+        None,
+        core_import,
+        path_map,
+        enum_names,
+        will_be_unimplemented,
+    );
     let mut out = presence_header(&fn_name, &doc_comment, c_params, &source_cfg);
 
     if will_be_unimplemented {

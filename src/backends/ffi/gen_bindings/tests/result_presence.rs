@@ -29,7 +29,10 @@ fn generated_bindings_emit_result_presence_companion_for_every_ambiguous_optiona
     let api = ApiSurface {
         crate_name: "my-lib".to_string(),
         version: "1.0.0".to_string(),
-        functions: vec![optional_u64("get_port", None), optional_u64("checked_port", Some("String"))],
+        functions: vec![
+            optional_u64("get_port", None),
+            optional_u64("checked_port", Some("String")),
+        ],
         types: vec![TypeDef {
             name: "SampleConfig".to_string(),
             rust_path: "my_lib::SampleConfig".to_string(),
@@ -154,7 +157,13 @@ fn result_presence_companion_distinguishes_none_from_zero_valued_some_at_runtime
         error_type: Some("String".to_string()),
         ..FunctionDef::default()
     };
-    let functions = [&port_present, &port_absent, &checked_present, &checked_absent, &checked_err];
+    let functions = [
+        &port_present,
+        &port_absent,
+        &checked_present,
+        &checked_absent,
+        &checked_err,
+    ];
 
     let typ = TypeDef {
         name: "SampleConfig".to_string(),
@@ -175,7 +184,14 @@ fn result_presence_companion_distinguishes_none_from_zero_valued_some_at_runtime
     let mut generated = String::new();
     for func in functions {
         generated.push_str(&gen_free_function(
-            func, "smp", "sample_core", &empty_map, &empty_set, &empty_set, None, false,
+            func,
+            "smp",
+            "sample_core",
+            &empty_map,
+            &empty_set,
+            &empty_set,
+            None,
+            false,
         ));
         generated.push('\n');
         if let Some(presence) =
@@ -186,7 +202,13 @@ fn result_presence_companion_distinguishes_none_from_zero_valued_some_at_runtime
         }
     }
     generated.push_str(&gen_method_wrapper(
-        &typ, &margin_method, "smp", "sample_core", &empty_map, &empty_set, &empty_set,
+        &typ,
+        &margin_method,
+        "smp",
+        "sample_core",
+        &empty_map,
+        &empty_set,
+        &empty_set,
     ));
     generated.push('\n');
     let method_presence =

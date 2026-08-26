@@ -1,10 +1,9 @@
 use crate::adapters::AdapterBodies;
 use crate::backends::ffi::gen_bindings::functions::{
     gen_free_function, gen_free_function_len_companion, gen_free_function_result_presence_wrapper,
-    gen_method_result_presence_wrapper, gen_method_wrapper, gen_streaming_method_wrapper,
-    is_owned_default_constructor, returns_bytes_out_params, returns_c_char, should_skip_method_wrapper,
+    gen_method_result_presence_wrapper, gen_method_wrapper, gen_streaming_method_wrapper, is_owned_default_constructor,
+    returns_bytes_out_params, returns_c_char, should_skip_method_wrapper,
 };
-use crate::backends::ffi::type_map::optional_leaf_needs_presence_signal;
 use crate::backends::ffi::gen_bindings::helpers;
 use crate::backends::ffi::gen_bindings::helpers::{
     gen_ffi_tokio_runtime, gen_free_bytes, gen_free_string, gen_last_error, gen_version,
@@ -19,6 +18,7 @@ use crate::backends::ffi::gen_bindings::types::{
     gen_opaque_static_constructor, gen_type_free, gen_type_from_json, gen_type_new, gen_type_to_json,
     is_static_constructor,
 };
+use crate::backends::ffi::type_map::optional_leaf_needs_presence_signal;
 use crate::codegen::builder::RustFileBuilder;
 use crate::codegen::generators;
 use crate::core::config::{AdapterPattern, Language, ResolvedCrateConfig};

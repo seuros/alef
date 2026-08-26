@@ -211,8 +211,16 @@ fn docs_only_fixture_with_a_bad_reference_fails_generation_through_the_real_pipe
         ..E2eConfig::default()
     };
 
-    let error = generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[], &[])
-        .expect_err("a docs-only fixture referencing a nonexistent field must fail generation");
+    let error = generate_e2e(
+        &ResolvedCrateConfig::default(),
+        &e2e_config,
+        Some(&[]),
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect_err("a docs-only fixture referencing a nonexistent field must fail generation");
     let message = format!("{error:#}");
     assert!(message.contains("config_discovery"), "{message}");
     assert!(message.contains("does_not_exist"), "{message}");
@@ -236,8 +244,16 @@ fn docs_only_fixture_renders_under_its_own_slug_and_never_touches_snippet_covera
         ..E2eConfig::default()
     };
 
-    let (files, deferred_error) = generate_e2e(&ResolvedCrateConfig::default(), &e2e_config, Some(&[]), &[], &[], &[], &[])
-        .expect("a docs-only fixture with resolvable references must generate cleanly");
+    let (files, deferred_error) = generate_e2e(
+        &ResolvedCrateConfig::default(),
+        &e2e_config,
+        Some(&[]),
+        &[],
+        &[],
+        &[],
+        &[],
+    )
+    .expect("a docs-only fixture with resolvable references must generate cleanly");
     assert!(deferred_error.is_none(), "got: {deferred_error:?}");
 
     let docs_only_file = files

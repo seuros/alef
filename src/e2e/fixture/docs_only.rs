@@ -350,7 +350,10 @@ fn load_docs_only_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<DocsOnly
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Ok(());
     };
-    let mut paths: Vec<_> = entries.filter_map(|entry| entry.ok()).map(|entry| entry.path()).collect();
+    let mut paths: Vec<_> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect();
     paths.sort();
 
     for path in paths {
@@ -375,7 +378,8 @@ fn load_docs_only_recursive(base: &Path, dir: &Path, fixtures: &mut Vec<DocsOnly
         let mut fixture: DocsOnlyFixture = serde_json::from_value(value)
             .with_context(|| format!("failed to parse docs-only fixture: {}", path.display()))?;
         fixture.source = path.strip_prefix(base).unwrap_or(&path).to_string_lossy().to_string();
-        validate_docs_only_fixture_shape(&fixture).with_context(|| format!("invalid docs-only fixture: {}", path.display()))?;
+        validate_docs_only_fixture_shape(&fixture)
+            .with_context(|| format!("invalid docs-only fixture: {}", path.display()))?;
         fixtures.push(fixture);
     }
     Ok(())
@@ -459,7 +463,10 @@ fn render_docs_only_markdown(fixture: &DocsOnlyFixture) -> String {
 ///
 /// Callers must run [`validate_api_references`] first -- this function renders unconditionally
 /// and does not itself re-check references.
-pub fn render_docs_only_fixture(fixture: &DocsOnlyFixture, output: &str) -> Result<crate::core::backend::GeneratedFile> {
+pub fn render_docs_only_fixture(
+    fixture: &DocsOnlyFixture,
+    output: &str,
+) -> Result<crate::core::backend::GeneratedFile> {
     let path = docs_only_output_path(output, fixture)?;
     Ok(crate::core::backend::GeneratedFile {
         path,
@@ -681,7 +688,10 @@ mod tests {
     fn output_path_uses_the_dedicated_slug_and_stem_default() {
         let fixture: DocsOnlyFixture = serde_json::from_value(docs_only_json(serde_json::json!([]))).unwrap();
         let path = docs_only_output_path("docs/snippets-generated", &fixture).unwrap();
-        assert_eq!(path, Path::new("docs/snippets-generated/docs-only/guides/config_discovery.md"));
+        assert_eq!(
+            path,
+            Path::new("docs/snippets-generated/docs-only/guides/config_discovery.md")
+        );
     }
 
     #[test]
